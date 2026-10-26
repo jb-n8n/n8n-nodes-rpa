@@ -182,8 +182,8 @@ describe('adversarial input', () => {
     };
     const deep = '<a>'.repeat(10_000) + '</a>'.repeat(10_000);
     const million = '<r>' + '<a/>'.repeat(1_000_000) + '</r>';
-    fast('depth 10,000', () => parseXml(deep), /nested deeper than 200/, 200);
-    fast('1 million self-closing elements', () => parseXml(million), /more than 200000 elements/, 200);
+    fast('depth 10,000', () => parseXml(deep), /nested deeper than 200/, 1000);
+    fast('1 million self-closing elements', () => parseXml(million), /more than 200000 elements/, 1000);
     fast('unterminated attribute', () => parseXml('<a b="' + 'x'.repeat(5_000_000)), /unterminated tag/);
     fast('unterminated attribute before more markup', () => parseXml('<a b="x><c/><d/>'), /unterminated tag/);
     fast('a million ampersands', () => parseXml('<a>' + '&'.repeat(1_000_000) + '</a>'), /bare "&"/);

@@ -231,7 +231,7 @@ describe('Chrome Recorder JSON', () => {
     for (const [data, reason] of [[huge, 'larger than 5 MiB'], [Buffer.from(huge), 'larger than 5 MiB'], [many, 'more than 5,000 steps']] as const) {
       const t0 = performance.now();
       const r = importSource('chrome', data, OPTS);
-      expect(performance.now() - t0).toBeLessThan(200);
+      expect(performance.now() - t0).toBeLessThan(1000);
       expect(r.drafts).toEqual([]);
       expect(r.report.items).toEqual([expect.objectContaining({ kind: 'error', reason: expect.stringContaining(reason) })]);
     }

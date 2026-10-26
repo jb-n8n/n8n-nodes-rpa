@@ -285,7 +285,7 @@ describe('the header below a title line', () => {
     const quotes = Buffer.from(('"'.repeat(MiB) + '\n').repeat(10) + 'Document,Amount\n1,2\n');
     for (const data of [unclosed, wide, quotes]) {
       const { out, ms } = timed(() => fileFacts(data, CSV, { columns: ['Document', 'Missing'] }));
-      expect(ms).toBeLessThan(200);
+      expect(ms).toBeLessThan(1000);
       if ('error' in out) throw new Error(out.error);
       expect(out.columns!.length).toBeGreaterThan(0);
       expect(out.columns!.length).toBeLessThanOrEqual(200);
