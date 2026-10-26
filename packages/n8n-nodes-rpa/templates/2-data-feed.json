@@ -1,0 +1,316 @@
+{
+  "name": "RPA: 2 Data feed",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "### Self-healing data feed (grey: leave as is)\nEvery 6 hours **Run steps** runs the newest signed step list in `playwright_steps` for the `name` in **Settings**. When the site changes, the chat model repairs the run, a fresh browser proves the repaired steps, and the Repaired steps item goes to **RPA: 3 Approve steps**. Nothing new runs until a person approves it; the next run after approval uses the new version with no model call.",
+        "height": 300,
+        "width": 440,
+        "color": 7
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000201",
+      "name": "About this workflow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-80, -500]
+    },
+    {
+      "parameters": {
+        "content": "### Set once (green)\nRun **RPA: 1 Create tables (run once)** first, then pick credentials:\n- **RPA Browser**: Run steps\n- **RPA Site Login**: Run steps here, Sign steps in workflow 3\n- **RPA Step Signing**: Run steps here, Sign steps in workflow 3\n- **Chat model**: your model provider\n- **Alert on failure**: your SMTP account\n\nIn **Approve steps**, choose **RPA: 3 Approve steps**.",
+        "height": 300,
+        "width": 420,
+        "color": 4
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000202",
+      "name": "Set once",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [380, -500]
+    },
+    {
+      "parameters": {
+        "content": "### Change per site\nTo copy this feed for another site, change these and nothing else:\n1. `name` in **Settings**\n2. the **RPA Site Login** credential on **Run steps** (and on **Sign steps** in your copy of workflow 3: the signature binds the credential), and point **Approve steps** at that copy (it signs with its own Site Login)\n3. **Goal** on **Run steps**\n4. **Options → ID Pattern** on **Run steps**",
+        "height": 320,
+        "width": 420,
+        "color": 2
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000203",
+      "name": "Change per site",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [820, -500]
+    },
+    {
+      "parameters": {
+        "content": "### First run (grey)\nWith no active row, **Get active steps** outputs one empty item, Steps resolves to empty and **Run steps** builds version 1 from the Goal (AI Repair on, a chat model connected, Options → Name from Settings). The only output is a Repaired steps item, which goes to approval. Nothing reads the site's data until a person approves version 1. While version 1 waits for approval, AI Repair is off, so scheduled runs end with the configuration error \"Steps is empty. Add steps, or turn on AI Repair to build them from the Goal.\" That is expected until you approve.",
+        "height": 320,
+        "width": 440,
+        "color": 7
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000204",
+      "name": "First run",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [200, 340]
+    },
+    {
+      "parameters": {
+        "content": "### Why signed steps (grey)\nThe steps come from a Data Table, and anyone who can edit the table could change them. **Require Signed Steps** stays on: Run steps runs a row only when its signature matches its name, version, start site, Site Login and approver, and its version equals Expected Version (the newest active row). An edited row fails `script_untrusted` and nothing runs. Anyone who can edit the playwright_steps table can switch the feed back to an earlier approved version. While Repaired steps wait for a decision (an unexpired pending row), AI Repair is off and a changed site is reported, not repaired again.",
+        "height": 320,
+        "width": 460,
+        "color": 7
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000205",
+      "name": "Why signed steps",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [680, 340]
+    },
+    {
+      "parameters": { "rule": { "interval": [{ "field": "hours", "hoursInterval": 6 }] } },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000206",
+      "name": "Every 6 hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [{ "id": "3d6f1a20-7b4c-4e8a-9c11-0000000002a1", "name": "name", "value": "example-feed", "type": "string" }]
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000207",
+      "name": "Settings",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 0],
+      "notes": "The step list's name. Every Data Table filter and Run steps → Options → Name read it here."
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": { "__rl": true, "mode": "name", "value": "playwright_steps" },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            { "keyName": "name", "condition": "eq", "keyValue": "={{ $('Settings').item.json.name }}" },
+            { "keyName": "status", "condition": "eq", "keyValue": "pending" }
+          ]
+        },
+        "returnAll": true
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000208",
+      "name": "Get pending",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [440, 0],
+      "alwaysOutputData": true,
+      "notes": "Repaired steps waiting for a decision. An unexpired one turns AI Repair off on Run steps."
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": { "__rl": true, "mode": "name", "value": "playwright_steps" },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            { "keyName": "name", "condition": "eq", "keyValue": "={{ $('Settings').item.json.name }}" },
+            { "keyName": "status", "condition": "eq", "keyValue": "active" }
+          ]
+        },
+        "returnAll": false,
+        "limit": 1,
+        "orderBy": true,
+        "orderByColumn": "version",
+        "orderByDirection": "DESC"
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000209",
+      "name": "Get active steps",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [660, 0],
+      "alwaysOutputData": true,
+      "executeOnce": true,
+      "notes": "The newest active version, or one empty item on the first run. Execute Once: one run per schedule, however many pending rows came in."
+    },
+    {
+      "parameters": {
+        "operation": "runSteps",
+        "steps": "={{ $('Get active steps').item.json.steps ?? '' }}",
+        "requireSignedSteps": true,
+        "signature": "={{ $('Get active steps').item.json.signature }}",
+        "approvedBy": "={{ $('Get active steps').item.json.approvedBy }}",
+        "aiRepair": "={{ $('Get pending').all().filter(i => i.json.hash && DateTime.fromISO(i.json.expiresAt) > $now).length === 0 }}",
+        "goal": "Read every current stop-sale and safety campaign bulletin for this location (IDs look like N26-0417). The section may be renamed or moved in the menu; skip archived bulletins.",
+        "options": {
+          "name": "={{ $('Settings').item.json.name }}",
+          "expectedVersion": "={{ $('Get active steps').item.json.version }}",
+          "idPattern": "N26-\\d{4}",
+          "totalPattern": "Showing \\d+-\\d+ of (\\d+)",
+          "saveTrace": "onFailure"
+        }
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000210",
+      "name": "Run steps",
+      "type": "n8n-nodes-rpa.playwright",
+      "typeVersion": 1,
+      "position": [900, 0],
+      "onError": "continueErrorOutput",
+      "notes": "Outputs: Data (0), Repaired Steps (1), error (2)."
+    },
+    {
+      "parameters": { "model": { "__rl": true, "mode": "id", "value": "claude-sonnet-5-5" }, "options": {} },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000211",
+      "name": "Chat model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.5,
+      "position": [900, 220]
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "insert",
+        "dataTableId": { "__rl": true, "mode": "name", "value": "playwright_runs" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "name": "={{ $('Settings').item.json.name }}",
+            "lane": "={{ $json.lane }}",
+            "version": "={{ $json.version ?? 0 }}",
+            "hash": "={{ $json.hash ?? '' }}",
+            "confirmed": "={{ $json.confirmed ?? false }}",
+            "rowCount": "={{ ($json.rows ?? []).length }}",
+            "durationMs": "={{ $json.durationMs ?? 0 }}",
+            "llmTokens": "={{ $json.llmTokens ?? 0 }}",
+            "code": "",
+            "executionId": "={{ $execution.id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            { "id": "name", "displayName": "name", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "lane", "displayName": "lane", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "version", "displayName": "version", "required": false, "defaultMatch": false, "display": true, "type": "number", "canBeUsedToMatch": true },
+            { "id": "hash", "displayName": "hash", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "confirmed", "displayName": "confirmed", "required": false, "defaultMatch": false, "display": true, "type": "boolean", "canBeUsedToMatch": true },
+            { "id": "rowCount", "displayName": "rowCount", "required": false, "defaultMatch": false, "display": true, "type": "number", "canBeUsedToMatch": true },
+            { "id": "durationMs", "displayName": "durationMs", "required": false, "defaultMatch": false, "display": true, "type": "number", "canBeUsedToMatch": true },
+            { "id": "llmTokens", "displayName": "llmTokens", "required": false, "defaultMatch": false, "display": true, "type": "number", "canBeUsedToMatch": true },
+            { "id": "code", "displayName": "code", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "executionId", "displayName": "executionId", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000212",
+      "name": "Log run",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [1180, -160],
+      "notes": "One run row per successful run."
+    },
+    {
+      "parameters": {},
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000213",
+      "name": "Send data to destination",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1400, -160],
+      "notes": "Replace with where the rows go (a database, a sheet, an API). The rows are in {{ $('Run steps').item.json.rows }}."
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": { "__rl": true, "mode": "list", "value": "", "cachedResultName": "RPA: 3 Approve steps" },
+        "mode": "once",
+        "options": { "waitForSubWorkflow": false }
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000214",
+      "name": "Approve steps",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [1180, 0],
+      "notes": "Fire and forget: the approval waits for a person; this run finishes now."
+    },
+    {
+      "parameters": {
+        "resource": "email",
+        "operation": "send",
+        "fromEmail": "n8n-rpa@localhost",
+        "toEmail": "ops@example.com",
+        "subject": "=RPA {{ $json.details?.code || 'config_error' }} on {{ $('Settings').item.json.name }}",
+        "emailFormat": "text",
+        "text": "={{ $json.details?.code || 'config_error' }} on {{ $('Settings').item.json.name }} (steps v{{ $json.details?.version ?? 'none' }}, {{ $json.details?.lane ?? 'n/a' }} lane)\n\n{{ $json.message ?? $json.error }}\nExecution: {{ $execution.id }}\n\nWhat to do: see the error code table in the n8n-nodes-rpa README.",
+        "options": { "fileAttachments": "={{ [$binary.trace ? 'trace' : '', $binary.screenshot ? 'screenshot' : ''].filter(Boolean).join(',') }}" }
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000215",
+      "name": "Alert on failure",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1180, 160]
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "insert",
+        "dataTableId": { "__rl": true, "mode": "name", "value": "playwright_runs" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "name": "={{ $('Settings').item.json.name }}",
+            "lane": "={{ $('Run steps').item.json.details?.lane ?? '' }}",
+            "version": "={{ $('Run steps').item.json.details?.version ?? 0 }}",
+            "hash": "={{ $('Run steps').item.json.details?.hash ?? '' }}",
+            "confirmed": "={{ false }}",
+            "rowCount": "={{ 0 }}",
+            "durationMs": "={{ $('Run steps').item.json.details?.durationMs ?? 0 }}",
+            "llmTokens": "={{ $('Run steps').item.json.details?.llmTokens ?? 0 }}",
+            "code": "={{ $('Run steps').item.json.details?.code || 'config_error' }}",
+            "executionId": "={{ $execution.id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            { "id": "name", "displayName": "name", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "lane", "displayName": "lane", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "version", "displayName": "version", "required": false, "defaultMatch": false, "display": true, "type": "number", "canBeUsedToMatch": true },
+            { "id": "hash", "displayName": "hash", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "confirmed", "displayName": "confirmed", "required": false, "defaultMatch": false, "display": true, "type": "boolean", "canBeUsedToMatch": true },
+            { "id": "rowCount", "displayName": "rowCount", "required": false, "defaultMatch": false, "display": true, "type": "number", "canBeUsedToMatch": true },
+            { "id": "durationMs", "displayName": "durationMs", "required": false, "defaultMatch": false, "display": true, "type": "number", "canBeUsedToMatch": true },
+            { "id": "llmTokens", "displayName": "llmTokens", "required": false, "defaultMatch": false, "display": true, "type": "number", "canBeUsedToMatch": true },
+            { "id": "code", "displayName": "code", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "executionId", "displayName": "executionId", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000216",
+      "name": "Log failed run",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [1400, 160],
+      "notes": "One run row per failure. Error items keep the run facts under details; configuration errors log as config_error."
+    }
+  ],
+  "connections": {
+    "Every 6 hours": { "main": [[{ "node": "Settings", "type": "main", "index": 0 }]] },
+    "Settings": { "main": [[{ "node": "Get pending", "type": "main", "index": 0 }]] },
+    "Get pending": { "main": [[{ "node": "Get active steps", "type": "main", "index": 0 }]] },
+    "Get active steps": { "main": [[{ "node": "Run steps", "type": "main", "index": 0 }]] },
+    "Chat model": { "ai_languageModel": [[{ "node": "Run steps", "type": "ai_languageModel", "index": 0 }]] },
+    "Run steps": {
+      "main": [
+        [{ "node": "Log run", "type": "main", "index": 0 }],
+        [{ "node": "Approve steps", "type": "main", "index": 0 }],
+        [{ "node": "Alert on failure", "type": "main", "index": 0 }]
+      ]
+    },
+    "Log run": { "main": [[{ "node": "Send data to destination", "type": "main", "index": 0 }]] },
+    "Alert on failure": { "main": [[{ "node": "Log failed run", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}

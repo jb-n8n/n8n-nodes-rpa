@@ -1,0 +1,57 @@
+{
+  "name": "RPA: Hello world",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "### Hello world\nSet the RPA Browser credential, then click Execute.\n\n1. Pick your **RPA Browser** credential on both RPA nodes.\n2. **Screenshot example.com** visits one public site and returns a PNG.\n3. **Extract the sandbox table** reads a table from the sandbox site that ships with the compose stack. That site is on your own network, so **Options -> Allow Private Network** is on for this node only. Leave it off for public sites.\n\nIf the first run says it could not connect, the browser is not running. Start it with `docker compose up -d browser` (README: Where the browser runs).",
+        "height": 380,
+        "width": 520,
+        "color": 4
+      },
+      "id": "5a1b2c3d-4e5f-4a60-8b70-000000000501",
+      "name": "Before you click Execute",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-60, -420]
+    },
+    {
+      "parameters": {},
+      "id": "5a1b2c3d-4e5f-4a60-8b70-000000000502",
+      "name": "Click Execute",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "operation": "screenshot",
+        "url": "https://example.com"
+      },
+      "id": "5a1b2c3d-4e5f-4a60-8b70-000000000503",
+      "name": "Screenshot example.com",
+      "type": "n8n-nodes-rpa.playwright",
+      "typeVersion": 1,
+      "position": [240, 0]
+    },
+    {
+      "parameters": {
+        "operation": "extract",
+        "url": "http://sandbox:8080/public/table",
+        "shape": "table",
+        "table": { "locator": { "findBy": "css", "css": "table.results" } },
+        "options": { "allowPrivateNetwork": true }
+      },
+      "id": "5a1b2c3d-4e5f-4a60-8b70-000000000504",
+      "name": "Extract the sandbox table",
+      "type": "n8n-nodes-rpa.playwright",
+      "typeVersion": 1,
+      "position": [480, 0]
+    }
+  ],
+  "connections": {
+    "Click Execute": { "main": [[{ "node": "Screenshot example.com", "type": "main", "index": 0 }]] },
+    "Screenshot example.com": { "main": [[{ "node": "Extract the sandbox table", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}

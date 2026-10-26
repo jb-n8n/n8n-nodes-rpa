@@ -1,0 +1,66 @@
+# The rpa-browser chart end to end on a throwaway kind cluster (deploy/test/kind-e2e.sh): the image built from
+# images/browser, helm install of deploy/helm/rpa-browser, one session held, the second refused 503 busy, and a deleted
+# pod that stays Terminating until its session ends. Runs on pull requests that touch the image, deploy/ or this file,
+# nightly on main, and on demand. Uses no repository secrets.
+# Actions are pinned by full commit SHA (the same ones as ci.yml); downloaded tools by version and SHA-256 (the
+# linux_amd64 entries of each release's published checksum). kind's node image is pinned by digest in the script.
+name: kind e2e
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "images/**"
+      - "deploy/**"
+      - ".github/workflows/kind-e2e.yml"
+      - "packages/engine/package.json"
+      - "pnpm-lock.yaml"
+  schedule:
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kind-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kind-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      KIND_VERSION: v0.33.0
+      KIND_SHA256: aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d
+      KUBECTL_VERSION: v1.37.1
+      KUBECTL_SHA256: 65691ff77eb6fa44c908b77a1082c9f092c3b9733b5cefabec0d1104890e21a8
+      HELM_VERSION: v3.22.1
+      HELM_SHA256: 896cf63684a42a723d61c980369d6e588330927deb13676ca0d85006dd6da0ea
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The test's client connects with the engine's playwright-core (no browser download: Chromium runs in the image).
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Install kind, kubectl and helm (pinned, checksum-verified)
+        run: |
+          set -euo pipefail
+          bin="$RUNNER_TEMP/kind-tools"
+          mkdir -p "$bin"
+          cd "$RUNNER_TEMP"
+          fetch() { curl -fsSL --retry 3 -o "$1" "$2"; echo "$3  $1" | sha256sum -c -; }
+          fetch kind "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-amd64" "$KIND_SHA256"
+          install -m 0755 kind "$bin/kind"
+          fetch kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" "$KUBECTL_SHA256"
+          install -m 0755 kubectl "$bin/kubectl"
+          fetch helm.tar.gz "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" "$HELM_SHA256"
+          tar -xzf helm.tar.gz -C "$bin" --strip-components=1 linux-amd64/helm
+          echo "$bin" >> "$GITHUB_PATH"
+      - run: kind version && kubectl version --client && helm version --short
+      - run: deploy/test/kind-e2e.sh

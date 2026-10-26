@@ -1,0 +1,359 @@
+{
+  "name": "RPA: 3 Approve steps",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "### Approve repaired steps (grey: leave as is)\nCalled by **RPA: 2 Data feed** with a Repaired steps item. The approver gets the evidence, the change list, red safety flags and before/after screenshots, then an Approve / Reject email. **Mark pending** writes a `pending` row that expires after `approvalTimeoutHours`; while it is unexpired the feed reports a changed site instead of repairing again. Approve: **Sign steps** signs exactly the steps that were proven and **Save signed steps** sets the row `active`, and **Supersede older versions** sets earlier `active` rows of the same name to `superseded`. Reject or a refused signature: `rejected`. No answer in time: `expired`, and the next run repairs again.",
+        "height": 340,
+        "width": 520,
+        "color": 7
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000301",
+      "name": "About this workflow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-80, -500]
+    },
+    {
+      "parameters": {
+        "content": "### Set once (green)\nPick the SMTP credential on **Email repaired steps** and **Ask for approval**, and the **RPA Site Login** and **RPA Step Signing** credentials on **Sign steps** (the same ones as Run steps in workflow 2). Use one approver address in **Email repaired steps**, **Ask for approval** (To), **Sign steps** (Approved By and Approver Allowlist) and **Record rejection**.\n\nConfiguration faults (a missing credential, a short signing key) also end in **Record rejection**: check the error on **Sign steps** before the feed runs again. Approve one Repaired steps item per version.",
+        "height": 340,
+        "width": 460,
+        "color": 4
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000302",
+      "name": "Set once",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [480, -500]
+    },
+    {
+      "parameters": { "inputSource": "passthrough" },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000303",
+      "name": "Repaired steps received",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 0],
+      "notes": "Accept all data: the Repaired steps item arrives with its before/after screenshots as binary."
+    },
+    {
+      "parameters": {
+        "resource": "email",
+        "operation": "send",
+        "fromEmail": "n8n-rpa@localhost",
+        "toEmail": "approver@example.com",
+        "subject": "=Review: steps v{{ $json.version }} for {{ $json.name }}",
+        "emailFormat": "html",
+        "html": "=<!-- Every value below comes from the run (page text, model output): each is HTML-escaped so it cannot restyle or hide parts of this email. -->\n<h2>Steps v{{ String($json.version ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }} for {{ String($json.name ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }} are ready for review</h2>\n<p style=\"color:#b00020\"><b>Safety flags:</b> {{ String($json.safetyLine ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}</p>\n<p><b>Evidence:</b> {{ String($json.evidenceLine ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}</p>\n<p><b>What changed:</b><br>{{ String($json.changeList ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]).split('\\n').join('<br>') }}</p>\n<p>Steps hash: <code>{{ String($json.hash ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}</code>. {{ ({ 'before,after': 'Screenshots before and after the change are attached.', 'after': 'A screenshot after the change is attached (a first run has no before).', 'before': 'A screenshot before the change is attached.' })[String($json.attachmentNames ?? '')] ?? 'No screenshots are attached.' }} A second email asks for your decision.</p>",
+        "options": { "fileAttachments": "={{ $json.attachmentNames }}" }
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000304",
+      "name": "Email repaired steps",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "3d6f1a20-7b4c-4e8a-9c11-0000000003a1", "name": "name", "value": "={{ $('Repaired steps received').item.json.name }}", "type": "string" },
+            { "id": "3d6f1a20-7b4c-4e8a-9c11-0000000003a2", "name": "approvalTimeoutHours", "value": 72, "type": "number" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000305",
+      "name": "Settings",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [440, 0],
+      "notes": "name comes from the Repaired steps item, so one approval workflow serves every feed on the same Site Login. Change approvalTimeoutHours here."
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "upsert",
+        "dataTableId": { "__rl": true, "mode": "name", "value": "playwright_steps" },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            { "keyName": "hash", "condition": "eq", "keyValue": "={{ $('Repaired steps received').item.json.hash }}" },
+            { "keyName": "name", "condition": "eq", "keyValue": "={{ $('Settings').item.json.name }}" }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "name": "={{ $('Settings').item.json.name }}",
+            "version": "={{ $('Repaired steps received').item.json.version }}",
+            "hash": "={{ $('Repaired steps received').item.json.hash }}",
+            "status": "pending",
+            "expiresAt": "={{ $now.plus({ hours: $('Settings').item.json.approvalTimeoutHours }).toISO() }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            { "id": "name", "displayName": "name", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "version", "displayName": "version", "required": false, "defaultMatch": false, "display": true, "type": "number", "canBeUsedToMatch": true },
+            { "id": "hash", "displayName": "hash", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "status", "displayName": "status", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "expiresAt", "displayName": "expiresAt", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000306",
+      "name": "Mark pending",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [660, 0],
+      "notes": "Update-in-place by hash: the same repaired steps proposed again reuse their row."
+    },
+    {
+      "parameters": {
+        "resource": "email",
+        "operation": "sendAndWait",
+        "fromEmail": "n8n-rpa@localhost",
+        "toEmail": "approver@example.com",
+        "subject": "=Approve steps v{{ $('Repaired steps received').item.json.version }} for {{ $('Repaired steps received').item.json.name }}?",
+        "message": "=Steps v{{ String($('Repaired steps received').item.json.version ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }} for {{ String($('Repaired steps received').item.json.name ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\nEvidence: {{ String($('Repaired steps received').item.json.evidenceLine ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\nSafety flags: {{ String($('Repaired steps received').item.json.safetyLine ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\nHash: {{ String($('Repaired steps received').item.json.hash ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\nReview digest: {{ String($('Repaired steps received').item.json.digest ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\n\nApprove only if the change list in the previous email matches what you expect. This request expires after {{ $('Settings').item.json.approvalTimeoutHours }} hours.",
+        "approvalOptions": { "values": { "approvalType": "double", "approveLabel": "Approve", "disapproveLabel": "Reject" } },
+        "options": {
+          "limitWaitTime": {
+            "values": { "limitType": "afterTimeInterval", "resumeAmount": "={{ $('Settings').item.json.approvalTimeoutHours }}", "resumeUnit": "hours" }
+          }
+        }
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000307",
+      "name": "Ask for approval",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [880, 0],
+      "notes": "The buttons are signed resume links sent only to the approver's mailbox. Without an answer it resumes after approvalTimeoutHours with no data."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "conditions": [
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000003b1",
+              "leftValue": "={{ $json.data === undefined }}",
+              "rightValue": "",
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000308",
+      "name": "Timed out?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1100, 0]
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "update",
+        "dataTableId": { "__rl": true, "mode": "name", "value": "playwright_steps" },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            { "keyName": "hash", "condition": "eq", "keyValue": "={{ $('Repaired steps received').item.json.hash }}" },
+            { "keyName": "name", "condition": "eq", "keyValue": "={{ $('Settings').item.json.name }}" }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": { "status": "expired" },
+          "matchingColumns": [],
+          "schema": [
+            { "id": "status", "displayName": "status", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000309",
+      "name": "Record expiry",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [1320, -160]
+    },
+    {
+      "parameters": { "mode": "raw", "jsonOutput": "={{ $('Repaired steps received').item.json }}", "options": {} },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000310",
+      "name": "Repaired steps to sign",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1320, 80],
+      "notes": "Sign steps signs the incoming item, so the Repaired steps item comes back here unchanged after the approval email."
+    },
+    {
+      "parameters": {
+        "operation": "signSteps",
+        "approved": "={{ $('Ask for approval').item.json.data.approved }}",
+        "approverId": "approver@example.com",
+        "approverAllowlist": "approver@example.com"
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000311",
+      "name": "Sign steps",
+      "type": "n8n-nodes-rpa.playwright",
+      "typeVersion": 1,
+      "position": [1540, 80],
+      "onError": "continueErrorOutput",
+      "notes": "Outputs: the active or rejected record (0), error (1)."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "conditions": [
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000003b2",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "active",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000312",
+      "name": "Signed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1760, 0]
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "update",
+        "dataTableId": { "__rl": true, "mode": "name", "value": "playwright_steps" },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            { "keyName": "hash", "condition": "eq", "keyValue": "={{ $json.hash }}" },
+            { "keyName": "name", "condition": "eq", "keyValue": "={{ $('Settings').item.json.name }}" }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "status": "active",
+            "steps": "={{ $json.steps }}",
+            "signature": "={{ $json.signature }}",
+            "approvedBy": "={{ $json.approvedBy }}",
+            "approvedAt": "={{ $json.approvedAt }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            { "id": "status", "displayName": "status", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "steps", "displayName": "steps", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "signature", "displayName": "signature", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "approvedBy", "displayName": "approvedBy", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "approvedAt", "displayName": "approvedAt", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000313",
+      "name": "Save signed steps",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [1980, -80]
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "update",
+        "dataTableId": { "__rl": true, "mode": "name", "value": "playwright_steps" },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            { "keyName": "name", "condition": "eq", "keyValue": "={{ $('Settings').item.json.name }}" },
+            { "keyName": "status", "condition": "eq", "keyValue": "active" },
+            { "keyName": "version", "condition": "lt", "keyValue": "={{ $('Repaired steps received').item.json.version }}" }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": { "status": "superseded" },
+          "matchingColumns": [],
+          "schema": [
+            { "id": "status", "displayName": "status", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000315",
+      "name": "Supersede older versions",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [2200, -80],
+      "notes": "Earlier active rows of the same name become superseded, so only the version just approved is active. Runs already use the highest active version; this keeps the Data Table readable."
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "update",
+        "dataTableId": { "__rl": true, "mode": "name", "value": "playwright_steps" },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            { "keyName": "hash", "condition": "eq", "keyValue": "={{ $('Repaired steps received').item.json.hash }}" },
+            { "keyName": "name", "condition": "eq", "keyValue": "={{ $('Settings').item.json.name }}" }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": { "status": "rejected", "approvedBy": "approver@example.com", "approvedAt": "={{ $now.toISO() }}" },
+          "matchingColumns": [],
+          "schema": [
+            { "id": "status", "displayName": "status", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "approvedBy", "displayName": "approvedBy", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "approvedAt", "displayName": "approvedAt", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000314",
+      "name": "Record rejection",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [1980, 160],
+      "notes": "Rejected, or Sign steps refused (not on the allowlist, steps changed after review, unsafe, or a configuration fault such as a missing credential; check its error first). The row stops blocking repairs."
+    }
+  ],
+  "connections": {
+    "Repaired steps received": { "main": [[{ "node": "Email repaired steps", "type": "main", "index": 0 }]] },
+    "Email repaired steps": { "main": [[{ "node": "Settings", "type": "main", "index": 0 }]] },
+    "Settings": { "main": [[{ "node": "Mark pending", "type": "main", "index": 0 }]] },
+    "Mark pending": { "main": [[{ "node": "Ask for approval", "type": "main", "index": 0 }]] },
+    "Ask for approval": { "main": [[{ "node": "Timed out?", "type": "main", "index": 0 }]] },
+    "Timed out?": {
+      "main": [
+        [{ "node": "Record expiry", "type": "main", "index": 0 }],
+        [{ "node": "Repaired steps to sign", "type": "main", "index": 0 }]
+      ]
+    },
+    "Repaired steps to sign": { "main": [[{ "node": "Sign steps", "type": "main", "index": 0 }]] },
+    "Sign steps": {
+      "main": [
+        [{ "node": "Signed?", "type": "main", "index": 0 }],
+        [{ "node": "Record rejection", "type": "main", "index": 0 }]
+      ]
+    },
+    "Save signed steps": { "main": [[{ "node": "Supersede older versions", "type": "main", "index": 0 }]] },
+    "Signed?": {
+      "main": [
+        [{ "node": "Save signed steps", "type": "main", "index": 0 }],
+        [{ "node": "Record rejection", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}

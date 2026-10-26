@@ -1,0 +1,7 @@
+packages:
+  - packages/*
+  - sandbox/*
+  - images/*
+  # The gate is a package; the run-server's own package.json (images/browser/server) is installed only by the image's
+  # npm ci, never by the workspace.
+  - images/browser/gate

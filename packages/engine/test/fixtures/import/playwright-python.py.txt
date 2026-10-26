@@ -1,0 +1,9 @@
+import re
+from playwright.sync_api import Page, expect
+
+
+def test_example(page: Page) -> None:
+    page.goto("http://localhost:8080/acme/login")
+    page.get_by_label("Dealer user ID").fill("summit-ops")
+    page.get_by_label("Password").fill("demo-password")
+    page.get_by_role("button", name="Sign in").click()

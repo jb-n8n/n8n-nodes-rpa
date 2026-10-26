@@ -1,0 +1,64 @@
+{
+  "name": "RPA: 0 Connection check",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "### Check the connection\nRun this once after you set up the browser service. It proves that the browser can reach your site, through your network, firewall and TLS, before anyone writes steps.\n\n1. Pick your **RPA Browser** credential on **Screenshot the site**.\n2. In **Site to check**, replace `https://example.com` with your login page.\n3. Click **Execute workflow** and open the screenshot on **Screenshot the site**.\n\nYou should see your login page. If the run fails with `browser_unavailable`, n8n cannot reach the browser service: check the credential's endpoint and token. If the site is on your own network, turn on **Options → Allow Private Network** on **Screenshot the site**; leave it off for public sites.",
+        "height": 420,
+        "width": 520,
+        "color": 4
+      },
+      "id": "0c0e1d2a-3b4c-4d5e-8f60-000000000001",
+      "name": "Check the connection",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-60, -460]
+    },
+    {
+      "parameters": {},
+      "id": "0c0e1d2a-3b4c-4d5e-8f60-000000000002",
+      "name": "Click Execute",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "0c0e1d2a-3b4c-4d5e-8f60-0000000000a1",
+              "name": "url",
+              "value": "https://example.com",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "0c0e1d2a-3b4c-4d5e-8f60-000000000003",
+      "name": "Site to check",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 0],
+      "notes": "Replace the URL with your login page."
+    },
+    {
+      "parameters": {
+        "operation": "screenshot",
+        "url": "={{ $('Site to check').item.json.url }}"
+      },
+      "id": "0c0e1d2a-3b4c-4d5e-8f60-000000000004",
+      "name": "Screenshot the site",
+      "type": "n8n-nodes-rpa.playwright",
+      "typeVersion": 1,
+      "position": [440, 0]
+    }
+  ],
+  "connections": {
+    "Click Execute": { "main": [[{ "node": "Site to check", "type": "main", "index": 0 }]] },
+    "Site to check": { "main": [[{ "node": "Screenshot the site", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}

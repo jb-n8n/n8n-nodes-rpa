@@ -1,0 +1,28 @@
+{
+  "name": "n8n-rpa-eval",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "Seeded heal-rate eval for the RPA engine against the sandbox portal (Anthropic API).",
+  "scripts": {
+    "build": "pnpm --filter n8n-rpa-engine build && tsc -p tsconfig.json",
+    "start": "pnpm --filter n8n-rpa-engine build && tsc -p tsconfig.json && node dist/main.js",
+    "typecheck": "pnpm --filter n8n-rpa-engine build && tsc -p tsconfig.json --noEmit && tsc -p tsconfig.acceptance.json",
+    "test": "vitest run",
+    "acceptance": "vitest run --config vitest.acceptance.config.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "0.131.0",
+    "n8n-rpa-engine": "workspace:*",
+    "n8n-rpa-sandbox": "workspace:*",
+    "fflate": "0.8.3"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.1",
+    "n8n-workflow": "2.41.0",
+    "typescript": "5.9.3",
+    "vite": "8.3.3",
+    "vitest": "5.0.3"
+  }
+}

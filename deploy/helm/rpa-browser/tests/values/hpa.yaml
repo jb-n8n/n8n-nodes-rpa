@@ -1,0 +1,22 @@
+# No Prometheus: the default mode is a CPU HPA. A release name other than the chart's, a token key other than the
+# default, n8n in the same namespace, and CIDRs where the metadata exclusion applies to some and not to others.
+image:
+  repository: ghcr.io/example/rpa-browser
+  digest: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+sessionsPerReplica: 6
+drainSeconds: 900
+token:
+  existingSecret: browser-gate
+  key: gate-token
+n8n:
+  podSelector:
+    app: n8n-worker
+egress:
+  allowedCIDRs:
+    - 203.0.113.0/24
+    - 168.63.0.0/16
+    - 100.64.0.0/10
+    - 198.51.100.7/32
+    - "::/0"
+    - 2001:db8::/32
+    - fd00::/16

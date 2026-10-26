@@ -1,0 +1,153 @@
+<Activity mc:Ignorable="sap sap2010" x:Class="Main" mva:VisualBasic.Settings="{x:Null}" sap:VirtualizedContainerService.HintSize="1104,3180" sap2010:WorkflowViewState.IdRef="ActivityBuilder_1" xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:mva="clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities" xmlns:s="clr-namespace:System;assembly=System.Private.CoreLib" xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation" xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation" xmlns:scg="clr-namespace:System.Collections.Generic;assembly=System.Private.CoreLib" xmlns:sd="clr-namespace:System.Data;assembly=System.Data.Common" xmlns:ss="clr-namespace:System.Security;assembly=System.Private.CoreLib" xmlns:ui="http://schemas.uipath.com/workflow/activities" xmlns:uix="http://schemas.uipath.com/workflow/activities/uix" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <x:Members>
+    <x:Property Name="in_User" Type="InOutArgument(x:String)" />
+    <x:Property Name="in_Password" Type="InOutArgument(ss:SecureString)" />
+  </x:Members>
+  <TextExpression.NamespacesForImplementation>
+    <scg:List x:TypeArguments="x:String" Capacity="24">
+      <x:String>System</x:String>
+      <x:String>System.Data</x:String>
+      <x:String>UiPath.Core</x:String>
+      <x:String>UiPath.Core.Activities</x:String>
+    </scg:List>
+  </TextExpression.NamespacesForImplementation>
+  <TextExpression.ReferencesForImplementation>
+    <scg:List x:TypeArguments="AssemblyReference" Capacity="12">
+      <AssemblyReference>System.Activities</AssemblyReference>
+      <AssemblyReference>UiPath.System.Activities</AssemblyReference>
+      <AssemblyReference>UiPath.UiAutomation.Activities</AssemblyReference>
+    </scg:List>
+  </TextExpression.ReferencesForImplementation>
+  <Sequence DisplayName="SAP line item report" sap:VirtualizedContainerService.HintSize="626,3050" sap2010:WorkflowViewState.IdRef="Sequence_1">
+    <Sequence.Variables>
+      <Variable x:TypeArguments="x:String" Default="C:\Reports\line-items.xlsx" Name="strReportPath" />
+      <Variable x:TypeArguments="sd:DataTable" Name="dtItems" />
+      <Variable x:TypeArguments="x:Int32" Name="intTotal" />
+    </Sequence.Variables>
+    <sap:WorkflowViewStateService.ViewState>
+      <scg:Dictionary x:TypeArguments="x:String, x:Object">
+        <x:Boolean x:Key="IsExpanded">True</x:Boolean>
+      </scg:Dictionary>
+    </sap:WorkflowViewStateService.ViewState>
+    <ui:GetRobotCredential AssetName="SAP_Login" CacheStrategy="None" DisplayName="Get SAP credential" FolderPath="{x:Null}" sap:VirtualizedContainerService.HintSize="584,104" sap2010:WorkflowViewState.IdRef="GetRobotCredential_1" Password="[in_Password]" TimeoutMS="{x:Null}" Username="[in_User]" />
+    <uix:NApplicationCard AttachMode="SingleWindow" DisplayName="Use Browser Chrome: SAP Logon" HealingAgentBehavior="Job" sap:VirtualizedContainerService.HintSize="584,1840" sap2010:WorkflowViewState.IdRef="NApplicationCard_1" InteractionMode="Simulate" OpenMode="Always" ScopeGuid="2b1f7a3c-9d4e-4f60-8a1b-0c2d3e4f5a60" Version="V2">
+      <uix:NApplicationCard.Body>
+        <ActivityAction x:TypeArguments="x:Object">
+          <ActivityAction.Argument>
+            <DelegateInArgument x:TypeArguments="x:Object" Name="WSSessionData" />
+          </ActivityAction.Argument>
+          <Sequence DisplayName="Do" sap:VirtualizedContainerService.HintSize="550,1720" sap2010:WorkflowViewState.IdRef="Sequence_2">
+            <uix:NTypeInto ActivateBefore="True" ClickBeforeMode="Single" DisplayName="Type Into 'User'" EmptyFieldMode="SingleLine" HealingAgentBehavior="SameAsCard" sap:VirtualizedContainerService.HintSize="516,182" sap2010:WorkflowViewState.IdRef="NTypeInto_1" ScopeIdentifier="2b1f7a3c-9d4e-4f60-8a1b-0c2d3e4f5a60" Text="[in_User]" Version="V5">
+              <uix:NTypeInto.Target>
+                <uix:TargetAnchorable BrowserURL="localhost:8080/sap/bc/gui/sap/its/webgui" DesignTimeRectangle="502, 214, 180, 22" DesignTimeScaleFactor="1" ElementType="InputBox" FullSelectorArgument="&lt;webctrl id='sap-user' tag='INPUT' aaname='User' /&gt;" FuzzySelectorArgument="&lt;webctrl id='sap-user' name='sap-user' tag='INPUT' type='text' aaname='User' /&gt;" Guid="7d0c51a2-6b3e-4f17-9a2c-1e3f5a7b9c01" ScopeSelectorArgument="&lt;html app='chrome.exe' title='Logon' /&gt;" SearchSteps="Selector, FuzzySelector" Version="V6" />
+              </uix:NTypeInto.Target>
+            </uix:NTypeInto>
+            <uix:NTypeInto ActivateBefore="True" ClickBeforeMode="Single" DisplayName="Type Into 'Password'" EmptyFieldMode="SingleLine" HealingAgentBehavior="SameAsCard" sap:VirtualizedContainerService.HintSize="516,182" sap2010:WorkflowViewState.IdRef="NTypeInto_2" ScopeIdentifier="2b1f7a3c-9d4e-4f60-8a1b-0c2d3e4f5a60" SecureText="[in_Password]" Version="V5">
+              <uix:NTypeInto.Target>
+                <uix:TargetAnchorable BrowserURL="localhost:8080/sap/bc/gui/sap/its/webgui" DesignTimeRectangle="502, 244, 180, 22" DesignTimeScaleFactor="1" ElementType="InputBox" FullSelectorArgument="&lt;webctrl id='sap-password' tag='INPUT' type='password' /&gt;" FuzzySelectorArgument="&lt;webctrl id='sap-password' name='sap-password' tag='INPUT' type='password' aaname='Password' /&gt;" Guid="7d0c51a2-6b3e-4f17-9a2c-1e3f5a7b9c02" ScopeSelectorArgument="&lt;html app='chrome.exe' title='Logon' /&gt;" SearchSteps="Selector, FuzzySelector" Version="V6" />
+              </uix:NTypeInto.Target>
+            </uix:NTypeInto>
+            <uix:NClick ActivateBefore="True" ClickType="Single" DisplayName="Click 'Log On'" HealingAgentBehavior="SameAsCard" sap:VirtualizedContainerService.HintSize="516,152" sap2010:WorkflowViewState.IdRef="NClick_1" KeyModifiers="None" MouseButton="Left" ScopeIdentifier="2b1f7a3c-9d4e-4f60-8a1b-0c2d3e4f5a60" Version="V5">
+              <uix:NClick.Target>
+                <uix:TargetAnchorable BrowserURL="localhost:8080/sap/bc/gui/sap/its/webgui" DesignTimeRectangle="502, 280, 64, 24" DesignTimeScaleFactor="1" ElementType="Button" FullSelectorArgument="&lt;webctrl tag='BUTTON' aaname='Log On' id='LOGON_BUTTON' /&gt;" FuzzySelectorArgument="&lt;webctrl id='LOGON_BUTTON' tag='BUTTON' type='submit' aaname='Log On' /&gt;" Guid="7d0c51a2-6b3e-4f17-9a2c-1e3f5a7b9c03" ScopeSelectorArgument="&lt;html app='chrome.exe' title='Logon' /&gt;" SearchSteps="Selector, FuzzySelector" Version="V6" />
+              </uix:NClick.Target>
+            </uix:NClick>
+            <uix:NClick ActivateBefore="True" ClickType="Single" DisplayName="Click 'Line Item Report'" HealingAgentBehavior="SameAsCard" sap:VirtualizedContainerService.HintSize="516,152" sap2010:WorkflowViewState.IdRef="NClick_2" KeyModifiers="None" MouseButton="Left" ScopeIdentifier="2b1f7a3c-9d4e-4f60-8a1b-0c2d3e4f5a60" Version="V5">
+              <uix:NClick.Target>
+                <uix:TargetAnchorable Guid="7d0c51a2-6b3e-4f17-9a2c-1e3f5a7b9c04" Reference="Rk3pQe1nTUmN0yZ7VbXg2A/Pq1nZ5bCsU0a9n8iU7v1wA" Version="V6" />
+              </uix:NClick.Target>
+            </uix:NClick>
+            <uix:NSelectItem DisplayName="Select Item 'Company Code'" HealingAgentBehavior="SameAsCard" sap:VirtualizedContainerService.HintSize="516,152" sap2010:WorkflowViewState.IdRef="NSelectItem_1" Item="1000" ScopeIdentifier="2b1f7a3c-9d4e-4f60-8a1b-0c2d3e4f5a60" Version="V5">
+              <uix:NSelectItem.Target>
+                <uix:TargetAnchorable DesignTimeRectangle="502, 214, 120, 22" ElementType="DropDown" FullSelectorArgument="&lt;webctrl tag='INPUT' aaname='Company Code' /&gt;" Guid="7d0c51a2-6b3e-4f17-9a2c-1e3f5a7b9c05" ScopeSelectorArgument="&lt;html app='chrome.exe' title='Line Item Report' /&gt;" SearchSteps="Selector" Version="V6" />
+              </uix:NSelectItem.Target>
+            </uix:NSelectItem>
+            <uix:NTypeInto ActivateBefore="True" ClickBeforeMode="Single" DisplayName="Type Into 'From'" EmptyFieldMode="SingleLine" HealingAgentBehavior="SameAsCard" sap:VirtualizedContainerService.HintSize="516,182" sap2010:WorkflowViewState.IdRef="NTypeInto_3" ScopeIdentifier="2b1f7a3c-9d4e-4f60-8a1b-0c2d3e4f5a60" Text="2026-09-01" Version="V5">
+              <uix:NTypeInto.Target>
+                <uix:TargetAnchorable ElementType="InputBox" FullSelectorArgument="&lt;webctrl tag='INPUT' type='date' aaname='From' /&gt;" Guid="7d0c51a2-6b3e-4f17-9a2c-1e3f5a7b9c06" ScopeSelectorArgument="&lt;html app='chrome.exe' title='Line Item Report' /&gt;" SearchSteps="Selector" Version="V6" />
+              </uix:NTypeInto.Target>
+            </uix:NTypeInto>
+            <uix:NTypeInto ActivateBefore="True" ClickBeforeMode="Single" DisplayName="Type Into 'To'" EmptyFieldMode="SingleLine" HealingAgentBehavior="SameAsCard" sap:VirtualizedContainerService.HintSize="516,182" sap2010:WorkflowViewState.IdRef="NTypeInto_4" ScopeIdentifier="2b1f7a3c-9d4e-4f60-8a1b-0c2d3e4f5a60" Version="V5">
+              <uix:NTypeInto.Text>
+                <InArgument x:TypeArguments="x:String">["2026-09-30"]</InArgument>
+              </uix:NTypeInto.Text>
+              <uix:NTypeInto.Target>
+                <uix:TargetAnchorable ElementType="InputBox" FullSelectorArgument="&lt;webctrl tag='INPUT' type='date' aaname='To' /&gt;" Guid="7d0c51a2-6b3e-4f17-9a2c-1e3f5a7b9c07" ScopeSelectorArgument="&lt;html app='chrome.exe' title='Line Item Report' /&gt;" SearchSteps="Selector" Version="V6" />
+              </uix:NTypeInto.Target>
+            </uix:NTypeInto>
+            <uix:NClick ActivateBefore="True" ClickType="Single" DisplayName="Click 'Execute'" HealingAgentBehavior="SameAsCard" sap:VirtualizedContainerService.HintSize="516,152" sap2010:WorkflowViewState.IdRef="NClick_3" KeyModifiers="None" MouseButton="Left" ScopeIdentifier="2b1f7a3c-9d4e-4f60-8a1b-0c2d3e4f5a60" Version="V5">
+              <uix:NClick.Target>
+                <uix:TargetAnchorable ElementType="Button" FullSelectorArgument="&lt;webctrl id='execBtn' tag='BUTTON' /&gt;" Guid="7d0c51a2-6b3e-4f17-9a2c-1e3f5a7b9c08" ScopeSelectorArgument="&lt;html app='chrome.exe' title='Line Item Report' /&gt;" SearchSteps="Selector" Version="V6" />
+              </uix:NClick.Target>
+            </uix:NClick>
+            <Delay DisplayName="Wait for the report" Duration="00:00:03" sap:VirtualizedContainerService.HintSize="516,22" sap2010:WorkflowViewState.IdRef="Delay_2" />
+            <ui:WaitForDownload DisplayName="Wait for Download" sap:VirtualizedContainerService.HintSize="516,330" sap2010:WorkflowViewState.IdRef="WaitForDownload_1" MonitoredFolder="{x:Null}" TimeoutMS="60000">
+              <ui:WaitForDownload.ActivityBody>
+                <ActivityAction>
+                  <Sequence DisplayName="Download" sap:VirtualizedContainerService.HintSize="482,220" sap2010:WorkflowViewState.IdRef="Sequence_3">
+                    <uix:NClick ActivateBefore="True" ClickType="Single" DisplayName="Click 'Export'" HealingAgentBehavior="SameAsCard" sap:VirtualizedContainerService.HintSize="448,152" sap2010:WorkflowViewState.IdRef="NClick_4" KeyModifiers="None" MouseButton="Left" ScopeIdentifier="2b1f7a3c-9d4e-4f60-8a1b-0c2d3e4f5a60" Version="V5">
+                      <uix:NClick.Target>
+                        <uix:TargetAnchorable ElementType="Button" FullSelectorArgument="&lt;webctrl tag='BUTTON' aaname='Export' class='btn tb' /&gt;" Guid="7d0c51a2-6b3e-4f17-9a2c-1e3f5a7b9c09" ScopeSelectorArgument="&lt;html app='chrome.exe' title='Line Items' /&gt;" SearchSteps="Selector" Version="V6" />
+                      </uix:NClick.Target>
+                    </uix:NClick>
+                  </Sequence>
+                </ActivityAction>
+              </ui:WaitForDownload.ActivityBody>
+            </ui:WaitForDownload>
+          </Sequence>
+        </ActivityAction>
+      </uix:NApplicationCard.Body>
+      <uix:NApplicationCard.TargetApp>
+        <uix:TargetApp Area="0, 0, 1280, 800" BrowserType="Chrome" IconBase64="{x:Null}" Selector="&lt;html app='chrome.exe' title='Logon' /&gt;" Title="Logon" Url="http://localhost:8080/sap/bc/gui/sap/its/webgui" Version="V2" />
+      </uix:NApplicationCard.TargetApp>
+    </uix:NApplicationCard>
+    <ui:InvokeWorkflowFile ArgumentsVariable="{x:Null}" ContinueOnError="{x:Null}" DisplayName="Invoke Workflow File: UploadReport.xaml" sap:VirtualizedContainerService.HintSize="584,88" sap2010:WorkflowViewState.IdRef="InvokeWorkflowFile_1" UnSafe="False" WorkflowFileName="Workflows\UploadReport.xaml">
+      <ui:InvokeWorkflowFile.Arguments>
+        <InArgument x:TypeArguments="x:String" x:Key="in_ReportPath">[strReportPath]</InArgument>
+      </ui:InvokeWorkflowFile.Arguments>
+    </ui:InvokeWorkflowFile>
+    <If Condition="[intTotal &gt; 1000]" DisplayName="If many line items" sap:VirtualizedContainerService.HintSize="584,320" sap2010:WorkflowViewState.IdRef="If_1">
+      <If.Then>
+        <ui:SendSMTPMailMessage Body="[&quot;The line item report has &quot; + intTotal.ToString + &quot; rows.&quot;]" DisplayName="Send SMTP Mail Message" sap:VirtualizedContainerService.HintSize="200,22" sap2010:WorkflowViewState.IdRef="SendSMTPMailMessage_1" Port="587" Server="smtp.acme.example" Subject="Large SAP line item report" To="finance@acme.example" />
+      </If.Then>
+      <If.Else>
+        <Delay DisplayName="Delay" Duration="00:00:05" sap:VirtualizedContainerService.HintSize="200,22" sap2010:WorkflowViewState.IdRef="Delay_1" />
+      </If.Else>
+    </If>
+    <ui:ForEach x:TypeArguments="x:Object" CurrentIndex="{x:Null}" DisplayName="For Each region" sap:VirtualizedContainerService.HintSize="584,300" sap2010:WorkflowViewState.IdRef="ForEach`1_1" Values="[{&quot;EMEA&quot;, &quot;AMER&quot;}]">
+      <ui:ForEach.Body>
+        <ActivityAction x:TypeArguments="x:Object">
+          <ActivityAction.Argument>
+            <DelegateInArgument x:TypeArguments="x:Object" Name="region" />
+          </ActivityAction.Argument>
+          <Sequence DisplayName="Body" sap:VirtualizedContainerService.HintSize="550,180" sap2010:WorkflowViewState.IdRef="Sequence_4">
+            <ui:HttpClient AcceptFormat="JSON" Body="{x:Null}" BodyFormat="application/json" ClientCertificate="{x:Null}" DisplayName="Notify the region" EndPoint="https://hooks.acme.example/sap-report" sap:VirtualizedContainerService.HintSize="516,90" sap2010:WorkflowViewState.IdRef="HttpClient_1" Method="POST" />
+          </Sequence>
+        </ActivityAction>
+      </ui:ForEach.Body>
+    </ui:ForEach>
+    <ui:ExcelApplicationScope Password="{x:Null}" DisplayName="Excel Application Scope" sap:VirtualizedContainerService.HintSize="584,330" sap2010:WorkflowViewState.IdRef="ExcelApplicationScope_1" InstanceCachePeriod="{x:Null}" MacroSetting="ReadFromExcelSettings" WorkbookPath="C:\Reports\line-items.xlsx">
+      <ui:ExcelApplicationScope.Body>
+        <ActivityAction x:TypeArguments="ui:WorkbookApplication">
+          <ActivityAction.Argument>
+            <DelegateInArgument x:TypeArguments="ui:WorkbookApplication" Name="ExcelWorkbookScope" />
+          </ActivityAction.Argument>
+          <Sequence DisplayName="Do" sap:VirtualizedContainerService.HintSize="550,210" sap2010:WorkflowViewState.IdRef="Sequence_5">
+            <ui:ExcelReadRange AddHeaders="True" DataTable="[dtItems]" DisplayName="Read Range" sap:VirtualizedContainerService.HintSize="516,60" sap2010:WorkflowViewState.IdRef="ExcelReadRange_1" Range="" SheetName="Line Items" />
+          </Sequence>
+        </ActivityAction>
+      </ui:ExcelApplicationScope.Body>
+    </ui:ExcelApplicationScope>
+    <ui:LogMessage DisplayName="Log Message" sap:VirtualizedContainerService.HintSize="584,90" sap2010:WorkflowViewState.IdRef="LogMessage_1" Level="Info" Message="[&quot;Report uploaded&quot;]" />
+    <uix:NSAPLogon Client="100" ConnectionName="RPA - Production" DisplayName="SAP Logon" sap:VirtualizedContainerService.HintSize="584,120" sap2010:WorkflowViewState.IdRef="NSAPLogon_1" Language="EN" Version="V1">
+      <uix:NSAPLogon.Target>
+        <uix:TargetAnchorable ElementType="Button" FullSelectorArgument="&lt;sap id='tbar[1]' /&gt;" Guid="7d0c51a2-6b3e-4f17-9a2c-1e3f5a7b9c10" ScopeSelectorArgument="&lt;wnd app='saplogon.exe' cls='SAP_FRONTEND_SESSION' title='SAP Easy Access' /&gt;" SearchSteps="Selector" Version="V6" />
+      </uix:NSAPLogon.Target>
+    </uix:NSAPLogon>
+    <uix:NClick ActivateBefore="True" ClickType="Single" DisplayName="Click 'Execute' in SAP GUI" sap:VirtualizedContainerService.HintSize="584,152" sap2010:WorkflowViewState.IdRef="NClick_5" KeyModifiers="None" MouseButton="Left" Version="V5">
+      <uix:NClick.Target>
+        <uix:TargetAnchorable ElementType="Button" FullSelectorArgument="&lt;wnd app='saplogon.exe' cls='SAP_FRONTEND_SESSION' /&gt;&lt;sap id='tbar[1]/btn[8]' /&gt;" Guid="7d0c51a2-6b3e-4f17-9a2c-1e3f5a7b9c11" SearchSteps="Selector" Version="V6" />
+      </uix:NClick.Target>
+    </uix:NClick>
+  </Sequence>
+</Activity>

@@ -1,0 +1,10 @@
+{
+  "name": "n8n-rpa-gate",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "Zero-dependency bearer-token gate in front of a Playwright run-server, baked into the rpa-browser image (images/browser).",
+  "exports": { ".": "./gate.mjs" },
+  "scripts": { "test": "node --test \"test/**/*.test.js\" \"../test/**/*.test.js\"" }
+}

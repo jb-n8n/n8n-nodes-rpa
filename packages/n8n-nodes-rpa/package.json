@@ -1,0 +1,78 @@
+{
+  "name": "n8n-nodes-rpa",
+  "version": "0.1.0",
+  "description": "Robotic process automation for n8n: screenshots, page text, PDFs, tables, forms and downloads, plus signed step lists that repair themselves with AI. Self-hosted only.",
+  "license": "MIT",
+  "homepage": "https://github.com/jb-n8n/n8n-nodes-rpa#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jb-n8n/n8n-nodes-rpa.git",
+    "directory": "packages/n8n-nodes-rpa"
+  },
+  "bugs": {
+    "url": "https://github.com/jb-n8n/n8n-nodes-rpa/issues"
+  },
+  "author": {
+    "name": "Jay Byoun",
+    "email": "290073995+jb-n8n@users.noreply.github.com"
+  },
+  "keywords": [
+    "n8n-community-node-package",
+    "n8n",
+    "rpa",
+    "browser-automation",
+    "web-scraping",
+    "self-healing",
+    "playwright"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "engines": {
+    "node": ">=22.12"
+  },
+  "files": [
+    "dist",
+    "templates"
+  ],
+  "n8n": {
+    "n8nNodesApiVersion": 1,
+    "strict": false,
+    "credentials": [
+      "dist/credentials/PlaywrightBrowserApi.credentials.js",
+      "dist/credentials/PlaywrightSiteLoginApi.credentials.js",
+      "dist/credentials/PlaywrightScriptSigningApi.credentials.js",
+      "dist/credentials/PlaywrightRedisApi.credentials.js"
+    ],
+    "nodes": [
+      "dist/nodes/Playwright/Playwright.node.js"
+    ]
+  },
+  "scripts": {
+    "build": "pnpm --filter n8n-rpa-engine build && node scripts/clean.mjs && tsc -p tsconfig.json && node scripts/copy-assets.mjs",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "lint": "eslint .",
+    "test": "tsc -p tsconfig.json && node scripts/copy-assets.mjs && vitest run"
+  },
+  "dependencies": {
+    "fflate": "0.8.3",
+    "playwright-core": "1.63.0",
+    "redis": "6.3.0"
+  },
+  "devDependencies": {
+    "@n8n/eslint-plugin-community-nodes": "0.35.0",
+    "@types/node": "24.19.1",
+    "eslint": "9.29.0",
+    "n8n-rpa-engine": "workspace:*",
+    "n8n-rpa-sandbox": "workspace:*",
+    "n8n-workflow": "2.41.0",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.70.0",
+    "vite": "8.3.3",
+    "vitest": "5.0.3"
+  },
+  "peerDependencies": {
+    "n8n-workflow": "*"
+  }
+}

@@ -1,0 +1,13 @@
+# The RPA browser service: the rpa-browser image (Playwright's run-server behind the token gate) as a Deployment with
+# drain on scale-in, a NetworkPolicy, and KEDA or CPU autoscaling. apiVersion v2: Helm 3 and Helm 4.
+apiVersion: v2
+name: rpa-browser
+description: The RPA browser service for n8n workers (browser sessions behind a token gate), with drain, policies and scaling
+type: application
+version: 0.1.0
+# The Playwright version inside the image (README: Version matching). image.tag or image.digest picks the image itself.
+appVersion: "1.63.0"
+keywords:
+  - n8n
+  - rpa
+  - browser

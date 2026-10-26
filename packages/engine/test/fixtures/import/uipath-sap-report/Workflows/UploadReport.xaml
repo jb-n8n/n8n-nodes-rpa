@@ -1,0 +1,19 @@
+<Activity mc:Ignorable="sap sap2010" x:Class="UploadReport" sap2010:WorkflowViewState.IdRef="ActivityBuilder_1" xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation" xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation" xmlns:uaws="clr-namespace:UiPath.Amazon.Scope.Activities;assembly=UiPath.Amazon.Scope.Activities" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <x:Members>
+    <x:Property Name="in_ReportPath" Type="InArgument(x:String)" />
+  </x:Members>
+  <Sequence DisplayName="Upload the report" sap2010:WorkflowViewState.IdRef="Sequence_1">
+    <uaws:AmazonScope AuthenticationType="AccessKey" DisplayName="Amazon Web Services Scope" sap2010:WorkflowViewState.IdRef="AmazonScope_1" Region="eu-central-1">
+      <uaws:AmazonScope.Body>
+        <ActivityAction x:TypeArguments="x:Object">
+          <ActivityAction.Argument>
+            <DelegateInArgument x:TypeArguments="x:Object" Name="AmazonScope" />
+          </ActivityAction.Argument>
+          <Sequence DisplayName="Do" sap2010:WorkflowViewState.IdRef="Sequence_2">
+            <uaws:UploadFile BucketName="acme-finance-reports" DisplayName="Upload line items to S3" FilePath="[in_ReportPath]" KeyName="sap/line-items.xlsx" sap2010:WorkflowViewState.IdRef="UploadFile_1" />
+          </Sequence>
+        </ActivityAction>
+      </uaws:AmazonScope.Body>
+    </uaws:AmazonScope>
+  </Sequence>
+</Activity>

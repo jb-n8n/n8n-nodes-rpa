@@ -1,0 +1,52 @@
+{{- include "rpa-browser.validate" . }}
+{{- if and .Values.networkPolicy.enabled .Values.egress.fqdns }}
+# Cilium only: egress.fqdns on 80/443, resolved through Cilium's DNS proxy (hence the DNS rule with an L7 dns section).
+# Cilium adds these allows to the NetworkPolicy's, and its deny rules win over any allow: the metadata ranges and
+# egress.exceptCIDRs stay unreachable even when a listed name resolves into them. To confirm on a Cilium cluster: that a
+# deny over the pod range in egress.exceptCIDRs does not also block kube-dns (CIDR rules are meant to match only
+# destinations outside the cluster).
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "rpa-browser.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rpa-browser.labels" . | nindent 4 }}
+spec:
+  endpointSelector:
+    matchLabels:
+      {{- include "rpa-browser.selectorLabels" . | nindent 6 }}
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: {{ .Values.egress.dns.namespace }}
+            {{- range $k, $v := .Values.egress.dns.podSelector }}
+            k8s:{{ $k }}: {{ $v | quote }}
+            {{- end }}
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: ANY
+          rules:
+            dns:
+              - matchPattern: "*"
+    - toFQDNs:
+        {{- range .Values.egress.fqdns }}
+        {{- if contains "*" . }}
+        - matchPattern: {{ . | quote }}
+        {{- else }}
+        - matchName: {{ . | quote }}
+        {{- end }}
+        {{- end }}
+      toPorts:
+        - ports:
+            - port: "80"
+              protocol: TCP
+            - port: "443"
+              protocol: TCP
+  egressDeny:
+    - toCIDRSet:
+        {{- range uniq (concat (include "rpa-browser.metadataRanges" . | fromJsonArray) (.Values.egress.exceptCIDRs | default list)) }}
+        - cidr: {{ . | quote }}
+        {{- end }}
+{{- end }}

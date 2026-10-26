@@ -1,0 +1,134 @@
+# Queue-mode override: n8n in queue mode with Postgres, Redis and two workers, on top of the stack and the dev override.
+#   docker compose -p n8n-rpa-queue -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.queue.yml up -d --build
+# It runs beside the default stack: its own project name (`name:` below overrides docker-compose.yml's n8n-rpa; `-p`
+# makes it explicit),
+# its own image tags (so a build here never replaces the images the default stack runs), and its own host ports:
+# n8n http://localhost:35678, sandbox :38080, Mailpit :38025, browser gate :33000 (all on 127.0.0.1).
+# Run Steps with an RPA Site Login needs an RPA Redis credential here: Host `redis`, Port 6379, no user or password.
+# Redis and Postgres are on their own `queue` network with n8n and the workers; the browser is not on it, so a page that
+# took over the browser cannot reach the queue, the breaker or the lock. Neither publishes a port.
+name: n8n-rpa-queue
+
+# Merged into n8n and both workers. Workers take everything else (the encryption key included) from docker-compose.yml's
+# n8n service through `extends`.
+x-queue-env: &queue-env
+  WEBHOOK_URL: http://localhost:35678/
+  EXECUTIONS_MODE: queue
+  OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS: "true"
+  QUEUE_BULL_REDIS_HOST: redis
+  QUEUE_BULL_REDIS_PORT: "6379"
+  QUEUE_HEALTH_CHECK_ACTIVE: "true"
+  DB_TYPE: postgresdb
+  DB_POSTGRESDB_HOST: postgres
+  DB_POSTGRESDB_PORT: "5432"
+  DB_POSTGRESDB_DATABASE: n8n
+  DB_POSTGRESDB_USER: n8n
+  # Local test stack only: Postgres publishes no port and is reachable only on the `queue` network.
+  DB_POSTGRESDB_PASSWORD: n8n-queue-local
+
+x-queue-depends: &queue-depends
+  postgres: { condition: service_healthy }
+  redis: { condition: service_healthy }
+
+x-n8n-health: &n8n-health
+  test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5678/healthz >/dev/null || exit 1"]
+  interval: 10s
+  timeout: 5s
+  retries: 12
+  start_period: 30s
+
+services:
+  n8n:
+    image: n8n-rpa/n8n:queue
+    environment: *queue-env
+    ports: !override
+      - "127.0.0.1:35678:5678" # n8n editor
+    networks: [browser, mail, queue]
+    depends_on: *queue-depends
+    healthcheck: *n8n-health
+
+  n8n-worker-1:
+    extends: { file: docker-compose.yml, service: n8n }
+    image: n8n-rpa/n8n:queue
+    hostname: n8n-worker-1
+    command: worker
+    environment:
+      <<: *queue-env
+      N8N_LOG_LEVEL: debug # the log names every execution this worker runs
+    ports: !reset []
+    volumes: !reset []
+    networks: [browser, mail, queue]
+    depends_on:
+      <<: *queue-depends
+      n8n: { condition: service_healthy } # the main process runs the database migrations
+    healthcheck: *n8n-health
+
+  n8n-worker-2:
+    extends: { file: docker-compose.yml, service: n8n }
+    image: n8n-rpa/n8n:queue
+    hostname: n8n-worker-2
+    command: worker
+    environment:
+      <<: *queue-env
+      N8N_LOG_LEVEL: debug # the log names every execution this worker runs
+    ports: !reset []
+    volumes: !reset []
+    networks: [browser, mail, queue]
+    depends_on:
+      <<: *queue-depends
+      n8n: { condition: service_healthy }
+    healthcheck: *n8n-health
+
+  browser:
+    image: n8n-rpa/rpa-browser:queue
+    ports: !override
+      - "127.0.0.1:33000:3000"
+
+  sandbox:
+    ports: !override
+      - "127.0.0.1:38080:8080" # sandbox admin page for your own browser
+
+  mailpit:
+    ports: !override
+      - "127.0.0.1:38025:8025" # inbox UI; n8n sends to mailpit:1025
+
+  postgres:
+    image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24 # n8n 2.41 supports Postgres 17 and later
+    restart: unless-stopped
+    user: "70:70" # the image's postgres user, so the entrypoint needs no capabilities to switch to it
+    environment:
+      POSTGRES_USER: n8n
+      POSTGRES_PASSWORD: n8n-queue-local
+      POSTGRES_DB: n8n
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks: [queue]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U n8n -d n8n"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+
+  redis:
+    image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    restart: unless-stopped
+    user: "999:1000" # the image's redis user
+    volumes:
+      - redis_data:/data
+    networks: [queue]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+
+networks:
+  queue: {} # n8n, both workers, postgres, redis: the browser is not on this network
+
+volumes:
+  postgres_data: {}
+  redis_data: {}

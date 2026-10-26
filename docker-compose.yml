@@ -1,0 +1,107 @@
+# RPA for n8n reference stack: n8n with the community node, a pinned browser server (playwright run-server) behind a token gate, the
+# sandbox, and Mailpit for approval emails. Every service has its own network namespace: the browser cannot reach
+# n8n's loopback. Two networks: `browser` (n8n, the browser service, sandbox) and `mail` (n8n, mailpit). The browser is not on
+# `mail`, so a compromised page cannot read approval links from Mailpit. It can still reach n8n:5678 on `browser`
+# (n8n has to connect to it); for production, add an egress firewall that lets the browser reach only the sites runs
+# may visit. From inside n8n the browser endpoint is ws://browser:3000/ (turn on Private Network Endpoint and use
+# the token below); the browser opens the sandbox at http://sandbox:8080; n8n sends mail to mailpit:1025.
+# Set BROWSER_TOKEN in .env first (see .env.example). docker-compose.dev.yml publishes the gate on 127.0.0.1:3000.
+name: n8n-rpa
+
+# Shared hardening, merged into services with `<<: *hardened`: no privilege escalation, no Linux capabilities.
+# browser repeats the two keys literally (README.md quotes that service verbatim); keep them in step.
+x-hardened: &hardened
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+
+services:
+  n8n:
+    build:
+      context: .
+      dockerfile: docker/n8n.Dockerfile
+    image: n8n-rpa/n8n:local
+    restart: unless-stopped
+    environment:
+      N8N_HOST: localhost
+      N8N_PORT: "5678"
+      N8N_PROTOCOL: http
+      WEBHOOK_URL: http://localhost:5678/
+      N8N_SECURE_COOKIE: "false"
+      GENERIC_TIMEZONE: UTC
+      # The key that encrypts credentials comes from .env, not from n8n's own first start. n8n 2.41 still writes it
+      # to ~/.n8n/config in the n8n_data volume, so protect that volume and its backups like the key itself.
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?set N8N_ENCRYPTION_KEY in .env (openssl rand -hex 32)}
+      N8N_COMMUNITY_PACKAGES_ENABLED: "true"
+      # "false": nobody can install an unverified community package from Settings > Community nodes. The baked-in
+      # package still loads: in n8n 2.41 this switch only gates installs (CommunityPackagesService
+      # checkInstallPermissions); packages already in ~/.n8n/nodes are loaded by a directory scan
+      # (n8n-core scanDirectoryForPackages) that ignores it. n8n 3 makes it gate loading too: revisit before upgrading.
+      N8N_UNVERIFIED_PACKAGES_ENABLED: "false"
+      N8N_GRACEFUL_SHUTDOWN_TIMEOUT: "30"
+      N8N_DIAGNOSTICS_ENABLED: "false"
+    ports:
+      - "127.0.0.1:5678:5678" # n8n editor
+    volumes:
+      - n8n_data:/home/node/.n8n
+    networks: [browser, mail]
+    <<: *hardened
+
+  browser:
+    # The rpa-browser image (images/browser): the Playwright run-server, the token gate and a supervisor under tini, which
+    # is the image's PID 1 (so no `init: true`). Compose, ECS and Kubernetes run the same image.
+    build:
+      context: images/browser
+    image: n8n-rpa/rpa-browser:local
+    restart: unless-stopped
+    user: pwuser
+    working_dir: /home/pwuser
+    # Chromium runs with --no-sandbox as pwuser (Playwright's default), so it needs no capabilities and no setuid
+    # helper. The run-server is installed in the image from a lockfile (images/browser/Dockerfile): nothing is
+    # downloaded at start.
+    # Same values as x-hardened, spelled out because README.md quotes this service line for line (readme.test.ts).
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    mem_limit: 2g
+    pids_limit: 1024
+    # The run-server listens on the container's loopback only, on a random 128-bit path generated at each container start;
+    # the gate on :3000 forwards WebSocket upgrades that carry the token. Neither the path nor the run-server's output
+    # leaves the container; the gate's errors still show in `docker logs`. The gate also refuses launch options outside
+    # headless/timeout/slowMo (no executablePath, args, ignoreDefaultArgs, env) and a client's exposeNetwork proxy.
+    # images/browser/entrypoint.sh supervises both: when either dies, it stops the other and exits 1, so `restart:
+    # unless-stopped` brings the pair back; on `docker stop` it stops the gate first, then the run-server.
+    environment:
+      BROWSER_GATE_TOKEN: ${BROWSER_TOKEN:?set BROWSER_TOKEN in .env}
+      BROWSER_GATE_PORT: "3000"
+      BROWSER_UPSTREAM_PORT: "3001"
+    networks: [browser]
+    # No published port: n8n reaches it on the compose network. docker-compose.dev.yml publishes it on 127.0.0.1.
+
+  sandbox:
+    build:
+      context: ./sandbox/portal
+    restart: unless-stopped
+    environment:
+      PORT: "8080"
+      STATE_FILE: /data/state.json
+    ports:
+      - "127.0.0.1:8080:8080" # sandbox admin page for your own browser
+    volumes:
+      - sandbox_state:/data
+    networks: [browser]
+    <<: *hardened
+
+  mailpit:
+    image: axllent/mailpit:v1.27.0@sha256:fb84cfb1c3a33007cfdee8ba5a77b8c6c894de5b1a368372ddc5c965cf5c0b6d
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8025:8025" # inbox UI; n8n sends to mailpit:1025
+    networks: [mail]
+    <<: *hardened
+
+networks:
+  browser: {} # n8n, the browser service, sandbox: n8n drives the browser, the browser opens the sandbox
+  mail: {} # n8n, mailpit: the browser is not on this network
+
+volumes:
+  n8n_data: {}
+  sandbox_state: {}

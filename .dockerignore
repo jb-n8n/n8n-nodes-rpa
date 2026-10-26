@@ -1,0 +1,12 @@
+**/node_modules
+**/dist
+.git
+.gstack
+.superpowers
+sandbox/portal/state
+packages/eval/eval-report-*.json
+.claude
+.env*
+docs
+*.tsbuildinfo
+demo

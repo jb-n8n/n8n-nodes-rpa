@@ -1,0 +1,43 @@
+# KEDA on session utilisation (the default mode once a Prometheus address is set), the PodMonitor that feeds it, n8n in
+# another namespace, and all of the internet on 80/443 minus the metadata address and the cluster's private ranges.
+image:
+  repository: ghcr.io/example/rpa-browser
+  tag: "1.63.0"
+token:
+  existingSecret: rpa-browser-token
+autoscaling:
+  min: 2
+  max: 12
+  prometheus:
+    serverAddress: http://prometheus-operated.monitoring.svc:9090
+    authenticationRef:
+      name: keda-prometheus
+      kind: ClusterTriggerAuthentication
+n8n:
+  podSelector:
+    app.kubernetes.io/name: n8n
+    app.kubernetes.io/component: worker
+  namespaceSelector:
+    kubernetes.io/metadata.name: n8n
+metrics:
+  from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: prometheus
+  podMonitor:
+    enabled: true
+    labels:
+      release: kube-prometheus-stack
+egress:
+  allowedCIDRs:
+    - 0.0.0.0/0
+  exceptCIDRs:
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+  dns:
+    # NodeLocal DNSCache: the one link-local address allowed, on port 53 only.
+    ipBlocks:
+      - 169.254.20.10/32

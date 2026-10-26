@@ -1,0 +1,67 @@
+{{- include "rpa-browser.validate" . }}
+{{- if .Values.networkPolicy.enabled }}
+{{- $blocks := include "rpa-browser.webIpBlocks" . | fromYamlArray }}
+{{- $dnsBlocks := include "rpa-browser.dnsIpBlocks" . | fromYamlArray }}
+# Ingress: the gate (3000) only from the n8n pods, the metrics port (9464) only from metrics.from. Egress: cluster DNS
+# (plus egress.dns.ipBlocks) on 53, and egress.allowedCIDRs on 80/443 with the metadata ranges and egress.exceptCIDRs
+# cut out of every CIDR that contains them. Nothing else: not n8n, not Redis, not the database.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "rpa-browser.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rpa-browser.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "rpa-browser.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- toYaml .Values.n8n.podSelector | nindent 14 }}
+          {{- with .Values.n8n.namespaceSelector }}
+          namespaceSelector:
+            matchLabels:
+              {{- toYaml . | nindent 14 }}
+          {{- end }}
+      ports:
+        - port: 3000
+          protocol: TCP
+    {{- with .Values.metrics.from }}
+    - from:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - port: 9464
+          protocol: TCP
+    {{- end }}
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.egress.dns.namespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.egress.dns.podSelector | nindent 14 }}
+        {{- with $dnsBlocks }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    {{- if $blocks }}
+    - to:
+        {{- toYaml $blocks | nindent 8 }}
+      ports:
+        - port: 80
+          protocol: TCP
+        - port: 443
+          protocol: TCP
+    {{- end }}
+{{- end }}

@@ -1,0 +1,203 @@
+# Build, typecheck, lint, tests, offline acceptance, dependency audit, the deploy checks (Terraform and the Helm chart), the
+# rpa-browser image build and its docker tests (plus a native arm64 build when images/ changed), and a secret scan. The
+# chart's end-to-end drain check on a kind cluster is kind-e2e.yml. Uses no repository secrets: the acceptance suite runs
+# offline (no ANTHROPIC_API_KEY, no compose stack).
+# Actions are pinned by full commit SHA; downloaded tools by version and SHA-256.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # The Redis GuardStore contract suite runs against this service (database 15).
+    services:
+      redis:
+        image: redis:7@sha256:4fa24486b8bcca8eec45ee0eb166edc674795e53a2b53d1a9ef263eecebaac85
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # pnpm version from "packageManager" in package.json.
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: npx --yes playwright@1.63.0 install --with-deps chromium
+      - run: pnpm -r build
+      - run: pnpm -r typecheck
+      - run: pnpm -r lint
+      - run: pnpm test
+        env:
+          REDIS_URL: redis://localhost:6379/15
+      - run: pnpm acceptance
+        env:
+          ANTHROPIC_API_KEY: ""
+      - run: pnpm audit --prod --audit-level high
+
+  # make -C deploy check: terraform fmt/init/validate/test for every module and example, tflint, and the Helm chart's
+  # render checks; tflint is required here (REQUIRE_TFLINT=1), unlike locally. Two Terraform versions:
+  # - 1.11.4, the floor every root declares (>= 1.11), over every root (the default set, so a new root can't skip the floor). The managed example composes
+  #   n8n-io/terraform-aws-n8n at its pinned release 0.5.0, which still accepts 1.11. Its main branch requires >= 1.13
+  #   and documents that `terraform test` on 1.11/1.12 can leak provider processes; the managed example's plan-only test
+  #   left none and took seconds on 1.11.4.
+  # - 1.16.7, a current release, over every root (the managed example fetches n8n's module at its pinned version).
+  # Checksums are the linux_amd64 entries of each release's published SHA256SUMS / checksums.txt / .sha256sum / CHECKSUMS.
+  deploy:
+    name: deploy (terraform ${{ matrix.terraform }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - terraform: 1.11.4
+            terraform_sha256: 1ce994251c00281d6845f0f268637ba50c0005657eb3cf096b92f753b42ef4dc
+          - terraform: 1.16.7
+            terraform_sha256: 5454efcf7fc87f0c2113111b9a5c7182f0ca1c6f0f23a1e110a50770a8fe473b
+    env:
+      TERRAFORM_VERSION: ${{ matrix.terraform }}
+      TERRAFORM_SHA256: ${{ matrix.terraform_sha256 }}
+      TFLINT_VERSION: v0.64.0
+      TFLINT_SHA256: cca9d13e2e1d7a2c627af60ff899a3c9b74212899416aeb96ec764d2ef954537
+      HELM_VERSION: v3.22.1
+      HELM_SHA256: 896cf63684a42a723d61c980369d6e588330927deb13676ca0d85006dd6da0ea
+      KUBECONFORM_VERSION: v0.8.0
+      KUBECONFORM_SHA256: 9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # node runs the chart's assert.mjs and the module's chart.sh helpers.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - name: Install Terraform, tflint, helm and kubeconform (pinned, checksum-verified)
+        run: |
+          set -euo pipefail
+          bin="$RUNNER_TEMP/deploy-tools"
+          mkdir -p "$bin"
+          cd "$RUNNER_TEMP"
+          fetch() { curl -fsSL --retry 3 -o "$1" "$2"; echo "$3  $1" | sha256sum -c -; }
+          fetch terraform.zip "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip" "$TERRAFORM_SHA256"
+          unzip -q -o terraform.zip terraform -d "$bin"
+          fetch tflint.zip "https://github.com/terraform-linters/tflint/releases/download/${TFLINT_VERSION}/tflint_linux_amd64.zip" "$TFLINT_SHA256"
+          unzip -q -o tflint.zip tflint -d "$bin"
+          fetch helm.tar.gz "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" "$HELM_SHA256"
+          tar -xzf helm.tar.gz -C "$bin" --strip-components=1 linux-amd64/helm
+          fetch kubeconform.tar.gz "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" "$KUBECONFORM_SHA256"
+          tar -xzf kubeconform.tar.gz -C "$bin" kubeconform
+          echo "$bin" >> "$GITHUB_PATH"
+      - run: terraform version && tflint --version && helm version --short && kubeconform -v
+      - name: make -C deploy check
+        env:
+          REQUIRE_TFLINT: "1"
+        run: make -C deploy check
+
+  # The rpa-browser image (images/browser): build it for linux/amd64 with plain `docker build` (the runner's own builder,
+  # so the image lands in the local docker with no export step; never pushed: browser-image.yml publishes), then run the
+  # image's tests against it (image.test.js, entrypoint.test.js, container.test.js). The gate's unit tests already run in
+  # the test job. The glob, not the directory: Node 22's `node --test <dir>` treats the directory as a module and fails.
+  browser-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The docker tests connect with the engine's playwright-core (no browser download: Chromium runs in the image).
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build the image (linux/amd64, not pushed)
+        run: docker build --platform linux/amd64 -t rpa-browser:ci images/browser
+      - run: node --test "images/browser/test/*.test.js"
+        env:
+          RPA_DOCKER_TESTS: "1"
+          RPA_BROWSER_IMAGE: rpa-browser:ci
+
+  # Did this change touch images/? GitHub's paths filter works per workflow, not per job, so the arm64 build below asks
+  # git: a pull request's merge commit against its base, a push against the previous head of the branch. Anything else
+  # (a dispatch, a new branch, an unknown previous head) counts as a change.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      images: ${{ steps.diff.outputs.images }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          range=""
+          if [ "$EVENT" = pull_request ]; then
+            range="HEAD^1 HEAD"
+          elif [ "$EVENT" = push ] && [ -n "$BEFORE" ] && git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            range="$BEFORE HEAD"
+          fi
+          images=true
+          if [ -n "$range" ]; then
+            # shellcheck disable=SC2086 # two revisions
+            changed="$(git diff --name-only $range)"
+            # Not piped into grep -q: with pipefail, grep's early exit could fail git diff with SIGPIPE.
+            grep -q '^images/' <<<"$changed" || images=false
+          fi
+          echo "images=$images" | tee -a "$GITHUB_OUTPUT"
+
+  # The same image built natively for linux/arm64 (build only, no tests, never pushed), when images/ changed: the
+  # published image is multi-arch (browser-image.yml builds arm64 under QEMU), so an arm64-only break shows up here
+  # first. ubuntu-24.04-arm runners are free for public repositories and billed per minute for private ones.
+  browser-image-arm64:
+    needs: changes
+    if: needs.changes.outputs.images == 'true'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the image (linux/arm64, not pushed)
+        run: docker build --platform linux/arm64 -t rpa-browser:ci-arm64 images/browser
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # The gitleaks image (pinned by digest) scans the whole history with .gitleaks.toml; no license or token needed.
+      - name: Scan history for secrets
+        run: >-
+          docker run --rm -v "$PWD:/repo:ro"
+          ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+          git /repo --config /repo/.gitleaks.toml --redact --no-banner --verbose

@@ -1,0 +1,7 @@
+{
+  "node": "n8n-nodes-rpa.playwright",
+  "nodeVersion": "1.0",
+  "codexVersion": "1.0",
+  "categories": ["Development", "Data & Storage"],
+  "alias": ["Playwright", "browser", "scrape", "screenshot", "PDF", "self-healing"]
+}

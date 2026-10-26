@@ -1,0 +1,19 @@
+# gitleaks configuration: the default rules, plus an allowlist for the synthetic values in tests.
+# Each entry is an exact fake value, not a path, so a real secret added to the same files is still reported.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Synthetic test values (wrong passwords, fixed signing keys and tokens, fake API keys)"
+regexTarget = "secret"
+regexes = [
+  '''^wrong-pass-123$''',
+  '''^tok-5d8e3a71$''',
+  '''^(0123456789abcdef){4}$''',
+  '''^[a-z-]+-signing-key-0123456789abcdef$''',
+  '''^dGhlIHNhbXBsZSBub25jZQ==$''',
+  '''^e2e(0123456789abcdef){3}0123456789ab$''',
+  '''^n8n-api-key-0123456789-abcdefghij$''',
+  '''^env\.N8N_API_KEY$''',
+  '''^cz1TSUQ6QU5PTjp2aGNhbGxzX0RFVl8wMDo$''',
+]

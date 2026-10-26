@@ -1,0 +1,15 @@
+# The kind end-to-end shape: fixed replicas, one session, a short drain, no NetworkPolicy (kind's
+# default CNI does not enforce one).
+image:
+  repository: rpa-browser
+  tag: e2e
+  pullPolicy: Never
+sessionsPerReplica: 1
+drainSeconds: 60
+replicas: 1
+autoscaling:
+  mode: none
+token:
+  existingSecret: rpa-browser-token
+networkPolicy:
+  enabled: false

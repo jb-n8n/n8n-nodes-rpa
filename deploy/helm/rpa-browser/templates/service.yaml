@@ -1,0 +1,18 @@
+{{- include "rpa-browser.validate" . }}
+# The gate's port only. The metrics port (9464) stays on the pods, reachable by metrics.from through the NetworkPolicy.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rpa-browser.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rpa-browser.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "rpa-browser.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: gate
+      port: 3000
+      targetPort: gate
+      protocol: TCP

@@ -1,0 +1,148 @@
+# rpa-browser: the RPA browser service. Each pod runs the rpa-browser image: Playwright's run-server behind the token
+# gate, which serves at most sessionsPerReplica browser sessions, reports metrics, and drains on scale-in.
+# Required: image.repository with image.tag and/or image.digest, token.existingSecret, and (with networkPolicy.enabled)
+# n8n.podSelector. The Service and every object are named after the release, so the endpoint for n8n is
+# ws://<release>.<namespace>.svc.cluster.local:3000/
+
+image:
+  # Required, for example ghcr.io/jb-n8n/rpa-browser.
+  repository: ""
+  # At least one of tag and digest. With both, the image is repository:tag@digest (the digest wins at pull time).
+  tag: ""
+  digest: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Sessions per pod (BROWSER_GATE_MAX_SESSIONS, 1-64). The gate refuses the next one with 503 busy and the engine waits
+# for a free session. Size the pod for it: start with 4 sessions on 2 vCPU / 4 GiB and measure.
+sessionsPerReplica: 4
+
+# Drain time in seconds (BROWSER_GATE_DRAIN_SECONDS, 1-86400), at least the longest run. On SIGTERM the gate refuses new sessions,
+# /healthz turns 503, and the pod exits once its sessions end or this time passes. terminationGracePeriodSeconds is this
+# plus 30. Whatever evicts or scales in the pod must allow that long: cluster-autoscaler's default
+# --max-graceful-termination-sec is 600, below the default 630 (see README.md).
+drainSeconds: 600
+
+# Pod count when autoscaling.mode is none. With an autoscaler the Deployment carries no replica count.
+replicas: 1
+
+autoscaling:
+  # keda: KEDA ScaledObject on session utilisation, sum(active) / sum(capacity) over this release's pods that are not
+  # draining, from Prometheus. Needs metrics.from while networkPolicy.enabled (the template refuses otherwise).
+  # hpa-cpu: a HorizontalPodAutoscaler on CPU (needs resources.requests.cpu).
+  # none: a fixed replica count (replicas).
+  # Empty (the default): keda when prometheus.serverAddress is set, hpa-cpu otherwise.
+  mode: ""
+  min: 1
+  max: 10
+  # Session utilisation the KEDA trigger holds (0-1). The trigger is metricType Value, so KEDA scales to
+  # ceil(replicas * utilisation / targetUtilization). Activation is 0. ignoreNullValues is false: no samples, or every
+  # pod draining (0 / 0), is an error and KEDA keeps the replica count.
+  targetUtilization: 0.7
+  # CPU utilisation (percent of the request) for hpa-cpu.
+  cpuTargetPercent: 70
+  prometheus:
+    # The Prometheus KEDA queries, for example http://prometheus-operated.monitoring.svc:9090 or an Amazon Managed
+    # Prometheus workspace URL. The query selects namespace="<namespace>" and app_kubernetes_io_instance="<release>" on
+    # rpa_browser_sessions_active, rpa_browser_sessions_capacity and rpa_browser_draining: metrics.podMonitor writes
+    # both labels; a scrape config of your own must write the same two.
+    serverAddress: ""
+    # A KEDA TriggerAuthentication or ClusterTriggerAuthentication, for example {name: keda-amp, kind:
+    # ClusterTriggerAuthentication} for Amazon Managed Prometheus with pod identity. Empty: none.
+    authenticationRef: {}
+    # More Prometheus scaler metadata (strings), for example awsRegion. It never replaces the chart's own keys
+    # (serverAddress, query, threshold, activationThreshold, ignoreNullValues).
+    extraMetadata: {}
+
+token:
+  # Required: an existing Secret in the release namespace holding the gate token (32 characters or more). The chart never
+  # creates it and never takes the token as a value, so the token stays out of Helm values and Terraform state:
+  #   kubectl -n <namespace> create secret generic rpa-browser-token --from-literal=token="$(openssl rand -hex 32)"
+  existingSecret: ""
+  key: token
+
+# The n8n pods that may open sessions (port 3000). podSelector is required while networkPolicy.enabled: matchLabels of
+# the n8n pods that run RPA steps (the workers in queue mode). namespaceSelector: matchLabels of n8n's namespace when it
+# is not this one; empty means this namespace only.
+n8n:
+  podSelector: {}
+  namespaceSelector: {}
+
+metrics:
+  # NetworkPolicy peers that may scrape port 9464 (your Prometheus pods). Empty: nothing may reach the metrics port, so
+  # set this when you use metrics.podMonitor or KEDA. The Service never exposes 9464.
+  from: []
+  podMonitor:
+    # A Prometheus Operator PodMonitor for port 9464 that writes the namespace and app_kubernetes_io_instance labels the
+    # KEDA query selects.
+    enabled: false
+    interval: 15s
+    # Labels your Prometheus selects PodMonitors by, for example {release: kube-prometheus-stack}.
+    labels: {}
+
+networkPolicy:
+  # A NetworkPolicy for the browser pods: ingress on 3000 only from n8n, on 9464 only from metrics.from; egress only to
+  # kube-dns (and egress.dns.ipBlocks) on 53 and to egress.allowedCIDRs on 80/443. These ranges are cut out of every
+  # CIDR that contains them, and a CIDR inside one is refused: 169.254.0.0/16 (the 169.254.169.254 metadata service of
+  # AWS, GCP, Azure and OCI; ECS task metadata), fe80::/10, fd00:ec2::/32 (AWS IPv6 metadata), 100.100.100.200/32
+  # (Alibaba), 168.63.129.16/32 (Azure WireServer), fd20:ce::254/128 (GCP IPv6 metadata). Needs a CNI that enforces
+  # NetworkPolicy (on EKS: the VPC CNI network policy agent).
+  enabled: true
+
+egress:
+  # The CIDRs the browser may reach on 80 and 443, IPv4 or IPv6, for example the customer's portals or 0.0.0.0/0. Empty:
+  # the browser reaches no site. A CIDR inside a metadata range (see networkPolicy) is refused.
+  allowedCIDRs: []
+  # Ranges to cut out of every allowed CIDR that contains them, for example the VPC, pod and service ranges so a page
+  # can't reach n8n, Redis or the database through 0.0.0.0/0. An entry that covers a whole allowed CIDR is refused.
+  exceptCIDRs: []
+  # Domain names (Cilium only): a CiliumNetworkPolicy that allows them on 80/443 through Cilium's DNS proxy, and denies
+  # the metadata ranges and egress.exceptCIDRs on every port, so a name that resolves into them is still blocked.
+  # Lower case; one leading "*." label at most ("*.example.com"); never "*", "*.*" or "*.<tld>". Needs Cilium.
+  fqdns: []
+  dns:
+    # Where cluster DNS runs. The egress rule allows UDP and TCP 53 to these pods only.
+    namespace: kube-system
+    podSelector:
+      k8s-app: kube-dns
+    # More DNS servers by CIDR, on port 53 only. NodeLocal DNSCache listens on 169.254.20.10 on every node: list
+    # 169.254.20.10/32 here when your cluster runs it (pods then send DNS there, not to kube-dns). It is the only
+    # address inside a metadata range the chart accepts, and only here.
+    ipBlocks: []
+
+# The gate container's resources. Chromium needs memory per session; a CPU HPA measures against requests.cpu (required
+# for hpa-cpu). No CPU limit: throttled browsers time out.
+resources:
+  requests:
+    cpu: "2"
+    memory: 4Gi
+  limits:
+    memory: 4Gi
+
+# The root filesystem is read-only; Chromium's profiles, downloads and shared memory files (Playwright starts it with
+# --disable-dev-shm-usage) go to /tmp, an emptyDir, and so do caches (XDG_CACHE_HOME, XDG_CONFIG_HOME). medium: Memory
+# makes it a tmpfs that counts against the memory limit. A pod that writes more than sizeLimit is evicted at once, with
+# no drain: its sessions end. Size it for sessionsPerReplica browsers and their downloads.
+tmpVolume:
+  sizeLimit: 2Gi
+  medium: ""
+readOnlyRootFilesystem: true
+
+podDisruptionBudget:
+  enabled: true
+  # One pod at a time. Even the only pod can be evicted (a node drain), and it drains for its full grace period first.
+  maxUnavailable: 1
+  # Set minAvailable instead to keep that many pods serving; it wins over maxUnavailable when set. With minAvailable at
+  # or above the pod count, evictions wait until there are more pods.
+  # minAvailable: 2
+
+nameOverride: ""
+fullnameOverride: ""
+serviceAccountName: ""
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+priorityClassName: ""

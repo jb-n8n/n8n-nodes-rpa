@@ -1,0 +1,23 @@
+--batch_0123
+Content-Type: application/http
+Content-Transfer-Encoding: binary
+
+GET LineItems/$count?$filter=(CompanyCode%20eq%20%271000%27%20and%20(PostingDate%20ge%20datetime%272026-09-01T00%3A00%3A00%27%20and%20PostingDate%20le%20datetime%272026-09-30T00%3A00%3A00%27)) HTTP/1.1
+sap-contextid-accept: header
+Accept: text/plain, */*;q=0.5
+Accept-Language: en
+DataServiceVersion: 2.0
+MaxDataServiceVersion: 2.0
+X-CSRF-Token: Fetch
+
+
+--batch_0123
+Content-Type: application/http
+Content-Transfer-Encoding: binary
+
+GET LineItems?sap-client=100&$skip=0&$top=20&$orderby=PostingDate%20desc&$filter=(CompanyCode%20eq%20%271000%27%20and%20(PostingDate%20ge%20datetime%272026-09-01T00%3A00%3A00%27%20and%20PostingDate%20le%20datetime%272026-09-30T00%3A00%3A00%27))&$inlinecount=allpages HTTP/1.1
+Accept: application/json
+DataServiceVersion: 2.0
+
+
+--batch_0123--

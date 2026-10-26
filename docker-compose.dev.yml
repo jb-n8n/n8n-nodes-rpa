@@ -1,0 +1,15 @@
+# Development override: publishes the browser gate on this machine's loopback, for local tools and
+# ACCEPTANCE_COMPOSE=1. The gate still needs the token (BROWSER_TOKEN in .env). SANDBOX_SAP=realistic switches the sandbox's
+# SAP look-alike to the realistic one (the first Fiori load needs internet access to sdk.openui5.org), SANDBOX_SAP_LOGIN=sso
+# puts single sign-on with MFA in front of it (sso2: email first, then password), and IDP_KMSI=off skips sso2's "Stay signed in?".
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+services:
+  browser:
+    ports:
+      - "127.0.0.1:3000:3000"
+  sandbox:
+    environment:
+      SANDBOX_SAP: ${SANDBOX_SAP:-light} # realistic: the SAP logon, classic GUI, OData service and the OpenUI5 Fiori app
+      SANDBOX_SAP_LOGIN: ${SANDBOX_SAP_LOGIN:-sap} # sso: in realistic mode, sign in through the sandbox's identity provider with a TOTP code; sso2: the same, email first
+      IDP_KMSI: ${IDP_KMSI:-on} # sso2: off drops the "Stay signed in?" page
+      UI5_CACHE_DIR: /data/ui5 # OpenUI5 files fetched once from sdk.openui5.org, kept in the sandbox_state volume

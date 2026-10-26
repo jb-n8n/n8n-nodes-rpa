@@ -1,0 +1,25 @@
+# Cilium FQDN egress next to the CIDR policy, and an explicit mode that wins over the KEDA default even though a
+# Prometheus address is set.
+image:
+  repository: ghcr.io/example/rpa-browser
+  tag: "1.63.0"
+  digest: sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210
+autoscaling:
+  mode: hpa-cpu
+  prometheus:
+    serverAddress: http://prometheus.monitoring.svc:9090
+token:
+  existingSecret: rpa-browser-token
+n8n:
+  podSelector:
+    app.kubernetes.io/name: n8n
+egress:
+  fqdns:
+    - portal.example.com
+    - "*.sap.example.com"
+  # No allowedCIDRs: the Cilium deny list still carries these next to the metadata ranges.
+  exceptCIDRs:
+    - 10.0.0.0/8
+    - fd00::/8
+podDisruptionBudget:
+  minAvailable: 2

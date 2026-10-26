@@ -1,0 +1,10 @@
+{
+  "name": "n8n-rpa-sandbox",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "Mock dealer portal with release drift, for engine tests and evals. No dependencies.",
+  "exports": { "./testing.js": "./testing.js", "./server.js": "./server.js", "./xlsx.js": "./xlsx.js", "./sap-mode.js": "./sap-mode.js" },
+  "scripts": { "start": "node server.js", "test": "node --test \"test/**/*.test.js\"" }
+}

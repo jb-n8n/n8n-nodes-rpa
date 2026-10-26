@@ -1,0 +1,180 @@
+{
+  "title": "SAP line item export behind the identity provider (identity-first)",
+  "steps": [
+    {
+      "type": "setViewport",
+      "width": 1280,
+      "height": 800,
+      "deviceScaleFactor": 1,
+      "isMobile": false,
+      "hasTouch": false,
+      "isLandscape": false
+    },
+    {
+      "type": "navigate",
+      "url": "http://localhost:8080/sap/bc/gui/sap/its/webgui",
+      "assertedEvents": [
+        {
+          "type": "navigation",
+          "url": "http://localhost:8080/idp/login?RelayState=%2Fsap%2Fbc%2Fgui%2Fsap%2Fits%2Fwebgui",
+          "title": "Sign in"
+        }
+      ]
+    },
+    {
+      "type": "click",
+      "target": "main",
+      "selectors": [["aria/Email"], ["#loginfmt"], ["xpath///*[@id=\"loginfmt\"]"], ["pierce/#loginfmt"]],
+      "offsetX": 140,
+      "offsetY": 14
+    },
+    {
+      "type": "change",
+      "value": "rpa-bot@rpa.example",
+      "selectors": [["aria/Email"], ["#loginfmt"], ["xpath///*[@id=\"loginfmt\"]"], ["pierce/#loginfmt"]],
+      "target": "main"
+    },
+    {
+      "type": "click",
+      "target": "main",
+      "selectors": [["aria/Next[role=\"button\"]"], ["text/Next"], ["#idSIButton9"], ["xpath///*[@id=\"idSIButton9\"]"], ["pierce/#idSIButton9"]],
+      "offsetX": 38,
+      "offsetY": 16,
+      "assertedEvents": [
+        {
+          "type": "navigation",
+          "url": "http://localhost:8080/idp/password?tx=6f1d0c8e2b7a4f93a1c5e0d2b4a69f7c3e81",
+          "title": "Enter password"
+        }
+      ]
+    },
+    {
+      "type": "click",
+      "target": "main",
+      "selectors": [["aria/Password"], ["#passwd"], ["xpath///*[@id=\"passwd\"]"], ["pierce/#passwd"]],
+      "offsetX": 120,
+      "offsetY": 13
+    },
+    {
+      "type": "change",
+      "value": "idp-demo-password",
+      "selectors": [["aria/Password"], ["#passwd"], ["xpath///*[@id=\"passwd\"]"], ["pierce/#passwd"]],
+      "target": "main"
+    },
+    {
+      "type": "click",
+      "target": "main",
+      "selectors": [["aria/Sign in[role=\"button\"]"], ["text/Sign in"], ["#idSIButton9"], ["xpath///*[@id=\"idSIButton9\"]"], ["pierce/#idSIButton9"]],
+      "offsetX": 41,
+      "offsetY": 16,
+      "assertedEvents": [
+        {
+          "type": "navigation",
+          "url": "http://localhost:8080/idp/mfa?tx=0b9e44d1c7f25a8e6d3f1a0c9b2e7d4f5a16",
+          "title": "Enter code"
+        }
+      ]
+    },
+    {
+      "type": "click",
+      "target": "main",
+      "selectors": [["aria/Code"], ["#otc"], ["xpath///*[@id=\"otc\"]"], ["pierce/#otc"]],
+      "offsetX": 96,
+      "offsetY": 12
+    },
+    {
+      "type": "change",
+      "value": "482913",
+      "selectors": [["aria/Code"], ["#otc"], ["xpath///*[@id=\"otc\"]"], ["pierce/#otc"]],
+      "target": "main"
+    },
+    {
+      "type": "click",
+      "target": "main",
+      "selectors": [["aria/Verify[role=\"button\"]"], ["text/Verify"], ["#idSubmit_SAOTCC_Continue"], ["xpath///*[@id=\"idSubmit_SAOTCC_Continue\"]"], ["pierce/#idSubmit_SAOTCC_Continue"]],
+      "offsetX": 33,
+      "offsetY": 15
+    },
+    {
+      "type": "click",
+      "target": "main",
+      "selectors": [["aria/No[role=\"button\"]"], ["text/No"], ["#idBtn_Back"], ["xpath///*[@id=\"idBtn_Back\"]"], ["pierce/#idBtn_Back"]],
+      "offsetX": 20,
+      "offsetY": 15,
+      "assertedEvents": [
+        {
+          "type": "navigation",
+          "url": "http://localhost:8080/sap(czE9U0lEOkFOT046OWYyYzRlMWE3YjNkNTA2OA)/bc/gui/sap/its/webgui",
+          "title": "SAP Easy Access"
+        }
+      ]
+    },
+    {
+      "type": "click",
+      "target": "main",
+      "selectors": [["aria/Line Item Report[role=\"button\"]"], ["text/Line Item Report"], ["#M0\\:46\\:\\:btn\\[1\\]"], ["xpath///*[@id=\"M0:46::btn[1]\"]"], ["pierce/#M0\\:46\\:\\:btn\\[1\\]"]],
+      "offsetX": 52,
+      "offsetY": 11
+    },
+    {
+      "type": "click",
+      "target": "main",
+      "selectors": [["aria/Company Code"], ["#M0\\:46\\:\\:0\\:17"], ["xpath///*[@id=\"M0:46::0:17\"]"], ["pierce/#M0\\:46\\:\\:0\\:17"]],
+      "offsetX": 30,
+      "offsetY": 9
+    },
+    {
+      "type": "change",
+      "value": "1000",
+      "selectors": [["aria/Company Code"], ["#M0\\:46\\:\\:0\\:17"], ["xpath///*[@id=\"M0:46::0:17\"]"], ["pierce/#M0\\:46\\:\\:0\\:17"]],
+      "target": "main"
+    },
+    {
+      "type": "click",
+      "target": "main",
+      "selectors": [["aria/From"], ["#M0\\:46\\:\\:1\\:17"], ["xpath///*[@id=\"M0:46::1:17\"]"], ["pierce/#M0\\:46\\:\\:1\\:17"]],
+      "offsetX": 40,
+      "offsetY": 10
+    },
+    {
+      "type": "change",
+      "value": "01.09.2026",
+      "selectors": [["aria/From"], ["#M0\\:46\\:\\:1\\:17"], ["xpath///*[@id=\"M0:46::1:17\"]"], ["pierce/#M0\\:46\\:\\:1\\:17"]],
+      "target": "main"
+    },
+    {
+      "type": "click",
+      "target": "main",
+      "selectors": [["aria/To"], ["#M0\\:46\\:\\:1\\:40"], ["xpath///*[@id=\"M0:46::1:40\"]"], ["pierce/#M0\\:46\\:\\:1\\:40"]],
+      "offsetX": 40,
+      "offsetY": 10
+    },
+    {
+      "type": "change",
+      "value": "30.09.2026",
+      "selectors": [["aria/To"], ["#M0\\:46\\:\\:1\\:40"], ["xpath///*[@id=\"M0:46::1:40\"]"], ["pierce/#M0\\:46\\:\\:1\\:40"]],
+      "target": "main"
+    },
+    {
+      "type": "click",
+      "target": "main",
+      "selectors": [["aria/Execute (F8)[role=\"button\"]"], ["text/Execute (F8)"], ["#M0\\:50\\:\\:btn\\[8\\]"], ["xpath///*[@id=\"M0:50::btn[8]\"]"], ["pierce/#M0\\:50\\:\\:btn\\[8\\]"]],
+      "offsetX": 27,
+      "offsetY": 12
+    },
+    {
+      "type": "click",
+      "target": "main",
+      "selectors": [["aria/Spreadsheet... (Ctrl+Shift+F7)[role=\"button\"]"], ["text/Spreadsheet... (Ctrl+Shift+F7)"], ["#M0\\:50\\:\\:btn\\[XXL\\]"], ["xpath///*[@id=\"M0:50::btn[XXL]\"]"], ["pierce/#M0\\:50\\:\\:btn\\[XXL\\]"]],
+      "offsetX": 30,
+      "offsetY": 12
+    },
+    {
+      "type": "click",
+      "target": "main",
+      "selectors": [["aria/Continue (Enter)[role=\"button\"]"], ["text/Continue (Enter)"], ["#M1\\:50\\:\\:btn\\[0\\]"], ["xpath///*[@id=\"M1:50::btn[0]\"]"], ["pierce/#M1\\:50\\:\\:btn\\[0\\]"]],
+      "offsetX": 34,
+      "offsetY": 12
+    }
+  ]
+}

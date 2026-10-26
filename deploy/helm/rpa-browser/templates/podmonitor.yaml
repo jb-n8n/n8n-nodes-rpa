@@ -1,0 +1,35 @@
+{{- include "rpa-browser.validate" . }}
+{{- if .Values.metrics.podMonitor.enabled }}
+# Scrapes the gate's metrics port. The relabelings write namespace and app_kubernetes_io_instance, the two labels the
+# KEDA query selects (a PodMonitor doesn't copy pod labels by default).
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "rpa-browser.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rpa-browser.labels" . | nindent 4 }}
+    {{- with .Values.metrics.podMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "rpa-browser.selectorLabels" . | nindent 6 }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.metrics.podMonitor.interval }}
+      relabelings:
+        - action: replace
+          sourceLabels:
+            - __meta_kubernetes_namespace
+          targetLabel: namespace
+        - action: replace
+          sourceLabels:
+            - __meta_kubernetes_pod_label_app_kubernetes_io_instance
+          targetLabel: app_kubernetes_io_instance
+{{- end }}

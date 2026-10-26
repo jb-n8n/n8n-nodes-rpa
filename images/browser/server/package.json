@@ -1,0 +1,10 @@
+{
+  "name": "n8n-rpa-browser-server",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The run-server of the rpa-browser image: playwright run-server, installed at image build time from package-lock.json (images/browser/Dockerfile). Its version must match the image and the engine's playwright-core (README: Version matching).",
+  "license": "MIT",
+  "dependencies": {
+    "playwright": "1.63.0"
+  }
+}

@@ -1,0 +1,47 @@
+{{- include "rpa-browser.validate" . -}}
+{{- $mode := include "rpa-browser.autoscalingMode" . -}}
+The RPA browser service is installed as {{ include "rpa-browser.fullname" . }} in {{ .Release.Namespace }}.
+
+RPA Browser credential in n8n (Browser Server mode):
+  Endpoint: ws://{{ include "rpa-browser.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:3000/
+  Token:    the "{{ .Values.token.key }}" key of the Secret {{ .Release.Namespace }}/{{ .Values.token.existingSecret }}
+
+Sessions per pod: {{ .Values.sessionsPerReplica }}. Drain on scale-in: {{ .Values.drainSeconds }} s; a pod may take {{ add (int .Values.drainSeconds) 30 }} s to stop.
+Allow that in cluster-autoscaler (--max-graceful-termination-sec, default 600) and anything else that evicts pods.
+Scaling: {{ $mode }}{{ if eq $mode "keda" }} (session utilisation target {{ .Values.autoscaling.targetUtilization }}, {{ .Values.autoscaling.min }}-{{ .Values.autoscaling.max }} pods){{ else if eq $mode "hpa-cpu" }} (CPU {{ .Values.autoscaling.cpuTargetPercent }} %, {{ .Values.autoscaling.min }}-{{ .Values.autoscaling.max }} pods){{ else }} (replicas: {{ .Values.replicas }}){{ end }}.
+{{- if .Values.networkPolicy.enabled }}
+{{- if empty .Values.egress.allowedCIDRs }}{{ if empty .Values.egress.fqdns }}
+
+WARNING: egress.allowedCIDRs and egress.fqdns are empty, so the browser can reach no site. Set the ranges (or, with
+Cilium, the domain names) of the sites your automations open.
+{{- end }}{{ end }}
+{{- if and (empty .Values.metrics.from) .Values.metrics.podMonitor.enabled }}
+
+WARNING: metrics.from is empty, so the NetworkPolicy blocks Prometheus from the metrics port (9464). Set metrics.from
+to your Prometheus pods.
+{{- end }}
+{{- if and .Values.egress.fqdns .Values.egress.exceptCIDRs }}
+
+To confirm on your Cilium cluster: the CiliumNetworkPolicy denies egress.exceptCIDRs on every port. If they include
+the pod range, check that DNS lookups to kube-dns still work (Cilium's CIDR rules should match only destinations
+outside the cluster).
+{{- end }}
+
+The NetworkPolicy needs a CNI that enforces it (on EKS, enable the VPC CNI network policy agent). With NodeLocal
+DNSCache, add 169.254.20.10/32 to egress.dns.ipBlocks.
+{{- end }}
+{{- if and (eq $mode "keda") (not .Values.metrics.podMonitor.enabled) }}
+
+KEDA queries namespace="{{ .Release.Namespace }}",app_kubernetes_io_instance="{{ .Release.Name }}". Without
+metrics.podMonitor.enabled, your own scrape config must write those two labels on port 9464's samples.
+{{- end }}
+{{- $minAvailable := .Values.podDisruptionBudget.minAvailable }}
+{{- if and .Values.podDisruptionBudget.enabled (not (kindIs "invalid" $minAvailable)) (not (kindIs "string" $minAvailable)) }}
+{{- $least := ternary .Values.replicas .Values.autoscaling.min (eq $mode "none") }}
+{{- if le (int $least) (int $minAvailable) }}
+
+NOTE: podDisruptionBudget.minAvailable ({{ .Values.podDisruptionBudget.minAvailable }}) is not below the minimum pod count
+({{ $least }}): a node drain can't evict a browser pod until there are more. Raise the minimum or lower minAvailable if
+that is not what you want.
+{{- end }}
+{{- end }}

@@ -1,0 +1,532 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "n8n-nodes-rpa step document",
+  "description": "Steps for the RPA node's Run Steps operation: a document { name?, version?, startUrl?, interrupts?, steps } or a bare array of steps. Hand-written to mirror the engine's parseScript; parseScript also checks that regular expressions compile, that detect.require names one of the checks, and that without a startUrl the first step is an absolute goto (or the node's Start URL is set).",
+  "oneOf": [
+    { "$ref": "#/definitions/document" },
+    { "$ref": "#/definitions/steps" }
+  ],
+  "definitions": {
+    "document": {
+      "type": "object",
+      "required": ["steps"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "description": "The step list's name. Signed steps carry it, and the Data Tables are keyed by it." },
+        "version": { "type": "integer", "minimum": 1, "maximum": 9007199254740991, "description": "The version of these steps. Sign Steps signs it; Run Steps checks it as Expected Version." },
+        "startUrl": { "type": "string", "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://", "description": "An absolute http(s) URL where the run starts. Without it, the first step's absolute goto, else the node's Start URL." },
+        "interrupts": {
+          "type": "array",
+          "description": "Pop-ups dismissed whenever they appear: when target shows, click click.",
+          "items": { "$ref": "#/definitions/interrupt" }
+        },
+        "steps": { "$ref": "#/definitions/steps" }
+      },
+      "additionalProperties": false
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 200,
+      "items": { "$ref": "#/definitions/step" }
+    },
+    "interrupt": {
+      "type": "object",
+      "required": ["target", "click"],
+      "properties": {
+        "target": { "$ref": "#/definitions/locatorInner" },
+        "click": { "$ref": "#/definitions/locatorInner" }
+      },
+      "additionalProperties": false
+    },
+    "nonEmptyString": { "type": "string", "minLength": 1 },
+    "regex": { "type": "string", "minLength": 1, "description": "A JavaScript regular expression (it must compile)." },
+    "locator": {
+      "type": "object",
+      "description": "Exactly one of role, label, text, testId or css, with optional name, exact, within, frame and fallbacks.",
+      "properties": {
+        "role": { "type": "string", "minLength": 1, "description": "An ARIA role, such as button or link. Add name for its accessible name." },
+        "label": { "type": "string", "minLength": 1, "description": "The form label of a field." },
+        "text": { "type": "string", "minLength": 1, "description": "Visible text." },
+        "testId": { "type": "string", "minLength": 1, "description": "A data-testid value." },
+        "css": { "type": "string", "minLength": 1, "description": "A CSS selector." },
+        "name": { "type": "string", "description": "The accessible name, for a role locator." },
+        "exact": { "type": "boolean", "description": "Whether the name or text must match exactly." },
+        "frame": { "type": "string", "minLength": 1, "description": "A CSS selector of the iframe to search inside." },
+        "within": { "$ref": "#/definitions/locatorInner" },
+        "fallbacks": {
+          "type": "array",
+          "maxItems": 5,
+          "description": "Other locators tried in order when this one has no unique visible match. A fallback has no fallbacks of its own.",
+          "items": { "$ref": "#/definitions/locatorInner" }
+        }
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        { "required": ["role"] },
+        { "required": ["label"] },
+        { "required": ["text"] },
+        { "required": ["testId"] },
+        { "required": ["css"] }
+      ]
+    },
+    "locatorInner": {
+      "type": "object",
+      "description": "A locator without fallbacks (inside within, a fallback or an interrupt).",
+      "properties": {
+        "role": { "type": "string", "minLength": 1 },
+        "label": { "type": "string", "minLength": 1 },
+        "text": { "type": "string", "minLength": 1 },
+        "testId": { "type": "string", "minLength": 1 },
+        "css": { "type": "string", "minLength": 1 },
+        "name": { "type": "string" },
+        "exact": { "type": "boolean" },
+        "frame": { "type": "string", "minLength": 1 },
+        "within": { "$ref": "#/definitions/locatorInner" }
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        { "required": ["role"] },
+        { "required": ["label"] },
+        { "required": ["text"] },
+        { "required": ["testId"] },
+        { "required": ["css"] }
+      ]
+    },
+    "locatorNoFrame": {
+      "description": "A sign-in locator: no frame.",
+      "allOf": [
+        { "$ref": "#/definitions/locator" },
+        { "not": { "type": "object", "required": ["frame"] } }
+      ]
+    },
+    "fileCheck": {
+      "type": "object",
+      "description": "What the downloaded file must be. Part of what Sign Steps signs.",
+      "properties": {
+        "name": { "$ref": "#/definitions/regex", "description": "A regular expression the sanitized file name must match." },
+        "minBytes": { "type": "integer", "minimum": 1, "maximum": 209715200 },
+        "columns": { "type": "array", "minItems": 1, "maxItems": 50, "items": { "type": "string", "minLength": 1, "maxLength": 200 } },
+        "minRows": { "type": "integer", "minimum": 0, "maximum": 1000000000 }
+      },
+      "additionalProperties": false
+    },
+    "method": { "type": "string", "pattern": "^([Gg][Ee][Tt]|[Pp][Oo][Ss][Tt]|[Pp][Uu][Tt]|[Pp][Aa][Tt][Cc][Hh]|[Dd][Ee][Ll][Ee][Tt][Ee])$" },
+    "fieldSpec": {
+      "type": "object",
+      "properties": {
+        "locator": { "$ref": "#/definitions/locator" },
+        "pattern": { "$ref": "#/definitions/regex" },
+        "attribute": { "enum": ["text", "href", "src", "title", "alt", "aria-label"] }
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        { "required": ["locator"] },
+        { "required": ["pattern"] }
+      ],
+      "dependencies": { "attribute": ["locator"] }
+    },
+    "step": {
+      "type": "object",
+      "description": "One step: an intent and exactly one verb.",
+      "required": ["intent"],
+      "properties": {
+        "intent": { "type": "string", "minLength": 1, "maxLength": 200, "description": "What the step does, in plain words (logs and errors)." },
+        "optional": { "type": "boolean", "description": "Whether the run continues when this step finds nothing." },
+        "when": {
+          "type": "object",
+          "required": ["visible"],
+          "properties": { "visible": { "$ref": "#/definitions/locator" } },
+          "additionalProperties": false,
+          "description": "Run the step only when this element is visible."
+        },
+        "expect": {
+          "type": "object",
+          "properties": {
+            "url": { "type": "string", "minLength": 1 },
+            "heading": { "type": "string", "minLength": 1 },
+            "visible": { "$ref": "#/definitions/locator" }
+          },
+          "additionalProperties": false,
+          "description": "What the page shows after the step."
+        },
+        "checkpoint": { "type": "boolean" },
+        "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 120000 }
+      },
+      "oneOf": [
+        { "$ref": "#/definitions/verb-goto" },
+        { "$ref": "#/definitions/verb-signIn" },
+        { "$ref": "#/definitions/verb-click" },
+        { "$ref": "#/definitions/verb-fill" },
+        { "$ref": "#/definitions/verb-select" },
+        { "$ref": "#/definitions/verb-check" },
+        { "$ref": "#/definitions/verb-clickAll" },
+        { "$ref": "#/definitions/verb-waitFor" },
+        { "$ref": "#/definitions/verb-paginate" },
+        { "$ref": "#/definitions/verb-extract" },
+        { "$ref": "#/definitions/verb-submit" },
+        { "$ref": "#/definitions/verb-download" },
+        { "$ref": "#/definitions/verb-popup" },
+        { "$ref": "#/definitions/verb-detect" },
+        { "$ref": "#/definitions/verb-screenshot" },
+        { "$ref": "#/definitions/verb-pdf" },
+        { "$ref": "#/definitions/verb-read" },
+        { "$ref": "#/definitions/verb-extractTable" }
+      ]
+    },
+    "nestedStep": {
+      "type": "object",
+      "description": "A step inside paginate.each: no signIn and no paginate.",
+      "required": ["intent"],
+      "allOf": [{ "$ref": "#/definitions/step" }],
+      "not": {
+        "anyOf": [
+          { "required": ["signIn"] },
+          { "required": ["paginate"] }
+        ]
+      }
+    },
+    "verb-goto": {
+      "type": "object",
+      "required": ["goto"],
+      "properties": {
+        "intent": true, "optional": true, "when": true, "expect": true, "checkpoint": true, "timeoutMs": true,
+        "goto": { "type": "string", "minLength": 1, "description": "A URL or a path to open." },
+        "waitUntil": { "enum": ["load", "domcontentloaded", "networkidle"] }
+      },
+      "additionalProperties": false
+    },
+    "verb-signIn": {
+      "type": "object",
+      "required": ["signIn"],
+      "properties": {
+        "intent": true, "optional": true, "when": true, "expect": true, "checkpoint": true, "timeoutMs": true,
+        "signIn": {
+          "type": "object",
+          "description": "Types the RPA Site Login's username, password and code. Needs a Site Login.",
+          "required": ["username", "password", "submit"],
+          "properties": {
+            "username": { "$ref": "#/definitions/locatorNoFrame" },
+            "next": { "$ref": "#/definitions/locatorNoFrame", "description": "A two-page sign-in: the button that moves from the username page to the password page." },
+            "password": { "$ref": "#/definitions/locatorNoFrame" },
+            "submit": { "$ref": "#/definitions/locatorNoFrame" },
+            "totp": {
+              "type": "object",
+              "required": ["field", "submit"],
+              "properties": {
+                "field": { "$ref": "#/definitions/locatorNoFrame" },
+                "submit": { "$ref": "#/definitions/locatorNoFrame" }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "verb-click": {
+      "type": "object",
+      "required": ["click"],
+      "properties": {
+        "intent": true, "optional": true, "when": true, "expect": true, "checkpoint": true, "timeoutMs": true,
+        "click": { "$ref": "#/definitions/locator" }
+      },
+      "additionalProperties": false
+    },
+    "verb-fill": {
+      "type": "object",
+      "required": ["fill"],
+      "properties": {
+        "intent": true, "optional": true, "when": true, "expect": true, "checkpoint": true, "timeoutMs": true,
+        "fill": {
+          "type": "object",
+          "required": ["field", "value"],
+          "properties": {
+            "field": { "$ref": "#/definitions/locator" },
+            "value": { "type": "string", "description": "The text to type; may be {{var.name}}. Never a secret." }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "verb-select": {
+      "type": "object",
+      "required": ["select"],
+      "properties": {
+        "intent": true, "optional": true, "when": true, "expect": true, "checkpoint": true, "timeoutMs": true,
+        "select": {
+          "type": "object",
+          "required": ["field", "value"],
+          "properties": {
+            "field": { "$ref": "#/definitions/locator" },
+            "value": { "type": "string", "description": "The option to choose; may be {{var.name}}." }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "verb-check": {
+      "type": "object",
+      "required": ["check"],
+      "properties": {
+        "intent": true, "optional": true, "when": true, "expect": true, "checkpoint": true, "timeoutMs": true,
+        "check": {
+          "type": "object",
+          "required": ["field"],
+          "properties": {
+            "field": { "$ref": "#/definitions/locator" },
+            "checked": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "verb-clickAll": {
+      "type": "object",
+      "required": ["clickAll"],
+      "properties": {
+        "intent": true, "optional": true, "when": true, "expect": true, "checkpoint": true, "timeoutMs": true,
+        "clickAll": {
+          "type": "object",
+          "required": ["target", "max"],
+          "properties": {
+            "target": { "$ref": "#/definitions/locator" },
+            "max": { "type": "integer", "minimum": 1, "maximum": 100 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "verb-waitFor": {
+      "type": "object",
+      "required": ["waitFor"],
+      "properties": {
+        "intent": true, "optional": true, "when": true, "expect": true, "checkpoint": true, "timeoutMs": true,
+        "waitFor": {
+          "type": "object",
+          "properties": {
+            "target": { "$ref": "#/definitions/locator" },
+            "state": { "enum": ["visible", "hidden", "attached"] },
+            "hasText": { "type": "string", "minLength": 1 },
+            "minCount": { "type": "integer", "minimum": 1, "maximum": 10000 },
+            "response": {
+              "type": "object",
+              "required": ["urlContains"],
+              "properties": { "urlContains": { "type": "string", "minLength": 1 } },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false,
+          "anyOf": [
+            { "required": ["target"] },
+            { "required": ["response"] }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "verb-paginate": {
+      "type": "object",
+      "required": ["paginate"],
+      "properties": {
+        "intent": true, "optional": true, "when": true, "expect": true, "checkpoint": true, "timeoutMs": true,
+        "paginate": {
+          "type": "object",
+          "required": ["next", "until", "max", "each"],
+          "properties": {
+            "next": { "$ref": "#/definitions/locator" },
+            "until": { "enum": ["absent", "disabled"] },
+            "max": { "type": "integer", "minimum": 1, "maximum": 100 },
+            "nextWaitMs": { "type": "integer", "minimum": 0, "maximum": 10000 },
+            "each": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 200,
+              "items": { "$ref": "#/definitions/nestedStep" }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "verb-extract": {
+      "type": "object",
+      "required": ["extract"],
+      "properties": {
+        "intent": true, "optional": true, "when": true, "expect": true, "checkpoint": true, "timeoutMs": true,
+        "extract": {
+          "type": "object",
+          "description": "Rows from a page or a list. Needs an idPattern or an item locator.",
+          "required": ["scope"],
+          "properties": {
+            "scope": { "$ref": "#/definitions/locator" },
+            "item": { "$ref": "#/definitions/locator" },
+            "fields": { "type": "object", "additionalProperties": { "$ref": "#/definitions/fieldSpec" } },
+            "idPattern": { "$ref": "#/definitions/regex" },
+            "textMode": { "enum": ["text", "textContent"] }
+          },
+          "additionalProperties": false,
+          "anyOf": [
+            { "required": ["idPattern"] },
+            { "required": ["item"] }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "verb-submit": {
+      "type": "object",
+      "required": ["submit"],
+      "properties": {
+        "intent": true, "optional": true, "when": true, "expect": true, "checkpoint": true, "timeoutMs": true,
+        "submit": {
+          "type": "object",
+          "description": "A declared write: the only write target allowed, and only while this step runs.",
+          "required": ["button", "path"],
+          "properties": {
+            "button": { "$ref": "#/definitions/locator" },
+            "path": { "type": "string", "pattern": "^/" },
+            "host": { "type": "string", "minLength": 1 },
+            "method": { "$ref": "#/definitions/method" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "verb-download": {
+      "type": "object",
+      "required": ["download"],
+      "properties": {
+        "intent": true, "optional": true, "when": true, "expect": true, "checkpoint": true, "timeoutMs": true,
+        "download": {
+          "type": "object",
+          "required": ["trigger"],
+          "properties": {
+            "trigger": { "$ref": "#/definitions/locator" },
+            "via": {
+              "type": "object",
+              "description": "A download through a form post (a declared write).",
+              "required": ["path"],
+              "properties": {
+                "path": { "type": "string", "pattern": "^/" },
+                "host": { "type": "string", "minLength": 1 },
+                "method": { "$ref": "#/definitions/method" }
+              },
+              "additionalProperties": false
+            },
+            "maxBytes": { "type": "integer", "minimum": 1, "maximum": 209715200 },
+            "mime": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+            "check": { "$ref": "#/definitions/fileCheck" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "verb-popup": {
+      "type": "object",
+      "required": ["popup"],
+      "properties": {
+        "intent": true, "optional": true, "when": true, "expect": true, "checkpoint": true, "timeoutMs": true,
+        "popup": {
+          "type": "object",
+          "required": ["trigger"],
+          "properties": { "trigger": { "$ref": "#/definitions/locator" } },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "verb-detect": {
+      "type": "object",
+      "required": ["detect"],
+      "properties": {
+        "intent": true, "optional": true, "when": true, "expect": true, "checkpoint": true, "timeoutMs": true,
+        "detect": {
+          "type": "object",
+          "required": ["name", "checks"],
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "checks": { "type": "object", "minProperties": 1, "additionalProperties": { "$ref": "#/definitions/locator" } },
+            "require": { "type": "string", "minLength": 1, "description": "The name of one of the checks." }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "verb-screenshot": {
+      "type": "object",
+      "required": ["screenshot"],
+      "properties": {
+        "intent": true, "optional": true, "when": true, "expect": true, "checkpoint": true, "timeoutMs": true,
+        "screenshot": {
+          "type": "object",
+          "required": ["capture"],
+          "properties": {
+            "capture": { "enum": ["full", "viewport", "element"] },
+            "element": { "$ref": "#/definitions/locator" }
+          },
+          "additionalProperties": false,
+          "if": { "properties": { "capture": { "const": "element" } } },
+          "then": { "required": ["element"] },
+          "else": { "not": { "required": ["element"] } }
+        }
+      },
+      "additionalProperties": false
+    },
+    "verb-pdf": {
+      "type": "object",
+      "required": ["pdf"],
+      "properties": {
+        "intent": true, "optional": true, "when": true, "expect": true, "checkpoint": true, "timeoutMs": true,
+        "pdf": {
+          "type": "object",
+          "properties": {
+            "paper": { "enum": ["A4", "Letter"] },
+            "background": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "verb-read": {
+      "type": "object",
+      "required": ["read"],
+      "properties": {
+        "intent": true, "optional": true, "when": true, "expect": true, "checkpoint": true, "timeoutMs": true,
+        "read": {
+          "type": "object",
+          "required": ["what"],
+          "properties": { "what": { "enum": ["text", "html", "title", "url"] } },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "verb-extractTable": {
+      "type": "object",
+      "required": ["extractTable"],
+      "properties": {
+        "intent": true, "optional": true, "when": true, "expect": true, "checkpoint": true, "timeoutMs": true,
+        "extractTable": {
+          "type": "object",
+          "required": ["table"],
+          "properties": {
+            "table": { "$ref": "#/definitions/locator" },
+            "idPattern": { "$ref": "#/definitions/regex" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

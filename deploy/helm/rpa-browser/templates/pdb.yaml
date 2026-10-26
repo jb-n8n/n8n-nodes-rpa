@@ -1,0 +1,22 @@
+{{- include "rpa-browser.validate" . }}
+{{- if .Values.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "rpa-browser.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rpa-browser.labels" . | nindent 4 }}
+spec:
+  {{- if not (kindIs "invalid" .Values.podDisruptionBudget.minAvailable) }}
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  {{- else }}
+  # One pod at a time: an evicted pod still drains for its full grace period, even when it is the only one.
+  maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
+  {{- end }}
+  # A pod that isn't ready (crashing, or already draining) never holds up a node drain.
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  selector:
+    matchLabels:
+      {{- include "rpa-browser.selectorLabels" . | nindent 6 }}
+{{- end }}

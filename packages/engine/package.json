@@ -1,0 +1,38 @@
+{
+  "name": "n8n-rpa-engine",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./schema/steps.schema.json": "./schema/steps.schema.json"
+  },
+  "files": [
+    "dist",
+    "schema"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "fflate": "0.8.3",
+    "playwright-core": "1.63.0"
+  },
+  "devDependencies": {
+    "n8n-rpa-gate": "workspace:*",
+    "n8n-rpa-sandbox": "workspace:*",
+    "@types/node": "24.19.1",
+    "ajv": "8.20.0",
+    "typescript": "5.9.3",
+    "vite": "8.3.3",
+    "vitest": "5.0.3"
+  }
+}

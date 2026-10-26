@@ -1,0 +1,23 @@
+node_modules/
+dist/
+*.tsbuildinfo
+sandbox/portal/state/
+.superpowers/
+.gstack/
+.claude/worktrees/
+packages/eval/eval-report-*.json
+.env
+.DS_Store
+# Local recordings and their stack configs (may hold secrets); never committed.
+demo/
+
+# Maintainers' private notes and tooling: kept outside the repository and linked into a working copy, never committed.
+# No trailing slash: these paths may be symlinks, and a pattern ending in / matches only real directories.
+CLAUDE.md
+CLAUDE.local.md
+/docs/superpowers
+/docs/research
+.superpowers
+.claude
+.gstack
+demo

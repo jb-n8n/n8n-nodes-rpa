@@ -1,0 +1,25 @@
+import { test, expect } from '@playwright/test';
+
+test('test', async ({ page }) => {
+  await page.goto('http://localhost:8080/acme/login');
+  await page.getByLabel('Dealer user ID').click();
+  await page.getByLabel('Dealer user ID').fill('summit-ops');
+  await page.getByLabel('Password').click();
+  await page.getByLabel('Password').fill('demo-password');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.getByLabel('Authentication code').click();
+  await page.getByLabel('Authentication code').fill('482913');
+  await page.getByRole('button', { name: 'Verify' }).click();
+  await page.goto('http://localhost:8080/sap/bc/gui/sap/its/webgui');
+  await expect(page).toHaveURL('http://localhost:8080/sap(czE9U0lEOkFOT046OWYyYzRlMWE3YjNkNTA2OA)/bc/gui/sap/its/webgui');
+  await page.getByRole('button', { name: 'Line Item Report' }).click();
+  await page.getByLabel('Company Code').selectOption('1000');
+  await page.getByLabel('From').fill('2026-09-01');
+  await page.getByLabel('To', { exact: true }).fill('2026-09-30');
+  await page.getByRole('button', { name: 'Execute' }).click();
+  await expect(page.getByRole('grid')).toBeVisible();
+  await page.locator('#x').nth(2).click();
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export', exact: true }).click();
+  const download = await downloadPromise;
+});

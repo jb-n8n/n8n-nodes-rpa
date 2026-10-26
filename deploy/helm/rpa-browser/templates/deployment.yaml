@@ -1,0 +1,144 @@
+{{- include "rpa-browser.validate" . }}
+{{- $mode := include "rpa-browser.autoscalingMode" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "rpa-browser.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rpa-browser.labels" . | nindent 4 }}
+spec:
+  {{- if eq $mode "none" }}
+  replicas: {{ .Values.replicas }}
+  {{- end }}
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      {{- include "rpa-browser.selectorLabels" . | nindent 6 }}
+  # A new pod first, then the old one drains: a rollout never removes serving capacity before replacing it.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        {{- include "rpa-browser.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      # The gate drains for drainSeconds after SIGTERM; 30 more seconds for the run-server and the browsers to stop.
+      terminationGracePeriodSeconds: {{ add (int .Values.drainSeconds) 30 }}
+      # A page that broke out of the browser finds no Kubernetes API token and no other services' addresses.
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      {{- with .Values.serviceAccountName }}
+      serviceAccountName: {{ . }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # pwuser (uid and gid 1001) is the image's user, from the Playwright base image.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: rpa-browser
+          image: {{ include "rpa-browser.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: {{ .Values.readOnlyRootFilesystem }}
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - name: gate
+              containerPort: 3000
+              protocol: TCP
+            # Only on the pod, for Prometheus (metrics.from); the Service never carries it.
+            - name: metrics
+              containerPort: 9464
+              protocol: TCP
+          env:
+            - name: BROWSER_GATE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.token.existingSecret }}
+                  key: {{ .Values.token.key }}
+            - name: BROWSER_GATE_PORT
+              value: "3000"
+            - name: BROWSER_GATE_METRICS_PORT
+              value: "9464"
+            - name: BROWSER_GATE_MAX_SESSIONS
+              value: {{ .Values.sessionsPerReplica | quote }}
+            - name: BROWSER_GATE_DRAIN_SECONDS
+              value: {{ .Values.drainSeconds | quote }}
+            # The root filesystem is read-only: fontconfig and other caches go to /tmp.
+            - name: XDG_CACHE_HOME
+              value: /tmp/.cache
+            - name: XDG_CONFIG_HOME
+              value: /tmp/.config
+          # 503 while draining or while the run-server is down: the pod leaves the Service and gets no new sessions.
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: gate
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
+          # TCP only: a draining gate answers /healthz with 503 and must not be restarted for it.
+          livenessProbe:
+            tcpSocket:
+              port: gate
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            {{- with .Values.tmpVolume.medium }}
+            medium: {{ . }}
+            {{- end }}
+            {{- with .Values.tmpVolume.sizeLimit }}
+            sizeLimit: {{ . }}
+            {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

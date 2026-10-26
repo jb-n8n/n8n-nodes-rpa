@@ -1,0 +1,30 @@
+
+--batch_6bf1-e3c9-846e
+Content-Type: application/http
+Content-Transfer-Encoding: binary
+
+GET LineItems/$count?$filter=CompanyCode%20eq%20%271000%27%20and%20(PostingDate%20ge%20datetime%272026-09-01T00%3a00%3a00%27%20and%20PostingDate%20le%20datetime%272026-09-30T00%3a00%3a00%27) HTTP/1.1
+sap-cancel-on-close: true
+sap-contextid-accept: header
+Accept: text/plain, */*;q=0.5
+Accept-Language: en
+DataServiceVersion: 2.0
+MaxDataServiceVersion: 2.0
+X-Requested-With: XMLHttpRequest
+
+
+--batch_6bf1-e3c9-846e
+Content-Type: application/http
+Content-Transfer-Encoding: binary
+
+GET LineItems?$skip=0&$top=20&$orderby=PostingDate%20asc&$filter=CompanyCode%20eq%20%271000%27%20and%20(PostingDate%20ge%20datetime%272026-09-01T00%3a00%3a00%27%20and%20PostingDate%20le%20datetime%272026-09-30T00%3a00%3a00%27) HTTP/1.1
+sap-cancel-on-close: true
+sap-contextid-accept: header
+Accept: application/json
+Accept-Language: en
+DataServiceVersion: 2.0
+MaxDataServiceVersion: 2.0
+X-Requested-With: XMLHttpRequest
+
+
+--batch_6bf1-e3c9-846e--

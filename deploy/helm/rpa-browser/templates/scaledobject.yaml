@@ -1,0 +1,39 @@
+{{- include "rpa-browser.validate" . }}
+{{- if eq (include "rpa-browser.autoscalingMode" .) "keda" }}
+{{- $p := .Values.autoscaling.prometheus }}
+{{- $metadata := merge (dict
+  "serverAddress" $p.serverAddress
+  "query" (include "rpa-browser.utilisationQuery" .)
+  "threshold" (toString .Values.autoscaling.targetUtilization)
+  "activationThreshold" "0"
+  "ignoreNullValues" "false"
+) ($p.extraMetadata | default dict) }}
+# Session utilisation, sum(active) / sum(capacity) over this release's pods that are not draining. metricType Value:
+# KEDA scales to ceil(replicas * utilisation / threshold); AverageValue would divide a service-wide ratio by the replica
+# count again. ignoreNullValues false: no samples (or every pod draining) is an error that holds the replica count,
+# never a 0 that scales in.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "rpa-browser.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rpa-browser.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "rpa-browser.fullname" . }}
+  minReplicaCount: {{ .Values.autoscaling.min }}
+  maxReplicaCount: {{ .Values.autoscaling.max }}
+  pollingInterval: 15
+  triggers:
+    - type: prometheus
+      metricType: Value
+      metadata:
+        {{- toYaml $metadata | nindent 8 }}
+      {{- with $p.authenticationRef }}
+      authenticationRef:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

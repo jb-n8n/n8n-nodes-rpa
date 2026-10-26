@@ -1,0 +1,152 @@
+{
+  "title": "SAP line item export",
+  "steps": [
+    {
+      "type": "setViewport",
+      "width": 1280,
+      "height": 800,
+      "deviceScaleFactor": 1,
+      "isMobile": false,
+      "hasTouch": false,
+      "isLandscape": false
+    },
+    {
+      "type": "navigate",
+      "url": "http://localhost:8080/acme/login"
+    },
+    {
+      "type": "click",
+      "target": "main",
+      "selectors": [["aria/Dealer user ID"], ["#username"], ["xpath///*[@id=\"username\"]"], ["pierce/#username"]],
+      "offsetX": 120,
+      "offsetY": 14
+    },
+    {
+      "type": "change",
+      "value": "summit-ops",
+      "selectors": [["aria/Dealer user ID"], ["#username"], ["xpath///*[@id=\"username\"]"], ["pierce/#username"]],
+      "target": "main"
+    },
+    {
+      "type": "click",
+      "target": "main",
+      "selectors": [["aria/Password"], ["#password"], ["xpath///*[@id=\"password\"]"], ["pierce/#password"]],
+      "offsetX": 96,
+      "offsetY": 12
+    },
+    {
+      "type": "change",
+      "value": "demo-password",
+      "selectors": [["aria/Password"], ["#password"], ["xpath///*[@id=\"password\"]"], ["pierce/#password"]],
+      "target": "main"
+    },
+    {
+      "type": "click",
+      "target": "main",
+      "selectors": [["aria/Sign in"], ["text/Sign in"], ["#sign-in"], ["xpath///*[@id=\"sign-in\"]"], ["pierce/#sign-in"]],
+      "offsetX": 31,
+      "offsetY": 17
+    },
+    {
+      "type": "click",
+      "target": "main",
+      "selectors": [["aria/Authentication code"], ["#otp"], ["xpath///*[@id=\"otp\"]"], ["pierce/#otp"]],
+      "offsetX": 88,
+      "offsetY": 15
+    },
+    {
+      "type": "change",
+      "value": "482913",
+      "selectors": [["aria/Authentication code"], ["#otp"], ["xpath///*[@id=\"otp\"]"], ["pierce/#otp"]],
+      "target": "main"
+    },
+    {
+      "type": "click",
+      "target": "main",
+      "selectors": [["aria/Verify"], ["text/Verify"], ["#verify"], ["xpath///*[@id=\"verify\"]"], ["pierce/#verify"]],
+      "offsetX": 24,
+      "offsetY": 16
+    },
+    {
+      "type": "waitForExpression",
+      "expression": "document.readyState === 'complete'"
+    },
+    {
+      "type": "navigate",
+      "url": "http://localhost:8080/sap/bc/gui/sap/its/webgui",
+      "assertedEvents": [
+        {
+          "type": "navigation",
+          "url": "http://localhost:8080/sap(czE9U0lEOkFOT046OWYyYzRlMWE3YjNkNTA2OA)/bc/gui/sap/its/webgui",
+          "title": "SAP Easy Access"
+        }
+      ]
+    },
+    {
+      "type": "click",
+      "target": "main",
+      "selectors": [["aria/Line Item Report"], ["text/Line Item Report"], ["#M0\\:5e1c9a07\\:\\:2"], ["xpath///*[@id=\"M0:5e1c9a07::2\"]"], ["pierce/#M0\\:5e1c9a07\\:\\:2"]],
+      "offsetX": 52,
+      "offsetY": 11
+    },
+    {
+      "type": "click",
+      "target": "main",
+      "selectors": [["aria/Company Code[role=\"combobox\"]"], ["#M0\\:b72d04e3\\:\\:0"], ["xpath///*[@id=\"M0:b72d04e3::0\"]"], ["pierce/#M0\\:b72d04e3\\:\\:0"]],
+      "offsetX": 30,
+      "offsetY": 9
+    },
+    {
+      "type": "change",
+      "value": "1000",
+      "selectors": [["aria/Company Code[role=\"combobox\"]"], ["#M0\\:b72d04e3\\:\\:0"], ["xpath///*[@id=\"M0:b72d04e3::0\"]"], ["pierce/#M0\\:b72d04e3\\:\\:0"]],
+      "target": "main"
+    },
+    {
+      "type": "click",
+      "target": "main",
+      "selectors": [["aria/From"], ["#M0\\:b72d04e3\\:\\:1"], ["xpath///*[@id=\"M0:b72d04e3::1\"]"], ["pierce/#M0\\:b72d04e3\\:\\:1"]],
+      "offsetX": 40,
+      "offsetY": 10
+    },
+    {
+      "type": "change",
+      "value": "2026-09-01",
+      "selectors": [["aria/From"], ["#M0\\:b72d04e3\\:\\:1"], ["xpath///*[@id=\"M0:b72d04e3::1\"]"], ["pierce/#M0\\:b72d04e3\\:\\:1"]],
+      "target": "main"
+    },
+    {
+      "type": "click",
+      "target": "main",
+      "selectors": [["aria/To"], ["#M0\\:b72d04e3\\:\\:2"], ["xpath///*[@id=\"M0:b72d04e3::2\"]"], ["pierce/#M0\\:b72d04e3\\:\\:2"]],
+      "offsetX": 40,
+      "offsetY": 10
+    },
+    {
+      "type": "change",
+      "value": "2026-09-30",
+      "selectors": [["aria/To"], ["#M0\\:b72d04e3\\:\\:2"], ["xpath///*[@id=\"M0:b72d04e3::2\"]"], ["pierce/#M0\\:b72d04e3\\:\\:2"]],
+      "target": "main"
+    },
+    {
+      "type": "click",
+      "target": "main",
+      "selectors": [["aria/Execute[role=\"button\"]"], ["text/Execute"], ["#M0\\:b72d04e3\\:\\:3"], ["xpath///*[@id=\"M0:b72d04e3::3\"]"], ["pierce/#M0\\:b72d04e3\\:\\:3"]],
+      "offsetX": 27,
+      "offsetY": 12
+    },
+    {
+      "type": "scroll",
+      "target": "main",
+      "x": 0,
+      "y": 420
+    },
+    {
+      "type": "click",
+      "target": "main",
+      "selectors": [["aria/Export"], ["text/Export"], ["#M0\\:0c93f5ad\\:\\:0"], ["xpath///*[@id=\"M0:0c93f5ad::0\"]"], ["pierce/#M0\\:0c93f5ad\\:\\:0"]],
+      "offsetX": 22,
+      "offsetY": 12
+    }
+  ]
+}

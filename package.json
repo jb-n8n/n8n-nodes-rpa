@@ -1,0 +1,19 @@
+{
+  "name": "n8n-rpa",
+  "private": true,
+  "packageManager": "pnpm@10.32.1",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "test": "pnpm -r test && node --test \"deploy/scripts/test/*.test.mjs\"",
+    "typecheck": "pnpm -r typecheck",
+    "acceptance": "pnpm --filter n8n-rpa-eval acceptance"
+  },
+  "pnpm": {
+    "overrides": {
+      "axios": "^1.20.0",
+      "zod": "^4.6.6"
+    }
+  }
+}

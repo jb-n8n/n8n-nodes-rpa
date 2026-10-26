@@ -1,0 +1,25 @@
+{{- include "rpa-browser.validate" . }}
+{{- if eq (include "rpa-browser.autoscalingMode" .) "hpa-cpu" }}
+# Without Prometheus: CPU against the container's request, a rougher stand-in for session utilisation.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "rpa-browser.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rpa-browser.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "rpa-browser.fullname" . }}
+  minReplicas: {{ .Values.autoscaling.min }}
+  maxReplicas: {{ .Values.autoscaling.max }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.cpuTargetPercent }}
+{{- end }}

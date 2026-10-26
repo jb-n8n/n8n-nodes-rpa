@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ObjectRepositoryTargetData ContentHash="2f8c1b9e4d7a6053" Reference="Rk3pQe1nTUmN0yZ7VbXg2A/Pq1nZ5bCsU0a9n8iU7v1wA" Type="Element" xmlns="http://schemas.uipath.com/workflow/activities/uix" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <ObjectRepositoryTargetData.Target>
+    <TargetAnchorable DesignTimeRectangle="40, 180, 160, 26" DesignTimeScaleFactor="1" ElementType="Button" FullSelectorArgument="&lt;webctrl tag='BUTTON' check:text='Line Item Report' /&gt;" FuzzySelectorArgument="&lt;webctrl tag='BUTTON' type='submit' aaname='Line Item Report' /&gt;" Guid="a41c7e20-58d3-4b9f-8e0a-6c2b1d9f3e75" ScopeSelectorArgument="&lt;html app='chrome.exe' title='SAP Easy Access' /&gt;" SearchSteps="Selector, FuzzySelector" Version="V6" />
+  </ObjectRepositoryTargetData.Target>
+</ObjectRepositoryTargetData>
