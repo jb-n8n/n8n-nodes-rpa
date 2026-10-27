@@ -13,7 +13,7 @@
     "acceptance": "vitest run --config vitest.acceptance.config.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "0.131.0",
+    "@anthropic-ai/sdk": "1.3.0",
     "n8n-rpa-engine": "workspace:*",
     "n8n-rpa-sandbox": "workspace:*",
     "fflate": "0.8.3"
