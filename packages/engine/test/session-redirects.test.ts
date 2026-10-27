@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createServer as createNetServer } from 'node:net';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { chromium, type BrowserServer } from 'playwright-core';
+import { chromium, type BrowserServer, type Page } from 'playwright-core';
 import { startRedirectGuard } from '../src/browser/redirects.js';
 import { openSession, type Session } from '../src/browser/session.js';
 import { createMasker } from '../src/secrets/mask.js';
@@ -373,6 +373,60 @@ describe('the guard on detach', () => {
       expect(await result).toBe('TypeError');
       await new Promise((r) => setTimeout(r, 300));
       expect(off.hits).toEqual([]);
+    } finally { await browser.close(); }
+  });
+});
+
+describe('the guard on detach, shared browser', () => {
+  const guardOn = async (browser: Awaited<ReturnType<typeof chromium.launch>>, context: Awaited<ReturnType<typeof browser.newContext>>, decisions: boolean[]) =>
+    startRedirectGuard(browser, context, {
+      shared: true,
+      decide: (h) => { decisions.push(h.attributed); return new Promise(() => undefined); },
+      onPolicy: async () => true,
+      closed: () => false,
+      onLost: () => undefined,
+    });
+  const fetchFrom = (target: { evaluate: Page['evaluate'] }, url: string) =>
+    target.evaluate(async (u: string) => fetch(u).then((r) => r.status, (e: Error) => e.name), url);
+  it("this session's paused hop and an unattributed paused hop are failed", async () => {
+    const browser = await chromium.launch({ headless: true });
+    try {
+      const mine = await browser.newContext();
+      const other = await browser.newContext();
+      const decisions: boolean[] = [];
+      const guard = await guardOn(browser, mine, decisions);
+      const page = await mine.newPage();
+      await guard.adopt(page);
+      await page.goto(`${base}/page`);
+      // Another context's same-process sub-frame: not a target, in none of this session's frame trees.
+      const otherPage = await other.newPage();
+      await otherPage.goto(`${base}/page`);
+      await otherPage.setContent(`<iframe src="${base}/page"></iframe>`);
+      const frame = otherPage.frames()[1];
+      await frame.waitForLoadState();
+      const ours = fetchFrom(page, hop(offUrl('/ours')));
+      const unknown = fetchFrom(frame, hop(offUrl('/unknown')));
+      await expect.poll(() => [...decisions].sort()).toEqual([false, true]);
+      await guard.detach();
+      expect([await ours, await unknown]).toEqual(['TypeError', 'TypeError']);
+      await new Promise((r) => setTimeout(r, 300));
+      expect(off.hits).toEqual([]);
+    } finally { await browser.close(); }
+  });
+  it('an unattributed first URL still paused goes on', async () => {
+    const browser = await chromium.launch({ headless: true });
+    try {
+      const context = await browser.newContext();
+      const decisions: boolean[] = [];
+      // Never adopted: no request can be tied to a session, so this first URL waits on its owner until detach.
+      const guard = await guardOn(browser, context, decisions);
+      const page = await context.newPage();
+      const loaded = page.goto(`${base}/page`);
+      await new Promise((r) => setTimeout(r, 500));
+      expect(site.hits).toEqual([]);
+      await guard.detach();
+      expect((await loaded)?.status()).toBe(200);
+      expect(decisions).toEqual([]);
     } finally { await browser.close(); }
   });
 });

@@ -75,8 +75,9 @@ export interface RedirectGuard {
    */
   whenDecided(method: string, url: string, done: Promise<void>, waitMs: number): Promise<boolean>;
   /**
-   * Stops intercepting: fails every request still paused (unless positively another context's), then detaches. Call it
-   * once the context is closed. Never throws.
+   * Stops intercepting: answers every request still paused (fails this session's and unattributed hops, lets another
+   * context's requests and unattributed first URLs go on; Local Browser: fails all), then detaches. Call it once the
+   * context is closed. Never throws.
    */
   detach(): Promise<void>;
 }
@@ -204,17 +205,30 @@ export async function startRedirectGuard(browser: Browser, context: BrowserConte
     return { isMain: false, url: (await findFrame(frameId))?.url ?? '' };
   };
 
-  /** Requests paused and not yet answered, with their owner once known: detach() fails every one not positively foreign. */
-  const pending = new Map<string, Owner | undefined>();
+  /** Requests paused and not yet answered: whether each is a hop, and its owner once known. detach() answers them. */
+  const pending = new Map<string, { hop: boolean; owner?: Owner }>();
+  const sendFail = (requestId: string, errorReason: 'BlockedByClient' | 'NameNotResolved') =>
+    cdp.send('Fetch.failRequest', { requestId, errorReason }).catch(() => undefined);
+  const sendContinue = (requestId: string) => cdp.send('Fetch.continueRequest', { requestId }).catch(() => undefined);
+  /**
+   * What happens to a paused request when the guard stops (Chromium lets a paused request go on detach): this session's
+   * requests and hops nobody can tie to a session are failed; another context's requests, and first URLs nobody can tie
+   * to a session (their own context's route handler decided them), go on. Local Browser: everything is failed.
+   */
+  const onStop = (requestId: string, hop: boolean, owner: Owner | undefined) => {
+    const lets = opts.shared && (owner === 'foreign' || (!hop && owner !== 'ours'));
+    return lets ? sendContinue(requestId) : sendFail(requestId, 'BlockedByClient');
+  };
+  // A decision that comes after detach() is not acted on: detach() has answered the request already.
   const fail = (requestId: string, errorReason: 'BlockedByClient' | 'NameNotResolved') => {
+    if (detached) return undefined;
     pending.delete(requestId);
-    return cdp.send('Fetch.failRequest', { requestId, errorReason }).catch(() => undefined);
+    return sendFail(requestId, errorReason);
   };
   const cont = (requestId: string) => {
-    // A decision that comes after detach() is not acted on: detach() has failed the request already (unless foreign).
-    if (detached) return pending.get(requestId) === 'foreign' ? undefined : fail(requestId, 'BlockedByClient');
+    if (detached) return undefined;
     pending.delete(requestId);
-    return cdp.send('Fetch.continueRequest', { requestId }).catch(() => undefined);
+    return sendContinue(requestId);
   };
 
   const handle = async (e: { requestId: string; request: { url: string; method: string }; frameId: string; resourceType: string; networkId?: string; redirectedRequestId?: string }) => {
@@ -223,10 +237,12 @@ export async function startRedirectGuard(browser: Browser, context: BrowserConte
     if (!opts.shared && opts.closed()) return fail(requestId, 'BlockedByClient');
     const chain = networkId !== undefined ? chains.get(networkId) : undefined;
     const hop = chain !== undefined || e.redirectedRequestId !== undefined;
+    pending.get(requestId)!.hop = hop;
     // A hop belongs to whoever its chain's first request belonged to, even once that frame or page is gone; a chain
     // known only as 'unknown' is looked up again (it may since be found as this session's).
     const owner = chain === 'ours' || chain === 'foreign' ? chain : await ownerOf(frameId);
-    if (pending.has(requestId)) pending.set(requestId, owner);
+    const held = pending.get(requestId);
+    if (held) held.owner = owner;
     if (!hop && networkId !== undefined) setBounded(chains, networkId, owner, MAX_CHAINS);
     if (owner === 'foreign') return cont(requestId);
     // A first URL nobody can tie to this session (a shared browser's same-process frame found in none of this session's
@@ -252,9 +268,12 @@ export async function startRedirectGuard(browser: Browser, context: BrowserConte
   };
 
   cdp.on('Fetch.requestPaused', (e) => {
-    // Paused while detaching: failed, not left for the detach to let go (fail closed, whoever's it is).
-    if (detached) return void fail(e.requestId, 'BlockedByClient');
-    pending.set(e.requestId, undefined);
+    if (detached) {
+      // Paused while detaching: answered by the same rule as detach(), from what is known without a lookup.
+      const chain = e.networkId !== undefined ? chains.get(e.networkId) : undefined;
+      return void onStop(e.requestId, chain !== undefined || e.redirectedRequestId !== undefined, chain);
+    }
+    pending.set(e.requestId, { hop: false });
     // Anything unexpected fails the request: a paused request is never left hanging, nor let through unchecked.
     void handle(e).catch(() => fail(e.requestId, 'BlockedByClient'));
   });
@@ -310,9 +329,13 @@ export async function startRedirectGuard(browser: Browser, context: BrowserConte
     async detach() {
       if (detached) return;
       detached = true;
-      // Chromium lets a paused request go when the session detaches: fail each first (fail closed if still undecided).
-      const held = [...pending].filter(([, owner]) => owner !== 'foreign').map(([id]) => id);
-      await Promise.all(held.map((id) => fail(id, 'BlockedByClient')));
+      // Chromium lets a paused request go when the session detaches: answer each first.
+      const held = [...pending];
+      pending.clear();
+      await Promise.all(held.map(([id, { hop, owner }]) => onStop(id, hop, owner)));
+      // Detaching with Fetch on can leave a request that pauses at that instant hanging (seen with Playwright 1.63's Chromium): turn Fetch
+      // off first. Chromium lets go of anything paused since the answers above; this session's context is closed by then.
+      await cdp.send('Fetch.disable').catch(() => undefined);
       await cdp.detach().catch(() => undefined);
       await Promise.all([...sessions.values()].map(async (s) => (await s)?.detach().catch(() => undefined)));
     },
