@@ -688,7 +688,7 @@ Differences to expect: URLs are allowlisted (other sites are blocked, so add wha
 ```bash
 pnpm install
 pnpm -r build        # the node package compiles against the engine's dist
-pnpm test            # engine, sandbox, gate, node, eval, deploy/scripts
+pnpm test            # engine, sandbox, gate, node, eval, deploy/scripts (one suite at a time)
 pnpm -r typecheck
 pnpm -r lint
 pnpm acceptance      # the data feed through the templates; ANTHROPIC_API_KEY adds the live parts (ACCEPTANCE_SEEDS, default 25)

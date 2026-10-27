@@ -8,6 +8,7 @@ import type { Script, Step } from '../src/types.js';
 import { baselineScript, LOCAL, policyFor, reportScript, SECRETS, SIGN_IN_STEPS, signedLaneInput, TEST_KEY } from './helpers.js';
 import { notReachedNetworkIdle, tooManyRows } from '../src/messages.js';
 import { publicPolicy } from './helpers.js';
+import { bound } from './timing.js';
 const TOTAL_PATTERN = 'Showing \\d+[-–]\\d+ of (\\d+)';
 
 let portal: Awaited<ReturnType<typeof startPortal>>;
@@ -88,7 +89,7 @@ describe('runScriptLane', () => {
     const tampered = { ...inp, script: { ...script, version: 2 } };
     const r = await runScriptLane(tampered);
     expect(r.ok).toBe(false);
-    if (!r.ok) { expect(r).toMatchObject({ code: 'script_untrusted', message: UNSIGNED_REQUIRED }); expect(r.durationMs).toBeLessThan(500); }
+    if (!r.ok) { expect(r).toMatchObject({ code: 'script_untrusted', message: UNSIGNED_REQUIRED }); expect(r.durationMs).toBeLessThan(bound(500)); }
   });
   it('an undeclared submit is a policy violation before any browser work', async () => {
     const s = baselineScript(portal.url);
@@ -110,7 +111,7 @@ describe('runScriptLane', () => {
     if (r.ok) throw new Error('expected failure');
     expect(r.code).toBe('incomplete');
     expect(r.message).toBe('run cancelled');
-    expect(r.durationMs).toBeLessThan(500);
+    expect(r.durationMs).toBeLessThan(bound(500));
   });
   it('aborting mid-run cancels it', async () => {
     const s = baselineScript(portal.url);
@@ -122,7 +123,7 @@ describe('runScriptLane', () => {
     if (r.ok) throw new Error('expected failure');
     expect(r.code).toBe('incomplete');
     expect(r.message).toBe('run cancelled');
-    expect(Date.now() - t0).toBeLessThan(10_000);
+    expect(Date.now() - t0).toBeLessThan(bound(10_000, 20_000));
   });
   it('aborting while a click waits for a missing element returns at once, not after the step timeout', async () => {
     portal.setState({ label: 'Field Actions' });
@@ -132,7 +133,7 @@ describe('runScriptLane', () => {
     const r = await runScriptLane(input(baselineScript(portal.url), { signal: ac.signal, defaultStepTimeoutMs: 20_000 }));
     if (r.ok) throw new Error('expected failure');
     expect(r).toMatchObject({ code: 'incomplete', message: 'run cancelled' });
-    expect(Date.now() - t0).toBeLessThan(6000);
+    expect(Date.now() - t0).toBeLessThan(bound(6000, 20_000));
   });
   it('aborting during a waitFor hasText wait returns at once, not after the step timeout', async () => {
     const s = baselineScript(portal.url);
@@ -143,7 +144,7 @@ describe('runScriptLane', () => {
     const r = await runScriptLane(input(s, { signal: ac.signal, defaultStepTimeoutMs: 20_000 }));
     if (r.ok) throw new Error('expected failure');
     expect(r).toMatchObject({ code: 'incomplete', message: 'run cancelled' });
-    expect(Date.now() - t0).toBeLessThan(6000);
+    expect(Date.now() - t0).toBeLessThan(bound(6000, 20_000));
   });
   // Regression: per-page reads inside paginate logged index 0 instead of their paginate step's index
   it('steps nested in paginate log under the paginate step index', async () => {
@@ -268,7 +269,7 @@ describe('trust gate at the lane', () => {
     const r = await runScriptLane(input(baselineScript(portal.url), { endpoint: NEVER_OPENED, trust: { required: true, key: TEST_KEY } }));
     if (r.ok) throw new Error('expected failure');
     expect(r).toMatchObject({ code: 'script_untrusted', message: UNSIGNED_REQUIRED });
-    expect(r.durationMs).toBeLessThan(500);
+    expect(r.durationMs).toBeLessThan(bound(500));
   });
   it('unsigned steps that sign in need Allow Unsigned Writes', async () => {
     const unsigned = await runScriptLane(input(baselineScript(portal.url), { endpoint: NEVER_OPENED, trust: { required: false } }));

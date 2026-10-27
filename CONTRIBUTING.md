@@ -11,7 +11,7 @@ the stack, and a local Chromium for the engine tests (`npx playwright@1.63.0 ins
 ```bash
 pnpm install
 pnpm -r build
-pnpm test            # engine, node, eval, sandbox, gate, deploy script
+pnpm test            # engine, node, eval, sandbox, gate, deploy script (one suite at a time)
 pnpm -r typecheck
 pnpm -r lint
 pnpm acceptance      # offline; ANTHROPIC_API_KEY adds the live-model parts

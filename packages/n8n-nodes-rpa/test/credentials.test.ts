@@ -4,6 +4,7 @@ import { createServer, type AddressInfo } from 'node:net';
 import { describe, expect, it, vi } from 'vitest';
 import type { ICredentialType } from 'n8n-workflow';
 import * as engine from 'n8n-rpa-engine';
+import { bound } from '../../engine/test/timing.js';
 import { PlaywrightBrowserApi } from '../credentials/PlaywrightBrowserApi.credentials.js';
 import { PlaywrightRedisApi } from '../credentials/PlaywrightRedisApi.credentials.js';
 import { PlaywrightScriptSigningApi } from '../credentials/PlaywrightScriptSigningApi.credentials.js';
@@ -189,7 +190,7 @@ describe('v2 credential tests', () => {
       const r = await browserTestResult({ mode: 'playwright', wsUrl: `ws://127.0.0.1:${port}/`, token: 't'.repeat(32) }, engine, 1500);
       expect(r).toEqual({ status: 'OK', message: 'Connected; the browser service accepted the token but every browser session is busy right now' });
       expect(Date.now() - t0).toBeGreaterThanOrEqual(1400);
-      expect(Date.now() - t0).toBeLessThan(4000);
+      expect(Date.now() - t0).toBeLessThan(bound(4000, 10_000));
       const hinted = await browserTestResult({ mode: 'playwright', wsUrl: `ws://127.0.0.1:${port}/?token=abc123` }, engine, 0);
       expect(hinted).toEqual({
         status: 'OK', message: 'Connected; the browser service accepted the token but every browser session is busy right now; move the token from the URL to the Token field',

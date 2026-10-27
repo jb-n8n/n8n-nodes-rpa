@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { deflateRawSync } from 'node:zlib';
 import { strToU8, zipSync } from 'fflate';
 import { checkFile, fileFacts } from '../src/steps/file-check.js';
+import { bound } from './timing.js';
 
 const CSV = 'text/csv';
 const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -79,14 +80,14 @@ describe('bounded cost on page-controlled files', () => {
 
   it('80k unclosed rows and 20k unclosed <si> finish fast', () => {
     const rows = timed(() => fileFacts(Buffer.from(sheetZip('<worksheet>' + '<row r="1">'.repeat(80_000))), XLSX));
-    expect(rows.ms).toBeLessThan(100);
+    expect(rows.ms).toBeLessThan(bound(100));
     expect('error' in rows.out || Array.isArray(rows.out.columns)).toBe(true);
     const si = timed(() => fileFacts(Buffer.from(sheetZip(
       '<row><c t="s"><v>19999999</v></c></row>', '<sst>' + '<si>'.repeat(20_000))), XLSX));
-    expect(si.ms).toBeLessThan(100);
+    expect(si.ms).toBeLessThan(bound(100));
     expect(si.out).toEqual({ columns: [''], rows: 0 });
     const cells = timed(() => fileFacts(Buffer.from(sheetZip('<row>' + '<c r="A1">'.repeat(80_000))), XLSX));
-    expect(cells.ms).toBeLessThan(100);
+    expect(cells.ms).toBeLessThan(bound(100));
   });
   it('does not count <rowBreaks> or <rows> as rows', () => {
     const s = '<row><c t="inlineStr"><is><t>A</t></is></c></row><rowBreaks count="1"/><rows/>';
@@ -101,13 +102,13 @@ describe('bounded cost on page-controlled files', () => {
     for (const z of [declaredHuge, lying]) {
       const { out, ms } = timed(() => fileFacts(z, XLSX));
       expect(out).toEqual({ error: 'the file is too large to read its columns' });
-      expect(ms).toBeLessThan(2000);
+      expect(ms).toBeLessThan(bound(2000));
     }
   });
   it('64 MiB of commas is read with a capped header', () => {
     const data = Buffer.alloc(64 * 1024 * 1024, ',');
     const { out, ms } = timed(() => fileFacts(data, CSV));
-    expect(ms).toBeLessThan(5000);
+    expect(ms).toBeLessThan(bound(5000));
     if ('error' in out) throw new Error(out.error);
     expect(out.columns?.length).toBe(200);
     const miss = checkFile({ fileName: 'x.csv', mimeType: CSV, data }, { columns: ['Z'] });
@@ -164,7 +165,7 @@ describe('hostile archives (central-directory reader)', () => {
   const quick = (z: Buffer, expected: unknown) => {
     const { out, ms } = timed(() => fileFacts(z, XLSX));
     expect(out).toEqual(expected);
-    expect(ms).toBeLessThan(2000);
+    expect(ms).toBeLessThan(bound(2000));
   };
 
   it('a real bomb (declared size 100) and the same with a data descriptor are refused', () => {
@@ -285,7 +286,7 @@ describe('the header below a title line', () => {
     const quotes = Buffer.from(('"'.repeat(MiB) + '\n').repeat(10) + 'Document,Amount\n1,2\n');
     for (const data of [unclosed, wide, quotes]) {
       const { out, ms } = timed(() => fileFacts(data, CSV, { columns: ['Document', 'Missing'] }));
-      expect(ms).toBeLessThan(200);
+      expect(ms).toBeLessThan(bound(200));
       if ('error' in out) throw new Error(out.error);
       expect(out.columns!.length).toBeGreaterThan(0);
       expect(out.columns!.length).toBeLessThanOrEqual(200);
@@ -295,7 +296,7 @@ describe('the header below a title line', () => {
     const sheet = '<worksheet><sheetData>' + `<row>${cells.repeat(300)}</row>`.repeat(10) + `<row>${inline('Document')}</row></sheetData></worksheet>`;
     const z = Buffer.from(zipSync({ 'xl/worksheets/sheet1.xml': strToU8(sheet) }));
     const { out, ms } = timed(() => fileFacts(z, XLSX, { columns: ['Document'] }));
-    expect(ms).toBeLessThan(500);
+    expect(ms).toBeLessThan(bound(500));
     if ('error' in out) throw new Error(out.error);
     expect(out.columns).toHaveLength(200);
     expect(out.columns![0]).toBe('w'.repeat(200));

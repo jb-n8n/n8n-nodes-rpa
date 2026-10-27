@@ -6,6 +6,7 @@ import { installInterrupts } from '../src/steps/interrupts.js';
 import { runSteps, type StepContext } from '../src/steps/run.js';
 import type { PortalSecrets, Step } from '../src/types.js';
 import { baselineScript, LOCAL, policyFor, SECRETS, SIGN_IN_STEPS } from './helpers.js';
+import { bound } from './timing.js';
 
 let portal: Awaited<ReturnType<typeof startPortal>>;
 let session: Session;
@@ -166,10 +167,10 @@ describe('signIn / detect / interrupts', () => {
     const ctx = await atLogin({ ...SECRETS, password: 'wrong-pass-123' });
     try {
       const t0 = Date.now();
-      const r = await runSteps(ctx, SIGN_IN_STEPS);
+      const r = await runSteps({ ...ctx, defaultTimeoutMs: bound(3000) }, SIGN_IN_STEPS);
       if (r.ok) throw new Error('expected failure');
       expect(r.failure.message).toBe('detected:login_failed');
-      expect(Date.now() - t0).toBeLessThan(2500);
+      expect(Date.now() - t0).toBeLessThan(bound(2500));
     } finally { await session.close(); }
   });
 });

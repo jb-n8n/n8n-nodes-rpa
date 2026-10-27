@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { deflateRawSync } from 'node:zlib';
 import { strToU8, zipSync } from 'fflate';
 import { readZipEntries } from '../src/steps/zip.js';
+import { bound } from './timing.js';
 import { timed, zeros, zip } from './zip-fixtures.js';
 
 const MiB = 1024 * 1024;
@@ -64,7 +65,7 @@ describe('readZipEntries', () => {
     const quick = (z: Buffer, expected: 'too-large' | 'unreadable', detail: RegExp) => {
       const { out, ms } = timed(() => readZipEntries(z, all, CAPS));
       expect(out).toEqual({ error: expected, detail: expect.stringMatching(detail) });
-      expect(ms).toBeLessThan(2000);
+      expect(ms).toBeLessThan(bound(2000));
     };
     quick(zip([{ name: 'a', raw: ok, usize: 6 }, { name: 'a', raw: ok, usize: 6 }]), 'unreadable', /twice/);
     quick(zip([{ name: 'a', raw: ok, usize: 6, flags: 1 }]), 'unreadable', /encrypted/);
@@ -86,7 +87,7 @@ describe('readZipEntries', () => {
     empty[empty.length - 5] = 1;
     const overlap = timed(() => readZipEntries(overlapping(100, empty), all, CAPS));
     expect(overlap.out).toEqual({ error: 'unreadable', detail: 'the accepted entries overlap' });
-    expect(overlap.ms).toBeLessThan(1000);
+    expect(overlap.ms).toBeLessThan(bound(1000));
     // One such record alone is a valid, empty entry.
     expect(entries(readZipEntries(overlapping(1, empty), all, CAPS)).get('f0')!.length).toBe(0);
     // Not a zip, truncated, empty, and zip64 markers.
@@ -119,7 +120,7 @@ describe('readZipEntries', () => {
     expect(entries(atCap.out).size).toBe(2000);
     const over = timed(() => readZipEntries(zip(filler(2001)), all, CAPS));
     expect(over.out).toEqual({ error: 'unreadable', detail: 'the archive has more than 2000 entries' });
-    expect(over.ms).toBeLessThan(1000);
+    expect(over.ms).toBeLessThan(bound(1000));
 
     // Per entry: exactly the cap is read, one byte more is refused (stored and deflated alike).
     const exact = Buffer.alloc(4 * MiB, 'a');
@@ -133,7 +134,7 @@ describe('readZipEntries', () => {
     const nine = Array.from({ length: 9 }, (_v, i) => ({ name: `p${i}`, raw: part, usize: 100 }));
     const total = timed(() => readZipEntries(zip(nine), all, CAPS));
     expect(total.out).toEqual({ error: 'too-large', detail: 'the entries together are larger than 33554432 bytes' });
-    expect(total.ms).toBeLessThan(2000);
+    expect(total.ms).toBeLessThan(bound(2000));
     expect(entries(readZipEntries(zip(nine.slice(0, 8)), all, CAPS)).size).toBe(8);
     // Only accepted entries count toward the total.
     expect(entries(readZipEntries(zip(nine), (n) => n !== 'p8', CAPS)).size).toBe(8);

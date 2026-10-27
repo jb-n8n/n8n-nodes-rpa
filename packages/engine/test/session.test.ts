@@ -148,14 +148,18 @@ describe('openSession (local)', () => {
     } finally { await s.close(); }
   });
   it('kills the session when a sub-request redirects off-list', async () => {
+    // The hop goes to an off-list port that listens, so the browser sends it: that is the hop the watchdog is for.
+    const off = createHttpServer((_q, res) => { res.end('x'); });
+    await new Promise<void>((r) => off.listen(0, '127.0.0.1', r));
+    const port = (off.address() as { port: number }).port;
     const s = await openSession({ endpoint: LOCAL, policy: policyFor(portal), masker });
     try {
       await s.page.goto(`${portal.url}/acme/login`);
-      await s.page.evaluate((u) => fetch(u).catch(() => null), `${portal.url}/acme/p/redirect-sub`).catch(() => undefined);
-      await expect.poll(() => s.violations.some((v) => v.fatal && v.kind === 'host' && v.url.includes('127.0.0.1:1'))).toBe(true);
+      await s.page.evaluate((u) => fetch(u).catch(() => null), `${portal.url}/acme/p/redirect-sub?port=${port}`).catch(() => undefined);
+      await expect.poll(() => s.violations.some((v) => v.fatal && v.kind === 'host' && v.url.startsWith(`http://127.0.0.1:${port}/`))).toBe(true);
       await expect.poll(() => s.closed).toBe(true);
       expect(s.closeReason).toBe('violation');
-    } finally { await s.close(); }
+    } finally { await s.close(); off.closeAllConnections(); await new Promise((r) => off.close(r)); }
   });
   it('records why the session closed: first reason wins, disconnect marks it closed', async () => {
     const a = await openSession({ endpoint: LOCAL, policy: policyFor(portal), masker });
@@ -345,7 +349,7 @@ describe('openSession blocked requests on session-shaped paths', () => {
     try {
       await s.page.goto(`${portal.url}/acme/login`);
       await s.page.evaluate(() => fetch('/sap(cz1TSUQ6QU5PTjoxMjM0NTY3OA%3D%3D)/bc/gui/sap/its/webgui', { method: 'POST' }).catch(() => undefined));
-      await expect.poll(() => s.blockedRequests, { timeout: 10_000 }).toEqual([{ method: 'POST', host: portal.host, path: '/sap(…)/bc/gui/sap/its/webgui' }]);
+      await expect.poll(() => s.blockedRequests).toEqual([{ method: 'POST', host: portal.host, path: '/sap(…)/bc/gui/sap/its/webgui' }]);
     } finally { await s.close(); }
   });
 });
@@ -405,7 +409,7 @@ describe('openSession read-only POSTs and redirects', () => {
     const s = await openSession({ endpoint: LOCAL, policy, masker, isPrivate: () => false });
     try {
       await s.page.goto(`${portal.url}/acme/p/frame`);
-      await expect.poll(() => s.page.frameLocator('#widget-frame').locator('#widget').textContent(), { timeout: 10_000 }).toBe('widget posted');
+      await expect.poll(() => s.page.frameLocator('#widget-frame').locator('#widget').textContent()).toBe('widget posted');
       expect(s.writesSent).toBe(1);
       expect([...s.readPostsUsed]).toEqual([]);
     } finally { await s.close(); }
@@ -419,7 +423,7 @@ describe('openSession frames and navigations', () => {
     const s = await openSession({ endpoint: LOCAL, policy, masker, isPrivate: () => false });
     try {
       await s.page.goto(`${portal.url}/acme/p/frame`);
-      await expect.poll(() => s.page.frameLocator('#widget-frame').locator('#widget').textContent(), { timeout: 10_000 }).toBe('widget posted');
+      await expect.poll(() => s.page.frameLocator('#widget-frame').locator('#widget').textContent()).toBe('widget posted');
       expect(s.violations).toEqual([]);
       expect(portal.state().widgetPosts).toBe(1);
     } finally { await s.close(); }
@@ -820,7 +824,7 @@ describe('write modes, wildcard, restrict and viewport', () => {
     try {
       await s.page.goto(`${portal.url}/public/beacon`, { waitUntil: 'load' });
       // The beacon and the keepalive fetch hit the same method, host and path: one record (dedupe).
-      await expect.poll(() => s.blockedRequests.length, { timeout: 10_000 }).toBe(2);
+      await expect.poll(() => s.blockedRequests.length).toBe(2);
       expect(s.blockedRequests).toContainEqual({ method: 'POST', host: other, path: '/public/collect' });
       expect(s.blockedRequests).toContainEqual({ method: 'POST', host: portal.host, path: '/public/collect' });
       // The third-party beacon is an off-list request; the same-host POST is a blocked write.
@@ -1068,7 +1072,7 @@ describe('frame-host writes under noWritePolicy', () => {
     try {
       await s.page.goto(`${portal.url}/acme/p/frame`).catch(() => undefined);
       // The POST comes from the widget's own script, so the frame loaded.
-      await expect.poll(() => s.violations.some((v) => v.kind === 'write' && v.fatal && v.url === `http://localhost:${portal.port}/acme/p/widget`), { timeout: 10_000 }).toBe(true);
+      await expect.poll(() => s.violations.some((v) => v.kind === 'write' && v.fatal && v.url === `http://localhost:${portal.port}/acme/p/widget`)).toBe(true);
       expect(s.violations.some((v) => v.kind === 'host')).toBe(false);
       expect(portal.state().widgetPosts).toBe(0);
     } finally { await s.close(); }
@@ -1093,11 +1097,11 @@ describe('bounded and masked logs, restrict during the address check', () => {
       await s.page.evaluate((o) => {
         for (let i = 0; i < 500; i++) navigator.sendBeacon(`http://${o}/public/c${i % 5}`, 'x');
       }, other);
-      await expect.poll(() => s.blockedRequests.length, { timeout: 10_000 }).toBe(5);
+      await expect.poll(() => s.blockedRequests.length).toBe(5);
       await s.page.evaluate((o) => {
         for (let i = 0; i < 300; i++) void fetch(`http://${o}/public/u${i}`, { method: 'POST', mode: 'no-cors' }).catch(() => undefined);
       }, other);
-      await expect.poll(() => s.blockedRequests.length, { timeout: 10_000 }).toBe(100);
+      await expect.poll(() => s.blockedRequests.length).toBe(100);
       await new Promise((r) => setTimeout(r, 500));
       expect(s.blockedRequests).toHaveLength(100);
       expect(new Set(s.blockedRequests.map(key)).size).toBe(100);

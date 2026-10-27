@@ -12,6 +12,7 @@ import { loginBlockEnd } from '../src/policy/validate.js';
 import { parseScript } from '../src/steps/parse.js';
 import type { Step } from '../src/types.js';
 import { ERP_CHECK, SAP_VARS, SECRETS } from './helpers.js';
+import { bound } from './timing.js';
 import { timed, zeros, zip } from './zip-fixtures.js';
 
 type S<K extends string> = Extract<Step, Record<K, unknown>>;
@@ -376,7 +377,7 @@ describe('UiPath projects', () => {
     for (let i = 1; i <= 10; i++) fan[`F${i}.xaml`] = strToU8(xaml(i < 10 ? invoke(`F${i + 1}.xaml`).repeat(40) : '<Delay Duration="00:00:01" />', `F${i}`));
     const { out, ms } = timed(() => importSource('uipath', Buffer.from(zipSync(fan)), { name: 'fan', hasSiteLogin: false }));
     expect(errors(out)).toEqual([expect.objectContaining({ reason: expect.stringContaining(MAX_UIPATH_ACTIVITIES.toLocaleString('en-US')) })]);
-    expect(ms).toBeLessThan(3000);
+    expect(ms).toBeLessThan(bound(3000));
   });
 
   it('secrets never appear', () => {
@@ -417,29 +418,29 @@ describe('UiPath projects', () => {
     // Main invokes F 20,000 times; F holds 150,000 elements that are not activities.
     const big = run({ 'Main.xaml': xaml(invoke('F.xaml').repeat(20_000)), 'F.xaml': xaml(`${'<Sequence.Variables />'.repeat(150_000)}<Delay />`, 'F') });
     expect(errors(big.out)).toEqual([expect.objectContaining({ reason: expect.stringContaining('more work than an import does') })]);
-    expect(big.ms).toBeLessThan(1000);
+    expect(big.ms).toBeLessThan(bound(1000));
     // Nested Flowcharts over a large subtree, invoked many times.
     let chart = `<Sequence>${'<Sequence.Variables />'.repeat(100_000)}<Delay DisplayName="Bottom" /></Sequence>`;
     for (let i = 0; i < 60; i++) chart = `<Flowchart DisplayName="F${i}"><Flowchart.StartNode><FlowStep x:Name="__R${i}">${chart}</FlowStep></Flowchart.StartNode></Flowchart>`;
     const flow = run({ 'Main.xaml': xaml(invoke('C.xaml').repeat(5_000)), 'C.xaml': xaml(chart, 'C') });
     expect(errors(flow.out)).toEqual([expect.objectContaining({ reason: expect.stringContaining('more work than an import does') })]);
-    expect(flow.ms).toBeLessThan(1000);
+    expect(flow.ms).toBeLessThan(bound(1000));
     const once = timed(() => importSource('uipath', xaml(chart), { name: 'c', hasSiteLogin: false }));
     expect(errors(once.out).map((e) => e.reason)).toEqual([]);
     expect(once.out.flow?.nodes).toEqual([{ kind: 'wait', displayName: 'Bottom' }]);
-    expect(once.ms).toBeLessThan(1000);
+    expect(once.ms).toBeLessThan(bound(1000));
     // A 60 KiB selector invoked 20,000 times, and referenced 20,000 times through the Object Repository.
     const longSelector = `<html app='chrome.exe' title='${'t'.repeat(60_000)}' /><webctrl tag='BUTTON' aaname='Go' />`;
     const sel = run({ 'Main.xaml': xaml(invoke('S.xaml').repeat(20_000)), 'S.xaml': xaml(card(click('Go', longSelector)), 'S') });
     expect(errors(sel.out)).toEqual([expect.objectContaining({ reason: expect.stringContaining('more work than an import does') })]);
-    expect(sel.ms).toBeLessThan(1000);
+    expect(sel.ms).toBeLessThan(bound(1000));
     const refClick = '<uix:NClick DisplayName="Click \'Go\'"><uix:NClick.Target><uix:TargetAnchorable Reference="L/E1" /></uix:NClick.Target></uix:NClick>';
     const repo = run({
       'project.json': JSON.stringify({ main: 'Main.xaml' }),
       'Main.xaml': xaml(card(refClick.repeat(20_000))),
       '.objects/L/A/S/E1/.content': `<ObjectRepositoryTargetData Reference="L/E1"><TargetAnchorable FullSelectorArgument="${esc(longSelector)}" /></ObjectRepositoryTargetData>`,
     });
-    expect(repo.ms).toBeLessThan(1000);
+    expect(repo.ms).toBeLessThan(bound(1000));
     expect(repo.out.report.items.length).toBeLessThan(5);
   });
 
@@ -474,7 +475,7 @@ describe('UiPath projects', () => {
     for (const e of errs) expect(e.reason).toContain('1,000,000 elements');
     // The first six files fit; the rest are reported, not parsed.
     expect(out.flow?.nodes.filter((n) => n.kind === 'wait').map((n) => n.displayName)).toEqual(['P0', 'P1', 'P2', 'P3', 'P4', 'P5']);
-    expect(ms).toBeLessThan(3000);
+    expect(ms).toBeLessThan(bound(3000));
     // The Object Repository counts too.
     const objects: Record<string, Uint8Array> = { 'project.json': strToU8('{"main":"Main.xaml"}'), 'Main.xaml': strToU8(xaml('<Delay />')) };
     for (let i = 0; i < 6; i++) objects[`.objects/L/A/S/E${i}/.content`] = strToU8(`<ObjectRepositoryTargetData Reference="L/E${i}">${'<x />'.repeat(199_000)}</ObjectRepositoryTargetData>`);
@@ -520,7 +521,7 @@ describe('UiPath projects', () => {
     // A DOCTYPE (entity expansion) is refused.
     const doctype = run(`<!DOCTYPE a [<!ENTITY x "y">]>${xaml('')}`);
     expect(errors(doctype.out)).toEqual([expect.objectContaining({ reason: expect.stringContaining('DOCTYPE') })]);
-    for (const t of [bomb, many, big, deep, wide, doctype]) expect(t.ms).toBeLessThan(1000);
+    for (const t of [bomb, many, big, deep, wide, doctype]) expect(t.ms).toBeLessThan(bound(1000));
 
     // A malformed invoked workflow is reported and the rest imports.
     const broken = importSource('uipath', projectZip({ 'Workflows/UploadReport.xaml': '<Activity><Sequence></Activity>' }), OPTS);

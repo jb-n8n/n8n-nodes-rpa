@@ -56,10 +56,11 @@ test('redirect-out sends the browser to localhost on the same port', async () =>
   assert.equal(res.headers.get('location'), `http://localhost:${portal.port}/acme/home`);
 });
 
-test('redirect-sub sends a sub-request to an off-list port', async () => {
-  const res = await fetch(`${portal.url}/acme/p/redirect-sub`, { redirect: 'manual' });
+test('redirect-sub sends a sub-request to the given port on 127.0.0.1', async () => {
+  const res = await fetch(`${portal.url}/acme/p/redirect-sub?port=4321`, { redirect: 'manual' });
   assert.equal(res.status, 302);
-  assert.equal(res.headers.get('location'), 'http://127.0.0.1:1/x');
+  assert.equal(res.headers.get('location'), 'http://127.0.0.1:4321/x');
+  assert.equal((await fetch(`${portal.url}/acme/p/redirect-sub`, { redirect: 'manual' })).status, 400);
 });
 
 test('ws attack page opens a websocket', async () => {

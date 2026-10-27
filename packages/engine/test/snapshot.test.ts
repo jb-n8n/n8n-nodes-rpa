@@ -5,6 +5,7 @@ import { snapshot, type Snapshot, type SnapshotElement } from '../src/agent/snap
 import { renderSnapshot } from '../src/agent/tools.js';
 import { createMasker } from '../src/secrets/mask.js';
 import { resolveUnique } from '../src/steps/locator.js';
+import { bound } from './timing.js';
 
 let browser: Browser;
 let page: Page;
@@ -237,7 +238,7 @@ describe('field values (the agent sees what a field already holds)', () => {
     });
     const t0 = Date.now();
     const raw = await rawOf(() => snapshot(page, masker, { refStart: 1 }));
-    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(Date.now() - t0).toBeLessThan(bound(2000));
     // What crosses to Node of each value is bounded like a name, and marked cut.
     const sent = (JSON.parse(raw.sent) as { elements: { value?: string; valueCut?: true }[] }).elements.filter((e) => e.value);
     expect(sent).toHaveLength(2);

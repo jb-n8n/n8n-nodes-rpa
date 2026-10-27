@@ -10,6 +10,7 @@ import { newRunState, type StepContext } from '../src/steps/run.js';
 import type { OutputSpec, RunState } from '../src/types.js';
 import { clickNamed, done, fakeModel, refByName, use } from './fake-model.js';
 import { baselineScript, LOCAL, policyFor, SECRETS } from './helpers.js';
+import { bound } from './timing.js';
 
 let portal: Awaited<ReturnType<typeof startPortal>>;
 let session: Session;
@@ -185,7 +186,7 @@ describe('runAgentLoop', () => {
       const t0 = Date.now();
       const stuck = await loop(ctx, state, hung, { budget: { deadlineMs: Date.now() + 500 } });
       expect(stuck.outcome).toBe('budget');
-      expect(Date.now() - t0).toBeLessThan(3000);
+      expect(Date.now() - t0).toBeLessThan(bound(3000));
     } finally { await session.close(); }
   });
   it('ends as error when the model stops calling tools or fails, with a masked note', async () => {

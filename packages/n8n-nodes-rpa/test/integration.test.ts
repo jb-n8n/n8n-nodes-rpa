@@ -3,6 +3,7 @@ import type { IDataObject, INodeExecutionData } from 'n8n-workflow';
 import type { Script } from 'n8n-rpa-engine';
 import { SANDBOX, startPortal } from 'n8n-rpa-sandbox/testing.js';
 import { clickNamed, done, fakeModel, use } from '../../engine/test/fake-model.js';
+import { bound } from '../../engine/test/timing.js';
 import { loadEngine, type Engine } from '../nodes/Playwright/engine.js';
 import { resetGuardsForTests } from '../nodes/Playwright/guard.js';
 import { executeRunSteps } from '../nodes/Playwright/operations/runSteps.js';
@@ -140,7 +141,7 @@ describe('Run Steps and Sign Steps against the sandbox (real engine)', () => {
     setTimeout(() => controller.abort(), 1500);
     const t0 = Date.now();
     const [data] = await run(record, { signal: controller.signal, staticData, options: { timeout: 8 } });
-    expect(Date.now() - t0).toBeLessThan(6000);
+    expect(Date.now() - t0).toBeLessThan(bound(6000, 8000));
     expect(data[0].json.details).toMatchObject({ code: 'incomplete', message: 'run cancelled' });
     expect(staticData).toEqual({});
     portal.reset();

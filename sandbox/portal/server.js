@@ -387,8 +387,13 @@ async function portalRoute(req, res, rest, url) {
     const host = String(req.headers.host || '').replace('127.0.0.1', 'localhost');
     return redirect(res, `http://${host}/${BRAND}/home`);
   }
+  // To ?port= on 127.0.0.1: an off-list port the test listens on, so the browser sends the hop. A hop the browser refuses
+  // without sending (port 1 is on Chromium's unsafe-port list; a local browser resolves no off-list name) may surface as
+  // no redirect hop at all on Linux.
   if (rest === '/p/redirect-sub') {
-    return redirect(res, 'http://127.0.0.1:1/x');
+    const port = Number(url.searchParams.get('port'));
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return send(res, 400, 'port required');
+    return redirect(res, `http://127.0.0.1:${port}/x`);
   }
   if (rest === '/p/ws') {
     return send(res, 200, `<!doctype html><p id="ws-page">socket test</p><script>try{new WebSocket('ws://'+location.host+'/ws')}catch(e){}</script>`);

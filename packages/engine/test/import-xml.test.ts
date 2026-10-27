@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { strToU8, zipSync } from 'fflate';
 import { parseXml, unescapeXml, type XmlNode } from '../src/import/xml.js';
 import { readZipEntries } from '../src/steps/zip.js';
+import { bound } from './timing.js';
 import { timed, zeros, zip } from './zip-fixtures.js';
 
 const node = (r: ReturnType<typeof parseXml>): XmlNode => {
@@ -174,10 +175,10 @@ describe('unescapeXml', () => {
 describe('adversarial input', () => {
   it('xml and zip limits hold on adversarial input', () => {
     // The target bound (200 ms) holds for depth 10,000 and a million elements; the other inputs get a looser 1,000 ms.
-    const fast = (label: string, f: () => ReturnType<typeof parseXml>, want: RegExp, bound = 1000) => {
+    const fast = (label: string, f: () => ReturnType<typeof parseXml>, want: RegExp, limit = 1000) => {
       const { out, ms } = timed(f);
       expect(errorOf(out), label).toMatch(want);
-      expect(ms, label).toBeLessThan(bound);
+      expect(ms, label).toBeLessThan(bound(limit));
       return ms;
     };
     const deep = '<a>'.repeat(10_000) + '</a>'.repeat(10_000);
@@ -195,10 +196,10 @@ describe('adversarial input', () => {
     fast('repeated attribute', () => parseXml('<a ' + 'x="1" '.repeat(500_000) + '/>'), /appears twice/);
     const many = timed(() => parseXml('<a ' + Array.from({ length: 100_000 }, (_v, i) => `k${i}="${i}"`).join(' ') + '/>'));
     expect(errorOf(many.out)).toBeNull();
-    expect(many.ms).toBeLessThan(1000);
+    expect(many.ms).toBeLessThan(bound(1000));
     const refs = timed(() => unescapeXml('&#'.repeat(1_000_000) + '&#x1'.repeat(1_000_000) + '&amp'.repeat(1_000_000)));
     expect(refs.out.length).toBe(10_000_000);
-    expect(refs.ms).toBeLessThan(1000);
+    expect(refs.ms).toBeLessThan(bound(1000));
 
     // The import zip caps: a bomb, a declared-huge entry and too many entries come back as errors, quickly.
     const CAPS = { maxEntries: 2_000, perEntry: 4 * 1024 * 1024, total: 32 * 1024 * 1024 };
@@ -208,7 +209,7 @@ describe('adversarial input', () => {
     for (const [z, want] of [[bomb, 'too-large'], [tiny, 'unreadable']] as const) {
       const { out, ms } = timed(() => readZipEntries(z, () => true, CAPS));
       expect(out instanceof Map ? null : out.error).toBe(want);
-      expect(ms).toBeLessThan(1000);
+      expect(ms).toBeLessThan(bound(1000));
     }
     const { out, ms } = timed(() => {
       const files = readZipEntries(nested, () => true, CAPS);
@@ -216,6 +217,6 @@ describe('adversarial input', () => {
       return parseXml(files.get('Main.xaml')!.toString('utf8'));
     });
     expect(errorOf(out)).toMatch(/nested deeper than 200/);
-    expect(ms).toBeLessThan(1000);
+    expect(ms).toBeLessThan(bound(1000));
   });
 });
