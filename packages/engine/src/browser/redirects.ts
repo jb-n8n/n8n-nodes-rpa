@@ -20,6 +20,12 @@ import type { RequestFrame } from './window.js';
  *   with the same rules as context.route: host list, write rules, write windows, address check. Off the policy it is
  *   failed and recorded; it never leaves the browser.
  *
+ * Whose a request is (remote browsers, which other sessions may share): a hop belongs to its chain's first request. A
+ * request is another context's only when a DevTools target positively says so (then it passes untouched). A first URL
+ * that cannot be tied to this session either way (a same-process frame in none of this session's frame trees) passes:
+ * its own context's route handler decides it. A hop of such a chain is checked all the same (fail closed), but not
+ * recorded or counted here.
+ *
  * The browser keeps doing all the networking: no URL, cookie, cache, proxy or DNS-pinning behaviour changes. Fetching
  * hops in n8n's process with route.fetch instead would bypass the browser's pinned addresses (Local Browser) and the
  * server address check, and would send requests from n8n's network in CDP mode.
@@ -68,7 +74,10 @@ export interface RedirectGuard {
    * guard. Only accounting depends on it: violations are recorded by both and kept once.
    */
   whenDecided(method: string, url: string, done: Promise<void>, waitMs: number): Promise<boolean>;
-  /** Stops intercepting. Call only once the context is closed (a paused request is let go on detach). Never throws. */
+  /**
+   * Stops intercepting: fails every request still paused (unless positively another context's), then detaches. Call it
+   * once the context is closed. Never throws.
+   */
   detach(): Promise<void>;
 }
 
@@ -195,9 +204,18 @@ export async function startRedirectGuard(browser: Browser, context: BrowserConte
     return { isMain: false, url: (await findFrame(frameId))?.url ?? '' };
   };
 
-  const cont = (requestId: string) => cdp.send('Fetch.continueRequest', { requestId }).catch(() => undefined);
-  const fail = (requestId: string, errorReason: 'BlockedByClient' | 'NameNotResolved') =>
-    cdp.send('Fetch.failRequest', { requestId, errorReason }).catch(() => undefined);
+  /** Requests paused and not yet answered, with their owner once known: detach() fails every one not positively foreign. */
+  const pending = new Map<string, Owner | undefined>();
+  const fail = (requestId: string, errorReason: 'BlockedByClient' | 'NameNotResolved') => {
+    pending.delete(requestId);
+    return cdp.send('Fetch.failRequest', { requestId, errorReason }).catch(() => undefined);
+  };
+  const cont = (requestId: string) => {
+    // A decision that comes after detach() is not acted on: detach() has failed the request already (unless foreign).
+    if (detached) return pending.get(requestId) === 'foreign' ? undefined : fail(requestId, 'BlockedByClient');
+    pending.delete(requestId);
+    return cdp.send('Fetch.continueRequest', { requestId }).catch(() => undefined);
+  };
 
   const handle = async (e: { requestId: string; request: { url: string; method: string }; frameId: string; resourceType: string; networkId?: string; redirectedRequestId?: string }) => {
     const { requestId, request: { url, method }, frameId, networkId } = e;
@@ -208,8 +226,12 @@ export async function startRedirectGuard(browser: Browser, context: BrowserConte
     // A hop belongs to whoever its chain's first request belonged to, even once that frame or page is gone; a chain
     // known only as 'unknown' is looked up again (it may since be found as this session's).
     const owner = chain === 'ours' || chain === 'foreign' ? chain : await ownerOf(frameId);
+    if (pending.has(requestId)) pending.set(requestId, owner);
     if (!hop && networkId !== undefined) setBounded(chains, networkId, owner, MAX_CHAINS);
     if (owner === 'foreign') return cont(requestId);
+    // A first URL nobody can tie to this session (a shared browser's same-process frame found in none of this session's
+    // frame trees): its own context's route handler decides it, so it passes here. Its hops stay checked (fail closed).
+    if (!hop && owner === 'unknown') return cont(requestId);
     if (opts.closed()) return fail(requestId, 'BlockedByClient');
     if (!hop) {
       const floor = (SAFE.has(method.toUpperCase()) || takeOne(expected, key(method, url))) && await opts.onPolicy(url, method);
@@ -230,7 +252,9 @@ export async function startRedirectGuard(browser: Browser, context: BrowserConte
   };
 
   cdp.on('Fetch.requestPaused', (e) => {
-    if (detached) return;
+    // Paused while detaching: failed, not left for the detach to let go (fail closed, whoever's it is).
+    if (detached) return void fail(e.requestId, 'BlockedByClient');
+    pending.set(e.requestId, undefined);
     // Anything unexpected fails the request: a paused request is never left hanging, nor let through unchecked.
     void handle(e).catch(() => fail(e.requestId, 'BlockedByClient'));
   });
@@ -286,6 +310,9 @@ export async function startRedirectGuard(browser: Browser, context: BrowserConte
     async detach() {
       if (detached) return;
       detached = true;
+      // Chromium lets a paused request go when the session detaches: fail each first (fail closed if still undecided).
+      const held = [...pending].filter(([, owner]) => owner !== 'foreign').map(([id]) => id);
+      await Promise.all(held.map((id) => fail(id, 'BlockedByClient')));
       await cdp.detach().catch(() => undefined);
       await Promise.all([...sessions.values()].map(async (s) => (await s)?.detach().catch(() => undefined)));
     },

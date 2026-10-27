@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createServer as createNetServer } from 'node:net';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { chromium, type BrowserServer } from 'playwright-core';
+import { startRedirectGuard } from '../src/browser/redirects.js';
 import { openSession, type Session } from '../src/browser/session.js';
 import { createMasker } from '../src/secrets/mask.js';
 import type { BrowserEndpoint, PortalPolicy } from '../src/types.js';
@@ -299,6 +300,17 @@ describe('redirect guard in the remote modes', () => {
       expect(offViolations(a)).toEqual([expect.objectContaining({ kind: 'host', fatal: true })]);
       expect(b.violations).toEqual([]);
       expect(b.closed).toBe(false);
+      // A first URL from A's same-process sub-frame: B cannot tie it to A by target, and lets A's route handler decide it.
+      const a2 = await openSession({ endpoint: remote, policy: policy(), masker });
+      try {
+        await a2.page.goto(`${base}/page`);
+        await a2.page.setContent(`<iframe src="${base}/page"></iframe>`);
+        const frame = a2.page.frames()[1];
+        await frame.waitForLoadState();
+        expect(await frame.evaluate(async (u) => (await fetch(u)).status, `${base}/echo`)).toBe(200);
+        expect(a2.violations).toEqual([]);
+        expect(b.violations).toEqual([]);
+      } finally { await a2.close(); }
     } finally { await a.close(); await b.close(); }
   });
   it("CDP: this session's hops are guarded; another client's context on the same browser is left alone", async () => {
@@ -335,6 +347,32 @@ describe('redirect guard in the remote modes', () => {
       // Detached: the other client's requests are no longer paused by a session that has ended.
       await otherPage.goto(`${base}/page`);
       expect(await otherPage.evaluate(async (u) => (await fetch(u)).text(), hop(offUrl('/after')))).toBe('off');
+    } finally { await browser.close(); }
+  });
+});
+
+describe('the guard on detach', () => {
+  it('a hop still paused when the guard detaches is failed, never let go', async () => {
+    const browser = await chromium.launch({ headless: true });
+    try {
+      const context = await browser.newContext();
+      let decisions = 0;
+      const guard = await startRedirectGuard(browser, context, {
+        shared: false,
+        // A decision that never comes: the hop stays paused until detach.
+        decide: () => { decisions++; return new Promise(() => undefined); },
+        onPolicy: async () => true,
+        closed: () => false,
+        onLost: () => undefined,
+      });
+      const page = await context.newPage();
+      await page.goto(`${base}/page`);
+      const result = page.evaluate(async (u) => fetch(u).then((r) => r.text(), (e: Error) => e.name), hop(offUrl('/held')));
+      await expect.poll(() => decisions).toBe(1);
+      await guard.detach();
+      expect(await result).toBe('TypeError');
+      await new Promise((r) => setTimeout(r, 300));
+      expect(off.hits).toEqual([]);
     } finally { await browser.close(); }
   });
 });
