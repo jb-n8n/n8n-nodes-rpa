@@ -36,9 +36,9 @@ interface WindowRule {
 
 /**
  * A write window with the session side attached. `admit` is called synchronously from the route handler (and the
- * redirect watchdog), right after checkRequest found a write and before any await: it reserves one of at most 3 slots,
- * so concurrent requests can never exceed the cap. A slot reserved for a request the address check then blocks is not
- * given back.
+ * redirect guard, or the watchdog for a hop the guard did not see), right after checkRequest found a write and before
+ * any await: it reserves one of at most 3 slots, so concurrent requests can never exceed the cap. A slot reserved for a
+ * request the address check then blocks is not given back.
  */
 export function createWindow(rule: WindowRule): {
   handle: WriteWindow; admit(policy: PortalPolicy, url: string, method: string, frame: RequestFrame | undefined): boolean;

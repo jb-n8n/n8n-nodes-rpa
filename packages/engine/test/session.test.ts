@@ -142,14 +142,16 @@ describe('openSession (local)', () => {
     const s = await openSession({ endpoint: LOCAL, policy: policyFor(portal), masker });
     try {
       await s.page.goto(`${portal.url}/acme/p/redirect-out`).catch(() => undefined);
-      // Either the route handler aborts the hop or the redirect watchdog kills the session; both are fatal.
+      // The redirect guard refuses the hop before it is sent; that is fatal.
       await expect.poll(() => s.violations.some((v) => v.fatal && v.url.includes('localhost'))).toBe(true);
       await expect.poll(() => s.closed).toBe(true);
     } finally { await s.close(); }
   });
   it('kills the session when a sub-request redirects off-list', async () => {
-    // The hop goes to an off-list port that listens, so the browser sends it: that is the hop the watchdog is for.
-    const off = createHttpServer((_q, res) => { res.end('x'); });
+    // The hop goes to an off-list port that listens, so a hop that got out would be answered. The redirect guard refuses it
+    // before it is sent (Playwright's route handler sees only the first URL, and the watchdog only hops already sent).
+    let offHits = 0;
+    const off = createHttpServer((_q, res) => { offHits++; res.end('x'); });
     await new Promise<void>((r) => off.listen(0, '127.0.0.1', r));
     const port = (off.address() as { port: number }).port;
     const s = await openSession({ endpoint: LOCAL, policy: policyFor(portal), masker });
@@ -159,6 +161,9 @@ describe('openSession (local)', () => {
       await expect.poll(() => s.violations.some((v) => v.fatal && v.kind === 'host' && v.url.startsWith(`http://127.0.0.1:${port}/`))).toBe(true);
       await expect.poll(() => s.closed).toBe(true);
       expect(s.closeReason).toBe('violation');
+      await s.idle();
+      expect(offHits).toBe(0);
+      expect(s.violations.filter((v) => v.url.startsWith(`http://127.0.0.1:${port}/`))).toHaveLength(1);
     } finally { await s.close(); off.closeAllConnections(); await new Promise((r) => off.close(r)); }
   });
   it('records why the session closed: first reason wins, disconnect marks it closed', async () => {
@@ -565,17 +570,21 @@ describe('private network block', () => {
     expect(err).toBeInstanceOf(PrivateNetworkError);
     expect((err as Error).message).toBe(privateAddress('cdn.test'));
   });
-  it('a redirect hop to an allowlisted name that resolves privately is fatal', async () => {
+  it('a redirect hop to an allowlisted name that resolves privately is fatal, and is never sent', async () => {
     // Through the seams 127.0.0.1 counts as public and localhost resolves to 10.0.0.5.
     const isPrivate = (ip: string) => ip.startsWith('10.');
     const resolveHost = async (h: string) => (h === 'localhost' ? ['10.0.0.5'] : []);
     const other = `localhost:${portal.port}`;
+    const tableHits = async () => ((await (await fetch(`${portal.url}/public/api/counters`)).json()) as { hits: Record<string, number> }).hits['/public/table'] ?? 0;
+    const before = await tableHits();
     const s = await openSession({ endpoint: remote, policy: withoutOptIn({ navHosts: [portal.host, other] }), masker, resolveHost, isPrivate });
     try {
       await s.page.goto(`${portal.url}/public/redirect?to=${encodeURIComponent(`http://${other}/public/table`)}`).catch(() => undefined);
       await s.idle();
       await expect.poll(() => s.violations.some((v) => v.kind === 'private' && v.fatal && v.host === other)).toBe(true);
       await expect.poll(() => s.closed).toBe(true);
+      // localhost really reaches the sandbox: the hop would have been answered had it been sent.
+      expect(await tableHits()).toBe(before);
     } finally { await s.close(); }
   });
   it('a redirect hop to a host that is not on the allowlist is fatal (the host rule comes first)', async () => {
@@ -1014,7 +1023,7 @@ describe('destructive navigations under noWritePolicy', () => {
     }
     expect(checkRequest(n, nav('http://127.0.0.1:9999/acme/x?a=%ZZ&page=2'))).toBeNull();
   });
-  it('a redirect hop to a destructive address in an agent or prove session ends the run (the hop itself was already sent)', async () => {
+  it('a redirect hop to a destructive address in an agent or prove session ends the run and is never sent', async () => {
     let hits = 0;
     const server = createHttpServer((req, res) => {
       if (req.url === '/r') { res.writeHead(302, { Location: '/orders/7?action=cancel' }); res.end(); return; }
@@ -1029,7 +1038,7 @@ describe('destructive navigations under noWritePolicy', () => {
       await s.page.goto(`http://${host}/r`).catch(() => undefined);
       await expect.poll(() => s.violations.some((v) => v.kind === 'write' && v.fatal && v.url === `http://${host}/orders/7`)).toBe(true);
       await expect.poll(() => s.closed).toBe(true);
-      expect(hits).toBeLessThanOrEqual(1);
+      expect(hits).toBe(0);
     } finally {
       await s.close();
       await new Promise((r) => server.close(r));

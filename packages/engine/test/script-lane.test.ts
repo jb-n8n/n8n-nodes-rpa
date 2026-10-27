@@ -171,7 +171,7 @@ describe('runScriptLane', () => {
     const r = await runScriptLane(input(s, { budgetMs: 4000 }));
     if (!r.ok) expect(r.code).toBe('incomplete'); else throw new Error('expected failure');
   });
-  it('an off-list redirect caught by the watchdog is a policy violation, not a budget overrun', async () => {
+  it('an off-list redirect is a policy violation, not a budget overrun', async () => {
     const s = baselineScript(portal.url);
     s.steps.push({ intent: 'Go to redirect page', goto: '/acme/p/redirect-out' } as Step);
     const r = await runScriptLane(input(s));

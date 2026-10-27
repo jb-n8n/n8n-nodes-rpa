@@ -18,6 +18,7 @@ import { matchingReadPost, readPostLabel, readPostsProblem } from '../policy/rea
 import type { BrowserEndpoint, PortalPolicy, RequestRecord, Violation } from '../types.js';
 import { createAddressGuard, defaultResolveHost, hostnameOf, isPrivateAddress, type AddressGuard, type ResolveHost } from './address.js';
 import { HARDEN_SCRIPT } from './harden.js';
+import { startRedirectGuard, type HopVerdict, type RedirectGuard } from './redirects.js';
 import { createWindow, FILL_AND_SUBMIT, submitTargetRule, type RequestFrame, type WriteWindow } from './window.js';
 import type { AllowedSubmit } from '../policy/submits.js';
 
@@ -32,6 +33,8 @@ export const CONNECT_TIMEOUT_MS = 10_000;
 export const SESSION_WAIT_MS = 60_000;
 /** The longest Session.idle() waits for pending address checks. */
 const IDLE_MAX_MS = 2_000;
+/** The longest the redirect watchdog waits for the redirect guard's word on a hop that writes. */
+const WATCHDOG_WAIT_MS = 5_000;
 
 export class BrowserUnavailableError extends Error {
   constructor(message: string) {
@@ -201,7 +204,7 @@ export interface Session {
   readonly writesSent: number;
   /** Labels (`POST host/path*`, never the concrete URL) of the read-only POST entries that admitted a request, in first-use order. */
   readonly readPostsUsed: ReadonlySet<string>;
-  /** Swaps the policy the route handler, redirect watchdog and address checks use for every later request; closes the windows. */
+  /** Swaps the policy the route handler, redirect guard and watchdog, and address checks use for every later request; closes the windows. */
   restrict(policy: PortalPolicy): void;
   /**
    * Opens a write window for the declared target of the submit or download step now running, closing the previous one;
@@ -218,7 +221,7 @@ export interface Session {
   close(reason?: CloseReason): Promise<void>;
   /** The raw Playwright trace zip when tracing was on: stops tracing if the session is open, else returns what close() saved. */
   takeTrace(): Promise<Buffer | undefined>;
-  /** Resolves when the pending address checks (redirect hops, server addresses) are done, or after 2 s. */
+  /** Resolves when the pending checks (redirect hops, server addresses) are done, or after 2 s. */
   idle(): Promise<void>;
   /**
    * StepContext.stepHooks for this session: each step becomes a named group in the trace (when tracing is on), and over
@@ -392,8 +395,11 @@ export async function openSession(opts: {
   viewport?: { width: number; height: number };
   /** The run's cancellation and absolute deadline (Date.now() scale): waiting for a free browser session stops at either. */
   signal?: AbortSignal; deadlineMs?: number;
-  /** Test seams only: never reachable from TaskInput. */
-  resolveHost?: ResolveHost; isPrivate?: (ip: string) => boolean; sessionWait?: SessionWaitSeams;
+  /**
+   * Test seams only: never reachable from TaskInput. `redirectGuard: false` leaves redirect hops to the watchdog alone,
+   * to test that defence in depth.
+   */
+  resolveHost?: ResolveHost; isPrivate?: (ip: string) => boolean; sessionWait?: SessionWaitSeams; redirectGuard?: boolean;
 }): Promise<Session> {
   const { endpoint, policy, masker } = opts;
   // Defence in depth: the node refuses these entries already; a policy built some other way must not widen the reads.
@@ -427,7 +433,13 @@ export async function openSession(opts: {
     throw new BrowserUnavailableError(scrub(connectError(err, endpoint)));
   }
   try {
-    return await setup(browser, policy, scrub, { storageState: opts.storageState, trace: opts.trace, viewport: opts.viewport, guard, seams, markers: endpoint.mode !== 'local' && (endpoint.slowMo ?? 0) > 0 });
+    return await setup(browser, policy, scrub, {
+      storageState: opts.storageState, trace: opts.trace, viewport: opts.viewport, guard, seams,
+      markers: endpoint.mode !== 'local' && (endpoint.slowMo ?? 0) > 0,
+      // A remote browser may serve other clients (a CDP endpoint, a Playwright server that shares one browser); Local
+      // Browser is launched for this session alone.
+      redirectGuard: opts.redirectGuard === false ? 'off' : endpoint.mode === 'local' ? 'own' : 'shared',
+    });
   } catch (err) {
     await browser.close().catch(() => undefined);
     throw new BrowserUnavailableError(scrub(`could not start the browser session: ${err instanceof Error ? err.message.split('\n')[0] : String(err)}`));
@@ -436,7 +448,10 @@ export async function openSession(opts: {
 
 async function setup(
   browser: Browser, policy: PortalPolicy, scrub: (m: string) => string,
-  options: { storageState?: StorageState; trace?: boolean; viewport?: { width: number; height: number }; guard: AddressGuard; seams: Seams; markers?: boolean },
+  options: {
+    storageState?: StorageState; trace?: boolean; viewport?: { width: number; height: number }; guard: AddressGuard; seams: Seams; markers?: boolean;
+    redirectGuard: 'own' | 'shared' | 'off';
+  },
 ): Promise<Session> {
   const context = await browser.newContext({
     serviceWorkers: 'block', acceptDownloads: true,
@@ -495,6 +510,7 @@ async function setup(
     }
   };
   let closing: Promise<void> | null = null;
+  let redirects: RedirectGuard | null = null;
   // Requests are refused as soon as `closed` is set; the trace is saved before the context goes away.
   const close = (reason: CloseReason = 'caller'): Promise<void> => {
     if (closing) return closing;
@@ -503,7 +519,9 @@ async function setup(
     closeWindows();
     closing = (async () => {
       await saveTrace();
+      // The guard lets go of any paused request when it detaches: only once the context can send nothing more.
       await context.close().catch(() => undefined);
+      await redirects?.detach();
       await browser.close().catch(() => undefined);
     })();
     return closing;
@@ -529,16 +547,22 @@ async function setup(
   // request without limit: non-fatal violations and blocked requests are deduped and capped; fatal ones always kept.
   const loggedViolations = new Set<string>();
   const loggedBlocked = new Set<string>();
+  const loggedFatal = new Set<string>();
   /** `raw` is the request URL; the violation shows its masked origin + pathname, capped. */
   const record = (v: Omit<Violation, 'fatal'>, fatal: boolean, raw: string) => {
     const entry: Violation = {
       ...v, url: cap(scrub(shownUrl(raw))), ...(v.host !== undefined ? { host: cap(scrub(v.host)) } : {}),
       ...(v.method !== undefined ? { method: scrub(v.method).slice(0, MAX_METHOD) } : {}), fatal,
     };
+    const key = JSON.stringify([entry.kind, entry.method ?? '', entry.url, entry.host ?? '']);
     if (!fatal) {
-      const key = JSON.stringify([entry.kind, entry.method ?? '', entry.url, entry.host ?? '']);
       if (loggedViolations.has(key) || loggedViolations.size >= MAX_LOGGED) return;
       loggedViolations.add(key);
+    } else {
+      // The redirect guard and the watchdog can both see one hop: the same fatal entry is kept once. (The first fatal
+      // violation closes the session, so a repeat adds nothing.)
+      if (loggedFatal.has(key)) return;
+      loggedFatal.add(key);
     }
     violations.push(entry);
     if (fatal) void close('violation');
@@ -580,80 +604,111 @@ async function setup(
     record({ kind: 'private', url: cap(`${u.origin}${u.pathname}`), host: u.host }, true, res.url());
   };
 
-  await context.route('**/*', async (route) => {
-    if (closed) {
-      await route.abort('blockedbyclient').catch(() => undefined);
-      return;
-    }
-    const r = route.request();
-    const nav = r.isNavigationRequest();
-    const frame = requestFrame(r);
+  /**
+   * Decides one request before the browser sends it: the first URL of every request (context.route) and every redirect
+   * hop (the redirect guard, browser/redirects.ts). Order: scheme → host allowlist → method/write rules (checkRequest) →
+   * address. A write is never sent either way. A refused hop is always fatal: a listed site's own redirect sent it
+   * off the policy.
+   */
+  const decide = async (req: {
+    url: string; method: string; nav: boolean; frame: RequestFrame | undefined; hop: boolean;
+    /**
+     * false: a hop the guard cannot tie to this session for sure (a frame no longer found). It is checked and refused the
+     * same way, but neither recorded nor counted, and no window admits it; the watchdog, which only sees this session's
+     * requests, records it if it is this session's.
+     */
+    attributed?: boolean;
+  }): Promise<HopVerdict> => {
+    const { url, nav, frame, hop } = req;
+    const attributed = req.attributed !== false;
+    const method = req.method.toUpperCase();
     const mainNav = nav && !(frame !== undefined && !frame.isMain);
-    const method = r.method().toUpperCase();
-    const url = r.url();
     // A window slot is reserved at most once per request. A request decided again after restrict() (which closes the
     // windows) never gets a second slot, so it is refused.
     let reserved = false;
     // A restrict() while the address check is pending means the request is decided again under the new policy.
     for (let attempt = 0; attempt < 3; attempt++) {
       const used = current;
-      // Order: scheme → host allowlist → method/write rules (checkRequest) → address. A write is never sent either way.
       let v = checkRequest(used, { url, method, isNavigation: nav, frame });
-      // A refused write passes while an open window admits it. Decided here, synchronously, before any await, so the
-      // window caps hold for concurrent requests.
-      if (v?.kind === 'write' && !reserved && admit(used, url, method, frame)) {
+      // A refused write passes while an open window admits it (a 307/308 re-POST of the submitted form takes one of its
+      // window's slots). Decided here, synchronously, before any await, so the window caps hold for concurrent requests.
+      if (v?.kind === 'write' && attributed && !reserved && admit(used, url, method, frame)) {
         reserved = true;
         v = null;
       }
       if (v) {
-        // A blocked main-frame navigation always ends the run; a blocked write ends it unless writeMode is 'block';
-        // anything else (sub-resources, sub-frame navigations) is logged and the run goes on.
-        const fatal = mainNav || (v.kind === 'write' && used.writeMode !== 'block');
-        record(v, fatal, url);
-        if (!fatal && !SAFE_METHODS.has(method)) recordBlocked(method, url);
-        await route.abort('blockedbyclient').catch(() => undefined);
-        return;
+        // A blocked main-frame navigation or redirect hop always ends the run; a blocked write ends it unless writeMode is
+        // 'block'; anything else (sub-resources, sub-frame navigations) is logged and the run goes on.
+        const fatal = hop || mainNav || (v.kind === 'write' && used.writeMode !== 'block');
+        if (attributed) record(v, fatal, url);
+        if (attributed && !fatal && !SAFE_METHODS.has(method)) recordBlocked(method, url);
+        return 'blocked';
       }
       const a = await addressCheck(url).catch(() => unchecked(url));
       if (current !== used) continue;
-      if (a === 'unresolved') {
-        await route.abort('namenotresolved').catch(() => undefined);
-        return;
-      }
-      if (a) {
-        // A private main-frame navigation ends the run; a private sub-resource or sub-frame load is blocked and logged.
-        record(a, mainNav, url);
-        if (!mainNav && !SAFE_METHODS.has(method)) recordBlocked(method, url);
-        await route.abort('blockedbyclient').catch(() => undefined);
-        return;
-      }
+      // Closed while the check ran: nothing is sent, and nothing is recorded after the session's end.
       if (closed) break;
+      if (a === 'unresolved') return 'unresolved';
+      if (a) {
+        // A private main-frame navigation or hop ends the run; a private sub-resource or sub-frame load is blocked and logged.
+        const fatal = hop || mainNav;
+        if (attributed) record(a, fatal, url);
+        if (attributed && !fatal && !SAFE_METHODS.has(method)) recordBlocked(method, url);
+        return 'blocked';
+      }
       // Counted before it is sent: a write that may have left the browser is never missed (over-reporting is the safe side).
-      countWrite(used, url, method, frame);
-      await route.continue().catch(() => undefined);
-      return;
+      if (attributed) countWrite(used, url, method, frame);
+      return 'continue';
     }
     // Closed, or the policy kept changing under the request: fail closed.
-    await route.abort('blockedbyclient').catch(() => undefined);
+    return 'blocked';
+  };
+
+  await context.route('**/*', async (route) => {
+    if (closed) {
+      await route.abort('blockedbyclient').catch(() => undefined);
+      return;
+    }
+    const r = route.request();
+    const verdict = await decide({ url: r.url(), method: r.method(), nav: r.isNavigationRequest(), frame: requestFrame(r), hop: false });
+    if (verdict === 'continue') {
+      redirects?.expect(r.method(), r.url());
+      await route.continue().catch(() => undefined);
+    } else await route.abort(verdict === 'unresolved' ? 'namenotresolved' : 'blockedbyclient').catch(() => undefined);
   });
-  // page.route does not see redirect hops; this watchdog does. Any off-list or private hop has already been sent and
-  // its response may reach the page, so it is fatal: the session is closed and the run ends as policy_violation.
+  // Defence in depth behind the redirect guard. Playwright continues a redirect hop before any client code sees it, so
+  // this watchdog only ever sees a hop that has already been sent, if it sees it at all: an off-list or private one is
+  // fatal, and the session is closed. Off-list hops are recorded at once (the guard, deciding the same hop, records the
+  // same entry, which record() keeps once) and the address check starts at once. What takes a window slot or counts as
+  // a write is the guard's when it decided the hop: the watchdog waits for the guard's word (until the hop is done, at
+  // most WATCHDOG_WAIT_MS) and does it only for a hop the guard did not decide.
   context.on('request', (r) => {
     if (!r.redirectedFrom()) return;
     const hopFrame = requestFrame(r);
-    let v = checkRequest(current, { url: r.url(), method: r.method(), isNavigation: r.isNavigationRequest(), frame: hopFrame });
-    // A 307/308 re-POST of the submitted form takes one of its window's slots (same rule as the route handler).
-    if (v?.kind === 'write' && admit(current, r.url(), r.method(), hopFrame)) v = null;
-    if (v) {
-      record(v, true, r.url());
+    const url = r.url();
+    const method = r.method();
+    const v = checkRequest(current, { url, method, isNavigation: r.isNavigationRequest(), frame: hopFrame });
+    if (v && v.kind !== 'write') {
+      record(v, true, url);
       return;
     }
-    // The hop has already been sent: a re-posted write counts.
-    countWrite(current, r.url(), r.method(), hopFrame);
-    track((async () => {
-      const a = await addressCheck(r.url()).catch(() => unchecked(r.url()));
-      if (a && a !== 'unresolved') record(a, true, r.url());
-    })());
+    if (!v) {
+      track((async () => {
+        const a = await addressCheck(url).catch(() => unchecked(url));
+        // Not after the session's end: the guard has refused anything still pending then.
+        if (!closed && a && a !== 'unresolved') record(a, true, url);
+      })());
+    }
+    if (!v && SAFE_METHODS.has(method.toUpperCase())) return;
+    const act = () => {
+      // A 307/308 re-POST of the submitted form takes one of its window's slots (same rule as the route handler).
+      if (v && !admit(current, url, method, hopFrame)) record(v, true, url);
+      // The hop has already been sent: a re-posted write counts.
+      else countWrite(current, url, method, hopFrame);
+    };
+    if (!redirects) return act();
+    const done = r.response().then(() => undefined, () => undefined);
+    track(redirects.whenDecided(method, url, done, WATCHDOG_WAIT_MS).then((decided) => { if (!decided) act(); }));
   });
   // Shared workers, worker WebSockets, WebSocketStream, WebTransport and WebRTC never reach context.route or
   // routeWebSocket: every frame loses them before page script runs (browser/harden.ts).
@@ -678,7 +733,30 @@ async function setup(
     const key = `${u.origin}${u.pathname}`;
     if (navigations.size < MAX_NAVIGATIONS) navigations.add(key);
   });
+  if (options.redirectGuard !== 'off') {
+    redirects = await startRedirectGuard(browser, context, {
+      shared: options.redirectGuard === 'shared',
+      decide: (hop) => {
+        const verdict = decide({ url: hop.url, method: hop.method, nav: hop.isNavigation, frame: hop.frame, hop: true, attributed: hop.attributed });
+        track(verdict.then(() => undefined, () => undefined));
+        return verdict;
+      },
+      onPolicy: async (url, method) => {
+        let u: URL;
+        try { u = new URL(url); } catch { return false; }
+        if (u.protocol === 'data:' || u.protocol === 'blob:' || u.protocol === 'about:') return true;
+        if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+        const p = current;
+        const listed = [...p.navHosts, ...listedSubresources(p), ...(p.frameHosts ?? [])].includes(u.host);
+        if (!listed && !(p.subresourceHosts === '*' && SAFE_METHODS.has(method.toUpperCase()))) return false;
+        return (await addressCheck(url).catch(() => unchecked(url))) === null;
+      },
+      closed: () => closed,
+      onLost: () => { void close('disconnected'); },
+    });
+  }
   const page = await context.newPage();
+  await redirects?.adopt(page);
   /**
    * Over CDP or a Browser Server with Slow Motion on (someone is watching the run), a live view attached to the same page reads the step as a
    * console event (Runtime.consoleAPICalled): it is logged from an isolated world, so the page's own script can neither

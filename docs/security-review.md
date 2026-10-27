@@ -28,7 +28,7 @@ compare, Expected Version, Sign Steps' rechecks) held.
 
 ## Residual risk
 
-- **Redirect hops in AI repair.** A redirect to a destructive address ends the run, but the browser has already sent that request. Checking `Location` first would mean fetching navigations with `route.fetch`, which bypasses the DNS-rebinding check.
+- **Redirect hops in AI repair.** Fixed since this review: every redirect hop, in every session, is now checked before the browser sends it (`browser/redirects.ts`). The check intercepts each hop in the browser through a browser-level DevTools session instead of fetching it with `route.fetch`, so the browser keeps its pinned addresses and the DNS-rebinding check still applies.
 - **GET side effects behind ordinary addresses** are not detected, and the accepted risk for signed steps is unchanged.
 - **Network layer.** The engine's checks run on what Playwright exposes. The browser can still reach `n8n:5678` on the compose network, and a page can make the browser look up a host name in DNS. For production, put the browser behind an egress firewall or proxy that blocks private addresses and pins each connection to a checked address.
 - **CSP and Trusted Types.** Sites that forbid `blob:` workers can no longer start dedicated workers (fails closed).

@@ -8,12 +8,12 @@ import type { BrowserEndpoint, PortalPolicy, Script } from '../src/types.js';
 import { fakeModel } from './fake-model.js';
 import { policyFor, SECRETS, signedLaneInput } from './helpers.js';
 
-/** How long the mocked lookup of `localhost` takes: longer than the page needs to fail, shorter than Session.idle()'s 2 s. */
+/** How long the mocked lookup of `localhost` takes: longer than a step's timeout here (400 ms), shorter than Session.idle()'s 2 s. */
 const SLOW_LOOKUP_MS = 1_200;
 
 // TaskInput has no resolver seam (by design), so the lanes are driven through the module defaults instead. With these
-// mocks 127.0.0.1 counts as public and localhost resolves, slowly, to 10.0.0.5: the private-address check of a redirect
-// hop to localhost finishes only after the page it led to has already failed.
+// mocks 127.0.0.1 counts as public and localhost resolves, slowly, to 10.0.0.5: the redirect guard holds a hop to localhost
+// until its private-address check is done, which is after the step that led to it has already timed out.
 vi.mock('../src/browser/address.js', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../src/browser/address.js')>();
   return {
@@ -70,7 +70,7 @@ describe('late private-address checks decide the lane outcome', () => {
     expect(r).toMatchObject({ code: 'policy_violation', message: privateAddress(other()) });
     expect(model.invocations).toHaveLength(0);
   });
-  it('a step that failed on its own before a private hop was flagged reports the private address', async () => {
+  it('a step that timed out before its private hop was flagged reports the private address, under that step', async () => {
     const script: Script = {
       name: 'late-hop-step', version: 1, startUrl: `${portal.url}/public/table`,
       steps: [
@@ -80,6 +80,7 @@ describe('late private-address checks decide the lane outcome', () => {
     };
     const r = await runScriptLane(input(script));
     if (r.ok) throw new Error('expected failure');
-    expect(r).toMatchObject({ code: 'policy_violation', message: `Wait for the table: ${privateAddress(other())}` });
+    // The hop is never sent, so the step that opened the redirect is the one that fails, not the next one.
+    expect(r).toMatchObject({ code: 'policy_violation', message: `Open the redirect: ${privateAddress(other())}` });
   });
 });
