@@ -62,7 +62,7 @@
   },
   "devDependencies": {
     "@n8n/eslint-plugin-community-nodes": "0.35.0",
-    "@types/node": "24.19.1",
+    "@types/node": "26.6.5",
     "eslint": "9.29.0",
     "n8n-rpa-engine": "workspace:*",
     "n8n-rpa-sandbox": "workspace:*",
