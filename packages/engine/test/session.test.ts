@@ -148,14 +148,18 @@ describe('openSession (local)', () => {
     } finally { await s.close(); }
   });
   it('kills the session when a sub-request redirects off-list', async () => {
+    // The hop goes to an off-list port that listens, so the browser sends it: that is the hop the watchdog is for.
+    const off = createHttpServer((_q, res) => { res.end('x'); });
+    await new Promise<void>((r) => off.listen(0, '127.0.0.1', r));
+    const port = (off.address() as { port: number }).port;
     const s = await openSession({ endpoint: LOCAL, policy: policyFor(portal), masker });
     try {
       await s.page.goto(`${portal.url}/acme/login`);
-      await s.page.evaluate((u) => fetch(u).catch(() => null), `${portal.url}/acme/p/redirect-sub`).catch(() => undefined);
-      await expect.poll(() => s.violations.some((v) => v.fatal && v.kind === 'host' && v.url.includes('127.0.0.1:1'))).toBe(true);
+      await s.page.evaluate((u) => fetch(u).catch(() => null), `${portal.url}/acme/p/redirect-sub?port=${port}`).catch(() => undefined);
+      await expect.poll(() => s.violations.some((v) => v.fatal && v.kind === 'host' && v.url.startsWith(`http://127.0.0.1:${port}/`))).toBe(true);
       await expect.poll(() => s.closed).toBe(true);
       expect(s.closeReason).toBe('violation');
-    } finally { await s.close(); }
+    } finally { await s.close(); off.closeAllConnections(); await new Promise((r) => off.close(r)); }
   });
   it('records why the session closed: first reason wins, disconnect marks it closed', async () => {
     const a = await openSession({ endpoint: LOCAL, policy: policyFor(portal), masker });
