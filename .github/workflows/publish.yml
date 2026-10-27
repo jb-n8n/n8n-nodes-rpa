@@ -72,7 +72,16 @@ jobs:
           ' CHANGELOG.md > "$notes"
           grep -q '[^[:space:]]' "$notes" || { echo "::error::CHANGELOG.md has no section for ${GITHUB_REF_NAME#v}"; exit 1; }
       - run: pnpm install --frozen-lockfile
-      - run: npx --yes playwright@1.63.0 install --with-deps chromium
+      # A hung download fails within minutes and is retried, instead of running into the job's time limit.
+      - name: Install Chromium
+        timeout-minutes: 16
+        run: |
+          for attempt in 1 2 3; do
+            timeout --kill-after=15 300 npx --yes playwright@1.63.0 install --with-deps chromium && exit 0
+            echo "::warning::Chromium install attempt $attempt failed or timed out"
+            sleep 10
+          done
+          exit 1
       - run: pnpm -r build
       - run: pnpm -r typecheck
       - run: pnpm -r lint
