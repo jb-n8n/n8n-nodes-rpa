@@ -10,7 +10,7 @@ Please keep the report private until a fixed version is published or we agree on
 
 ## Supported versions
 
-Only the latest published version of `n8n-nodes-rpa` on npm, and the latest `ghcr.io/jb-n8n/rpa-browser` image, are supported. Fixes land on `main` and ship in a new version.
+Only the latest published version of `n8n-nodes-rpa` (on npm, and the same tarball on the GitHub Release), and the latest `ghcr.io/jb-n8n/rpa-browser` image, are supported. Fixes land on `main` and ship in a new version.
 
 ## Scope
 

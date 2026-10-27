@@ -1,6 +1,7 @@
-// Packs n8n-nodes-rpa for npm: the tarball publish.yml publishes. `pnpm pack` rewrites the workspace: versions, then the
-// manifest is cleaned: devDependencies (they name unpublished workspace packages such as n8n-rpa-engine, which anyone
-// could register on npm) and the build scripts are dropped, and the result is checked. Run after a build:
+// Packs n8n-nodes-rpa: the tarball publish.yml publishes to npm and attaches to the GitHub Release. `pnpm pack`
+// rewrites the workspace: versions, then the manifest is cleaned: devDependencies (they name unpublished workspace
+// packages such as n8n-rpa-engine, which anyone could register on npm) and the build scripts are dropped, and the result
+// is checked. Run after a build:
 //   node packages/n8n-nodes-rpa/scripts/pack.mjs <destination directory>
 // It prints the tarball's path. No dependencies; needs pnpm, npm and tar.
 import { execFileSync } from 'node:child_process';
