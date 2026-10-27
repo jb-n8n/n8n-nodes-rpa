@@ -16,6 +16,31 @@ packages (`N8N_COMMUNITY_PACKAGES_ENABLED=true`, the default) and the install of
 verified community nodes, and a node that drives a browser cannot be verified, so this package is for self-hosted n8n
 only.
 
+**Or from the GitHub Release.** Each version is also attached to its
+[GitHub Release](https://github.com/jb-n8n/n8n-nodes-rpa/releases) as `n8n-nodes-rpa-<version>.tgz` (the same tarball
+npm has), with a build attestation and a SHA-256 file. Check it, install it into n8n's nodes folder as the user n8n
+runs as, then restart n8n (on macOS use `shasum -a 256 -c`):
+
+```sh
+v=0.1.0
+gh release download "v$v" --repo jb-n8n/n8n-nodes-rpa --pattern "n8n-nodes-rpa-$v.tgz*"
+gh attestation verify "n8n-nodes-rpa-$v.tgz" --repo jb-n8n/n8n-nodes-rpa
+sha256sum -c "n8n-nodes-rpa-$v.tgz.sha256"
+npm install --prefix ~/.n8n/nodes --omit=peer --ignore-scripts "./n8n-nodes-rpa-$v.tgz"
+```
+
+The folder is `~/.n8n/nodes` (`$N8N_USER_FOLDER/.n8n/nodes` when `N8N_USER_FOLDER` is set); n8n loads every
+`n8n-nodes-*` package in its `node_modules` at start. `--omit=peer` keeps n8n's own `n8n-workflow`; the three
+dependencies come from the npm registry at exact versions. For n8n in Docker, copy the tarball into the container and
+run the same command there with `docker exec -u node`, with the folder at `/home/node/.n8n/nodes` on a volume. n8n does
+not list a package installed this way under **Settings → Community nodes**; upgrade it the same way.
+
+**Queue mode:** every n8n process loads nodes from its own disk, so the main instance, every worker and every webhook
+processor need the package. Install it on each, use `N8N_REINSTALL_MISSING_PACKAGES=true` with the Community nodes
+install, or run an image with the package baked in: the repository's `docker/n8n.Dockerfile` builds n8n 2.41.0 with it,
+from the source at a tag or from the downloaded tarball (`--build-arg RPA_PACKAGE=release --build-context
+rpa-release=<directory holding the tarball>`).
+
 The node drives a browser it does not run itself. Point the **RPA Browser** credential at one of:
 
 - **Browser Server**: a browser server over the Playwright protocol (`ws://…` or `wss://…` with a token), such as

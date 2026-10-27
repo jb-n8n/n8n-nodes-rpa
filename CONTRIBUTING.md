@@ -42,9 +42,11 @@ The README's [Development](README.md#development) section lists what each suite 
 
 Releases are published to npm from GitHub Actions with provenance (`.github/workflows/publish.yml`), never from a
 laptop. The workflow tests in a job without publish rights, packs the tarball with
-`packages/n8n-nodes-rpa/scripts/pack.mjs` (devDependencies and scripts stripped, the manifest checked), and a second
-job with no checkout publishes that tarball. A maintainer bumps the version in `packages/n8n-nodes-rpa/package.json`, adds the entry to `CHANGELOG.md`,
-and pushes a `v<version>` tag. The `rpa-browser` image is published the same way by
+`packages/n8n-nodes-rpa/scripts/pack.mjs` (devDependencies and scripts stripped, the manifest checked) and cuts the
+version's section out of `CHANGELOG.md`; a second job with no checkout publishes that tarball to npm; once it has, a
+third job with no checkout attests the same tarball and creates the GitHub Release `v<version>` with the tarball, its
+SHA-256 and that section as the notes. A maintainer bumps the version in `packages/n8n-nodes-rpa/package.json`, adds
+the `## <version> (<date>)` entry to `CHANGELOG.md`, and pushes a `v<version>` tag. The `rpa-browser` image is published the same way by
 `.github/workflows/browser-image.yml`, from a `browser-v<version>` tag on `main`; its Playwright version must equal the
 node's `playwright-core`.
 

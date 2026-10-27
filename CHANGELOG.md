@@ -6,8 +6,8 @@ All notable changes to `n8n-nodes-rpa` and the `rpa-browser` image. Versions fol
 
 ## 0.1.0 (2026-10-26)
 
-First public release: the node `n8n-nodes-rpa` 0.1.0 on npm and the image `ghcr.io/jb-n8n/rpa-browser:0.1.0`
-(Playwright 1.63.0).
+First public release: the node `n8n-nodes-rpa` 0.1.0 on npm (the same tarball is attached to the GitHub Release, with
+a build attestation) and the image `ghcr.io/jb-n8n/rpa-browser:0.1.0` (Playwright 1.63.0).
 
 ### The node
 
