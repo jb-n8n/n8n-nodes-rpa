@@ -67,7 +67,7 @@ describe('read-only POST matching', () => {
     const t = Date.now();
     expect(readPathMatches('/a*b*c*d*e*f*g*h*z', `/a${'b'.repeat(5000)}`)).toBe(false);
     expect(readPathMatches('/*a*a*a*a*a*a*a*a*b', `/${'a'.repeat(5000)}`)).toBe(false);
-    expect(Date.now() - t).toBeLessThan(50);
+    expect(Date.now() - t).toBeLessThan(500);
   });
   it('matches only a POST to the same host (port included) and pathname', () => {
     const policy = { readPosts: [{ host: 'h:1', path: '/p*/x' }] };

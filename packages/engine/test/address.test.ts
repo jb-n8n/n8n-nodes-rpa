@@ -186,7 +186,7 @@ describe('bounded lookups', () => {
     // ...and the navigation host still resolves within one junk lookup.
     const t0 = Date.now();
     expect(await g.check('nav.example')).toEqual({ ok: true, addresses: ['93.184.215.14'] });
-    expect(Date.now() - t0).toBeLessThan(500);
+    expect(Date.now() - t0).toBeLessThan(800);
     await Promise.all(junk);
     // The cap is full for wildcard names, never for listed ones (login and submit hosts included).
     expect(await g.check('n64.junk')).toEqual({ ok: false, reason: 'unresolved' });

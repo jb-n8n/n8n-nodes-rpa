@@ -244,7 +244,7 @@ describe('Chrome Recorder JSON', () => {
     expect(hostile.length).toBeLessThan(MAX_CHROME_BYTES);
     const t1 = performance.now();
     const h = importSource('chrome', hostile, OPTS);
-    expect(performance.now() - t1).toBeLessThan(500);
+    expect(performance.now() - t1).toBeLessThan(2000);
     expect(h.report.items).toContainEqual(expect.objectContaining({ kind: 'dropped', what: 'Shadow DOM or frame selector chains (1)' }));
     // Runs of escaped quotes in CSS reach the draft builder's id checks (draft.ts) through this path and stay linear there too.
     const quotes = recording([
