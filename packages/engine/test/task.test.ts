@@ -18,6 +18,7 @@ import {
 import type { BrowserEndpoint, Script, Step } from '../src/types.js';
 import { clickNamed, done, fakeModel, refByName, use, type FakeTurn } from './fake-model.js';
 import { APPROVER, baselineScript, LOCAL, policyFor, publicPolicy, reportScript, SECRETS, TEST_KEY } from './helpers.js';
+import { bound } from './timing.js';
 const TOTAL_PATTERN = 'Showing \\d+[-–]\\d+ of (\\d+)';
 
 // proveScript runs for real; the wrapper only records what runTask passed it.
@@ -307,7 +308,7 @@ describe('runTask', () => {
     const t0 = Date.now();
     const slow = await runTask(task({ model: hung, budgetMs: 12_000 }));
     expect(slow).toMatchObject({ ok: false, code: 'incomplete', lane: 'agent' });
-    expect(Date.now() - t0).toBeLessThan(15_000);
+    expect(Date.now() - t0).toBeLessThan(12_000 + bound(3000));
     const traced = await runTask(task({ model: fakeModel(HEAL()), saveTrace: 'always' }));
     expect(traced.ok).toBe(true);
     const text = Object.values(unzipSync(traced.trace as Buffer)).map((b) => strFromU8(b)).join('\n');
@@ -486,13 +487,13 @@ describe('runTask', () => {
     expect(slow).toMatchObject({ ok: false, code: 'incomplete', lane: 'agent' });
     // Reserve = min(60 s, 40% of 20 s) = 8 s: the model call is cut off about 12 s in (plus the browser launch).
     expect(abortedAt - t0).toBeGreaterThanOrEqual(11_500);
-    expect(abortedAt - t0).toBeLessThan(14_500);
+    expect(abortedAt - t0).toBeLessThan(bound(14_500, 20_000));
     const t1 = Date.now();
     const healed = await runTask(task({ model: fakeModel(HEAL()), budgetMs: 100_000 }));
     expect(healed.ok).toBe(true);
     const { input: p, at } = proveCalls[0];
     expect(p.deadlineMs! - t1).toBeGreaterThan(99_000); // the run's single deadline (budget from the start)
-    expect(p.deadlineMs! - t1).toBeLessThan(101_500);
+    expect(p.deadlineMs! - t1).toBeLessThan(100_000 + bound(1500));
     expect(p.budgetMs).toBeGreaterThanOrEqual(p.deadlineMs! - at - 50);
     expect(p.deadlineMs! - at).toBeGreaterThan(40_000); // at least the 40 s reserve is left for prove
   });
@@ -660,7 +661,7 @@ describe('runTask', () => {
     const neverOpened = { mode: 'playwright' as const, wsUrl: 'ws://browser.invalid:1/' };
     const r = await runTask(task({ model, endpoint: neverOpened, trust: { required: true, key: TEST_KEY } }));
     expect(r).toMatchObject({ ok: false, code: 'script_untrusted', lane: 'script', message: UNSIGNED_REQUIRED });
-    if (!r.ok) expect(r.durationMs).toBeLessThan(500);
+    if (!r.ok) expect(r.durationMs).toBeLessThan(bound(500));
     const unsigned = await runTask(task({ model, endpoint: neverOpened, trust: { required: false } }));
     expect(unsigned).toMatchObject({ ok: false, code: 'script_untrusted', lane: 'script', message: UNSIGNED_WRITES });
     expect(model.invocations).toHaveLength(0);

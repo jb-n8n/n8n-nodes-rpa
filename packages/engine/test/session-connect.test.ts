@@ -10,6 +10,7 @@ import { createMasker } from '../src/secrets/mask.js';
 import type { BrowserEndpoint } from '../src/types.js';
 import { fakeModel } from './fake-model.js';
 import { baselineScript, policyFor, SECRETS, signedLaneInput } from './helpers.js';
+import { bound } from './timing.js';
 
 /**
  * A Browser Server endpoint whose gate answers 503 busy/draining is retried with backoff for up to
@@ -55,7 +56,7 @@ describe('waiting for a free browser session', () => {
       try {
         expect(s.closed).toBe(false);
         expect(took).toBeGreaterThanOrEqual(1900);
-        expect(took).toBeLessThan(10_000);
+        expect(took).toBeLessThan(bound(10_000, 60_000));
         expect(gate.stats().refused.capacity).toBeGreaterThanOrEqual(1);
         expect(gate.stats().sessionsTotal).toBe(2);
       } finally { await s.close(); }
@@ -79,7 +80,7 @@ describe('waiting for a free browser session', () => {
       );
       expect((err as Error).message).not.toMatch(/abc|someone|hunter22|g{32}/);
       expect(took).toBeGreaterThanOrEqual(2900);
-      expect(took).toBeLessThan(5000);
+      expect(took).toBeLessThan(bound(5000));
       expect(gate.stats().refused.capacity).toBeGreaterThanOrEqual(3);
     } finally { await held.close(); await closeGate(gate); }
   });
@@ -93,7 +94,7 @@ describe('waiting for a free browser session', () => {
         .catch((e: Error) => e);
       expect(err).toBeInstanceOf(BrowserUnavailableError);
       expect((err as Error).message).toBe(tokenRefused(url));
-      expect(Date.now() - t0).toBeLessThan(1000);
+      expect(Date.now() - t0).toBeLessThan(bound(1000));
       expect(gate.stats().refused.unauthorized).toBe(1);
       expect(gate.stats().refused.capacity).toBe(0);
     } finally { await held.close(); await closeGate(gate); }
@@ -106,7 +107,7 @@ describe('waiting for a free browser session', () => {
       const t0 = Date.now();
       const err = await openSession({ endpoint: endpoint(url, { sessionWaitMs: 0 }), policy, masker }).catch((e: Error) => e);
       expect((err as Error).message).toBe(noFreeBrowserSession(url, 0));
-      expect(Date.now() - t0).toBeLessThan(1000);
+      expect(Date.now() - t0).toBeLessThan(bound(1000));
       expect(gate.stats().refused.draining).toBe(1);
     } finally { await closeGate(gate); }
   });
@@ -154,12 +155,12 @@ describe('waiting for a free browser session', () => {
       const err = await openSession({ endpoint: endpoint(url), policy, masker, deadlineMs: Date.now() + 1800 }).catch((e: Error) => e);
       // 1.8 s of sleeps plus the connects around them.
       expect((err as Error).message).toMatch(/ had no free browser session for [23] s\. /);
-      expect(Date.now() - t0).toBeLessThan(3500);
+      expect(Date.now() - t0).toBeLessThan(bound(3500));
       // A run budget is the same deadline: the lane never waits past it.
       const t1 = Date.now();
       const lane = await openLaneRuntime({ endpoint: endpoint(url), policy, masker, budgetMs: 1000, trace: false }).catch((e: Error) => e);
       expect(lane).toBeInstanceOf(BrowserUnavailableError);
-      expect(Date.now() - t1).toBeLessThan(2500);
+      expect(Date.now() - t1).toBeLessThan(bound(2500));
     } finally { await held.close(); await closeGate(gate); }
   });
 
@@ -172,13 +173,13 @@ describe('waiting for a free browser session', () => {
       const t0 = Date.now();
       const err = await openSession({ endpoint: endpoint(url), policy, masker, signal: ac.signal }).catch((e: Error) => e);
       expect(err).toBeInstanceOf(BrowserUnavailableError);
-      expect(Date.now() - t0).toBeLessThan(1500);
+      expect(Date.now() - t0).toBeLessThan(bound(1500));
       const ac2 = new AbortController();
       setTimeout(() => ac2.abort(), 300);
       const t1 = Date.now();
       const r = await runTask(signedLaneInput(baselineScript('http://127.0.0.1:9'), { policy, endpoint: endpoint(url), secrets: SECRETS, signal: ac2.signal }));
       expect(r).toMatchObject({ ok: false, code: 'incomplete', message: CANCELLED });
-      expect(Date.now() - t1).toBeLessThan(1500);
+      expect(Date.now() - t1).toBeLessThan(bound(1500));
       // A first run (no steps, AI repair on) opens the browser on its own path in runTask.
       const ac3 = new AbortController();
       setTimeout(() => ac3.abort(), 300);
@@ -188,7 +189,7 @@ describe('waiting for a free browser session', () => {
         repair: { model: fakeModel([]), goal: 'Read every row.', name: 'first-run' },
       });
       expect(first).toMatchObject({ ok: false, lane: 'agent', code: 'incomplete', message: CANCELLED });
-      expect(Date.now() - t2).toBeLessThan(1500);
+      expect(Date.now() - t2).toBeLessThan(bound(1500));
     } finally { await held.close(); await closeGate(gate); }
   });
 });
@@ -212,7 +213,7 @@ describe('what is not waited on', () => {
     const t0 = Date.now();
     const err = await openSession({ endpoint: { mode: 'playwright', wsUrl: `ws://127.0.0.1:${port}/` }, policy, masker }).catch((e: Error) => e);
     expect((err as Error).message).toBe(browserUnreachable(`ws://127.0.0.1:${port}/`));
-    expect(Date.now() - t0).toBeLessThan(1000);
+    expect(Date.now() - t0).toBeLessThan(bound(1000));
   });
 
   it('a CDP endpoint is never waited on, even behind a busy answer', async () => {
@@ -221,6 +222,6 @@ describe('what is not waited on', () => {
     const err = await openSession({ endpoint: { mode: 'cdp', wsUrl: `ws://127.0.0.1:${port}/` }, policy, masker }).catch((e: Error) => e);
     expect(err).toBeInstanceOf(BrowserUnavailableError);
     expect((err as Error).message).not.toBe(noFreeBrowserSession(`ws://127.0.0.1:${port}/`, 0));
-    expect(Date.now() - t0).toBeLessThan(1000);
+    expect(Date.now() - t0).toBeLessThan(bound(1000));
   });
 });

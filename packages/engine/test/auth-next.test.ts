@@ -18,6 +18,7 @@ import { parseScript } from '../src/steps/parse.js';
 import { newRunState, runSteps, type StepContext } from '../src/steps/run.js';
 import type { PortalPolicy, PortalSecrets, Step } from '../src/types.js';
 import { LOCAL, SECRETS, signedLaneInput } from './helpers.js';
+import { bound } from './timing.js';
 
 type Mode = {
   next: '/password' | '/elsewhere/password'; mfa: boolean;
@@ -189,12 +190,12 @@ describe('signIn with next', () => {
     try {
       const state = newRunState();
       const t0 = Date.now();
-      const r = await runSteps(ctx, [SIGN_IN], state);
+      const r = await runSteps({ ...ctx, defaultTimeoutMs: bound(3000) }, [SIGN_IN], state);
       expect(r.ok).toBe(false);
       // A username the site does not know is a rejected login (it trips the login breaker), not drift.
       if (!r.ok) expect(r.failure.message).toBe('detected:login_failed');
       // The re-rendered username page is recognised without waiting for the whole step timeout.
-      expect(Date.now() - t0).toBeLessThan(2900);
+      expect(Date.now() - t0).toBeLessThan(bound(2900));
       expect(posts.map((p) => p.path)).toEqual(['/login']);
       expect(ctx.violations).toEqual([]);
       expect(state.credentialsSubmitted).toBe(true);

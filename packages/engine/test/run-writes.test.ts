@@ -262,7 +262,7 @@ describe('Fill and Submit write window', () => {
         document.body.append(f);
         f.submit();
       });
-      await expect.poll(() => frameless.length, { timeout: 5000 }).toBeGreaterThan(0);
+      await expect.poll(() => frameless.length).toBeGreaterThan(0);
       expect(frameless[0]).toBe(true);
       await s.idle();
       expect(s.writeWindow?.posts).toEqual([]);

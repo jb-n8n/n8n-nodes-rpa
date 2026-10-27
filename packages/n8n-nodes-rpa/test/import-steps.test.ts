@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { NodeHelpers, NodeOperationError, type IDataObject, type INodeExecutionData, type INodeProperties, type INodePropertyOptions } from 'n8n-workflow';
 import * as real from 'n8n-rpa-engine';
 import type { AdoptInput, AdoptResult, Draft, ImportResult, Script } from 'n8n-rpa-engine';
+import { bound } from '../../engine/test/timing.js';
 import { zip } from '../../engine/test/zip-fixtures.js';
 import { OPERATIONS } from '../nodes/Playwright/description/index.js';
 import { nodeInputs, nodeOutputs } from '../nodes/Playwright/description/io.js';
@@ -408,7 +409,7 @@ describe('Import Steps: execution', () => {
       expect(workflow.nodes.length).toBeLessThanOrEqual(510);
       const more = workflow.nodes.find((n) => / more activities$/.test(n.name));
       expect(more?.parameters.content).toContain('more activities: see the report.');
-      expect(ms).toBeLessThan(2000);
+      expect(ms).toBeLessThan(bound(2000));
       process.stdout.write(`[bounded outputs] 8x24k: Data item ${jsonBytes} B, workflow file ${workflowBytes} B, ${Math.round(ms)} ms\n`);
     });
 
@@ -421,7 +422,7 @@ describe('Import Steps: execution', () => {
       expect(workflowBytes).toBeLessThan(MIB);
       expect(workflow.nodes.length).toBeLessThanOrEqual(510);
       expect(workflow.nodes.some((n) => / more activities$/.test(n.name))).toBe(true);
-      expect(ms).toBeLessThan(2000);
+      expect(ms).toBeLessThan(bound(2000));
       process.stdout.write(`[bounded outputs] 20k Ifs: Data item ${jsonBytes} B, workflow file ${workflowBytes} B, ${Math.round(ms)} ms\n`);
     });
   });

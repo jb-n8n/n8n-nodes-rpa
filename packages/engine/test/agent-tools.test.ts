@@ -11,6 +11,7 @@ import { refByName } from './fake-model.js';
 import { LOOKS_DESTRUCTIVE } from '../src/messages.js';
 import { baselineScript, LOCAL, policyFor, publicPolicy, SECRETS } from './helpers.js';
 import type { DownloadTemplate } from '../src/steps/file-check.js';
+import { bound } from './timing.js';
 
 let portal: Awaited<ReturnType<typeof startPortal>>;
 let session: Session;
@@ -276,7 +277,7 @@ describe('agent tools', () => {
     const out = await call(r, 'click', { ref: service });
     const ms = Date.now() - t0;
     expect(out.error).toBe(true);
-    expect(ms).toBeLessThan(10_000);
+    expect(ms).toBeLessThan(bound(10_000, 30_000));
     // The step it would have recorded carries no timeout of its own: a replay still waits the full step timeout.
     const failed = r.tools.actions[r.tools.actions.length - 1];
     expect(failed).toMatchObject({ tool: 'click', ok: false });
@@ -454,12 +455,13 @@ describe('agent tools', () => {
     try {
       await r.ctx.page.setContent('<main><p>Page 1 of 2</p><button type="button" onclick="void 0">Next page »</button></main>');
       const t = await r.tools.look();
+      r.ctx.defaultTimeoutMs = bound(3000);
       setTimeout(() => { void r.ctx.page.close(); }, 1200);
       const t0 = Date.now();
       const next = await call(r, 'next_page', { ref: refByName(t, 'Next page »') });
       expect(next.error).toBe(true);
       expect(next.text).not.toMatch(/moved to the next page/);
-      expect(Date.now() - t0).toBeLessThan(3000);
+      expect(Date.now() - t0).toBeLessThan(bound(3000));
     } finally { await session.close(); }
   });
   it('extracts rows on every page with next_page, and goes back', async () => {

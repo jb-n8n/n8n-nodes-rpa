@@ -5,6 +5,7 @@ import { deflateRawSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { Workflow, type IConnections, type INode, type INodeProperties, type INodeTypes } from 'n8n-workflow';
 import { importSource, type Draft, type FlowNode, type ImportOptions, type UiPathFlow } from 'n8n-rpa-engine';
+import { bound } from '../../engine/test/timing.js';
 import { zip } from '../../engine/test/zip-fixtures.js';
 import { buildWorkflow, MAX_WORKFLOW_NODES, workflowFile, type WorkflowJson, type WorkflowNode } from '../nodes/Playwright/import/workflow.js';
 import { RPA_NODE_TYPE } from '../nodes/Playwright/node-type.js';
@@ -569,7 +570,7 @@ describe('buildWorkflow', () => {
     const bytes = workflowFile(flow, [], { name: 'big' }).data.length;
     const ms = performance.now() - started;
     lint(w);
-    expect(ms).toBeLessThan(2000);
+    expect(ms).toBeLessThan(bound(2000));
     expect(bytes).toBeLessThan(1024 * 1024);
     expect(w.nodes.length).toBeLessThanOrEqual(MAX_WORKFLOW_NODES + 4);
     // The trigger counts as a node, so 499 activities are drawn; the sticky counts the rest.
@@ -591,7 +592,7 @@ describe('buildWorkflow', () => {
     const flow = flowOf([...inner, ...waits(1_000, 'After')]);
     const started = performance.now();
     const w = buildWorkflow(flow, [], { name: 'nested' });
-    expect(performance.now() - started).toBeLessThan(2000);
+    expect(performance.now() - started).toBeLessThan(bound(2000));
     lint(w);
     expect(w.nodes.length).toBeLessThanOrEqual(MAX_WORKFLOW_NODES + 4);
     expect(targets(w, 'Run the bot')).toEqual([['If 299']]);

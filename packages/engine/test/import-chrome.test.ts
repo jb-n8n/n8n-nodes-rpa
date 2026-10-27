@@ -7,6 +7,7 @@ import type { ImportOptions, ImportReport, ImportResult } from '../src/import/ty
 import { parseScript } from '../src/steps/parse.js';
 import type { Step } from '../src/types.js';
 import { ERP_CHECK, SAP_VARS, SECRETS } from './helpers.js';
+import { bound } from './timing.js';
 
 type S<K extends string> = Extract<Step, Record<K, unknown>>;
 
@@ -231,7 +232,7 @@ describe('Chrome Recorder JSON', () => {
     for (const [data, reason] of [[huge, 'larger than 5 MiB'], [Buffer.from(huge), 'larger than 5 MiB'], [many, 'more than 5,000 steps']] as const) {
       const t0 = performance.now();
       const r = importSource('chrome', data, OPTS);
-      expect(performance.now() - t0).toBeLessThan(1000);
+      expect(performance.now() - t0).toBeLessThan(bound(200));
       expect(r.drafts).toEqual([]);
       expect(r.report.items).toEqual([expect.objectContaining({ kind: 'error', reason: expect.stringContaining(reason) })]);
     }
@@ -244,7 +245,7 @@ describe('Chrome Recorder JSON', () => {
     expect(hostile.length).toBeLessThan(MAX_CHROME_BYTES);
     const t1 = performance.now();
     const h = importSource('chrome', hostile, OPTS);
-    expect(performance.now() - t1).toBeLessThan(2000);
+    expect(performance.now() - t1).toBeLessThan(bound(500));
     expect(h.report.items).toContainEqual(expect.objectContaining({ kind: 'dropped', what: 'Shadow DOM or frame selector chains (1)' }));
     // Runs of escaped quotes in CSS reach the draft builder's id checks (draft.ts) through this path and stay linear there too.
     const quotes = recording([
@@ -255,7 +256,7 @@ describe('Chrome Recorder JSON', () => {
     expect(quotes.length).toBeLessThan(MAX_CHROME_BYTES);
     const t2 = performance.now();
     expect(() => importSource('chrome', quotes, OPTS)).not.toThrow();
-    expect(performance.now() - t2).toBeLessThan(1000);
+    expect(performance.now() - t2).toBeLessThan(bound(1000));
     // An object already parsed is held to the step cap too.
     const report = newReport();
     expect(chromeEvents({ title: 'big', steps: new Array(MAX_CHROME_STEPS + 1).fill(step) }, report)).toEqual([]);

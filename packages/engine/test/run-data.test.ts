@@ -10,6 +10,7 @@ import { locatorNotUnique, tooManyRows } from '../src/messages.js';
 import type { ExtractSpec } from '../src/types.js';
 import { publicPolicy } from './helpers.js';
 import { MAX_REGEX_SUBJECT, regexMatches, regexSubject } from '../src/steps/limits.js';
+import { bound } from './timing.js';
 
 let portal: Awaited<ReturnType<typeof startPortal>>;
 let session: Session;
@@ -393,7 +394,7 @@ describe('lists without an ID Pattern, attributes, per-item uniqueness and the r
       const r = await runSteps(ctx, [{ intent: 'Read', timeoutMs: 5000, extract: { scope: { css: 'body' }, item: { css: 'li.item' } } }]);
       expect(r.ok).toBe(true);
       expect(r.state.rows).toEqual([]);
-      expect(Date.now() - t0).toBeLessThan(2500);
+      expect(Date.now() - t0).toBeLessThan(bound(2500, 5000));
     } finally { await session.close(); }
   });
 });

@@ -10,6 +10,7 @@ import { describeStep } from '../src/proposal/describe.js';
 import { createMasker } from '../src/secrets/mask.js';
 import { parseScript } from '../src/steps/parse.js';
 import type { Step } from '../src/types.js';
+import { bound } from './timing.js';
 
 type S<K extends string> = Extract<Step, Record<K, unknown>>;
 
@@ -997,13 +998,13 @@ describe('bounded work on hostile selectors', () => {
     const t0 = performance.now();
     expect(pickLocator([{ css: `a[href=${hostile}` }, { css: `#x${"'\\'".repeat(300_000)}` }])).toBeDefined();
     expect(pickLocator([{ css: `[id=${hostile}` }, { css: '[id="__button12"]' }, { css: "[id='ok-1'] > #ember12" }, { css: 'b' }])).toEqual({ css: `[id=${hostile}`, fallbacks: [{ css: 'b' }] });
-    expect(performance.now() - t0).toBeLessThan(1000);
+    expect(performance.now() - t0).toBeLessThan(bound(1000));
   });
 
   it('an oversized candidate is dropped and reported before any other work', () => {
     const t0 = performance.now();
     const r = importEvents([goto(LOGIN), click('Export', [{ css: hostile }, { role: 'button', name: 'Export' }]), click('Huge', [{ css: hostile }])]);
-    expect(performance.now() - t0).toBeLessThan(1000);
+    expect(performance.now() - t0).toBeLessThan(bound(1000));
     expect(stepsOf(r).slice(1)).toEqual([{ intent: 'Click Export', click: { role: 'button', name: 'Export' } }]);
     expect(r.report.items).toContainEqual(expect.objectContaining({ kind: 'dropped', what: 'Click Huge' }));
     expect(r.report.items.filter((i) => i.reason.includes('longer than'))).toHaveLength(2);

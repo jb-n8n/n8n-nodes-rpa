@@ -5,6 +5,7 @@ import { MAX_RENDERED, renderVars } from '../src/secrets/render.js';
 import { inputTooLong, renderedTooLong } from '../src/messages.js';
 import { runScriptLane } from '../src/lane/script-lane.js';
 import type { PortalPolicy } from '../src/types.js';
+import { bound } from './timing.js';
 
 describe('totp', () => {
   // RFC 6238 appendix B, SHA-1 secret "12345678901234567890" in base32.
@@ -264,7 +265,7 @@ describe('masker encoding gaps', () => {
     const t0 = performance.now();
     m.mask(text);
     m.containsSecret(text);
-    expect(performance.now() - t0).toBeLessThan(5000);
+    expect(performance.now() - t0).toBeLessThan(bound(5000));
     // A run that typed a TOTP code adds three whole-number codes. In one alternation with the secrets
     // their lookbehinds took V8 off its fast path: 5 MB of trace text went from 10 ms to 380 ms per TOTP step.
     const piece = (k: number) => `{"type":"after","callId":"call@${k}","endTime":${1700000000 + k}.123,"url":"https://portal.example.com/a%20b?x=${k}&amp;y=\\u0041","snapshot":"<div id=\\"r${k}\\">Order 1234${k % 10} 482910 &#160; 111111x</div>"}\n`;

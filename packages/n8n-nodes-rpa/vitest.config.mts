@@ -13,5 +13,12 @@ export default defineConfig({
       { find: /^(?:\.\.\/\.\.|.*\/n8n-nodes-rpa)?\/engine\/index\.js$/, replacement: ENGINE_SRC },
     ],
   },
-  test: { include: ['test/**/*.test.ts'], testTimeout: 120_000, hookTimeout: 60_000, pool: 'forks' },
+  test: {
+    include: ['test/**/*.test.ts'],
+    testTimeout: 120_000,
+    hookTimeout: 60_000,
+    pool: 'forks',
+    // As in the engine, so an expect.poll on a browser does not give up after 1 s (the default) on a shared CI runner.
+    expect: { poll: { timeout: 10_000 } },
+  },
 });

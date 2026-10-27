@@ -7,6 +7,7 @@ import { IMPORT_UNSUPPORTED_TARGET } from '../src/messages.js';
 import { parseScript } from '../src/steps/parse.js';
 import type { Step } from '../src/types.js';
 import { ERP_CHECK, SAP_VARS, SECRETS } from './helpers.js';
+import { bound } from './timing.js';
 
 type S<K extends string> = Extract<Step, Record<K, unknown>>;
 
@@ -404,8 +405,8 @@ describe('Playwright code', () => {
       const t0 = performance.now();
       let r: ImportResult | undefined;
       expect(() => { r = importSource('playwright', code, OPTS); }).not.toThrow();
-      // Linear parsing finishes in tens of ms locally; 1 s leaves room for shared CI runners and still catches a quadratic path.
-      expect(performance.now() - t0).toBeLessThan(1000);
+      // The target bound for the unclosed string, template and comment; a looser one for the other shapes.
+      expect(performance.now() - t0).toBeLessThan(bound(i < 3 ? 200 : 1000));
       expect(r?.drafts).toEqual([]);
       expect(r?.report.items.length).toBeGreaterThan(0);
       expect(r?.report.items.length).toBeLessThan(300);
