@@ -91,7 +91,7 @@ services:
     <<: *hardened
 
   mailpit:
-    image: axllent/mailpit:v1.27.0@sha256:fb84cfb1c3a33007cfdee8ba5a77b8c6c894de5b1a368372ddc5c965cf5c0b6d
+    image: axllent/mailpit:v1.32.0@sha256:0790692be935ea4420d085694f7985b1f692ca6a8771ab0e0bd8ba75ac180498
     restart: unless-stopped
     ports:
       - "127.0.0.1:8025:8025" # inbox UI; n8n sends to mailpit:1025
