@@ -1,6 +1,7 @@
 # Weekly dependency updates; minor and patch updates arrive as one grouped pull request per ecosystem.
 # Majors come one by one. The Playwright image (images/browser/Dockerfile), the engine's playwright-core and playwright
-# in images/browser/server/package-lock.json must move together (README: Version matching).
+# in images/browser/server/package-lock.json must move together (README: Version matching), so Dependabot skips them:
+# bump all three in one pull request by hand.
 version: 2
 updates:
   # The pnpm workspace (pnpm-lock.yaml at the root covers every package).
@@ -8,6 +9,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: "playwright-core"
     groups:
       minor-and-patch:
         update-types: [minor, patch]
@@ -17,6 +20,8 @@ updates:
     directory: /images/browser/server
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: "playwright"
     groups:
       minor-and-patch:
         update-types: [minor, patch]
@@ -29,6 +34,8 @@ updates:
       - /sandbox/portal
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: "mcr.microsoft.com/playwright"
     groups:
       minor-and-patch:
         update-types: [minor, patch]
