@@ -112,9 +112,8 @@ function startUrlOf(raw: string): URL | null {
  * sub-resources are not checked. The violation shows no query.
  *
  * checkRequest calls this only for an http(s) main-frame navigation under such a policy, with the URL it parsed and
- * whether that URL is a declared login page. A redirect hop is checked by the session's redirect watchdog, through
- * checkRequest: a destructive hop ends the run, but the browser has already sent it (page.route does not see redirect
- * hops).
+ * whether that URL is a declared login page. A redirect hop is checked by the session's redirect guard
+ * (browser/redirects.ts), through checkRequest, before the browser sends it: a destructive hop ends the run.
  */
 export function destructiveNavigation(policy: PortalPolicy, u: URL, loginPage: boolean): boolean {
   const start = startUrlOf(policy.startUrl);

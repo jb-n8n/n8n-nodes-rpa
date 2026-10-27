@@ -62,8 +62,9 @@ First public release: the node `n8n-nodes-rpa` 0.1.0 on npm and the image `ghcr.
 - **Templates**: Hello world, "RPA: 0 Connection check" (proves the browser reaches your site), the self-healing data
   feed (create tables, the feed, approve repaired steps) and "RPA: 5 Import a bot" (a form in front of Import Steps,
   with approval through "RPA: 3 Approve steps").
-- **Safety**: a per-run site allowlist, private networks blocked by default, writes only where steps declare them,
-  a login breaker and a run lock per Site Login, scrubbed browser traces.
+- **Safety**: a per-run site allowlist, checked on every redirect hop before the browser sends it, private networks
+  blocked by default, writes only where steps declare them, a login breaker and a run lock per Site Login, scrubbed
+  browser traces.
 - **Browser connections**: a browser server over the Playwright protocol (such as Browserless or the `rpa-browser`
   image), Chrome DevTools Protocol, or a local browser for development. Slow Motion for live views and debugging.
 
