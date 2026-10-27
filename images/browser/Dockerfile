@@ -6,7 +6,7 @@
 # Base image pinned by digest (the tag is kept for readability); Dependabot proposes digest updates. The image tag, the
 # lockfile and the engine's playwright-core move together (README: Version matching).
 
-FROM mcr.microsoft.com/playwright:v1.63.0@sha256:eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27
+FROM mcr.microsoft.com/playwright:v1.64.1@sha256:47b510dd9230bf0b9bfc9b20102241e577ea7a99334ab4c3ca19f19770e9b8ea
 
 # tini is PID 1: it forwards signals to the supervisor and reaps orphaned browser processes. Kubernetes has no init
 # option, so the image brings its own. Pinned to the version in the base image's distribution (Ubuntu 24.04 noble/universe).
