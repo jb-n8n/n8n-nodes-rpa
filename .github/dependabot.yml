@@ -11,6 +11,18 @@ updates:
       interval: weekly
     ignore:
       - dependency-name: "playwright-core"
+      # n8n-workflow 2.45.0 and later (3.0.0 included) build a zod 3 schema when loaded (z.string().ip() in
+      # message-event-bus.js; zod 4 removed it), so lint and the tests fail under the root "zod": "^4.6.6" override.
+      # The override stays: zod < 4.6.6, every zod 3 included, has GHSA-mrhx-c7xc-m3w5 (high). Revisit when
+      # n8n-workflow's zod peer moves to zod 4 or zod 3 gets a patched release.
+      - dependency-name: "n8n-workflow"
+        versions: [">= 2.45.0"]
+      # TypeScript 7: typescript-eslint (8.72.x and its canary) peers on typescript < 6.1.0 and fails to load against
+      # 7.0 (its typescript package no longer exposes the compiler API), and the n8n lint plugin builds on it.
+      # This also holds back 6.x, which typescript-eslint does support: bump to 6.0 by hand if wanted. Revisit when
+      # typescript-eslint supports TypeScript 7.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
     groups:
       minor-and-patch:
         update-types: [minor, patch]
@@ -35,7 +47,9 @@ updates:
     schedule:
       interval: weekly
     ignore:
+      # Dependabot names the image after its last path segment ("playwright"), so both names are listed.
       - dependency-name: "mcr.microsoft.com/playwright"
+      - dependency-name: "playwright"
     groups:
       minor-and-patch:
         update-types: [minor, patch]
