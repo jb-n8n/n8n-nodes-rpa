@@ -5,8 +5,9 @@ first so we can agree on the approach.
 
 ## Build and test
 
-You need Node.js 22.12 or later, pnpm 10.32.1 (`corepack enable` picks up the pinned version), Docker with Compose for
-the stack, and a local Chromium for the engine tests (`npx playwright@1.63.0 install chromium`).
+You need Node.js 22.12 or later, pnpm 10.32.1 (`corepack enable` picks up the pinned version on Node 22 and 24; Node 25
+and later ship without corepack, so use `npm install -g pnpm@10.32.1`), Docker with Compose for the stack, and a local
+Chromium for the engine tests (`npx playwright@1.63.0 install chromium`).
 
 ```bash
 pnpm install
