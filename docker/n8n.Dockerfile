@@ -42,7 +42,7 @@ COPY --from=package /packs /packs
 RUN npm init -y >/dev/null \
  && npm install --ignore-scripts --omit=dev --omit=peer --no-audit --no-fund /packs/n8n-nodes-rpa-*.tgz
 
-FROM n8nio/n8n:2.41.0@sha256:7217b80f0dd060c1328f328f7ce4f4bb106efd4d4da78157ca5a8cf3f81edfaf
+FROM n8nio/n8n:2.45.3@sha256:bf88c3783fc4b2a90a007bb99b04ad2f6a9627f41499baf72ca67559c51c7f4c
 USER root
 COPY --from=install /opt/n8n-rpa/node_modules /opt/n8n-rpa/node_modules
 # Also in the nodes folder itself, where n8n loads it from, for containers that skip the entrypoint below: n8n's Helm
