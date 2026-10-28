@@ -147,6 +147,30 @@ jobs:
           RPA_DOCKER_TESTS: "1"
           RPA_BROWSER_IMAGE: rpa-browser:ci
 
+  # The n8n image with the node baked in (docker/n8n.Dockerfile, build context: the repository root): build it for
+  # linux/amd64 (never pushed), then check that n8n's own Node loads the node and every credential from the nodes folder,
+  # resolving n8n-workflow from n8n's install as n8n does. Nothing else builds this image: a base-image bump that broke it
+  # (Node 26 has no corepack) went unnoticed until it was built by hand.
+  n8n-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the image (linux/amd64, not pushed)
+        run: docker build --platform linux/amd64 -f docker/n8n.Dockerfile -t n8n-rpa:ci .
+      - name: n8n's Node loads the node and the credentials
+        run: |
+          docker run --rm --entrypoint node -e NODE_PATH=/usr/local/lib/node_modules/n8n/node_modules n8n-rpa:ci -e '
+            const base = "/home/node/.n8n/nodes/node_modules/n8n-nodes-rpa";
+            const pkg = require(base + "/package.json");
+            for (const f of [...pkg.n8n.nodes, ...pkg.n8n.credentials]) {
+              if (!Object.keys(require(base + "/" + f)).length) throw new Error(f + " exports nothing");
+            }
+            console.log(`${pkg.name} ${pkg.version}: ${pkg.n8n.nodes.length} node(s) and ${pkg.n8n.credentials.length} credential(s) load`);
+          '
+
   # Did this change touch images/? GitHub's paths filter works per workflow, not per job, so the arm64 build below asks
   # git: a pull request's merge commit against its base, a push against the previous head of the branch. Anything else
   # (a dispatch, a new branch, an unknown previous head) counts as a change.
