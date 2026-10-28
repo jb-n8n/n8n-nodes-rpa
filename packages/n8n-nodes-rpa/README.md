@@ -37,7 +37,7 @@ not list a package installed this way under **Settings → Community nodes**; up
 
 **Queue mode:** every n8n process loads nodes from its own disk, so the main instance, every worker and every webhook
 processor need the package. Install it on each, use `N8N_REINSTALL_MISSING_PACKAGES=true` with the Community nodes
-install, or run an image with the package baked in: the repository's `docker/n8n.Dockerfile` builds n8n 2.41.0 with it,
+install, or run an image with the package baked in: the repository's `docker/n8n.Dockerfile` builds n8n 2.45.3 with it,
 from the source at a tag or from the downloaded tarball (`--build-arg RPA_PACKAGE=release --build-context
 rpa-release=<directory holding the tarball>`).
 
