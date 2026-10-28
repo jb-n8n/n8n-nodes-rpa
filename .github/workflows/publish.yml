@@ -13,8 +13,8 @@
 #   contents/id-token/attestations write): no checkout, no install, no repository code. It downloads the same tarball
 #   and the notes, checks the manifest again, attests the tarball (`gh attestation verify n8n-nodes-rpa-<version>.tgz
 #   --repo jb-n8n/n8n-nodes-rpa`) and creates the GitHub Release v<version> with the tarball and its SHA-256.
-# npm authentication: npm trusted publishing (OIDC, no token) once it is configured for this workflow on npmjs.com; until
-# then, the NPM_TOKEN secret of the "npm" environment. Actions are pinned by full commit SHA.
+# npm authentication: npm trusted publishing only (OIDC, no token), configured on npmjs.com for this workflow and the
+# "npm" environment; the package disallows tokens. Actions are pinned by full commit SHA.
 name: Publish
 
 on:
@@ -151,8 +151,6 @@ jobs:
         working-directory: ${{ runner.temp }}/pack
         # The check above allows exactly one tarball here.
         run: npm publish ./n8n-nodes-rpa-*.tgz --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   github-release:
     needs: [test, npm]
@@ -160,8 +158,8 @@ jobs:
     timeout-minutes: 15
     # Create this environment in the repository settings before the first release, with a deployment tag policy that
     # allows only `v*` (required reviewers are optional: the npm job was approved already). Without it, GitHub creates
-    # the environment on first use with no protection. It is its own environment rather than npm's (which holds
-    # NPM_TOKEN, a secret this job must not see) or ghcr's (whose policy allows only main and browser-v* tags).
+    # the environment on first use with no protection. It is its own environment rather than npm's (which npm's
+    # trusted publisher names, so only the npm job may use it) or ghcr's (whose policy allows only main and browser-v* tags).
     environment: release
     permissions:
       contents: write # create the release and upload its assets with GITHUB_TOKEN
