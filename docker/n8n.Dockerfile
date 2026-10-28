@@ -13,7 +13,8 @@ FROM node:26-alpine@sha256:40cd011b55415bc894e45b02fdd5a5dfde056921b7d23a64c74f8
 
 FROM base AS build
 WORKDIR /repo
-RUN corepack enable && corepack prepare pnpm@10.32.1 --activate
+# Node 25 and later ship without corepack, so pnpm (the packageManager pin) comes from the registry.
+RUN npm install -g --ignore-scripts --no-audit --no-fund pnpm@10.32.1
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY packages ./packages
 COPY sandbox ./sandbox
