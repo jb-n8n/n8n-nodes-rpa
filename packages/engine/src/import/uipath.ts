@@ -8,8 +8,11 @@ import { createMasker } from '../secrets/mask.js';
 import { readZipEntries, type ZipCaps } from '../steps/zip.js';
 import { buildDraft, cleanLabel, describeEvent, MIN_SECRET_LENGTH } from './draft.js';
 import { stripSecrets, TOTP_OUTPUT_HINT } from './secrets.js';
-import type { Candidate, Draft, FlowNode, ImportEvent, ImportItem, ImportOptions, ImportReport, ImportResult, UiPathFlow } from './types.js';
+import type { Candidate, DesktopDraft, Draft, FlowNode, ImportEvent, ImportItem, ImportOptions, ImportReport, ImportResult, UiPathFlow } from './types.js';
+import { buildDesktopDraft, type DesktopEvent, type DesktopSequence } from './uipath-desktop.js';
+import { readDesktopSelector, type DesktopSelectorRead } from './uipath-desktop-selector.js';
 import { readSelector } from './uipath-selector.js';
+import type { UiaTarget, WindowSel } from '../types.js';
 import { parseXml, type XmlNode } from './xml.js';
 
 /** An upload larger than this is refused before anything is read. */
@@ -49,6 +52,8 @@ type Typed = Extract<ImportEvent, { kind: 'fill' | 'select' }>;
 /** What the walk produces, in order: browser events, flow nodes, and the structure that holds more of both. */
 type Item =
   | { t: 'event'; event: ImportEvent; card: string; cardId?: number; url?: string }
+  /** A desktop activity (a UI Automation app, never SAP GUI): `scope` is the window scope's display name. */
+  | { t: 'desktop'; event: DesktopEvent; scope: string }
   | { t: 'node'; node: FlowNode }
   | { t: 'if'; expression: string; displayName: string; then: Item[]; else: Item[] }
   | { t: 'forEach'; expression: string; displayName: string; body: Item[] };
@@ -69,6 +74,8 @@ interface Ctx {
   /** The workflow's expressions are C# (project.json expressionLanguage, or the file's own editor attribute). */
   csharp: boolean;
   desktop: boolean;
+  /** Inside an Open Application, Attach Window or Use Application scope on a UI Automation app (not SAP GUI). */
+  app?: { window?: WindowSel; exe?: string; name: string };
   aws: boolean;
   excelPath?: string;
 }
@@ -258,7 +265,13 @@ class Aborted extends Error {}
  * refuses cycles; every problem, a malformed workflow included, is a report item. Never throws.
  */
 export function uipathImport(data: Buffer | Uint8Array | string, opts: ImportOptions, report: ImportReport): { sequences: UiPathSequence[]; flow: UiPathFlow } {
-  const empty = () => ({ sequences: [], flow: { name: cleanLabel(opts.name), nodes: [] } });
+  const { sequences, flow } = walkUiPath(data, opts, report);
+  return { sequences, flow };
+}
+
+/** uipathImport with the desktop sequences and the literal secrets desktop steps would have typed. Never throws. */
+function walkUiPath(data: Buffer | Uint8Array | string, opts: ImportOptions, report: ImportReport): WalkResult {
+  const empty = (): WalkResult => ({ sequences: [], desktop: [], typedSecrets: [], flow: { name: cleanLabel(opts.name), nodes: [] } });
   try {
     const project = loadProject(data, report);
     if (!project) return empty();
@@ -274,9 +287,9 @@ export function uipathImport(data: Buffer | Uint8Array | string, opts: ImportOpt
  * `<name>-<n>`), the flow, and the report. Never throws.
  */
 export function importUiPath(data: Buffer | Uint8Array | string, opts: ImportOptions, report: ImportReport): ImportResult {
-  const { sequences, flow } = uipathImport(data, opts, report);
+  const { sequences, desktop, typedSecrets: desktopSecrets, flow } = walkUiPath(data, opts, report);
   const drafts: Draft[] = [];
-  const typedSecrets: string[] = [];
+  const typedSecrets: string[] = desktopSecrets.filter((v) => v.trim().length >= MIN_SECRET_LENGTH);
   const missing = new Set<number>();
   if (sequences.length) {
     // The explicit download's sequence gets the Expected File; failing that, the last with an export-like click,
@@ -327,19 +340,41 @@ export function importUiPath(data: Buffer | Uint8Array | string, opts: ImportOpt
         return reason === undefined;
       });
       const seqOpts: ImportOptions = { ...opts, download: i === dl ? opts.download : undefined, idPattern: i === 0 ? opts.idPattern : undefined, startUrl: i === 0 ? opts.startUrl : undefined };
-      const draft = buildDraft(kept, seqOpts, report, `${opts.name}-${i + 1}`);
+      const number = sequences[i]?.number ?? i + 1;
+      const draft = buildDraft(kept, seqOpts, report, `${opts.name}-${number}`);
       if (draft) drafts.push(draft);
-      else missing.add(i + 1);
+      else missing.add(number);
     });
+  } else if (desktop.length) {
+    // Desktop drafts only: the report says so where the browser branch would say there are no browser steps.
   } else if (flow.nodes.length) {
     report.items.push({ at: '', kind: 'untranslated', what: 'Browser steps', reason: 'the project has no browser activities, so there are no steps to adopt: only the workflow around them' });
   } else if (!report.items.some((i) => i.kind === 'error')) {
     report.items.push({ at: '', kind: 'error', what: WHAT, reason: IMPORT_EMPTY });
   }
 
+  // Defence in depth for the desktop drafts: none names a Site Login secret or a value typed into a credential field.
+  const slAll = opts.hasSiteLogin ? [opts.secrets?.username, opts.secrets?.password, opts.secrets?.totpSecret] : [];
+  const draftMasker = createMasker([...slAll.filter((s): s is string => typeof s === 'string' && s.length >= MIN_SECRET_LENGTH), ...typedSecrets]);
+  const shortSecrets = slAll.filter((s): s is string => typeof s === 'string' && s.length > 0 && s.length < MIN_SECRET_LENGTH).map((s) => s.trim().toLowerCase());
+  const desktopDrafts: DesktopDraft[] = [];
+  for (const seq of desktop) {
+    const draft = buildDesktopDraft(seq, report);
+    const typed = draft ? draft.script.steps.flatMap((s) => ('fill' in s ? [s.fill.value] : 'select' in s ? [s.select.option] : [])) : [];
+    if (draft && (draftMasker.containsSecret(JSON.stringify(draft.script)) || typed.some((v) => shortSecrets.includes(v.trim().toLowerCase())))) {
+      report.steps -= draft.script.steps.length;
+      report.items.push({ at: '', kind: 'error', what: seq.name, reason: 'the desktop draft still named a sign-in value, so it was not returned' });
+      missing.add(seq.number);
+      continue;
+    }
+    if (draft) desktopDrafts.push(draft);
+    else missing.add(seq.number);
+  }
+
   // A sequence that built no draft is shown in the flow as untranslated, so the workflow never names a missing draft.
   const mark = (nodes: FlowNode[]): FlowNode[] => nodes.map((n) => {
     if (n.kind === 'browser' && missing.has(n.sequence)) return { kind: 'untranslated', activity: 'Browser steps', displayName: n.displayName, note: 'no step could be built from these browser activities: see the report' };
+    if (n.kind === 'desktop' && missing.has(n.sequence)) return { kind: 'untranslated', activity: 'Desktop steps', displayName: n.displayName, note: 'no step could be built from these desktop activities: see the report' };
     if (n.kind === 'if') return { ...n, then: mark(n.then), else: mark(n.else) };
     if (n.kind === 'forEach') return { ...n, body: mark(n.body) };
     return n;
@@ -364,7 +399,7 @@ export function importUiPath(data: Buffer | Uint8Array | string, opts: ImportOpt
   capReport(report);
   for (const item of report.items) { item.at = mask(item.at); item.what = mask(item.what); item.reason = mask(item.reason); }
   const finalFlow = maskStrings<UiPathFlow>({ name: flow.name, nodes: mark(flow.nodes) }, mask, (key, v) => (key === 'asset' ? secretMask(v) : undefined));
-  return { drafts, report, ...(finalFlow.nodes.length ? { flow: finalFlow } : {}) };
+  return { drafts, ...(desktopDrafts.length ? { desktopDrafts } : {}), report, ...(finalFlow.nodes.length ? { flow: finalFlow } : {}) };
 }
 
 /**
@@ -552,8 +587,13 @@ const READ_RANGE = new Set(['ReadRange', 'ExcelReadRange', 'ReadRangeX']);
 const WRITE_RANGE = new Set(['WriteRange', 'ExcelWriteRange', 'WriteRangeX']);
 const EXCEL_SCOPE = new Set(['ExcelApplicationScope', 'ExcelProcessScopeX', 'ExcelApplicationCard']);
 
-/** A browser sequence: its events, and the card it belongs to; `continued` when an earlier sequence used the same card. */
-export interface UiPathSequence { name: string; events: ImportEvent[]; card?: number; continued?: boolean }
+/**
+ * A browser sequence: its events, and the card it belongs to; `continued` when an earlier sequence used the same card.
+ * `number`: its place among all sequences, browser and desktop (the draft is `<name>-<number>`).
+ */
+export interface UiPathSequence { name: string; number: number; events: ImportEvent[]; card?: number; continued?: boolean }
+/** What the walk returns: browser sequences, desktop sequences, literal secrets typed in desktop steps (never imported), and the flow. */
+export interface WalkResult { sequences: UiPathSequence[]; desktop: DesktopSequence[]; typedSecrets: string[]; flow: UiPathFlow }
 
 class Walker {
   private visited = 0;
@@ -564,17 +604,28 @@ class Walker {
   private readonly cardsWithSequence = new Set<number>();
   private readonly desktop: ImportItem[] = [];
   private readonly sequences: UiPathSequence[] = [];
+  private readonly desktopSequences: DesktopSequence[] = [];
+  /** Sequences numbered so far, browser and desktop together. */
+  private numbered = 0;
+  /** Variables (lower case) that hold a password or another secret: a credential's password output, a secure value. */
+  private readonly secretVars = new Set<string>();
+  /** The names the steps type secrets as (their spelling in the steps). */
+  private readonly secretVarNames = new Set<string>();
+  /** Literal values a desktop step would have typed into a password field: never imported, masked out of everything. */
+  private readonly desktopTypedSecrets: string[] = [];
+  /** Each credential lookup's report item and its outputs (lower case), reworded at the end when desktop steps type them. */
+  private readonly credentialItems: { item: ImportItem; outputs: string[] }[] = [];
   private readonly xmlns: Map<string, string>[] = [];
   /** The variables TOTP activities write their code to, lower case. */
   private readonly totpOutputs = new Set<string>();
 
   constructor(private readonly project: Project, private readonly opts: ImportOptions, private readonly report: ImportReport) {}
 
-  run(): { sequences: UiPathSequence[]; flow: UiPathFlow } {
+  run(): WalkResult {
     const main = this.project.files.get(this.project.main!)!;
     const parsed = this.parse(this.project.main!);
     const name = cleanLabel(this.project.name ?? '') || (parsed ? cleanLabel(parsed.root.attrs['x:Class'] ?? '') : '') || cleanLabel(this.opts.name);
-    if (!parsed) return { sequences: [], flow: { name, nodes: [] } };
+    if (!parsed) return { sequences: [], desktop: [], typedSecrets: [], flow: { name, nodes: [] } };
     const ctx: Ctx = { file: main.path, stack: [this.project.main!], chain: [main.path], nesting: 0, desktop: false, aws: false, names: parsed.names, csharp: this.project.csharp };
     const items = this.workflow(this.project.main!, parsed, ctx);
     const nodes = this.finish(items);
@@ -582,7 +633,16 @@ class Walker {
       this.report.items.push({ at: '', kind: 'untranslated', what: `SAP desktop activities (${this.desktop.length})`, reason: DESKTOP_HEADING_REASON });
       this.desktop.forEach((d, i) => this.report.items.push({ ...d, what: `${i + 1}. ${d.what}` }));
     }
-    return { sequences: this.sequences, flow: { name, nodes } };
+    for (const seq of this.desktopSequences) seq.secretVariables = [...this.secretVarNames];
+    // A credential whose password desktop steps type is supplied as run variables there, never by a Site Login.
+    const desktopVars = new Set(this.desktopSequences.flatMap((q) => q.events.flatMap((e) => (e.kind === 'fill' || e.kind === 'select'
+      ? [...(e.kind === 'fill' ? e.value : e.option).matchAll(/\{\{var\.([A-Za-z0-9_]+)\}\}/g)].map((m) => m[1].toLowerCase()) : []))));
+    for (const { item, outputs } of this.credentialItems) {
+      if (outputs.some((o) => desktopVars.has(o))) {
+        item.reason = 'a UiPath credential is never imported: desktop steps type its user name and password from run variables (see the secret items); browser steps use an RPA Site Login on the Run steps node';
+      }
+    }
+    return { sequences: this.sequences, desktop: this.desktopSequences, typedSecrets: this.desktopTypedSecrets, flow: { name, nodes } };
   }
 
   /** A workflow file, parsed once within the project's element budget; null (and an error item) when it cannot be read. */
@@ -737,7 +797,12 @@ class Walker {
       case 'GetRobotCredential':
       case 'GetCredential': {
         const asset = textOf(this.arg(el, 'AssetName', ctx));
+        // Its password output is a secret wherever a desktop step types it (desktop steps type it from a run variable).
+        const password = this.arg(el, 'Password', ctx);
+        if (password && 'expr' in password && IDENT.test(password.expr)) this.secretVars.add(password.expr.toLowerCase());
+        const outputs = ['Password', 'Username'].map((k) => this.arg(el, k, ctx)).flatMap((v) => (v && 'expr' in v && IDENT.test(v.expr) ? [v.expr.toLowerCase()] : []));
         this.add(at, 'converted', displayName, 'a UiPath credential is never imported: attach an RPA Site Login to the Run steps node instead');
+        this.credentialItems.push({ item: this.report.items[this.report.items.length - 1], outputs });
         return [{ t: 'node', node: { kind: 'credential', asset: cleanLabel(asset), displayName } }];
       }
       case 'GetAsset':
@@ -754,7 +819,7 @@ class Walker {
         return [{ t: 'node', node: { kind: 'email', ...(to ? { to } : {}), ...(subject ? { subject } : {}), displayName } }];
       }
       case 'Delay': {
-        if (ctx.card && !ctx.desktop) {
+        if ((ctx.card && !ctx.desktop) || ctx.app) {
           this.add(at, 'converted', displayName, 'a wait inside the browser is not a step: steps wait for their elements; set timeoutMs on the next step if the page is slow');
           return [];
         }
@@ -783,6 +848,8 @@ class Walker {
     // Browser cards and desktop applications.
     if (name === 'NApplicationCard' || name === 'OpenBrowser' || name === 'AttachBrowser' || name === 'BrowserScope') return this.card(el, ctx);
     if (/^N?SAP/.test(name) || ctx.desktop) return this.desktopActivity(el, ctx);
+    if (name === 'OpenApplication' || name === 'WindowScope') return this.desktopScope(el, ctx);
+    if (ctx.app) return this.desktopUi(el, ctx);
     return this.browserActivity(el, ctx);
   }
 
@@ -808,6 +875,11 @@ class Walker {
     const selector = el.attrs.Selector ?? appEl?.attrs.Selector ?? '';
     const filePath = (appEl?.attrs.FilePath ?? '').toLowerCase();
     const desktop = ctx.desktop || (url === undefined && (this.selector(selector).desktop || (filePath.endsWith('.exe') && !/chrome|msedge|firefox|iexplore/.test(filePath))));
+    // A UI Automation app (not SAP GUI): its activities become desktop steps.
+    if (desktop && !ctx.desktop && !this.isSap(selector, filePath)) {
+      const openMode = (el.attrs.OpenMode ?? '').toLowerCase();
+      return this.desktopScope(el, ctx, { selector, filePath: appEl ? this.arg(appEl, 'FilePath', ctx) : undefined, args: appEl ? this.arg(appEl, 'Arguments', ctx) : undefined, launch: openMode !== 'never' });
+    }
     if (desktop) {
       const out = this.desktopActivity(el, ctx);
       append(out, this.list(this.body(el), { ...ctx, desktop: true, card: undefined }));
@@ -868,6 +940,8 @@ class Walker {
     const displayName = displayOf(el);
     const at = this.at(el, ctx);
     const label = intentLabel(el.attrs.DisplayName ?? '');
+    // A UI Automation app's element outside a window scope (a full <wnd> selector): a desktop step. SAP GUI stays below.
+    if (this.desktopKind(el, ctx) === 'desktop') return this.desktopUi(el, ctx);
 
     if (name === 'NGoToUrl' || name === 'NNavigateTo' || name === 'NavigateTo') {
       const url = this.arg(el, 'Url', ctx);
@@ -953,6 +1027,250 @@ class Walker {
     return [this.event(e, ctx)];
   }
 
+  // -------------------------------------------------------------------------------------------------------------------
+  // Desktop applications driven through UI Automation (anything but SAP GUI, which keeps the SAP report branch)
+
+  /** readDesktopSelector, once per selector string. */
+  private readonly desktopReads = new Map<string, DesktopSelectorRead>();
+  private desktopRead(selector: string): DesktopSelectorRead {
+    let read = this.desktopReads.get(selector);
+    if (!read) {
+      read = readDesktopSelector(selector);
+      this.desktopReads.set(selector, read);
+    }
+    return read;
+  }
+
+  /** SAP GUI for Windows: by its selector (<sap>, saplogon.exe, SAP_FRONTEND_SESSION) or its executable. */
+  private isSap(selector: string, filePath = ''): boolean {
+    return this.desktopRead(selector).kind === 'sap' || /(^|[\\/])(saplogon|sapgui|saplgpad)\.exe$/i.test(filePath.trim());
+  }
+
+  /** The activity's selectors: its full selector, its scope selector, or why there is none it can read. */
+  private desktopSelectors(el: XmlNode, ctx: Ctx): { full?: string; scope?: string; problem?: string } {
+    const prop = el.children.find((c) => isProperty(c) && propertyName(c) === 'Target');
+    const t = prop ? content(prop)[0] : undefined;
+    if (!t) {
+      const sel = attrValue(el.attrs.Selector, ctx.csharp);
+      if (sel && 'literal' in sel) return { full: sel.literal };
+      return sel ? { problem: `the selector is the expression ${sel.expr.slice(0, 200)}, which is not evaluated` } : {};
+    }
+    const scope = t.attrs.ScopeSelectorArgument;
+    let full = this.arg(t, 'FullSelectorArgument', ctx) ?? this.arg(t, 'Selector', ctx);
+    if (full === undefined && t.attrs.Reference) {
+      const ref = t.attrs.Reference;
+      const found = this.project.objects.get(ref) ?? this.project.objects.get(`#${ref.slice(ref.lastIndexOf('/') + 1)}`);
+      if (!found?.selector) return { problem: `its Object Repository element (${ref.slice(0, 120)}) is not in the project's .objects folder` };
+      full = { literal: found.selector };
+    }
+    if (full === undefined) {
+      const steps = (t.attrs.SearchSteps ?? '').toLowerCase();
+      if (steps.includes('image') || steps.includes('cv') || t.attrs.CVScreenId || t.attrs.ImageBase64) return { scope, problem: 'the target is found by image or computer vision, which UI Automation cannot read: rebuild this step on the app\'s elements' };
+      return { scope, problem: 'the target has no selector' };
+    }
+    if ('expr' in full) return { scope, problem: `the selector is the expression ${full.expr.slice(0, 200)}, which is not evaluated` };
+    return { full: full.literal, ...(scope !== undefined ? { scope } : {}) };
+  }
+
+  /** 'desktop' when the activity's target is a desktop selector of a UI Automation app (not SAP GUI, not a web page). */
+  private desktopKind(el: XmlNode, ctx: Ctx): 'desktop' | undefined {
+    const { full, scope } = this.desktopSelectors(el, ctx);
+    const kinds = [full, scope].filter((s): s is string => s !== undefined).map((s) => this.desktopRead(s).kind);
+    if (kinds.includes('sap') || kinds.length === 0) return undefined;
+    return kinds.some((k) => k !== 'none') ? 'desktop' : undefined;
+  }
+
+  /**
+   * Open Application, Attach Window or a Use Application card on a UI Automation app: a launch (unless it only attaches)
+   * and a window scope, then its body as desktop activities in that window.
+   */
+  private desktopScope(el: XmlNode, ctx: Ctx, card?: { selector: string; filePath?: Val; args?: Val; launch: boolean }): Item[] {
+    const name = local(el.name);
+    const displayName = displayOf(el);
+    const at = this.at(el, ctx);
+    let selector = card?.selector ?? '';
+    if (!card) {
+      const sel = this.arg(el, 'Selector', ctx) ?? (() => {
+        const prop = el.children.find((c) => isProperty(c) && propertyName(c) === 'Target');
+        const t = prop ? content(prop)[0] : undefined;
+        return t ? this.arg(t, 'Selector', ctx) : undefined;
+      })();
+      if (sel && 'literal' in sel) selector = sel.literal;
+      else if (sel) this.add(at, 'converted', displayName, `${name}: the window selector is the expression ${sel.expr.slice(0, 200)}, which is not evaluated: the steps find their elements in any window of the app`);
+    }
+    if (this.isSap(selector)) return this.desktopActivity(el, ctx);
+    const read = this.desktopRead(selector);
+    if (read.kind === 'untranslated') {
+      this.add(at, 'untranslated', displayName, `${name}: ${read.reason}`);
+      return [];
+    }
+    const window = read.kind === 'uia' || read.kind === 'window' ? read.window : undefined;
+    if (read.kind === 'uia' || read.kind === 'window') for (const issue of read.issues) this.add(at, 'converted', displayName, issue);
+    const fileVal = card ? card.filePath : this.arg(el, 'FileName', ctx);
+    const argsVal = card ? card.args : this.arg(el, 'Arguments', ctx);
+    const launch = card ? card.launch : name === 'OpenApplication';
+    let exe = window?.exe;
+    if (fileVal && 'literal' in fileVal) {
+      const file = fileVal.literal.trim().replace(/^"|"$/g, '');
+      const base = file.split(/[\\/]/).pop() ?? '';
+      if (/\.exe$/i.test(base)) {
+        exe = base;
+        if (launch && base !== file) this.add(at, 'converted', displayName, `the app opens as ${base}: the desktop runner's policy names the path it runs (${file.slice(0, 200)})`);
+      }
+    } else if (fileVal && launch) {
+      this.add(at, 'converted', displayName, `${name}: the app's path is the expression ${fileVal.expr.slice(0, 200)}, which is not evaluated: the steps open ${exe ?? 'the app the window selector names'}`);
+    }
+    const out: Item[] = [];
+    const scopeName = displayName;
+    if (launch && exe) {
+      const args = argsVal && 'literal' in argsVal && argsVal.literal.trim() ? [argsVal.literal.trim()] : undefined;
+      if (args) this.add(at, 'converted', displayName, 'the app\'s arguments became one argument (app.args): check them, and list them in the runner\'s policy (allowedArgs)');
+      else if (argsVal && 'expr' in argsVal) this.add(at, 'untranslated', displayName, `the app's arguments are the expression ${argsVal.expr.slice(0, 200)}, which is not evaluated: add them to app.args by hand`);
+      out.push({ t: 'desktop', event: { at, kind: 'launch', exe, ...(args ? { args } : {}), ...(window ? { window } : {}), label: displayName }, scope: scopeName });
+    }
+    if (window) out.push({ t: 'desktop', event: { at, kind: 'scope', window, label: displayName }, scope: scopeName });
+    append(out, this.list(this.body(el), { ...ctx, app: { ...(window ? { window } : {}), ...(exe ? { exe } : {}), name: scopeName }, card: undefined }));
+    return out;
+  }
+
+  /** The activity's UI Automation target: its selector's path in its own window, else the scope's; or why there is none. */
+  private desktopTarget(el: XmlNode, ctx: Ctx): { target?: UiaTarget; problem?: string; sap?: true; issues: string[]; hints: string[] } {
+    const { full, scope, problem } = this.desktopSelectors(el, ctx);
+    if (problem) return { problem, issues: [], hints: [] };
+    const read: DesktopSelectorRead = full !== undefined ? this.desktopRead(full) : { kind: 'none' };
+    const scopeRead: DesktopSelectorRead = scope !== undefined ? this.desktopRead(scope) : { kind: 'none' };
+    if (read.kind === 'sap' || scopeRead.kind === 'sap') return { sap: true, issues: [], hints: [] };
+    if (read.kind === 'untranslated') return { problem: read.reason, issues: [], hints: read.hints };
+    if (read.kind === 'none') return { problem: full === undefined ? 'the activity has no target the import can read' : 'the selector names no desktop element (it is not a <wnd>, <uia> or <ctrl> selector)', issues: [], hints: [] };
+    if (read.kind === 'window') return { problem: 'the selector names only a window, not an element in it', issues: read.issues, hints: read.hints };
+    const scopeWindow = scopeRead.kind === 'uia' || scopeRead.kind === 'window' ? scopeRead.window : undefined;
+    const window = read.window ?? scopeWindow ?? ctx.app?.window;
+    return { target: { ...(window ? { window: { ...window } } : {}), path: read.path }, issues: read.issues, hints: read.hints };
+  }
+
+  /** The run variable an expression names (`[in_Company]` → in_Company), or undefined when it is not a plain variable. */
+  private desktopVar(expr: string): string | undefined {
+    if (!IDENT.test(expr)) return undefined;
+    return varKey(expr, this.opts.vars) ?? expr;
+  }
+
+  /**
+   * One desktop activity (Click, Type Into, Type Secure Text, Select Item, Check, Send Hotkey, Get Text) as a desktop
+   * event. Anything it cannot translate is a report item and no step, so the desktop sequence around it stays whole.
+   */
+  private desktopUi(el: XmlNode, ctx: Ctx): Item[] {
+    const name = local(el.name);
+    const displayName = displayOf(el);
+    const at = this.at(el, ctx);
+    const label = intentLabel(el.attrs.DisplayName ?? '');
+    const scope = ctx.app?.name ?? displayName;
+    const item = (event: DesktopEvent): Item => ({ t: 'desktop', event, scope });
+    const skip = (kind: ImportItem['kind'], reason: string): Item[] => { this.add(at, kind, displayName, `${name}: ${reason}`); return []; };
+
+    if (/^(CV|N?Image|Ocr|N?FindImage|ClickImage|ClickText|ClickOCRText|HoverImage)/.test(name) || /Image$|OCR/.test(name)) {
+      return skip('untranslated', 'the target is found by image, OCR or computer vision, which UI Automation cannot read: rebuild this step on the app\'s elements');
+    }
+    const isClick = name === 'NClick' || name === 'Click' || name === 'DoubleClick';
+    const isType = name === 'NTypeInto' || name === 'TypeInto' || name === 'TypeSecureText' || name === 'SetText' || name === 'NSetText';
+    const isSelect = name === 'NSelectItem' || name === 'SelectItem';
+    const isCheck = name === 'NCheck' || name === 'Check';
+    const isHotkey = name === 'SendHotkey';
+    const isRead = name === 'NGetText' || name === 'GetText' || name === 'GetValue' || name === 'GetFullText' || name === 'GetVisibleText';
+    if (!isClick && !isType && !isSelect && !isCheck && !isHotkey && !isRead) {
+      const inner = this.body(el).length;
+      return skip('untranslated', `this activity has no desktop step equivalent in this release${inner ? `: the ${inner === 1 ? '1 activity' : `${inner} activities`} inside ${inner === 1 ? 'was' : 'were'} not imported` : ''}`);
+    }
+    const hasTarget = el.children.some((c) => isProperty(c) && propertyName(c) === 'Target') || el.attrs.Selector !== undefined;
+    const t = isHotkey && !hasTarget ? { issues: [], hints: [] as string[] } : this.desktopTarget(el, ctx);
+    if ('sap' in t && t.sap) return this.desktopActivity(el, ctx);
+    if ('problem' in t && t.problem) return skip(/image|computer vision|Java|remote desktop|mixes/.test(t.problem) ? 'untranslated' : 'dropped', t.problem);
+    for (const issue of t.issues) this.add(at, 'converted', label || displayName, issue);
+    const target = 'target' in t ? t.target : undefined;
+
+    if (isHotkey) {
+      const chord = canonicalChord(this.lit(el, 'Key', ctx) ?? '', this.lit(el, 'KeyModifiers', ctx) ?? '');
+      if ('error' in chord) return skip('untranslated', chord.error);
+      return [item({ at, kind: 'key', ...(target ? { target } : {}), label: '', chord: chord.chord })];
+    }
+    if (!target) return skip('dropped', 'the activity has no target the import can read');
+    if (isClick) {
+      if (name === 'DoubleClick' || (this.lit(el, 'ClickType', ctx) ?? '').toLowerCase().includes('double')) this.add(at, 'converted', label || displayName, 'a double click became a click: desktop steps click once');
+      return [item({ at, kind: 'click', target, label })];
+    }
+    if (isCheck) {
+      const action = (this.lit(el, 'Action', ctx) ?? 'Check').toLowerCase();
+      if (action === 'toggle') this.add(at, 'converted', label || displayName, 'Toggle became Check: change the step to unchecked if the box should be cleared');
+      return [item({ at, kind: 'check', target, label, checked: action !== 'uncheck' })];
+    }
+    if (isRead) {
+      const out = ['Value', 'Text', 'TextString', 'Result'].map((k) => this.arg(el, k, ctx)).find((v) => v && 'expr' in v && IDENT.test(v.expr));
+      const as = out && 'expr' in out ? out.expr : '';
+      return [item({ at, kind: 'read', target, label, as })];
+    }
+    if (isSelect) {
+      const v = this.arg(el, 'Item', ctx);
+      if (v && 'literal' in v && v.literal !== '') return [item({ at, kind: 'select', target, label, option: v.literal })];
+      const varName = v && 'expr' in v ? this.desktopVar(v.expr) : undefined;
+      if (varName) {
+        this.add(at, 'converted', label || displayName, `the item is the UiPath variable ${varName}: the step chooses {{var.${varName}}}; set ${varName} in Run steps → Variables`);
+        return [item({ at, kind: 'select', target, label, option: `{{var.${varName}}}` })];
+      }
+      return skip('untranslated', v && 'expr' in v ? `the item is the expression ${v.expr.slice(0, 200)}, which is not evaluated: choose the item in the step by hand` : 'the activity chooses no item');
+    }
+
+    // Typing. A secure value, a credential's password or a password-like field never carries a value: a run variable.
+    const fieldHints = [...t.hints, displayName].join(' ');
+    const passwordField = PASSWORD_FIELD.test(fieldHints);
+    const secureProp = name === 'TypeSecureText' || el.attrs.SecureText !== undefined || el.children.some((c) => isProperty(c) && propertyName(c) === 'SecureText');
+    const secret = (varName: string, source: string): Item[] => {
+      this.secretVars.add(varName.toLowerCase());
+      this.secretVarNames.add(varName);
+      this.add(at, 'secret', label || displayName,
+        `${source} is never imported: the step types the run variable {{var.${varName}}}. Supply ${varName} in Run steps → Options → Variables from a secret source (an n8n external secret, or a node that reads your vault), never as plain text in the workflow; the run masks typed values in its messages and logs, and the runner never returns a password field's value`);
+      return [item({ at, kind: 'fill', target, label, value: `{{var.${varName}}}` })];
+    };
+    if (secureProp) {
+      const v = this.arg(el, 'SecureText', ctx);
+      const varName = (v && 'expr' in v ? this.desktopVar(v.expr) : undefined) ?? 'password';
+      return secret(varName, v && 'expr' in v && IDENT.test(v.expr) ? `the secure text (${v.expr.slice(0, 80)})` : 'the secure text');
+    }
+    const val = this.arg(el, 'Text', ctx);
+    if (val && 'literal' in val) {
+      const { text, enter } = specialKeys(val.literal);
+      if (text !== val.literal) this.add(at, 'converted', label || displayName, 'special keys typed with the text ([k(…)]) were removed from it');
+      const out: Item[] = [];
+      if (passwordField && text !== '') {
+        if (text.trim()) this.desktopTypedSecrets.push(text);
+        append(out, secret('password', 'a value typed into a password field'));
+      } else if (isSaveField(target)) {
+        const file = text.split(/[\\/]/).pop() ?? '';
+        if (!file.trim()) return skip('untranslated', 'the typed save path names no file: type {{$exportDir}}\\<file> by hand and add an expectFile step');
+        this.add(at, 'converted', label || displayName, `the save path became {{$exportDir}}\\${file}: the app saves into the run's export folder, and the file comes back to n8n`);
+        out.push(item({ at, kind: 'fill', target, label, value: `{{$exportDir}}\\${file}`, exportFile: file }));
+      } else {
+        out.push(item({ at, kind: 'fill', target, label, value: text }));
+      }
+      if (enter) out.push(item({ at, kind: 'key', target, label: '', chord: 'Enter' }));
+      return out;
+    }
+    if (val && 'expr' in val) {
+      if (isSaveField(target)) {
+        const file = savePathFile(val.expr, ctx.csharp);
+        if (!file) return skip('untranslated', `the save path is the expression ${val.expr.slice(0, 200)}, which the import cannot split into a folder and a literal file name: type {{$exportDir}}\\<file> into the field by hand and add an expectFile step`);
+        this.add(at, 'converted', label || displayName, `the save path ${val.expr.slice(0, 200)} became {{$exportDir}}\\${file}: the app saves into the run's export folder instead of the folder variable, and the file comes back to n8n`);
+        return [item({ at, kind: 'fill', target, label, value: `{{$exportDir}}\\${file}`, exportFile: file })];
+      }
+      const varName = this.desktopVar(val.expr);
+      if (varName && (this.secretVars.has(val.expr.toLowerCase()) || passwordField || PASSWORD_NAME.test(varName))) return secret(varName, `the password (${val.expr.slice(0, 80)})`);
+      if (varName) {
+        this.add(at, 'converted', label || displayName, `the typed text is the UiPath variable ${varName}: the step types {{var.${varName}}}; set ${varName} in Run steps → Variables`);
+        return [item({ at, kind: 'fill', target, label, value: `{{var.${varName}}}` })];
+      }
+      return skip('untranslated', `the typed text is the expression ${val.expr.slice(0, 200)}, which is not evaluated: map it to a variable in the step by hand`);
+    }
+    return skip('dropped', 'the activity types no text');
+  }
+
   /**
    * A TOTP activity is no step and no flow node (it never splits the browser steps around it). The variables it
    * writes (its arguments that are a bare variable, other than its secret) mark the fills typed from them as codes.
@@ -1029,14 +1347,28 @@ class Walker {
   private finish(items: Item[]): FlowNode[] {
     const nodes: FlowNode[] = [];
     let current: UiPathSequence | undefined;
+    let desktop: DesktopSequence | undefined;
     for (const it of items) {
+      if (it.t === 'desktop') {
+        current = undefined;
+        if (!desktop) {
+          const number = ++this.numbered;
+          desktop = { number, name: `${this.opts.name}-${number}`, displayName: it.scope, events: [], secretVariables: [] };
+          this.desktopSequences.push(desktop);
+          nodes.push({ kind: 'desktop', sequence: number, displayName: it.scope });
+        }
+        desktop.events.push(it.event);
+        continue;
+      }
       if (it.t === 'event') {
+        desktop = undefined;
         if (!current) {
           const continued = it.cardId !== undefined && this.cardsWithSequence.has(it.cardId);
-          current = { name: `${this.opts.name}-${this.sequences.length + 1}`, events: [], ...(it.cardId !== undefined ? { card: it.cardId, continued } : {}) };
+          const number = ++this.numbered;
+          current = { name: `${this.opts.name}-${number}`, number, events: [], ...(it.cardId !== undefined ? { card: it.cardId, continued } : {}) };
           this.sequences.push(current);
           if (it.cardId !== undefined) this.cardsWithSequence.add(it.cardId);
-          nodes.push({ kind: 'browser', sequence: this.sequences.length, displayName: it.card });
+          nodes.push({ kind: 'browser', sequence: number, displayName: it.card });
           if (continued && it.event.kind !== 'goto' && it.url) {
             const goto: ImportEvent = { at: it.event.at, kind: 'goto', url: it.url };
             current.events.push(goto);
@@ -1047,6 +1379,7 @@ class Walker {
         continue;
       }
       current = undefined;
+      desktop = undefined;
       if (it.t === 'node') nodes.push(it.node);
       else if (it.t === 'if') nodes.push({ kind: 'if', expression: it.expression, then: this.finish(it.then), else: this.finish(it.else), displayName: it.displayName });
       else nodes.push({ kind: 'forEach', expression: it.expression, body: this.finish(it.body), displayName: it.displayName });
@@ -1083,4 +1416,68 @@ function specialKeys(text: string): { text: string; enter: boolean } {
     i++;
   }
   return { text: out, enter };
+}
+
+/** A field whose selector or display name reads like a password, PIN or secret: what is typed there is never imported. */
+const PASSWORD_FIELD = /pass(word|wort|code)?\b|passwd|pwd|\bpin\b|secret|kennwort|mot de passe/i;
+/** A variable whose name reads like a password. */
+const PASSWORD_NAME = /pass(word|wd)?|pwd|secret|\bpin\b/i;
+
+/**
+ * A Windows Save or Export dialog's file name field: automation id 1001 (the common file dialog's edit box) or the name
+ * "File name:", in a dialog window (class #32770) or a window whose title says save or export, or with no window known.
+ */
+function isSaveField(t: UiaTarget): boolean {
+  const last = t.path[t.path.length - 1];
+  const field = last.automationId === '1001' || /^file ?name:?$/i.test(last.name ?? '');
+  if (!field) return false;
+  const w = t.window;
+  return !w || w.className === '#32770' || /save|export|speichern|enregistrer/i.test(w.title ?? w.titlePattern ?? '') || (w.title === undefined && w.titlePattern === undefined);
+}
+
+/**
+ * The file name a save-path expression ends in, when the import can split it: `folder + "\\file.csv"` (or `&`),
+ * `Path.Combine(folder, "file.csv")`, with any folder expression before it. undefined when the file part is not a
+ * string literal or names no file.
+ */
+function savePathFile(expr: string, csharp: boolean): string | undefined {
+  const e = expr.trim();
+  let lit: string | undefined;
+  const combine = /^(?:System\.IO\.)?Path\.Combine\((.+),\s*(@?"(?:[^"\\]|""|\\.)*")\s*\)$/s.exec(e);
+  if (combine) lit = stringLiteral(combine[2], csharp);
+  else {
+    const concat = /[+&]\s*(@?"(?:[^"\\]|""|\\.)*")\s*$/s.exec(e);
+    if (concat && concat.index > 0) lit = stringLiteral(concat[1], csharp);
+  }
+  if (lit === undefined) return undefined;
+  const file = lit.split(/[\\/]/).pop() ?? '';
+  return file.trim() && !file.includes('{') ? file : undefined;
+}
+
+const KEY_NAMES: Record<string, string> = {
+  enter: 'Enter', return: 'Enter', tab: 'Tab', esc: 'Escape', escape: 'Escape', space: 'Space', back: 'Backspace', backspace: 'Backspace',
+  del: 'Delete', delete: 'Delete', ins: 'Insert', insert: 'Insert', home: 'Home', end: 'End', pgup: 'PageUp', pageup: 'PageUp', prior: 'PageUp',
+  pgdn: 'PageDown', pagedown: 'PageDown', next: 'PageDown', up: 'Up', down: 'Down', left: 'Left', right: 'Right',
+};
+
+/**
+ * A Send Hotkey's key and modifiers (`Key="enter" KeyModifiers="Ctrl, Shift"`) as the step format's canonical chord:
+ * modifiers Ctrl, Alt, Shift in that order, then the key (`Ctrl+Shift+S`, `Enter`, `F5`). Win chords are refused.
+ */
+export function canonicalChord(key: string, modifiers: string): { chord: string } | { error: string } {
+  const k = key.trim().toLowerCase();
+  let name = KEY_NAMES[k];
+  if (!name && /^f([1-9]|1[0-9]|2[0-4])$/.test(k)) name = k.toUpperCase();
+  if (!name && /^[a-z0-9]$/.test(k)) name = k.toUpperCase();
+  if (!name) return { error: `the key ${key.slice(0, 40) || '(none)'} is not one desktop steps can press (Enter, Tab, Escape, arrows, F1 to F24, letters and digits)` };
+  const mods = new Set<string>();
+  for (const m of modifiers.split(/[\s,+|]+/).map((x) => x.toLowerCase()).filter(Boolean)) {
+    if (m === 'none') continue;
+    if (m === 'ctrl' || m === 'control') mods.add('Ctrl');
+    else if (m === 'alt') mods.add('Alt');
+    else if (m === 'shift') mods.add('Shift');
+    else if (m === 'win' || m === 'windows' || m === 'lwin' || m === 'rwin') return { error: 'a Windows-key shortcut drives the Windows shell, not the app: desktop steps never send one' };
+    else return { error: `the modifier ${m.slice(0, 20)} is not one desktop steps know (Ctrl, Alt, Shift)` };
+  }
+  return { chord: [...['Ctrl', 'Alt', 'Shift'].filter((m) => mods.has(m)), name].join('+') };
 }

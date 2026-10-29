@@ -50,3 +50,9 @@ export {
   type Lease, type RunnerAddress, type RunnerEndpoint,
 } from './desktop/client.js';
 export * from './desktop/protocol.js';
+// Desktop drafts (UiPath desktop imports): their review, the owner's write declarations at approval, and signing.
+export {
+  declareWrites, describeDesktopStep, DESKTOP_CHANGES_MISMATCH, DESKTOP_EVIDENCE_INVALID, DESKTOP_FLAGS_INCOMPLETE, desktopProposal, desktopSafetyFlags,
+  desktopWriteCandidates, parseWriteSteps, reviewDesktopLocator, signDesktopSteps, WRITE_STEPS_INVALID,
+  type DesktopProposal, type SignedDesktopRow,
+} from './proposal/desktop.js';

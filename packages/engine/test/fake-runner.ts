@@ -1,6 +1,7 @@
 // An in-process desktop runner for tests: a TLS WebSocket server speaking protocol 1 (JSON-RPC 2.0) over an in-memory
-// UI tree of the demo app ("ERP Demo": sign-in form, order search, results grid, export through a Save As dialog that
-// writes a CSV into the run's export directory). It enforces the runner's floor as the real one does: bearer token on
+// UI tree of a demo app: by default a small order search ("orders": sign-in form, order search, results grid, export
+// through a Save As dialog that writes a CSV into the run's export directory); with `app: 'erp'`, a model of the real
+// ERP Demo v1 in desktop/erp-demo (its window titles, automation ids, menu names, line items and CSV). It enforces the runner's floor as the real one does: bearer token on
 // the upgrade, one run at a time with a lease, allowed apps, declared write controls and gated keys, repair-mode limits,
 // export directory confinement, and the protocol's error codes. Error messages never contain typed values (unless a
 // test turns on `echoTypedInErrors`, to prove the engine masks them anyway).
@@ -106,8 +107,17 @@ const ORDERS = [
   ['ORD-1003', 'Globex', 'Open', '300.00'],
 ];
 
+/** What the runner needs of an app model: its windows (foreground last) and what tests look at. */
+export interface AppModel {
+  windows: Win[];
+  readonly foreground: Win;
+  results: string[][];
+  signInFailures: number;
+  posted: number;
+}
+
 /** The demo app's windows and behaviour. */
-class DemoApp {
+class DemoApp implements AppModel {
   windows: Win[] = [];
   results: string[][] = [];
   signInFailures = 0;
@@ -196,7 +206,7 @@ function describeTarget(t: RunnerTarget): string {
   return t.path.map((c) => [c.controlType, c.automationId && `#${c.automationId}`, c.name !== undefined && `"${c.name}"`].filter(Boolean).join(' ')).join(' > ');
 }
 
-interface Run { runId: string; leaseMs: number; exportDir: string; timer: NodeJS.Timeout; app?: DemoApp; focus?: El }
+interface Run { runId: string; leaseMs: number; exportDir: string; timer: NodeJS.Timeout; app?: AppModel; focus?: El }
 
 export interface FakeRunnerOptions {
   token?: string;
@@ -208,6 +218,8 @@ export interface FakeRunnerOptions {
   tlsMaxVersion?: 'TLSv1.2' | 'TLSv1.3';
   /** The allowed app's executable is not at its policy path (app.launch answers not_found, as the runner does). */
   appMissing?: boolean;
+  /** The app model: 'orders' (default) or 'erp', the real ERP Demo v1's controls. */
+  app?: 'orders' | 'erp';
 }
 
 export interface Received { method: string; params: Record<string, unknown> }
@@ -236,7 +248,9 @@ export class FakeRunner {
   /** The run holding the lock, if any. */
   run: Run | undefined;
   /** The demo app of the last run (kept after run.end for assertions). */
-  lastApp: DemoApp | undefined;
+  lastApp: AppModel | undefined;
+  /** Which app model app.launch starts. */
+  readonly app: 'orders' | 'erp';
   lastExportDir: string | undefined;
   private lastTyped = '';
   private server: Server | undefined;
@@ -251,6 +265,7 @@ export class FakeRunner {
     this.echoTypedInErrors = opts.echoTypedInErrors ?? false;
     this.appMissing = opts.appMissing ?? false;
     this.tlsMaxVersion = opts.tlsMaxVersion ?? 'TLSv1.3';
+    this.app = opts.app ?? 'orders';
     this.cert = selfSignedCert();
     this.fingerprint = this.cert.fingerprint;
   }
@@ -482,7 +497,7 @@ export class FakeRunner {
         const exe = String((p.app as { exe?: string })?.exe ?? '').split(/[\\/]/).pop() ?? '';
         if (!this.policy.allowedApps.some((a) => a.exe.toLowerCase() === exe.toLowerCase())) throw new RpcError(E.policy_refused, `app not allowed: ${exe}`);
         if (this.appMissing) throw new RpcError(E.not_found, `not_found: no element matched application executable "${exe}" (no matching window of the run)`);
-        run.app = new DemoApp(() => this.run?.exportDir);
+        run.app = this.app === 'erp' ? new ErpApp(() => this.run?.exportDir) : new DemoApp(() => this.run?.exportDir);
         this.lastApp = run.app;
         return { pid: 4242 };
       }
@@ -609,5 +624,136 @@ export class FakeRunner {
       default:
         throw new RpcError(-32602, `unknown action ${action}`);
     }
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The ERP Demo v1 (desktop/erp-demo): the same window titles, automation ids and menu names as the WinForms app, and the
+// same deterministic line items and CSV. WinForms menu items have no automation id: they are found by name.
+
+export const ERP_EXE = 'ErpDemo.exe';
+export const ERP_USER = 'clerk';
+export const ERP_PASSWORD = 'demo1234';
+export const ERP_POLICY: FakePolicy = { ...DEMO_POLICY, allowedApps: [{ exe: ERP_EXE }], writeControls: [{ exe: ERP_EXE, automationId: 'btnPost' }] };
+const ERP_VENDORS = ['Acme Paper Co', 'Blue River Logistics', 'Granite Tools', 'Harbor Foods', 'Summit Energy'];
+const ERP_STATUSES = ['Open', 'Cleared', 'Blocked'];
+const ERP_COUNTS: Record<string, number> = { 1000: 12, 2000: 7, 3000: 4 };
+const ERP_CURRENCIES: Record<string, string> = { 1000: 'EUR', 2000: 'USD' };
+export const ERP_CSV_HEADER = 'Document,Date,Company,Vendor,Amount,Currency,Status';
+
+/** LineItems.Search of the ERP Demo: rows of [Document, Date, Company, Vendor, Amount, Currency, Status]. */
+export function erpLineItems(company: string, from: string, to: string): string[][] {
+  const code = Number(company);
+  const rows: string[][] = [];
+  for (let i = 1; i <= (ERP_COUNTS[company] ?? 0); i++) {
+    const date = new Date(Date.UTC(2026, 0, 5 + (i - 1) * 23)).toISOString().slice(0, 10);
+    if (date < from || date > to) continue;
+    const amount = (100 + ((i * 7919 + code) % 100000) / 100).toFixed(2);
+    rows.push([`${company}-${String(i).padStart(4, '0')}`, date, company, ERP_VENDORS[(i + Math.floor(code / 1000)) % ERP_VENDORS.length], amount, ERP_CURRENCIES[company] ?? 'GBP', ERP_STATUSES[i % 3]]);
+  }
+  return rows;
+}
+/** LineItems.ToCsv: a header, CRLF line ends, fields quoted only when they need it. */
+export function erpCsv(rows: string[][]): string {
+  const quote = (f: string) => (/[,"\r\n]/.test(f) ? `"${f.replaceAll('"', '""')}"` : f);
+  return [ERP_CSV_HEADER, ...rows.map((r) => r.map(quote).join(','))].map((l) => `${l}\r\n`).join('');
+}
+
+class ErpApp implements AppModel {
+  windows: Win[] = [];
+  results: string[][] = [];
+  signInFailures = 0;
+  posted = 0;
+  /** Files the app saved, by full path (saving outside the export directory is allowed but never retrievable). */
+  readonly saved: string[] = [];
+
+  constructor(private readonly exportDir: () => string | undefined) {
+    this.windows = [this.loginWindow()];
+  }
+
+  get foreground(): Win {
+    return this.windows[this.windows.length - 1];
+  }
+
+  private loginWindow(): Win {
+    const user = el('Edit', 'txtUser', 'User name', { className: 'WindowsForms10.EDIT.app.0.2bf8098_r6_ad1' });
+    const password = el('Edit', 'txtPassword', 'Password', { isPassword: true, className: 'WindowsForms10.EDIT.app.0.2bf8098_r6_ad1' });
+    const error = el('Text', 'lblLoginError', '', { visible: false });
+    const signIn = () => {
+      if (user.value === ERP_USER && password.value === ERP_PASSWORD) { this.windows = [this.mainWindow()]; return; }
+      error.name = 'User name or password is wrong.';
+      error.visible = true;
+      password.value = '';
+      this.signInFailures++;
+    };
+    // The form's AcceptButton: Enter in any field presses Sign in.
+    for (const field of [user, password]) (field as El & { onEnter?: () => void }).onEnter = signIn;
+    const button = el('Button', 'btnSignIn', 'Sign in', { onClick: signIn });
+    return {
+      title: 'ERP Demo - Sign in', exe: ERP_EXE, automationId: 'LoginForm', className: 'WindowsForms10.Window.8.app.0.2bf8098_r6_ad1',
+      root: el('Window', 'LoginForm', 'ERP Demo - Sign in', { children: [el('Text', 'lblUser', 'User name'), user, el('Text', 'lblPassword', 'Password'), password, error, button] }),
+    };
+  }
+
+  private mainWindow(): Win {
+    const company = el('ComboBox', 'cmbCompany', 'Company code', { items: ['1000', '2000', '3000'] });
+    const from = el('Edit', 'txtDateFrom', 'Date from', { value: '2026-01-01' });
+    const to = el('Edit', 'txtDateTo', 'Date to', { value: '2026-12-31' });
+    const count = el('Text', 'lblResultCount', '');
+    const grid = el('Table', 'gridResults', 'Results');
+    const detail = el('Edit', 'txtDetail', 'Detail', { value: '' });
+    const status = el('Text', 'lblStatus', 'Signed in as clerk');
+    const columns = ['Document', 'Date', 'Company', 'Vendor', 'Amount', 'Currency', 'Status'];
+    const search = () => {
+      if (!company.value) { count.name = 'Choose a company code.'; return; }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(from.value ?? '') || !/^\d{4}-\d{2}-\d{2}$/.test(to.value ?? '')) { count.name = 'Dates must be YYYY-MM-DD.'; return; }
+      this.results = erpLineItems(company.value, from.value!, to.value!);
+      grid.children = this.results.map((r, i) => el('Custom', '', `Row ${i}`, { children: r.map((cell, j) => el('DataItem', '', `${columns[j]} Row ${i}`, { value: cell })) }));
+      count.name = `${this.results.length} line items`;
+      detail.value = this.results[0] ? [this.results[0][0], this.results[0][1], this.results[0][3], this.results[0][4], this.results[0][5], this.results[0][6]].join(' ') : '';
+    };
+    const fileMenu = el('MenuItem', '', 'File', { onClick: () => this.toggleFileMenu() });
+    const menu = el('MenuBar', 'mainMenu', '', { children: [fileMenu, el('MenuItem', '', 'Help')] });
+    const searchPanel = el('Group', 'grpSearch', 'Line items', {
+      children: [el('Text', 'lblCompany', 'Company code'), company, el('Text', 'lblFrom', 'Date from'), from, el('Text', 'lblTo', 'Date to'), to,
+        el('Button', 'btnSearch', 'Search', { onClick: search }), el('Button', 'btnPost', 'Post', { onClick: () => { this.posted++; } }), count],
+    });
+    return {
+      title: 'ERP Demo - Line items', exe: ERP_EXE, automationId: 'MainForm', className: 'WindowsForms10.Window.8.app.0.2bf8098_r6_ad1',
+      root: el('Window', 'MainForm', 'ERP Demo - Line items', { children: [menu, searchPanel, grid, el('Pane', 'pnlDetail', '', { children: [detail] }), el('StatusBar', 'statusBar', '', { children: [status] })] }),
+    };
+  }
+
+  private toggleFileMenu(): void {
+    const open = this.windows.find((w) => w.automationId === 'FileMenu');
+    if (open) { this.windows = this.windows.filter((w) => w !== open); return; }
+    const exportItem = el('MenuItem', '', 'Export...', { onClick: () => { this.windows = this.windows.filter((w) => w.automationId !== 'FileMenu'); this.windows.push(this.saveDialog()); } });
+    const exit = el('MenuItem', '', 'Exit');
+    // The drop-down is its own untitled window of the app (a ToolStripDropDown), as in WinForms.
+    this.windows.push({ title: '', exe: ERP_EXE, automationId: 'FileMenu', className: 'WindowsForms10.Window.20808.app.0.2bf8098_r6_ad1', root: el('Menu', '', 'File', { children: [exportItem, el('Separator', '', ''), exit] }) });
+  }
+
+  private saveDialog(): Win {
+    const file = el('Edit', '1001', 'File name:', { className: 'Edit', value: 'line-items.csv' });
+    const owner = this.foreground;
+    const close = () => { this.windows = this.windows.filter((w) => w.title !== 'Export line items'); };
+    const save = el('Button', '1', 'Save', {
+      className: 'Button',
+      onClick: () => {
+        const typed = file.value ?? '';
+        const cut = Math.max(typed.lastIndexOf('\\'), typed.lastIndexOf('/'));
+        const dir = cut >= 0 ? typed.slice(0, cut) : '';
+        const name = typed.slice(cut + 1);
+        const exportDir = this.exportDir();
+        if (name) this.saved.push(typed);
+        if (exportDir && dir === exportDir && name) writeFileSync(join(exportDir, name), erpCsv(this.results));
+        close();
+      },
+    });
+    const cancel = el('Button', '2', 'Cancel', { className: 'Button', onClick: close });
+    return {
+      title: 'Export line items', exe: ERP_EXE, automationId: '', className: '#32770', owner,
+      root: el('Window', '', 'Export line items', { children: [el('ComboBox', 'FileNameControlHost', 'File name:', { children: [file] }), save, cancel] }),
+    };
   }
 }
