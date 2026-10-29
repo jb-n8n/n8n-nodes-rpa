@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The platform-neutral part of the desktop runner: protocol, server, run lock and lease, policy floor, target
+       resolution, snapshots and file retrieval. The UI itself sits behind IDesktop (Rpa.Runner.Windows on Windows,
+       a fake in the tests). -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>Rpa.Runner.Core</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Rpa.Runner.Core.Tests" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- A small "legacy ERP" WinForms app (MIT) for the RPA desktop runner's tests and demos. Two UI versions: v1 and v2
+       (an "upgrade" with renamed and moved controls and a new dialog). Pick the default at build time with
+       -p:ErpDemoUi=v2, or at run time with the ui switch (see Program.cs). -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>ErpDemo</AssemblyName>
+    <RootNamespace>ErpDemo</RootNamespace>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <ApplicationHighDpiMode>SystemAware</ApplicationHighDpiMode>
+    <ErpDemoUi Condition="'$(ErpDemoUi)' == ''">v1</ErpDemoUi>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(ErpDemoUi)' == 'v2'">
+    <DefineConstants>$(DefineConstants);ERP_DEMO_V2</DefineConstants>
+  </PropertyGroup>
+  <Target Name="CheckErpDemoUi" BeforeTargets="Build">
+    <Error Condition="'$(ErpDemoUi)' != 'v1' And '$(ErpDemoUi)' != 'v2'" Text="ErpDemoUi must be v1 or v2" />
+  </Target>
+</Project>

@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The Windows UI driver: FlaUI over UI Automation 3 (MIT), session health, foreground handling, window capture,
+       DPAPI for the stored certificate key. Compiles anywhere (EnableWindowsTargeting), runs on Windows only. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <RootNamespace>Rpa.Runner.Windows</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="FlaUI.UIA3" Version="5.0.0" />
+    <PackageReference Include="System.Drawing.Common" Version="8.0.10" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Rpa.Runner.Core\Rpa.Runner.Core.csproj" />
+  </ItemGroup>
+</Project>
