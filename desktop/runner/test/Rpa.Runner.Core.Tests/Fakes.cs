@@ -107,7 +107,9 @@ public sealed class FakeDesktop : IDesktop
     {
         if (op.Action is ActionKind.Type or ActionKind.Key)
         {
-            // As the Windows driver does right before keyboard input.
+            // As the Windows driver does right before keyboard input: first the window manager's focus window (a bare
+            // window handle, not the UI Automation element), then the focused element.
+            op.Guard(new FakeNode("Window", "", "", (InputReceiver ?? op.Element).ProcessId));
             var receiver = KeyboardFocusCheck.Receiver(true, true, op.Element.ProcessId, FocusUnknown ? null : InputReceiver ?? op.Element);
             op.Guard(receiver);
         }

@@ -290,7 +290,8 @@ public sealed class RunnerService
             if (!_scope.IsRunProcess(run, receiver.ProcessId))
                 throw RpcErrors.PolicyRefused("the input would reach a window of another application");
             CheckWriteControl(receiver, res.Window, write, mode, "the element under the pointer or with the keyboard focus");
-            if (mode == ActMode.Repair) CheckRepairReceiver(receiver, element);
+            // Where the pointer lands; a repair-mode key (Escape) goes to the focused element, which is its target.
+            if (mode == ActMode.Repair && action != ActionKind.Key) CheckRepairReceiver(receiver, element);
         }
 
         while (true)
