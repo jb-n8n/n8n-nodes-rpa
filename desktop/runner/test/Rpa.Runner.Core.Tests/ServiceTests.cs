@@ -194,12 +194,13 @@ public sealed class ServiceTests : IDisposable
     {
         var w = _h.BeginWithApp();
         _h.Desktop.Focused = w.Find("txtUser");
-        _h.Ok("act", new { runId = Harness.RunId, action = "key", value = "Tab", write = true, timeoutMs = 0 });
+        _h.Ok("act", new { runId = Harness.RunId, action = "key", value = "Tab", timeoutMs = 0 });
         Assert.Equal("txtUser", _h.Desktop.Performed[^1].Element.AutomationId);
-        // Any key to the focus counts as a write while the window has a write control.
-        _h.Err("act", new { runId = Harness.RunId, action = "key", value = "Tab", timeoutMs = 0 }, RpcErrors.PolicyRefusedCode);
-        _h.Desktop.Focused = w.Find("btnPost");
         _h.Err("act", new { runId = Harness.RunId, action = "key", value = "Enter", timeoutMs = 0 }, RpcErrors.PolicyRefusedCode);
+        // The focus on a write control: even navigation needs write: true.
+        _h.Desktop.Focused = w.Find("btnPost");
+        _h.Err("act", new { runId = Harness.RunId, action = "key", value = "Tab", timeoutMs = 0 }, RpcErrors.PolicyRefusedCode);
+        _h.Ok("act", new { runId = Harness.RunId, action = "key", value = "Enter", write = true, timeoutMs = 0 });
         _h.Err("act", new { runId = Harness.RunId, action = "click", timeoutMs = 0 }, RpcErrors.InvalidParams);
     }
 
@@ -209,18 +210,60 @@ public sealed class ServiceTests : IDisposable
     [InlineData("Space")]
     [InlineData("Alt+P")]
     [InlineData("alt+1")]
-    public void Activating_keys_need_write_true_while_the_window_has_a_write_control(string key)
+    [InlineData("F10")]
+    [InlineData("Alt")]
+    [InlineData("Shift+F10")]
+    [InlineData("Apps")]
+    [InlineData("Ctrl+P")]
+    [InlineData("Shift+Down")]
+    public void Keys_other_than_navigation_need_write_true_while_the_run_has_a_write_control(string key)
     {
         var w = _h.BeginWithApp();
         var e = _h.Err("act", Act(Id("txtUser"), "key", new { value = key }), RpcErrors.PolicyRefusedCode);
         Assert.Contains("write control", e["message"]!.GetValue<string>());
         _h.Ok("act", Act(Id("txtUser"), "key", new { value = key, write = true }));
-        // A window without write controls: no gate.
+        // Another window of the run holds the write control: still gated.
         var dialog = new FakeNode("Window", "Find", "dlgFind", w.ProcessId);
         dialog.Child("Edit", "Search for", "txtFind");
         _h.Desktop.Windows.Insert(0, dialog);
         _h.Desktop.Foreground = dialog;
+        _h.Err("act", Act(Harness.T(new { automationId = "txtFind" }), "key", new { value = key }), RpcErrors.PolicyRefusedCode);
+        // No write control anywhere in the run: no gate.
+        _h.Desktop.Windows.Remove(w);
         _h.Ok("act", Act(Harness.T(new { automationId = "txtFind" }), "key", new { value = key }));
+    }
+
+    [Theory]
+    [InlineData("Tab")]
+    [InlineData("Shift+Tab")]
+    [InlineData("Down")]
+    [InlineData("left")]
+    [InlineData("Home")]
+    [InlineData("PageDown")]
+    [InlineData("Escape")]
+    public void Navigation_keys_need_no_write_flag(string key)
+    {
+        _h.BeginWithApp();
+        _h.Ok("act", Act(Id("txtUser"), "key", new { value = key }));
+    }
+
+    [Fact]
+    public void An_open_menu_gates_arrows_and_enter()
+    {
+        var w = _h.BeginWithApp();
+        var menu = new FakeNode("Menu", "Context", "", w.ProcessId);
+        menu.Child("MenuItem", "Post", "mnuPostLine");
+        _h.Desktop.Windows.Insert(0, menu);
+        _h.Err("act", Act(Id("txtUser"), "key", new { value = "Down" }), RpcErrors.PolicyRefusedCode);
+        _h.Err("act", Act(Id("txtUser"), "key", new { value = "Enter" }), RpcErrors.PolicyRefusedCode);
+        _h.Err("act", Act(Id("txtUser"), "key", new { value = "Home" }), RpcErrors.PolicyRefusedCode);
+        _h.Ok("act", Act(Id("txtUser"), "key", new { value = "Escape" }));
+        _h.Ok("act", Act(Id("txtUser"), "key", new { value = "Down", write = true }));
+        // A drop-down menu inside the main window counts too.
+        _h.Desktop.Windows.Remove(menu);
+        _h.Ok("act", Act(Id("txtUser"), "key", new { value = "Down" }));
+        w.Child("Menu", "File", "mnuFileDropDown");
+        _h.Err("act", Act(Id("txtUser"), "key", new { value = "Down" }), RpcErrors.PolicyRefusedCode);
     }
 
     [Theory]

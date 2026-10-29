@@ -37,9 +37,10 @@ administrators only. See [`runner/policy.example.json`](runner/policy.example.js
   a path the runner's own user could modify or replace, which is refused otherwise. Install apps in a protected folder
   (such as `C:\Program Files`) and run the runner as a normal, non-elevated user.
 - `writeControls`: controls (by process and automation id) that act only with `write: true`, including through a child
-  element, the mouse landing on them, or the keyboard focus being on them. While a window holds a write control, the
-  keys that activate controls without targeting them (Enter, Space, Alt+letter) and any key sent to the focus need
-  `write: true` there too.
+  element, the mouse landing on them, or the keyboard focus being on them. While any window of the run holds a write
+  control, every key without `write: true` must be plain navigation (Tab, Shift+Tab, arrows, Home, End, PageUp,
+  PageDown, Escape), and only Tab and Escape while a menu is open: Enter, Space, Alt, F10, Shift+F10 or a mnemonic
+  could reach the write control without targeting it.
 - `gatedKeys`: key chords that need `write: true` (in any spelling: `ctrl+s` is `Ctrl+S`). List the app's save and
   post shortcuts here.
 - `maxFileBytes`: the largest file `file.retrieve` returns (default 20 MiB).

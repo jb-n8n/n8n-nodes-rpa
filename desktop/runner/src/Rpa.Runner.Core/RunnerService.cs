@@ -241,12 +241,16 @@ public sealed class RunnerService
         if (action == ActionKind.Read && Redaction.HidesValue(element))
             throw RpcErrors.PolicyRefused("reading a password or credential field is not allowed");
 
-        // Keys that activate controls without targeting them (Enter on a default button, Space on a focused button, an
-        // Alt mnemonic), and any key sent to whatever has the focus, count as writes while the window has a write control.
-        if (chord is not null && (target is null || IsActivatingChord(chord)) && WindowHasWriteControl(res.Window))
+        // Keys can reach a write control without targeting it (Enter on a default button, Space on a focused button, an
+        // Alt mnemonic, F10 or Alt into the menu bar, Shift+F10 or Apps into a context menu, then arrows and Enter). So
+        // while any window of the run holds a write control, a key without write: true must be plain navigation, and
+        // not even that while a menu is open.
+        if (chord is not null && !write && RunHasWriteControl(run))
         {
-            if (mode == ActMode.Repair) throw RpcErrors.PolicyRefused($"the key {chord} could activate a declared write control; repair mode never sends it");
-            if (!write) throw RpcErrors.PolicyRefused($"the key {chord} could activate a declared write control in this window and needs write: true");
+            if (!IsNavigationKey(chord))
+                throw RpcErrors.PolicyRefused($"the key {chord} could reach a declared write control of this run and needs write: true (only Tab, arrows, Home, End, PageUp, PageDown and Escape do not)");
+            if (chord.Key is not ("Escape" or "Tab") && RunMenuOpen(run))
+                throw RpcErrors.PolicyRefused($"a menu is open, so the key {chord} could reach a declared write control and needs write: true");
         }
 
         EnsureForeground(run, res.Window);
@@ -285,23 +289,48 @@ public sealed class RunnerService
         }
     }
 
-    /// <summary>Enter and Space (any modifiers), and Alt with a letter or digit (a mnemonic).</summary>
-    internal static bool IsActivatingChord(KeyChord chord) =>
-        chord.Key is "Enter" or "Space" || (chord.Alt && chord.Key.Length == 1 && char.IsAsciiLetterOrDigit(chord.Key[0]));
+    /// <summary>The keys that only move: Tab, Shift+Tab, arrows, Home, End, PageUp, PageDown, Escape, no other modifier.</summary>
+    internal static bool IsNavigationKey(KeyChord chord) =>
+        !chord.Ctrl && !chord.Alt && !chord.Win &&
+        (chord.Key == "Tab" || (!chord.Shift && chord.Key is "Up" or "Down" or "Left" or "Right" or "Home" or "End" or "PageUp" or "PageDown" or "Escape"));
 
-    private bool WindowHasWriteControl(IUiNode window)
+    /// <summary>Whether any window of the run holds a declared write control (unreadable windows count as holding one).</summary>
+    private bool RunHasWriteControl(RunState run)
     {
-        var exe = _scope.ExeOf(window.ProcessId);
-        foreach (var w in _policy.WriteControls)
+        if (_policy.WriteControls.Count == 0) return false;
+        foreach (var window in _scope.RunWindows(run, null))
         {
-            if (!string.Equals(w.Exe, exe, StringComparison.OrdinalIgnoreCase)) continue;
+            var exe = _scope.ExeOf(window.ProcessId);
+            foreach (var w in _policy.WriteControls)
+            {
+                if (!string.Equals(w.Exe, exe, StringComparison.OrdinalIgnoreCase)) continue;
+                try
+                {
+                    if (string.Equals(window.AutomationId, w.AutomationId, StringComparison.Ordinal) ||
+                        window.FindDescendants(new Cond(null, w.AutomationId, null, null, null)).Count > 0) return true;
+                }
+                catch (ElementGoneException)
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /// <summary>Whether a menu (a drop-down, a context menu, a Win32 popup menu) of the run is open.</summary>
+    private bool RunMenuOpen(RunState run)
+    {
+        foreach (var window in _scope.RunWindows(run, null))
+        {
             try
             {
-                if (window.FindDescendants(new Cond(null, w.AutomationId, null, null, null)).Count > 0) return true;
+                if (string.Equals(window.ControlType, "Menu", StringComparison.OrdinalIgnoreCase) || window.ClassName == "#32768") return true;
+                if (window.FindDescendants(new Cond("Menu", null, null, null, null)).Any(m => !m.IsOffscreen)) return true;
             }
             catch (ElementGoneException)
             {
-                return true; // cannot tell: treat as present
+                return true;
             }
         }
         return false;

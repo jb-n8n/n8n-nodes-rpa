@@ -20,7 +20,8 @@ public sealed class ServerTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         var policy = Path.Combine(_dir, "policy.json");
-        File.WriteAllText(policy, """{ "allowedApps": [{ "exe": "ErpDemo.exe", "path": "/opt/erp/ErpDemo.exe" }] }""");
+        var app = System.Text.Json.JsonSerializer.Serialize(Path.Combine(Path.GetTempPath(), "erp", "ErpDemo.exe"));
+        File.WriteAllText(policy, $$"""{ "allowedApps": [{ "exe": "ErpDemo.exe", "path": {{app}} }] }""");
         var options = RunnerOptions.Parse(["--port", "0", "--bind", "127.0.0.1", "--data-dir", _dir, "--policy", policy],
             name => name == "RPA_RUNNER_TOKEN" ? GoodToken : null);
         _host = await RunnerHost.StartAsync(options, _desktop, new FakeProcessHost(), new NoKeyProtection(), TimeProvider.System,

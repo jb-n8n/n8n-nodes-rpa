@@ -354,6 +354,7 @@ public sealed class WindowsDesktop : IDesktop, IDisposable
             "Enter" => 0x0D, "Tab" => 0x09, "Escape" => 0x1B, "Space" => 0x20, "Backspace" => 0x08,
             "Delete" => 0x2E, "Insert" => 0x2D, "Home" => 0x24, "End" => 0x23, "PageUp" => 0x21, "PageDown" => 0x22,
             "Left" => 0x25, "Up" => 0x26, "Right" => 0x27, "Down" => 0x28, "Apps" => 0x5D,
+            "Alt" => 0x12, "Ctrl" => 0x11, "Shift" => 0x10, "Win" => 0x5B,
             var f when f.Length > 1 && f[0] == 'F' => 0x70 + int.Parse(f.AsSpan(1), System.Globalization.CultureInfo.InvariantCulture) - 1,
             var c => (int)c[0],
         }));

@@ -16,6 +16,8 @@ public sealed record KeyChord(bool Ctrl, bool Alt, bool Shift, bool Win, string 
         ["pgup"] = "PageUp", ["pagedown"] = "PageDown", ["pgdn"] = "PageDown", ["up"] = "Up", ["down"] = "Down",
         ["left"] = "Left", ["right"] = "Right", ["arrowup"] = "Up", ["arrowdown"] = "Down", ["arrowleft"] = "Left",
         ["arrowright"] = "Right", ["apps"] = "Apps", ["menu"] = "Apps",
+        // A modifier pressed on its own (Alt alone opens the menu bar).
+        ["alt"] = "Alt", ["ctrl"] = "Ctrl", ["control"] = "Ctrl", ["shift"] = "Shift", ["win"] = "Win",
     };
 
     public static KeyChord Parse(string text)
