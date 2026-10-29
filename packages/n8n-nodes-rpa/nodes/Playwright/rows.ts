@@ -1,4 +1,4 @@
-import type { SignedStepsRow } from 'n8n-rpa-engine';
+import type { SignedDesktopRow, SignedStepsRow } from 'n8n-rpa-engine';
 
 export const STEPS_TABLE = 'playwright_steps';
 export const RUN_TABLE = 'playwright_runs';
@@ -33,7 +33,7 @@ export interface StepsRecord {
   name: string; version: number; steps: string; hash: string; signature: string; approvedBy: string; approvedAt: string; status: 'active' | 'rejected';
 }
 
-export function signedRecord(row: SignedStepsRow): StepsRecord {
+export function signedRecord(row: SignedStepsRow | SignedDesktopRow): StepsRecord {
   return {
     name: row.name, version: row.version, steps: JSON.stringify(row.steps), hash: row.hash, signature: row.signature,
     approvedBy: row.approvedBy, approvedAt: row.approvedAt, status: 'active',

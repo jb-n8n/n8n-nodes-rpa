@@ -1,5 +1,5 @@
 import type { IBinaryKeyData, IDataObject, INodeExecutionData, IPairedItemData } from 'n8n-workflow';
-import type { DownloadedFile, ErrorCode, Proposal, RequestRecord, TaskResult } from 'n8n-rpa-engine';
+import type { DesktopProposal, DownloadedFile, ErrorCode, Proposal, RequestRecord, TaskResult } from 'n8n-rpa-engine';
 import type { NodeContext } from './context.js';
 import type { Compiled, LaneSuccess } from './operations/quick/shared.js';
 import type { Engine } from './engine.js';
@@ -125,6 +125,32 @@ export function repairedStepsJson(engine: Engine, proposal: Proposal, attachment
     changeList: changeList(p),
     safetyLine: safetyLine(p),
     attachmentNames,
+  };
+}
+
+/**
+ * The JSON of a Repaired steps item for desktop steps from an import (engine desktopProposal): the same fields as a
+ * browser item, so the approval template and Sign Steps take it unchanged. Nothing was replayed: the evidence is empty,
+ * the evidence line says so, and there are no screenshots. The safety flags are the engine's full list
+ * (desktopSafetyFlags), which Sign Steps recomputes; the digest covers them.
+ */
+export function desktopRepairedStepsJson(engine: Engine, proposal: DesktopProposal): IDataObject {
+  const safetyFlags = engine.desktopSafetyFlags(engine.parseDesktopScript(proposal.steps));
+  const p: DesktopProposal = { ...proposal, safetyFlags };
+  return {
+    name: p.name,
+    baseVersion: p.baseVersion,
+    version: p.version,
+    steps: plain(p.steps) as unknown as IDataObject,
+    hash: p.hash,
+    digest: engine.proposalDigest(p),
+    evidence: { count: p.evidence.count, total: p.evidence.total, diff: { missing: [...p.evidence.diff.missing], extra: [...p.evidence.diff.extra] } },
+    changes: p.changes.map((c) => ({ was: c.was, now: c.now })),
+    safetyFlags: [...safetyFlags],
+    evidenceLine: evidenceLine(p, engine),
+    changeList: changeList(p),
+    safetyLine: safetyLine(p),
+    attachmentNames: '',
   };
 }
 

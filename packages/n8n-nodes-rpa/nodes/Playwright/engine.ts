@@ -6,6 +6,7 @@ export type Engine = Pick<
   | 'validateScript' | 'UNVERIFIED_COUNT_FLAG' | 'EXTRACT_FIELDS_DROPPED' | 'changeListMatches' | 'describeCheck' | 'MIME'
   | 'DOWNLOAD_NEEDS_BROWSER_SERVER' | 'importSource' | 'adoptDraft' | 'scrubTrace'
   | 'runDesktopTask' | 'probeRunner' | 'isDesktopDocument' | 'runnerConnected'
+  | 'desktopProposal' | 'desktopSafetyFlags' | 'signDesktopSteps' | 'parseWriteSteps' | 'parseDesktopScript'
 >;
 
 let cached: Promise<Engine> | undefined;

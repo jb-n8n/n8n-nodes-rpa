@@ -371,12 +371,15 @@ describe('3-approve-steps.json', () => {
     for (const field of ['evidenceLine', 'changeList', 'safetyLine', 'hash']) expect(String(email.html)).toContain(`$json.${field}`);
     expect(String(email.html)).toContain('color:#b00020');
   });
-  it('trigger → email → Settings → Mark pending → Ask for approval → Timed out? (yes → Record expiry, no → Repaired steps to sign → Sign steps)', () => {
+  it('trigger → email → Settings → Mark pending → Desktop steps? → Ask for approval (desktop: form → Desktop answer) → Timed out? (yes → Record expiry, no → Repaired steps to sign → Sign steps)', () => {
     expect(targets(t, 'Repaired steps received')).toEqual([['Email repaired steps']]);
     expect(targets(t, 'Email repaired steps')).toEqual([['Settings']]);
     expect(targets(t, 'Settings')).toEqual([['Mark pending']]);
-    expect(targets(t, 'Mark pending')).toEqual([['Ask for approval']]);
+    expect(targets(t, 'Mark pending')).toEqual([['Desktop steps?']]);
+    expect(targets(t, 'Desktop steps?')).toEqual([['Ask for approval (desktop steps)'], ['Ask for approval']]);
     expect(targets(t, 'Ask for approval')).toEqual([['Timed out?']]);
+    expect(targets(t, 'Ask for approval (desktop steps)')).toEqual([['Desktop answer']]);
+    expect(targets(t, 'Desktop answer')).toEqual([['Timed out?']]);
     expect(targets(t, 'Timed out?')).toEqual([['Record expiry'], ['Repaired steps to sign']]);
     expect(targets(t, 'Repaired steps to sign')).toEqual([['Sign steps']]);
     expect(byName(t, 'Settings').parameters).toMatchObject({
@@ -397,11 +400,12 @@ describe('3-approve-steps.json', () => {
       expect(conditions(name).map((c) => [c.keyName, c.condition])).toEqual([['hash', 'eq'], ['name', 'eq']]);
       expect(conditions(name)[1].keyValue).toBe(`={{ ${SETTINGS_NAME} }}`);
     }
-    for (const name of ['Mark pending', 'Record expiry', 'Record rejection']) expect(conditions(name)[0].keyValue).toBe("={{ $('Repaired steps received').item.json.hash }}");
-    expect(conditions('Save signed steps')[0].keyValue).toBe('={{ $json.hash }}');
+    // Save signed steps updates the pending row of the reviewed hash and writes the signed hash: they differ only for
+    // desktop steps with Write steps (the declared write flags are part of what is signed).
+    for (const name of ['Mark pending', 'Record expiry', 'Save signed steps', 'Record rejection']) expect(conditions(name)[0].keyValue).toBe("={{ $('Repaired steps received').item.json.hash }}");
     expect(table(byName(t, 'Record expiry')).columns?.value).toEqual({ status: 'expired' });
     expect(table(byName(t, 'Save signed steps')).columns?.value).toEqual({
-      status: 'active', steps: '={{ $json.steps }}', signature: '={{ $json.signature }}', approvedBy: '={{ $json.approvedBy }}', approvedAt: '={{ $json.approvedAt }}',
+      status: 'active', steps: '={{ $json.steps }}', hash: '={{ $json.hash }}', signature: '={{ $json.signature }}', approvedBy: '={{ $json.approvedBy }}', approvedAt: '={{ $json.approvedAt }}',
     });
     expect(table(byName(t, 'Record rejection')).columns?.value).toEqual({ status: 'rejected', approvedBy: APPROVER, approvedAt: '={{ $now.toISO() }}' });
   });
@@ -435,7 +439,8 @@ describe('3-approve-steps.json', () => {
     const sign = byName(t, 'Sign steps');
     expect(sign).toMatchObject({ type: NODE_TYPE, onError: 'continueErrorOutput' });
     expect(sign.parameters).toEqual({
-      operation: 'signSteps', approved: "={{ $('Ask for approval').item.json.data.approved }}", approverId: APPROVER, approverAllowlist: APPROVER,
+      operation: 'signSteps', approved: "={{ $('Timed out?').item.json.data.approved }}", approverId: APPROVER, approverAllowlist: APPROVER,
+      writeSteps: "={{ $('Timed out?').item.json.data.writeSteps ?? '' }}",
     });
     expect(nodeOutputs('signSteps', undefined)).toHaveLength(1);
     expect(loadInN8n(sign).outputs).toEqual(['Success', 'Error']);
@@ -467,12 +472,38 @@ describe('3-approve-steps.json', () => {
     expect(restored).toEqual(received);
     const sign = byName(t, 'Sign steps').parameters;
     const run = async (approved: boolean) => {
-      const params = { ...sign, approved };
+      // Browser steps: Ask for approval's answer has no writeSteps, so the expression gives ''.
+      const params = { ...sign, approved, writeSteps: '' };
       const ctx = harness({ params, rawParameters: sign, items: [{ json: restored }], credentials: { playwrightScriptSigningApi: { secretKey: 'k'.repeat(32) } } });
       return (await executeSignSteps(ctx, engine, () => new Date('2026-10-07T09:30:00.000Z')))[0][0].json;
     };
     expect(await run(false)).toMatchObject({ status: 'rejected', name: 'example-feed', version: 2, hash: received.hash, approvedBy: APPROVER });
     expect(await run(true)).toMatchObject({ status: 'active', name: 'example-feed', version: 2, hash: received.hash, approvedBy: APPROVER });
+  });
+  it('desktop steps get a form (Decision, Write steps); Desktop answer gives Sign steps approved and writeSteps, or no data on a timeout', () => {
+    const branch = byName(t, 'Desktop steps?').parameters as { conditions: { conditions: { leftValue: string }[] } };
+    const isDesktop = (steps: unknown) => evaluate(branch.conditions.conditions[0].leftValue, { $: () => ({ item: { json: { steps } } }) });
+    expect(isDesktop({ surface: 'desktop', app: { exe: 'ErpDemo.exe' }, steps: [] })).toBe(true);
+    expect(isDesktop({ name: 'feed', startUrl: 'https://example.com/', steps: [] })).toBe(false);
+    expect(isDesktop(undefined)).toBe(false);
+    const ask = byName(t, 'Ask for approval (desktop steps)').parameters;
+    expect(ask).toMatchObject({
+      operation: 'sendAndWait', responseType: 'customForm', toEmail: APPROVER,
+      formFields: { values: [{ fieldLabel: 'Decision', fieldType: 'dropdown', fieldOptions: { values: [{ option: 'Approve' }, { option: 'Reject' }] }, requiredField: true }, { fieldLabel: 'Write steps' }] },
+      options: { limitWaitTime: byName(t, 'Ask for approval').parameters.options && (byName(t, 'Ask for approval').parameters.options as { limitWaitTime: unknown }).limitWaitTime },
+    });
+    expect(String(ask.message)).toContain('The import never marks a step as a write: in Write steps, list the numbers of the steps that save, post or submit');
+    const answer = String(byName(t, 'Desktop answer').parameters.jsonOutput);
+    expect(evaluate(answer, { $json: { data: { Decision: 'Approve', 'Write steps': '16', respondedAt: 'x' } } })).toEqual({ data: { approved: true, writeSteps: '16' } });
+    expect(evaluate(answer, { $json: { data: { Decision: 'Reject', respondedAt: 'x' } } })).toEqual({ data: { approved: false, writeSteps: '' } });
+    expect(evaluate(answer, { $json: { name: 'feed', hash: 'h' } })).toEqual({});
+    const timedOut = (byName(t, 'Timed out?').parameters as { conditions: { conditions: { leftValue: string }[] } }).conditions.conditions[0].leftValue;
+    expect(evaluate(timedOut, { $json: {} })).toBe(true);
+    const sign = byName(t, 'Sign steps').parameters;
+    const fromTimedOut = (json: unknown) => ({ $: (name: string) => { expect(name).toBe('Timed out?'); return { item: { json } }; } });
+    expect(evaluate(String(sign.writeSteps), fromTimedOut({ data: { approved: true, writeSteps: '16' } }))).toBe('16');
+    expect(evaluate(String(sign.writeSteps), fromTimedOut({ data: { approved: true, respondedAt: 'x' } }))).toBe('');
+    expect(evaluate(String(sign.approved), fromTimedOut({ data: { approved: true, writeSteps: '' } }))).toBe(true);
   });
   it('uses one approver address in every approver field', () => {
     const emails = new Set<string>();
