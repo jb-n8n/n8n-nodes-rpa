@@ -1,6 +1,6 @@
 import type { INodeCredentialTestResult } from 'n8n-workflow';
 import type { PortalPolicy } from 'n8n-rpa-engine';
-import { browserConfig, signingKey, siteLoginConfig, type CredentialData } from './config.js';
+import { browserConfig, desktopRunnerConfig, signingKey, siteLoginConfig, type CredentialData } from './config.js';
 import type { Engine } from './engine.js';
 import { pingRedis } from './redis-store.js';
 
@@ -78,6 +78,19 @@ export function siteLoginTestResult(data: CredentialData): INodeCredentialTestRe
       status: 'OK',
       message: `Valid: ${policy.navHosts.length} site(s) the browser may open, ${policy.login.length} password page(s), ${policy.allowedSubmits.length} form(s) it may submit`,
     };
+  } catch (error) {
+    return { status: 'Error', message: reason(error) };
+  }
+}
+
+/**
+ * Connects to the RPA Desktop Runner (the certificate is checked against the fingerprint before the token is sent),
+ * calls hello and closes. Errors are the engine's messages: unreachable, wrong fingerprint, refused token.
+ */
+export async function desktopRunnerTestResult(data: CredentialData, engine: Pick<Engine, 'probeRunner' | 'runnerConnected'>): Promise<INodeCredentialTestResult> {
+  try {
+    const hello = await engine.probeRunner(desktopRunnerConfig(data));
+    return { status: 'OK', message: engine.runnerConnected(hello.runner?.session ?? {}) };
   } catch (error) {
     return { status: 'Error', message: reason(error) };
   }

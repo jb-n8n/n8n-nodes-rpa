@@ -10,8 +10,9 @@ import { siteLoginKey } from '../guard.js';
 import { openGuardStore, type GuardStore, type GuardStoreDeps } from '../guard-store.js';
 import { lazyChatModel } from '../model.js';
 import { configErrorItem, dataItem, failureItem, repairedStepsItem } from '../output.js';
+import { BROWSER_STEPS_NEED_BROWSER_CREDENTIAL, runDesktopStepsItem } from './runDesktopSteps.js';
 import {
-  asBoolean, asNumber, asString, checkMaxItems, clamp, credentialId, errorMessage, field, isObject, literalBoolean, literalString, rawParameter, readCommonOptions, rowCheckPatterns,
+  asBoolean, asNumber, asString, browserCredentials, checkMaxItems, clamp, credentialId, errorMessage, field, isObject, literalBoolean, literalString, rawParameter, readCommonOptions, rowCheckPatterns,
   refuseCdpDownload, rowChecks, hasDownloadStep, SITE_LOGIN_NO_ID, splitList, type CommonOptions,
 } from './common.js';
 
@@ -176,7 +177,7 @@ function aiRepairOutputs(ctx: NodeContext): boolean {
   return nodeOutputs(rawParameter(ctx, 'operation'), rawParameter(ctx, 'aiRepair')).length === 2;
 }
 
-type ItemOutcome =
+export type ItemOutcome =
   | { kind: 'ok'; data?: INodeExecutionData; repaired?: INodeExecutionData }
   | { kind: 'error'; item: INodeExecutionData; error: NodeOperationError };
 
@@ -254,7 +255,13 @@ async function runStepsItem(ctx: NodeContext, engine: Engine, i: number, deps: R
     // An empty id would key every id-less Site Login together ("site-login:") and bind signatures to nothing.
     if (siteLoginId === '') throw new ConfigError(SITE_LOGIN_NO_ID);
     p = readRunStepsParams(ctx, i);
-    endpoint = browserConfig(await ctx.getCredentials(CREDENTIALS.browser, i));
+  } catch (error) {
+    return configError(errorMessage(error), safeOptionName(ctx, i));
+  }
+  // Routed by the steps' own (signed) surface: desktop steps run on the desktop runner, never in a browser.
+  if (p.steps.kind === 'steps' && engine.isDesktopDocument(p.steps.raw)) return await runDesktopStepsItem(ctx, engine, i, p);
+  try {
+    endpoint = browserConfig(await browserCredentials(ctx, i, BROWSER_STEPS_NEED_BROWSER_CREDENTIAL));
     // A CDP connection cannot read downloaded files: stored steps with a download, or a first run asked for an Expected File.
     refuseCdpDownload(engine, endpoint, (p.steps.kind === 'steps' && hasDownloadStep(p.steps.raw)) || (p.steps.kind === 'empty' && p.aiRepair && expectedDownload(engine, p.expectedFile) !== undefined));
     if (siteLoginId !== undefined) siteLogin = siteLoginConfig(await ctx.getCredentials(CREDENTIALS.siteLogin, i));

@@ -52,6 +52,8 @@ export async function dataItem(
     files.push({ fileName: file.fileName, mimeType: file.mimeType, bytes: file.data.length, binaryProperty: file.binaryName });
   }
   const name = f.name ?? extra.name;
+  // Desktop read steps name their text (`as`); browser outputs never carry a name, so their items are unchanged.
+  const values: IDataObject = Object.fromEntries(r.outputs.flatMap((o) => (o.as !== undefined ? [[o.as, o.text ?? '']] : [])));
   if (r.trace) binary.trace = await ctx.helpers.prepareBinaryData(r.trace, `${slug(name ?? '')}-trace.zip`, 'application/zip');
   const blocked = f.blockedRequests ?? [];
   const json: IDataObject = {
@@ -70,6 +72,7 @@ export async function dataItem(
     log: plain(r.log) as unknown as IDataObject[],
     // Rows only when row checks ran: an extract step on the script lane, always for agent-lane rows (the proof ran).
     ...(r.lane === 'agent' || f.verified ? { rows: r.rows.map((row) => ({ ...row })) } : {}),
+    ...(Object.keys(values).length ? { values } : {}),
     ...(files.length ? { files } : {}),
     ...(blocked.length ? { blockedRequests: blocked.map((b) => ({ ...b })) } : {}),
     ...(f.submitted ? { submitted: true } : {}),

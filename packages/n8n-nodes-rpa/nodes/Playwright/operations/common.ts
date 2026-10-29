@@ -1,6 +1,6 @@
 import { NodeOperationError, type INodeExecutionData } from 'n8n-workflow';
 import type { OutputSpec, SaveTrace } from 'n8n-rpa-engine';
-import { ConfigError } from '../config.js';
+import { ConfigError, CREDENTIALS } from '../config.js';
 import type { NodeContext } from '../context.js';
 import type { Engine } from '../engine.js';
 import { configErrorItem } from '../output.js';
@@ -19,6 +19,15 @@ export const clamp = (n: number, lo: number, hi: number): number => Math.min(hi,
 
 /** An attached Site Login with an empty id: a configuration error in Run Steps, a refusal in Sign Steps. */
 export const SITE_LOGIN_NO_ID = 'The RPA Site Login credential has no id. Save the credential, then select it again on this node.';
+
+/**
+ * The RPA Browser credential's data for Run Steps. The credential is not marked required (desktop steps need the RPA
+ * Desktop Runner instead), so browser steps refuse here with `missing`, naming it, when it is not attached.
+ */
+export async function browserCredentials(ctx: NodeContext, i: number, missing: string): Promise<Record<string, unknown>> {
+  if (credentialId(ctx, CREDENTIALS.browser) === undefined) throw new ConfigError(missing);
+  return await ctx.getCredentials(CREDENTIALS.browser, i);
+}
 
 /** The attached credential's id ('' when n8n has none), or undefined when the credential is not attached to the node. */
 export function credentialId(ctx: NodeContext, type: string): string | undefined {

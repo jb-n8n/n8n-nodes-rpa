@@ -114,7 +114,9 @@ describe('config errors never echo a query string or a fragment', () => {
 
 describe('v2 credential names', () => {
   it('names the v2 credential types and the Redis credential', () => {
-    expect(CREDENTIALS).toEqual({ browser: 'playwrightBrowserApi', siteLogin: 'playwrightSiteLoginApi', signing: 'playwrightScriptSigningApi', redis: 'playwrightRedisApi' });
+    expect(CREDENTIALS).toEqual({
+      browser: 'playwrightBrowserApi', siteLogin: 'playwrightSiteLoginApi', signing: 'playwrightScriptSigningApi', redis: 'playwrightRedisApi', desktopRunner: 'rpaDesktopRunnerApi',
+    });
     expect(DEFAULT_ENDPOINT_URL).toBe('ws://browser:3000/');
   });
   it('host errors use a neutral example host', () => {

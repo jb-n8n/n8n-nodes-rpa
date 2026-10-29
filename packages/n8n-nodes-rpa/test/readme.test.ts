@@ -262,7 +262,7 @@ describe('README', () => {
   it('explains every error code and prints every golden message', () => {
     const s = section('## Error codes');
     for (const code of Object.keys(GUIDANCE)) expect(s, code).toContain(`| \`${code}\` |`);
-    expect(Object.keys(GUIDANCE)).toHaveLength(12);
+    expect(Object.keys(GUIDANCE)).toHaveLength(13);
     for (const m of GOLDEN_MESSAGES) expect(s, m).toContain(m);
     for (const text of ['configError: true', 'details', 'output 2', '`llmTokens`']) expect(s, text).toContain(text);
   });

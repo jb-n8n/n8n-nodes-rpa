@@ -9,6 +9,7 @@ import { PlaywrightBrowserApi } from '../credentials/PlaywrightBrowserApi.creden
 import { PlaywrightRedisApi } from '../credentials/PlaywrightRedisApi.credentials.js';
 import { PlaywrightScriptSigningApi } from '../credentials/PlaywrightScriptSigningApi.credentials.js';
 import { PlaywrightSiteLoginApi } from '../credentials/PlaywrightSiteLoginApi.credentials.js';
+import { RpaDesktopRunnerApi } from '../credentials/RpaDesktopRunnerApi.credentials.js';
 import { CREDENTIALS } from '../nodes/Playwright/config.js';
 import { browserTestResult, CREDENTIAL_TEST_WAIT_MS, scriptSigningResult, siteLoginTestResult } from '../nodes/Playwright/credential-tests.js';
 
@@ -21,7 +22,7 @@ vi.hoisted(() => {
 
 const SECRET_FIELDS = ['password', 'totpSecret', 'token', 'secretKey'];
 
-const V2 = [new PlaywrightBrowserApi(), new PlaywrightSiteLoginApi(), new PlaywrightScriptSigningApi(), new PlaywrightRedisApi()];
+const V2 = [new PlaywrightBrowserApi(), new PlaywrightSiteLoginApi(), new PlaywrightScriptSigningApi(), new PlaywrightRedisApi(), new RpaDesktopRunnerApi()];
 const USE_CASE_WORDS = /\b(portal|recall|notice|dealer)s?\b/i;
 type OptionLike = { name?: string; value?: unknown; description?: string };
 /** Every text a user reads in the credential dialog (never `name` or `type`, which are identifiers). */
@@ -54,12 +55,12 @@ describe('RPA Redis credential', () => {
 
 describe('v2 credential types', () => {
   it('have the CREDENTIALS names, and package.json registers each compiled file', () => {
-    expect(V2.map((c) => c.name)).toEqual([CREDENTIALS.browser, CREDENTIALS.siteLogin, CREDENTIALS.signing, CREDENTIALS.redis]);
+    expect(V2.map((c) => c.name)).toEqual([CREDENTIALS.browser, CREDENTIALS.siteLogin, CREDENTIALS.signing, CREDENTIALS.redis, CREDENTIALS.desktopRunner]);
     const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { n8n: { credentials: string[] } };
     for (const c of V2) expect(pkg.n8n.credentials).toContain(`dist/credentials/${c.constructor.name}.credentials.js`);
   });
   it('every credential display name starts with "RPA " (n8n lists credential types globally)', () => {
-    expect(V2.map((c) => c.displayName)).toEqual(['RPA Browser', 'RPA Site Login', 'RPA Step Signing', 'RPA Redis']);
+    expect(V2.map((c) => c.displayName)).toEqual(['RPA Browser', 'RPA Site Login', 'RPA Step Signing', 'RPA Redis', 'RPA Desktop Runner']);
     for (const c of V2) expect(c.displayName.startsWith('RPA ')).toBe(true);
   });
   it('names Playwright only where an operator needs it: the Browser Server protocol and the local install command', () => {
@@ -137,6 +138,7 @@ describe('v2 credential types', () => {
       'dist/credentials/PlaywrightSiteLoginApi.credentials.js',
       'dist/credentials/PlaywrightScriptSigningApi.credentials.js',
       'dist/credentials/PlaywrightRedisApi.credentials.js',
+      'dist/credentials/RpaDesktopRunnerApi.credentials.js',
     ]);
     expect(() => new URL(String(pkg.homepage))).not.toThrow();
   });

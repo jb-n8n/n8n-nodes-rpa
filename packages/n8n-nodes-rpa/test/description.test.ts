@@ -280,15 +280,16 @@ describe('dynamic inputs and outputs', () => {
 
 describe('credentials', () => {
   const shown = (operation: string) => (d.credentials ?? []).filter((c) => NodeHelpers.displayParameter({ operation }, c, null, d)).map((c) => c.name);
-  it('Browser on every operation except Sign Steps; Site Login on Run, Sign and Import Steps; Step Signing only on Run and Sign Steps; Redis on Run and Import Steps', () => {
-    expect(shown('runSteps')).toEqual(['playwrightBrowserApi', 'playwrightSiteLoginApi', 'playwrightScriptSigningApi', 'playwrightRedisApi']);
+  it('Browser on every operation except Sign Steps; Site Login on Run, Sign and Import Steps; Step Signing only on Run and Sign Steps; Redis on Run and Import Steps; Desktop Runner only on Run Steps', () => {
+    expect(shown('runSteps')).toEqual(['playwrightBrowserApi', 'playwrightSiteLoginApi', 'playwrightScriptSigningApi', 'playwrightRedisApi', 'rpaDesktopRunnerApi']);
     expect(shown('signSteps')).toEqual(['playwrightSiteLoginApi', 'playwrightScriptSigningApi']);
     expect(shown('importSteps')).toEqual(['playwrightBrowserApi', 'playwrightSiteLoginApi', 'playwrightRedisApi']); // no signing key: Sign Steps signs
     expect(shown('screenshot')).toEqual(['playwrightBrowserApi']); // quick operations take no Site Login
   });
-  it('Step Signing is not marked required (runtime check per operation); Browser is', () => {
+  it('no credential is marked required (runtime checks per operation: Run Steps needs RPA Browser or RPA Desktop Runner by the steps\' surface)', () => {
     expect((d.credentials ?? []).map((c) => [c.name, c.required])).toEqual([
-      ['playwrightBrowserApi', true], ['playwrightSiteLoginApi', false], ['playwrightScriptSigningApi', false], ['playwrightRedisApi', false],
+      ['playwrightBrowserApi', false], ['playwrightSiteLoginApi', false], ['playwrightScriptSigningApi', false], ['playwrightRedisApi', false],
+      ['rpaDesktopRunnerApi', false],
     ]);
   });
 });
@@ -313,7 +314,8 @@ describe('wording and guidance', () => {
       script_untrusted: 'The steps are not signed by the Step Signing key, or the signature does not match their name, version, start site, Site Login, approver or the expected version. Nothing ran.',
       policy_violation: 'The steps or the page tried something not allowed: an unlisted or private site, a write, a password field, or a secret outside sign-in. The run stopped.',
       locked_out: 'An earlier login failed and the breaker is open. Check the account, then change Options → Login Breaker Reset Key.',
-      busy: 'Another run using this Site Login is in progress. This run was skipped.',
+      busy: 'Another run using this Site Login or desktop runner is in progress. This run was skipped.',
+      runner_unavailable: 'The desktop runner could not be reached, refused the token or the certificate, or its Windows session is locked or signed out. Check the RPA Desktop Runner credential and the runner machine.',
     });
   });
 });

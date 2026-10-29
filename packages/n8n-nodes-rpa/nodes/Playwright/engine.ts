@@ -5,6 +5,7 @@ export type Engine = Pick<
   'runTask' | 'signSteps' | 'proposalDigest' | 'openSession' | 'createMasker' | 'scriptHash' | 'PLAYWRIGHT_VERSION' | 'parseScript' | 'repairPrecondition'
   | 'validateScript' | 'UNVERIFIED_COUNT_FLAG' | 'EXTRACT_FIELDS_DROPPED' | 'changeListMatches' | 'describeCheck' | 'MIME'
   | 'DOWNLOAD_NEEDS_BROWSER_SERVER' | 'importSource' | 'adoptDraft' | 'scrubTrace'
+  | 'runDesktopTask' | 'probeRunner' | 'isDesktopDocument' | 'runnerConnected'
 >;
 
 let cached: Promise<Engine> | undefined;

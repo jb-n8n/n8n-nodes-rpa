@@ -523,6 +523,16 @@ Columns and rows are read from CSV, plain text (including tab-delimited) and XLS
 - There is no date-range check on a downloaded file. It needs per-report knowledge (which column, which format, which variables). The name pattern, the required columns and the minimum rows are the checks on offer.
 - AI repair of a download proves one checked file. It does not read the file's content beyond the checks, and it cannot heal a download that is a form POST (`download.via`).
 
+### Desktop runs
+
+Run Steps can also drive a Windows desktop app through a desktop runner. Such steps say `"surface": "desktop"` and name the app instead of a start URL (`"app": { "exe": "ErpDemo.exe" }`). Run Steps picks the lane from that field, which the signature covers: desktop steps need an **RPA Desktop Runner** credential, browser steps an **RPA Browser** credential, and a mismatch is a configuration error that names the credential needed. Desktop steps need a node release after 0.1.0; 0.1.0 refuses them as a shape error (`script has unknown key "surface"`) before anything starts.
+
+- **The credential**: the runner's `wss://` URL (port 8765 when none is given; plain `ws://` is refused), its token, and the SHA-256 fingerprint of its certificate, which the runner prints when it starts. The node checks the certificate against the fingerprint before it sends the token or anything else. **Test connection** reports `Connected to the desktop runner (session interactive)`.
+- **The steps**: locators are UI Automation paths, `{ "uia": { "window": { "title": "Save As" }, "path": [{ "controlType": "Button", "automationId": "1" }] } }`, with `fallbacks` as for browser locators. The verbs are `click`, `fill`, `select` (`option`), `check`, `waitFor`, `read` (`{ target, as }`, returned in Data under `values`), `key` (`{ "key": "Enter" }`, optionally with a `target`) and `expectFile` (`{ pattern, check? }`: the file the app saved into the run's export directory, returned as the step's file like a download). `{{$exportDir}}` in a `fill` value types the run's export directory, for a Save As dialog; it is accepted nowhere else, and no other `{{$...}}` name is accepted anywhere. Browser verbs, browser locators, `expect.url` and `expect.heading` are refused in desktop steps, and `uia` in browser steps.
+- **Writes**: a step that changes data in the app is declared with `"write": true` (on `click`, `fill`, `select`, `check` or `key`). The runner refuses its declared write controls and gated keys without it, and unsigned steps with a write step need **Allow Unsigned Writes**.
+- **Not yet**: AI repair, an RPA Site Login and overlay handlers (`interrupts`) for desktop steps.
+- **The desktop policy is weaker than the browser's.** A browser run is held to a network allow-list checked on every request and redirect. A desktop app talks to its own back ends, which the runner cannot filter. What holds is the runner's local policy on the Windows machine (`%ProgramData%\RPA Runner\policy.json`, writable by administrators only: the allowed apps, the declared write controls, the gated keys and the export directory), which n8n cannot switch off. A compromised n8n, or a stolen RPA Desktop Runner credential, can still do whatever a declared write step could do in the allowed apps: protect the credential as you would the n8n instance.
+
 ## The self-healing data feed
 
 This is the use case the engine was built for: read data from a site that has no API (login, second factor, filters, reports) on a schedule, and keep working when the site changes. When the signed steps stop matching, a connected chat model repairs the run on the same browser session, a fresh browser proves the repaired steps with no model, and a person approves them. The next run uses the new steps with zero model calls.
@@ -629,7 +639,8 @@ Configuration errors (a missing credential, a bad option, a literal-only switch 
 | `script_untrusted` | The steps are not signed by the Step Signing key, or the signature does not match their name, version, start site, Site Login, approver or the expected version. Nothing ran. | Security alert: check who edited the `playwright_steps` table. |
 | `policy_violation` | The steps or the page tried something not allowed: an unlisted or private site, a write, a password field, or a secret outside sign-in. The run stopped. | See the message; add the site under **Also Allow These Sites** only if expected. |
 | `locked_out` | An earlier login failed and the breaker is open. | Check the account, then change **Options → Login Breaker Reset Key**. |
-| `busy` | Another run using this Site Login is in progress. This run was skipped. | Nothing; the next run goes ahead. |
+| `busy` | Another run using this Site Login or desktop runner is in progress. This run was skipped. | Nothing; the next run goes ahead. |
+| `runner_unavailable` | The desktop runner could not be reached, refused the token or the certificate, or its Windows session is locked or signed out. | Check the RPA Desktop Runner credential and the runner machine ([Desktop runs](#desktop-runs)). |
 
 The messages you will see most (tests assert them word for word; no message contains a URL query string, a token or a user name):
 
