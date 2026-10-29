@@ -9,6 +9,7 @@ import { configErrorItem } from '../output.js';
 import { rejectedRecord, signedRecord, type StepsRecord } from '../rows.js';
 import { asBoolean, asString, checkMaxItems, credentialId, errorMessage, isObject, literalRaw, SITE_LOGIN_NO_ID, splitList } from './common.js';
 
+export const SIGN_NO_DESKTOP = 'Sign Steps cannot sign desktop steps (surface "desktop") yet: they have no Repaired steps review.';
 export const NOT_REPAIRED_STEPS = 'The input item is not a Repaired steps item from Run Steps (it has no digest). Only Repaired steps items can be signed.';
 export const MISSING_NAME_OR_VERSION = 'The Repaired steps item has no name or version.';
 export const APPROVER_NOT_ALLOWED = 'Approved By is not on the Approver Allowlist';
@@ -291,6 +292,8 @@ async function signOne(ctx: NodeContext, engine: Engine, i: number, json: IDataO
   if (fileEvidenceProblem(p)) return refuse([FILE_EVIDENCE_MISMATCH]);
   if (shownTextChanged(engine, proposal, p.shownText)) return refuse([SHOWN_TEXT_CHANGED]);
   // Parsed once for the checks below; engine.signSteps parses the steps it signs itself.
+  // Desktop steps have no repair yet, so no Repaired steps item of theirs reaches Sign Steps through the review flow.
+  if (engine.isDesktopDocument(p.steps)) return refuse([SIGN_NO_DESKTOP]);
   let script: Script;
   try {
     script = engine.parseScript(p.steps);

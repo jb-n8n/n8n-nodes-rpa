@@ -262,7 +262,7 @@ describe('README', () => {
   it('explains every error code and prints every golden message', () => {
     const s = section('## Error codes');
     for (const code of Object.keys(GUIDANCE)) expect(s, code).toContain(`| \`${code}\` |`);
-    expect(Object.keys(GUIDANCE)).toHaveLength(12);
+    expect(Object.keys(GUIDANCE)).toHaveLength(13);
     for (const m of GOLDEN_MESSAGES) expect(s, m).toContain(m);
     for (const text of ['configError: true', 'details', 'output 2', '`llmTokens`']) expect(s, text).toContain(text);
   });
@@ -355,7 +355,7 @@ describe('README', () => {
     const s = section('## Run Steps reference');
     const at = s.slice(s.indexOf('**Step schema.**'));
     for (const text of ['`packages/engine/schema/steps.schema.json`', 'draft-07', '`json.schemas`', '`$schema` key', 'refuses keys it does not know',
-      'five rules', 'compiles', '`detect.require`', 'absolute `goto`', 'parses as a URL', 'stricter than Run Steps', '`http:host`', 'UTF-16']) expect(at, text).toContain(text);
+      'six rules', 'compiles', '`detect.require`', 'absolute `goto`', 'parses as a URL', 'stricter than Run Steps', '`http:host`', 'UTF-16', '`{{$...}}`']) expect(at, text).toContain(text);
   });
 
   it('documents signIn.next in the Run Steps reference and both login pages in the safety model', () => {

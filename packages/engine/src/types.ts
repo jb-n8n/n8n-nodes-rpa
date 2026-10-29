@@ -106,6 +106,8 @@ export interface Interrupt {
   click: Locator;
 }
 export interface Script {
+  /** Absent or "browser": a desktop step set is a DesktopScript, which parseScript refuses. */
+  surface?: 'browser';
   name?: string;
   version?: number;
   /** Always set after parseScript: the document's startUrl, else its first absolute goto, else the default. */
@@ -198,6 +200,8 @@ export interface DownloadedFile {
 export interface StepOutput {
   index: number;
   verb: 'screenshot' | 'pdf' | 'read';
+  /** A desktop read step's `as`: the name its text goes by in the run outputs. Absent for browser steps. */
+  as?: string;
   binary?: { name: string; fileName: string; mimeType: string; data: Buffer };
   text?: string;
   html?: string;
@@ -267,7 +271,9 @@ export interface Violation {
 export type ErrorCode =
   | 'login_failed' | 'account_locked' | 'auth_blocked' | 'site_down' | 'browser_unavailable'
   | 'drift_detected' | 'not_found' | 'incomplete' | 'script_untrusted' | 'policy_violation'
-  | 'locked_out' | 'busy';
+  | 'locked_out' | 'busy'
+  /** Desktop runs: the desktop runner could not be reached, refused the token or certificate, or its desktop is locked or signed out. */
+  | 'runner_unavailable';
 
 export interface BrowserEndpoint {
   mode: 'local' | 'playwright' | 'cdp';
@@ -283,4 +289,54 @@ export interface BrowserEndpoint {
    * draining, in milliseconds. Absent: SESSION_WAIT_MS (60 s). 0: fail at the first refusal. The run budget caps it.
    */
   sessionWaitMs?: number;
+}
+
+// Desktop step sets (`surface: "desktop"`): they drive a Windows app through the desktop runner (desktop/), never a browser.
+
+/** Which window a target is in. Every given field must match; `exe` is the file name, case-insensitive. */
+export interface WindowSel { exe?: string; title?: string; titlePattern?: string; automationId?: string; className?: string }
+/** One UI Automation condition. `index` picks among siblings that match the rest (0-based). */
+export interface UiaCond { controlType?: string; automationId?: string; name?: string; className?: string; index?: number }
+/** A UI Automation target: `path` is matched as descendants in order, each condition below the previous match. */
+export interface UiaTarget { window?: WindowSel; path: UiaCond[] }
+/** A desktop locator: a primary UI Automation target and up to five fallbacks, tried in order like a browser locator's. */
+export interface DesktopLocator { uia: UiaTarget; fallbacks?: { uia: UiaTarget }[] }
+/** The app a desktop step set launches. */
+export interface DesktopApp { exe: string; args?: string[] }
+
+export interface DesktopStepBase {
+  intent: string;
+  optional?: boolean;
+  when?: { visible: DesktopLocator };
+  expect?: { visible?: DesktopLocator };
+  checkpoint?: boolean;
+  timeoutMs?: number;
+  /**
+   * The owner declares this step a write (signed with the steps): the runner then accepts it on a declared write
+   * control or a gated key. Only on click, fill, select, check and key.
+   */
+  write?: boolean;
+}
+export type DesktopStep = DesktopStepBase &
+  (
+    | { click: DesktopLocator }
+    /** `value` may hold {{$exportDir}}, the run's export directory, filled in by the runner. */
+    | { fill: { field: DesktopLocator; value: string } }
+    | { select: { field: DesktopLocator; option: string } }
+    | { check: { field: DesktopLocator; checked?: boolean } }
+    | { waitFor: { target: DesktopLocator; state?: 'visible' | 'hidden' } }
+    | { read: { target: DesktopLocator; as: string } }
+    | { key: { key: string; target?: DesktopLocator } }
+    | { expectFile: { pattern: string; check?: FileCheck; maxBytes?: number; mime?: string[] } }
+  );
+
+export const DESKTOP_VERBS = ['click', 'fill', 'select', 'check', 'waitFor', 'read', 'key', 'expectFile'] as const;
+export type DesktopVerb = (typeof DESKTOP_VERBS)[number];
+
+export interface DesktopScript {
+  surface: 'desktop';
+  name?: string;
+  version?: number;
+  app: DesktopApp;
+  steps: DesktopStep[];
 }

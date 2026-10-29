@@ -84,6 +84,9 @@ Schema of the step document for editor autocomplete, at `dist/schema/steps.schem
 - **RPA Step Signing**: the HMAC key that Sign Steps signs with and Run Steps checks.
 - **RPA Redis**: optional; in queue mode with several workers, it shares the login breaker and the run lock between
   them.
+- **RPA Desktop Runner**: for Run Steps with desktop steps (`"surface": "desktop"`): a desktop runner's `wss://` URL,
+  its token and its certificate fingerprint, checked before the token is sent. See Desktop runs in the repository
+  README.
 
 ## Templates
 

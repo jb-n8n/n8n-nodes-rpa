@@ -14,7 +14,8 @@ export const GUIDANCE: Record<ErrorCode, string> = {
   script_untrusted: 'The steps are not signed by the Step Signing key, or the signature does not match their name, version, start site, Site Login, approver or the expected version. Nothing ran.',
   policy_violation: 'The steps or the page tried something not allowed: an unlisted or private site, a write, a password field, or a secret outside sign-in. The run stopped.',
   locked_out: 'An earlier login failed and the breaker is open. Check the account, then change Options → Login Breaker Reset Key.',
-  busy: 'Another run using this Site Login is in progress. This run was skipped.',
+  busy: 'Another run using this Site Login or desktop runner is in progress. This run was skipped.',
+  runner_unavailable: 'The desktop runner could not be reached, refused the token or the certificate, or its Windows session is locked or signed out. Check the RPA Desktop Runner credential and the runner machine.',
 };
 
 /**

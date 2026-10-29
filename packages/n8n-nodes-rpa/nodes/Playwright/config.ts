@@ -5,6 +5,7 @@ export const CREDENTIALS = {
   siteLogin: 'playwrightSiteLoginApi',
   signing: 'playwrightScriptSigningApi',
   redis: 'playwrightRedisApi',
+  desktopRunner: 'rpaDesktopRunnerApi',
 } as const;
 
 /** The reference compose stack's browser server (the compose service `browser`). */
@@ -197,6 +198,17 @@ export function browserConfig(data: CredentialData): BrowserEndpoint {
   const wsUrl = text(data, 'wsUrl') || DEFAULT_ENDPOINT_URL;
   const token = typeof data.token === 'string' && data.token ? data.token : undefined;
   return { mode, wsUrl, ...(token ? { token } : {}), ...(data.privateNetwork === true ? { privateNetwork: true } : {}), ...slow };
+}
+
+/** The RPA Desktop Runner credential as the engine's RunnerEndpoint. The engine checks the URL and fingerprint formats. */
+export function desktopRunnerConfig(data: CredentialData): { url: string; token: string; fingerprint: string } {
+  const url = text(data, 'url');
+  const fingerprint = text(data, 'fingerprint');
+  const token = typeof data.token === 'string' ? data.token : '';
+  if (!url) throw new ConfigError('The RPA Desktop Runner credential needs the Runner URL (wss://host:8765).');
+  if (!token) throw new ConfigError('The RPA Desktop Runner credential needs the Token.');
+  if (!fingerprint) throw new ConfigError('The RPA Desktop Runner credential needs the Certificate Fingerprint the runner prints at start.');
+  return { url, token, fingerprint };
 }
 
 export function signingKey(data: CredentialData): string {

@@ -25,7 +25,7 @@ describe('RPA node', () => {
     expect(d.usableAsTool).toBeUndefined();
   });
   it('names its credentials with literals equal to CREDENTIALS, each tested by a method the node implements', () => {
-    expect(d.credentials?.map((c) => c.name)).toEqual([CREDENTIALS.browser, CREDENTIALS.siteLogin, CREDENTIALS.signing, CREDENTIALS.redis]);
+    expect(d.credentials?.map((c) => c.name)).toEqual([CREDENTIALS.browser, CREDENTIALS.siteLogin, CREDENTIALS.signing, CREDENTIALS.redis, CREDENTIALS.desktopRunner]);
     for (const c of d.credentials ?? []) expect(Object.keys(node.methods.credentialTest)).toContain(c.testedBy);
   });
   it('has no secret parameters', () => {

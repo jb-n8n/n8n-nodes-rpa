@@ -327,7 +327,7 @@ describe('executeQuickOp: failures', () => {
   it('a missing RPA Browser credential is a configuration error', async () => {
     const engine = fakeEngine(() => okResult());
     const [[item]] = await executeQuickOp(harness({ params: quickParams('screenshot'), credentials: {}, continueOnFail: true }), engine, 'screenshot');
-    expect(String(item.json.message)).toContain('playwrightBrowserApi');
+    expect(item.json.message).toBe('This operation runs in a browser: attach an RPA Browser credential.');
     expect(engine.calls).toHaveLength(0);
   });
 });

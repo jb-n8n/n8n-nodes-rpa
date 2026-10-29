@@ -43,7 +43,8 @@
       "dist/credentials/PlaywrightBrowserApi.credentials.js",
       "dist/credentials/PlaywrightSiteLoginApi.credentials.js",
       "dist/credentials/PlaywrightScriptSigningApi.credentials.js",
-      "dist/credentials/PlaywrightRedisApi.credentials.js"
+      "dist/credentials/PlaywrightRedisApi.credentials.js",
+      "dist/credentials/RpaDesktopRunnerApi.credentials.js"
     ],
     "nodes": [
       "dist/nodes/Playwright/Playwright.node.js"

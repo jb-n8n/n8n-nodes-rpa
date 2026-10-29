@@ -158,3 +158,33 @@ export const IMPORT_NOT_ADOPTABLE =
 export const IMPORT_UNSUPPORTED_TARGET = 'Only JavaScript or TypeScript Playwright code can be imported; record with --target javascript.';
 export const IMPORT_EMPTY = 'Nothing in this file could be turned into steps.';
 export const IMPORT_PROOF_FAILED = 'The imported steps ran, but replaying them in a fresh browser did not pass the proof, so there is nothing to sign';
+
+// Desktop step sets and the desktop runner. Golden: tests assert them verbatim.
+/** A desktop step set reached the browser lane (parseScript), or the reverse. */
+export const DESKTOP_STEPS_NEED_RUNNER = 'these are desktop steps (surface "desktop"): they run on a desktop runner, never in a browser. Attach an RPA Desktop Runner credential.';
+export const BROWSER_STEPS_NEED_BROWSER = 'these are browser steps: they run in a browser, never on a desktop runner. Attach an RPA Browser credential.';
+export const reservedTemplate = (path: string, name: string) => `${path} uses {{${name}}}: names that start with $ are reserved`;
+export const exportDirOnlyInFill = (path: string) => `${path} uses {{$exportDir}}, which is allowed only in the value of a desktop fill step`;
+export const browserStepOnDesktop = (path: string, verb: string) => `${path}: "${verb}" is a browser step, not allowed in a desktop step set`;
+export const browserLocatorOnDesktop = (path: string, kind: string) => `${path} uses the browser locator "${kind}": desktop step sets find elements with { uia }`;
+export const desktopLocatorInBrowser = (path: string) => `${path} uses { uia }, which is allowed only in a desktop step set (surface "desktop")`;
+export const DESKTOP_UNSIGNED_WRITES =
+  'Unsigned desktop steps cannot run a write step (write: true). Sign them, or turn on Options → Allow Unsigned Writes.';
+export const RUNNER_URL_NOT_SECURE = 'The desktop runner URL must start with wss://: plain ws:// is refused.';
+export const RUNNER_URL_HAS_CREDENTIALS = 'The desktop runner URL must not carry a token or a user name: put the token in the Token field.';
+export const RUNNER_FINGERPRINT_INVALID =
+  'The certificate fingerprint must be the SHA-256 fingerprint the runner prints at start: 64 hexadecimal digits, colons optional.';
+export const runnerUnreachable = (where: string, why: string) => `Could not connect to the desktop runner at ${where} (${why}). Is it running, and is the port open?`;
+export const runnerFingerprintMismatch = (where: string, presented: string) =>
+  `The desktop runner at ${where} presented a certificate with fingerprint ${presented}, which is not the fingerprint in the RPA Desktop Runner credential. Nothing was sent.`;
+export const runnerTokenRefused = (where: string) => `The desktop runner at ${where} refused the token. Check the Token in the RPA Desktop Runner credential.`;
+export const RUNNER_DISCONNECTED = 'the desktop runner closed the connection';
+export const RUNNER_BUSY = 'the desktop runner is busy with another run';
+/** app.launch answered not_found: the allowed app is not installed where the runner's policy says. */
+export const runnerAppMissing = (exe: string) =>
+  `the desktop runner could not start ${exe}: it is not installed at the path the runner's policy names (allowedApps[].path). Install it there or correct the policy`;
+export const desktopNotInteractive = (locked: boolean) =>
+  locked ? 'the desktop runner\'s Windows session is locked: unlock it or sign the runner user in again' : 'the desktop runner is not in an interactive Windows session';
+/** The credential test's success message, with the Windows session's state as the runner reports it. */
+export const runnerConnected = (session: { interactive?: boolean; locked?: boolean }) =>
+  `Connected to the desktop runner (session ${session?.locked ? 'locked' : session?.interactive ? 'interactive' : 'not interactive'})`;

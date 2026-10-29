@@ -3,7 +3,7 @@ import {
   type INodeExecutionData, type INodeType, type INodeTypeDescription,
 } from 'n8n-workflow';
 import type { NodeContext } from './context.js';
-import { browserTestResult, redisTestResult, scriptSigningResult, siteLoginTestResult } from './credential-tests.js';
+import { browserTestResult, desktopRunnerTestResult, redisTestResult, scriptSigningResult, siteLoginTestResult } from './credential-tests.js';
 import { properties, SUBTITLE } from './description/index.js';
 import { INPUTS_EXPRESSION, OUTPUTS_EXPRESSION } from './description/io.js';
 import { loadEngine, type Engine } from './engine.js';
@@ -43,11 +43,15 @@ export class Playwright implements INodeType {
     // Literal names: the credential-test-required and valid-credential-references lint rules read only string literals.
     // test/node.test.ts checks they equal CREDENTIALS, which the operations read.
     credentials: [
-      { name: 'playwrightBrowserApi', displayName: 'RPA Browser', required: true, testedBy: 'browserTest', displayOptions: { hide: { operation: ['signSteps'] } } },
+      // Not required: Run Steps with desktop steps needs the RPA Desktop Runner instead. Every operation that runs a browser
+      // refuses at run time, naming RPA Browser, when it is missing (operations/common.ts browserCredentials).
+      { name: 'playwrightBrowserApi', displayName: 'RPA Browser', required: false, testedBy: 'browserTest', displayOptions: { hide: { operation: ['signSteps'] } } },
       { name: 'playwrightSiteLoginApi', displayName: 'RPA Site Login', required: false, testedBy: 'siteLoginTest', displayOptions: { show: { operation: ['runSteps', 'signSteps', 'importSteps'] } } },
       // Required at run time for Sign Steps (and Run Steps with a signature); n8n cannot vary `required` by operation.
       { name: 'playwrightScriptSigningApi', displayName: 'RPA Step Signing', required: false, testedBy: 'scriptSigningTest', displayOptions: { show: { operation: ['runSteps', 'signSteps'] } } },
       { name: 'playwrightRedisApi', displayName: 'RPA Redis', required: false, testedBy: 'guardRedisTest', displayOptions: { show: { operation: ['runSteps', 'importSteps'] } } },
+      // Desktop steps (surface "desktop") run on a desktop runner; Run Steps refuses them without this credential.
+      { name: 'rpaDesktopRunnerApi', displayName: 'RPA Desktop Runner', required: false, testedBy: 'desktopRunnerTest', displayOptions: { show: { operation: ['runSteps'] } } },
     ],
     properties,
   };
@@ -65,6 +69,9 @@ export class Playwright implements INodeType {
       },
       async guardRedisTest(this: ICredentialTestFunctions, credential: ICredentialsDecrypted): Promise<INodeCredentialTestResult> {
         return await redisTestResult(credential.data ?? {});
+      },
+      async desktopRunnerTest(this: ICredentialTestFunctions, credential: ICredentialsDecrypted): Promise<INodeCredentialTestResult> {
+        return await desktopRunnerTestResult(credential.data ?? {}, await loadEngine());
       },
     },
   };

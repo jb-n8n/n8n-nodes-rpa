@@ -12,7 +12,7 @@ import { workflowFile } from '../import/workflow.js';
 import { lazyChatModel } from '../model.js';
 import { configErrorItem, repairedStepsItem, slug } from '../output.js';
 import {
-  asBoolean, asString, checkMaxItems, credentialId, errorMessage, hasDownloadStep, literalString, readCommonOptions, refuseCdpDownload, regexOption,
+  asBoolean, asString, browserCredentials, checkMaxItems, credentialId, errorMessage, hasDownloadStep, literalString, readCommonOptions, refuseCdpDownload, regexOption,
   SITE_LOGIN_NO_ID, type CommonOptions,
 } from './common.js';
 import { expectedDownload, NO_MODEL, noteRepairRan, repairAlreadyRan, siteLoginGuard, variablesOption } from './runSteps.js';
@@ -177,7 +177,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
     // An empty id would key every id-less Site Login's breaker together ("site-login:").
     if (siteLoginId === '') throw new ConfigError(SITE_LOGIN_NO_ID);
     p = readImportParams(ctx, i);
-    endpoint = browserConfig(await ctx.getCredentials(CREDENTIALS.browser, i));
+    endpoint = browserConfig(await browserCredentials(ctx, i));
     // A CDP connection cannot read downloaded files: refused before anything is read.
     refuseCdpDownload(engine, endpoint, expectedDownload(engine, p.expectedFile) !== undefined);
     if (siteLoginId !== undefined) siteLogin = siteLoginConfig(await ctx.getCredentials(CREDENTIALS.siteLogin, i));
