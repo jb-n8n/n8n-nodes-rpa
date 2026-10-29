@@ -77,7 +77,9 @@ const EXPRESSIONS: Record<string, (s: Scope) => unknown> = {
   "={{ $('Repaired steps received').item.json.hash }}": (s) => s.repaired.hash,
   "={{ $now.plus({ hours: $('Settings').item.json.approvalTimeoutHours }).toISO() }}": (s) => new Date(s.now + Number(s.settings.approvalTimeoutHours) * 3_600_000).toISOString(),
   "={{ $now.toISO() }}": (s) => new Date(s.now).toISOString(),
-  "={{ $('Ask for approval').item.json.data.approved }}": (s) => (s.approval.data as IDataObject | undefined)?.approved,
+  // Timed out? passes the approval's answer through: Ask for approval's (browser steps) or Desktop answer's (desktop steps).
+  "={{ $('Timed out?').item.json.data.approved }}": (s) => (s.approval.data as IDataObject | undefined)?.approved,
+  "={{ $('Timed out?').item.json.data.writeSteps ?? '' }}": (s) => (s.approval.data as IDataObject | undefined)?.writeSteps ?? '',
   "={{ $json.data === undefined }}": (s) => s.json.data === undefined,
   '={{ $json.status }}': (s) => s.json.status,
   '={{ $json.hash }}': (s) => s.json.hash,
@@ -255,8 +257,9 @@ async function feedRun(table: MemoryTable, feed: Feed, o: {
 
 type Decision = 'approve' | 'reject' | 'timeout' | 'pending';
 /**
- * Template 3 for one Repaired steps item: Settings → Mark pending → Ask for approval (the decision; 'pending' stops there
- * unanswered) → Timed out? → Record expiry, or Repaired steps to sign → Sign steps → Signed? → Save signed steps / Record rejection.
+ * Template 3 for one Repaired steps item (browser steps: Desktop steps? is false): Settings → Mark pending → Ask for
+ * approval (the decision; 'pending' stops there unanswered) → Timed out? → Record expiry, or Repaired steps to sign →
+ * Sign steps → Signed? → Save signed steps / Record rejection.
  */
 async function approvalRun(table: MemoryTable, repaired: INodeExecutionData, decision: Decision, feed: Feed, o: { now?: number } = {}) {
   const t = APPROVE;
