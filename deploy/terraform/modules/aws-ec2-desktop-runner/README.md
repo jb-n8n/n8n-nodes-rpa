@@ -1,0 +1,203 @@
+# aws-ec2-desktop-runner
+
+A Terraform module for a Windows Server 2022 test VM on EC2 that runs the RPA desktop runner. A dedicated low-privilege Windows user, `rpa-runner`, signs in on the console automatically. The runner starts in that user's interactive session at logon, because UI Automation needs a real, unlocked desktop. n8n's RPA Desktop Runner credential connects to it directly at `wss://<ip>:8765/rpa/v1`.
+
+This is a test bed, not the production layout: one VM, one auto-signed-in user, a direct connection from the CIDRs you list. The production model (a supervisor service that opens a fresh session per run, no stored auto-logon password) comes later.
+
+## What it creates
+
+- **Network**, one of three:
+  - by default, a VPC of its own (`10.90.0.0/24`) with one public subnet, an internet gateway and a default route. The VPC's default security group is emptied.
+  - `use_default_vpc = true`: a default subnet of the region's default VPC
+  - `subnet_id`: an existing subnet
+
+  The zone is the first one, by name, that offers `instance_type`, unless you set `availability_zone`.
+- **Security group:** the runner port (8765) and RDP (3389, unless `enable_rdp = false`) from `allowed_cidrs` only. Egress is TCP 80 and 443, which SSM, Secrets Manager, the runner download and Windows Update need.
+- **The VM:** the latest Windows Server 2022 English Full AMI, found through the public SSM parameter. `t3.large` by default. IMDSv2 only, with one hop. An encrypted gp3 root volume. A role with `AmazonSSMManagedInstanceCore` and an inline policy that may only write the three secrets.
+- **Three Secrets Manager secrets,** created empty. The VM fills them on first boot (see [Secrets](#secrets)).
+- Optional: an Elastic IP (`elastic_ip = true`), so the runner URL survives stop and start.
+
+Every resource carries the tag `Project = n8n-rpa-desktop-testbed`.
+
+## What the first boot does
+
+The user data is a small bootstrap that unpacks [`setup.ps1.tftpl`](setup.ps1.tftpl) and runs it once, as LocalSystem under EC2Launch v2. The setup script is gzipped and stripped of comments so it fits EC2's 16 KB limit. Progress goes to `%ProgramData%\RPA Runner\setup\setup.log`. The setup:
+
+1. Gives the built-in Administrator a new random password and stores it in Secrets Manager. You need it for RDP.
+2. Creates `rpa-runner`, a member of Users only, with a random password that never expires. Turns on auto-logon for it. See [Auto-logon](#auto-logon).
+3. Turns off everything that locks or covers the desktop:
+   - the lock screen (`NoLockScreen`) and the inactivity lock (`InactivityTimeoutSecs = 0`)
+   - the screen saver and the Lock command (`DisableLockWorkstation`), in the default user profile, which rpa-runner's profile is copied from
+   - Server Manager and the network-discovery prompt at logon, and display sleep
+4. Locks down `%ProgramData%\RPA Runner`:
+   - Administrators and SYSTEM own it.
+   - rpa-runner may read it, create files and folders in it (the runner creates `runner-certificate.pfx.bin` and `exports\`) and write `logs\`.
+   - rpa-runner can't change, delete or re-permission `policy.json`, `token` or the folder itself. The runner checks this at start: it refuses a policy file or folder anyone but administrators could change or replace, including a delete-child right on the folder.
+   - rpa-runner can't write `setup\`, where SYSTEM logs the setup and runner installs.
+5. Writes `policy.json` from `runner_policy` and the bearer token to `token`. The token file is readable by SYSTEM, Administrators and rpa-runner only.
+6. Turns Windows Firewall on for every profile and adds two rules:
+   - inbound on the runner port
+   - an outbound block to the instance metadata service for rpa-runner, so neither the runner nor an app it drives can use the instance role
+7. Writes `runner.json`, [`start-runner.ps1`](scripts/start-runner.ps1) and [`install-runner.ps1`](scripts/install-runner.ps1) to `C:\Program Files\RPA Runner\`. Installs the runner when `runner_artifact_url` is set (see [Installing the runner](#installing-the-runner)). Registers the scheduled task `\RPA\RPA Runner`, which starts `start-runner.ps1` at rpa-runner's logon, interactive and limited.
+8. Restarts the VM. rpa-runner signs in on the console and the task starts the runner.
+
+`start-runner.ps1` restarts the runner whenever it exits and writes the runner's output to `logs\runner.out.log` and `runner.err.log`. The runner itself logs to `logs\runner-<date>.log`. Its start line, `RPA runner listening on wss://0.0.0.0:8765/rpa/v1, fingerprint <SHA-256>`, is where `desktop-testbed.sh fingerprint` finds the certificate fingerprint. `start-runner.ps1` passes the runner its settings in the environment:
+- `RPA_RUNNER_TOKEN_FILE`, the path of the token file
+- `RPA_RUNNER_POLICY_FILE`
+- `RPA_RUNNER_PORT`
+
+The token itself is never put in the environment, because apps the runner launches would inherit it. The runner refuses a token on its command line anyway.
+
+Until a runner is installed, `start-runner.ps1` checks for one every 30 seconds.
+
+## Installing the runner
+
+[`install-runner.ps1`](scripts/install-runner.ps1) runs as an administrator: at first boot when `runner_artifact_url` is set, or later through `desktop-testbed.sh install-runner <url> [sha256]` over SSM, without a new VM. It downloads the file and checks the SHA-256 when one is given. It stops the runner and the demo app, installs, and `start-runner.ps1` starts the new runner within 30 seconds. It accepts:
+
+- **The rpa-desktop release zip**, laid out as:
+  - `rpa-desktop\runner\RpaRunner.exe`, with `policy.example.json` and `README.md`
+  - `rpa-desktop\erp-demo\v1\ErpDemo.exe` and `rpa-desktop\erp-demo\v2\ErpDemo.exe`
+  - `rpa-desktop\LICENSE`
+
+  The runner goes to `C:\Program Files\RPA Runner\`. ERP Demo v1 goes to `C:\Program Files\RPA Runner\erp-demo\ErpDemo.exe`, the path the default policy allows. v2 goes to `C:\Program Files\RPA Runner\erp-demo-v2\ErpDemo.exe`; the default policy doesn't allow it yet, it waits for the repair demo. Under Program Files both are admin-owned, which the runner requires of an allowed app unless the entry says `allowUserWritable`.
+- A zip with `RpaRunner.exe` anywhere in it: that folder goes to `C:\Program Files\RPA Runner\`.
+- `RpaRunner.exe` itself.
+
+A GitHub Actions artifact needs a token to download, so put the zip somewhere the VM can fetch it over HTTPS: a release asset, or a private S3 bucket and a pre-signed URL valid for an hour.
+
+## Secrets
+
+The VM generates every secret itself, with the OS's cryptographic RNG. It writes each one to Secrets Manager (`secretsmanager:PutSecretValue`) before using it. No value ever appears in a Terraform plan, the state, an output, the user data or a log. The instance role can write these three secrets but not read them back. Terraform never reads them either.
+
+| Secret (output) | Value | Also on the VM |
+|---|---|---|
+| `runner_token_secret_arn` | the runner's bearer token, 48 characters, for n8n's credential | `%ProgramData%\RPA Runner\token` (SYSTEM, Administrators, rpa-runner) |
+| `runner_user_password_secret_arn` | rpa-runner's password | the LSA secret `DefaultPassword` |
+| `admin_password_secret_arn` | the built-in Administrator's password | the SAM, as for any account |
+
+For the credential, export the token in your shell straight from Secrets Manager; never paste it into a file:
+
+```sh
+export RPA_RUNNER_TOKEN="$(aws secretsmanager get-secret-value --region <region> \
+  --secret-id "$(terraform output -raw runner_token_secret_arn)" --query SecretString --output text)"
+```
+
+The secrets' ARNs, the runner URL and `runner_policy` are in the user data and the state. None of them is a secret. `runner_artifact_url` is too, so use a public release asset or a short-lived pre-signed URL.
+
+## Auto-logon
+
+Winlogon signs rpa-runner in with these values:
+- `AutoAdminLogon = 1`, `DefaultUserName`, `DefaultDomainName` (the computer name)
+- `ForceAutoLogon = 1`, which signs rpa-runner in again if it signs out
+
+The password is **not** in the registry. The setup stores it as the LSA secret `DefaultPassword` through `LsaStorePrivateData`, the way Sysinternals Autologon does. It removes any `DefaultPassword` registry value. Winlogon reads the LSA secret.
+
+The LSA secret is protected by the system, not encrypted against an administrator: anyone with administrator rights on the VM can read it. That is the cost of attended-style auto-logon. It is why rpa-runner is a standard user with no other purpose, and why its password is random and kept nowhere else but Secrets Manager.
+
+## The policy
+
+`runner_policy` becomes `%ProgramData%\RPA Runner\policy.json`, the runner's local floor. The runner refuses unknown fields, so optional fields you leave unset are left out of the file rather than written as null. The default:
+
+```json
+{
+  "allowedApps": [
+    { "exe": "ErpDemo.exe", "path": "C:\\Program Files\\RPA Runner\\erp-demo\\ErpDemo.exe", "allowedArgs": [["--ui", "v1"], ["--ui", "v2"]] }
+  ],
+  "writeControls": [
+    { "exe": "ErpDemo.exe", "automationId": "btnPost" },
+    { "exe": "ErpDemo.exe", "automationId": "1" }
+  ],
+  "gatedKeys": ["Ctrl+S", "F11"],
+  "maxFileBytes": 20971520
+}
+```
+
+- `allowedApps`: the only executables `app.launch` starts.
+  - `exe` is the file name a step set names.
+  - `path` (required) is the absolute local path that runs. It must end in `exe`; UNC and device paths are refused.
+  - `sha256` (optional) pins the file's hash.
+  - `allowedArgs` (optional) lists the exact argument lists a launch may pass; without it, none.
+  - `allowUserWritable` (optional, default false) permits a path the runner's user could change or replace.
+- `writeControls`: controls (process and automation id) that act only with `write: true`. The default lists the demo app's Post button and automation id `1`, which Windows gives the OK or Save button of a common dialog: that gates the Save of the demo's Export dialog, so the export step must be signed as a write. It gates every OK and Save button of a common dialog owned by `ErpDemo.exe` (Open, Save As, Print), and while such a dialog is open, keys without `write: true` are limited to navigation keys (Tab, arrows, Home, End, PageUp, PageDown, Escape).
+- `gatedKeys`: key chords that need `write: true`.
+- `maxFileBytes`: the largest file `file.retrieve` returns, at most 36 MiB.
+
+## Example
+
+[`deploy/terraform/examples/aws-ec2-desktop-runner`](../../examples/aws-ec2-desktop-runner) wires the module with `allowed_cidrs` as its one required input. [`deploy/scripts/desktop-testbed.sh`](../../../scripts/desktop-testbed.sh) drives it. It keeps the Terraform state in `TESTBED_STATE_DIR`, a directory it refuses inside the repository.
+
+```sh
+export TESTBED_STATE_DIR=~/rpa-testbed-state        # anywhere outside the repository
+export AWS_REGION=us-west-2
+deploy/scripts/desktop-testbed.sh up                # allowed_cidrs = this machine's public IPv4 /32
+deploy/scripts/desktop-testbed.sh status            # state, runner URL, SSM
+deploy/scripts/desktop-testbed.sh install-runner https://.../rpa-desktop.zip <sha256>
+deploy/scripts/desktop-testbed.sh fingerprint       # for the credential's fingerprint field
+deploy/scripts/desktop-testbed.sh rdp-password      # copies the Administrator password to the clipboard
+deploy/scripts/desktop-testbed.sh stop              # stop paying for the instance
+deploy/scripts/desktop-testbed.sh start             # the public IP changes unless elastic_ip
+deploy/scripts/desktop-testbed.sh down
+```
+
+`up` passes extra arguments to `terraform apply`, for example `-auto-approve`. The first boot takes about 10 minutes, including the restart.
+
+## Inputs
+
+| Name | Default | Notes |
+|---|---|---|
+| `allowed_cidrs` | required | Who may reach the runner port and RDP. 0.0.0.0/0, ::/0, and ranges wider than /16 (IPv4) or /48 (IPv6) are refused: a /8 can hold other AWS customers. Host bits must be zero. |
+| `name` | `rpa-desktop-testbed` | Name and prefix of every resource |
+| `instance_type` | `t3.large` | x86_64 only; Graviton types are refused |
+| `cpu_credits` | `unlimited` | t2/t3/t3a only. `standard` throttles, which makes the first boot slow. |
+| `ami_ssm_parameter` | Windows Server 2022 English Full | Later AMI changes are ignored; replace the VM to move to a newer one |
+| `root_volume_size_gb` | 50 | 30 to 1024 GiB |
+| `kms_key_arn` | null | A customer managed key for the volume and the secrets |
+| `subnet_id`, `use_default_vpc`, `vpc_cidr`, `availability_zone` | own VPC | See [What it creates](#what-it-creates) |
+| `associate_public_ip` | true | Must stay true in the module's own VPC |
+| `elastic_ip` | false | A fixed address; billed while the VM is stopped too |
+| `enable_rdp` | true | SSM works without RDP |
+| `runner_port` | 8765 | |
+| `runner_artifact_url`, `runner_artifact_sha256` | empty | The release zip, a zip with the runner, or the `.exe` ([Installing the runner](#installing-the-runner)). A set hash is checked. A changed URL replaces the VM; `install-runner` doesn't. |
+| `runner_executable` | `RpaRunner.exe` | |
+| `runner_arguments` | `[]` | Never the token |
+| `runner_policy` | allows ERP Demo v1 | See [The policy](#the-policy) |
+| `secret_recovery_window_days` | 7 | 0 deletes the secrets at once on destroy |
+| `tags` | `{}` | |
+
+## Outputs
+
+`instance_id`, `region`, `public_ip`, `private_ip`, `runner_url`, `runner_token_secret_arn`, `runner_user_password_secret_arn`, `admin_password_secret_arn`, `fingerprint_command`, `security_group_id`, `vpc_id`, `subnet_id`.
+
+- `public_ip` and `runner_url` are the address at apply time. Without `elastic_ip` it changes on every stop and start; `desktop-testbed.sh status` shows the current one.
+- `fingerprint_command` is an AWS CLI command line. It searches the `*.log` files in `%ProgramData%\RPA Runner\logs` (no recursion) through SSM Run Command and prints the newest SHA-256 fingerprint (colon-separated uppercase hex). `desktop-testbed.sh fingerprint` does the same.
+
+## Cost
+
+While running, you pay for the instance, including the Windows licence, and its public IPv4 address. With `cpu_credits = "unlimited"` (the default), CPU use above the t3 baseline, averaged over 24 hours, is billed too; the first boot and Windows' own maintenance cost a little of that. `standard` avoids it at the price of a slower boot. While stopped, you pay for the gp3 volume and the three secrets, plus the Elastic IP if you set one. `desktop-testbed.sh stop` stops the instance; `down` destroys everything. Nothing else runs: no NAT gateway, no load balancer, no CloudWatch alarms or logs.
+
+## Security notes
+
+- **Exposure:** only `allowed_cidrs`, only the runner port and RDP. The runner refuses plain `ws://` and checks the bearer token. n8n pins the runner's certificate fingerprint before sending the token.
+- **RDP as Administrator** opens a session of its own and leaves rpa-runner's console session alone. Don't RDP in as rpa-runner: disconnecting that session locks its desktop, and the runner then reports `desktop_unavailable` until the VM restarts.
+- **The instance role** can use SSM and write, never read, its three secrets. rpa-runner can't reach the instance metadata service, so it can't use the role at all. Administrators and SYSTEM can, with two consequences:
+  - `AmazonSSMManagedInstanceCore` also allows `ssm:GetParameter(s)` on every parameter, so an administrator on the VM could read the account's SecureString parameters in the region. Keep the test bed in an account without production parameters, or replace the managed policy with an inline one limited to `ssm:UpdateInstanceInformation`, `ssmmessages:*Channel` and `ec2messages:*`.
+  - The role keeps `PutSecretValue` after the first boot, so an administrator on the VM could replace a secret's value.
+- **The runner and the apps it drives run as the same user.** A driven app could read the token file, stop the runner or take its port. The ACL on `policy.json` only keeps the runner itself from changing its policy; it is no boundary against the apps. Only allow apps you trust in `runner_policy`; the production model runs them under separate users.
+- **Egress** on 80 and 443 to anywhere is open to the driven apps as well.
+
+
+## Tests
+
+`make -C deploy check` runs `terraform fmt`, `validate`, `terraform test` and tflint here. `terraform test` runs plan-only against a mocked AWS provider. It asserts:
+- the security group rules, with a structural check that no other rule resources, inline rules or all-protocol rules exist
+- IMDSv2, the encrypted root volume, the tags and the placement in each network mode
+- the role: SSM, plus `PutSecretValue` on exactly the three secrets, and with a key, `kms:GenerateDataKey` through Secrets Manager only
+- the user data:
+  - under 10 KB
+  - the setup gzipped inside it
+  - the policy, runner settings and ARNs base64-encoded
+  - never a `DefaultPassword` registry write
+- the outputs
+- the input validations (0.0.0.0/0, ::/0, /1, /8, IPv6 /32, host bits, Arm types, http:// URLs, quotes, short hashes)
+
+`deploy/scripts/test/desktop-testbed.test.mjs` runs `desktop-testbed.sh` against fake `terraform`, `aws`, `curl` and `pbcopy` commands.

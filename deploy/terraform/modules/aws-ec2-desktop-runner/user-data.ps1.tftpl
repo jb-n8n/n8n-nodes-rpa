@@ -1,0 +1,9 @@
+<powershell>
+# RPA desktop runner test bed: the first-boot setup (setup.ps1.tftpl in the Terraform module aws-ec2-desktop-runner),
+# gzipped and base64-encoded to fit EC2's 16 KB user data limit. EC2Launch v2 runs this once, as LocalSystem.
+$zip = New-Object IO.Compression.GZipStream((New-Object IO.MemoryStream(, [Convert]::FromBase64String('${setup}'))), ([IO.Compression.CompressionMode]::Decompress))
+$reader = New-Object IO.StreamReader($zip, [Text.Encoding]::UTF8)
+$setup = $reader.ReadToEnd()
+$reader.Dispose()
+& ([scriptblock]::Create($setup))
+</powershell>
