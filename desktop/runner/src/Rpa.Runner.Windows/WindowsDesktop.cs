@@ -75,7 +75,7 @@ public sealed class WindowsDesktop : IDesktop, IDisposable
     public IUiNode? GetFocusedElement()
     {
         try { return new UiaNode(_automation, _automation.FocusedElement()); }
-        catch (Exception e) when (e is COMException or ElementNotAvailableException) { return null; }
+        catch (Exception e) when (e is COMException or ElementNotAvailableException or TimeoutException) { return null; }
     }
 
     public IUiNode? GetTopLevelWindowOf(IUiNode element)
@@ -174,11 +174,6 @@ public sealed class WindowsDesktop : IDesktop, IDisposable
             Detached(() => p.ExpandCollapse.Pattern.Expand());
             return;
         }
-        if (p.Invoke.IsSupported)
-        {
-            Detached(() => p.Invoke.Pattern.Invoke());
-            return;
-        }
         if (ct is ControlType.ListItem or ControlType.TabItem or ControlType.TreeItem or ControlType.DataItem && p.SelectionItem.IsSupported)
         {
             Detached(() => p.SelectionItem.Pattern.Select());
@@ -189,7 +184,14 @@ public sealed class WindowsDesktop : IDesktop, IDisposable
             Detached(() => p.Toggle.Pattern.Toggle());
             return;
         }
-        MouseAt(el, op, Mouse.Click);
+        // Buttons and leaf menu items get a real click: a UI Automation Invoke that opens a modal dialog keeps the app's
+        // provider busy until the dialog closes, and every later UI Automation call into the app times out meanwhile.
+        if (UiaNode.Guard(() => !el.Properties.IsOffscreen.ValueOrDefault && el.TryGetClickablePoint(out _)) || !p.Invoke.IsSupported)
+        {
+            MouseAt(el, op, Mouse.Click);
+            return;
+        }
+        Detached(() => p.Invoke.Pattern.Invoke());
     }
 
     private void MouseAt(AutomationElement el, UiOperation op, Action<Point, MouseButton> click)
@@ -197,12 +199,14 @@ public sealed class WindowsDesktop : IDesktop, IDisposable
         var point = UiaNode.Guard(() => el.TryGetClickablePoint(out var pt) ? pt : Center(el.BoundingRectangle));
         AutomationElement receiver;
         try { receiver = _automation.FromPoint(point); }
-        catch (Exception e) when (e is COMException or ElementNotAvailableException)
+        catch (Exception e) when (e is COMException or ElementNotAvailableException or TimeoutException)
         {
             throw new RetryableActionException("nothing to click at the element's position");
         }
         op.Guard(new UiaNode(_automation, receiver));
+        Mouse.Position = point; // no animated move
         click(point, MouseButton.Left);
+        Wait.UntilInputIsProcessed();
     }
 
     private void Type(UiaNode node, UiOperation op)
@@ -384,6 +388,7 @@ public sealed class WindowsDesktop : IDesktop, IDisposable
     private UiaNode? Wrap(IntPtr h)
     {
         try { return new UiaNode(_automation, _automation.FromHandle(h)); }
-        catch (Exception e) when (e is COMException or ElementNotAvailableException or ArgumentException) { return null; }
+        // A window whose app is busy (TimeoutException) is skipped this time; the caller polls again.
+        catch (Exception e) when (e is COMException or ElementNotAvailableException or ArgumentException or TimeoutException) { return null; }
     }
 }

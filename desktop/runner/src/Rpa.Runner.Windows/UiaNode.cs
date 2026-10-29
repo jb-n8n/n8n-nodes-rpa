@@ -91,6 +91,7 @@ internal sealed class UiaNode : IUiNode
     {
         try { return read(); }
         catch (ElementNotAvailableException e) { throw new ElementGoneException("element not available", e); }
+        catch (TimeoutException e) { throw new ElementGoneException("the app did not answer in time", e); }
         catch (COMException e) when (IsGone(e)) { throw new ElementGoneException("element not available", e); }
     }
 
