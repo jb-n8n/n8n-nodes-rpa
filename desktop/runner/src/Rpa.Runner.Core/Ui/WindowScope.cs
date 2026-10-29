@@ -54,14 +54,7 @@ public sealed class WindowScope
     {
         if (!_policy.IsAllowedExe(_processes.GetExeName(pid))) return false;
         var launched = run.Processes;
-        int? cur = pid;
-        for (var i = 0; i < 16 && cur is int p; i++)
-        {
-            if (launched.Contains(p)) return true;
-            cur = _processes.GetParentPid(p);
-            if (cur == p) break;
-        }
-        return false;
+        return launched.Contains(pid) || _processes.IsDescendantOf(pid, launched);
     }
 
     public bool IsOsSurface(IUiNode window)

@@ -115,53 +115,51 @@ jobs:
           }
           Get-ChildItem -Recurse $env:OUT -Include *.exe | ForEach-Object { '{0} {1:N1} MB' -f $_.FullName, ($_.Length / 1MB) }
 
-      # The policy at the contract's default location; a fresh random token, masked in the log.
-      - name: Start the runner
-        timeout-minutes: 3
+      # One step for the runner and the client: Windows ends a step's child processes when the step ends. The policy
+      # sits at the contract's default location; the token is fresh, random and masked. allowUserWritable: the
+      # workspace belongs to the runner's own (admin) user, which a real install must avoid.
+      - name: Start the runner and run the protocol scenario (drives the ERP Demo through the runner)
+        timeout-minutes: 12
         run: |
           $data = Join-Path $env:ProgramData 'RPA Runner'
-          New-Item -ItemType Directory -Force $data | Out-Null
+          New-Item -ItemType Directory -Force $data, "$env:OUT\logs" | Out-Null
           $v1 = "$env:OUT\erp-demo\v1\ErpDemo.exe"
           $v2 = "$env:OUT\erp-demo\v2\ErpDemo.exe"
           @{
-            allowedApps   = @(@{ exe = 'ErpDemo.exe'; path = $v1 }, @{ exe = 'ErpDemo.exe'; path = $v2 })
+            allowedApps   = @(@{ exe = 'ErpDemo.exe'; path = $v1; allowUserWritable = $true },
+                              @{ exe = 'ErpDemo.exe'; path = $v2; allowUserWritable = $true })
             writeControls = @(@{ exe = 'ErpDemo.exe'; automationId = 'btnPost' })
             gatedKeys     = @('Ctrl+S', 'F11')
             maxFileBytes  = 20971520
           } | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 (Join-Path $data 'policy.json')
           $bytes = [byte[]]::new(32); [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
-          $token = [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
-          Write-Host "::add-mask::$token"
-          "RPA_RUNNER_TOKEN=$token" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
-          $env:RPA_RUNNER_TOKEN = $token
-          New-Item -ItemType Directory -Force "$env:OUT\logs" | Out-Null
+          $env:RPA_RUNNER_TOKEN = [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+          Write-Host "::add-mask::$env:RPA_RUNNER_TOKEN"
           $p = Start-Process -FilePath "$env:OUT\rpa-desktop-runner\RpaRunner.exe" -WindowStyle Hidden -PassThru `
                  -RedirectStandardOutput "$env:OUT\logs\runner-stdout.log" -RedirectStandardError "$env:OUT\logs\runner-stderr.log"
-          "RUNNER_PID=$($p.Id)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
-          for ($i = 0; $i -lt 60; $i++) {
-            Start-Sleep -Milliseconds 500
-            $line = Get-Content "$env:OUT\logs\runner-stdout.log" -ErrorAction SilentlyContinue | Select-String 'RPA runner listening on' | Select-Object -First 1
-            if ($line) { break }
-            if ($p.HasExited) { break }
+          try {
+            $line = $null
+            for ($i = 0; $i -lt 60 -and -not $line -and -not $p.HasExited; $i++) {
+              Start-Sleep -Milliseconds 500
+              $line = Get-Content "$env:OUT\logs\runner-stdout.log" -ErrorAction SilentlyContinue | Select-String 'RPA runner listening on' | Select-Object -First 1
+            }
+            Get-Content "$env:OUT\logs\runner-stdout.log", "$env:OUT\logs\runner-stderr.log" -ErrorAction SilentlyContinue
+            if (-not $line) { throw 'the runner did not start' }
+            if ($line.Line -notmatch 'listening on wss://0\.0\.0\.0:8765/rpa/v1, fingerprint ((?:[0-9A-F]{2}:){31}[0-9A-F]{2})$') { throw "unexpected start line: $($line.Line)" }
+            dotnet desktop/runner/test/Rpa.Runner.Scenario/bin/Release/net8.0/Rpa.Runner.Scenario.dll `
+              --url wss://127.0.0.1:8765/rpa/v1 --fingerprint $Matches[1] `
+              --app $v1 --app-v2 $v2 --out "$env:OUT\scenario"
+            $code = $LASTEXITCODE
+            if ($p.HasExited) { Write-Host "::error::the runner exited during the scenario (code $($p.ExitCode))"; $code = 1 }
+            exit $code
+          } finally {
+            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
           }
-          Get-Content "$env:OUT\logs\runner-stdout.log", "$env:OUT\logs\runner-stderr.log" -ErrorAction SilentlyContinue
-          if (-not $line) { throw 'the runner did not start' }
-          if ($line.Line -notmatch 'listening on wss://0\.0\.0\.0:8765/rpa/v1, fingerprint ((?:[0-9A-F]{2}:){31}[0-9A-F]{2})$') { throw "unexpected start line: $($line.Line)" }
-          "RUNNER_FINGERPRINT=$($Matches[1])" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
-      - name: Protocol scenario (drives the ERP Demo through the runner)
-        timeout-minutes: 10
-        run: |
-          dotnet desktop/runner/test/Rpa.Runner.Scenario/bin/Release/net8.0/Rpa.Runner.Scenario.dll `
-            --url wss://127.0.0.1:8765/rpa/v1 --fingerprint $env:RUNNER_FINGERPRINT `
-            --app "$env:OUT\erp-demo\v1\ErpDemo.exe" --app-v2 "$env:OUT\erp-demo\v2\ErpDemo.exe" --out "$env:OUT\scenario"
-          exit $LASTEXITCODE
-
-      - name: Stop the runner and collect its logs
+      - name: Collect the runner's logs
         if: always()
         timeout-minutes: 2
         run: |
-          if ($env:RUNNER_PID) { Stop-Process -Id $env:RUNNER_PID -Force -ErrorAction SilentlyContinue }
           New-Item -ItemType Directory -Force "$env:OUT\logs" | Out-Null
           Copy-Item (Join-Path $env:ProgramData 'RPA Runner\logs\*') "$env:OUT\logs\" -ErrorAction SilentlyContinue
           Get-ChildItem "$env:OUT\logs" -ErrorAction SilentlyContinue

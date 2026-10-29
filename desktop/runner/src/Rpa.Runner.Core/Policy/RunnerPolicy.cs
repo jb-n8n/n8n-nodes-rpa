@@ -18,11 +18,14 @@ public sealed class RunnerPolicy
     public long MaxFileBytes { get; init; } = DefaultMaxFileBytes;
 
     /// <summary>
-    /// <c>exe</c> is the file name app.launch and window checks match (case-insensitive). <c>path</c> (optional, an
-    /// extension to the contract's example) pins the absolute path: app.launch then launches exactly that file. Without
-    /// <c>path</c>, app.launch must give an absolute path whose file name is <c>exe</c>.
+    /// An application app.launch may start. <c>exe</c> is the file name that app.launch requests and window checks match
+    /// (case-insensitive). The fields beyond the contract's example are required or optional as follows:
+    /// <c>path</c> (required) pins the absolute local path, the only file launched for this entry (never a UNC or device
+    /// path); <c>sha256</c> (optional) pins the file's hash; <c>allowedArgs</c> (optional) lists the exact argument lists
+    /// app.launch may pass (none otherwise); <c>allowUserWritable</c> (optional, default false) permits a path the
+    /// runner's own user can modify (otherwise refused, since anything the runner user can replace is not pinned).
     /// </summary>
-    public sealed record AllowedApp(string Exe, string? Path);
+    public sealed record AllowedApp(string Exe, string Path, string? Sha256, IReadOnlyList<IReadOnlyList<string>> AllowedArgs, bool AllowUserWritable);
 
     public sealed record WriteControl(string Exe, string AutomationId);
 
@@ -38,6 +41,9 @@ public sealed class RunnerPolicy
     {
         public string? Exe { get; set; }
         public string? Path { get; set; }
+        public string? Sha256 { get; set; }
+        public List<List<string>>? AllowedArgs { get; set; }
+        public bool? AllowUserWritable { get; set; }
     }
 
     private sealed class WriteShape
@@ -81,14 +87,16 @@ public sealed class RunnerPolicy
         {
             if (string.IsNullOrWhiteSpace(a.Exe) || a.Exe.IndexOfAny(['\\', '/']) >= 0)
                 throw new InvalidPolicyException($"{source}: allowedApps[].exe must be a file name such as \"App.exe\"");
-            if (a.Path is not null)
-            {
-                if (!System.IO.Path.IsPathFullyQualified(a.Path))
-                    throw new InvalidPolicyException($"{source}: allowedApps[].path must be an absolute path");
-                if (!string.Equals(System.IO.Path.GetFileName(a.Path), a.Exe, StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidPolicyException($"{source}: allowedApps[].path must end in the exe file name");
-            }
-            apps.Add(new AllowedApp(a.Exe, a.Path is null ? null : System.IO.Path.GetFullPath(a.Path)));
+            if (a.Path is null)
+                throw new InvalidPolicyException($"{source}: allowedApps[].path is required (the absolute path of {a.Exe})");
+            if (IsUncOrDevice(a.Path) || !System.IO.Path.IsPathFullyQualified(a.Path))
+                throw new InvalidPolicyException($"{source}: allowedApps[].path must be an absolute local path (no UNC or device paths)");
+            if (!string.Equals(System.IO.Path.GetFileName(a.Path), a.Exe, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidPolicyException($"{source}: allowedApps[].path must end in the exe file name");
+            if (a.Sha256 is not null && !System.Text.RegularExpressions.Regex.IsMatch(a.Sha256, "^[0-9a-fA-F]{64}$"))
+                throw new InvalidPolicyException($"{source}: allowedApps[].sha256 must be 64 hex characters");
+            var argLists = (a.AllowedArgs ?? []).Select(l => (IReadOnlyList<string>)(l ?? throw new InvalidPolicyException($"{source}: allowedApps[].allowedArgs must be a list of string lists"))).ToList();
+            apps.Add(new AllowedApp(a.Exe, System.IO.Path.GetFullPath(a.Path), a.Sha256?.ToUpperInvariant(), argLists, a.AllowUserWritable ?? false));
         }
 
         var writes = new List<WriteControl>();
@@ -116,27 +124,37 @@ public sealed class RunnerPolicy
         exeName is not null && AllowedApps.Any(a => string.Equals(a.Exe, exeName, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
-    /// The file app.launch may start for the requested exe, or a policy refusal. Never launches a bare name from the
-    /// working directory or PATH. Several entries may name the same exe with different paths.
+    /// The policy entry app.launch may start for the requested exe and arguments, or a policy refusal. The request names
+    /// the file name or the entry's exact path; the entry's pinned path is what runs. Several entries may name the same
+    /// exe with different paths.
     /// </summary>
-    public string ResolveLaunch(string requested)
+    public AllowedApp ResolveLaunch(string requested, IReadOnlyList<string> args)
     {
         var name = System.IO.Path.GetFileName(requested);
         var apps = AllowedApps.Where(a => string.Equals(a.Exe, name, StringComparison.OrdinalIgnoreCase)).ToList();
         if (apps.Count == 0) throw RpcErrors.PolicyRefused($"application \"{name}\" is not in the runner's allowedApps");
+        AllowedApp app;
         if (string.Equals(requested, name, StringComparison.Ordinal))
         {
-            return apps.FirstOrDefault(a => a.Path is not null)?.Path
-                   ?? throw RpcErrors.PolicyRefused($"application \"{name}\" needs an absolute path (or a path in the runner's policy)");
+            app = apps[0];
         }
-        if (!System.IO.Path.IsPathFullyQualified(requested))
-            throw RpcErrors.PolicyRefused($"application \"{name}\" needs an absolute path (or a path in the runner's policy)");
-        var full = System.IO.Path.GetFullPath(requested);
-        var pinned = apps.FirstOrDefault(a => a.Path is not null && string.Equals(a.Path, full, StringComparison.OrdinalIgnoreCase));
-        if (pinned is not null) return pinned.Path!;
-        if (apps.Any(a => a.Path is null)) return full;
-        throw RpcErrors.PolicyRefused($"application \"{name}\" may only be started from the paths the policy names");
+        else
+        {
+            if (IsUncOrDevice(requested) || !System.IO.Path.IsPathFullyQualified(requested))
+                throw RpcErrors.PolicyRefused($"application \"{name}\" must be named by its file name or the absolute local path in the policy");
+            var full = System.IO.Path.GetFullPath(requested);
+            app = apps.FirstOrDefault(a => string.Equals(a.Path, full, StringComparison.OrdinalIgnoreCase))
+                  ?? throw RpcErrors.PolicyRefused($"application \"{name}\" may only be started from the paths the policy names");
+        }
+        if (args.Count > 0 && !app.AllowedArgs.Any(l => l.SequenceEqual(args, StringComparer.Ordinal)))
+            throw RpcErrors.PolicyRefused($"these arguments for \"{name}\" are not in the policy's allowedArgs");
+        return app;
     }
+
+    /// <summary>UNC (\\server\share), device (\\.\, \\?\) and forward-slash variants.</summary>
+    public static bool IsUncOrDevice(string path) =>
+        path.StartsWith(@"\\", StringComparison.Ordinal) || path.StartsWith("//", StringComparison.Ordinal) ||
+        path.StartsWith(@"\/", StringComparison.Ordinal) || path.StartsWith(@"/\", StringComparison.Ordinal);
 
     public bool IsWriteControl(string? exeName, string automationId) =>
         exeName is not null && automationId.Length > 0 && WriteControls.Any(w =>

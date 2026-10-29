@@ -24,6 +24,7 @@ public sealed class RunnerService
 
     private readonly IDesktop _desktop;
     private readonly IProcessHost _processes;
+    private readonly IPathSecurity _paths;
     private readonly RunnerPolicy _policy;
     private readonly RunManager _runs;
     private readonly WindowScope _scope;
@@ -35,10 +36,11 @@ public sealed class RunnerService
     private readonly string _version;
 
     public RunnerService(IDesktop desktop, IProcessHost processes, RunnerPolicy policy, RunManager runs, TimeProvider time,
-        RunnerLog log, string version)
+        RunnerLog log, string version, IPathSecurity? paths = null)
     {
         _desktop = desktop;
         _processes = processes;
+        _paths = paths ?? new DefaultPathSecurity();
         _policy = policy;
         _runs = runs;
         _time = time;
@@ -131,9 +133,18 @@ public sealed class RunnerService
     private JsonNode AppLaunch(RunState run, Params p, CancellationToken ct)
     {
         var app = p.ReqApp("app");
-        var path = _policy.ResolveLaunch(app.Exe);
+        var entry = _policy.ResolveLaunch(app.Exe, app.Args);
+        var path = entry.Path;
         RequireSession();
-        if (!File.Exists(path)) throw RpcErrors.NotFound($"application executable \"{Path.GetFileName(path)}\"", null);
+        if (!File.Exists(path)) throw RpcErrors.NotFound($"application executable \"{entry.Exe}\"", null);
+        if (!entry.AllowUserWritable && _paths.IsWritableByRunnerUser(path))
+            throw RpcErrors.PolicyRefused($"\"{entry.Exe}\" sits where the runner's own user can replace it; install it in a protected folder or set allowUserWritable in the policy");
+        if (entry.Sha256 is not null)
+        {
+            using var f = File.OpenRead(path);
+            if (!string.Equals(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(f)), entry.Sha256, StringComparison.Ordinal))
+                throw RpcErrors.PolicyRefused($"\"{entry.Exe}\" does not match the sha256 the policy pins");
+        }
         var pid = _processes.Start(path, app.Args);
         run.AddProcess(pid);
         _log.Info($"app.launch {Path.GetFileName(path)} pid={pid}");
@@ -230,6 +241,14 @@ public sealed class RunnerService
         if (action == ActionKind.Read && Redaction.HidesValue(element))
             throw RpcErrors.PolicyRefused("reading a password or credential field is not allowed");
 
+        // Keys that activate controls without targeting them (Enter on a default button, Space on a focused button, an
+        // Alt mnemonic), and any key sent to whatever has the focus, count as writes while the window has a write control.
+        if (chord is not null && (target is null || IsActivatingChord(chord)) && WindowHasWriteControl(res.Window))
+        {
+            if (mode == ActMode.Repair) throw RpcErrors.PolicyRefused($"the key {chord} could activate a declared write control; repair mode never sends it");
+            if (!write) throw RpcErrors.PolicyRefused($"the key {chord} could activate a declared write control in this window and needs write: true");
+        }
+
         EnsureForeground(run, res.Window);
 
         void Guard(IUiNode receiver)
@@ -264,6 +283,28 @@ public sealed class RunnerService
                 CheckWriteControl(element, res.Window, write, mode, "the target");
             }
         }
+    }
+
+    /// <summary>Enter and Space (any modifiers), and Alt with a letter or digit (a mnemonic).</summary>
+    internal static bool IsActivatingChord(KeyChord chord) =>
+        chord.Key is "Enter" or "Space" || (chord.Alt && chord.Key.Length == 1 && char.IsAsciiLetterOrDigit(chord.Key[0]));
+
+    private bool WindowHasWriteControl(IUiNode window)
+    {
+        var exe = _scope.ExeOf(window.ProcessId);
+        foreach (var w in _policy.WriteControls)
+        {
+            if (!string.Equals(w.Exe, exe, StringComparison.OrdinalIgnoreCase)) continue;
+            try
+            {
+                if (window.FindDescendants(new Cond(null, w.AutomationId, null, null, null)).Count > 0) return true;
+            }
+            catch (ElementGoneException)
+            {
+                return true; // cannot tell: treat as present
+            }
+        }
+        return false;
     }
 
     private Resolution FocusedResolution(RunState run)

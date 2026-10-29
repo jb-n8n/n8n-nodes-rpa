@@ -23,14 +23,21 @@ catch (RunnerOptions.InvalidOptionsException e)
 }
 
 var version = typeof(RunnerHost).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion?.Split('+')[0] ?? "0.0.0";
+var paths = new WindowsPathSecurity();
+paths.CreatePrivateDirectory(options.DataDir);
+paths.CreatePrivateDirectory(Path.Combine(options.DataDir, "logs"));
 var log = new RunnerLog(Path.Combine(options.DataDir, "logs"));
 log.Info($"RPA runner {version} starting (data dir {options.DataDir}, policy {options.PolicyPath})");
+
+if (File.Exists(options.PolicyPath))
+    foreach (var problem in PolicyFileCheck.Problems(options.PolicyPath))
+        log.Warn($"policy file: {problem}; make it writable by administrators only");
 
 using var desktop = new WindowsDesktop();
 RunnerHost host;
 try
 {
-    host = await RunnerHost.StartAsync(options, desktop, new WindowsProcessHost(), new DpapiKeyProtector(), TimeProvider.System, log, version);
+    host = await RunnerHost.StartAsync(options, desktop, new WindowsProcessHost(), new DpapiKeyProtector(), TimeProvider.System, log, version, paths);
 }
 catch (Exception e) when (e is RunnerPolicy.InvalidPolicyException or InvalidOperationException or IOException or UnauthorizedAccessException)
 {

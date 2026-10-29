@@ -20,7 +20,7 @@ public sealed class ServerTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         var policy = Path.Combine(_dir, "policy.json");
-        File.WriteAllText(policy, """{ "allowedApps": [{ "exe": "ErpDemo.exe" }] }""");
+        File.WriteAllText(policy, """{ "allowedApps": [{ "exe": "ErpDemo.exe", "path": "/opt/erp/ErpDemo.exe" }] }""");
         var options = RunnerOptions.Parse(["--port", "0", "--bind", "127.0.0.1", "--data-dir", _dir, "--policy", policy],
             name => name == "RPA_RUNNER_TOKEN" ? GoodToken : null);
         _host = await RunnerHost.StartAsync(options, _desktop, new FakeProcessHost(), new NoKeyProtection(), TimeProvider.System,
@@ -123,7 +123,10 @@ public sealed class ServerTests : IAsyncLifetime
             TimeProvider.System, RunnerLog.Silent, "0.1.0-test");
         Assert.Equal(_host.Fingerprint, second.Fingerprint);
         if (!OperatingSystem.IsWindows())
+        {
             Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(Path.Combine(_dir, CertificateStore.FileName)));
+            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute, File.GetUnixFileMode(Path.Combine(_dir, "exports")));
+        }
     }
 
     private static async Task<JsonObject> Call(ClientWebSocket ws, string request)

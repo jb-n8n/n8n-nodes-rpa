@@ -7,14 +7,58 @@ using Rpa.Runner.Core.Ui;
 
 namespace Rpa.Runner.Windows;
 
-/// <summary>Processes on Windows: image names via QueryFullProcessImageName, parents via a Toolhelp snapshot, and a
-/// wait for a launched app's first idle moment.</summary>
+/// <summary>
+/// Processes on Windows. Each launched process goes into its own job object (kill-on-close), so its descendants are
+/// known exactly (a reused process id is never in the job), the whole tree ends with the job, and the apps die with the
+/// runner if it crashes. Image names via QueryFullProcessImageName, parents via a Toolhelp snapshot.
+/// </summary>
 public sealed class WindowsProcessHost : SystemProcessHost
 {
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<int, IntPtr> _jobs = new();
+
     protected override void AfterStart(Process p)
     {
+        // A process can start children before it is assigned; the parent-link check below still covers those.
+        var job = Native.CreateJobObject(IntPtr.Zero, null);
+        if (job != IntPtr.Zero)
+        {
+            var info = new Native.JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
+            info.BasicLimitInformation.LimitFlags = Native.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            var size = Marshal.SizeOf<Native.JOBOBJECT_EXTENDED_LIMIT_INFORMATION>();
+            Native.SetInformationJobObject(job, Native.JobObjectExtendedLimitInformation, ref info, (uint)size);
+            if (Native.AssignProcessToJobObject(job, p.Handle)) _jobs[p.Id] = job;
+            else Native.CloseHandle(job);
+        }
         try { p.WaitForInputIdle(10000); }
         catch (InvalidOperationException) { /* no message loop (yet) */ }
+    }
+
+    public override bool IsDescendantOf(int pid, IReadOnlyCollection<int> roots)
+    {
+        var h = Native.OpenProcess(Native.PROCESS_QUERY_LIMITED_INFORMATION, false, (uint)pid);
+        if (h != IntPtr.Zero)
+        {
+            try
+            {
+                foreach (var root in roots)
+                    if (_jobs.TryGetValue(root, out var job) && Native.IsProcessInJob(h, job, out var inJob) && inJob) return true;
+            }
+            finally
+            {
+                Native.CloseHandle(h);
+            }
+        }
+        return base.IsDescendantOf(pid, roots);
+    }
+
+    public override void KillTree(int pid)
+    {
+        if (_jobs.TryRemove(pid, out var job))
+        {
+            Native.TerminateJobObject(job, 1);
+            Native.CloseHandle(job);
+        }
+        base.KillTree(pid);
     }
 
     public override string? GetExeName(int pid)

@@ -1,6 +1,10 @@
 {
   "allowedApps": [
-    { "exe": "ErpDemo.exe", "path": "C:\\Program Files\\ERP Demo\\ErpDemo.exe" }
+    {
+      "exe": "ErpDemo.exe",
+      "path": "C:\\Program Files\\ERP Demo\\ErpDemo.exe",
+      "allowedArgs": [["--ui", "v1"], ["--ui", "v2"]]
+    }
   ],
   "writeControls": [
     { "exe": "ErpDemo.exe", "automationId": "btnPost" }

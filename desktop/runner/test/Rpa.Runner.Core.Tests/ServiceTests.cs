@@ -103,6 +103,45 @@ public sealed class ServiceTests : IDisposable
     }
 
     [Fact]
+    public void App_launch_refuses_unlisted_arguments_a_user_writable_path_and_a_wrong_hash()
+    {
+        _h.Begin();
+        _h.Err("app.launch", new { runId = Harness.RunId, app = new { exe = "ErpDemo.exe", args = new[] { "--evil" } } }, RpcErrors.PolicyRefusedCode);
+        _h.Paths.Writable = true;
+        var e = _h.Err("app.launch", new { runId = Harness.RunId, app = new { exe = "ErpDemo.exe" } }, RpcErrors.PolicyRefusedCode);
+        Assert.Contains("replace", e["message"]!.GetValue<string>());
+        Assert.Empty(_h.Processes.Started);
+    }
+
+    [Fact]
+    public void App_launch_checks_the_pinned_hash_and_allows_user_writable_paths_only_when_the_policy_says_so()
+    {
+        using var probe = new Harness();
+        var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(probe.AppPath)));
+        string Policy(string sha) => $$"""
+            { "allowedApps": [{ "exe": "ErpDemo.exe", "path": {{System.Text.Json.JsonSerializer.Serialize(probe.AppPath)}}, "sha256": "{{sha}}", "allowUserWritable": true }] }
+            """;
+        using (var good = new Harness(Policy(hash.ToLowerInvariant())))
+        {
+            File.WriteAllText(good.AppPath, "fake"); // same content as the probe's file
+            good.Paths.Writable = true;
+            good.Begin();
+            good.Ok("app.launch", new { runId = Harness.RunId, app = new { exe = probe.AppPath } });
+        }
+        using var bad = new Harness(Policy(new string('0', 64)));
+        bad.Begin();
+        bad.Err("app.launch", new { runId = Harness.RunId, app = new { exe = "ErpDemo.exe" } }, RpcErrors.PolicyRefusedCode);
+    }
+
+    [Fact]
+    public void Export_dirs_are_created_private()
+    {
+        _h.Begin();
+        Assert.Contains(Path.GetFullPath(_h.ExportDir!), _h.Paths.Private);
+        Assert.Contains(Path.GetFullPath(Path.Combine(_h.Root, "exports")), _h.Paths.Private);
+    }
+
+    [Fact]
     public void Write_controls_need_write_true()
     {
         _h.BeginWithApp();
@@ -155,11 +194,33 @@ public sealed class ServiceTests : IDisposable
     {
         var w = _h.BeginWithApp();
         _h.Desktop.Focused = w.Find("txtUser");
-        _h.Ok("act", new { runId = Harness.RunId, action = "key", value = "Enter", timeoutMs = 0 });
+        _h.Ok("act", new { runId = Harness.RunId, action = "key", value = "Tab", write = true, timeoutMs = 0 });
         Assert.Equal("txtUser", _h.Desktop.Performed[^1].Element.AutomationId);
+        // Any key to the focus counts as a write while the window has a write control.
+        _h.Err("act", new { runId = Harness.RunId, action = "key", value = "Tab", timeoutMs = 0 }, RpcErrors.PolicyRefusedCode);
         _h.Desktop.Focused = w.Find("btnPost");
         _h.Err("act", new { runId = Harness.RunId, action = "key", value = "Enter", timeoutMs = 0 }, RpcErrors.PolicyRefusedCode);
         _h.Err("act", new { runId = Harness.RunId, action = "click", timeoutMs = 0 }, RpcErrors.InvalidParams);
+    }
+
+    [Theory]
+    [InlineData("Enter")]
+    [InlineData("ctrl+enter")]
+    [InlineData("Space")]
+    [InlineData("Alt+P")]
+    [InlineData("alt+1")]
+    public void Activating_keys_need_write_true_while_the_window_has_a_write_control(string key)
+    {
+        var w = _h.BeginWithApp();
+        var e = _h.Err("act", Act(Id("txtUser"), "key", new { value = key }), RpcErrors.PolicyRefusedCode);
+        Assert.Contains("write control", e["message"]!.GetValue<string>());
+        _h.Ok("act", Act(Id("txtUser"), "key", new { value = key, write = true }));
+        // A window without write controls: no gate.
+        var dialog = new FakeNode("Window", "Find", "dlgFind", w.ProcessId);
+        dialog.Child("Edit", "Search for", "txtFind");
+        _h.Desktop.Windows.Insert(0, dialog);
+        _h.Desktop.Foreground = dialog;
+        _h.Ok("act", Act(Harness.T(new { automationId = "txtFind" }), "key", new { value = key }));
     }
 
     [Theory]

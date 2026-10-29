@@ -20,7 +20,7 @@ public sealed class Harness : IDisposable
         File.WriteAllText(AppPath, "fake");
         Policy = RunnerPolicy.Parse(policyJson ?? $$"""
             {
-              "allowedApps": [{ "exe": "ErpDemo.exe", "path": {{JsonSerializer.Serialize(AppPath)}} }],
+              "allowedApps": [{ "exe": "ErpDemo.exe", "path": {{JsonSerializer.Serialize(AppPath)}}, "allowedArgs": [["--ui", "v2"]] }],
               "writeControls": [{ "exe": "ErpDemo.exe", "automationId": "btnPost" }],
               "gatedKeys": ["Ctrl+S", "F11"],
               "maxFileBytes": 1024
@@ -28,8 +28,8 @@ public sealed class Harness : IDisposable
             """);
         Time = realTime ? null : new FakeTimeProvider(DateTimeOffset.Parse("2026-10-29T10:00:00Z"));
         TimeProvider time = Time is null ? TimeProvider.System : Time;
-        Runs = new RunManager(Path.Combine(Root, "exports"), Processes, time, Log);
-        Service = new RunnerService(Desktop, Processes, Policy, Runs, time, Log, "0.1.0-test");
+        Runs = new RunManager(Path.Combine(Root, "exports"), Processes, time, Log, Paths);
+        Service = new RunnerService(Desktop, Processes, Policy, Runs, time, Log, "0.1.0-test", Paths);
         Dispatcher = new RpcDispatcher(Service, Log);
     }
 
@@ -39,6 +39,7 @@ public sealed class Harness : IDisposable
     public FakeTimeProvider? Time { get; }
     public FakeDesktop Desktop { get; } = new();
     public FakeProcessHost Processes { get; } = new();
+    public FakePathSecurity Paths { get; } = new();
     public RunnerLog Log { get; } = RunnerLog.Silent;
     public RunManager Runs { get; }
     public RunnerService Service { get; }

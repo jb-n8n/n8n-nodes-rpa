@@ -57,6 +57,36 @@ public class SystemProcessHost : IProcessHost
         }
     }
 
+    public virtual bool IsDescendantOf(int pid, IReadOnlyCollection<int> roots)
+    {
+        var child = pid;
+        var childStart = GetStartTime(child);
+        for (var i = 0; i < 16 && childStart is not null; i++)
+        {
+            if (GetParentPid(child) is not int parent || parent == child) return false;
+            var parentStart = GetStartTime(parent);
+            // A parent that started after its "child" is a reused id, not the real parent.
+            if (parentStart is null || parentStart > childStart) return false;
+            if (roots.Contains(parent)) return true;
+            child = parent;
+            childStart = parentStart;
+        }
+        return false;
+    }
+
+    protected virtual DateTime? GetStartTime(int pid)
+    {
+        try
+        {
+            using var p = Process.GetProcessById(pid);
+            return p.StartTime.ToUniversalTime();
+        }
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException)
+        {
+            return null;
+        }
+    }
+
     /// <summary>Kills a process this host started (never another process that happens to have the id).</summary>
     public virtual void KillTree(int pid)
     {

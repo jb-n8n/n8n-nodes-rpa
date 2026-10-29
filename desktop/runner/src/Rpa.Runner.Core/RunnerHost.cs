@@ -99,18 +99,19 @@ public sealed class RunnerHost : IAsyncDisposable
     public int Port => _server.Port;
 
     public static async Task<RunnerHost> StartAsync(RunnerOptions options, IDesktop desktop, IProcessHost processes,
-        IKeyProtector protector, TimeProvider time, RunnerLog log, string version)
+        IKeyProtector protector, TimeProvider time, RunnerLog log, string version, IPathSecurity? paths = null)
     {
+        paths ??= new DefaultPathSecurity();
+        paths.CreatePrivateDirectory(options.DataDir);
         var policy = RunnerPolicy.Load(options.PolicyPath);
         log.Info($"policy loaded: {policy.AllowedApps.Count} allowed app(s), {policy.WriteControls.Count} write control(s), " +
                  $"{policy.GatedKeys.Count} gated key(s), maxFileBytes={policy.MaxFileBytes}");
         var cert = CertificateStore.LoadOrCreate(options.DataDir, protector, log);
         var fingerprint = CertificateStore.Fingerprint(cert);
         var exportRoot = Path.Combine(options.DataDir, "exports");
-        Directory.CreateDirectory(exportRoot);
-        var runs = new RunManager(exportRoot, processes, time, log);
+        var runs = new RunManager(exportRoot, processes, time, log, paths);
         runs.SweepStaleExportDirs();
-        var service = new RunnerService(desktop, processes, policy, runs, time, log, version);
+        var service = new RunnerService(desktop, processes, policy, runs, time, log, version, paths);
         var dispatcher = new RpcDispatcher(service, log);
         var server = RunnerServer.Create(options.Bind, options.Port, cert, options.Token, dispatcher, log);
         await server.StartAsync();

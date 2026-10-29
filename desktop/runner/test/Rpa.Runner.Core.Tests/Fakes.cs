@@ -125,5 +125,31 @@ public sealed class FakeProcessHost : IProcessHost
 
     public string? GetExeName(int pid) => Names.TryGetValue(pid, out var n) ? n : null;
     public int? GetParentPid(int pid) => Parents.TryGetValue(pid, out var p) ? p : null;
+
+    public bool IsDescendantOf(int pid, IReadOnlyCollection<int> roots)
+    {
+        int? cur = pid;
+        for (var i = 0; i < 16 && cur is int c; i++)
+        {
+            cur = GetParentPid(c);
+            if (cur is int p && roots.Contains(p)) return true;
+        }
+        return false;
+    }
     public void KillTree(int pid) => Killed.Add(pid);
+}
+
+/// <summary>Records private directories; the writable answer is set by the test.</summary>
+public sealed class FakePathSecurity : IPathSecurity
+{
+    public List<string> Private { get; } = [];
+    public bool Writable { get; set; }
+
+    public void CreatePrivateDirectory(string path)
+    {
+        Directory.CreateDirectory(path);
+        Private.Add(Path.GetFullPath(path));
+    }
+
+    public bool IsWritableByRunnerUser(string file) => Writable;
 }

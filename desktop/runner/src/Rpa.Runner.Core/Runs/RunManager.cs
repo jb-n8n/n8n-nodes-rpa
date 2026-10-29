@@ -49,15 +49,18 @@ public sealed class RunManager : IDisposable
     private readonly object _gate = new();
     private readonly string _exportRoot;
     private readonly IProcessHost _processes;
+    private readonly IPathSecurity _paths;
     private readonly TimeProvider _time;
     private readonly RunnerLog _log;
     private RunState? _active;
     private ITimer? _timer;
 
-    public RunManager(string exportRoot, IProcessHost processes, TimeProvider time, RunnerLog log)
+    public RunManager(string exportRoot, IProcessHost processes, TimeProvider time, RunnerLog log, IPathSecurity? paths = null)
     {
         _exportRoot = exportRoot;
         _processes = processes;
+        _paths = paths ?? new DefaultPathSecurity();
+        _paths.CreatePrivateDirectory(exportRoot);
         _time = time;
         _log = log;
     }
@@ -76,7 +79,7 @@ public sealed class RunManager : IDisposable
             if (_active is not null || _cleaning is not null) throw RpcErrors.RunnerBusy();
             // A fresh, unguessable directory per run; the run id is caller-chosen and never used in the path.
             var dir = Path.Combine(_exportRoot, Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(dir);
+            _paths.CreatePrivateDirectory(dir);
             var lease = TimeSpan.FromMilliseconds(leaseMs);
             _active = new RunState(runId, Path.GetFullPath(dir), lease, _time.GetUtcNow() + lease);
             _timer?.Dispose();

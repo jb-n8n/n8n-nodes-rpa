@@ -31,13 +31,22 @@ never tokens, typed values or file contents.
 The runner refuses to start without a policy file (default `<data dir>\policy.json`). Make it writable by
 administrators only. See [`runner/policy.example.json`](runner/policy.example.json):
 
-- `allowedApps`: the only executables `app.launch` starts. `exe` is the file name; `path` (recommended) pins the
-  absolute path, and then a step set may name just the file name. Without `path`, the request must give an absolute
-  path whose file name is `exe`.
+- `allowedApps`: the only executables `app.launch` starts. `exe` is the file name a step set names; `path` (required)
+  pins the absolute local path that runs (UNC and device paths are refused). Optional: `sha256` pins the file's hash;
+  `allowedArgs` lists the exact argument lists a launch may pass (without it, none); `allowUserWritable: true` permits
+  a path the runner's own user could modify or replace, which is refused otherwise. Install apps in a protected folder
+  (such as `C:\Program Files`) and run the runner as a normal, non-elevated user.
 - `writeControls`: controls (by process and automation id) that act only with `write: true`, including through a child
-  element, the mouse landing on them, or the keyboard focus being on them.
-- `gatedKeys`: key chords that need `write: true` (in any spelling: `ctrl+s` is `Ctrl+S`).
+  element, the mouse landing on them, or the keyboard focus being on them. While a window holds a write control, the
+  keys that activate controls without targeting them (Enter, Space, Alt+letter) and any key sent to the focus need
+  `write: true` there too.
+- `gatedKeys`: key chords that need `write: true` (in any spelling: `ctrl+s` is `Ctrl+S`). List the app's save and
+  post shortcuts here.
 - `maxFileBytes`: the largest file `file.retrieve` returns (default 20 MiB).
+
+Each launched app runs in its own Windows job object: the run's windows are those of processes in it, and the run's end
+(or its expired lease, or the runner exiting) ends the whole process tree. The data, log and export directories get an
+explicit ACL: the runner's user, SYSTEM and Administrators only.
 
 A run acts only on windows of processes it launched whose executable is allowed. If another application's window holds
 the foreground and the runner cannot bring the run's window back, the action is refused; OS surfaces (notifications,

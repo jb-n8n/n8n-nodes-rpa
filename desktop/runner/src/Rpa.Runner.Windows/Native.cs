@@ -92,6 +92,55 @@ internal static partial class Native
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     public static extern bool Process32NextW(IntPtr snapshot, ref PROCESSENTRY32W entry);
 
+    public const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000;
+    public const int JobObjectExtendedLimitInformation = 9;
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern IntPtr CreateJobObject(IntPtr attributes, string? name);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool SetInformationJobObject(IntPtr job, int infoClass, ref JOBOBJECT_EXTENDED_LIMIT_INFORMATION info, uint length);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool IsProcessInJob(IntPtr process, IntPtr job, out bool result);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool TerminateJobObject(IntPtr job, uint exitCode);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct JOBOBJECT_BASIC_LIMIT_INFORMATION
+    {
+        public long PerProcessUserTimeLimit;
+        public long PerJobUserTimeLimit;
+        public uint LimitFlags;
+        public UIntPtr MinimumWorkingSetSize;
+        public UIntPtr MaximumWorkingSetSize;
+        public uint ActiveProcessLimit;
+        public UIntPtr Affinity;
+        public uint PriorityClass;
+        public uint SchedulingClass;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct IO_COUNTERS
+    {
+        public ulong ReadOperationCount, WriteOperationCount, OtherOperationCount, ReadTransferCount, WriteTransferCount, OtherTransferCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+    {
+        public JOBOBJECT_BASIC_LIMIT_INFORMATION BasicLimitInformation;
+        public IO_COUNTERS IoInfo;
+        public UIntPtr ProcessMemoryLimit;
+        public UIntPtr JobMemoryLimit;
+        public UIntPtr PeakProcessMemoryUsed;
+        public UIntPtr PeakJobMemoryUsed;
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     public struct RECT
     {

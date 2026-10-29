@@ -102,6 +102,13 @@ public interface IProcessHost
     /// <summary>The parent process id, or null when unknown.</summary>
     int? GetParentPid(int pid);
 
+    /// <summary>
+    /// True when the process descends from one of the roots (processes this host started). Windows answers from the
+    /// job object each launched process was placed in; elsewhere parent links count only when the parent started
+    /// before the child, so a reused process id cannot pose as a parent.
+    /// </summary>
+    bool IsDescendantOf(int pid, IReadOnlyCollection<int> roots);
+
     /// <summary>Kills the process and its descendants; ignores processes that already exited.</summary>
     void KillTree(int pid);
 }
