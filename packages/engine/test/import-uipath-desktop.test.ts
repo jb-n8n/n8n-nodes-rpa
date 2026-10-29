@@ -347,8 +347,23 @@ describe('approving and signing an imported desktop draft', () => {
     // Flags that hide a candidate write, with a matching digest: refused.
     const hidden = { ...p, safetyFlags: p.safetyFlags.filter((f) => !f.includes('step 16')) };
     expect(reasons(sign(hidden, [], proposalDigest(hidden)))).toContain('the safety flags do not list the app, the returned files, the declared writes and the candidate writes the steps have');
-    const crafted = { ...p, changes: [{ was: null, now: 'Click Cancel (click "Button" id "2")' }] };
-    expect(reasons(sign(crafted, [], proposalDigest(crafted)))).toContain('the change list names a step that is not in the steps');
+    // The change list must show every step, in order, as added: a missing, reordered, padded or foreign entry is refused.
+    const MISMATCH = 'the change list does not show every step of the steps, in order, as added';
+    const lists = {
+      foreign: [...p.changes.slice(0, -1), { was: null, now: 'Click Cancel (click "Button" id "2")' }],
+      missing: p.changes.filter((_, i) => i !== 15),
+      reordered: [p.changes[1], p.changes[0], ...p.changes.slice(2)],
+      padded: [...p.changes, { was: null, now: null }],
+      nullNow: p.changes.map((c, i) => (i === 15 ? { was: null, now: null } : c)),
+      empty: [],
+      changedWas: p.changes.map((c, i) => (i === 0 ? { was: c.now, now: c.now } : c)),
+    };
+    for (const [what, changes] of Object.entries(lists)) {
+      const crafted = { ...p, changes } as DesktopProposal;
+      expect(reasons(sign(crafted, [], proposalDigest(crafted))), what).toEqual([MISMATCH]);
+    }
+    const based = { ...p, baseVersion: 0 };
+    expect(reasons(sign(based, [], proposalDigest(based)))).toContain('desktop steps have no repair yet, so a desktop proposal must be a first version (no base version) that shows every step');
     const proven = { ...p, evidence: { ...p.evidence, count: 12 } };
     expect(reasons(sign(proven, [], proposalDigest(proven)))).toContain('desktop steps are not replayed at import, so their evidence must be empty (no rows, no file)');
     expect(reasons(sign(p, [1]))).toEqual(['Write Steps: step 1 is a waitFor step, which cannot be a write (only click, fill, select, check and key steps can)']);
@@ -366,6 +381,16 @@ describe('approving and signing an imported desktop draft', () => {
     expect(p.steps.steps[8].write).toBeUndefined();
     expect(d.ok && describeDesktopStep(d.script.steps[8])).toMatch(/; declared write\)$/);
     expect(d.ok && desktopSafetyFlags(d.script)).toContain('write: step 9 (Click Search) is a declared write step');
+    // A proposal of steps that already carry a write shows it in the change list, and signs only with that exact list.
+    if (!d.ok) throw new Error('declareWrites failed');
+    const withWrite = desktopProposal(d.script);
+    expect(withWrite.changes[8].now).toBe('Click Search (click "Button" id "btnSearch" name "Search" in window app "erpdemo.exe" title "ERP Demo - Line items" or "Button" id "btnSearch" in window app "erpdemo.exe" title "ERP Demo - Line items"; declared write)');
+    expect(withWrite.safetyFlags).toContain('write: step 9 (Click Search) is a declared write step');
+    expect(signDesktopSteps({ proposal: withWrite, key: KEY, approverId: OWNER, reviewedDigest: proposalDigest(withWrite), writeSteps: [] }).ok).toBe(true);
+    const hiddenWrite = { ...withWrite, changes: p.changes };
+    expect(signDesktopSteps({ proposal: hiddenWrite, key: KEY, approverId: OWNER, reviewedDigest: proposalDigest(hiddenWrite), writeSteps: [] })).toEqual({
+      ok: false, reasons: ['the change list does not show every step of the steps, in order, as added'],
+    });
   });
 });
 

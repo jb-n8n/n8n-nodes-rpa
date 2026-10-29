@@ -154,7 +154,8 @@ export const WRITE_STEPS_INVALID = 'Write Steps must list step numbers, such as 
 export const writeStepOutOfRange = (n: number, count: number) => `Write Steps: there is no step ${n} (the steps are numbered 1 to ${count})`;
 export const writeStepNotAllowed = (n: number, verb: string) => `Write Steps: step ${n} is a ${verb} step, which cannot be a write (only click, fill, select, check and key steps can)`;
 export const DESKTOP_FLAGS_INCOMPLETE = 'the safety flags do not list the app, the returned files, the declared writes and the candidate writes the steps have';
-export const DESKTOP_CHANGES_MISMATCH = 'the change list names a step that is not in the steps';
+export const DESKTOP_CHANGES_MISMATCH = 'the change list does not show every step of the steps, in order, as added';
+export const DESKTOP_NEEDS_FIRST_VERSION = 'desktop steps have no repair yet, so a desktop proposal must be a first version (no base version) that shows every step';
 export const DESKTOP_EVIDENCE_INVALID = 'desktop steps are not replayed at import, so their evidence must be empty (no rows, no file)';
 
 /** Write Steps as typed by the approver: step numbers separated by commas or spaces; '' or only spaces is none. */
@@ -194,9 +195,9 @@ const sameSet = (a: string[], b: string[]): boolean => {
 /**
  * Re-checks a desktop proposal (an untrusted Repaired steps item) and signs it with the owner's declared writes. In
  * order: the review digest is required; the steps parse as a desktop step set with a name and version; the hash,
- * name, version and digest match what was reviewed; the safety flags are exactly desktopSafetyFlags of the steps and
- * every change-list entry describes a step the steps have (an unkeyed digest alone could hide a step); the evidence is
- * empty. Then Write Steps are added (declareWrites) and the result is signed with `pw-steps/2`, bound to the app
+ * name, version and digest match what was reviewed; it is a first version (no base); the safety flags are exactly
+ * desktopSafetyFlags of the steps and the change list is exactly desktopStepChanges of the steps (one entry per step,
+ * in order: an unkeyed digest alone could hide a step); the evidence is empty. Then Write Steps are added (declareWrites) and the result is signed with `pw-steps/2`, bound to the app
  * (sign.ts desktopBinding) and the approver. No Site Login is bound: desktop runs refuse one. Never throws.
  */
 export function signDesktopSteps(input: {
@@ -232,9 +233,8 @@ export function signDesktopSteps(input: {
   if (proposal.hash !== hash) reasons.push(STEPS_HASH_MISMATCH);
   if (name !== proposal.name) reasons.push(STEPS_NAME_MISMATCH);
   if (version !== proposal.version) reasons.push(STEPS_VERSION_MISMATCH);
-  if (proposal.baseVersion !== null && (typeof proposal.baseVersion !== 'number' || version <= proposal.baseVersion)) {
-    reasons.push(`version ${version} is not newer than the base version ${String(proposal.baseVersion)}`);
-  }
+  // Desktop steps have no repair yet: every desktop proposal is a first version, reviewed whole.
+  if (proposal.baseVersion !== null) reasons.push(DESKTOP_NEEDS_FIRST_VERSION);
   let digest = '';
   try {
     digest = proposalDigest(proposal);
@@ -244,9 +244,15 @@ export function signDesktopSteps(input: {
   if (input.reviewedDigest !== digest) reasons.push(STEPS_CHANGED_AFTER_REVIEW);
   const flags = Array.isArray(proposal.safetyFlags) ? proposal.safetyFlags : [];
   if (!sameSet(flags.map(String), desktopSafetyFlags(script))) reasons.push(DESKTOP_FLAGS_INCOMPLETE);
-  const known = new Set(script.steps.map(describeDesktopStep));
-  const changes = Array.isArray(proposal.changes) ? proposal.changes : [];
-  if (!changes.every((c) => c && typeof c === 'object' && (c.now === null || (typeof c.now === 'string' && known.has(c.now))))) reasons.push(DESKTOP_CHANGES_MISMATCH);
+  // The change list is the whole review: exactly one "added" entry per step, in order, each the step's own description
+  // (a declared write says so). A partial, reordered or padded list could hide a step from the approver.
+  const changes: unknown[] = Array.isArray(proposal.changes) ? proposal.changes : [];
+  const expectedChanges = desktopStepChanges(script);
+  const exact = changes.length === expectedChanges.length && changes.every((c, i) => {
+    const e = c as { was?: unknown; now?: unknown } | null;
+    return e !== null && typeof e === 'object' && e.was === null && e.now === expectedChanges[i].now;
+  });
+  if (!exact) reasons.push(DESKTOP_CHANGES_MISMATCH);
   const e = proposal.evidence as unknown as Record<string, unknown> | undefined;
   const d = e?.diff as { missing?: unknown[]; extra?: unknown[] } | undefined;
   if (!e || e.count !== 0 || e.total !== null || e.file !== undefined || e.readPosts !== undefined || !d || d.missing?.length !== 0 || d.extra?.length !== 0) {
