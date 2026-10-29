@@ -235,4 +235,4 @@ const waitFor: Handler = async (ctx, step, _state, timeout) => {
   }
 };
 
-registerHandlers({ goto, click, fill, select, check, waitFor });
+registerHandlers('browser', { goto, click, fill, select, check, waitFor });

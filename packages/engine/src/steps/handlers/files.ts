@@ -215,4 +215,4 @@ const popup: Handler = async (ctx, step, _state, timeout) => {
   return t.candidate;
 };
 
-registerHandlers({ submit, download, popup });
+registerHandlers('browser', { submit, download, popup });

@@ -2,14 +2,14 @@ import type { Page } from 'playwright-core';
 import type { AllowedSubmit, WriteWindow } from '../browser/session.js';
 import { maskClipped, type Masker } from '../secrets/mask.js';
 import type { PortalPolicy, PortalSecrets, RunState, Script, Step, StepLogEntry, StepsResult, StepVerb, Violation } from '../types.js';
-import { checkExpect } from './expect.js';
 import type { InterruptHandle } from './interrupts.js';
 import { HANDLERS } from './handlers/index.js';
-import { isVisibleNow } from './locator.js';
 import { verbOf } from './parse.js';
 import { PolicyError } from './errors.js';
 import { shownMessage } from './urls.js';
 import { BLOCKED_STOP } from '../messages.js';
+import { createBrowserSurface } from '../surface/browser.js';
+import type { Surface } from '../surface/surface.js';
 
 /**
  * What a step handler works with. `page` may be replaced (popup). `violations` is the session's live list:
@@ -17,6 +17,8 @@ import { BLOCKED_STOP } from '../messages.js';
  */
 export interface StepContext {
   page: Page;
+  /** What the runner drives. Absent: the browser surface over `page` (surfaceOf), which follows a page a popup step replaced. */
+  surface?: Surface;
   script: Script;
   policy: PortalPolicy;
   /** Site Login secrets, only for signIn; absent without a Site Login. */
@@ -52,6 +54,11 @@ export interface StepHooks {
   end(page: Page, ok: boolean, label: string): Promise<void>;
 }
 export type Handler = (ctx: StepContext, step: Step, state: RunState, timeoutMs: number) => Promise<number | void>;
+
+/** The context's surface: its own, else the browser surface over `ctx.page`. */
+export function surfaceOf(ctx: StepContext): Surface {
+  return ctx.surface ?? createBrowserSurface(() => ctx.page);
+}
 
 export function newRunState(): RunState {
   return { rows: [], evidence: [], downloads: [], outputs: [], detected: {}, lastCheckpoint: -1, log: [], credentialsSubmitted: false, submitClicked: false, extractRan: false, attributeFields: [], submitted: false };
@@ -108,6 +115,9 @@ export async function runSteps(
     maxTimeoutMs?: number;
   } = {},
 ): Promise<StepsResult> {
+  const surface = surfaceOf(ctx);
+  // Step hooks take a Playwright page: they belong to browser runs only.
+  const hooks = surface.kind === 'browser' ? ctx.stepHooks : undefined;
   // startAt 1: the lane already ran step 0 (the start page) and logged it.
   for (let i = opts.startAt ?? 0; i < steps.length; i++) {
     const step = steps[i];
@@ -129,21 +139,21 @@ export async function runSteps(
     const timeout = Math.min(step.timeoutMs ?? ctx.defaultTimeoutMs, opts.maxTimeoutMs ?? Infinity);
     let hookLabel: string | undefined;
     const endHook = async (ok: boolean) => {
-      if (hookLabel !== undefined) await ctx.stepHooks?.end(ctx.page, ok, hookLabel).catch(() => undefined);
+      if (hookLabel !== undefined) await hooks?.end(ctx.page, ok, hookLabel).catch(() => undefined);
     };
     try {
-      if (step.when && !(await isVisibleNow(ctx.page, step.when.visible))) {
+      if (step.when && !(await surface.isVisible(step.when.visible))) {
         log('skipped', 0, { note: 'condition not met' });
         if (!opts.nested) await opts.afterStep?.(i);
         continue;
       }
-      if (ctx.stepHooks && !opts.nested) {
+      if (hooks && !opts.nested) {
         hookLabel = maskClipped(ctx.masker, opts.label ? `${opts.label}: ${step.intent}` : `Step ${at + 1}: ${step.intent}`, HOOK_LABEL_MAX);
-        await ctx.stepHooks.start(ctx.page, hookLabel).catch(() => undefined);
+        await hooks.start(ctx.page, hookLabel).catch(() => undefined);
       }
       const verb = verbOf(step);
-      const handler = HANDLERS[verb];
-      if (!handler) throw new Error(`step type "${verb}" has no handler`);
+      const handler = HANDLERS[surface.kind][verb];
+      if (!handler) throw new Error(`step type "${verb}" has no handler${surface.kind === 'browser' ? '' : ` for the ${surface.kind} surface`}`);
       // The write window belongs to one top-level step; nested (paginate) runs never get it.
       ctx.writeStep = !opts.nested && ctx.policy.writeWindow !== undefined && ctx.policy.writeWindow.step === i;
       let candidate: number | void;
@@ -152,7 +162,7 @@ export async function runSteps(
       } finally {
         ctx.writeStep = false;
       }
-      if (step.expect) await checkExpect(ctx.page, step.expect, timeout);
+      if (step.expect) await surface.checkExpect(step.expect, timeout);
       if (step.checkpoint && !opts.nested) state.lastCheckpoint = i;
       const output = logOutput(state, verb, outputsBefore, downloadsBefore);
       log('ok', Date.now() - t0, { ...(typeof candidate === 'number' ? { candidate } : {}), ...(output ? { output } : {}) });

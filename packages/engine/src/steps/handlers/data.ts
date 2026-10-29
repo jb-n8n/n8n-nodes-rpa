@@ -195,4 +195,4 @@ const clickAll: Handler = async (ctx, step, _state, timeout) => {
   return found.candidate;
 };
 
-registerHandlers({ extract, paginate, clickAll });
+registerHandlers('browser', { extract, paginate, clickAll });

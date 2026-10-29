@@ -274,4 +274,4 @@ const extractTable: Handler = async (ctx, step, state, timeout) => {
   return candidate;
 };
 
-registerHandlers({ screenshot, pdf, read, extractTable });
+registerHandlers('browser', { screenshot, pdf, read, extractTable });
