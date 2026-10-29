@@ -145,9 +145,10 @@ describe('Run Steps and Sign Steps fields', () => {
     expect(field('steps').placeholder).toBe(STEPS_PLACEHOLDER);
     expect(parseScript(JSON.parse(STEPS_PLACEHOLDER)).steps).toHaveLength(3);
   });
-  it('Sign Steps shows Approved (hint "Off records a rejection"), Approved By and Approver Allowlist', () => {
+  it('Sign Steps shows Approved (hint "Off records a rejection"), Approved By, Approver Allowlist and Write Steps', () => {
     const sign = d.properties.filter((p) => p.displayOptions?.show?.operation?.includes('signSteps') && p.name !== 'options').map((p) => p.name);
-    expect(sign).toEqual(['signInputNotice', 'approved', 'approverId', 'approverAllowlist']);
+    expect(sign).toEqual(['signInputNotice', 'approved', 'approverId', 'approverAllowlist', 'writeSteps']);
+    expect(field('writeSteps')).toMatchObject({ displayName: 'Write Steps', type: 'string', default: '', placeholder: '7, 9', hint: 'Desktop steps only. Leave empty when no step saves, posts or submits.' });
     expect(field('approved')).toMatchObject({ displayName: 'Approved', type: 'boolean', default: false, hint: 'Off records a rejection' });
     expect(field('approverId').displayName).toBe('Approved By');
     expect(field('approverAllowlist').displayName).toBe('Approver Allowlist');

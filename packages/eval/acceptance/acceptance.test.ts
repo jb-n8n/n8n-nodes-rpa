@@ -4,7 +4,9 @@
 // (any other fails the test, so template and emulation cannot drift apart), and the Data Table is an in-memory table with
 // n8n's get / upsert / update semantics. Live-model parts need ANTHROPIC_API_KEY; the compose stack part needs ACCEPTANCE_COMPOSE=1.
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, relative } from 'node:path';
+import { strToU8, zipSync } from 'fflate';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { ICredentialDataDecryptedObject, IDataObject, INodeExecutionData } from 'n8n-workflow';
@@ -16,6 +18,7 @@ import { loadEngine, type Engine } from '../../n8n-nodes-rpa/nodes/Playwright/en
 import { resetGuardsForTests } from '../../n8n-nodes-rpa/nodes/Playwright/guard.js';
 import { executeRunSteps } from '../../n8n-nodes-rpa/nodes/Playwright/operations/runSteps.js';
 import { executeSignSteps } from '../../n8n-nodes-rpa/nodes/Playwright/operations/signSteps.js';
+import { desktopRepairedStepsJson } from '../../n8n-nodes-rpa/nodes/Playwright/output.js';
 import { STEPS_TABLE } from '../../n8n-nodes-rpa/nodes/Playwright/rows.js';
 import { nodeContext, repairedItem } from '../../n8n-nodes-rpa/test/feed-fixtures.js';
 import { anthropicChatModel } from '../src/anthropic-model.js';
@@ -77,7 +80,9 @@ const EXPRESSIONS: Record<string, (s: Scope) => unknown> = {
   "={{ $('Repaired steps received').item.json.hash }}": (s) => s.repaired.hash,
   "={{ $now.plus({ hours: $('Settings').item.json.approvalTimeoutHours }).toISO() }}": (s) => new Date(s.now + Number(s.settings.approvalTimeoutHours) * 3_600_000).toISOString(),
   "={{ $now.toISO() }}": (s) => new Date(s.now).toISOString(),
-  "={{ $('Ask for approval').item.json.data.approved }}": (s) => (s.approval.data as IDataObject | undefined)?.approved,
+  // Timed out? passes the approval's answer through: Ask for approval's (browser steps) or Desktop answer's (desktop steps).
+  "={{ $('Timed out?').item.json.data.approved }}": (s) => (s.approval.data as IDataObject | undefined)?.approved,
+  "={{ $('Timed out?').item.json.data.writeSteps ?? '' }}": (s) => (s.approval.data as IDataObject | undefined)?.writeSteps ?? '',
   "={{ $json.data === undefined }}": (s) => s.json.data === undefined,
   '={{ $json.status }}': (s) => s.json.status,
   '={{ $json.hash }}': (s) => s.json.hash,
@@ -85,6 +90,13 @@ const EXPRESSIONS: Record<string, (s: Scope) => unknown> = {
   '={{ $json.signature }}': (s) => s.json.signature,
   '={{ $json.approvedBy }}': (s) => s.json.approvedBy,
   '={{ $json.approvedAt }}': (s) => s.json.approvedAt,
+  // Supersede older versions: $json is the row Save signed steps wrote (n8n returns updated rows with their id).
+  '={{ $json.id }}': (s) => s.json.id,
+  "={{ $('Repaired steps received').item.json.steps?.surface === 'desktop' }}": (s) => (s.repaired.steps as IDataObject | undefined)?.surface === 'desktop',
+  "={{ $json.data === undefined ? {} : { data: { approved: $json.data['Decision'] === 'Approve', writeSteps: String($json.data['Write steps'] ?? '') } } }}": (s) => {
+    const data = s.json.data as IDataObject | undefined;
+    return data === undefined ? {} : { data: { approved: data.Decision === 'Approve', writeSteps: String(data['Write steps'] ?? '') } };
+  },
 };
 function resolve(value: unknown, s: Scope): unknown {
   if (typeof value === 'string' && value.startsWith('=')) {
@@ -105,8 +117,17 @@ class MemoryTable {
   private nextId = 1;
   private match(row: IDataObject, conditions: Condition[]): boolean {
     return conditions.every((c) => {
-      if (c.condition !== 'eq') throw new Error(`the emulator implements only "eq" conditions, not "${c.condition}"`);
-      return String(row[c.keyName] ?? '') === String(c.keyValue ?? '');
+      const v = row[c.keyName];
+      // Number columns (version, id) compare as numbers, as n8n casts a filter value to the column's type.
+      const want = typeof v === 'number' ? Number(c.keyValue) : String(c.keyValue ?? '');
+      const have = typeof v === 'number' ? v : String(v ?? '');
+      switch (c.condition) {
+        case 'eq': return have === want;
+        case 'neq': return have !== want;
+        case 'lt': return typeof have === 'number' && have < (want as number);
+        case 'lte': return typeof have === 'number' && have <= (want as number);
+        default: throw new Error(`the emulator implements "eq", "neq", "lt" and "lte" conditions, not "${c.condition}"`);
+      }
     });
   }
   get(conditions: Condition[], o: { limit?: number; orderBy?: [string, string] }): IDataObject[] {
@@ -255,10 +276,14 @@ async function feedRun(table: MemoryTable, feed: Feed, o: {
 
 type Decision = 'approve' | 'reject' | 'timeout' | 'pending';
 /**
- * Template 3 for one Repaired steps item: Settings → Mark pending → Ask for approval (the decision; 'pending' stops there
- * unanswered) → Timed out? → Record expiry, or Repaired steps to sign → Sign steps → Signed? → Save signed steps / Record rejection.
+ * Template 3 for one Repaired steps item (browser steps: Desktop steps? is false): Settings → Mark pending → Ask for
+ * approval (the decision; 'pending' stops there unanswered) → Timed out? → Record expiry, or Repaired steps to sign →
+ * Sign steps → Signed? → Save signed steps / Record rejection.
  */
-async function approvalRun(table: MemoryTable, repaired: INodeExecutionData, decision: Decision, feed: Feed, o: { now?: number } = {}) {
+async function approvalRun(
+  table: MemoryTable, repaired: INodeExecutionData, decision: Decision, feed: Feed,
+  o: { now?: number; /** Desktop steps: the approver's Write steps answer on the form. */ writeSteps?: string } = {},
+) {
   const t = APPROVE;
   const s = emptyScope(o.now);
   s.repaired = repaired.json;
@@ -267,7 +292,14 @@ async function approvalRun(table: MemoryTable, repaired: INodeExecutionData, dec
   const [pendingRow] = tableNode(t, 'Mark pending', table, s);
   if (decision === 'pending') return { outcome: 'pending' as const };
   // Send-and-wait resumes with its input item when the time limit passes, and with { data: { approved } } on an answer.
-  s.approval = decision === 'timeout' ? { ...pendingRow } : { data: { approved: decision === 'approve', respondedAt: new Date(s.now).toISOString() } };
+  // Desktop steps get the form (Decision, Write steps), which Desktop answer turns into { data: { approved, writeSteps } }.
+  if (ifNode(t, 'Desktop steps?', s)) {
+    s.json = decision === 'timeout' ? { ...pendingRow }
+      : { data: { Decision: decision === 'approve' ? 'Approve' : 'Reject', 'Write steps': o.writeSteps ?? '', respondedAt: new Date(s.now).toISOString() } };
+    s.approval = setNode(t, 'Desktop answer', s);
+  } else {
+    s.approval = decision === 'timeout' ? { ...pendingRow } : { data: { approved: decision === 'approve', respondedAt: new Date(s.now).toISOString() } };
+  }
   s.json = s.approval;
   if (ifNode(t, 'Timed out?', s)) {
     tableNode(t, 'Record expiry', table, s);
@@ -287,7 +319,9 @@ async function approvalRun(table: MemoryTable, repaired: INodeExecutionData, dec
     return { outcome: 'refused' as const, refusal: String(record.json.error) };
   }
   if (ifNode(t, 'Signed?', s)) {
-    tableNode(t, 'Save signed steps', table, s);
+    const saved = tableNode(t, 'Save signed steps', table, s);
+    // Save signed steps → Supersede older versions, once per row it wrote (Email signed steps only sends mail).
+    for (const row of saved) tableNode(t, 'Supersede older versions', table, { ...s, json: row });
     return { outcome: 'active' as const, signed: record.json };
   }
   tableNode(t, 'Record rejection', table, s);
@@ -441,7 +475,7 @@ describe('the data feed from template 2', () => {
     expect(heal.repaired).toHaveLength(1);
     expect(heal.repaired[0].json).toMatchObject({ name: NAME, baseVersion: 1, version: 2 });
     expect(await approvalRun(table, heal.repaired[0], 'approve', feed)).toMatchObject({ outcome: 'active' });
-    expect(table.rows.map((r) => [r.version, r.status])).toEqual([[1, 'active'], [2, 'active']]);
+    expect(table.rows.map((r) => [r.version, r.status])).toEqual([[1, 'superseded'], [2, 'active']]);
 
     const idle = recording(fakeModel([]));
     const next = await feedRun(table, feed, { model: idle });
@@ -450,6 +484,47 @@ describe('the data feed from template 2', () => {
     expect(firstIdle.calls + idle.calls).toBe(0);
     expect(falseCompletes(0, [...boot.data, ...v1.data, ...heal.data, ...next.data])).toEqual([]);
     expect(scan([...boot.data, ...boot.repaired, ...heal.data, ...heal.repaired, ...next.data], [table.rows, builder.sent, healer.sent])).toEqual([]);
+  });
+});
+
+describe('approving imported desktop steps through template 3 (I1)', () => {
+  /** The sample UiPath desktop project's Repaired steps item, as Import Steps sends it to template 3. */
+  function desktopRepaired(): INodeExecutionData {
+    const dir = fileURLToPath(new URL('../../engine/test/fixtures/import/uipath-erp-desktop/', import.meta.url));
+    const entries: Record<string, Uint8Array> = {};
+    const walk = (d: string) => {
+      for (const n of readdirSync(d)) {
+        const p = join(d, n);
+        if (statSync(p).isDirectory()) walk(p);
+        else entries[`ERP Demo Line Items/${relative(dir, p).split('\\').join('/')}`] = strToU8(readFileSync(p, 'utf8'));
+      }
+    };
+    walk(dir);
+    const r = importSource('uipath', Buffer.from(zipSync(entries)), { name: 'erp', hasSiteLogin: false });
+    const draft = r.desktopDrafts?.[0];
+    if (!draft) throw new Error('the sample project gave no desktop draft');
+    return { json: desktopRepairedStepsJson(engine, engine.desktopProposal(draft.script)) };
+  }
+  const active = (table: MemoryTable) => table.rows.filter((r) => r.status === 'active');
+
+  it('approving the same desktop project again leaves exactly one active row (always version 1), the latest', async () => {
+    const table = new MemoryTable();
+    const feed: Feed = { template: DATA_FEED, site: portal };
+    const item = desktopRepaired();
+    expect(item.json).toMatchObject({ name: 'erp-1', version: 1, baseVersion: null });
+    const first = await approvalRun(table, item, 'approve', feed, { writeSteps: '16' });
+    expect(first).toMatchObject({ outcome: 'active', signed: { writeLine: 'Signed as writes: step 16 (Click Save)' } });
+    expect(active(table)).toHaveLength(1);
+    // The same project imported and approved again, with the same Write steps (the same signed hash) and then without any.
+    const again = await approvalRun(table, desktopRepaired(), 'approve', feed, { writeSteps: '16' });
+    expect(again.outcome).toBe('active');
+    expect(active(table)).toHaveLength(1);
+    expect(active(table)[0].id).toBe(table.rows.at(-1)!.id);
+    const none = await approvalRun(table, desktopRepaired(), 'approve', feed, { writeSteps: '' });
+    expect(none).toMatchObject({ outcome: 'active', signed: { writeLine: 'Signed as writes: none (no step was listed in Write Steps)' } });
+    expect(active(table)).toHaveLength(1);
+    expect(JSON.parse(String(active(table)[0].steps)).steps.some((st: IDataObject) => st.write === true)).toBe(false);
+    expect(table.rows.map((r) => r.status)).toEqual(['superseded', 'superseded', 'active']);
   });
 });
 
@@ -568,7 +643,9 @@ describe('the feed copied for a second site', () => {
     expect(table.rows.filter((r) => r.name === NAME).map((r) => [r.version, r.status])).toEqual([[1, 'active']]);
     // The rebuilt version 1 usually has the rejected one's hash, so Mark pending reuses that row (update-in-place by hash).
     const secondRows = table.rows.filter((r) => r.name === 'second-site');
-    expect(secondRows.filter((r) => r.status === 'active').map((r) => r.version).sort()).toEqual([1, 2]);
+    // Approving version 2 superseded version 1 (Supersede older versions): one active row per name.
+    expect(secondRows.filter((r) => r.status === 'active').map((r) => r.version)).toEqual([2]);
+    expect(secondRows.filter((r) => r.status === 'superseded').map((r) => r.version)).toEqual([1]);
     expect(secondRows.some((r) => r.status === 'pending')).toBe(false);
   });
 });

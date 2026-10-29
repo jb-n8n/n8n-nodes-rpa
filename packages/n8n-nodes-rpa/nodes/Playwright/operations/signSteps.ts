@@ -1,5 +1,5 @@
 import { NodeOperationError, type IDataObject, type INodeExecutionData, type IPairedItemData } from 'n8n-workflow';
-import type { IntentChange, PortalPolicy, Proposal, Script, Step } from 'n8n-rpa-engine';
+import type { DesktopProposal, IntentChange, PortalPolicy, Proposal, Script, Step } from 'n8n-rpa-engine';
 import { checkUrl, ConfigError, CREDENTIALS, policyFor, readPostLabelLocal, signingKey, siteLoginConfig, type SiteLogin } from '../config.js';
 import type { NodeContext } from '../context.js';
 import type { Engine } from '../engine.js';
@@ -9,7 +9,7 @@ import { configErrorItem } from '../output.js';
 import { rejectedRecord, signedRecord, type StepsRecord } from '../rows.js';
 import { asBoolean, asString, checkMaxItems, credentialId, errorMessage, isObject, literalRaw, SITE_LOGIN_NO_ID, splitList } from './common.js';
 
-export const SIGN_NO_DESKTOP = 'Sign Steps cannot sign desktop steps (surface "desktop") yet: they have no Repaired steps review.';
+export const WRITE_STEPS_BROWSER = 'Write Steps applies to desktop steps only: clear it for browser steps.';
 export const NOT_REPAIRED_STEPS = 'The input item is not a Repaired steps item from Run Steps (it has no digest). Only Repaired steps items can be signed.';
 export const MISSING_NAME_OR_VERSION = 'The Repaired steps item has no name or version.';
 export const APPROVER_NOT_ALLOWED = 'Approved By is not on the Approver Allowlist';
@@ -75,10 +75,11 @@ export function parseRepairedSteps(json: IDataObject): ParsedProposal {
 }
 
 /** True when a line the item carries differs from the recomputed one. A body too malformed to format is left to the digest check. */
-function shownTextChanged(engine: Engine, p: Proposal, shown: ParsedProposal['shownText']): boolean {
+function shownTextChanged(engine: Engine, p: Proposal | DesktopProposal, shown: ParsedProposal['shownText']): boolean {
   /** The plain-English lines a reviewer reads, recomputed from the fields the digest covers. */
-  const formats: Record<keyof ParsedProposal['shownText'], (p: Proposal) => string> = { evidenceLine: (q) => evidenceLine(q, engine), changeList, safetyLine };
-  for (const [name, format] of Object.entries(formats) as [keyof typeof formats, (p: Proposal) => string][]) {
+  type Any = Proposal | DesktopProposal;
+  const formats: Record<keyof ParsedProposal['shownText'], (p: Any) => string> = { evidenceLine: (q) => evidenceLine(q, engine), changeList, safetyLine };
+  for (const [name, format] of Object.entries(formats) as [keyof typeof formats, (p: Any) => string][]) {
     const value = shown[name];
     if (value === undefined) continue;
     let expected: string | undefined;
@@ -241,6 +242,7 @@ async function signOne(ctx: NodeContext, engine: Engine, i: number, json: IDataO
   let approverId: string;
   let allowlist: string[];
   let approved: boolean;
+  let writeStepsText: string;
   try {
     // n8n cannot make a credential required for one operation only: checked here.
     if (credentialId(ctx, CREDENTIALS.signing) === undefined) throw new ConfigError(SIGN_NEEDS_KEY);
@@ -252,6 +254,8 @@ async function signOne(ctx: NodeContext, engine: Engine, i: number, json: IDataO
     allowlist = splitList(asString(ctx.getNodeParameter('approverAllowlist', i, ''))).map((a) => a.toLowerCase());
     // An unknown answer (for example a send-and-wait that timed out) is a rejection, never an approval.
     approved = asBoolean(ctx.getNodeParameter('approved', i, false), false);
+    // Desktop steps only: the steps the approver declares writes. An expression (the approval form's answer) is expected.
+    writeStepsText = asString(ctx.getNodeParameter('writeSteps', i, '')).trim();
     key = signingKey(await ctx.getCredentials(CREDENTIALS.signing, i));
     if (siteLoginId !== undefined) siteLogin = siteLoginConfig(await ctx.getCredentials(CREDENTIALS.siteLogin, i));
   } catch (error) {
@@ -282,6 +286,8 @@ async function signOne(ctx: NodeContext, engine: Engine, i: number, json: IDataO
     if (!hashMatches(engine, p.steps, p.hash)) return refuse([HASH_MISMATCH]);
     return record(rejectedRecord({ name: p.name, version: p.version, hash: p.hash }, approverId, at));
   }
+  if (engine.isDesktopDocument(p.steps)) return signDesktop(engine, p, { key, approverId, writeStepsText, secrets: siteSecrets, at, refuse, record });
+  if (writeStepsText) return refuse([WRITE_STEPS_BROWSER]);
 
   const proposal: Proposal = {
     name: p.name, baseVersion: p.baseVersion, version: p.version, steps: p.steps as Script, hash: p.hash,
@@ -292,8 +298,6 @@ async function signOne(ctx: NodeContext, engine: Engine, i: number, json: IDataO
   if (fileEvidenceProblem(p)) return refuse([FILE_EVIDENCE_MISMATCH]);
   if (shownTextChanged(engine, proposal, p.shownText)) return refuse([SHOWN_TEXT_CHANGED]);
   // Parsed once for the checks below; engine.signSteps parses the steps it signs itself.
-  // Desktop steps have no repair yet, so no Repaired steps item of theirs reaches Sign Steps through the review flow.
-  if (engine.isDesktopDocument(p.steps)) return refuse([SIGN_NO_DESKTOP]);
   let script: Script;
   try {
     script = engine.parseScript(p.steps);
@@ -321,6 +325,50 @@ async function signOne(ctx: NodeContext, engine: Engine, i: number, json: IDataO
   const reasons = [...(result.ok ? [] : result.reasons), ...(changes ? [changes] : [])];
   if (!result.ok || changes) return refuse(reasons);
   return record(signedRecord(result.row));
+}
+
+/**
+ * Desktop steps (an imported desktop draft's Repaired steps item): the approver's Write Steps are added to exactly the
+ * listed steps and the result is signed, bound to the app the steps launch (engine signDesktopSteps, which re-checks
+ * the hash, the digest, the safety flags and the change list). The lines the approver read must be the ones the fields
+ * give. No Site Login is bound (desktop runs refuse one); its secrets still keep a record that names one out.
+ */
+function signDesktop(
+  engine: Engine, p: ParsedProposal,
+  c: { key: string; approverId: string; writeStepsText: string; secrets: (string | undefined)[]; at: Date; refuse: (r: string[]) => SignOutcome; record: (r: StepsRecord) => SignOutcome },
+): SignOutcome {
+  const writeSteps = engine.parseWriteSteps(c.writeStepsText);
+  if ('error' in writeSteps) return c.refuse([writeSteps.error]);
+  if (malformedEvidence(p.evidence)) return c.refuse([EVIDENCE_MALFORMED]);
+  const proposal = {
+    name: p.name ?? '', baseVersion: p.baseVersion, version: p.version ?? 0, steps: p.steps, hash: p.hash,
+    evidence: p.evidence, changes: p.changes, safetyFlags: p.safetyFlags, screenshots: {},
+  } as unknown as DesktopProposal;
+  if (shownTextChanged(engine, proposal, p.shownText)) return c.refuse([SHOWN_TEXT_CHANGED]);
+  let expected: string[] | undefined;
+  try {
+    expected = engine.desktopSafetyFlags(engine.parseDesktopScript(p.steps));
+  } catch {
+    expected = undefined; // signDesktopSteps refuses steps that do not parse, with the reason
+  }
+  // As for browser steps, the safety line the approver read is required and must be the recomputed one.
+  if (expected && p.shownText.safetyLine !== safetyLine({ safetyFlags: expected })) return c.refuse([SHOWN_TEXT_CHANGED]);
+  let result: ReturnType<Engine['signDesktopSteps']>;
+  try {
+    result = engine.signDesktopSteps({ proposal, key: c.key, approverId: c.approverId, reviewedDigest: p.digest, writeSteps, secrets: c.secrets, now: c.at });
+  } catch (error) {
+    return c.refuse([errorMessage(error)]);
+  }
+  if (!result.ok) return c.refuse(result.reasons);
+  // What was signed as writes, by number and intent, so the approver's choice is confirmed in words.
+  const writes = result.row.writeSteps.map((n) => ({ step: n, intent: result.row.steps.steps[n - 1].intent }));
+  return c.record({ ...signedRecord(result.row), writeSteps: writes, writeLine: desktopWriteLine(writes) });
+}
+
+/** `Signed as writes: step 16 (Click Save)`, or none. */
+export function desktopWriteLine(writes: { step: number; intent: string }[]): string {
+  if (writes.length === 0) return 'Signed as writes: none (no step was listed in Write Steps)';
+  return `Signed as writes: ${writes.map((w) => `step ${w.step} (${w.intent.replace(/\s+/g, ' ').trim()})`).join(', ')}`;
 }
 
 /**

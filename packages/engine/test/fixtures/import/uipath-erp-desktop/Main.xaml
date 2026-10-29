@@ -1,0 +1,89 @@
+<Activity mc:Ignorable="sap sap2010" x:Class="Main" mva:VisualBasic.Settings="{x:Null}" sap:VirtualizedContainerService.HintSize="760,1420" sap2010:WorkflowViewState.IdRef="ActivityBuilder_1" xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:mva="clr-namespace:Microsoft.VisualBasic.Activities;assembly=System.Activities" xmlns:s="clr-namespace:System;assembly=mscorlib" xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation" xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation" xmlns:scg="clr-namespace:System.Collections.Generic;assembly=mscorlib" xmlns:ss="clr-namespace:System.Security;assembly=mscorlib" xmlns:ui="http://schemas.uipath.com/workflow/activities" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <TextExpression.NamespacesForImplementation>
+    <scg:List x:TypeArguments="x:String" Capacity="8">
+      <x:String>System</x:String>
+      <x:String>System.IO</x:String>
+      <x:String>System.Security</x:String>
+      <x:String>UiPath.Core</x:String>
+      <x:String>UiPath.Core.Activities</x:String>
+    </scg:List>
+  </TextExpression.NamespacesForImplementation>
+  <TextExpression.ReferencesForImplementation>
+    <scg:List x:TypeArguments="AssemblyReference" Capacity="6">
+      <AssemblyReference>System.Activities</AssemblyReference>
+      <AssemblyReference>UiPath.System.Activities</AssemblyReference>
+      <AssemblyReference>UiPath.UiAutomation.Activities</AssemblyReference>
+    </scg:List>
+  </TextExpression.ReferencesForImplementation>
+  <Sequence DisplayName="ERP Demo line items" sap:VirtualizedContainerService.HintSize="626,1300" sap2010:WorkflowViewState.IdRef="Sequence_1">
+    <Sequence.Variables>
+      <Variable x:TypeArguments="x:String" Name="username" />
+      <Variable x:TypeArguments="ss:SecureString" Name="password" />
+      <Variable x:TypeArguments="x:String" Default="1000" Name="companyCode" />
+      <Variable x:TypeArguments="x:String" Default="2026-01-01" Name="dateFrom" />
+      <Variable x:TypeArguments="x:String" Default="2026-12-31" Name="dateTo" />
+      <Variable x:TypeArguments="x:String" Default="C:\Exports" Name="exportFolder" />
+      <Variable x:TypeArguments="x:String" Name="resultCount" />
+      <Variable x:TypeArguments="x:String" Name="firstDocument" />
+    </Sequence.Variables>
+    <ui:GetRobotCredential AssetName="ERP_Demo_Login" CacheStrategy="None" DisplayName="Get ERP Demo credential" FolderPath="{x:Null}" sap:VirtualizedContainerService.HintSize="584,104" sap2010:WorkflowViewState.IdRef="GetRobotCredential_1" Password="[password]" TimeoutMS="{x:Null}" Username="[username]" />
+    <ui:OpenApplication Arguments="{x:Null}" ContinueOnError="{x:Null}" TimeoutMS="{x:Null}" WorkingDirectory="{x:Null}" DisplayName="Open Application 'ERP Demo - Sign in'" FileName="C:\Program Files\ERP Demo\ErpDemo.exe" sap:VirtualizedContainerService.HintSize="584,640" sap2010:WorkflowViewState.IdRef="OpenApplication_1" Selector="&lt;wnd app='erpdemo.exe' cls='WindowsForms10.Window.8.app*' title='ERP Demo - Sign in' /&gt;">
+      <ui:OpenApplication.Body>
+        <ActivityAction x:TypeArguments="x:Object">
+          <ActivityAction.Argument>
+            <DelegateInArgument x:TypeArguments="x:Object" Name="ContextTarget" />
+          </ActivityAction.Argument>
+          <Sequence DisplayName="Sign in" sap:VirtualizedContainerService.HintSize="550,520" sap2010:WorkflowViewState.IdRef="Sequence_2">
+            <ui:TypeInto DelayBefore="{x:Null}" DelayBetweenKeys="{x:Null}" DelayMS="{x:Null}" Activate="True" ClickBeforeTyping="True" DisplayName="Type Into 'User name'" EmptyField="True" sap:VirtualizedContainerService.HintSize="516,134" sap2010:WorkflowViewState.IdRef="TypeInto_1" SimulateType="True" Text="[username]">
+              <ui:TypeInto.Target>
+        <ui:Target ClippingRegion="{x:Null}" Element="{x:Null}" Id="4f1a0c2e-1111-4a00-8000-000000000001" Selector="&lt;uia automationid='txtUser' cls='WindowsForms10.EDIT.app*' name='User name' role='edit' /&gt;">
+          <ui:Target.TimeoutMS>
+            <InArgument x:TypeArguments="x:Int32" />
+          </ui:Target.TimeoutMS>
+          <ui:Target.WaitForReady>
+            <InArgument x:TypeArguments="ui:WaitForReady" />
+          </ui:Target.WaitForReady>
+        </ui:Target>
+              </ui:TypeInto.Target>
+            </ui:TypeInto>
+            <ui:TypeSecureText DelayBefore="{x:Null}" DelayBetweenKeys="{x:Null}" DelayMS="{x:Null}" Activate="True" ClickBeforeTyping="True" DisplayName="Type Secure Text 'Password'" EmptyField="True" sap:VirtualizedContainerService.HintSize="516,134" sap2010:WorkflowViewState.IdRef="TypeSecureText_1" SecureText="[password]" SimulateType="True">
+              <ui:TypeSecureText.Target>
+        <ui:Target ClippingRegion="{x:Null}" Element="{x:Null}" Id="4f1a0c2e-1111-4a00-8000-000000000002" Selector="&lt;uia automationid='txtPassword' name='Password' role='edit' /&gt;">
+          <ui:Target.TimeoutMS>
+            <InArgument x:TypeArguments="x:Int32" />
+          </ui:Target.TimeoutMS>
+          <ui:Target.WaitForReady>
+            <InArgument x:TypeArguments="ui:WaitForReady" />
+          </ui:Target.WaitForReady>
+        </ui:Target>
+              </ui:TypeSecureText.Target>
+            </ui:TypeSecureText>
+            <ui:SendHotkey DelayBefore="{x:Null}" DelayBetweenKeys="{x:Null}" DelayMS="{x:Null}" Activate="True" DisplayName="Send Hotkey 'Enter' to sign in" sap:VirtualizedContainerService.HintSize="516,134" sap2010:WorkflowViewState.IdRef="SendHotkey_1" Key="enter" KeyModifiers="None" SpecialKey="True">
+              <ui:SendHotkey.Target>
+        <ui:Target ClippingRegion="{x:Null}" Element="{x:Null}" Id="4f1a0c2e-1111-4a00-8000-000000000003" Selector="&lt;uia automationid='txtPassword' name='Password' role='edit' /&gt;">
+          <ui:Target.TimeoutMS>
+            <InArgument x:TypeArguments="x:Int32" />
+          </ui:Target.TimeoutMS>
+          <ui:Target.WaitForReady>
+            <InArgument x:TypeArguments="ui:WaitForReady" />
+          </ui:Target.WaitForReady>
+        </ui:Target>
+              </ui:SendHotkey.Target>
+            </ui:SendHotkey>
+          </Sequence>
+        </ActivityAction>
+      </ui:OpenApplication.Body>
+    </ui:OpenApplication>
+    <ui:InvokeWorkflowFile ArgumentsVariable="{x:Null}" ContinueOnError="{x:Null}" DisplayName="Invoke Workflow File: SearchAndExport.xaml" sap:VirtualizedContainerService.HintSize="584,88" sap2010:WorkflowViewState.IdRef="InvokeWorkflowFile_1" UnSafe="False" WorkflowFileName="Workflows\SearchAndExport.xaml">
+      <ui:InvokeWorkflowFile.Arguments>
+        <InArgument x:TypeArguments="x:String" x:Key="in_CompanyCode">[companyCode]</InArgument>
+        <InArgument x:TypeArguments="x:String" x:Key="in_DateFrom">[dateFrom]</InArgument>
+        <InArgument x:TypeArguments="x:String" x:Key="in_DateTo">[dateTo]</InArgument>
+        <InArgument x:TypeArguments="x:String" x:Key="in_ExportFolder">[exportFolder]</InArgument>
+        <OutArgument x:TypeArguments="x:String" x:Key="out_ResultCount">[resultCount]</OutArgument>
+        <OutArgument x:TypeArguments="x:String" x:Key="out_FirstDocument">[firstDocument]</OutArgument>
+      </ui:InvokeWorkflowFile.Arguments>
+    </ui:InvokeWorkflowFile>
+    <ui:LogMessage DisplayName="Log Message" sap:VirtualizedContainerService.HintSize="584,90" sap2010:WorkflowViewState.IdRef="LogMessage_1" Level="Info" Message="[&quot;Exported &quot; + resultCount + &quot;, first document &quot; + firstDocument]" />
+  </Sequence>
+</Activity>

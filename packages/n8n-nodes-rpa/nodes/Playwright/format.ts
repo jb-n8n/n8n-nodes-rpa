@@ -1,4 +1,4 @@
-import type { DownloadTemplate, PortalPolicy, Proposal, Script, Step } from 'n8n-rpa-engine';
+import type { DesktopProposal, DownloadTemplate, PortalPolicy, Proposal, Script, Step } from 'n8n-rpa-engine';
 import type { Engine } from './engine.js';
 
 /**
@@ -55,7 +55,8 @@ const oneLine = (s: string): string =>
  * One line of evidence for the approver. For a file proposal it describes the PROVEN file (the evidence's), and the
  * checks come from the download step of the steps, never from the evidence.
  */
-export function evidenceLine(p: Proposal, engine: Pick<Engine, 'describeCheck'>): string {
+export function evidenceLine(p: Proposal | DesktopProposal, engine: Pick<Engine, 'describeCheck'>): string {
+  if (isDesktopProposal(p)) return DESKTOP_EVIDENCE_LINE;
   const { count, total, diff, file: f } = p.evidence;
   const reads = p.evidence.readPosts?.length ? `; read-only requests the Site Login allowed: ${p.evidence.readPosts.join(', ')}` : '';
   if (f) {
@@ -67,9 +68,24 @@ export function evidenceLine(p: Proposal, engine: Pick<Engine, 'describeCheck'>)
   return oneLine(`${head}${delta}${reads}`);
 }
 
-/** Plain-English step changes, one per line. */
-export function changeList(p: Proposal): string {
+/** The evidence line of desktop steps from an import: nothing was replayed, so the approver reviews the steps as written. */
+export const DESKTOP_EVIDENCE_LINE =
+  'Not replayed: desktop steps imported from UiPath are reviewed as written (there is no desktop proof yet). Check every step, and list in Write Steps the steps that save, post or submit.';
+
+/** A proposal whose steps are a desktop step set (`surface: "desktop"`, own property, as the engine routes). */
+export function isDesktopProposal(p: Proposal | DesktopProposal): p is DesktopProposal {
+  const steps = p.steps as unknown;
+  return typeof steps === 'object' && steps !== null && Object.hasOwn(steps, 'surface') && (steps as { surface?: unknown }).surface === 'desktop';
+}
+
+/**
+ * Plain-English step changes, one per line. Desktop steps are a first version whose change list is every step in order,
+ * so each line carries its step number (`Step 16: Click Save (…)`): the number the approver lists in Write Steps. The
+ * numbers are added here, recomputed from the reviewed fields (the digest covers the changes, not this text).
+ */
+export function changeList(p: Proposal | DesktopProposal): string {
   if (p.changes.length === 0) return 'No step changes';
+  if (isDesktopProposal(p)) return p.changes.map((c, i) => `Step ${i + 1}: ${c.now === null ? `Removed: ${oneLine(c.was ?? '')}` : oneLine(c.now)}`).join('\n');
   return p.changes
     .map((c) => {
       const was = c.was === null ? null : oneLine(c.was);
@@ -79,6 +95,6 @@ export function changeList(p: Proposal): string {
     .join('\n');
 }
 
-export function safetyLine(p: Proposal): string {
+export function safetyLine(p: Pick<Proposal, 'safetyFlags'>): string {
   return p.safetyFlags.length ? p.safetyFlags.map(oneLine).join('; ') : 'none';
 }

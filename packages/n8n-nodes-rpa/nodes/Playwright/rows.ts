@@ -1,4 +1,4 @@
-import type { SignedStepsRow } from 'n8n-rpa-engine';
+import type { SignedDesktopRow, SignedStepsRow } from 'n8n-rpa-engine';
 
 export const STEPS_TABLE = 'playwright_steps';
 export const RUN_TABLE = 'playwright_runs';
@@ -31,9 +31,13 @@ export const RUN_TABLE_COLUMNS: readonly { name: string; type: ColumnType }[] = 
 /** The record Sign Steps outputs, shaped as a row of the steps table (the approval template writes it by hash). */
 export interface StepsRecord {
   name: string; version: number; steps: string; hash: string; signature: string; approvedBy: string; approvedAt: string; status: 'active' | 'rejected';
+  /** Desktop steps signed by Sign Steps: the steps signed as writes (1-based) with their intents. Not a table column. */
+  writeSteps?: { step: number; intent: string }[];
+  /** Desktop steps: one line naming them, `Signed as writes: step 16 (Click Save)`, for the approval's confirmation. Not a table column. */
+  writeLine?: string;
 }
 
-export function signedRecord(row: SignedStepsRow): StepsRecord {
+export function signedRecord(row: SignedStepsRow | SignedDesktopRow): StepsRecord {
   return {
     name: row.name, version: row.version, steps: JSON.stringify(row.steps), hash: row.hash, signature: row.signature,
     approvedBy: row.approvedBy, approvedAt: row.approvedAt, status: 'active',

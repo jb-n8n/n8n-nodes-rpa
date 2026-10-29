@@ -10,10 +10,10 @@ import { isBreakerCode, runGuarded, type GuardedResult } from '../execute.js';
 import { isQueueMode, openGuardStore, QUEUE_NEEDS_REDIS, type GuardStoreDeps } from '../guard-store.js';
 import { workflowFile } from '../import/workflow.js';
 import { lazyChatModel } from '../model.js';
-import { configErrorItem, repairedStepsItem, slug } from '../output.js';
+import { configErrorItem, desktopRepairedStepsJson, repairedStepsItem, slug } from '../output.js';
 import {
-  asBoolean, asString, browserCredentials, checkMaxItems, credentialId, errorMessage, hasDownloadStep, literalString, readCommonOptions, refuseCdpDownload, regexOption,
-  SITE_LOGIN_NO_ID, type CommonOptions,
+  asBoolean, asString, BROWSER_CREDENTIAL_NEEDED, browserCredentials, checkMaxItems, credentialId, errorMessage, hasDownloadStep, literalString, readCommonOptions,
+  refuseCdpDownload, regexOption, SITE_LOGIN_NO_ID, type CommonOptions,
 } from './common.js';
 import { expectedDownload, NO_MODEL, noteRepairRan, repairAlreadyRan, siteLoginGuard, variablesOption } from './runSteps.js';
 
@@ -44,6 +44,11 @@ export const NOTHING_IMPORTED = (reason: string) => `Nothing was imported: ${rea
 export const NONE_ADOPTED = (n: number, first: string) => `None of the ${n} imported step lists could be adopted. ${first}`;
 /** Why a draft's steps are null on Data: they carry a Site Login value (defence in depth behind the importer's own stripping). */
 export const STEPS_WITHHELD = 'The steps are not shown: they contain a value of the RPA Site Login.';
+/** A desktop draft on Data: it goes to approval as imported, without a replay. */
+export const DESKTOP_FOR_APPROVAL =
+  'Desktop steps are not replayed at import (there is no desktop proof yet): they go to approval as imported. Review every step, supply the variables in Run steps, and list the steps that save, post or submit in Write Steps when you approve.';
+/** A UiPath project with browser sequences, imported without an RPA Browser credential (its desktop sequences need none). */
+export const IMPORT_BROWSER_NEEDED = 'The project has browser steps: attach an RPA Browser credential to replay them.';
 
 const SOURCES: readonly string[] = ['chrome', 'playwright', 'uipath'];
 
@@ -169,7 +174,8 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
 
   const siteLoginId = credentialId(ctx, CREDENTIALS.siteLogin);
   let p: ImportParams;
-  let endpoint: BrowserEndpoint;
+  // A UiPath project may hold only desktop sequences: then no browser runs and no RPA Browser credential is needed.
+  let endpoint: BrowserEndpoint | undefined;
   let siteLogin: SiteLogin | undefined = undefined;
   let fixedPolicy: PortalPolicy | undefined = undefined;
   let data: Buffer | string;
@@ -177,9 +183,11 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
     // An empty id would key every id-less Site Login's breaker together ("site-login:").
     if (siteLoginId === '') throw new ConfigError(SITE_LOGIN_NO_ID);
     p = readImportParams(ctx, i);
-    endpoint = browserConfig(await browserCredentials(ctx, i));
-    // A CDP connection cannot read downloaded files: refused before anything is read.
-    refuseCdpDownload(engine, endpoint, expectedDownload(engine, p.expectedFile) !== undefined);
+    if (p.source !== 'uipath' || credentialId(ctx, CREDENTIALS.browser) !== undefined) {
+      endpoint = browserConfig(await browserCredentials(ctx, i));
+      // A CDP connection cannot read downloaded files: refused before anything is read.
+      refuseCdpDownload(engine, endpoint, expectedDownload(engine, p.expectedFile) !== undefined);
+    }
     if (siteLoginId !== undefined) siteLogin = siteLoginConfig(await ctx.getCredentials(CREDENTIALS.siteLogin, i));
     if (siteLogin && !node.credentials?.[CREDENTIALS.redis] && isQueueMode(deps)) throw new ConfigError(QUEUE_NEEDS_REDIS);
     // With a Site Login or a Start URL the policy is known now; otherwise each draft's first page decides it.
@@ -217,12 +225,13 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
   };
   const imported = engine.importSource(p.source, data, opts);
   const report = maskDeep<ImportReport>(imported.report, mask);
+  const desktopDrafts = imported.desktopDrafts ?? [];
 
   // A UiPath project's flow becomes an n8n workflow for Import from file, whatever happens to its drafts.
   let workflow: { binary: IBinaryKeyData; name: string } | undefined;
   if (imported.flow) {
     try {
-      const file = workflowFile(imported.flow, imported.drafts, { name: p.name });
+      const file = workflowFile(imported.flow, imported.drafts, { name: p.name, desktopDrafts });
       const name = (JSON.parse(file.data.toString('utf8')) as { name: string }).name;
       workflow = { binary: { workflow: await ctx.helpers.prepareBinaryData(file.data, file.fileName, file.mimeType) }, name };
     } catch (error) {
@@ -230,17 +239,48 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
     }
   }
   const firstError = report.items.find((item) => item.kind === 'error');
-  if (imported.drafts.length === 0 && firstError) {
+  if (imported.drafts.length === 0 && desktopDrafts.length === 0 && firstError) {
     // The workflow file was built from what could be read: the error item keeps it, so the rest of the bot is not lost.
     const failed = configError(NOTHING_IMPORTED(firstError.reason), p.name, { report, ...(workflow ? { workflowName: workflow.name } : {}) });
     if (workflow && failed.kind === 'error') failed.item.binary = { ...workflow.binary };
     return failed;
   }
 
-  const outcomes = await adoptAll(ctx, engine, i, deps, { p, endpoint, siteLogin, siteLoginId, fixedPolicy, drafts: imported.drafts, masker, textMasker });
+  if (imported.drafts.length > 0 && !endpoint) {
+    const failed = configError(credentialId(ctx, CREDENTIALS.browser) === undefined ? IMPORT_BROWSER_NEEDED : BROWSER_CREDENTIAL_NEEDED, p.name, { report, ...(workflow ? { workflowName: workflow.name } : {}) });
+    if (workflow && failed.kind === 'error') failed.item.binary = { ...workflow.binary };
+    return failed;
+  }
+  const outcomes = endpoint ? await adoptAll(ctx, engine, i, deps, { p, endpoint, siteLogin, siteLoginId, fixedPolicy, drafts: imported.drafts, masker, textMasker }) : [];
   const failed = outcomes.filter((o): o is Extract<DraftOutcome, { kind: 'failed' }> => o.kind === 'failed');
+  // Desktop drafts are never replayed: each one that carries no Site Login value goes to approval as imported.
+  const desktopOut = desktopDrafts.map((d) => {
+    const withheld = containsSecret(d.script);
+    let review: IDataObject | undefined;
+    let problem: string | undefined;
+    if (!withheld) {
+      try {
+        review = desktopRepairedStepsJson(engine, engine.desktopProposal(d.script));
+      } catch (error) {
+        problem = mask(errorMessage(error));
+      }
+    }
+    const entry: IDataObject = {
+      name: d.name,
+      surface: 'desktop',
+      steps: withheld ? null : (plain(d.script) as unknown as IDataObject),
+      adopted: false,
+      forApproval: review !== undefined,
+      writeCandidates: [...d.writeCandidates],
+      variables: [...d.variables],
+      secretVariables: [...d.secretVariables],
+      reason: withheld ? STEPS_WITHHELD : problem ?? DESKTOP_FOR_APPROVAL,
+    };
+    return { entry, review };
+  });
+  const forApproval = desktopOut.filter((o) => o.review !== undefined).length;
   // Every draft failed (a draft that cannot be adopted is a result, not a failure): the error output, with the report.
-  const allFailed = outcomes.length > 0 && failed.length === outcomes.length;
+  const allFailed = outcomes.length > 0 && failed.length === outcomes.length && forApproval === 0;
   // Failure captures (Debug Trace not Never): on the error item the first failure's are `screenshot` and `trace`, as on a
   // Run Steps failure item; every other failed draft's trace is `trace-<n>`, n its index in `drafts`.
   const captures: IBinaryKeyData = {};
@@ -273,6 +313,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
       ...(traceRefs.has(k) ? { traceRef: traceRefs.get(k) } : {}),
     };
   });
+  entries.push(...desktopOut.map((o) => o.entry));
   const fields: IDataObject = { report: report as unknown as IDataObject, drafts: entries, ...(workflow ? { workflowName: workflow.name } : {}) };
   const binary: IBinaryKeyData = { ...(workflow?.binary ?? {}), ...captures };
   const binaryField = Object.keys(binary).length ? { binary } : {};
@@ -298,6 +339,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
   for (const o of outcomes) {
     if (o.kind === 'adopted') repaired.push({ ...(await repairedStepsItem(ctx, engine, o.proposal)), pairedItem: paired });
   }
+  for (const o of desktopOut) if (o.review) repaired.push({ json: o.review, pairedItem: paired });
   return { kind: 'ok', data: { json: fields, pairedItem: paired, ...binaryField }, repaired };
 }
 

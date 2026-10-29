@@ -154,12 +154,17 @@ describe('Run Steps routes by the steps\' surface', () => {
 });
 
 describe('desktop steps elsewhere in the node', () => {
-  it('Sign Steps refuses desktop steps with a message of its own', async () => {
+  it('Sign Steps refuses desktop steps that were not reviewed as they are (a crafted digest, a base version)', async () => {
     const { executeSignSteps } = await import('../nodes/Playwright/operations/signSteps.js');
-    const item = { name: 'erp-orders', baseVersion: 1, version: 2, steps: DESKTOP_STEPS, hash: engine.scriptHash(DESKTOP_STEPS), digest: 'd'.repeat(64), safetyFlags: [], changes: [], evidence: { count: 0, total: null, diff: { missing: [], extra: [] } } };
+    // The safety flags and line are the recomputed ones (Sign Steps checks those first); the digest and the change list are not.
+    const safetyFlags = engine.desktopSafetyFlags(engine.parseDesktopScript(DESKTOP_STEPS));
+    const item = { name: 'erp-orders', baseVersion: 1, version: 2, steps: DESKTOP_STEPS, hash: engine.scriptHash(DESKTOP_STEPS), digest: 'd'.repeat(64), safetyFlags, changes: [], evidence: { count: 0, total: null, diff: { missing: [], extra: [] } }, safetyLine: safetyFlags.join('; ') };
     const p = { operation: 'signSteps', approved: true, approverId: APPROVER, approverAllowlist: APPROVER };
     const out = await executeSignSteps(harness({ params: p, items: [{ json: item }], credentials: { playwrightScriptSigningApi: { secretKey: KEY } }, continueOnFail: true }), engine);
-    expect(String(out[0][0].json.error)).toContain('Sign Steps cannot sign desktop steps (surface "desktop") yet: they have no Repaired steps review.');
+    const error = String(out[0][0].json.error);
+    expect(error).toContain('the repaired steps changed after they were reviewed');
+    expect(error).toContain('a desktop proposal must be a first version');
+    expect(error).toContain('the change list does not show every step of the steps, in order, as added');
   });
 
   it('Run Steps with desktop steps refuses configured row checks', async () => {

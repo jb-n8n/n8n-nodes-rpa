@@ -52,7 +52,7 @@ export const NO_REVIEW_DIGEST = 'the proposal has no review digest';
 export const UNVERIFIED_COUNT_FLAG = 'count unverified: the page that was read states no total';
 
 /** Digest of everything a reviewer saw (screenshots excluded); approval can be pinned to it. */
-export function proposalDigest(proposal: Proposal): string {
+export function proposalDigest(proposal: Pick<Proposal, 'name' | 'baseVersion' | 'version' | 'changes' | 'safetyFlags' | 'evidence'> & { steps: unknown }): string {
   const { name, baseVersion, version, steps, changes, safetyFlags, evidence } = proposal;
   return scriptHash({ name, baseVersion, version, steps, changes, safetyFlags, evidence });
 }

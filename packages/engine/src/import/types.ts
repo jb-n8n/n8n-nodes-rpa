@@ -1,7 +1,7 @@
 // The neutral shapes every importer shares: a parser turns its source into events, stripSecrets removes every
 // typed secret and folds the sign-in into one event, and buildDraft turns the events into a step document and a report.
 import type { DownloadTemplate } from '../steps/file-check.js';
-import type { Locator, PortalSecrets, Script } from '../types.js';
+import type { DesktopScript, Locator, PortalSecrets, Script } from '../types.js';
 
 export type ImportSource = 'chrome' | 'playwright' | 'uipath';
 /** One way to find an element, as the source recorded it. A target lists them best first: the first is the primary locator. */
@@ -23,7 +23,8 @@ export type ImportEvent =
    */
   | { at: string; kind: 'signIn'; username: Candidate[]; next?: Candidate[]; password: Candidate[]; submit: Candidate[]; totp?: { field: Candidate[]; submit: Candidate[] } };
 
-export interface ImportItem { at: string; kind: 'untranslated' | 'dropped' | 'converted' | 'secret' | 'error'; what: string; reason: string }
+/** `candidateWrite`: a desktop step that may save, post or submit; the owner decides at approval (it is never declared by the import). */
+export interface ImportItem { at: string; kind: 'untranslated' | 'dropped' | 'converted' | 'secret' | 'error' | 'candidateWrite'; what: string; reason: string }
 export interface ImportReport { source: ImportSource; steps: number; items: ImportItem[] }
 export interface ImportOptions {
   name: string;
@@ -38,12 +39,21 @@ export interface ImportOptions {
 }
 /** Version 1, unsigned, accepted by parseScript. */
 export interface Draft { name: string; script: Script }
-export interface ImportResult { drafts: Draft[]; report: ImportReport; flow?: UiPathFlow }
+/**
+ * A desktop draft (UiPath desktop sequences): version 1, unsigned, accepted by parseDesktopScript. Never replayed at
+ * import; it goes to approval as written. `writeCandidates`: steps (1-based) that may write, for the owner to confirm.
+ * `variables`: the run variables its steps type; `secretVariables`: those that hold a password or another secret.
+ */
+export interface DesktopDraft { name: string; script: DesktopScript; writeCandidates: number[]; variables: string[]; secretVariables: string[] }
+/** `desktopDrafts`: UiPath desktop sequences, apart from the browser drafts (present only when there are any). */
+export interface ImportResult { drafts: Draft[]; desktopDrafts?: DesktopDraft[]; report: ImportReport; flow?: UiPathFlow }
 
 /** A UiPath workflow's shape outside the browser (the UiPath importer fills it). Literal attribute values only; expressions stay text. */
 export interface UiPathFlow { name: string; nodes: FlowNode[] }
 export type FlowNode =
   | { kind: 'browser'; sequence: number; displayName: string }
+  /** A desktop sequence: the desktop draft `<name>-<sequence>`. Browser and desktop sequences share one numbering. */
+  | { kind: 'desktop'; sequence: number; displayName: string }
   | { kind: 's3Upload'; bucket?: string; key?: string; displayName: string }
   | { kind: 'readSpreadsheet' | 'writeSpreadsheet'; path?: string; sheet?: string; displayName: string }
   | { kind: 'http'; method?: string; url?: string; displayName: string }

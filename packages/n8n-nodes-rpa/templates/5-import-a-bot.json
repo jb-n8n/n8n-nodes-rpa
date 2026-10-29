@@ -3,7 +3,7 @@
   "nodes": [
     {
       "parameters": {
-        "content": "### Import a bot (grey: leave as is)\nTurns a bot you already have into steps for approval. Open the form (**Execute workflow**, or the production URL once published) and upload one of:\n- a **Chrome Recorder** export: Chrome DevTools → Recorder → Export → JSON\n- **Playwright code** from `npx playwright codegen` (JavaScript or TypeScript)\n- a **UiPath** project as a .zip, or one .xaml workflow\n\n**Import steps** builds a draft, runs it once and replays it in a fresh browser. What passes goes to **RPA: 3 Approve steps**, and each step list gets its own approval (a UiPath project can give several). The form's last page says what was imported; a UiPath import also downloads the rest of the bot as an n8n workflow. After approval, run the steps with Run Steps as **RPA: 2 Data feed** does, with `name` in **Settings** set to the Name you typed in the form.",
+        "content": "### Import a bot (grey: leave as is)\nTurns a bot you already have into steps for approval. Open the form (**Execute workflow**, or the production URL once published) and upload one of:\n- a **Chrome Recorder** export: Chrome DevTools → Recorder → Export → JSON\n- **Playwright code** from `npx playwright codegen` (JavaScript or TypeScript)\n- a **UiPath** project as a .zip, or one .xaml workflow\n\n**Import steps** builds a draft, runs it once and replays it in a fresh browser. What passes goes to **RPA: 3 Approve steps**; desktop steps from a UiPath project go there without a replay, and each step list gets its own approval (a UiPath project can give several). The form's last page says what was imported; a UiPath import also downloads the rest of the bot as an n8n workflow. After approval, run the steps with Run Steps as **RPA: 2 Data feed** does, with `name` in **Settings** set to the Name you typed in the form.",
         "height": 400,
         "width": 520,
         "color": 7
@@ -19,7 +19,7 @@
     },
     {
       "parameters": {
-        "content": "### Set once (green)\nRun **RPA: 1 Create tables (run once)** and import **RPA: 3 Approve steps** first, then pick credentials:\n- **Import a bot**: a Basic Auth credential, the user name and password people type to open the form. Create one with **Credential → + Create new credential → Basic Auth** on the node.\n- **RPA Browser**: Import steps\n- **RPA Site Login**: Import steps, when the bot signs in. Use the same one on **Sign steps** in workflow 3: the signature binds it.\n- **Chat model**: your model provider. It repairs a draft that no longer matches the site.\n\nIn **Approve steps**, choose **RPA: 3 Approve steps**. For a site on your own network (the sandbox), turn on **Options → Allow Private Network** in **Import steps**.\n\nKeep **Authentication** on: an anonymous form could start logins with the attached Site Login (login breaker trips) and spend on the chat model.",
+        "content": "### Set once (green)\nRun **RPA: 1 Create tables (run once)** and import **RPA: 3 Approve steps** first, then pick credentials:\n- **Import a bot**: a Basic Auth credential, the user name and password people type to open the form. Create one with **Credential → + Create new credential → Basic Auth** on the node.\n- **RPA Browser**: Import steps (a UiPath project with only desktop steps needs none)\n- **RPA Site Login**: Import steps, when the bot signs in. Use the same one on **Sign steps** in workflow 3: the signature binds it.\n- **Chat model**: your model provider. It repairs a draft that no longer matches the site.\n\nIn **Approve steps**, choose **RPA: 3 Approve steps**. For a site on your own network (the sandbox), turn on **Options → Allow Private Network** in **Import steps**.\n\nKeep **Authentication** on: an anonymous form could start logins with the attached Site Login (login breaker trips) and spend on the chat model.",
         "height": 440,
         "width": 480,
         "color": 4
@@ -35,7 +35,7 @@
     },
     {
       "parameters": {
-        "content": "### Why approval (grey)\nA recording is someone's clicks, not a reviewed automation. Imported steps never submit a form or post, the replay blocks writes, and no rows or files from it are delivered. A typed password, PIN or code is never imported: the sign-in becomes one `signIn` step that types the RPA Site Login's values. The steps run on a schedule only after a person approves them and **Sign Steps** signs exactly the steps that were proven.",
+        "content": "### Why approval (grey)\nA recording is someone's clicks, not a reviewed automation. Imported steps never submit a form or post, the replay blocks writes, and no rows or files from it are delivered. A typed password, PIN or code is never imported: the sign-in becomes one `signIn` step that types the RPA Site Login's values. The steps run on a schedule only after a person approves them and **Sign Steps** signs exactly the steps that were proven. Desktop steps are never marked as writes by the import: the approver lists the steps that save, post or submit, and only those may use the desktop runner's write controls.",
         "height": 400,
         "width": 440,
         "color": 7
@@ -225,7 +225,7 @@
         "operation": "completion",
         "respondWith": "returnBinary",
         "completionTitle": "Imported",
-        "completionMessage": "=Imported: {{ $json.report.steps }} steps; {{ $json.report.items.filter(i => i.kind === 'untranslated').length }} not translated, {{ $json.report.items.filter(i => i.kind === 'secret').length }} removed as secrets.\n{{ $json.drafts.filter(d => d.adopted).length }} of {{ $json.drafts.length }} step lists passed the replay and are waiting for approval in RPA: 3 Approve steps.\nYour browser downloads {{ $binary.workflow.fileName }}: the rest of the bot as an n8n workflow. Open it in n8n with Import from file; stickies mark what was not translated.",
+        "completionMessage": "=Imported: {{ $json.report.steps }} steps; {{ $json.report.items.filter(i => i.kind === 'untranslated').length }} not translated, {{ $json.report.items.filter(i => i.kind === 'secret').length }} removed as secrets.\n{{ $json.drafts.filter(d => d.adopted).length }} of {{ $json.drafts.filter(d => d.surface !== 'desktop').length }} step lists passed the replay and are waiting for approval in RPA: 3 Approve steps.{{ $json.drafts.some(d => d.forApproval) ? ' ' + $json.drafts.filter(d => d.forApproval).length + ' desktop step lists are waiting there too, not replayed: review every step and list the steps that save, post or submit in Write steps.' : '' }}\nYour browser downloads {{ $binary.workflow.fileName }}: the rest of the bot as an n8n workflow. Open it in n8n with Import from file; stickies mark what was not translated.",
         "inputDataFieldName": "workflow",
         "limitWaitTime": true,
         "limitType": "afterTimeInterval",
@@ -248,7 +248,7 @@
         "operation": "completion",
         "respondWith": "text",
         "completionTitle": "Imported",
-        "completionMessage": "=Imported: {{ $json.report.steps }} steps; {{ $json.report.items.filter(i => i.kind === 'untranslated').length }} not translated, {{ $json.report.items.filter(i => i.kind === 'secret').length }} removed as secrets.\n{{ $json.drafts.filter(d => d.adopted).length }} of {{ $json.drafts.length }} step lists passed the replay and are waiting for approval in RPA: 3 Approve steps.\nThe full report, and the reason for any step list that could not be proved, is on the Data output of Import steps in this execution.",
+        "completionMessage": "=Imported: {{ $json.report.steps }} steps; {{ $json.report.items.filter(i => i.kind === 'untranslated').length }} not translated, {{ $json.report.items.filter(i => i.kind === 'secret').length }} removed as secrets.\n{{ $json.drafts.filter(d => d.adopted).length }} of {{ $json.drafts.filter(d => d.surface !== 'desktop').length }} step lists passed the replay and are waiting for approval in RPA: 3 Approve steps.{{ $json.drafts.some(d => d.forApproval) ? ' ' + $json.drafts.filter(d => d.forApproval).length + ' desktop step lists are waiting there too, not replayed: review every step and list the steps that save, post or submit in Write steps.' : '' }}\nThe full report, and the reason for any step list that could not be proved, is on the Data output of Import steps in this execution.",
         "limitWaitTime": true,
         "limitType": "afterTimeInterval",
         "resumeAmount": 1,
