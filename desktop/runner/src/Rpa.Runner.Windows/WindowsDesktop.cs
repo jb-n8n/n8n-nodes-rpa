@@ -209,32 +209,50 @@ public sealed class WindowsDesktop : IDesktop, IDisposable
         Wait.UntilInputIsProcessed();
     }
 
+    /// <summary>
+    /// Types like a person: the field is cleared, then the text goes in through the keyboard, so the app sees the same
+    /// notifications as for real typing (a Save dialog ignores a file name set behind its back). A field without a
+    /// value pattern, or one whose value reads back different, falls back to setting the value directly.
+    /// </summary>
     private void Type(UiaNode node, UiOperation op)
     {
         var el = node.Element;
         var text = op.Text ?? "";
         var value = el.Patterns.Value;
-        if (value.IsSupported && !UiaNode.Guard(() => value.Pattern.IsReadOnly.ValueOrDefault))
-        {
-            try
-            {
-                UiaNode.Guard(() => value.Pattern.SetValue(text));
-                return;
-            }
-            catch (Exception e) when (e is COMException or InvalidOperationException or UnauthorizedAccessException)
-            {
-                // Some password fields refuse SetValue; fall back to the keyboard.
-            }
-        }
-        // Keyboard: control characters would act as keys (Enter could press a default button), so they are refused.
-        if (text.Any(char.IsControl))
+        var settable = value.IsSupported && !UiaNode.Guard(() => value.Pattern.IsReadOnly.ValueOrDefault);
+        // Control characters would act as keys (Enter could press a default button).
+        var keyboard = !text.Any(char.IsControl);
+        if (!keyboard && !settable)
             throw RpcErrors.PolicyRefused("typed text for this field contains control characters; use a key action instead");
-        UiaNode.Guard(() => el.Focus());
-        op.Guard(FocusedOr(node));
-        Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, (VirtualKeyShort)'A');
-        Keyboard.Type(VirtualKeyShort.DELETE);
-        if (text.Length > 0) Keyboard.Type(text);
-        Wait.UntilInputIsProcessed();
+        if (keyboard)
+        {
+            UiaNode.Guard(() => el.Focus());
+            op.Guard(FocusedOr(node));
+            if (settable) TrySetValue(el, "");
+            else
+            {
+                Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, (VirtualKeyShort)'A');
+                Keyboard.Type(VirtualKeyShort.DELETE);
+            }
+            if (text.Length > 0) Keyboard.Type(text);
+            Wait.UntilInputIsProcessed();
+            // A password field cannot be read back; for the rest, check what arrived.
+            if (!settable || node.IsPassword || node.Value == text) return;
+        }
+        if (!settable || !TrySetValue(el, text)) throw new RetryableActionException("the field did not take the typed text");
+    }
+
+    private static bool TrySetValue(AutomationElement el, string text)
+    {
+        try
+        {
+            UiaNode.Guard(() => el.Patterns.Value.Pattern.SetValue(text));
+            return true;
+        }
+        catch (Exception e) when (e is COMException or InvalidOperationException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     private void Select(AutomationElement el, string itemName)
