@@ -17,8 +17,12 @@ public sealed class RunnerService
     public const int DefaultMaxNodes = 400;
     public const int DefaultMaxDepth = 25;
     public const long MaxTimeoutMs = 600000;
+    public const int MaxWindows = 20;
     private const long DefaultActTimeoutMs = 10000;
     private const long DefaultFileTimeoutMs = 30000;
+
+    private const string RepairRefusal =
+        "repair mode allows only focus, expand, read, Escape without a target, and click on tabs, list items and tree items";
 
     private static readonly HashSet<string> RepairClickable = new(StringComparer.OrdinalIgnoreCase) { "TabItem", "ListItem", "TreeItem" };
 
@@ -76,6 +80,7 @@ public sealed class RunnerService
         "isVisible" => WithRun(p, ct, IsVisible),
         "resolve" => WithRun(p, ct, Resolve),
         "act" => WithRun(p, ct, Act),
+        "windows" => WithRun(p, ct, Windows),
         "file.retrieve" => WithRun(p, ct, FileRetrieve, ui: false),
         "screenshot" => WithRun(p, ct, Screenshot),
         _ => throw new RpcException(RpcErrors.MethodNotFound, "method_not_found", "method not found"),
@@ -242,8 +247,8 @@ public sealed class RunnerService
         }
 
         // Floor checks that need no UI.
-        if (mode == ActMode.Repair && action is not (ActionKind.Focus or ActionKind.Expand or ActionKind.Read or ActionKind.Click))
-            throw RpcErrors.PolicyRefused("repair mode allows only focus, expand, read, and click on tabs, list items and tree items");
+        if (mode == ActMode.Repair && action is not (ActionKind.Focus or ActionKind.Expand or ActionKind.Read or ActionKind.Click or ActionKind.Key))
+            throw RpcErrors.PolicyRefused(RepairRefusal);
         if (chord is not null && IsSystemChord(chord))
             throw RpcErrors.PolicyRefused($"the key {chord} reaches the Windows shell, not the app, and is never sent");
         if (chord is not null && _policy.IsGatedKey(chord))
@@ -251,6 +256,9 @@ public sealed class RunnerService
             if (mode == ActMode.Repair) throw RpcErrors.PolicyRefused($"the gated key {chord} is never allowed in repair mode");
             if (!write) throw RpcErrors.PolicyRefused($"the gated key {chord} needs write: true");
         }
+        // Repair may close a menu or dialog with Escape (to the run's focused element), and press no other key.
+        if (mode == ActMode.Repair && action == ActionKind.Key && (target is not null || chord!.ToString() != "Escape"))
+            throw RpcErrors.PolicyRefused(RepairRefusal);
 
         RequireSession();
         var res = target is null ? FocusedResolution(run, deadline, ct) : _resolver.Resolve(run, target, Remaining(deadline), ct);
@@ -310,6 +318,41 @@ public sealed class RunnerService
                 CheckWriteControl(element, res.Window, write, mode, "the target");
             }
         }
+    }
+
+    /// <summary>The run's top-level windows (its processes' own and owned windows, never another application's): the
+    /// foreground window first when it is the run's, then front to back, at most <see cref="MaxWindows"/>. A window that
+    /// goes away while being read is left out.</summary>
+    private JsonNode Windows(RunState run, Params p, CancellationToken ct)
+    {
+        RequireSession();
+        string? fgId = null;
+        try
+        {
+            var fg = _desktop.GetForegroundWindow();
+            if (fg is not null && _scope.IsRunProcess(run, fg.ProcessId)) fgId = fg.Id;
+        }
+        catch (ElementGoneException) { }
+        var entries = new List<(JsonObject Window, bool Foreground)>();
+        foreach (var w in _scope.RunWindows(run, null))
+        {
+            try
+            {
+                var isFg = fgId is not null && w.Id == fgId;
+                entries.Add((new JsonObject
+                {
+                    ["title"] = w.Name,
+                    ["exe"] = _scope.ExeOf(w.ProcessId) ?? "",
+                    ["automationId"] = w.AutomationId,
+                    ["className"] = w.ClassName,
+                    ["foreground"] = isFg,
+                }, isFg));
+            }
+            catch (ElementGoneException) { }
+        }
+        var list = new JsonArray();
+        foreach (var e in entries.Where(e => e.Foreground).Concat(entries.Where(e => !e.Foreground)).Take(MaxWindows)) list.Add(e.Window);
+        return new JsonObject { ["windows"] = list };
     }
 
     /// <summary>Chords the Windows shell takes whatever has the focus: anything with Win, Ctrl+Esc, Ctrl+Shift+Esc,

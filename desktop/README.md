@@ -58,8 +58,9 @@ explicit ACL: the runner's user, SYSTEM and Administrators only.
 
 A run acts only on windows of processes it launched whose executable is allowed. If another application's window holds
 the foreground and the runner cannot bring the run's window back, the action is refused; OS surfaces (notifications,
-the taskbar, the Start menu) are ignored. `mode: "repair"` allows only `focus`, `expand`, `read`, and `click` on tabs,
-list items and tree items.
+the taskbar, the Start menu) are ignored. `mode: "repair"` allows only `focus`, `expand`, `read`, `key` with the value
+`Escape` and no target (it goes to the run's focused element, to close a menu or a dialog; an `Escape` listed in
+`gatedKeys` stays refused), and `click` on tabs, list items and tree items.
 
 Key chords that reach the Windows shell rather than the app (anything with Win, Ctrl+Esc, Ctrl+Shift+Esc,
 Alt+Tab, Alt+Esc) are never sent. `type` goes only into editable text fields, as Unicode keystrokes (no shortcuts or
@@ -103,7 +104,7 @@ the runner and drives the ERP Demo through it with the scenario client. Its arti
 
 JSON-RPC 2.0 over WebSocket, one request per message, `Authorization: Bearer <token>` on the upgrade (HTTP 401
 otherwise). Methods: `hello`, `run.begin` (`{ runId, leaseMs }`, 5000 to 600000), `run.heartbeat`, `run.end`,
-`app.launch`, `snapshot`, `isVisible`, `resolve`, `act`, `file.retrieve`, `screenshot`. One run at a time; a lease that
+`app.launch`, `snapshot`, `isVisible`, `resolve`, `act`, `windows`, `file.retrieve`, `screenshot`. One run at a time; a lease that
 expires ends the run as `run.end` does (its apps closed, its export directory deleted). Requests on one connection
 are handled concurrently, so a `run.heartbeat` is answered while an `act` or `file.retrieve` is still running. The lease is also renewed when
 any request for the run finishes, and never expires while one is in progress.
@@ -113,4 +114,7 @@ Error codes: -32001 `runner_busy`, -32002 `desktop_unavailable`, -32003 `policy_
 name. Messages never contain typed values.
 
 Beyond the minimum: `act` with `action: "key"` may omit `target` (the key goes to the run's focused element, under the
-same write checks); `snapshot` adds `truncated: true` when it stopped at `maxNodes` or `maxDepth`.
+same write checks); `snapshot` adds `truncated: true` when it stopped at `maxNodes` or `maxDepth`; `windows { runId }`
+returns `{ windows: [{ title, exe, automationId, className, foreground }] }`, the run's top-level windows (its own and
+owned windows, such as dialogs and open menu drop-downs, never another application's), the foreground window first
+(`foreground: true`, only when it is the run's), then front to back, at most 20.

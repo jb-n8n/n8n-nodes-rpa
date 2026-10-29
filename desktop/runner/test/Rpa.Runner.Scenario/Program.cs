@@ -52,6 +52,7 @@ internal sealed class Scenario(Uri url, string token, string fingerprint, string
         {
             await MainFlow();
             await V2Smoke();
+            await V2Repair();
             await LeaseExpiry();
             await WrongToken();
         }
@@ -225,11 +226,7 @@ internal sealed class Scenario(Uri url, string token, string fingerprint, string
             try
             {
                 await Call("app.launch", new { runId = _runId, app = new { exe = appV2Path } });
-                await Call("resolve", new { runId = _runId, target = TW(LoginTitle, new { automationId = "txtUser" }), timeoutMs = 30000 });
-                await Act(TW(LoginTitle, new { automationId = "txtUser" }), "type", new { value = "clerk" });
-                await Act(TW(LoginTitle, new { automationId = "txtPassword" }), "type", new { value = Password });
-                await Act(TW(LoginTitle, new { automationId = "btnSignIn" }), "click");
-                await Call("resolve", new { runId = _runId, target = TW(MainTitle, new { automationId = "btnFind" }), timeoutMs = 15000 });
+                await SignIn("btnFind");
                 await ExpectError(-32004, () => Call("resolve", new { runId = _runId, target = TW(MainTitle, new { automationId = "btnSearch" }), timeoutMs = 0 }));
                 await Act(TW(MainTitle, new { controlType = "MenuItem", name = "File" }), "click");
                 await Call("resolve", new { runId = _runId, target = T(new { controlType = "MenuItem", name = "Exit" }), timeoutMs = 5000 });
@@ -253,6 +250,286 @@ internal sealed class Scenario(Uri url, string token, string fingerprint, string
             }
         });
     }
+
+    // The repair agent's exploration on the v2 build: what repair mode may do (expand, Escape without a target, windows,
+    // snapshot) and what real WinForms UI Automation shows while a menu drop-down or a dialog is open. Every OBSERVE line
+    // records real behaviour (later fakes copy it); assertions are limited to what the protocol promises.
+    private async Task V2Repair()
+    {
+        _runId = "repair-" + Guid.NewGuid().ToString("N")[..8];
+        var failedBefore = _results.Count(r => !r.Ok);
+        var begun = false;
+        List<JsonNode> baseline = [];
+        try
+        {
+            if (!await Step("repair (v2): run.begin, launch the v2 build, sign in", async () =>
+                {
+                    await Call("run.begin", new { runId = _runId, leaseMs = 120000 });
+                    begun = true;
+                    await Call("app.launch", new { runId = _runId, app = new { exe = appV2Path } });
+                    await SignIn("btnFind");
+                    baseline = await WaitWindows("after sign-in (baseline)",
+                        l => l.Any(w => Str(w, "title") == MainTitle) && !l.Any(w => Str(w, "title") == LoginTitle));
+                    Expect(baseline.Count > 0 && Str(baseline[0], "title") == MainTitle, "the main window is listed first");
+                    Expect(baseline[0]["foreground"]!.GetValue<bool>(), "the main window is the foreground window");
+                }))
+                return;
+
+            var reports = TW(MainTitle, new { controlType = "MenuItem", name = "Reports" });
+            JsonNode? dropDown = null;
+            await Step("repair a: expand MenuItem \"Reports\" (mode repair) opens a drop-down window that windows lists", async () =>
+            {
+                await Act(reports, "expand", new { mode = "repair" });
+                var list = await WaitWindows("after expand Reports", l => NewWindows(l, baseline).Count > 0);
+                var added = NewWindows(list, baseline);
+                foreach (var w in added) Observe($"new window after expand Reports: {Describe(w)}");
+                dropDown = added.FirstOrDefault(w => Str(w, "className") != "SysShadow") ?? added.FirstOrDefault();
+                Expect(dropDown is not null, "a new window of the run is listed while the drop-down is open");
+                Observe($"drop-down window: {Describe(dropDown!)}; listed at index {list.IndexOf(dropDown!)} of {list.Count}");
+            });
+
+            await Step("repair b: while the drop-down is open, MenuItem \"Export line items...\" shows in a snapshot", async () =>
+            {
+                var seenIn = new List<string>();
+                var none = await SaveSnapshot("snapshot-repair-open-nowindow.json");
+                var hasNone = HasNode(none, "MenuItem", "Export line items...");
+                Observe($"snapshot without window selector: returned window title=\"{none["window"]!["title"]}\" exe={none["window"]!["exe"]}, root {NodeText(none, 0)}, {Nodes(none).Count} nodes, has MenuItem \"Export line items...\": {hasNone}");
+                if (hasNone) seenIn.Add("snapshot without window");
+                var main = await SaveSnapshot("snapshot-repair-open-main.json", new { title = MainTitle });
+                var hasMain = HasNode(main, "MenuItem", "Export line items...");
+                Observe($"snapshot of window {{title: \"{MainTitle}\"}}: {Nodes(main).Count} nodes, has MenuItem \"Export line items...\": {hasMain}{(hasMain ? $" (parent: {ParentText(main, "Export line items...")})" : "")}; Menu nodes: {Nodes(main).Count(n => Str(n, "controlType") == "Menu")}");
+                if (hasMain) seenIn.Add("snapshot of the main window");
+                if (dropDown is not null)
+                {
+                    var dd = await SaveSnapshot("snapshot-repair-open-dropdown.json", SelOf(dropDown));
+                    var hasDd = HasNode(dd, "MenuItem", "Export line items...");
+                    Observe($"snapshot of the drop-down window (selector {SelOf(dropDown).ToJsonString()}): returned title=\"{dd["window"]!["title"]}\", root {NodeText(dd, 0)}, nodes: {Brief(dd, 10)}");
+                    if (hasDd) seenIn.Add("snapshot of the drop-down window");
+                }
+                Observe($"MenuItem \"Export line items...\" visible in: {(seenIn.Count == 0 ? "none" : string.Join(", ", seenIn))}");
+                Expect(seenIn.Count > 0, "MenuItem \"Export line items...\" is visible in at least one snapshot");
+            });
+
+            await Step("repair c: key Escape (mode repair, no target) closes the drop-down", async () =>
+            {
+                await RepairEscape();
+                var list = await WaitWindows("after one Escape", l => NewWindows(l, baseline).Count == 0);
+                Expect(NewWindows(list, baseline).Count == 0, "the drop-down window is gone");
+                // Is the menu bar still in menu mode (Reports highlighted)? Then Down reopens a drop-down.
+                var reopened = await DownReopens("after one Escape", baseline);
+                Observe($"menu mode after one Escape: {(reopened ? "yes (Down reopened a drop-down)" : "no (Down opened nothing)")}");
+                if (reopened)
+                {
+                    await RepairEscape();
+                    list = await WaitWindows("after Escape on the reopened drop-down", l => NewWindows(l, baseline).Count == 0);
+                    await RepairEscape();
+                    var again = await DownReopens("after two more Escapes", baseline);
+                    Observe($"menu mode after a second Escape: {(again ? "yes (Down reopened a drop-down)" : "no (Down opened nothing): the second Escape leaves the menu bar")}");
+                }
+                Observe($"Escapes needed to clean up: {await CloseNewWindows(baseline)}");
+            });
+
+            await Step("repair d: expanding Help while the Reports drop-down is open", async () =>
+            {
+                await Act(reports, "expand", new { mode = "repair" });
+                await WaitWindows("after expand Reports (d)", l => NewWindows(l, baseline).Count > 0);
+                await Act(TW(MainTitle, new { controlType = "MenuItem", name = "Help" }), "expand", new { mode = "repair" });
+                await Task.Delay(500);
+                var list = await WaitWindows("after expand Help", _ => true);
+                var added = NewWindows(list, baseline);
+                var reportsOpen = false;
+                var helpOpen = false;
+                for (var i = 0; i < added.Count; i++)
+                {
+                    var snap = await SaveSnapshot($"snapshot-repair-d-window{i}.json", SelOf(added[i]), maxNodes: 60);
+                    var r = HasNode(snap, "MenuItem", "Export line items...");
+                    var h = HasNode(snap, "MenuItem", "About");
+                    reportsOpen |= r;
+                    helpOpen |= h;
+                    Observe($"new window {i} after expand Help: {Describe(added[i])}; root {NodeText(snap, 0)}; has \"Export line items...\": {r}, has \"About\": {h}");
+                }
+                var main = await SaveSnapshot("snapshot-repair-d-main.json", new { title = MainTitle });
+                Observe($"main window tree after expand Help: has \"Export line items...\": {HasNode(main, "MenuItem", "Export line items...")}, has \"About\": {HasNode(main, "MenuItem", "About")}");
+                Observe($"expanding Help while Reports is open: Reports drop-down {(reportsOpen ? "stays open" : "closed")}, Help drop-down {(helpOpen ? "open" : "not seen")}");
+                Observe($"Escapes needed to clean up: {await CloseNewWindows(baseline)}");
+            });
+
+            await Step("repair e: click on a Button, key Enter, and Escape with a target are policy_refused (-32003)", async () =>
+            {
+                await ExpectError(-32003, () => Act(TW(MainTitle, new { controlType = "Button", name = "Find" }), "click", new { mode = "repair" }));
+                await ExpectError(-32003, () => Call("act", new { runId = _runId, action = "key", value = "Enter", mode = "repair", timeoutMs = 5000 }));
+                await ExpectError(-32003, () => Act(TW(MainTitle, new { automationId = "txtDateFrom" }), "key", new { value = "Escape", mode = "repair" }));
+            });
+
+            await Step("repair f1: the Confirm export dialog: windows, snapshot, and Escape (mode repair) cancels it", async () =>
+            {
+                await OpenConfirmExport();
+                var list = await WaitWindows("with Confirm export open", l => l.Any(w => Str(w, "title") == "Confirm export"));
+                var confirm = list.FirstOrDefault(w => Str(w, "title") == "Confirm export");
+                Expect(confirm is not null, "windows lists Confirm export");
+                Observe($"Confirm export: index {list.IndexOf(confirm!)} of {list.Count}, {Describe(confirm!)}");
+                var snap = await SaveSnapshot("snapshot-repair-confirm-nowindow.json");
+                Observe($"snapshot without window selector: title=\"{snap["window"]!["title"]}\", nodes: {Brief(snap, 12)}");
+                await RepairEscape();
+                list = await WaitWindows("after Escape on Confirm export", l => !l.Any(w => Str(w, "title") == "Confirm export"));
+                var gone = !list.Any(w => Str(w, "title") == "Confirm export");
+                Observe($"Escape cancels Confirm export: {gone}; first window now: {(list.Count > 0 ? Describe(list[0]) : "none")}");
+                Expect(gone, "Escape closed Confirm export");
+            });
+
+            await Step("repair f2: Continue opens the Save dialog; Escape (mode repair) cancels it", async () =>
+            {
+                await OpenConfirmExport();
+                await Act(TW("Confirm export", new { controlType = "Button", name = "Continue" }), "click");
+                await Call("resolve", new { runId = _runId, target = TW(SaveTitle, new { automationId = "1001", controlType = "Edit" }), timeoutMs = 15000 });
+                var list = await WaitWindows("with the Save dialog open", l => l.Any(w => Str(w, "title") == SaveTitle));
+                var save = list.FirstOrDefault(w => Str(w, "title") == SaveTitle);
+                Expect(save is not null, "windows lists the Save dialog");
+                Observe($"Save dialog: index {list.IndexOf(save!)} of {list.Count}, {Describe(save!)}");
+                var snap = await SaveSnapshot("snapshot-repair-save-nowindow.json", maxNodes: 1500);
+                Observe($"snapshot without window selector: title=\"{snap["window"]!["title"]}\", root {NodeText(snap, 0)}, {Nodes(snap).Count} nodes{(snap["truncated"]?.GetValue<bool>() == true ? " (truncated)" : "")}");
+                await RepairEscape();
+                list = await WaitWindows("after Escape on the Save dialog", l => !l.Any(w => Str(w, "title") == SaveTitle));
+                var gone = !list.Any(w => Str(w, "title") == SaveTitle);
+                Observe($"Escape cancels the Save dialog: {gone}; first window now: {(list.Count > 0 ? Describe(list[0]) : "none")}");
+                Expect(gone, "Escape closed the Save dialog");
+            });
+        }
+        finally
+        {
+            if (_results.Count(r => !r.Ok) > failedBefore && begun) await CaptureFailure("repair");
+            if (begun)
+            {
+                try { await Call("run.end", new { runId = _runId }); }
+                catch (Exception e) { Console.WriteLine($"    (run.end failed: {e.Message})"); }
+            }
+        }
+    }
+
+    private async Task SignIn(string mainControlId)
+    {
+        await Call("resolve", new { runId = _runId, target = TW(LoginTitle, new { automationId = "txtUser" }), timeoutMs = 30000 });
+        await Act(TW(LoginTitle, new { automationId = "txtUser" }), "type", new { value = "clerk" });
+        await Act(TW(LoginTitle, new { automationId = "txtPassword" }), "type", new { value = Password });
+        await Act(TW(LoginTitle, new { automationId = "btnSignIn" }), "click");
+        await Call("resolve", new { runId = _runId, target = TW(MainTitle, new { automationId = mainControlId }), timeoutMs = 15000 });
+    }
+
+    private async Task OpenConfirmExport()
+    {
+        await Act(TW(MainTitle, new { controlType = "MenuItem", name = "Reports" }), "click");
+        await Act(T(new { controlType = "MenuItem", name = "Export line items..." }), "click", timeoutMs: 5000);
+        await Call("resolve", new { runId = _runId, target = TW("Confirm export", new { automationId = "btnConfirmExport" }), timeoutMs = 15000 });
+    }
+
+    private Task<JsonNode> RepairEscape() =>
+        Call("act", new { runId = _runId, action = "key", value = "Escape", mode = "repair", timeoutMs = 5000 });
+
+    /// <summary>Sends Down (step mode, no target) and reports whether a new window (a drop-down) appeared.</summary>
+    private async Task<bool> DownReopens(string label, List<JsonNode> baseline)
+    {
+        try
+        {
+            await Call("act", new { runId = _runId, action = "key", value = "Down", timeoutMs = 5000 });
+        }
+        catch (RunnerError e)
+        {
+            Observe($"key Down (step mode, no target) {label}: refused {e.Code}: {e.RunnerMessage}");
+            return false;
+        }
+        await Task.Delay(500);
+        var list = await WaitWindows($"after key Down {label}", _ => true);
+        return NewWindows(list, baseline).Count > 0;
+    }
+
+    /// <summary>Presses Escape (repair mode) until no window beyond the baseline is listed; returns how many it took.</summary>
+    private async Task<int> CloseNewWindows(List<JsonNode> baseline)
+    {
+        for (var i = 0; i < 4; i++)
+        {
+            var list = await WaitWindows($"cleanup check {i}", l => NewWindows(l, baseline).Count == 0, ms: 1000, print: false);
+            if (NewWindows(list, baseline).Count == 0) return i;
+            await RepairEscape();
+        }
+        throw new InvalidOperationException("expected: four Escapes close every new window");
+    }
+
+    /// <summary>Polls windows until the condition holds or the time is up; prints the last list.</summary>
+    private async Task<List<JsonNode>> WaitWindows(string label, Func<List<JsonNode>, bool> until, int ms = 3000, bool print = true)
+    {
+        var sw = Stopwatch.StartNew();
+        List<JsonNode> list;
+        while (true)
+        {
+            list = (await Call("windows", new { runId = _runId }))["windows"]!.AsArray().Select(n => n!).ToList();
+            if (until(list) || sw.ElapsedMilliseconds >= ms) break;
+            await Task.Delay(200);
+        }
+        if (print)
+        {
+            Observe($"windows {label}: {list.Count} entries");
+            for (var i = 0; i < list.Count; i++) Observe($"  [{i}] {Describe(list[i])}");
+        }
+        return list;
+    }
+
+    private static List<JsonNode> NewWindows(List<JsonNode> list, List<JsonNode> baseline)
+    {
+        var known = baseline.Select(WindowKey).ToHashSet();
+        return list.Where(w => !known.Contains(WindowKey(w))).ToList();
+    }
+
+    private static string WindowKey(JsonNode w) => $"{Str(w, "title")}|{Str(w, "automationId")}|{Str(w, "className")}";
+
+    private static string Describe(JsonNode w) =>
+        $"title=\"{Str(w, "title")}\" exe={Str(w, "exe")} automationId=\"{Str(w, "automationId")}\" className=\"{Str(w, "className")}\" foreground={w["foreground"]?.GetValue<bool>()}";
+
+    /// <summary>A window selector from what windows reported: the exact title (or an empty one), automation id and class.</summary>
+    private static JsonObject SelOf(JsonNode w)
+    {
+        var o = new JsonObject();
+        if (Str(w, "title").Length > 0) o["title"] = Str(w, "title");
+        else o["titlePattern"] = "^$";
+        if (Str(w, "automationId").Length > 0) o["automationId"] = Str(w, "automationId");
+        if (Str(w, "className").Length > 0) o["className"] = Str(w, "className");
+        return o;
+    }
+
+    private static string Str(JsonNode? n, string key) => n?[key]?.GetValue<string>() ?? "";
+
+    private static List<JsonNode> Nodes(JsonNode snap) => snap["nodes"]!.AsArray().Select(n => n!).ToList();
+
+    private static bool HasNode(JsonNode snap, string controlType, string name) =>
+        Nodes(snap).Any(n => Str(n, "controlType") == controlType && Str(n, "name") == name);
+
+    private static string NodeText(JsonNode snap, int index)
+    {
+        var nodes = Nodes(snap);
+        if (index >= nodes.Count) return "(none)";
+        var n = nodes[index];
+        return $"{Str(n, "controlType")} \"{Str(n, "name")}\" automationId=\"{Str(n, "automationId")}\" className=\"{Str(n, "className")}\"";
+    }
+
+    /// <summary>The nearest node above the named one with a smaller depth (its parent in the pruned tree).</summary>
+    private static string ParentText(JsonNode snap, string name)
+    {
+        var nodes = Nodes(snap);
+        var i = nodes.FindIndex(n => Str(n, "name") == name);
+        var depth = nodes[i]["depth"]!.GetValue<int>();
+        for (var j = i - 1; j >= 0; j--)
+            if (nodes[j]["depth"]!.GetValue<int>() < depth) return $"{NodeText(snap, j)} at depth {nodes[j]["depth"]}";
+        return "(none)";
+    }
+
+    private static string Brief(JsonNode snap, int max)
+    {
+        var nodes = Nodes(snap);
+        var parts = nodes.Take(max).Select(n =>
+            $"{n["depth"]}:{Str(n, "controlType")} \"{Str(n, "name")}\"{(Str(n, "automationId").Length > 0 ? "#" + Str(n, "automationId") : "")}");
+        return string.Join("; ", parts) + (nodes.Count > max ? $"; ... ({nodes.Count} nodes)" : "");
+    }
+
+    private static void Observe(string text) => Console.WriteLine($"    OBSERVE: {text}");
 
     private async Task LeaseExpiry()
     {

@@ -36,7 +36,7 @@ public sealed class ServiceTests : IDisposable
     [Fact]
     public void Methods_other_than_hello_and_run_begin_need_the_active_run_id()
     {
-        foreach (var m in new[] { "run.heartbeat", "run.end", "app.launch", "snapshot", "isVisible", "resolve", "act", "file.retrieve", "screenshot" })
+        foreach (var m in new[] { "run.heartbeat", "run.end", "app.launch", "snapshot", "isVisible", "resolve", "act", "windows", "file.retrieve", "screenshot" })
             _h.Err(m, new { runId = "nope" }, RpcErrors.NoRunCode);
         _h.Begin();
         _h.Err("snapshot", new { runId = "other" }, RpcErrors.NoRunCode);
@@ -382,6 +382,104 @@ public sealed class ServiceTests : IDisposable
         _h.Err("act", Act(Id("btnSignIn"), "click", new { mode = "repair" }), RpcErrors.PolicyRefusedCode);
         _h.Err("act", Act(Id("btnPost"), "focus", new { mode = "repair", write = true }), RpcErrors.PolicyRefusedCode);
         _h.Err("act", Act(Id("txtUser"), "key", new { mode = "repair", value = "Ctrl+S", write = true }), RpcErrors.PolicyRefusedCode);
+    }
+
+    [Fact]
+    public void Repair_mode_allows_Escape_without_target()
+    {
+        var w = _h.BeginWithApp();
+        _h.Desktop.Focused = w.Find("txtUser");
+        var r = _h.Ok("act", new { runId = Harness.RunId, action = "key", value = "Escape", mode = "repair", timeoutMs = 0 });
+        Assert.Empty(r.AsObject());
+        var op = Assert.Single(_h.Desktop.Performed);
+        Assert.Equal("Escape", op.Key!.ToString());
+        Assert.Equal("txtUser", op.Element.AutomationId);
+    }
+
+    [Theory]
+    [InlineData("Enter", false)]
+    [InlineData("Tab", false)]
+    [InlineData("Down", false)]
+    [InlineData("Shift+Escape", false)]
+    [InlineData("Escape", true)]
+    public void Repair_mode_refuses_other_keys(string key, bool withTarget)
+    {
+        var w = _h.BeginWithApp();
+        _h.Desktop.Focused = w.Find("txtUser");
+        object p = withTarget
+            ? Act(Id("txtUser"), "key", new { value = key, mode = "repair" })
+            : new { runId = Harness.RunId, action = "key", value = key, mode = "repair", timeoutMs = 0 };
+        var e = _h.Err("act", p, RpcErrors.PolicyRefusedCode);
+        // The wire message is "<error name>: <reason>".
+        Assert.StartsWith("policy_refused: repair mode allows only", e["message"]!.GetValue<string>());
+        Assert.Empty(_h.Desktop.Performed);
+    }
+
+    [Fact]
+    public void Repair_mode_refuses_gated_Escape()
+    {
+        using var probe = new Harness();
+        using var h = new Harness($$"""
+            { "allowedApps": [{ "exe": "ErpDemo.exe", "path": {{System.Text.Json.JsonSerializer.Serialize(probe.AppPath)}} }], "gatedKeys": ["Escape"] }
+            """);
+        var w = h.BeginWithApp();
+        h.Desktop.Focused = w.Find("txtUser");
+        var e = h.Err("act", new { runId = Harness.RunId, action = "key", value = "Escape", mode = "repair", timeoutMs = 0 }, RpcErrors.PolicyRefusedCode);
+        Assert.Equal("policy_refused: the gated key Escape is never allowed in repair mode", e["message"]!.GetValue<string>());
+        Assert.Empty(h.Desktop.Performed);
+    }
+
+    [Fact]
+    public void Windows_lists_run_windows_foreground_first()
+    {
+        var main = _h.BeginWithApp();
+        main.ClassName = "WindowsForms10.Window.8.app";
+        var dialog = new FakeNode("Window", "Confirm export", "ConfirmForm", main.ProcessId) { ClassName = "WindowsForms10.Window.8.app.dlg" };
+        _h.Desktop.Windows.Insert(0, dialog);
+        _h.Desktop.Foreground = dialog;
+        var list = _h.Ok("windows", new { runId = Harness.RunId })["windows"]!.AsArray();
+        Assert.Equal(2, list.Count);
+        Assert.Equal("Confirm export", list[0]!["title"]!.GetValue<string>());
+        Assert.Equal("ErpDemo.exe", list[0]!["exe"]!.GetValue<string>());
+        Assert.Equal("ConfirmForm", list[0]!["automationId"]!.GetValue<string>());
+        Assert.Equal("WindowsForms10.Window.8.app.dlg", list[0]!["className"]!.GetValue<string>());
+        Assert.True(list[0]!["foreground"]!.GetValue<bool>());
+        Assert.Equal("ERP Demo - Line items", list[1]!["title"]!.GetValue<string>());
+        Assert.Equal("MainForm", list[1]!["automationId"]!.GetValue<string>());
+        Assert.False(list[1]!["foreground"]!.GetValue<bool>());
+        // The foreground window comes first even when it is not front-most; the rest stay in z-order.
+        _h.Desktop.Foreground = main;
+        list = _h.Ok("windows", new { runId = Harness.RunId })["windows"]!.AsArray();
+        Assert.Equal(["ERP Demo - Line items", "Confirm export"], list.Select(n => n!["title"]!.GetValue<string>()));
+        Assert.Equal([true, false], list.Select(n => n!["foreground"]!.GetValue<bool>()));
+        // At most 20.
+        for (var i = 0; i < 25; i++) _h.Desktop.Windows.Add(new FakeNode("Window", $"Extra {i}", "", main.ProcessId));
+        Assert.Equal(20, _h.Ok("windows", new { runId = Harness.RunId })["windows"]!.AsArray().Count);
+    }
+
+    [Fact]
+    public void Windows_never_lists_other_processes()
+    {
+        _h.BeginWithApp();
+        _h.Processes.Names[777] = "notepad.exe";
+        var foreign = new FakeNode("Window", "Untitled - Notepad", "", 777);
+        _h.Desktop.Windows.Insert(0, foreign);
+        _h.Desktop.Foreground = foreign;
+        var list = _h.Ok("windows", new { runId = Harness.RunId })["windows"]!.AsArray();
+        var only = Assert.Single(list);
+        Assert.Equal("ERP Demo - Line items", only!["title"]!.GetValue<string>());
+        Assert.False(only["foreground"]!.GetValue<bool>());
+        Assert.DoesNotContain("Notepad", list.ToJsonString());
+    }
+
+    [Fact]
+    public void Windows_needs_active_run()
+    {
+        _h.BeginWithApp();
+        var e = _h.Err("windows", new { runId = "other" }, RpcErrors.NoRunCode);
+        Assert.Equal("no_run", e["data"]!["name"]!.GetValue<string>());
+        _h.Desktop.Session = new SessionState(true, true, true);
+        _h.Err("windows", new { runId = Harness.RunId }, RpcErrors.DesktopUnavailableCode);
     }
 
     [Fact]
