@@ -396,6 +396,22 @@ public sealed class ServiceTests : IDisposable
         Assert.Equal("txtUser", op.Element.AutomationId);
     }
 
+    [Fact]
+    public void Repair_mode_Escape_reaches_a_dialog_the_run_window_owns()
+    {
+        var main = _h.BeginWithApp();
+        // UI Automation nests an owned dialog under its owner, while the window manager lists it as a top-level window.
+        var dialog = new FakeNode("Window", "Confirm export", "ConfirmExportForm");
+        dialog.Child("Button", "Continue", "btnConfirmExport");
+        main.Add(dialog);
+        _h.Desktop.Windows.Insert(0, dialog);
+        _h.Desktop.Foreground = dialog;
+        _h.Desktop.Focused = dialog.Find("btnConfirmExport");
+        _h.Ok("act", new { runId = Harness.RunId, action = "key", value = "Escape", mode = "repair", timeoutMs = 0 });
+        var op = Assert.Single(_h.Desktop.Performed);
+        Assert.Same(dialog, op.Window);
+    }
+
     [Theory]
     [InlineData("Enter", false)]
     [InlineData("Tab", false)]

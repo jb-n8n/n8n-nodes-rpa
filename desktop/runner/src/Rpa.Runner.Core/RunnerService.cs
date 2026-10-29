@@ -440,7 +440,11 @@ public sealed class RunnerService
         }
         if (!_scope.IsRunProcess(run, focused.ProcessId))
             throw RpcErrors.PolicyRefused("the keyboard focus is in a window of another application");
-        return new Resolution(0, focused, _desktop.GetTopLevelWindowOf(focused) ?? window);
+        // The keyboard focus lives in the foreground window. UI Automation nests owned windows (dialogs, drop-downs)
+        // under their owner, so the root of the focused element's tree may be the owner, not the window with the focus.
+        var fg = _desktop.GetForegroundWindow();
+        var top = fg is not null && _scope.IsRunProcess(run, fg.ProcessId) ? fg : _desktop.GetTopLevelWindowOf(focused) ?? window;
+        return new Resolution(0, focused, top);
     }
 
     /// <summary>An action on a declared write control (the element or any ancestor inside its window) needs write: true,

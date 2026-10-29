@@ -379,6 +379,9 @@ internal sealed class Scenario(Uri url, string token, string fingerprint, string
 
             await Step("repair f2: Continue opens the Save dialog; Escape (mode repair) cancels it", async () =>
             {
+                // A Confirm export left open by f1 would stay behind a second one (the menu still works through UI
+                // Automation while the dialog is modal), so start from the main window alone.
+                await CloseNewWindows(baseline);
                 await OpenConfirmExport();
                 await Act(TW("Confirm export", new { controlType = "Button", name = "Continue" }), "click");
                 await Call("resolve", new { runId = _runId, target = TW(SaveTitle, new { automationId = "1001", controlType = "Edit" }), timeoutMs = 15000 });
