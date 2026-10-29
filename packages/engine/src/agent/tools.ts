@@ -8,11 +8,11 @@ import { candidatesOf } from '../steps/locator.js';
 import { poll } from '../steps/poll.js';
 import { isLoginPage } from '../steps/urls.js';
 import { FILE_CHECK_FAILED_PREFIX, type DownloadTemplate } from '../steps/file-check.js';
-import { runSteps, type StepContext } from '../steps/run.js';
+import { runSteps, surfaceOf, type StepContext } from '../steps/run.js';
 import type { Interrupt, Locator, OutputSpec, RunState, Step } from '../types.js';
 import { candidatesFor } from './candidates.js';
 import { DENYLIST, fold, INVISIBLE, isDestructive, isDestructiveUrl, normalizeForDenylist } from '../policy/destructive.js';
-import { currentIdentity, snapshot, type Snapshot, type SnapshotElement } from './snapshot.js';
+import { currentIdentity, type Snapshot, type SnapshotElement } from './snapshot.js';
 
 export { DENYLIST, isDestructive, normalizeForDenylist };
 
@@ -223,10 +223,11 @@ export class AgentTools {
     this.seenState = undefined;
     this.lastVisit = 0;
     // No field values on a declared login page: split code boxes and the username field hold sign-in data.
-    const s = await snapshot(this.page, this.masker, { refStart: this.nextRef, values: !isLoginPage(this.ctx.policy, this.page.url()) });
+    const surface = surfaceOf(this.ctx);
+    const s = await surface.snapshot(this.masker, { refStart: this.nextRef, values: !isLoginPage(this.ctx.policy, surface.address()) });
     this.nextRef = s.nextRef;
     this.current = new Map(s.elements.map((e) => [e.ref, e]));
-    this.seenState = pageStateOf(this.page.url(), s);
+    this.seenState = pageStateOf(surface.address(), s);
     // A visit is arriving on a page: reading the same page again (extract, a failed click) is not a new visit.
     if (this.seenState !== previous) {
       this.lastVisit = (this.visits.get(this.seenState) ?? 0) + 1;
