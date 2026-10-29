@@ -49,7 +49,8 @@ as an administrator: the runner leaves an existing directory's permissions alone
   could reach the write control without targeting it.
 - `gatedKeys`: key chords that need `write: true` (in any spelling: `ctrl+s` is `Ctrl+S`). List the app's save and
   post shortcuts here.
-- `maxFileBytes`: the largest file `file.retrieve` returns (default 20 MiB).
+- `maxFileBytes`: the largest file `file.retrieve` returns (default 20 MiB, at most 36 MiB so the answer fits a 50 MiB
+  message).
 
 Each launched app runs in its own Windows job object: the run's windows are those of processes in it, and the run's end
 (or its expired lease, or the runner exiting) ends the whole process tree. The data, log and export directories get an
@@ -103,7 +104,8 @@ the runner and drives the ERP Demo through it with the scenario client. Its arti
 JSON-RPC 2.0 over WebSocket, one request per message, `Authorization: Bearer <token>` on the upgrade (HTTP 401
 otherwise). Methods: `hello`, `run.begin` (`{ runId, leaseMs }`, 5000 to 600000), `run.heartbeat`, `run.end`,
 `app.launch`, `snapshot`, `isVisible`, `resolve`, `act`, `file.retrieve`, `screenshot`. One run at a time; a lease that
-expires ends the run as `run.end` does (its apps closed, its export directory deleted). The lease is also renewed when
+expires ends the run as `run.end` does (its apps closed, its export directory deleted). Requests on one connection
+are handled concurrently, so a `run.heartbeat` is answered while an `act` or `file.retrieve` is still running. The lease is also renewed when
 any request for the run finishes, and never expires while one is in progress.
 
 Error codes: -32001 `runner_busy`, -32002 `desktop_unavailable`, -32003 `policy_refused`, -32004 `not_found`,

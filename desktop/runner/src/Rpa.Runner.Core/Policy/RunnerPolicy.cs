@@ -12,8 +12,9 @@ public sealed class RunnerPolicy
 {
     public const long DefaultMaxFileBytes = 20 * 1024 * 1024;
 
-    /// <summary>The largest file one protocol message can carry comfortably (base64 in a single WebSocket message).</summary>
-    public const long MaxFileBytesCeiling = 256L * 1024 * 1024;
+    /// <summary>The largest file one file.retrieve answer can carry: its base64 plus the JSON stays under the 50 MiB
+    /// frame limit clients accept.</summary>
+    public const long MaxFileBytesCeiling = 36L * 1024 * 1024;
 
     public IReadOnlyList<AllowedApp> AllowedApps { get; init; } = [];
     public IReadOnlyList<WriteControl> WriteControls { get; init; } = [];

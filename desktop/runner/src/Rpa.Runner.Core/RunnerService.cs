@@ -437,7 +437,7 @@ public sealed class RunnerService
         var pattern = p.ReqString("pattern");
         var timeout = TimeSpan.FromMilliseconds(p.OptLong("timeoutMs", 0, MaxTimeoutMs) ?? DefaultFileTimeoutMs);
         var maxBytes = p.OptLong("maxBytes", 1, long.MaxValue) ?? _policy.MaxFileBytes;
-        var limit = Math.Min(maxBytes, _policy.MaxFileBytes);
+        var limit = Math.Min(Math.Min(maxBytes, _policy.MaxFileBytes), RunnerPolicy.MaxFileBytesCeiling);
         var f = _files.Retrieve(run.ExportDir, pattern, timeout, limit, ct);
         _log.Info($"file.retrieve size={f.Size}");
         return new JsonObject { ["name"] = f.Name, ["size"] = f.Size, ["base64"] = Convert.ToBase64String(f.Bytes) };

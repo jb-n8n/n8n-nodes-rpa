@@ -16,15 +16,17 @@ public sealed class ServerTests : IAsyncLifetime
     private readonly string _dir = Directory.CreateTempSubdirectory("rpa-server-").FullName;
     private RunnerHost _host = null!;
     private readonly FakeDesktop _desktop = new();
+    private readonly FakeProcessHost _processes = new();
+    private static readonly string AppPath = Path.Combine(Path.GetTempPath(), "erp", "ErpDemo.exe");
 
     public async Task InitializeAsync()
     {
         var policy = Path.Combine(_dir, "policy.json");
-        var app = System.Text.Json.JsonSerializer.Serialize(Path.Combine(Path.GetTempPath(), "erp", "ErpDemo.exe"));
+        var app = System.Text.Json.JsonSerializer.Serialize(AppPath);
         File.WriteAllText(policy, $$"""{ "allowedApps": [{ "exe": "ErpDemo.exe", "path": {{app}} }] }""");
         var options = RunnerOptions.Parse(["--port", "0", "--bind", "127.0.0.1", "--data-dir", _dir, "--policy", policy],
             name => name == "RPA_RUNNER_TOKEN" ? GoodToken : null);
-        _host = await RunnerHost.StartAsync(options, _desktop, new FakeProcessHost(), new NoKeyProtection(), TimeProvider.System,
+        _host = await RunnerHost.StartAsync(options, _desktop, _processes, new NoKeyProtection(), TimeProvider.System,
             RunnerLog.Silent, "0.1.0-test");
     }
 
@@ -112,6 +114,35 @@ public sealed class ServerTests : IAsyncLifetime
         await Send(ws, """{"jsonrpc":"2.0","id":"b","method":"run.heartbeat","params":{"runId":"x"}}""");
         var ids = new HashSet<string> { (await Receive(ws))["id"]!.GetValue<string>(), (await Receive(ws))["id"]!.GetValue<string>() };
         Assert.Equal(["a", "b"], ids.Order());
+    }
+
+    [Fact]
+    public async Task A_heartbeat_is_answered_while_an_act_on_the_same_connection_is_still_running()
+    {
+        using var release = new ManualResetEventSlim();
+        using var ws = Client(GoodToken);
+        await ws.ConnectAsync(Url, default);
+        var begin = await Call(ws, """{"jsonrpc":"2.0","id":1,"method":"run.begin","params":{"runId":"r","leaseMs":5000}}""");
+        Assert.NotNull(begin["result"]);
+        var w = new FakeNode("Window", "Main", "MainForm", 4242);
+        w.Child("Button", "Slow", "btnSlow");
+        // Not launched through the fake host: register the window's process as the run's directly.
+        _host.Runs.Get("r").AddProcess(4242);
+        _processes.Names[4242] = "ErpDemo.exe";
+        _processes.Paths[4242] = AppPath;
+        _desktop.Windows.Add(w);
+        _desktop.Foreground = w;
+        _desktop.OnPerform = _ => { release.Wait(TimeSpan.FromSeconds(20)); return null; };
+        await Send(ws, """{"jsonrpc":"2.0","id":2,"method":"act","params":{"runId":"r","target":{"path":[{"automationId":"btnSlow"}]},"action":"click","timeoutMs":20000}}""");
+        await Task.Delay(300);
+        await Send(ws, """{"jsonrpc":"2.0","id":3,"method":"run.heartbeat","params":{"runId":"r"}}""");
+        var first = await Receive(ws);
+        Assert.Equal(3, first["id"]!.GetValue<int>());
+        release.Set();
+        var second = await Receive(ws);
+        Assert.Equal(2, second["id"]!.GetValue<int>());
+        Assert.NotNull(second["result"]);
+        await Call(ws, """{"jsonrpc":"2.0","id":4,"method":"run.end","params":{"runId":"r"}}""");
     }
 
     [Fact]

@@ -56,6 +56,7 @@ public class PolicyTests
     [InlineData("""{ "gatedKeys": ["Ctrl+Banana"] }""")]
     [InlineData("""{ "maxFileBytes": 0 }""")]
     [InlineData("""{ "maxFileBytes": 1073741824 }""")]
+    [InlineData("""{ "maxFileBytes": 37748737 }""")]
     [InlineData("""not json""")]
     public void Refuses_invalid_policies(string json)
     {
