@@ -103,7 +103,10 @@ The LSA secret is protected by the system, not encrypted against an administrato
   "allowedApps": [
     { "exe": "ErpDemo.exe", "path": "C:\\Program Files\\RPA Runner\\erp-demo\\ErpDemo.exe", "allowedArgs": [["--ui", "v1"], ["--ui", "v2"]] }
   ],
-  "writeControls": [{ "exe": "ErpDemo.exe", "automationId": "btnPost" }],
+  "writeControls": [
+    { "exe": "ErpDemo.exe", "automationId": "btnPost" },
+    { "exe": "ErpDemo.exe", "automationId": "1" }
+  ],
   "gatedKeys": ["Ctrl+S", "F11"],
   "maxFileBytes": 20971520
 }
@@ -115,7 +118,7 @@ The LSA secret is protected by the system, not encrypted against an administrato
   - `sha256` (optional) pins the file's hash.
   - `allowedArgs` (optional) lists the exact argument lists a launch may pass; without it, none.
   - `allowUserWritable` (optional, default false) permits a path the runner's user could change or replace.
-- `writeControls`: controls (process and automation id) that act only with `write: true`.
+- `writeControls`: controls (process and automation id) that act only with `write: true`. The default lists the demo app's Post button and automation id `1`, which Windows gives the OK or Save button of a common dialog: that gates the Save of the demo's Export dialog, so the export step must be signed as a write. It gates every OK and Save button of a common dialog owned by `ErpDemo.exe` (Open, Save As, Print), and while such a dialog is open, keys without `write: true` are limited to navigation keys (Tab, arrows, Home, End, PageUp, PageDown, Escape).
 - `gatedKeys`: key chords that need `write: true`.
 - `maxFileBytes`: the largest file `file.retrieve` returns, at most 36 MiB.
 

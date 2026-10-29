@@ -191,7 +191,7 @@ variable "runner_arguments" {
 }
 
 variable "runner_policy" {
-  description = "The runner's local policy, written to %ProgramData%\\RPA Runner\\policy.json (administrators may change it, the runner user may only read it). Each allowedApps entry pins the absolute local path that runs; sha256 pins its hash, allowedArgs lists the exact argument lists a launch may pass (none without it), allowUserWritable (default false) permits a path the runner's user could change. The default allows the demo app installed by install-runner.ps1, with --ui v1 or --ui v2, and gates its Post button and Ctrl+S / F11."
+  description = "The runner's local policy, written to %ProgramData%\\RPA Runner\\policy.json (administrators may change it, the runner user may only read it). Each allowedApps entry pins the absolute local path that runs; sha256 pins its hash, allowedArgs lists the exact argument lists a launch may pass (none without it), allowUserWritable (default false) permits a path the runner's user could change. The default allows the demo app installed by install-runner.ps1, with --ui v1 or --ui v2, and gates its Post button, the OK/Save button (automation id 1) of every common dialog it owns, such as its Export Save dialog, and Ctrl+S / F11."
   type = object({
     allowedApps = list(object({
       exe               = string
@@ -213,7 +213,7 @@ variable "runner_policy" {
       path        = "C:\\Program Files\\RPA Runner\\erp-demo\\ErpDemo.exe"
       allowedArgs = [["--ui", "v1"], ["--ui", "v2"]]
     }]
-    writeControls = [{ exe = "ErpDemo.exe", automationId = "btnPost" }]
+    writeControls = [{ exe = "ErpDemo.exe", automationId = "btnPost" }, { exe = "ErpDemo.exe", automationId = "1" }]
     gatedKeys     = ["Ctrl+S", "F11"]
     maxFileBytes  = 20971520
   }

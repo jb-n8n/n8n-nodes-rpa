@@ -227,7 +227,7 @@ run "user_data_carries_settings_but_no_secret" {
   }
   assert {
     condition = alltrue([for v in [
-      jsonencode({ allowedApps = [{ allowedArgs = [["--ui", "v1"], ["--ui", "v2"]], exe = "ErpDemo.exe", path = "C:\\Program Files\\RPA Runner\\erp-demo\\ErpDemo.exe" }], gatedKeys = ["Ctrl+S", "F11"], maxFileBytes = 20971520, writeControls = [{ automationId = "btnPost", exe = "ErpDemo.exe" }] }),
+      jsonencode({ allowedApps = [{ allowedArgs = [["--ui", "v1"], ["--ui", "v2"]], exe = "ErpDemo.exe", path = "C:\\Program Files\\RPA Runner\\erp-demo\\ErpDemo.exe" }], gatedKeys = ["Ctrl+S", "F11"], maxFileBytes = 20971520, writeControls = [{ automationId = "btnPost", exe = "ErpDemo.exe" }, { automationId = "1", exe = "ErpDemo.exe" }] }),
       jsonencode({ args = [], exe = "RpaRunner.exe", port = 8765 }),
       "arn:aws:secretsmanager:us-west-2:123456789012:secret:rpa-desktop-testbed-runner-token-AbCdEf",
       "us-west-2",
