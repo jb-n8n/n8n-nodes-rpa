@@ -227,7 +227,7 @@ public sealed class WindowsDesktop : IDesktop, IDisposable
         if (keyboard)
         {
             UiaNode.Guard(() => el.Focus());
-            op.Guard(FocusedOr(node));
+            op.Guard(KeyboardReceiver(op));
             if (settable) TrySetValue(el, "");
             else
             {
@@ -316,7 +316,7 @@ public sealed class WindowsDesktop : IDesktop, IDisposable
     private void SendKey(AutomationElement el, UiOperation op)
     {
         UiaNode.Guard(() => el.Focus());
-        op.Guard(FocusedOr(new UiaNode(_automation, el)));
+        op.Guard(KeyboardReceiver(op));
         Keyboard.TypeSimultaneously(Keys(op.Key!));
         Wait.UntilInputIsProcessed();
     }
@@ -338,7 +338,29 @@ public sealed class WindowsDesktop : IDesktop, IDisposable
         throw RpcErrors.InvalidParamsError("the element cannot expand");
     }
 
-    private IUiNode FocusedOr(IUiNode fallback) => GetFocusedElement() ?? fallback;
+    /// <summary>
+    /// The element that will receive keyboard input, checked after focusing the target: the window manager's foreground
+    /// window must be the operation's window (its root), and UI Automation's focused element must belong to the process
+    /// that owns the focus window. The process check runs on the window manager's answer too, so a busy provider cannot
+    /// hide another application's window.
+    /// </summary>
+    private IUiNode KeyboardReceiver(UiOperation op)
+    {
+        var fg = Native.GetForegroundWindow();
+        var expected = op.Window is UiaNode w ? w.Handle : op.Window is HwndNode hn ? hn.Handle : IntPtr.Zero;
+        var isExpected = expected == IntPtr.Zero
+            ? fg != IntPtr.Zero && Native.PidOf(fg) == op.Window.ProcessId
+            : fg == expected || Native.GetAncestor(fg, Native.GA_ROOT) == expected;
+        var focusHwnd = fg;
+        if (fg != IntPtr.Zero)
+        {
+            var info = new Native.GUITHREADINFO { cbSize = Marshal.SizeOf<Native.GUITHREADINFO>() };
+            if (Native.GetGUIThreadInfo(Native.GetWindowThreadProcessId(fg, out _), ref info) && info.hwndFocus != IntPtr.Zero)
+                focusHwnd = info.hwndFocus;
+            op.Guard(new HwndNode(focusHwnd));
+        }
+        return KeyboardFocusCheck.Receiver(fg != IntPtr.Zero, isExpected, Native.PidOf(focusHwnd), GetFocusedElement());
+    }
 
     /// <summary>
     /// Runs a pattern call that may open a modal dialog. In-process UI Automation providers (WinForms) answer only

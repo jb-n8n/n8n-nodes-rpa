@@ -142,6 +142,39 @@ public sealed class ServiceTests : IDisposable
     }
 
     [Fact]
+    public void Keyboard_input_with_an_unknown_focus_is_never_sent()
+    {
+        _h.BeginWithApp();
+        _h.Desktop.FocusUnknown = true;
+        var e = _h.Err("act", Act(Id("txtUser"), "type", new { value = "typed-x", timeoutMs = 600 }), RpcErrors.TimeoutCode);
+        Assert.Contains("keyboard focus", e["message"]!.GetValue<string>());
+        _h.Err("act", Act(Id("txtUser"), "key", new { value = "Tab", timeoutMs = 600 }), RpcErrors.TimeoutCode);
+        Assert.Empty(_h.Desktop.Performed);
+    }
+
+    [Fact]
+    public void A_key_without_a_target_and_an_unknown_focus_is_refused()
+    {
+        _h.BeginWithApp();
+        _h.Desktop.Focused = null;
+        var e = _h.Err("act", new { runId = Harness.RunId, action = "key", value = "Tab", timeoutMs = 500 }, RpcErrors.PolicyRefusedCode);
+        Assert.Contains("keyboard focus", e["message"]!.GetValue<string>());
+        Assert.Empty(_h.Desktop.Performed);
+    }
+
+    [Theory]
+    [InlineData(false, true, 1)]
+    [InlineData(true, false, 1)]
+    [InlineData(true, true, 2)]
+    public void The_keyboard_receiver_check_fails_closed(bool foregroundKnown, bool expected, int focusPid)
+    {
+        var focused = new FakeNode("Edit", "x", "x", pid: 1);
+        Assert.Throws<RetryableActionException>(() => KeyboardFocusCheck.Receiver(foregroundKnown, expected, focusPid, focused));
+        Assert.Throws<RetryableActionException>(() => KeyboardFocusCheck.Receiver(true, true, 1, null));
+        Assert.Same(focused, KeyboardFocusCheck.Receiver(true, true, 1, focused));
+    }
+
+    [Fact]
     public void Write_controls_need_write_true()
     {
         _h.BeginWithApp();

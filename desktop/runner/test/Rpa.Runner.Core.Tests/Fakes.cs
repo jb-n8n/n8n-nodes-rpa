@@ -92,9 +92,18 @@ public sealed class FakeDesktop : IDesktop
         return CanBringToFront;
     }
 
+    /// <summary>Simulates UI Automation not knowing the focused element when the driver types or sends a key.</summary>
+    public bool FocusUnknown { get; set; }
+
     public string? Perform(UiOperation op)
     {
-        if (InputReceiver is not null) op.Guard(InputReceiver);
+        if (op.Action is ActionKind.Type or ActionKind.Key)
+        {
+            // As the Windows driver does right before keyboard input.
+            var receiver = KeyboardFocusCheck.Receiver(true, true, op.Element.ProcessId, FocusUnknown ? null : InputReceiver ?? op.Element);
+            op.Guard(receiver);
+        }
+        else if (InputReceiver is not null) op.Guard(InputReceiver);
         Performed.Add(op);
         if (OnPerform is not null) return OnPerform(op);
         return op.Action == ActionKind.Read ? (op.Element.Value ?? op.Element.Name) : null;

@@ -231,7 +231,7 @@ public sealed class RunnerService
         }
 
         RequireSession();
-        var res = target is null ? FocusedResolution(run) : _resolver.Resolve(run, target, Remaining(deadline), ct);
+        var res = target is null ? FocusedResolution(run, deadline, ct) : _resolver.Resolve(run, target, Remaining(deadline), ct);
         var element = res.Element;
         var what = target?.Describe() ?? "the focused element";
 
@@ -282,7 +282,7 @@ public sealed class RunnerService
             {
                 if (_time.GetUtcNow() >= deadline) throw RpcErrors.Timeout($"the element went away while acting on it ({what})");
                 Thread.Sleep(TargetResolver.PollInterval);
-                res = target is null ? FocusedResolution(run) : _resolver.Resolve(run, target, Remaining(deadline), ct);
+                res = target is null ? FocusedResolution(run, deadline, ct) : _resolver.Resolve(run, target, Remaining(deadline), ct);
                 element = res.Element;
                 CheckWriteControl(element, res.Window, write, mode, "the target");
             }
@@ -336,11 +336,19 @@ public sealed class RunnerService
         return false;
     }
 
-    private Resolution FocusedResolution(RunState run)
+    /// <summary>The run's focused element for a key without a target. Fails closed: when the focus cannot be told, it
+    /// polls until the deadline and then refuses, instead of assuming the run's window.</summary>
+    private Resolution FocusedResolution(RunState run, DateTimeOffset deadline, CancellationToken ct)
     {
         var window = _scope.CurrentWindow(run) ?? throw RpcErrors.NotFound("a window of the run", null);
         EnsureForeground(run, window);
-        var focused = _desktop.GetFocusedElement() ?? window;
+        IUiNode? focused;
+        while ((focused = _desktop.GetFocusedElement()) is null)
+        {
+            if (_time.GetUtcNow() >= deadline) throw RpcErrors.PolicyRefused("cannot tell which element has the keyboard focus");
+            ct.ThrowIfCancellationRequested();
+            Thread.Sleep(TargetResolver.PollInterval);
+        }
         if (!_scope.IsRunProcess(run, focused.ProcessId))
             throw RpcErrors.PolicyRefused("the keyboard focus is in a window of another application");
         return new Resolution(0, focused, _desktop.GetTopLevelWindowOf(focused) ?? window);

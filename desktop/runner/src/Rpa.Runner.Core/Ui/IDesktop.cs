@@ -112,3 +112,24 @@ public interface IProcessHost
     /// <summary>Kills the process and its descendants; ignores processes that already exited.</summary>
     void KillTree(int pid);
 }
+
+/// <summary>
+/// Fail-closed choice of the element that will receive keyboard input. Drivers call it right before typing or sending
+/// a key, with what the window manager reports (independent of a busy UI Automation provider) and what UI Automation
+/// reports; anything unknown or inconsistent is a retryable failure, never a guess.
+/// </summary>
+public static class KeyboardFocusCheck
+{
+    /// <param name="foregroundKnown">The window manager reports a foreground window.</param>
+    /// <param name="foregroundIsExpected">That foreground window is the run window the element lives in.</param>
+    /// <param name="focusPid">The process owning the window with the keyboard focus (window manager).</param>
+    /// <param name="focused">The element UI Automation reports as focused, or null when it cannot tell.</param>
+    public static IUiNode Receiver(bool foregroundKnown, bool foregroundIsExpected, int focusPid, IUiNode? focused)
+    {
+        if (!foregroundKnown) throw new RetryableActionException("cannot tell which window has the keyboard focus");
+        if (!foregroundIsExpected) throw new RetryableActionException("the run's window does not have the keyboard focus");
+        if (focused is null) throw new RetryableActionException("cannot tell which element has the keyboard focus");
+        if (focused.ProcessId != focusPid) throw new RetryableActionException("the keyboard focus moved while checking it");
+        return focused;
+    }
+}
