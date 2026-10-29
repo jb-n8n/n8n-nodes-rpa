@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The protocol test client CI runs against the real runner on Windows: the ERP Demo scenario end to end, plus the
+       negative cases. Plain net8.0 (no runner code), so it talks to the runner exactly as n8n would. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>Rpa.Runner.Scenario</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+</Project>

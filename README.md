@@ -16,6 +16,7 @@ The repository is a pnpm monorepo:
 | `sandbox/portal` | A mock site: public fixture pages (`/public/...`), a site behind a login with TOTP that changes on every "release", and attack pages. The Hello world template and the tests use it. |
 | `images/browser` | The `rpa-browser` image: the browser server, the token gate in front of it (`images/browser/gate`) and the supervisor that runs both. The compose stack runs it. |
 | `deploy/` | The browser service at scale: a Helm chart, Terraform modules and examples, and a script that configures n8n. |
+| `desktop/` | Work in progress: the Windows desktop runner (C#, UI Automation) and ERP Demo, a sample WinForms app to drive. See [desktop/README.md](desktop/README.md). |
 | `docs/` | Runbooks for the browser service at scale, the SAP look-alike onboarding runbook and the security review. See [Documentation](#documentation). |
 
 **Contents**

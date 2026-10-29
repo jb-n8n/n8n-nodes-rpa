@@ -1,0 +1,10 @@
+{
+  "allowedApps": [
+    { "exe": "ErpDemo.exe", "path": "C:\\Program Files\\ERP Demo\\ErpDemo.exe" }
+  ],
+  "writeControls": [
+    { "exe": "ErpDemo.exe", "automationId": "btnPost" }
+  ],
+  "gatedKeys": ["Ctrl+S", "F11"],
+  "maxFileBytes": 20971520
+}

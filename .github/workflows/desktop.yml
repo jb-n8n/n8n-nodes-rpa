@@ -1,0 +1,201 @@
+# The Windows desktop runner and the ERP Demo app (desktop/): the runner core's unit tests on Linux, then on
+# windows-latest (which has an interactive, unlocked desktop) a UI Automation spike, a build and self-contained win-x64
+# publish of the runner and the demo app (v1 and v2), and the protocol scenario: the published runner started with a
+# policy and a random token, and a test client driving the demo app through it end to end (sign in, search, read,
+# export to the run's export dir, retrieve the file, end the run) plus the refusals (401, busy, policy, not found, not
+# unique, lease expiry). Uses no repository secrets.
+# Actions are pinned by full commit SHA.
+name: desktop
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "desktop/**"
+      - ".github/workflows/desktop.yml"
+  push:
+    branches: [main]
+    paths:
+      - "desktop/**"
+      - ".github/workflows/desktop.yml"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: "1"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "1"
+
+jobs:
+  core-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: desktop/global.json
+      - name: Build everything (the Windows projects compile on Linux)
+        timeout-minutes: 10
+        run: dotnet build desktop/Rpa.Desktop.sln -c Release
+      - name: Core unit tests
+        timeout-minutes: 10
+        run: dotnet test desktop/runner/test/Rpa.Runner.Core.Tests -c Release --no-build --logger "console;verbosity=normal"
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      OUT: ${{ github.workspace }}\out
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: desktop/global.json
+
+      - name: Build
+        timeout-minutes: 10
+        run: dotnet build desktop/Rpa.Desktop.sln -c Release
+
+      # The spike: can UI Automation (the OS's own client, not our code) see a WinForms window on this runner? If this
+      # fails, the hosted runner has no usable desktop and nothing after it can work.
+      - name: UI Automation spike (Windows PowerShell's UIAutomationClient sees the ERP Demo sign-in window)
+        timeout-minutes: 3
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'desktop\erp-demo\bin\Release\net8.0-windows\ErpDemo.exe'
+          $p = Start-Process -FilePath $exe -PassThru
+          try {
+            $root = [System.Windows.Automation.AutomationElement]::RootElement
+            $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ProcessIdProperty, $p.Id)
+            $win = $null
+            for ($i = 0; $i -lt 60 -and -not $win; $i++) { Start-Sleep -Milliseconds 500; $win = $root.FindFirst('Children', $cond) }
+            if (-not $win) { throw "UI Automation found no window of ErpDemo.exe (pid $($p.Id))" }
+            $user = $win.FindFirst('Descendants', (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::AutomationIdProperty, 'txtUser')))
+            Write-Host "window: '$($win.Current.Name)' class=$($win.Current.ClassName); txtUser found: $($null -ne $user)"
+            Write-Host "session: $([System.Diagnostics.Process]::GetCurrentProcess().SessionId), interactive: $([Environment]::UserInteractive), user: $env:USERNAME"
+            if (-not $user) { throw 'the window has no txtUser element' }
+          } finally {
+            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Core unit tests (Windows)
+        timeout-minutes: 10
+        run: dotnet test desktop/runner/test/Rpa.Runner.Core.Tests -c Release --no-build
+
+      - name: Publish the runner and the demo app (self-contained win-x64, single file)
+        timeout-minutes: 10
+        run: |
+          $common = @('-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '-p:PublishSingleFile=true',
+                      '-p:IncludeNativeLibrariesForSelfExtract=true', '-p:EnableCompressionInSingleFile=true')
+          dotnet publish desktop/runner/src/Rpa.Runner @common -o "$env:OUT\rpa-desktop-runner"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Copy-Item desktop/runner/policy.example.json, desktop/README.md "$env:OUT\rpa-desktop-runner\"
+          foreach ($ui in 'v1', 'v2') {
+            dotnet publish desktop/erp-demo @common "-p:ErpDemoUi=$ui" -o "$env:OUT\erp-demo\$ui"
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
+          Get-ChildItem -Recurse $env:OUT -Include *.exe | ForEach-Object { '{0} {1:N1} MB' -f $_.FullName, ($_.Length / 1MB) }
+
+      # The policy at the contract's default location; a fresh random token, masked in the log.
+      - name: Start the runner
+        timeout-minutes: 3
+        run: |
+          $data = Join-Path $env:ProgramData 'RPA Runner'
+          New-Item -ItemType Directory -Force $data | Out-Null
+          $v1 = "$env:OUT\erp-demo\v1\ErpDemo.exe"
+          $v2 = "$env:OUT\erp-demo\v2\ErpDemo.exe"
+          @{
+            allowedApps   = @(@{ exe = 'ErpDemo.exe'; path = $v1 }, @{ exe = 'ErpDemo.exe'; path = $v2 })
+            writeControls = @(@{ exe = 'ErpDemo.exe'; automationId = 'btnPost' })
+            gatedKeys     = @('Ctrl+S', 'F11')
+            maxFileBytes  = 20971520
+          } | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 (Join-Path $data 'policy.json')
+          $bytes = [byte[]]::new(32); [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+          $token = [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+          Write-Host "::add-mask::$token"
+          "RPA_RUNNER_TOKEN=$token" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          $env:RPA_RUNNER_TOKEN = $token
+          New-Item -ItemType Directory -Force "$env:OUT\logs" | Out-Null
+          $p = Start-Process -FilePath "$env:OUT\rpa-desktop-runner\RpaRunner.exe" -WindowStyle Hidden -PassThru `
+                 -RedirectStandardOutput "$env:OUT\logs\runner-stdout.log" -RedirectStandardError "$env:OUT\logs\runner-stderr.log"
+          "RUNNER_PID=$($p.Id)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          for ($i = 0; $i -lt 60; $i++) {
+            Start-Sleep -Milliseconds 500
+            $line = Get-Content "$env:OUT\logs\runner-stdout.log" -ErrorAction SilentlyContinue | Select-String 'RPA runner listening on' | Select-Object -First 1
+            if ($line) { break }
+            if ($p.HasExited) { break }
+          }
+          Get-Content "$env:OUT\logs\runner-stdout.log", "$env:OUT\logs\runner-stderr.log" -ErrorAction SilentlyContinue
+          if (-not $line) { throw 'the runner did not start' }
+          if ($line.Line -notmatch 'listening on wss://0\.0\.0\.0:8765/rpa/v1, fingerprint ((?:[0-9A-F]{2}:){31}[0-9A-F]{2})$') { throw "unexpected start line: $($line.Line)" }
+          "RUNNER_FINGERPRINT=$($Matches[1])" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Protocol scenario (drives the ERP Demo through the runner)
+        timeout-minutes: 10
+        run: |
+          dotnet desktop/runner/test/Rpa.Runner.Scenario/bin/Release/net8.0/Rpa.Runner.Scenario.dll `
+            --url wss://127.0.0.1:8765/rpa/v1 --fingerprint $env:RUNNER_FINGERPRINT `
+            --app "$env:OUT\erp-demo\v1\ErpDemo.exe" --app-v2 "$env:OUT\erp-demo\v2\ErpDemo.exe" --out "$env:OUT\scenario"
+          exit $LASTEXITCODE
+
+      - name: Stop the runner and collect its logs
+        if: always()
+        timeout-minutes: 2
+        run: |
+          if ($env:RUNNER_PID) { Stop-Process -Id $env:RUNNER_PID -Force -ErrorAction SilentlyContinue }
+          New-Item -ItemType Directory -Force "$env:OUT\logs" | Out-Null
+          Copy-Item (Join-Path $env:ProgramData 'RPA Runner\logs\*') "$env:OUT\logs\" -ErrorAction SilentlyContinue
+          Get-ChildItem "$env:OUT\logs" -ErrorAction SilentlyContinue
+
+      - name: Show the runner log and the snapshots (failure)
+        if: failure()
+        timeout-minutes: 2
+        run: |
+          Get-Content "$env:OUT\logs\*.log" -ErrorAction SilentlyContinue | Select-Object -Last 300
+          Get-ChildItem "$env:OUT\scenario\*.json" -ErrorAction SilentlyContinue | ForEach-Object { "== $($_.Name)"; Get-Content $_ | Select-Object -First 400 }
+
+      - name: Upload logs, snapshots and screenshots (failure)
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: desktop-scenario-logs
+          path: |
+            out/logs
+            out/scenario
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Upload the runner
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rpa-desktop-runner
+          path: out/rpa-desktop-runner
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload the demo app (v1 and v2)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: erp-demo
+          path: out/erp-demo
+          retention-days: 30
+          if-no-files-found: error
