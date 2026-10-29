@@ -1,13 +1,13 @@
 import { NodeOperationError, type IDataObject, type INodeExecutionData, type IPairedItemData } from 'n8n-workflow';
 import type { BrowserEndpoint, ErrorCode, PortalPolicy, Step, TaskFailure, TaskInput, WaitUntil } from 'n8n-rpa-engine';
-import { browserConfig, ConfigError, CREDENTIALS, policyFor, URL_REQUIRED, UrlPolicyError } from '../config.js';
+import { browserConfig, ConfigError, policyFor, URL_REQUIRED, UrlPolicyError } from '../config.js';
 import type { NodeContext } from '../context.js';
 import { properties } from '../description/index.js';
 import type { Engine } from '../engine.js';
 import { configNodeError, stepsRunError, type FailureDetails } from '../errors.js';
 import { runOne, type RunOneResult } from '../execute.js';
 import { configErrorItem, failureItem } from '../output.js';
-import { checkMaxItems, errorMessage, isObject, readCommonOptions, refuseCdpDownload, type CommonOptions } from './common.js';
+import { browserCredentials, checkMaxItems, errorMessage, isObject, readCommonOptions, refuseCdpDownload, type CommonOptions } from './common.js';
 import { compileGetPage, getPageOutput } from './quick/getPage.js';
 import { compilePdf, pdfOutput } from './quick/pdf.js';
 import { compileDownload, downloadOutput } from './quick/download.js';
@@ -131,7 +131,7 @@ async function runQuickItem(ctx: NodeContext, engine: Engine, op: QuickOp, i: nu
     params = readQuickParams(ctx, i, op);
     compiled = compileQuickOp(op, params);
     common = readCommonOptions(ctx, i);
-    endpoint = browserConfig(await ctx.getCredentials(CREDENTIALS.browser, i));
+    endpoint = browserConfig(await browserCredentials(ctx, i));
     refuseCdpDownload(engine, endpoint, op === 'download');
   } catch (error) {
     return configFailed(ctx, error, i, paired);

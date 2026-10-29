@@ -10,7 +10,7 @@ import {
   runnerUnreachable,
 } from '../messages.js';
 import {
-  DEFAULT_RUNNER_PORT, FingerprintMismatchError, RUNNER_PATH, RunnerConnectError, RunnerDisconnectedError, runnerError, RunnerTokenRefusedError, type HelloResult, type RunnerMethod, type RunnerMethods,
+  DEFAULT_RUNNER_PORT, FingerprintMismatchError, NoRunError, RUNNER_PATH, RunnerConnectError, RunnerDisconnectedError, runnerError, RunnerTokenRefusedError, type HelloResult, type RunnerMethod, type RunnerMethods,
 } from './protocol.js';
 import { acceptKey, encodeFrame, FrameReader, newKey, OPCODE } from './ws.js';
 
@@ -60,8 +60,8 @@ export function runnerAddress(url: string): RunnerAddress {
 }
 
 function checkToken(token: string): string {
-  // The token goes into a header line: no control characters, so it cannot add a header of its own.
-  if (typeof token !== 'string' || token === '' || /[\u0000-\u001f\u007f]/.test(token)) throw new Error('The desktop runner token is empty or contains a line break.');
+  // The token goes into a header line: visible ASCII only, so it cannot add a header of its own.
+  if (typeof token !== 'string' || !/^[\x21-\x7e]+$/.test(token)) throw new Error('The desktop runner token is empty or contains a line break, a space or a character that is not ASCII.');
   return token;
 }
 
@@ -71,6 +71,7 @@ function openTls(addr: RunnerAddress, timeoutMs: number, signal?: AbortSignal): 
     // The runner's certificate is self-signed: chain and name checks are replaced by the fingerprint pin below.
     const socket = tlsConnect({
       host: addr.host, port: addr.port, ...(addr.servername ? { servername: addr.servername } : {}), rejectUnauthorized: false, ALPNProtocols: ['http/1.1'],
+      minVersion: 'TLSv1.2',
     });
     const done = (err?: Error) => {
       clearTimeout(timer);
@@ -112,7 +113,7 @@ function upgrade(socket: TLSSocket, addr: RunnerAddress, token: string, timeoutM
         return;
       }
       const lines = head.subarray(0, end).toString('latin1').split('\r\n');
-      const status = Number(/^HTTP\/1\.1 (\d{3})/.exec(lines[0] ?? '')?.[1] ?? 0);
+      const status = Number(/^HTTP\/1\.[01] (\d{3})/.exec(lines[0] ?? '')?.[1] ?? 0);
       const headers = new Map(lines.slice(1).map((l) => {
         const i = l.indexOf(':');
         return [l.slice(0, i).trim().toLowerCase(), l.slice(i + 1).trim()] as const;
@@ -162,7 +163,11 @@ export async function connectRunner(endpoint: RunnerEndpoint, opts: { timeoutMs?
 
 interface Pending { method: string; resolve: (v: unknown) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }
 
-/** A lease kept alive by heartbeats while a run is open. `error` is the first heartbeat failure (the lease then stops). */
+/**
+ * A lease kept alive by heartbeats while a run is open. A heartbeat that times out (the runner busy with a long action)
+ * is retried at the next beat; the lease stops only when the runner says the run is gone (`error`, a NoRunError) or the
+ * connection ends.
+ */
 export interface Lease { stop(): void; readonly error: Error | undefined }
 
 /** One connection to the runner. Requests are answered by id; every pending request fails when the connection ends. */
@@ -269,10 +274,15 @@ export class RunnerClient {
   startLease(runId: string, leaseMs: number): Lease {
     const every = Math.max(500, Math.floor(leaseMs / 3));
     let error: Error | undefined;
+    let inFlight = false;
     const timer = setInterval(() => {
-      this.call('run.heartbeat', { runId }, every).catch((e: Error) => {
-        error ??= e;
-        clearInterval(timer);
+      if (this.isClosed) { clearInterval(timer); return; }
+      if (inFlight) return; // one heartbeat at a time: a slow answer is not a lost lease
+      inFlight = true;
+      // Waits up to the lease itself: a runner that answers one request at a time answers it after the current action.
+      this.call('run.heartbeat', { runId }, leaseMs).then(() => { inFlight = false; }, (e: Error) => {
+        inFlight = false;
+        if (e instanceof NoRunError) { error ??= e; clearInterval(timer); }
       });
     }, every);
     timer.unref();

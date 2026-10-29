@@ -89,11 +89,31 @@ describe('desktop step sets: parsing', () => {
     expect(desktopIssues(desktop([{ intent: 'x', click: { uia: { path: [{ name: 'a' }], window: { titlePattern: '(' } } } }]))).toEqual(['steps[0].click.uia.window.titlePattern is not a valid regex']);
     expect(desktopIssues(desktop([{ intent: 'x', click: { ...uia('a'), fallbacks: [{ ...uia('b'), fallbacks: [] }] } }]))).toEqual(['steps[0].click.fallbacks[0] has nested fallbacks']);
     expect(desktopIssues(desktop([{ intent: 'x', read: { target: uia('a'), as: 'count' }, write: true }]))).toEqual(['steps[0].write is only allowed on click, fill, select, check and key steps']);
-    expect(desktopIssues(desktop([{ intent: 'x', key: { key: 'Ctrl+Alt+Delete+X' } }]))).toEqual(['steps[0].key.key must be a key chord such as Enter, Tab, Ctrl+S or F5']);
+    expect(desktopIssues(desktop([{ intent: 'x', key: { key: 'Ctrl+Alt+Delete+X' } }]))).toEqual(['steps[0].key.key must be a key chord such as Enter, Tab, Ctrl+S or F5 (modifiers in the order Ctrl, Alt, Shift; letters uppercase)']);
     expect(desktopIssues(desktop([{ intent: 'x', read: { target: uia('a'), as: 'not a name' } }]))[0]).toMatch(/^steps\[0\]\.read\.as must be a name/);
     expect(desktopIssues(desktop([{ intent: 'x', click: uia('a'), extra: 1 }]))).toEqual(['steps[0] has unknown key "extra"']);
     expect(desktopIssues(desktop([{ intent: 'x', select: { field: uia('a'), value: 'Open' } }]))).toEqual(['steps[0].select has unknown key "value"', 'steps[0].select.option must be a non-empty string']);
     expect(desktopIssues(desktop([{ intent: 'x', expectFile: { pattern: '(' } }]))).toEqual(['steps[0].expectFile.pattern is not a valid regex']);
+  });
+
+  it('key chords have one spelling (Ctrl, Alt, Shift in that order, uppercase letters, no Win); read names are unique; expectFile is capped', () => {
+    for (const ok of ['Enter', 'Ctrl+S', 'Ctrl+Alt+Shift+F5', 'Alt+F4', 'Shift+Tab', 'Escape', '7']) expect(desktopIssues(desktop([{ intent: 'x', key: { key: ok } }])), ok).toEqual([]);
+    for (const bad of ['Ctrl+s', 'Shift+Ctrl+S', 'Ctrl+Ctrl+S', 'Win+R', 'Esc', 'ctrl+S', 'Enter ']) {
+      const issues = desktopIssues(desktop([{ intent: 'x', key: { key: bad } }]));
+      expect(issues, bad).toHaveLength(1);
+      expect(issues[0], bad).toMatch(/^steps\[0\]\.key\.key must be a key chord/);
+    }
+    expect(desktopIssues(desktop([
+      { intent: 'a', read: { target: uia('a'), as: 'total' } }, { intent: 'b', read: { target: uia('b'), as: 'total' } },
+    ]))).toEqual(['steps[1].read.as "total" is already used by an earlier read step']);
+    expect(desktopIssues(desktop([{ intent: 'x', expectFile: { pattern: 'a', maxBytes: 50 * 1024 * 1024 + 1 } }]))).toEqual(['steps[0].expectFile.maxBytes must be at most 52428800']);
+  });
+
+  it('reads surface as an own property only, as the hash does', () => {
+    const inherited = Object.assign(Object.create({ surface: 'desktop' }) as object, { startUrl: 'https://example.com/', steps: [{ intent: 'x', click: { role: 'button', name: 'Go' } }] });
+    expect(isDesktopDocument(inherited)).toBe(false);
+    expect(browserIssues(inherited)).toEqual([]);
+    expect(desktopIssues(Object.assign(Object.create({ surface: 'desktop' }) as object, { app: { exe: 'a.exe' }, steps: [] }))).toEqual([BROWSER_STEPS_NEED_BROWSER]);
   });
 
   it('accepts {{$exportDir}} only in a desktop fill value, and no other {{$...}} name anywhere', () => {
@@ -109,6 +129,9 @@ describe('desktop step sets: parsing', () => {
     ]);
     expect(desktopIssues(desktop([{ intent: 'x', click: { uia: { path: [{ name: '{{$json.x}}' }] } } }]))).toEqual([
       'steps[0].click.uia.path[0].name uses {{$json.x}}: names that start with $ are reserved',
+    ]);
+    expect(desktopIssues(desktop([{ intent: 'x', fill: { field: uia('a'), value: '{{{ $tempDir }}}' } }]))).toEqual([
+      'steps[0].fill.value uses {{$tempDir}}: names that start with $ are reserved',
     ]);
   });
 });
@@ -134,6 +157,14 @@ describe('browser step sets next to desktop ones', () => {
     expect(browserIssues(browser([{ intent: 'x', key: { key: 'Enter' } }]))[0]).toMatch(/^steps\[0\] must have exactly one action/);
     expect(browserIssues(browser([{ intent: 'x', expectFile: { pattern: 'a' } }]))[0]).toMatch(/^steps\[0\] must have exactly one action/);
     expect(browserIssues(browser([{ intent: 'x', click: loc, write: true }]))).toEqual(['steps[0] has unknown key "write"']);
+  });
+
+  it('the {{$...}} refusal covers only the values a browser run renders; intents, locator texts and regexes stay as they were', () => {
+    expect(browserIssues(browser([{ intent: 'Read {{ $ctrl.total }}', click: { text: '{{ $ctrl.total }}' }, expect: { heading: '{{$x}}' } }]))).toEqual([]);
+    expect(browserIssues(browser([{ intent: 'x', select: { field: loc, value: '{{$y}}' } }]))).toEqual(['steps[0].select.value uses {{$y}}: names that start with $ are reserved']);
+    expect(browserIssues(browser([{ intent: 'x', paginate: { next: loc, until: 'absent', max: 2, each: [{ intent: 'y', fill: { field: loc, value: '{{{$z}}}' } }] } }]))).toEqual([
+      'steps[0].paginate.each[0].fill.value uses {{$z}}: names that start with $ are reserved',
+    ]);
   });
 
   it('refuses every {{$...}} template in a browser step set, {{$exportDir}} included; {{var.x}} stays as it is', () => {
@@ -163,6 +194,12 @@ describe('desktop step sets: signing', () => {
     const mac = createHmac('sha256', KEY).update(`pw-steps/2\n${hash}\nerp-orders\n1\ndesktop app ErpDemo.exe\n\n${WHO}`).digest('hex');
     expect(signature).toBe(mac);
     expect(verifyScript(doc, KEY, { approvedBy: WHO, signature })).toBe(true);
+  });
+
+  it('signing refuses a desktop step set that does not parse', () => {
+    expect(() => signScript(desktop([{ intent: 'x', goto: 'https://example.com/' }]), KEY, { approvedBy: WHO })).toThrow(
+      'invalid script: steps[0]: "goto" is a browser step, not allowed in a desktop step set',
+    );
   });
 
   it('a desktop signature never verifies another app, a browser document or a changed surface', () => {

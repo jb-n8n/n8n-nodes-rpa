@@ -44,7 +44,7 @@ export class Playwright implements INodeType {
     // test/node.test.ts checks they equal CREDENTIALS, which the operations read.
     credentials: [
       // Not required: Run Steps with desktop steps needs the RPA Desktop Runner instead. Every operation that runs a browser
-      // refuses at run time, naming RPA Browser, when it is missing.
+      // refuses at run time, naming RPA Browser, when it is missing (operations/common.ts browserCredentials).
       { name: 'playwrightBrowserApi', displayName: 'RPA Browser', required: false, testedBy: 'browserTest', displayOptions: { hide: { operation: ['signSteps'] } } },
       { name: 'playwrightSiteLoginApi', displayName: 'RPA Site Login', required: false, testedBy: 'siteLoginTest', displayOptions: { show: { operation: ['runSteps', 'signSteps', 'importSteps'] } } },
       // Required at run time for Sign Steps (and Run Steps with a signature); n8n cannot vary `required` by operation.

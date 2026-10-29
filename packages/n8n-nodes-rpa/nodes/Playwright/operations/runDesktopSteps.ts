@@ -13,6 +13,7 @@ export const DESKTOP_STEPS_NEED_RUNNER_CREDENTIAL =
 export const BROWSER_STEPS_NEED_BROWSER_CREDENTIAL = 'These are browser steps: they run in a browser. Attach an RPA Browser credential.';
 export const DESKTOP_NO_SITE_LOGIN = 'Desktop steps do not use an RPA Site Login yet: remove it from this node.';
 export const DESKTOP_NO_REPAIR = 'AI repair is not available for desktop steps yet: turn AI Repair off.';
+export const DESKTOP_NO_ROW_CHECKS = 'Row checks (ID Pattern, Stated Total Pattern, Required Fields, Text That Means No Results) do not apply to desktop steps: clear them.';
 
 /**
  * One Run Steps item whose steps are desktop steps (`surface: "desktop"`): the engine's desktop lane on the RPA Desktop
@@ -43,6 +44,8 @@ export async function runDesktopStepsItem(ctx: NodeContext, engine: Engine, i: n
     if (credentialId(ctx, CREDENTIALS.desktopRunner) === undefined) throw new ConfigError(DESKTOP_STEPS_NEED_RUNNER_CREDENTIAL);
     if (credentialId(ctx, CREDENTIALS.siteLogin) !== undefined) throw new ConfigError(DESKTOP_NO_SITE_LOGIN);
     if (p.aiRepair) throw new ConfigError(DESKTOP_NO_REPAIR);
+    // Desktop steps read no rows, so a configured row check would silently never run.
+    if (p.output) throw new ConfigError(DESKTOP_NO_ROW_CHECKS);
     runner = desktopRunnerConfig(await ctx.getCredentials(CREDENTIALS.desktopRunner, i));
     if (credentialId(ctx, CREDENTIALS.signing) !== undefined) key = signingKey(await ctx.getCredentials(CREDENTIALS.signing, i));
   } catch (error) {

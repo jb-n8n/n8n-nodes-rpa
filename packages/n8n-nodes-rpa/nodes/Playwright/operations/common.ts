@@ -20,11 +20,13 @@ export const clamp = (n: number, lo: number, hi: number): number => Math.min(hi,
 /** An attached Site Login with an empty id: a configuration error in Run Steps, a refusal in Sign Steps. */
 export const SITE_LOGIN_NO_ID = 'The RPA Site Login credential has no id. Save the credential, then select it again on this node.';
 
+export const BROWSER_CREDENTIAL_NEEDED = 'This operation runs in a browser: attach an RPA Browser credential.';
+
 /**
- * The RPA Browser credential's data for Run Steps. The credential is not marked required (desktop steps need the RPA
- * Desktop Runner instead), so browser steps refuse here with `missing`, naming it, when it is not attached.
+ * The RPA Browser credential's data. The credential is not marked required (Run Steps with desktop steps needs the RPA
+ * Desktop Runner instead), so every operation that runs a browser refuses here, naming it, when it is not attached.
  */
-export async function browserCredentials(ctx: NodeContext, i: number, missing: string): Promise<Record<string, unknown>> {
+export async function browserCredentials(ctx: NodeContext, i: number, missing = BROWSER_CREDENTIAL_NEEDED): Promise<Record<string, unknown>> {
   if (credentialId(ctx, CREDENTIALS.browser) === undefined) throw new ConfigError(missing);
   return await ctx.getCredentials(CREDENTIALS.browser, i);
 }

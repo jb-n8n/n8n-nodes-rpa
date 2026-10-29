@@ -8,7 +8,7 @@ import { MAX_TEXT_BYTES, truncateUtf8 } from '../steps/handlers/capture.js';
 import { binaryName, DEFAULT_MAX_BYTES, DEFAULT_MIME, sanitizeFileName, sniffMime } from '../steps/handlers/files.js';
 import { registerHandlers } from '../steps/handlers/index.js';
 import { assertRunBinaryRoom, runBinaryBytes, MAX_RUN_BINARY_BYTES } from '../steps/limits.js';
-import { EXPORT_DIR_TOKEN } from '../steps/parse.js';
+import { EXPORT_DIR_TOKEN, MAX_EXPECTED_FILE_BYTES } from '../steps/parse.js';
 import { poll } from '../steps/poll.js';
 import type { Handler, StepContext } from '../steps/run.js';
 import type { DesktopLocator, DesktopStep, DesktopStepBase, RunState } from '../types.js';
@@ -133,7 +133,8 @@ const read: Handler = async (ctx, step, state, timeout) => {
 const expectFile: Handler = async (ctx, step, state, timeout) => {
   const e = (step as unknown as D<'expectFile'>).expectFile;
   const s = desktopOf(ctx);
-  const max = e.maxBytes ?? DEFAULT_MAX_BYTES;
+  // Never more than one client message can carry (parseDesktopScript refuses a larger maxBytes too).
+  const max = Math.min(e.maxBytes ?? DEFAULT_MAX_BYTES, MAX_EXPECTED_FILE_BYTES);
   // The runner never sends more than the step or the run may still hold.
   const room = MAX_RUN_BINARY_BYTES - runBinaryBytes(state);
   const r = await s.rpc('file.retrieve', { pattern: e.pattern, timeoutMs: timeout, maxBytes: Math.max(0, Math.min(max, room)) });

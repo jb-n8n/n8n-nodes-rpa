@@ -50,6 +50,11 @@ export type DesktopTaskResult = LaneSuccess | TaskFailure;
 export const DEFAULT_LEASE_MS = 30_000;
 export const DEFAULT_BUSY_WAIT_MS = 30_000;
 const BUSY_RETRY_MS = 1_000;
+/**
+ * Appended when the runner no longer knows the run (no_run, or a heartbeat told so): the run always sends its own
+ * runId, so the run ended on the runner's side.
+ */
+export const LEASE_LOST = 'the runner no longer has this run: its lease ran out or the runner restarted';
 const END_WAIT_MS = 5_000;
 /** Typed values shorter than this are not masked out of messages (a one-letter value would mask every such letter). */
 const MIN_MASKED_TYPED = 4;
@@ -122,6 +127,7 @@ function outputMasker(base: (string | undefined)[], surface?: DesktopSurface): M
   return createMasker([...base, ...(surface?.typed ?? []).filter((t) => t.length >= MIN_MASKED_TYPED)]);
 }
 
+/** Log notes masked for typed values. A read step's output text is the app's data, returned as read (masked for secrets). */
 function maskedLog(log: StepLogEntry[], masker: Masker): StepLogEntry[] {
   return log.map((e) => ({ ...e, ...(e.note !== undefined ? { note: masker.mask(e.note) } : {}) }));
 }
@@ -129,8 +135,8 @@ function maskedLog(log: StepLogEntry[], masker: Masker): StepLogEntry[] {
 /**
  * Runs a desktop step set: trust gate, shape check, connect (certificate pinned before the token is sent), hello,
  * run.begin (a busy runner is retried for busyWaitMs), app.launch, the steps on the desktop surface, and run.end on
- * every path once the run began. One budget and one cancel signal cover everything. Never throws; every returned
- * string is masked (secrets and typed values).
+ * every path once the run began. One budget and one cancel signal cover everything. Never throws. Messages and log
+ * notes are masked for secrets and typed values; read outputs and file names are masked for secrets.
  */
 export async function runDesktopTask(input: DesktopTaskInput): Promise<DesktopTaskResult> {
   const t0 = Date.now();
@@ -201,6 +207,8 @@ export async function runDesktopTask(input: DesktopTaskInput): Promise<DesktopTa
     const id = randomUUID();
     for (;;) {
       try {
+        // If this call times out after the runner began the run, runId stays unset and no run.end is sent: the runner's
+        // lease (leaseMs) frees it.
         await client.call('run.begin', { runId: id, leaseMs });
         break;
       } catch (err) {
@@ -231,8 +239,10 @@ export async function runDesktopTask(input: DesktopTaskInput): Promise<DesktopTa
         ...ids, failure, log: maskedLog(res.state.log, m), lastCheckpoint: res.state.lastCheckpoint, ...(res.state.submitted ? { submitted: true } : {}),
       };
       if (o) return fail(o.code, o.message, base);
-      const code = codeOf(desktop.errors.get(res.failure.index), res.failure.message);
-      return fail(code, shownFailure(res.failure.intent, failure.message), base);
+      const cause = desktop.errors.get(res.failure.index);
+      const code = codeOf(cause, res.failure.message);
+      const lost = lease?.error || cause instanceof NoRunError ? ` (${LEASE_LOST})` : '';
+      return fail(code, `${shownFailure(res.failure.intent, failure.message)}${lost}`, base);
     }
     const tail = { ...ids, log: maskedLog(res.state.log, outputMasker(secrets, surface)), ...(res.state.submitted ? { submitted: true } : {}) };
     const o = override();

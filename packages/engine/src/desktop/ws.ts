@@ -52,7 +52,12 @@ export class WsProtocolError extends Error {
  * reading a client). Messages over `maxMessageBytes` are a protocol error, so a peer cannot make us hold unbounded data.
  */
 export class FrameReader {
+  /** Bytes not yet consumed, as received: joined only once they hold a whole frame (no quadratic copying). */
+  private chunks: Buffer[] = [];
+  private pending = 0;
   private buf: Buffer = Buffer.alloc(0);
+  /** Bytes the next frame needs before parsing is worth trying (0: unknown yet). */
+  private need = 0;
   private parts: Buffer[] = [];
   private partsBytes = 0;
   private partOpcode = 0;
@@ -61,11 +66,20 @@ export class FrameReader {
 
   /** Feeds bytes; returns complete messages (text/binary joined) and control frames, in order. */
   push(chunk: Buffer): Frame[] {
-    this.buf = this.buf.length ? Buffer.concat([this.buf, chunk]) : chunk;
+    this.chunks.push(chunk);
+    this.pending += chunk.length;
     const out: Frame[] = [];
+    if (this.pending < this.need) return out;
+    this.buf = this.chunks.length === 1 ? this.chunks[0] : Buffer.concat(this.chunks, this.pending);
+    this.chunks = [];
+    this.pending = 0;
     for (;;) {
       const frame = this.next();
-      if (!frame) return out;
+      if (!frame) {
+        if (this.buf.length) { this.chunks = [this.buf]; this.pending = this.buf.length; }
+        this.buf = Buffer.alloc(0);
+        return out;
+      }
       const control = frame.opcode >= 0x8;
       if (control) {
         if (!frame.fin || frame.payload.length > 125) throw new WsProtocolError('invalid control frame');
@@ -92,6 +106,7 @@ export class FrameReader {
 
   private next(): Frame | undefined {
     const b = this.buf;
+    this.need = 0;
     if (b.length < 2) return undefined;
     const fin = (b[0] & 0x80) !== 0;
     if ((b[0] & 0x70) !== 0) throw new WsProtocolError('reserved bits set');
@@ -114,7 +129,7 @@ export class FrameReader {
     if (len > this.maxMessageBytes) throw new WsProtocolError(`message larger than ${this.maxMessageBytes} bytes`);
     const keyAt = at;
     if (masked) at += 4;
-    if (b.length < at + len) return undefined;
+    if (b.length < at + len) { this.need = at + len; return undefined; }
     let payload = b.subarray(at, at + len);
     if (masked) {
       const key = b.subarray(keyAt, keyAt + 4);

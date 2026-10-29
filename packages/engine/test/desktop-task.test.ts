@@ -296,3 +296,14 @@ describe('the browser lane next to desktop step sets', () => {
     expect(r).toMatchObject({ ok: false, code: 'policy_violation', message: `invalid script: ${DESKTOP_STEPS_NEED_RUNNER}` });
   });
 });
+
+describe('desktop task: review follow-ups', () => {
+  it('a run the runner dropped mid-step says its lease ran out', async () => {
+    runner = await FakeRunner.start();
+    setTimeout(() => runner!.expireRun(), 400);
+    const r = failed(await run(doc([{ intent: 'Wait', waitFor: { target: uia('neverThere') }, timeoutMs: 5000 }])));
+    expect({ code: r.code, message: r.message }).toEqual({
+      code: 'runner_unavailable', message: 'Wait: no active run with this runId (the runner no longer has this run: its lease ran out or the runner restarted)',
+    });
+  });
+});

@@ -63,8 +63,14 @@ export function startHostOf(raw: unknown): string {
 
 /** startHostOf, except that a document with no start of its own (no startUrl, no absolute first goto) throws FIRST_STEP_GOTO. */
 function signedStartHost(raw: unknown): string {
-  // A desktop step set has no start URL: it binds its app instead.
-  if (isDesktopDocument(raw)) return desktopBindingOf(raw);
+  // A desktop step set has no start URL: it binds its app instead, and only a document that parses is signed.
+  if (isDesktopDocument(raw)) {
+    try {
+      return desktopBinding(parseDesktopScript(raw).app.exe);
+    } catch (err) {
+      throw new Error(err instanceof Error ? err.message : String(err));
+    }
+  }
   try {
     return new URL(parseScript(raw).startUrl).host;
   } catch (err) {

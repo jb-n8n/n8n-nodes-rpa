@@ -243,6 +243,16 @@ export class FakeRunner {
     this.run = { runId: 'someone-else', leaseMs: 600_000, exportDir, timer: setTimeout(() => undefined, 0) };
   }
 
+  /** Ends the current run as if its lease had run out. */
+  expireRun(): void {
+    if (!this.run) return;
+    this.expiredRuns.push(this.run.runId);
+    this.endRun();
+  }
+
+  /** Answers heartbeats this much later (a runner busy with a long action, answering one request at a time). */
+  heartbeatDelayMs = 0;
+
   /** Drops every open connection (a network break). */
   dropConnections(): void {
     for (const s of this.sockets) s.destroy();
@@ -258,7 +268,10 @@ export class FakeRunner {
     let reader: FrameReader | undefined;
     socket.on('data', (chunk: Buffer) => {
       log.push(chunk);
-      if (reader) { this.onFrames(socket, reader, chunk); return; }
+      if (reader) {
+        try { this.onFrames(socket, reader, chunk); } catch { socket.destroy(); }
+        return;
+      }
       head = Buffer.concat([head, chunk]);
       const end = head.indexOf('\r\n\r\n');
       if (end < 0) return;
@@ -273,7 +286,7 @@ export class FakeRunner {
       socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${acceptKey(headers.get('sec-websocket-key') ?? '')}\r\n\r\n`);
       reader = new FrameReader(true, 1024 * 1024);
       const rest = head.subarray(end + 4);
-      if (rest.length) this.onFrames(socket, reader, rest);
+      if (rest.length) { try { this.onFrames(socket, reader, rest); } catch { socket.destroy(); } }
     });
   }
 
@@ -282,7 +295,12 @@ export class FakeRunner {
       if (f.opcode === OPCODE.close) { socket.end(encodeFrame(OPCODE.close, Buffer.from([0x03, 0xe8]), false)); return; }
       if (f.opcode === OPCODE.ping) { socket.write(encodeFrame(OPCODE.pong, f.payload, false)); continue; }
       if (f.opcode !== OPCODE.text) continue;
-      const msg = JSON.parse(f.payload.toString('utf8')) as { id: number; method: string; params?: Record<string, unknown> };
+      let msg: { id: number; method: string; params?: Record<string, unknown> };
+      try {
+        msg = JSON.parse(f.payload.toString('utf8')) as typeof msg;
+      } catch {
+        continue; // a malformed frame fails the test that sent it, not the test process
+      }
       this.requests.push({ method: msg.method, params: msg.params ?? {} });
       void this.answer(msg.method, msg.params ?? {}).then(
         (result) => ({ jsonrpc: '2.0', id: msg.id, result }),
@@ -371,6 +389,7 @@ export class FakeRunner {
         const run = this.requireRun(p);
         this.heartbeats++;
         this.armLease(run);
+        if (this.heartbeatDelayMs) await new Promise((r) => setTimeout(r, this.heartbeatDelayMs));
         return {};
       }
       case 'run.end':

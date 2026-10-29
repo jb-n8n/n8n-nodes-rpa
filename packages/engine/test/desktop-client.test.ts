@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { bound } from './timing.js';
 import { connectRunner, fingerprintOf, normalizeFingerprint, probeRunner, runnerAddress } from '../src/desktop/client.js';
 import {
   DesktopUnavailableError, ElementNotFoundError, ElementNotUniqueError, ExpectedFileMissingError, FingerprintMismatchError, NoRunError, PolicyRefusedError,
@@ -35,6 +36,14 @@ describe('WebSocket framing', () => {
       expect(new FrameReader(true, 200_000).push(encodeFrame(OPCODE.text, payload, true))[0].payload).toEqual(payload);
     }
     expect(() => new FrameReader(false, 10).push(encodeFrame(OPCODE.text, Buffer.alloc(11), false))).toThrow(WsProtocolError);
+    // A 20 MiB message in 16 KiB chunks is joined once, not once per chunk.
+    const big = encodeFrame(OPCODE.text, Buffer.alloc(20 * 1024 * 1024, 0x61), false);
+    const r = new FrameReader(false, 30 * 1024 * 1024);
+    const t0 = Date.now();
+    let got: unknown[] = [];
+    for (let i = 0; i < big.length; i += 16_384) got = got.concat(r.push(big.subarray(i, i + 16_384)));
+    expect(got).toHaveLength(1);
+    expect(Date.now() - t0).toBeLessThan(bound(1000));
     expect(() => new FrameReader(false, 100).push(encodeFrame(OPCODE.text, Buffer.from('x'), true))).toThrow('server frames must not be masked');
   });
 });
@@ -111,7 +120,7 @@ describe('pinning', () => {
   });
   it('a token with a line break is refused before connecting', async () => {
     runner = await FakeRunner.start();
-    await expect(connectRunner({ ...runner.endpoint, token: 'a\r\nX-Evil: 1' })).rejects.toThrow('The desktop runner token is empty or contains a line break.');
+    await expect(connectRunner({ ...runner.endpoint, token: 'a\r\nX-Evil: 1' })).rejects.toThrow('The desktop runner token is empty or contains a line break, a space or a character that is not ASCII.');
     expect(runner.bytes).toEqual([]);
   });
   it('probeRunner connects, calls hello and closes', async () => {
@@ -165,6 +174,20 @@ describe('error codes and the lease', () => {
     const late = client.startLease('kept', 600);
     await sleep(800);
     expect(late.error).toBeInstanceOf(NoRunError);
+    await client.close();
+  });
+  it('a slow heartbeat (a runner busy with a long action) does not end the lease', async () => {
+    runner = await FakeRunner.start();
+    const client = await connectRunner(runner.endpoint);
+    await client.call('run.begin', { runId: 'slow', leaseMs: 5000 });
+    runner.run!.leaseMs = 2000;
+    runner.heartbeatDelayMs = 900; // longer than a beat (500 ms): beats overlap and time out on the old client
+    const lease = client.startLease('slow', 600);
+    await sleep(2500);
+    expect(lease.error).toBeUndefined();
+    expect(runner.heartbeats).toBeGreaterThanOrEqual(2);
+    expect(runner.run?.runId).toBe('slow');
+    lease.stop();
     await client.close();
   });
   it('pending calls fail with a disconnect when the connection drops', async () => {

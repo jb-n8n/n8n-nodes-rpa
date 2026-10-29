@@ -322,10 +322,12 @@ export function parseScript(input: unknown, opts: { defaultStartUrl?: string } =
   const doc: unknown = Array.isArray(input) ? { steps: input } : input;
   if (!isObj(doc)) throw new ScriptShapeError(['script must be an object']);
   // Fail closed on the surface: a desktop step set never runs in a browser, and an unknown surface is refused.
-  if (doc.surface === 'desktop') throw new ScriptShapeError([DESKTOP_STEPS_NEED_RUNNER]);
-  if (doc.surface !== undefined && doc.surface !== 'browser') throw new ScriptShapeError([SURFACE_INVALID]);
+  // Own properties only: the hash (canonicalize) covers own properties, so routing never reads an inherited one.
+  const surface = Object.hasOwn(doc, 'surface') ? doc.surface : undefined;
+  if (surface === 'desktop') throw new ScriptShapeError([DESKTOP_STEPS_NEED_RUNNER]);
+  if (surface !== undefined && surface !== 'browser') throw new ScriptShapeError([SURFACE_INVALID]);
   for (const k of Object.keys(doc)) if (!['surface', 'name', 'version', 'startUrl', 'interrupts', 'steps'].includes(k)) issues.push(`script has unknown key "${k}"`);
-  checkTemplates(doc, '', () => false, issues);
+  checkBrowserTemplates(doc.steps, issues);
   if (doc.name !== undefined && !isStr(doc.name)) issues.push('name must be a non-empty string');
   if (doc.version !== undefined && !isInt(doc.version, 1, Number.MAX_SAFE_INTEGER)) issues.push('version must be a positive integer');
   let startUrl: string | undefined;
@@ -356,19 +358,19 @@ export function parseScript(input: unknown, opts: { defaultStartUrl?: string } =
 // Reserved templates. `{{$name}}` is kept apart from the steps' own `{{var.x}}` templates: the only one there is,
 // {{$exportDir}}, is the desktop runner's export directory, and it is accepted only in a desktop fill value.
 
-const TEMPLATE = /\{\{\s*([^}]*?)\s*\}\}/g;
+/** A `{{$name}}` template, also behind extra braces or spaces (`{{{ $name }}}`), so none slips past the check. */
+const RESERVED = /\{\{[\s{]*(\$[^}]*?)\s*\}\}/g;
 /** {{$exportDir}} as a fill value may write it (the same spacing renderVars accepts). */
 export const EXPORT_DIR_TOKEN = /\{\{\s*\$exportDir\s*\}\}/g;
 
 /**
- * Refuses every `{{$...}}` template in any string of the document, except {{$exportDir}} where `exportDirAllowed`
- * accepts the string's path. Paths are `steps[0].fill.value` style, without a leading dot.
+ * Refuses every `{{$...}}` template in any string of `v`, except {{$exportDir}} where `exportDirAllowed` accepts the
+ * string's path. Paths are `steps[0].fill.value` style, without a leading dot.
  */
 function checkTemplates(v: unknown, path: string, exportDirAllowed: (path: string) => boolean, issues: string[]) {
   if (typeof v === 'string') {
-    for (const m of v.matchAll(TEMPLATE)) {
+    for (const m of v.matchAll(RESERVED)) {
       const expr = m[1];
-      if (!expr.startsWith('$')) continue;
       const at = path || 'script';
       if (expr !== '$exportDir') issues.push(reservedTemplate(at, expr));
       else if (!exportDirAllowed(path)) issues.push(exportDirOnlyInFill(at));
@@ -379,6 +381,25 @@ function checkTemplates(v: unknown, path: string, exportDirAllowed: (path: strin
   if (isObj(v)) for (const [k, x] of Object.entries(v)) checkTemplates(x, path ? `${path}.${k}` : k, exportDirAllowed, issues);
 }
 
+/**
+ * Browser step sets: the values the run renders (goto, fill and select values, paginate bodies included) may not hold a
+ * `{{$...}}` template. Other strings (intents, locator texts, regexes) are never rendered and stay as they were: a page
+ * can show a literal `{{ $ctrl.x }}` that a text locator matches.
+ */
+function checkBrowserTemplates(steps: unknown, issues: string[], path = 'steps') {
+  if (!Array.isArray(steps)) return;
+  steps.forEach((s, i) => {
+    if (!isObj(s)) return;
+    const at = `${path}[${i}]`;
+    if (typeof s.goto === 'string') checkTemplates(s.goto, `${at}.goto`, () => false, issues);
+    for (const verb of ['fill', 'select']) {
+      const v = s[verb];
+      if (isObj(v) && typeof v.value === 'string') checkTemplates(v.value, `${at}.${verb}.value`, () => false, issues);
+    }
+    if (isObj(s.paginate)) checkBrowserTemplates(s.paginate.each, issues, `${at}.paginate.each`);
+  });
+}
+
 const DESKTOP_BASE_KEYS = new Set(['intent', 'optional', 'when', 'expect', 'checkpoint', 'timeoutMs', 'write']);
 /** Verbs that act on the app: only these may be declared writes. */
 const DESKTOP_WRITE_VERBS = new Set<string>(['click', 'fill', 'select', 'check', 'key']);
@@ -386,8 +407,14 @@ const BROWSER_LOCATOR_KEYS = ['role', 'label', 'text', 'testId', 'css', 'name', 
 const WINDOW_KEYS = ['exe', 'title', 'titlePattern', 'automationId', 'className'];
 const COND_TEXT_KEYS = ['controlType', 'automationId', 'name', 'className'];
 const MAX_UIA_TEXT = 500;
-/** A key chord as the runner sends it: modifiers joined with + before one key (Enter, Tab, Ctrl+S, F5, Alt+F4). */
-const KEY_CHORD = /^(?:(?:Ctrl|Alt|Shift|Win)\+){0,3}(?:Enter|Tab|Escape|Esc|Space|Backspace|Delete|Insert|Home|End|PageUp|PageDown|Up|Down|Left|Right|F(?:[1-9]|1[0-9]|2[0-4])|[A-Za-z0-9])$/;
+/**
+ * A key chord in its one canonical spelling, so the runner's gated keys (compared as written) cannot be passed with
+ * another spelling: modifiers in the order Ctrl, Alt, Shift, each at most once, then one key, letters uppercase.
+ * No Win chords: they drive the Windows shell, not the app.
+ */
+const KEY_CHORD = /^(?:Ctrl\+)?(?:Alt\+)?(?:Shift\+)?(?:Enter|Tab|Escape|Space|Backspace|Delete|Insert|Home|End|PageUp|PageDown|Up|Down|Left|Right|F(?:[1-9]|1[0-9]|2[0-4])|[A-Z0-9])$/;
+/** The largest file an expectFile step may ask for: it arrives base64 in one message, which the client caps. */
+export const MAX_EXPECTED_FILE_BYTES = 50 * 1024 * 1024;
 const READ_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 const isText = (v: unknown, max = MAX_UIA_TEXT): v is string => isStr(v) && v.length <= max && !/[\r\n]/.test(v);
 
@@ -509,7 +536,7 @@ function checkDesktopStep(s: unknown, path: string, issues: string[]) {
     case 'key':
       if (!isObj(v)) { issues.push(`${p} must be an object`); break; }
       checkKeys(v, ['key', 'target'], p, issues);
-      if (typeof v.key !== 'string' || !KEY_CHORD.test(v.key)) issues.push(`${p}.key must be a key chord such as Enter, Tab, Ctrl+S or F5`);
+      if (typeof v.key !== 'string' || !KEY_CHORD.test(v.key)) issues.push(`${p}.key must be a key chord such as Enter, Tab, Ctrl+S or F5 (modifiers in the order Ctrl, Alt, Shift; letters uppercase)`);
       if (v.target !== undefined) checkDesktopLocator(v.target, `${p}.target`, issues);
       break;
     case 'expectFile':
@@ -517,6 +544,7 @@ function checkDesktopStep(s: unknown, path: string, issues: string[]) {
       checkKeys(v, ['pattern', 'check', 'maxBytes', 'mime'], p, issues);
       checkRegex(v.pattern, `${p}.pattern`, issues);
       checkDownloadFile(v, p, issues);
+      if (isInt(v.maxBytes, MAX_EXPECTED_FILE_BYTES + 1, Number.MAX_SAFE_INTEGER)) issues.push(`${p}.maxBytes must be at most ${MAX_EXPECTED_FILE_BYTES}`);
       break;
   }
 }
@@ -530,7 +558,7 @@ export function desktopVerbOf(step: object): DesktopVerb {
 
 /** Whether a raw document declares itself a desktop step set (`surface: "desktop"`). Never throws. */
 export function isDesktopDocument(raw: unknown): boolean {
-  return isObj(raw) && raw.surface === 'desktop';
+  return isObj(raw) && Object.hasOwn(raw, 'surface') && raw.surface === 'desktop';
 }
 
 /**
@@ -542,7 +570,8 @@ export function parseDesktopScript(input: unknown): DesktopScript {
   const issues: string[] = [];
   if (!isObj(input)) throw new ScriptShapeError(['script must be an object']);
   const doc = input;
-  if (doc.surface !== 'desktop') throw new ScriptShapeError([doc.surface === undefined || doc.surface === 'browser' ? BROWSER_STEPS_NEED_BROWSER : SURFACE_INVALID]);
+  const surface = Object.hasOwn(doc, 'surface') ? doc.surface : undefined;
+  if (surface !== 'desktop') throw new ScriptShapeError([surface === undefined || surface === 'browser' ? BROWSER_STEPS_NEED_BROWSER : SURFACE_INVALID]);
   checkKeys(doc, ['surface', 'name', 'version', 'app', 'interrupts', 'steps'], 'script', issues);
   if (Object.hasOwn(doc, 'startUrl')) issues.push('startUrl is a browser setting, not allowed in a desktop step set: set app instead');
   if (doc.name !== undefined && !isStr(doc.name)) issues.push('name must be a non-empty string');
@@ -562,6 +591,14 @@ export function parseDesktopScript(input: unknown): DesktopScript {
   else {
     if (doc.steps.length > 200) issues.push('steps has more than 200 steps');
     doc.steps.forEach((s, i) => checkDesktopStep(s, `steps[${i}]`, issues));
+    // A read's `as` names its text in the run outputs: two reads with one name would overwrite each other.
+    const seen = new Set<string>();
+    doc.steps.forEach((s, i) => {
+      const as = isObj(s) && isObj(s.read) && typeof s.read.as === 'string' ? s.read.as : undefined;
+      if (as === undefined) return;
+      if (seen.has(as)) issues.push(`steps[${i}].read.as "${as}" is already used by an earlier read step`);
+      seen.add(as);
+    });
   }
   checkTemplates(doc, '', (path) => /^steps\[\d+\]\.fill\.value$/.test(path), issues);
   if (issues.length) throw new ScriptShapeError(issues);

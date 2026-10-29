@@ -152,3 +152,21 @@ describe('Run Steps routes by the steps\' surface', () => {
     expect(details(drift[0].json)).toMatchObject({ code: 'drift_detected', lane: 'script', stepIntent: 'Click Help', submitted: false });
   });
 });
+
+describe('desktop steps elsewhere in the node', () => {
+  it('Sign Steps refuses desktop steps with a message of its own', async () => {
+    const { executeSignSteps } = await import('../nodes/Playwright/operations/signSteps.js');
+    const item = { name: 'erp-orders', baseVersion: 1, version: 2, steps: DESKTOP_STEPS, hash: engine.scriptHash(DESKTOP_STEPS), digest: 'd'.repeat(64), safetyFlags: [], changes: [], evidence: { count: 0, total: null, diff: { missing: [], extra: [] } } };
+    const p = { operation: 'signSteps', approved: true, approverId: APPROVER, approverAllowlist: APPROVER };
+    const out = await executeSignSteps(harness({ params: p, items: [{ json: item }], credentials: { playwrightScriptSigningApi: { secretKey: KEY } }, continueOnFail: true }), engine);
+    expect(String(out[0][0].json.error)).toContain('Sign Steps cannot sign desktop steps (surface "desktop") yet: they have no Repaired steps review.');
+  });
+
+  it('Run Steps with desktop steps refuses configured row checks', async () => {
+    runner = await FakeRunner.start();
+    const p = params(DESKTOP_STEPS);
+    const [data] = await executeRunSteps(ctx({ rpaDesktopRunnerApi: { ...runner.endpoint }, playwrightScriptSigningApi: { secretKey: KEY } }, { ...p, options: { ...(p.options as object), idPattern: 'ORD-\\d+' } }), fakeEngine(() => scriptOk()));
+    expect(data[0].json.error).toBe('Row checks (ID Pattern, Stated Total Pattern, Required Fields, Text That Means No Results) do not apply to desktop steps: clear them.');
+    expect(runner.tcpConnections).toBe(0);
+  });
+});

@@ -29,7 +29,7 @@ export function selfSignedCert(cn = 'fake-desktop-runner'): TestCert {
   const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
   const ecdsaSha256 = seq(oid('1.2.840.10045.4.3.2'));
   const serial = randomBytes(8);
-  serial[0] &= 0x7f; // a positive INTEGER
+  serial[0] = (serial[0] & 0x3f) | 0x40; // a positive INTEGER in minimal DER (no leading zero byte, high bit clear)
   const now = Date.now();
   const tbs = seq(
     tlv(0xa0, tlv(0x02, Buffer.from([2]))), // v3
