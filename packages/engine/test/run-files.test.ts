@@ -164,6 +164,18 @@ describe('download / submit / popup', () => {
       expect(ctx.page.url()).toContain('/acme/service');
     } finally { await session.close(); }
   });
+  it('checks when and expect on the page a popup opened', async () => {
+    const ctx = await signedIn();
+    try {
+      await ctx.page.setContent(`<a href="${portal.url}/acme/service" target="_blank">Open service in new tab</a>`);
+      const r = await runSteps(ctx, [
+        { intent: 'Open tab', popup: { trigger: { role: 'link', name: 'Open service in new tab' } }, expect: { visible: { css: 'body[data-page=service]' } } },
+        { intent: 'Check', when: { visible: { css: 'body[data-page=service]' } }, waitFor: { target: { css: 'body[data-page=service]' } }, expect: { url: '/acme/service' } },
+      ]);
+      expect(r.ok).toBe(true);
+      expect(r.state.log.map((l) => l.status)).toEqual(['ok', 'ok']);
+    } finally { await session.close(); }
+  });
 });
 
 describe('public downloads', () => {

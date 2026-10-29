@@ -281,4 +281,4 @@ const detect: Handler = async (ctx, step, state, timeout) => {
   if (d.require && hit !== d.require) throw new Error(`${DETECTED_PREFIX}${hit}`);
 };
 
-registerHandlers({ signIn, detect });
+registerHandlers('browser', { signIn, detect });
