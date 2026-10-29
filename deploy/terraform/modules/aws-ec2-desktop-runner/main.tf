@@ -8,6 +8,16 @@ locals {
 
   burstable = can(regex("^t[23]a?\\.", var.instance_type))
 
+  # policy.json as the runner reads it: optional allowedApps fields that aren't set are left out, not written as null.
+  policy_json = jsonencode(merge(var.runner_policy, {
+    allowedApps = [for a in var.runner_policy.allowedApps : merge(
+      { exe = a.exe, path = a.path },
+      { for k, v in { sha256 = a.sha256 } : k => v if v != null },
+      { for k, v in { allowedArgs = a.allowedArgs } : k => v if v != null },
+      { for k, v in { allowUserWritable = a.allowUserWritable } : k => v if v != null },
+    )]
+  }))
+
   # EC2 takes at most 16 KB of user data, so the setup script travels gzipped, without its full-line comments (the files
   # here keep them), inside a small bootstrap.
   user_data      = templatefile("${path.module}/user-data.ps1.tftpl", { setup = base64gzip(local.setup) })
@@ -21,7 +31,7 @@ locals {
     runner_artifact_url             = base64encode(var.runner_artifact_url)
     runner_artifact_sha256          = base64encode(var.runner_artifact_sha256)
     runner_config                   = base64encode(jsonencode({ exe = var.runner_executable, args = var.runner_arguments, port = var.runner_port }))
-    runner_policy                   = base64encode(jsonencode(var.runner_policy))
+    runner_policy                   = base64encode(local.policy_json)
     runner_port                     = var.runner_port
     start_runner_ps1                = chomp(file("${path.module}/scripts/start-runner.ps1"))
     install_runner_ps1              = chomp(file("${path.module}/scripts/install-runner.ps1"))

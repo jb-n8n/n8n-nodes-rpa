@@ -227,8 +227,8 @@ run "user_data_carries_settings_but_no_secret" {
   }
   assert {
     condition = alltrue([for v in [
-      jsonencode({ allowedApps = [{ exe = "ErpDemo.exe" }], gatedKeys = ["Ctrl+S", "F11"], maxFileBytes = 20971520, writeControls = [{ automationId = "btnPost", exe = "ErpDemo.exe" }] }),
-      jsonencode({ args = [], exe = "rpa-desktop-runner.exe", port = 8765 }),
+      jsonencode({ allowedApps = [{ allowedArgs = [["--ui", "v1"], ["--ui", "v2"]], exe = "ErpDemo.exe", path = "C:\\Program Files\\RPA Runner\\erp-demo\\ErpDemo.exe" }], gatedKeys = ["Ctrl+S", "F11"], maxFileBytes = 20971520, writeControls = [{ automationId = "btnPost", exe = "ErpDemo.exe" }] }),
+      jsonencode({ args = [], exe = "RpaRunner.exe", port = 8765 }),
       "arn:aws:secretsmanager:us-west-2:123456789012:secret:rpa-desktop-testbed-runner-token-AbCdEf",
       "us-west-2",
     ] : strcontains(local.setup, "'${base64encode(v)}'")])
@@ -402,10 +402,60 @@ run "runner_artifact_reaches_the_vm" {
   assert {
     condition = (
       strcontains(local.setup, "'${base64encode("https://github.com/example/releases/download/v1/rpa-desktop-runner-win-x64.zip")}'") &&
-      strcontains(local.setup, "'${base64encode(jsonencode({ args = ["--log-level", "debug"], exe = "rpa-desktop-runner.exe", port = 8765 }))}'")
+      strcontains(local.setup, "'${base64encode(jsonencode({ args = ["--log-level", "debug"], exe = "RpaRunner.exe", port = 8765 }))}'")
     )
     error_message = "The artifact URL and the runner arguments reach the VM."
   }
+}
+
+run "policy_json_leaves_out_unset_fields" {
+  command = plan
+
+  variables {
+    runner_policy = {
+      allowedApps = [
+        { exe = "Notepad.exe", path = "C:\\Windows\\System32\\Notepad.exe" },
+        { exe = "Tool.exe", path = "D:\\Apps\\Tool.exe", sha256 = "ab${join("", [for i in range(31) : "cd"])}", allowUserWritable = true },
+      ]
+    }
+  }
+
+  assert {
+    condition = local.policy_json == jsonencode({
+      allowedApps = [
+        { exe = "Notepad.exe", path = "C:\\Windows\\System32\\Notepad.exe" },
+        { allowUserWritable = true, exe = "Tool.exe", path = "D:\\Apps\\Tool.exe", sha256 = "ab${join("", [for i in range(31) : "cd"])}" },
+      ]
+      gatedKeys     = []
+      maxFileBytes  = 20971520
+      writeControls = []
+    })
+    error_message = "Unset optional fields are left out of policy.json (the runner refuses unknown or null fields), defaults filled in."
+  }
+}
+
+run "refuses_a_policy_app_without_an_absolute_path" {
+  command = plan
+  variables {
+    runner_policy = { allowedApps = [{ exe = "ErpDemo.exe", path = "ErpDemo.exe" }] }
+  }
+  expect_failures = [var.runner_policy]
+}
+
+run "refuses_a_policy_path_for_another_exe" {
+  command = plan
+  variables {
+    runner_policy = { allowedApps = [{ exe = "ErpDemo.exe", path = "C:\\Windows\\System32\\cmd.exe" }] }
+  }
+  expect_failures = [var.runner_policy]
+}
+
+run "refuses_a_unc_policy_path" {
+  command = plan
+  variables {
+    runner_policy = { allowedApps = [{ exe = "ErpDemo.exe", path = "\\\\server\\share\\ErpDemo.exe" }] }
+  }
+  expect_failures = [var.runner_policy]
 }
 
 run "refuses_the_whole_internet" {

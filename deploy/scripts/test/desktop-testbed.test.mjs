@@ -190,7 +190,7 @@ test('fingerprint reads the runner log through SSM Run Command', () => {
     const send = t.calls().find((c) => c.includes('send-command'));
     assert.ok(send.includes('AWS-RunPowerShellScript') && send.includes(INSTANCE));
     const params = JSON.parse(send[send.indexOf('--parameters') + 1]);
-    assert.equal(params.commands[0].split(' | ')[0], 'Get-ChildItem -Path "$env:ProgramData\\RPA Runner\\*.log", "$env:ProgramData\\RPA Runner\\logs\\*.log" -File');
+    assert.equal(params.commands[0].split(' | ')[0], 'Get-ChildItem -Path "$env:ProgramData\\RPA Runner\\logs\\*.log" -File');
     assert.ok(params.commands[0].includes("-Pattern '([0-9A-F]{2}:){31}[0-9A-F]{2}'"));
     r = t.run(['fingerprint'], { FAKE_SSM_OUTPUT: '' });
     assert.equal(r.code, 1);

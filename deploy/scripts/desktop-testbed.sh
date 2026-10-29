@@ -197,7 +197,7 @@ cmd_start() {
 cmd_fingerprint() {
   load_outputs
   local ps out fp
-  ps="Get-ChildItem -Path \"\$env:ProgramData\\RPA Runner\\*.log\", \"\$env:ProgramData\\RPA Runner\\logs\\*.log\" -File | Sort-Object LastWriteTime | Select-String -CaseSensitive -Pattern '$FINGERPRINT_PATTERN' | Select-Object -Last 1 | ForEach-Object { \$_.Matches[0].Value }"
+  ps="Get-ChildItem -Path \"\$env:ProgramData\\RPA Runner\\logs\\*.log\" -File | Sort-Object LastWriteTime | Select-String -CaseSensitive -Pattern '$FINGERPRINT_PATTERN' | Select-Object -Last 1 | ForEach-Object { \$_.Matches[0].Value }"
   out="$(ssm_run 'RPA runner fingerprint' "$ps")"
   fp="$(printf '%s\n' "$out" | grep -Eo "$FINGERPRINT_PATTERN" | tail -n 1 || true)"
   [ -n "$fp" ] || fail "no fingerprint in the runner's log yet: is the runner installed and started? (status, install-runner)"

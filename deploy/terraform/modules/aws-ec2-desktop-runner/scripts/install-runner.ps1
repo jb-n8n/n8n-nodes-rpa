@@ -1,9 +1,15 @@
-# Installs or replaces the RPA desktop runner from an HTTPS URL: a zip of the self-contained win-x64 publish, or the
-# single executable. Run it as an administrator: the first-boot setup does when runner_artifact_url is set, and
-# desktop-testbed.sh install-runner runs it over SSM (as SYSTEM). It stops a running runner; start-runner.ps1, in the
-# rpa-runner session, starts the new one within 30 seconds.
+# Installs or replaces the RPA desktop runner from an HTTPS URL. Run it as an administrator: the first-boot setup does
+# when runner_artifact_url is set, and desktop-testbed.sh install-runner runs it over SSM (as SYSTEM). It stops a
+# running runner and the demo app; start-runner.ps1, in the rpa-runner session, starts the new runner within 30 seconds.
 #
-#   & 'C:\Program Files\RPA Runner\install-runner.ps1' -Url https://.../rpa-desktop-runner.zip [-Sha256 <hex>]
+#   & 'C:\Program Files\RPA Runner\install-runner.ps1' -Url https://.../rpa-desktop.zip [-Sha256 <hex>]
+#
+# The download may be:
+# - the rpa-desktop release zip: rpa-desktop\runner\ (the runner) goes to C:\Program Files\RPA Runner\, and the ERP Demo
+#   to erp-demo\ (v1, the build the default policy allows) and erp-demo-v2\ (v2, for the repair demo) beside it.
+#   Program Files keeps them admin-owned, so the runner's user can't change them (the runner checks this);
+# - a zip with the runner executable anywhere in it: that folder goes to C:\Program Files\RPA Runner\;
+# - the runner executable itself.
 #
 # The log (%ProgramData%\RPA Runner\setup\install-runner.log, which only administrators can write) and the output
 # never show a URL's query string, where a pre-signed URL carries its signature.
@@ -41,6 +47,7 @@ try {
   $stream = [IO.File]::OpenRead($download)
   try { [void]$stream.Read($head, 0, 2) } finally { $stream.Dispose() }
   $source = Join-Path $work 'files'
+  $demo = @{}
   New-Item -ItemType Directory -Path $source | Out-Null
   if ($head[0] -eq 0x50 -and $head[1] -eq 0x4B) {
     # A zip ("PK"): use the folder that holds the executable, wherever it sits in the archive.
@@ -48,6 +55,13 @@ try {
     Expand-Archive -LiteralPath (Join-Path $work 'download.zip') -DestinationPath $source
     $found = Get-ChildItem -LiteralPath $source -Recurse -File -Filter $config.exe | Sort-Object { $_.FullName.Length } | Select-Object -First 1
     if (-not $found) { throw "The zip has no $($config.exe)." }
+    # The release layout: <top>\runner\RpaRunner.exe beside <top>\erp-demo\v1 and v2.
+    if ($found.Directory.Name -eq 'runner') {
+      foreach ($ui in 'v1', 'v2') {
+        $dir = Join-Path $found.Directory.Parent.FullName "erp-demo\$ui"
+        if (Test-Path -LiteralPath (Join-Path $dir 'ErpDemo.exe')) { $demo[$ui] = $dir }
+      }
+    }
     $source = $found.DirectoryName
   } elseif ($head[0] -eq 0x4D -and $head[1] -eq 0x5A) {
     # A Windows executable ("MZ").
@@ -56,9 +70,16 @@ try {
     throw 'The download is neither a zip nor a Windows executable.'
   }
 
-  Get-Process -Name ([IO.Path]::GetFileNameWithoutExtension($config.exe)) -ErrorAction SilentlyContinue | Stop-Process -Force
+  Get-Process -Name ([IO.Path]::GetFileNameWithoutExtension($config.exe)), 'ErpDemo' -ErrorAction SilentlyContinue | Stop-Process -Force
   Start-Sleep -Seconds 2
   Get-ChildItem -LiteralPath $source | Where-Object { $own -notcontains $_.Name } | Copy-Item -Destination $installDir -Recurse -Force
+  foreach ($ui in @($demo.Keys | Sort-Object)) {
+    $target = Join-Path $installDir $(if ($ui -eq 'v1') { 'erp-demo' } else { "erp-demo-$ui" })
+    if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force }
+    New-Item -ItemType Directory -Path $target | Out-Null
+    Get-ChildItem -LiteralPath $demo[$ui] | Copy-Item -Destination $target -Recurse -Force
+    Log "installed ERP Demo $ui into $target"
+  }
   Log "installed $($config.exe) into $installDir; start-runner.ps1 starts it within 30 s"
 } finally {
   Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue

@@ -5,9 +5,10 @@ locals {
   public_ip = var.elastic_ip ? aws_eip.this[0].public_ip : (var.associate_public_ip ? aws_instance.this.public_ip : null)
   runner_ip = coalesce(local.public_ip, aws_instance.this.private_ip)
 
-  # Prints the newest SHA-256 fingerprint (colon-separated uppercase hex) the runner logged in %ProgramData%\RPA Runner or
-  # its logs folder. No recursion: rpa-runner can create folders (and junctions) there, and this runs as SYSTEM.
-  fingerprint_ps         = "Get-ChildItem -Path \"$env:ProgramData\\RPA Runner\\*.log\", \"$env:ProgramData\\RPA Runner\\logs\\*.log\" -File | Sort-Object LastWriteTime | Select-String -CaseSensitive -Pattern '([0-9A-F]{2}:){31}[0-9A-F]{2}' | Select-Object -Last 1 | ForEach-Object { $_.Matches[0].Value }"
+  # Prints the newest SHA-256 fingerprint (colon-separated uppercase hex) in %ProgramData%\RPA Runner\logs: the runner's
+  # start line in runner-<date>.log, or its captured output, runner.out.log. No recursion: rpa-runner can create folders
+  # (and junctions) there, and this runs as SYSTEM.
+  fingerprint_ps         = "Get-ChildItem -Path \"$env:ProgramData\\RPA Runner\\logs\\*.log\" -File | Sort-Object LastWriteTime | Select-String -CaseSensitive -Pattern '([0-9A-F]{2}:){31}[0-9A-F]{2}' | Select-Object -Last 1 | ForEach-Object { $_.Matches[0].Value }"
   fingerprint_parameters = replace(jsonencode({ commands = [local.fingerprint_ps] }), "'", "'\\''")
   ssm_target             = "--region ${local.region} --instance-id ${aws_instance.this.id}"
 }

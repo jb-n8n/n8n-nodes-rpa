@@ -152,7 +152,7 @@ variable "runner_port" {
 }
 
 variable "runner_artifact_url" {
-  description = "HTTPS URL of the runner build: a zip of the self-contained win-x64 publish, or the single executable. Empty: the VM is prepared without a runner (install one later with install-runner.ps1 over SSM). The URL is stored in the instance's user data and in state, so use a public release asset or a short-lived pre-signed URL, never one with a long-lived credential in it. Changing it replaces the VM."
+  description = "HTTPS URL of the runner build: the rpa-desktop release zip (runner/ plus erp-demo/v1 and v2), a zip of the runner's win-x64 publish, or the single executable. Empty: the VM is prepared without a runner (install one later with install-runner.ps1 over SSM). The URL is stored in the instance's user data and in state, so use a public release asset or a short-lived pre-signed URL, never one with a long-lived credential in it. Changing it replaces the VM."
   type        = string
   default     = ""
 
@@ -176,7 +176,7 @@ variable "runner_artifact_sha256" {
 variable "runner_executable" {
   description = "File name of the runner executable inside the artifact."
   type        = string
-  default     = "rpa-desktop-runner.exe"
+  default     = "RpaRunner.exe"
 
   validation {
     condition     = can(regex("^[A-Za-z0-9][A-Za-z0-9._-]*\\.exe$", var.runner_executable))
@@ -191,9 +191,15 @@ variable "runner_arguments" {
 }
 
 variable "runner_policy" {
-  description = "The runner's local policy, written to %ProgramData%\\RPA Runner\\policy.json (administrators may change it, the runner user may only read it). The default allows the demo app ErpDemo.exe and gates its Post button and Ctrl+S / F11."
+  description = "The runner's local policy, written to %ProgramData%\\RPA Runner\\policy.json (administrators may change it, the runner user may only read it). Each allowedApps entry pins the absolute local path that runs; sha256 pins its hash, allowedArgs lists the exact argument lists a launch may pass (none without it), allowUserWritable (default false) permits a path the runner's user could change. The default allows the demo app installed by install-runner.ps1, with --ui v1 or --ui v2, and gates its Post button and Ctrl+S / F11."
   type = object({
-    allowedApps = list(object({ exe = string }))
+    allowedApps = list(object({
+      exe               = string
+      path              = string
+      sha256            = optional(string)
+      allowedArgs       = optional(list(list(string)))
+      allowUserWritable = optional(bool)
+    }))
     writeControls = optional(list(object({
       exe          = string
       automationId = string
@@ -202,17 +208,33 @@ variable "runner_policy" {
     maxFileBytes = optional(number, 20971520)
   })
   default = {
-    allowedApps   = [{ exe = "ErpDemo.exe" }]
+    allowedApps = [{
+      exe         = "ErpDemo.exe"
+      path        = "C:\\Program Files\\RPA Runner\\erp-demo\\ErpDemo.exe"
+      allowedArgs = [["--ui", "v1"], ["--ui", "v2"]]
+    }]
     writeControls = [{ exe = "ErpDemo.exe", automationId = "btnPost" }]
     gatedKeys     = ["Ctrl+S", "F11"]
     maxFileBytes  = 20971520
   }
 
   validation {
-    condition     = var.runner_policy.maxFileBytes >= 1 && floor(var.runner_policy.maxFileBytes) == var.runner_policy.maxFileBytes
-    error_message = "runner_policy.maxFileBytes must be a positive whole number."
+    condition = alltrue([
+      for a in var.runner_policy.allowedApps :
+      can(regex("^[A-Za-z]:\\\\", a.path)) && endswith(lower(a.path), "\\${lower(a.exe)}") && can(regex("^[A-Za-z0-9][A-Za-z0-9 ._-]*\\.exe$", a.exe))
+    ])
+    error_message = "Each runner_policy.allowedApps entry needs exe (a file name such as App.exe) and path, an absolute local path (C:\\...) ending in that file name; UNC and device paths are refused."
+  }
+  validation {
+    condition     = alltrue([for a in var.runner_policy.allowedApps : a.sha256 == null || can(regex("^[0-9A-Fa-f]{64}$", coalesce(a.sha256, "-")))])
+    error_message = "runner_policy.allowedApps[].sha256 must be 64 hexadecimal characters."
+  }
+  validation {
+    condition     = var.runner_policy.maxFileBytes >= 1 && var.runner_policy.maxFileBytes <= 37748736 && floor(var.runner_policy.maxFileBytes) == var.runner_policy.maxFileBytes
+    error_message = "runner_policy.maxFileBytes must be a whole number from 1 to 37748736 (36 MiB, the runner's ceiling)."
   }
 }
+
 
 variable "secret_recovery_window_days" {
   description = "Recovery window of the three secrets on destroy: 0 deletes them at once, 7 to 30 keeps them restorable that long."

@@ -31,23 +31,39 @@ The user data is a small bootstrap that unpacks [`setup.ps1.tftpl`](setup.ps1.tf
    - Server Manager and the network-discovery prompt at logon, and display sleep
 4. Locks down `%ProgramData%\RPA Runner`:
    - Administrators and SYSTEM own it.
-   - rpa-runner may read it, create files (the runner's certificate) and write `logs\`.
-   - rpa-runner can't change or delete `policy.json` or `token`, and can't write `setup\`, where SYSTEM logs the setup and runner installs.
+   - rpa-runner may read it, create files and folders in it (the runner creates `runner-certificate.pfx.bin` and `exports\`) and write `logs\`.
+   - rpa-runner can't change, delete or re-permission `policy.json`, `token` or the folder itself. The runner checks this at start: it refuses a policy file or folder anyone but administrators could change or replace, including a delete-child right on the folder.
+   - rpa-runner can't write `setup\`, where SYSTEM logs the setup and runner installs.
 5. Writes `policy.json` from `runner_policy` and the bearer token to `token`. The token file is readable by SYSTEM, Administrators and rpa-runner only.
 6. Turns Windows Firewall on for every profile and adds two rules:
    - inbound on the runner port
    - an outbound block to the instance metadata service for rpa-runner, so neither the runner nor an app it drives can use the instance role
-7. Writes `runner.json`, [`start-runner.ps1`](scripts/start-runner.ps1) and [`install-runner.ps1`](scripts/install-runner.ps1) to `C:\Program Files\RPA Runner\`. Downloads the runner there when `runner_artifact_url` is set. Registers the scheduled task `\RPA\RPA Runner`, which starts `start-runner.ps1` at rpa-runner's logon, interactive and limited.
+7. Writes `runner.json`, [`start-runner.ps1`](scripts/start-runner.ps1) and [`install-runner.ps1`](scripts/install-runner.ps1) to `C:\Program Files\RPA Runner\`. Installs the runner when `runner_artifact_url` is set (see [Installing the runner](#installing-the-runner)). Registers the scheduled task `\RPA\RPA Runner`, which starts `start-runner.ps1` at rpa-runner's logon, interactive and limited.
 8. Restarts the VM. rpa-runner signs in on the console and the task starts the runner.
 
-`start-runner.ps1` restarts the runner whenever it exits. It writes the runner's output to `logs\runner.out.log` and `runner.err.log`; that is where `desktop-testbed.sh fingerprint` finds the certificate fingerprint. It passes the runner its settings in the environment:
+`start-runner.ps1` restarts the runner whenever it exits and writes the runner's output to `logs\runner.out.log` and `runner.err.log`. The runner itself logs to `logs\runner-<date>.log`. Its start line, `RPA runner listening on wss://0.0.0.0:8765/rpa/v1, fingerprint <SHA-256>`, is where `desktop-testbed.sh fingerprint` finds the certificate fingerprint. `start-runner.ps1` passes the runner its settings in the environment:
 - `RPA_RUNNER_TOKEN_FILE`, the path of the token file
 - `RPA_RUNNER_POLICY_FILE`
 - `RPA_RUNNER_PORT`
 
-The token itself is never put in the environment, because apps the runner launches would inherit it.
+The token itself is never put in the environment, because apps the runner launches would inherit it. The runner refuses a token on its command line anyway.
 
 Until a runner is installed, `start-runner.ps1` checks for one every 30 seconds.
+
+## Installing the runner
+
+[`install-runner.ps1`](scripts/install-runner.ps1) runs as an administrator: at first boot when `runner_artifact_url` is set, or later through `desktop-testbed.sh install-runner <url> [sha256]` over SSM, without a new VM. It downloads the file and checks the SHA-256 when one is given. It stops the runner and the demo app, installs, and `start-runner.ps1` starts the new runner within 30 seconds. It accepts:
+
+- **The rpa-desktop release zip**, laid out as:
+  - `rpa-desktop\runner\RpaRunner.exe`, with `policy.example.json` and `README.md`
+  - `rpa-desktop\erp-demo\v1\ErpDemo.exe` and `rpa-desktop\erp-demo\v2\ErpDemo.exe`
+  - `rpa-desktop\LICENSE`
+
+  The runner goes to `C:\Program Files\RPA Runner\`. ERP Demo v1 goes to `C:\Program Files\RPA Runner\erp-demo\ErpDemo.exe`, the path the default policy allows. v2 goes to `C:\Program Files\RPA Runner\erp-demo-v2\ErpDemo.exe`; the default policy doesn't allow it yet, it waits for the repair demo. Under Program Files both are admin-owned, which the runner requires of an allowed app unless the entry says `allowUserWritable`.
+- A zip with `RpaRunner.exe` anywhere in it: that folder goes to `C:\Program Files\RPA Runner\`.
+- `RpaRunner.exe` itself.
+
+A GitHub Actions artifact needs a token to download, so put the zip somewhere the VM can fetch it over HTTPS: a release asset, or a private S3 bucket and a pre-signed URL valid for an hour.
 
 ## Secrets
 
@@ -78,6 +94,31 @@ The password is **not** in the registry. The setup stores it as the LSA secret `
 
 The LSA secret is protected by the system, not encrypted against an administrator: anyone with administrator rights on the VM can read it. That is the cost of attended-style auto-logon. It is why rpa-runner is a standard user with no other purpose, and why its password is random and kept nowhere else but Secrets Manager.
 
+## The policy
+
+`runner_policy` becomes `%ProgramData%\RPA Runner\policy.json`, the runner's local floor. The runner refuses unknown fields, so optional fields you leave unset are left out of the file rather than written as null. The default:
+
+```json
+{
+  "allowedApps": [
+    { "exe": "ErpDemo.exe", "path": "C:\\Program Files\\RPA Runner\\erp-demo\\ErpDemo.exe", "allowedArgs": [["--ui", "v1"], ["--ui", "v2"]] }
+  ],
+  "writeControls": [{ "exe": "ErpDemo.exe", "automationId": "btnPost" }],
+  "gatedKeys": ["Ctrl+S", "F11"],
+  "maxFileBytes": 20971520
+}
+```
+
+- `allowedApps`: the only executables `app.launch` starts.
+  - `exe` is the file name a step set names.
+  - `path` (required) is the absolute local path that runs. It must end in `exe`; UNC and device paths are refused.
+  - `sha256` (optional) pins the file's hash.
+  - `allowedArgs` (optional) lists the exact argument lists a launch may pass; without it, none.
+  - `allowUserWritable` (optional, default false) permits a path the runner's user could change or replace.
+- `writeControls`: controls (process and automation id) that act only with `write: true`.
+- `gatedKeys`: key chords that need `write: true`.
+- `maxFileBytes`: the largest file `file.retrieve` returns, at most 36 MiB.
+
 ## Example
 
 [`deploy/terraform/examples/aws-ec2-desktop-runner`](../../examples/aws-ec2-desktop-runner) wires the module with `allowed_cidrs` as its one required input. [`deploy/scripts/desktop-testbed.sh`](../../../scripts/desktop-testbed.sh) drives it. It keeps the Terraform state in `TESTBED_STATE_DIR`, a directory it refuses inside the repository.
@@ -87,7 +128,7 @@ export TESTBED_STATE_DIR=~/rpa-testbed-state        # anywhere outside the repos
 export AWS_REGION=us-west-2
 deploy/scripts/desktop-testbed.sh up                # allowed_cidrs = this machine's public IPv4 /32
 deploy/scripts/desktop-testbed.sh status            # state, runner URL, SSM
-deploy/scripts/desktop-testbed.sh install-runner https://.../rpa-desktop-runner-win-x64.zip <sha256>
+deploy/scripts/desktop-testbed.sh install-runner https://.../rpa-desktop.zip <sha256>
 deploy/scripts/desktop-testbed.sh fingerprint       # for the credential's fingerprint field
 deploy/scripts/desktop-testbed.sh rdp-password      # copies the Administrator password to the clipboard
 deploy/scripts/desktop-testbed.sh stop              # stop paying for the instance
@@ -113,10 +154,10 @@ deploy/scripts/desktop-testbed.sh down
 | `elastic_ip` | false | A fixed address; billed while the VM is stopped too |
 | `enable_rdp` | true | SSM works without RDP |
 | `runner_port` | 8765 | |
-| `runner_artifact_url`, `runner_artifact_sha256` | empty | A zip of the win-x64 publish, or the `.exe`. A set hash is checked. A changed URL replaces the VM; `install-runner` doesn't. |
-| `runner_executable` | `rpa-desktop-runner.exe` | |
+| `runner_artifact_url`, `runner_artifact_sha256` | empty | The release zip, a zip with the runner, or the `.exe` ([Installing the runner](#installing-the-runner)). A set hash is checked. A changed URL replaces the VM; `install-runner` doesn't. |
+| `runner_executable` | `RpaRunner.exe` | |
 | `runner_arguments` | `[]` | Never the token |
-| `runner_policy` | allows `ErpDemo.exe` | The contract's policy: `allowedApps`, `writeControls`, `gatedKeys`, `maxFileBytes` |
+| `runner_policy` | allows ERP Demo v1 | See [The policy](#the-policy) |
 | `secret_recovery_window_days` | 7 | 0 deletes the secrets at once on destroy |
 | `tags` | `{}` | |
 
@@ -125,7 +166,7 @@ deploy/scripts/desktop-testbed.sh down
 `instance_id`, `region`, `public_ip`, `private_ip`, `runner_url`, `runner_token_secret_arn`, `runner_user_password_secret_arn`, `admin_password_secret_arn`, `fingerprint_command`, `security_group_id`, `vpc_id`, `subnet_id`.
 
 - `public_ip` and `runner_url` are the address at apply time. Without `elastic_ip` it changes on every stop and start; `desktop-testbed.sh status` shows the current one.
-- `fingerprint_command` is an AWS CLI command line. It searches the `*.log` files in `%ProgramData%\RPA Runner` and its `logs\` folder (no recursion) through SSM Run Command and prints the newest SHA-256 fingerprint (colon-separated uppercase hex). `desktop-testbed.sh fingerprint` does the same.
+- `fingerprint_command` is an AWS CLI command line. It searches the `*.log` files in `%ProgramData%\RPA Runner\logs` (no recursion) through SSM Run Command and prints the newest SHA-256 fingerprint (colon-separated uppercase hex). `desktop-testbed.sh fingerprint` does the same.
 
 ## Cost
 
@@ -141,12 +182,6 @@ While running, you pay for the instance, including the Windows licence, and its 
 - **The runner and the apps it drives run as the same user.** A driven app could read the token file, stop the runner or take its port. The ACL on `policy.json` only keeps the runner itself from changing its policy; it is no boundary against the apps. Only allow apps you trust in `runner_policy`; the production model runs them under separate users.
 - **Egress** on 80 and 443 to anywhere is open to the driven apps as well.
 
-## Unverified until the runner exists
-
-The runner itself isn't released yet. With the runner installed, check:
-- that it reads `RPA_RUNNER_TOKEN_FILE`, `RPA_RUNNER_POLICY_FILE` and `RPA_RUNNER_PORT`. If it takes other names or flags, adjust `start-runner.ps1` or set `runner_arguments`.
-- that it can write its certificate under `%ProgramData%\RPA Runner\`
-- that it prints its fingerprint to stdout or stderr, or logs it under that directory as a `*.log` file
 
 ## Tests
 

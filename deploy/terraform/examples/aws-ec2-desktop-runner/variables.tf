@@ -27,7 +27,7 @@ variable "elastic_ip" {
 }
 
 variable "runner_artifact_url" {
-  description = "HTTPS URL of the runner build (zip of the win-x64 publish, or the .exe). Empty: no runner yet; install one later with desktop-testbed.sh install-runner."
+  description = "HTTPS URL of the rpa-desktop release zip (or a zip with RpaRunner.exe, or the .exe). Empty: no runner yet; install one later with desktop-testbed.sh install-runner."
   type        = string
   default     = ""
 }
