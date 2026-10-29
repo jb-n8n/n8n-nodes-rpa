@@ -99,7 +99,16 @@ function desktopAction(step: DesktopStep): string {
       .filter(Boolean).join('; ') : '';
     s = `return the file matching ${q(step.expectFile.pattern)} from the export folder${checks ? `; checks: ${checks}` : ''}`;
   } else s = desktopVerbOf(step);
+  if ('expectFile' in step && step.expectFile.maxBytes !== undefined) s += `; at most ${step.expectFile.maxBytes} bytes`;
+  if ('expectFile' in step && step.expectFile.mime) s += `; types ${step.expectFile.mime.map(q).join(', ')}`;
   if (step.when) s = `if ${reviewDesktopLocator(step.when.visible)} shows, ${s}`;
+  // Every other field the signature covers is shown too, so the change list is the whole step.
+  const more = [
+    step.expect?.visible ? `then expect ${reviewDesktopLocator(step.expect.visible)} visible` : '',
+    step.optional === true ? 'optional' : '', step.checkpoint === true ? 'checkpoint' : '',
+    step.timeoutMs !== undefined ? `timeout ${step.timeoutMs} ms` : '',
+  ].filter(Boolean);
+  if (more.length) s += `; ${more.join('; ')}`;
   return step.write === true ? `${s}; declared write` : s;
 }
 
@@ -156,6 +165,7 @@ export const writeStepNotAllowed = (n: number, verb: string) => `Write Steps: st
 export const DESKTOP_FLAGS_INCOMPLETE = 'the safety flags do not list the app, the returned files, the declared writes and the candidate writes the steps have';
 export const DESKTOP_CHANGES_MISMATCH = 'the change list does not show every step of the steps, in order, as added';
 export const DESKTOP_NEEDS_FIRST_VERSION = 'desktop steps have no repair yet, so a desktop proposal must be a first version (no base version) that shows every step';
+export const DESKTOP_WRITES_PRESET = 'the reviewed steps already mark a write: only Write Steps, chosen when you approve, declares writes';
 export const DESKTOP_EVIDENCE_INVALID = 'desktop steps are not replayed at import, so their evidence must be empty (no rows, no file)';
 
 /** Write Steps as typed by the approver: step numbers separated by commas or spaces; '' or only spaces is none. */
@@ -258,6 +268,8 @@ export function signDesktopSteps(input: {
   if (!e || e.count !== 0 || e.total !== null || e.file !== undefined || e.readPosts !== undefined || !d || d.missing?.length !== 0 || d.extra?.length !== 0) {
     reasons.push(DESKTOP_EVIDENCE_INVALID);
   }
+  // The import never marks a write: a reviewed document that carries one did not come from it.
+  if (script.steps.some((st) => Object.hasOwn(st, 'write'))) reasons.push(DESKTOP_WRITES_PRESET);
   if (!input.approverId.trim()) reasons.push('approver id is empty');
   if (!input.key.trim()) reasons.push('signing key is empty');
   const at = input.now ?? new Date();

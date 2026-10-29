@@ -181,7 +181,12 @@ function readWindow(el: XmlNode, issues: string[]): WindowSel {
   const title = el.attrs.title;
   if (title && !title.includes('{{')) {
     const matching = (el.attrs['matching:title'] ?? '').toLowerCase();
-    if (matching === 'regex') win.titlePattern = title;
+    if (matching === 'regex') {
+      let valid = true;
+      try { new RegExp(title); } catch { valid = false; }
+      if (valid) win.titlePattern = title;
+      else issues.push(`the window title is a regular expression this engine cannot read (${title.slice(0, 80)}): the step matches any title`);
+    } else if (matching === 'fuzzy') issues.push('the window title is matched by fuzzy matching, which UI Automation conditions cannot express: the step matches any title');
     else if (hasWildcard(title)) win.titlePattern = wildcardPattern(title);
     else win.title = title;
   } else if (title) issues.push(`the window title is a UiPath variable (${title.slice(0, 80)}), which is not imported: the step matches without it`);

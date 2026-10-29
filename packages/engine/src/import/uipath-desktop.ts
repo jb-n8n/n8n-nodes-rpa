@@ -156,6 +156,8 @@ export function buildDesktopDraft(seq: DesktopSequence, report: ImportReport): D
       case 'key': {
         const where = e.target ? ` in ${shown(cleanLabel(e.label) || targetName(e.target) || 'the element')}` : '';
         push({ intent: `Press ${e.chord}${where}`, key: { key: e.chord, ...(e.target ? { target: desktopLocator(e.target) } : {}) } }, e.at);
+        // Enter in a Save dialog saves, as a click on Save does.
+        if (e.chord === 'Enter') flushFile();
         break;
       }
       case 'read': {

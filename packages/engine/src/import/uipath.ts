@@ -1098,7 +1098,8 @@ class Walker {
       if (sel && 'literal' in sel) selector = sel.literal;
       else if (sel) this.add(at, 'converted', displayName, `${name}: the window selector is the expression ${sel.expr.slice(0, 200)}, which is not evaluated: the steps find their elements in any window of the app`);
     }
-    if (this.isSap(selector)) return this.desktopActivity(el, ctx);
+    const fileForSap = card ? card.filePath : this.arg(el, 'FileName', ctx);
+    if (this.isSap(selector, fileForSap && 'literal' in fileForSap ? fileForSap.literal : '')) return this.desktopActivity(el, ctx);
     const read = this.desktopRead(selector);
     if (read.kind === 'untranslated') {
       this.add(at, 'untranslated', displayName, `${name}: ${read.reason}`);
@@ -1123,8 +1124,13 @@ class Walker {
     const out: Item[] = [];
     const scopeName = displayName;
     if (launch && exe) {
-      const args = argsVal && 'literal' in argsVal && argsVal.literal.trim() ? [argsVal.literal.trim()] : undefined;
-      if (args) this.add(at, 'converted', displayName, 'the app\'s arguments became one argument (app.args): check them, and list them in the runner\'s policy (allowedArgs)');
+      let args = argsVal && 'literal' in argsVal && argsVal.literal.trim() ? [argsVal.literal.trim()] : undefined;
+      if (args && PASSWORD_FIELD.test(args[0])) {
+        // A command line that passes a password is never imported.
+        if (args[0].trim().length >= 4) this.desktopTypedSecrets.push(args[0]);
+        this.add(at, 'secret', displayName, 'the app\'s arguments look like they carry a password or a secret, so they were not imported: pass the sign-in through steps that type run variables instead');
+        args = undefined;
+      } else if (args) this.add(at, 'converted', displayName, 'the app\'s arguments became one argument (app.args): check them, and list them in the runner\'s policy (allowedArgs)');
       else if (argsVal && 'expr' in argsVal) this.add(at, 'untranslated', displayName, `the app's arguments are the expression ${argsVal.expr.slice(0, 200)}, which is not evaluated: add them to app.args by hand`);
       out.push({ t: 'desktop', event: { at, kind: 'launch', exe, ...(args ? { args } : {}), ...(window ? { window } : {}), label: displayName }, scope: scopeName });
     }
@@ -1141,6 +1147,7 @@ class Walker {
     const scopeRead: DesktopSelectorRead = scope !== undefined ? this.desktopRead(scope) : { kind: 'none' };
     if (read.kind === 'sap' || scopeRead.kind === 'sap') return { sap: true, issues: [], hints: [] };
     if (read.kind === 'untranslated') return { problem: read.reason, issues: [], hints: read.hints };
+    if (scopeRead.kind === 'untranslated') return { problem: scopeRead.reason, issues: [], hints: scopeRead.hints };
     if (read.kind === 'none') return { problem: full === undefined ? 'the activity has no target the import can read' : 'the selector names no desktop element (it is not a <wnd>, <uia> or <ctrl> selector)', issues: [], hints: [] };
     if (read.kind === 'window') return { problem: 'the selector names only a window, not an element in it', issues: read.issues, hints: read.hints };
     const scopeWindow = scopeRead.kind === 'uia' || scopeRead.kind === 'window' ? scopeRead.window : undefined;
@@ -1194,6 +1201,10 @@ class Walker {
     }
     if (!target) return skip('dropped', 'the activity has no target the import can read');
     if (isClick) {
+      const button = (this.lit(el, 'MouseButton', ctx) ?? '').toLowerCase();
+      const modifiers = (this.lit(el, 'KeyModifiers', ctx) ?? '').toLowerCase();
+      if (button && !/left/.test(button)) return skip('untranslated', `a ${button.replace(/^btn_/, '')}-button click is not a desktop step (desktop steps click with the left button): rebuild this step by hand`);
+      if (modifiers && modifiers !== 'none') return skip('untranslated', `a click with ${modifiers} held down is not a desktop step: rebuild this step by hand`);
       if (name === 'DoubleClick' || (this.lit(el, 'ClickType', ctx) ?? '').toLowerCase().includes('double')) this.add(at, 'converted', label || displayName, 'a double click became a click: desktop steps click once');
       return [item({ at, kind: 'click', target, label })];
     }
@@ -1244,6 +1255,7 @@ class Walker {
         append(out, secret('password', 'a value typed into a password field'));
       } else if (isSaveField(target)) {
         const file = text.split(/[\\/]/).pop() ?? '';
+        if (file.includes('{')) return skip('untranslated', 'the typed file name holds a template, which the import does not carry into a save path: type {{$exportDir}}\\<file> by hand and add an expectFile step');
         if (!file.trim()) return skip('untranslated', 'the typed save path names no file: type {{$exportDir}}\\<file> by hand and add an expectFile step');
         this.add(at, 'converted', label || displayName, `the save path became {{$exportDir}}\\${file}: the app saves into the run's export folder, and the file comes back to n8n`);
         out.push(item({ at, kind: 'fill', target, label, value: `{{$exportDir}}\\${file}`, exportFile: file }));
@@ -1266,6 +1278,8 @@ class Walker {
         this.add(at, 'converted', label || displayName, `the typed text is the UiPath variable ${varName}: the step types {{var.${varName}}}; set ${varName} in Run steps → Variables`);
         return [item({ at, kind: 'fill', target, label, value: `{{var.${varName}}}` })];
       }
+      // A password field's expression may hold a literal part of the password: never echoed.
+      if (passwordField) return skip('untranslated', 'the text typed into this password field is an expression, which is not evaluated and never imported: type a run variable here by hand');
       return skip('untranslated', `the typed text is the expression ${val.expr.slice(0, 200)}, which is not evaluated: map it to a variable in the step by hand`);
     }
     return skip('dropped', 'the activity types no text');
@@ -1479,5 +1493,8 @@ export function canonicalChord(key: string, modifiers: string): { chord: string 
     else if (m === 'win' || m === 'windows' || m === 'lwin' || m === 'rwin') return { error: 'a Windows-key shortcut drives the Windows shell, not the app: desktop steps never send one' };
     else return { error: `the modifier ${m.slice(0, 20)} is not one desktop steps know (Ctrl, Alt, Shift)` };
   }
-  return { chord: [...['Ctrl', 'Alt', 'Shift'].filter((m) => mods.has(m)), name].join('+') };
+  const chord = [...['Ctrl', 'Alt', 'Shift'].filter((m) => mods.has(m)), name].join('+');
+  // Chords the Windows shell takes (the runner never sends them): Ctrl+Esc, Ctrl+Shift+Esc, Alt+Tab, Alt+Esc.
+  if (['Ctrl+Escape', 'Ctrl+Shift+Escape', 'Alt+Tab', 'Alt+Escape', 'Alt+Shift+Tab'].includes(chord)) return { error: `${chord} drives the Windows shell, not the app: desktop steps never send it` };
+  return { chord };
 }

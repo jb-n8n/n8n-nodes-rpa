@@ -244,6 +244,40 @@ const open = (body: string, title = 'ERP Demo - Line items') =>
   `<ui:OpenApplication DisplayName="Open ERP" FileName="ErpDemo.exe" Selector="${esc(`<wnd app='erpdemo.exe' title='${title}' />`)}"><ui:OpenApplication.Body><ActivityAction x:TypeArguments="x:Object"><Sequence>${body}</Sequence></ActivityAction></ui:OpenApplication.Body></ui:OpenApplication>`;
 const click = (name: string, selector: string, id = name) => `<ui:Click DisplayName="Click '${name}'" sap2010:WorkflowViewState.IdRef="${id}"><ui:Click.Target>${target(selector)}</ui:Click.Target></ui:Click>`;
 
+describe('review fixes: clicks, secrets in arguments and expressions, chords, titles', () => {
+  it('a right-button or modified click is untranslated, never a plain click', () => {
+    const r = importSource('uipath', xaml(open([
+      click('Menu', "<uia automationid='gridResults' role='table' />", 'R1').replace('<ui:Click ', '<ui:Click MouseButton="BTN_RIGHT" '),
+      click('Many', "<uia automationid='gridResults' role='table' />", 'R2').replace('<ui:Click ', '<ui:Click MouseButton="BTN_LEFT" KeyModifiers="Ctrl" '),
+      click('Search', "<uia automationid='btnSearch' role='button' />", 'R3').replace('<ui:Click ', '<ui:Click MouseButton="BTN_LEFT" KeyModifiers="None" '),
+    ].join(''))), { name: 'c', hasSiteLogin: false });
+    expect(r.desktopDrafts![0].script.steps.map((s) => s.intent)).toEqual(['Wait for the window ERP Demo - Line items', 'Click Search']);
+    expect(items(r, 'untranslated').map((i) => [i.at, i.reason])).toEqual([
+      ['Main.xaml: R1', expect.stringContaining('right-button click')], ['Main.xaml: R2', expect.stringContaining('with ctrl held down')],
+    ]);
+  });
+
+  it('arguments that carry a password and an expression typed into a password field are never echoed', () => {
+    const body = `<ui:TypeInto DisplayName="Type Into 'Password'" sap2010:WorkflowViewState.IdRef="T1" Text="[&quot;Pa55-lit&quot; &amp; suffix]"><ui:TypeInto.Target>${target("<uia automationid='txtPassword' name='Password' role='edit' />")}</ui:TypeInto.Target></ui:TypeInto>${click('Go', "<uia automationid='btnSignIn' role='button' />")}`;
+    const withArgs = open(body, 'ERP Demo - Sign in').replace('FileName="ErpDemo.exe"', 'FileName="ErpDemo.exe" Arguments="/user ops /password Arg-Secret-9"');
+    const r = importSource('uipath', xaml(withArgs), { name: 'a', hasSiteLogin: false });
+    const text = JSON.stringify(r);
+    expect(text).not.toContain('Pa55-lit');
+    expect(text).not.toContain('Arg-Secret-9');
+    expect(r.desktopDrafts![0].script.app).toEqual({ exe: 'ErpDemo.exe' });
+    expect(items(r, 'secret')).toContainEqual(expect.objectContaining({ reason: expect.stringContaining('arguments look like they carry a password') }));
+  });
+
+  it('shell chords are refused; Enter after a save path returns the file right away; odd window titles are reported', () => {
+    for (const [key, mods] of [['esc', 'Ctrl'], ['tab', 'Alt'], ['esc', 'Alt']]) expect(canonicalChord(key, mods)).toEqual({ error: expect.stringContaining('drives the Windows shell') });
+    const save = `<ui:TypeInto DisplayName="Type Into 'File name:'" Text="C:\\Exports\\out.csv[k(enter)]"><ui:TypeInto.Target>${target("<uia automationid='1001' name='File name:' role='edit' />")}</ui:TypeInto.Target></ui:TypeInto>`;
+    const r = importSource('uipath', xaml(open(`${save}${click('Search', "<uia automationid='btnSearch' role='button' />")}`, 'Export line items')), { name: 'e', hasSiteLogin: false });
+    expect(r.desktopDrafts![0].script.steps.map((s) => Object.keys(s).find((k) => k !== 'intent'))).toEqual(['waitFor', 'fill', 'key', 'expectFile', 'click']);
+    expect(readDesktopSelector("<wnd app='a.exe' title='(?i)orders' matching:title='regex' /><uia name='x' />")).toMatchObject({ kind: 'uia', window: { exe: 'a.exe' }, issues: [expect.stringContaining('regular expression this engine cannot read')] });
+    expect(readDesktopSelector("<wnd app='a.exe' title='Ordrs' matching:title='fuzzy' /><uia name='x' />")).toMatchObject({ window: { exe: 'a.exe' }, issues: [expect.stringContaining('fuzzy matching')] });
+  });
+});
+
 describe('untranslated desktop targets and mixed projects', () => {
   it('Java, image (computer vision) and remote desktop targets are report items, and the rest of the sequence stays one draft', () => {
     const r = importSource('uipath', xaml(open([
@@ -371,6 +405,20 @@ describe('approving and signing an imported desktop draft', () => {
     expect(reasons(sign(p, [17]))).toEqual(['Write Steps: step 17 is a expectFile step, which cannot be a write (only click, fill, select, check and key steps can)']);
   });
 
+  it('refuses reviewed steps that already mark a write, and shows every signed field in the change list', () => {
+    const p = sampleProposal();
+    const preset = structuredClone(p);
+    preset.steps.steps[15].write = true;
+    const crafted = { ...desktopProposal(preset.steps), steps: preset.steps };
+    // Flags and change list match the crafted steps, so only the preset write is refused, with or without Write Steps.
+    for (const writeSteps of [[], [16]]) {
+      const r = signDesktopSteps({ proposal: crafted, key: KEY, approverId: OWNER, reviewedDigest: proposalDigest(crafted), writeSteps });
+      expect(r).toEqual({ ok: false, reasons: ['the reviewed steps already mark a write: only Write Steps, chosen when you approve, declares writes'] });
+    }
+    const step = { ...p.steps.steps[8], optional: true, checkpoint: true, timeoutMs: 5000, expect: { visible: { uia: { path: [{ automationId: 'lblResultCount' }] } } } } as DesktopStep;
+    expect(describeDesktopStep(step)).toMatch(/; then expect id "lblResultCount" visible; optional; checkpoint; timeout 5000 ms\)$/);
+  });
+
   it('Write Steps text, declareWrites and the change list descriptions', () => {
     expect(parseWriteSteps('16, 4 4')).toEqual([4, 16]);
     expect(parseWriteSteps('')).toEqual([]);
@@ -381,16 +429,14 @@ describe('approving and signing an imported desktop draft', () => {
     expect(p.steps.steps[8].write).toBeUndefined();
     expect(d.ok && describeDesktopStep(d.script.steps[8])).toMatch(/; declared write\)$/);
     expect(d.ok && desktopSafetyFlags(d.script)).toContain('write: step 9 (Click Search) is a declared write step');
-    // A proposal of steps that already carry a write shows it in the change list, and signs only with that exact list.
+    // Steps that already carry a write show it in the change list and the flags (and Sign Steps refuses them: see above).
     if (!d.ok) throw new Error('declareWrites failed');
     const withWrite = desktopProposal(d.script);
     expect(withWrite.changes[8].now).toBe('Click Search (click "Button" id "btnSearch" name "Search" in window app "erpdemo.exe" title "ERP Demo - Line items" or "Button" id "btnSearch" in window app "erpdemo.exe" title "ERP Demo - Line items"; declared write)');
     expect(withWrite.safetyFlags).toContain('write: step 9 (Click Search) is a declared write step');
-    expect(signDesktopSteps({ proposal: withWrite, key: KEY, approverId: OWNER, reviewedDigest: proposalDigest(withWrite), writeSteps: [] }).ok).toBe(true);
     const hiddenWrite = { ...withWrite, changes: p.changes };
-    expect(signDesktopSteps({ proposal: hiddenWrite, key: KEY, approverId: OWNER, reviewedDigest: proposalDigest(hiddenWrite), writeSteps: [] })).toEqual({
-      ok: false, reasons: ['the change list does not show every step of the steps, in order, as added'],
-    });
+    const r = signDesktopSteps({ proposal: hiddenWrite, key: KEY, approverId: OWNER, reviewedDigest: proposalDigest(hiddenWrite), writeSteps: [] });
+    expect(r.ok ? [] : r.reasons).toContain('the change list does not show every step of the steps, in order, as added');
   });
 });
 

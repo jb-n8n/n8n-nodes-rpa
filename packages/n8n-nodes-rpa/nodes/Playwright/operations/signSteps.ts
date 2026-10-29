@@ -351,7 +351,8 @@ function signDesktop(
   } catch {
     expected = undefined; // signDesktopSteps refuses steps that do not parse, with the reason
   }
-  if (expected && p.shownText.safetyLine !== undefined && p.shownText.safetyLine !== safetyLine({ safetyFlags: expected })) return c.refuse([SHOWN_TEXT_CHANGED]);
+  // As for browser steps, the safety line the approver read is required and must be the recomputed one.
+  if (expected && p.shownText.safetyLine !== safetyLine({ safetyFlags: expected })) return c.refuse([SHOWN_TEXT_CHANGED]);
   let result: ReturnType<Engine['signDesktopSteps']>;
   try {
     result = engine.signDesktopSteps({ proposal, key: c.key, approverId: c.approverId, reviewedDigest: p.digest, writeSteps, secrets: c.secrets, now: c.at });
