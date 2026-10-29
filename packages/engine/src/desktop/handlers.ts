@@ -2,6 +2,7 @@
 // its own floor (allowed apps and windows, declared write controls, gated keys); a step declared `write: true` by its
 // owner is the only one that carries the write marker.
 
+import { runBinaryTooLarge } from '../messages.js';
 import { renderVars } from '../secrets/render.js';
 import { FILE_CHECK_FAILED_PREFIX, checkFile } from '../steps/file-check.js';
 import { MAX_TEXT_BYTES, truncateUtf8 } from '../steps/handlers/capture.js';
@@ -65,10 +66,20 @@ async function actOn(
   }
 }
 
-/** A text the run types into a field: rendered ({{var.x}}) and kept for masking (DesktopSurface.typed), never logged. */
+const VAR_REF = /\{\{\s*var\.([A-Za-z0-9_]+)\s*\}\}/g;
+
+/**
+ * A text the run types into a field, rendered ({{var.x}}). The value of every variable it uses is kept for masking
+ * (DesktopSurface.typed): such values come from outside the signed steps (a password, an account number) and are masked
+ * out of messages, logs and read outputs. Literal text is part of the signed steps and is not.
+ */
 function typedText(ctx: StepContext, template: string): string {
   const text = renderVars(template, ctx.vars, ctx.masker);
-  if (text) desktopOf(ctx).typed.push(text);
+  const typed = desktopOf(ctx).typed;
+  for (const m of template.matchAll(VAR_REF)) {
+    const v = ctx.vars[m[1]];
+    if (typeof v === 'string' && v && !typed.includes(v)) typed.push(v);
+  }
   return text;
 }
 
@@ -125,6 +136,7 @@ const waitFor: Handler = async (ctx, step, _state, timeout) => {
 const read: Handler = async (ctx, step, state, timeout) => {
   const s = step as unknown as D<'read'>;
   const r = await actOn(ctx, s, s.read.target, 'read', state, timeout);
+  // Masked for secrets here; the desktop task masks the outputs again for the typed variable values once the run ends.
   const { text, truncated } = truncateUtf8(ctx.masker.mask(r.text ?? ''), MAX_TEXT_BYTES);
   state.outputs.push({ index: ctx.stepIndex ?? 0, verb: 'read', as: s.read.as, text, ...(truncated ? { truncated: true } : {}) });
   return r.candidate;
@@ -133,11 +145,14 @@ const read: Handler = async (ctx, step, state, timeout) => {
 const expectFile: Handler = async (ctx, step, state, timeout) => {
   const e = (step as unknown as D<'expectFile'>).expectFile;
   const s = desktopOf(ctx);
-  // Never more than one client message can carry (parseDesktopScript refuses a larger maxBytes too).
+  // Never more than the runner's ceiling (parseDesktopScript refuses a larger maxBytes too); the runner's policy
+  // maxFileBytes is the effective limit and the runner caps the request at it.
   const max = Math.min(e.maxBytes ?? DEFAULT_MAX_BYTES, MAX_EXPECTED_FILE_BYTES);
-  // The runner never sends more than the step or the run may still hold.
+  // The runner never sends more than the step or the run may still hold. It takes maxBytes of at least 1: with no room
+  // left the step fails here with the run limit instead of asking for nothing.
   const room = MAX_RUN_BINARY_BYTES - runBinaryBytes(state);
-  const r = await s.rpc('file.retrieve', { pattern: e.pattern, timeoutMs: timeout, maxBytes: Math.max(0, Math.min(max, room)) });
+  if (room < 1) throw new Error(runBinaryTooLarge(runBinaryBytes(state) + 1));
+  const r = await s.rpc('file.retrieve', { pattern: e.pattern, timeoutMs: timeout, maxBytes: Math.min(max, room) });
   const data = Buffer.from(r.base64 ?? '', 'base64');
   if (data.length > max) throw new Error(`expected file exceeds ${max} bytes`);
   assertRunBinaryRoom(state, data.length);

@@ -31,6 +31,50 @@ export const DEMO_POLICY: FakePolicy = {
   maxFileBytes: 20 * 1024 * 1024,
 };
 
+/** The runner's ceiling for one file.retrieve answer (RunnerPolicy.MaxFileBytesCeiling). */
+export const RUNNER_MAX_FILE_BYTES = 36 * 1024 * 1024;
+const INVALID_PARAMS = -32602;
+
+/** A key chord as the runner reads it (KeyChord.Parse): modifier flags in any order and spelling, then the key. */
+interface Chord { ctrl: boolean; alt: boolean; shift: boolean; win: boolean; key: string }
+const KEY_ALIASES: Record<string, string> = {
+  enter: 'Enter', return: 'Enter', tab: 'Tab', escape: 'Escape', esc: 'Escape', space: 'Space', backspace: 'Backspace', delete: 'Delete', del: 'Delete',
+  insert: 'Insert', ins: 'Insert', home: 'Home', end: 'End', pageup: 'PageUp', pgup: 'PageUp', pagedown: 'PageDown', pgdn: 'PageDown', up: 'Up', down: 'Down',
+  left: 'Left', right: 'Right', apps: 'Apps', menu: 'Apps',
+};
+function parseChord(text: string): Chord {
+  const parts = text.split('+').map((x) => x.trim());
+  if (!text.trim() || parts.some((x) => !x)) throw new RpcError(INVALID_PARAMS, 'invalid params: key chord is not of the form Ctrl+Shift+Key');
+  const c: Chord = { ctrl: false, alt: false, shift: false, win: false, key: '' };
+  parts.forEach((part, i) => {
+    const m = ({ ctrl: 'ctrl', control: 'ctrl', alt: 'alt', shift: 'shift', win: 'win', meta: 'win', windows: 'win' } as const)[part.toLowerCase() as 'ctrl'];
+    if (!m) {
+      if (i < parts.length - 1) throw new RpcError(INVALID_PARAMS, 'invalid params: key chord has an unknown modifier');
+      const key = KEY_ALIASES[part.toLowerCase()] ?? (/^[A-Za-z0-9]$/.test(part) ? part.toUpperCase() : /^[Ff]([1-9]|1[0-9]|2[0-4])$/.test(part) ? part.toUpperCase() : undefined);
+      if (!key) throw new RpcError(INVALID_PARAMS, 'invalid params: key chord names an unknown key');
+      c.key = key;
+      return;
+    }
+    if (c[m]) throw new RpcError(INVALID_PARAMS, 'invalid params: key chord names a modifier twice');
+    c[m] = true;
+  });
+  return c;
+}
+const chordText = (c: Chord) => [c.ctrl && 'Ctrl', c.alt && 'Alt', c.shift && 'Shift', c.win && 'Win', c.key].filter(Boolean).join('+');
+/** RunnerService.IsSystemChord: anything with Win, Ctrl+Esc, Ctrl+Shift+Esc, Alt+Tab, Alt+Shift+Tab, Alt+Esc. */
+const isSystemChord = (c: Chord) => c.win || (c.ctrl && c.key === 'Escape') || (c.alt && (c.key === 'Tab' || c.key === 'Escape'));
+/** RunnerService.IsNavigationKey: Tab, Shift+Tab, arrows, Home, End, PageUp, PageDown, Escape, no other modifier. */
+const isNavigationKey = (c: Chord) => !c.ctrl && !c.alt && !c.win
+  && (c.key === 'Tab' || (!c.shift && ['Up', 'Down', 'Left', 'Right', 'Home', 'End', 'PageUp', 'PageDown', 'Escape'].includes(c.key)));
+/** An optional integer param in [min, max], or -32602 as the runner answers (Params.OptLong). */
+function optInt(p: Record<string, unknown>, name: string, min: number, max: number): number | undefined {
+  const v = p[name];
+  if (v === undefined || v === null) return undefined;
+  if (typeof v !== 'number' || !Number.isInteger(v)) throw new RpcError(INVALID_PARAMS, `invalid params: ${name} must be an integer`);
+  if (v < min || v > max) throw new RpcError(INVALID_PARAMS, `invalid params: ${name} must be between ${min} and ${max}`);
+  return v;
+}
+
 class RpcError extends Error {
   constructor(public readonly code: number, message: string) {
     super(message);
@@ -162,6 +206,8 @@ export interface FakeRunnerOptions {
   echoTypedInErrors?: boolean;
   /** Caps the TLS version (TLS 1.2: the server's handshake ends after the client's). */
   tlsMaxVersion?: 'TLSv1.2' | 'TLSv1.3';
+  /** The allowed app's executable is not at its policy path (app.launch answers not_found, as the runner does). */
+  appMissing?: boolean;
 }
 
 export interface Received { method: string; params: Record<string, unknown> }
@@ -174,6 +220,7 @@ export class FakeRunner {
   policy: FakePolicy;
   session: { interactive: boolean; locked: boolean };
   echoTypedInErrors: boolean;
+  appMissing: boolean;
   url = '';
   /** Every decrypted byte each connection sent, in order (index = connection). */
   readonly bytes: Buffer[][] = [];
@@ -202,6 +249,7 @@ export class FakeRunner {
     this.policy = opts.policy ?? DEMO_POLICY;
     this.session = opts.session ?? { interactive: true, locked: false };
     this.echoTypedInErrors = opts.echoTypedInErrors ?? false;
+    this.appMissing = opts.appMissing ?? false;
     this.tlsMaxVersion = opts.tlsMaxVersion ?? 'TLSv1.3';
     this.cert = selfSignedCert();
     this.fingerprint = this.cert.fingerprint;
@@ -237,10 +285,14 @@ export class FakeRunner {
     rmSync(this.exportRoot, { recursive: true, force: true });
   }
 
-  /** Simulates another n8n holding the runner: the lock is taken by a run nobody here owns. */
-  holdLock(): void {
+  /**
+   * Simulates another n8n holding the runner: the lock is taken by a run nobody here owns. With `leaseMs`, that run's
+   * lease runs out after it (an n8n that stopped mid-run and sends no more heartbeats).
+   */
+  holdLock(leaseMs?: number): void {
     const exportDir = mkdtempSync(join(this.exportRoot, 'other-'));
-    this.run = { runId: 'someone-else', leaseMs: 600_000, exportDir, timer: setTimeout(() => undefined, 0) };
+    this.run = { runId: 'someone-else', leaseMs: leaseMs ?? 600_000, exportDir, timer: setTimeout(() => undefined, 0) };
+    if (leaseMs !== undefined) this.armLease(this.run);
   }
 
   /** Ends the current run as if its lease had run out. */
@@ -365,6 +417,35 @@ export class FakeRunner {
     }
   }
 
+  /** RunnerPolicy.IsGatedKey: a gated chord also gates the same key with extra modifiers. */
+  private isGatedKey(c: Chord): boolean {
+    return this.policy.gatedKeys.map(parseChord).some((g) => g.key === c.key && (!g.ctrl || c.ctrl) && (!g.alt || c.alt) && (!g.shift || c.shift) && (!g.win || c.win));
+  }
+
+  /**
+   * Keys can reach a write control without targeting it (Enter on a default button, an Alt mnemonic, the menu bar): while
+   * any window of the run holds a declared write control, a key without write: true must be plain navigation, and only
+   * Escape or Tab while a menu is open (RunnerService.Act).
+   */
+  private checkKeyReach(run: Run, c: Chord, write: boolean): void {
+    if (write || !this.runHasWriteControl(run)) return;
+    const text = chordText(c);
+    if (!isNavigationKey(c)) {
+      throw new RpcError(E.policy_refused, `policy_refused: the key ${text} could reach a declared write control of this run and needs write: true (only Tab, arrows, Home, End, PageUp, PageDown and Escape do not)`);
+    }
+    if (c.key !== 'Escape' && c.key !== 'Tab' && this.runMenuOpen(run)) {
+      throw new RpcError(E.policy_refused, `policy_refused: a menu is open, so the key ${text} could reach a declared write control and needs write: true`);
+    }
+  }
+
+  private runHasWriteControl(run: Run): boolean {
+    return (run.app?.windows ?? []).some((w) => [w.root, ...descendants(w.root)].some((e) => this.isWriteControl(w, e)));
+  }
+
+  private runMenuOpen(run: Run): boolean {
+    return (run.app?.windows ?? []).some((w) => w.root.controlType === 'Menu' || w.className === '#32768' || descendants(w.root).some((e) => e.controlType === 'Menu' && e.visible));
+  }
+
   private isWriteControl(win: Win, e: El): boolean {
     return this.policy.writeControls.some((w) => w.exe.toLowerCase() === win.exe.toLowerCase() && w.automationId === e.automationId);
   }
@@ -400,18 +481,22 @@ export class FakeRunner {
         const run = this.requireRun(p);
         const exe = String((p.app as { exe?: string })?.exe ?? '').split(/[\\/]/).pop() ?? '';
         if (!this.policy.allowedApps.some((a) => a.exe.toLowerCase() === exe.toLowerCase())) throw new RpcError(E.policy_refused, `app not allowed: ${exe}`);
+        if (this.appMissing) throw new RpcError(E.not_found, `not_found: no element matched application executable "${exe}" (no matching window of the run)`);
         run.app = new DemoApp(() => this.run?.exportDir);
         this.lastApp = run.app;
         return { pid: 4242 };
       }
       case 'snapshot': {
         const run = this.requireRun(p);
+        optInt(p, 'maxNodes', 1, 5000);
+        optInt(p, 'maxDepth', 1, 100);
         const win = run.app?.foreground;
-        if (!win) return { window: { title: '', exe: '' }, nodes: [] };
-        const max = typeof p.maxNodes === 'number' ? p.maxNodes : 400;
+        if (!win) throw new RpcError(E.not_found, 'not_found: no element matched a window of the run (no matching window of the run)');
+        const max = optInt(p, 'maxNodes', 1, 5000) ?? 400;
+        const maxDepth = optInt(p, 'maxDepth', 1, 100) ?? 25;
         const nodes: RunnerNode[] = [];
         const walk = (e: El, depth: number) => {
-          if (nodes.length >= max || !e.visible) return;
+          if (nodes.length >= max || !e.visible || depth > maxDepth) return;
           nodes.push({
             ref: `r${nodes.length}`, depth, controlType: e.controlType, name: e.name, automationId: e.automationId, className: e.className, enabled: e.enabled,
             ...(e.isPassword ? (e.value ? { valueHidden: true as const } : {}) : e.value !== undefined ? { value: e.value } : {}),
@@ -439,14 +524,15 @@ export class FakeRunner {
         return this.act(this.requireRun(p), p);
       case 'file.retrieve': {
         const run = this.requireRun(p);
+        // The runner takes maxBytes >= 1 and caps it at its policy's maxFileBytes and its own ceiling.
+        const limit = Math.min(optInt(p, 'maxBytes', 1, Number.MAX_SAFE_INTEGER) ?? this.policy.maxFileBytes, this.policy.maxFileBytes, RUNNER_MAX_FILE_BYTES);
         const re = new RegExp(String(p.pattern));
         const until = Date.now() + Math.min(p.timeoutMs as number, 30_000);
         for (;;) {
           const hit = readdirSync(run.exportDir).find((f) => re.test(f) && statSync(join(run.exportDir, f)).isFile());
           if (hit) {
             const data = readFileSync(join(run.exportDir, hit));
-            const max = Math.min(p.maxBytes as number, this.policy.maxFileBytes);
-            if (data.length > max) throw new RpcError(E.policy_refused, `the file is larger than ${max} bytes`);
+            if (data.length > limit) throw new RpcError(E.policy_refused, `policy_refused: the matching file is ${data.length} bytes, over the limit of ${limit} bytes`);
             return { name: hit, size: data.length, base64: data.toString('base64') };
           }
           if (Date.now() >= until) throw new RpcError(E.expected_file_missing, 'no file matching the pattern in the export directory');
@@ -465,11 +551,16 @@ export class FakeRunner {
     const action = String(p.action);
     const write = p.write === true;
     const repair = p.mode === 'repair';
-    if (action === 'key' && p.target === undefined) {
-      const chord = String(p.value);
-      if (this.policy.gatedKeys.includes(chord) && !write) throw new RpcError(E.policy_refused, `the key ${chord} needs a declared write step`);
-      if (repair) throw new RpcError(E.policy_refused, 'repair mode allows only focus, expand, read and clicks on tabs, list items and tree items');
-      if (chord === 'Enter') (run.focus as (El & { onEnter?: () => void }) | undefined)?.onEnter?.();
+    const chord = action === 'key' ? parseChord(String(p.value ?? '')) : undefined;
+    if (repair && !['focus', 'expand', 'read', 'click'].includes(action)) {
+      throw new RpcError(E.policy_refused, 'repair mode allows only focus, expand, read and clicks on tabs, list items and tree items');
+    }
+    // The floor checks that need no UI, in the runner's order: shell chords, then gated keys.
+    if (chord && isSystemChord(chord)) throw new RpcError(E.policy_refused, `policy_refused: the key ${chordText(chord)} reaches the Windows shell, not the app, and is never sent`);
+    if (chord && this.isGatedKey(chord) && !write) throw new RpcError(E.policy_refused, `policy_refused: the gated key ${chordText(chord)} needs write: true`);
+    if (chord && p.target === undefined) {
+      this.checkKeyReach(run, chord, write);
+      if (chord.key === 'Enter' && !chord.ctrl && !chord.alt && !chord.shift) (run.focus as (El & { onEnter?: () => void }) | undefined)?.onEnter?.();
       return {};
     }
     const { el: e, win } = await this.findWithin(run, p.target as RunnerTarget, p.timeoutMs as number);
@@ -477,6 +568,7 @@ export class FakeRunner {
       throw new RpcError(E.policy_refused, 'repair mode allows only focus, expand, read and clicks on tabs, list items and tree items');
     }
     if (this.isWriteControl(win, e) && !write) throw new RpcError(E.policy_refused, `${e.controlType} #${e.automationId} is a declared write control: the step must be a declared write`);
+    if (chord) this.checkKeyReach(run, chord, write);
     run.focus = e;
     switch (action) {
       case 'click':
@@ -484,7 +576,8 @@ export class FakeRunner {
         e.onClick?.();
         return {};
       case 'type': {
-        if (e.controlType !== 'Edit') throw new RpcError(E.policy_refused, `${e.controlType} #${e.automationId} is not a text field`);
+        // The driver's answer for a control without a text value (WindowsDesktop.Type): -32602.
+        if (e.controlType !== 'Edit') throw new RpcError(INVALID_PARAMS, 'invalid params: the element does not take typed text');
         const segments = (p.segments as Segment[] | undefined) ?? [{ text: String(p.value ?? '') }];
         const text = segments.map((s) => ('exportDir' in s ? run.exportDir : s.text)).join('');
         this.lastTyped = text;
@@ -500,14 +593,12 @@ export class FakeRunner {
       }
       case 'check':
       case 'uncheck':
+        if (e.controlType !== 'CheckBox' && e.controlType !== 'RadioButton') throw new RpcError(INVALID_PARAMS, 'invalid params: the element cannot be checked or unchecked');
         e.value = action === 'check' ? 'On' : 'Off';
         return {};
-      case 'key': {
-        const chord = String(p.value);
-        if (this.policy.gatedKeys.includes(chord) && !write) throw new RpcError(E.policy_refused, `the key ${chord} needs a declared write step`);
-        if (chord === 'Enter') (e as El & { onEnter?: () => void }).onEnter?.();
+      case 'key':
+        if (chord?.key === 'Enter' && !chord.ctrl && !chord.alt && !chord.shift) (e as El & { onEnter?: () => void }).onEnter?.();
         return {};
-      }
       case 'read':
         if (e.isPassword) throw new RpcError(E.policy_refused, 'password fields are never read');
         if (e.controlType === 'DataGrid') return { text: e.children.map((r) => r.children.map((c) => c.name).join('\t')).join('\n') };

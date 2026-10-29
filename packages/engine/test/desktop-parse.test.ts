@@ -98,7 +98,7 @@ describe('desktop step sets: parsing', () => {
 
   it('key chords have one spelling (Ctrl, Alt, Shift in that order, uppercase letters, no Win); read names are unique; expectFile is capped', () => {
     for (const ok of ['Enter', 'Ctrl+S', 'Ctrl+Alt+Shift+F5', 'Alt+F4', 'Shift+Tab', 'Escape', '7']) expect(desktopIssues(desktop([{ intent: 'x', key: { key: ok } }])), ok).toEqual([]);
-    for (const bad of ['Ctrl+s', 'Shift+Ctrl+S', 'Ctrl+Ctrl+S', 'Win+R', 'Esc', 'ctrl+S', 'Enter ']) {
+    for (const bad of ['Ctrl+s', 'Shift+Ctrl+S', 'Ctrl+Ctrl+S', 'Esc', 'ctrl+S', 'Enter ']) {
       const issues = desktopIssues(desktop([{ intent: 'x', key: { key: bad } }]));
       expect(issues, bad).toHaveLength(1);
       expect(issues[0], bad).toMatch(/^steps\[0\]\.key\.key must be a key chord/);
@@ -106,7 +106,25 @@ describe('desktop step sets: parsing', () => {
     expect(desktopIssues(desktop([
       { intent: 'a', read: { target: uia('a'), as: 'total' } }, { intent: 'b', read: { target: uia('b'), as: 'total' } },
     ]))).toEqual(['steps[1].read.as "total" is already used by an earlier read step']);
-    expect(desktopIssues(desktop([{ intent: 'x', expectFile: { pattern: 'a', maxBytes: 50 * 1024 * 1024 + 1 } }]))).toEqual(['steps[0].expectFile.maxBytes must be at most 52428800']);
+    expect(desktopIssues(desktop([{ intent: 'x', expectFile: { pattern: 'a', maxBytes: 36 * 1024 * 1024 + 1 } }]))).toEqual([
+      'steps[0].expectFile.maxBytes must be at most 37748736 (the most the desktop runner sends; its policy maxFileBytes, 20 MiB by default, is the effective limit)',
+    ]);
+    expect(desktopIssues(desktop([{ intent: 'x', expectFile: { pattern: 'a', maxBytes: 36 * 1024 * 1024 } }]))).toEqual([]);
+  });
+
+  it('refuses the chords the Windows shell takes at parse time, as the runner and the importer do', () => {
+    for (const shell of ['Ctrl+Escape', 'Ctrl+Shift+Escape', 'Ctrl+Alt+Escape', 'Alt+Tab', 'Alt+Shift+Tab', 'Alt+Escape', 'Ctrl+Alt+Tab']) {
+      expect(desktopIssues(desktop([{ intent: 'x', key: { key: shell } }])), shell).toEqual([
+        `steps[0].key.key is ${shell}, which drives the Windows shell, not the app: desktop steps never send it`,
+      ]);
+    }
+    for (const win of ['Win+R', 'Win+Tab', 'Ctrl+Win+D', 'Meta+L']) {
+      expect(desktopIssues(desktop([{ intent: 'x', key: { key: win } }])), win).toEqual([
+        'steps[0].key.key is a Windows-key shortcut, which drives the Windows shell, not the app: desktop steps never send one',
+      ]);
+    }
+    // Escape, Tab and Shift+Tab alone stay plain navigation keys.
+    for (const ok of ['Escape', 'Tab', 'Shift+Tab', 'Ctrl+Tab', 'Shift+Escape']) expect(desktopIssues(desktop([{ intent: 'x', key: { key: ok } }])), ok).toEqual([]);
   });
 
   it('reads surface as an own property only, as the hash does', () => {

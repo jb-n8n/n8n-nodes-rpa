@@ -9,8 +9,8 @@ import { CANCELLED, clampBudget, laneFailure, type LaneSuccess } from '../lane/s
 import type { TaskFailure } from '../lane/task.js';
 import { hasSignature, type TrustInput, type TrustResult } from '../lane/trust.js';
 import {
-  DESKTOP_UNSIGNED_WRITES, desktopNotInteractive, inputTooLong, nameMismatch, RUNNER_BUSY, SIGNATURE_INVALID, SIGNATURE_WITHOUT_KEY, UNSIGNED_REQUIRED,
-  versionMismatch,
+  DESKTOP_UNSIGNED_WRITES, desktopNotInteractive, inputTooLong, nameMismatch, RUNNER_BUSY, runnerAppMissing, SIGNATURE_INVALID, SIGNATURE_WITHOUT_KEY,
+  UNSIGNED_REQUIRED, versionMismatch,
 } from '../messages.js';
 import { createMasker, type Masker } from '../secrets/mask.js';
 import { MAX_RENDERED } from '../secrets/render.js';
@@ -20,10 +20,10 @@ import { runBinaryProblem } from '../steps/limits.js';
 import { parseDesktopScript } from '../steps/parse.js';
 import { sleep } from '../steps/poll.js';
 import { newRunState, runSteps, type StepContext } from '../steps/run.js';
-import type { DesktopScript, ErrorCode, PortalPolicy, RunState, Script, Step, StepLogEntry } from '../types.js';
+import type { DesktopScript, ErrorCode, PortalPolicy, RunState, Script, Step, StepLogEntry, StepOutput } from '../types.js';
 import { connectRunner, RUNNER_CONNECT_TIMEOUT_MS, type Lease, type RunnerClient, type RunnerEndpoint } from './client.js';
 import {
-  DesktopUnavailableError, ElementNotFoundError, ElementNotUniqueError, ExpectedFileMissingError, NoRunError, PolicyRefusedError, PROTOCOL_VERSION,
+  DesktopUnavailableError, ElementCannotActError, ElementNotFoundError, ElementNotUniqueError, ExpectedFileMissingError, NoRunError, PolicyRefusedError, PROTOCOL_VERSION,
   RunnerBusyError, RunnerConnectError, RunnerDisconnectedError, RunnerTimeoutError,
 } from './protocol.js';
 import { createDesktopSurface, DesktopDriftError, type DesktopSurface } from './surface.js';
@@ -40,7 +40,10 @@ export interface DesktopTaskInput {
   budgetMs?: number;
   defaultStepTimeoutMs?: number;
   signal?: AbortSignal;
-  /** How long run.begin retries a busy runner (default 30 s, never past the budget). 0: fail at the first refusal. */
+  /**
+   * How long run.begin retries a busy runner (default: the lease plus 15 s, defaultBusyWaitMs; never past the budget).
+   * 0: fail at the first refusal.
+   */
   busyWaitMs?: number;
   /** The run's lease on the runner, renewed every third of it (5000..600000; default 30 s). */
   leaseMs?: number;
@@ -48,7 +51,15 @@ export interface DesktopTaskInput {
 export type DesktopTaskResult = LaneSuccess | TaskFailure;
 
 export const DEFAULT_LEASE_MS = 30_000;
-export const DEFAULT_BUSY_WAIT_MS = 30_000;
+/** How much longer than a lease a busy runner is waited for by default. */
+const BUSY_WAIT_MARGIN_MS = 15_000;
+/**
+ * The default busy wait for a run with this lease: the lease plus 15 s. A run whose n8n stopped mid-run holds the
+ * runner until its lease runs out (it sends no more heartbeats, and it had the same lease when the node's defaults
+ * apply), so waiting the lease plus a margin lets the next run start instead of failing busy just before the lock frees.
+ */
+export const defaultBusyWaitMs = (leaseMs: number): number => leaseMs + BUSY_WAIT_MARGIN_MS;
+export const DEFAULT_BUSY_WAIT_MS = defaultBusyWaitMs(DEFAULT_LEASE_MS);
 const BUSY_RETRY_MS = 1_000;
 /**
  * Appended when the runner no longer knows the run (no_run, or a heartbeat told so): the run always sends its own
@@ -110,7 +121,10 @@ function codeOf(err: unknown, message: string): ErrorCode {
     return 'runner_unavailable';
   }
   if (err instanceof PolicyRefusedError) return 'policy_violation';
-  if (err instanceof ElementNotFoundError || err instanceof ElementNotUniqueError || err instanceof RunnerTimeoutError || err instanceof DesktopDriftError) {
+  if (
+    err instanceof ElementNotFoundError || err instanceof ElementNotUniqueError || err instanceof ElementCannotActError || err instanceof RunnerTimeoutError
+    || err instanceof DesktopDriftError
+  ) {
     return 'drift_detected';
   }
   if (err instanceof ExpectedFileMissingError) return 'incomplete';
@@ -119,24 +133,33 @@ function codeOf(err: unknown, message: string): ErrorCode {
 }
 
 /**
- * Messages and log notes leave the run masked: secrets, and every value typed into a field that is long enough to mask
- * (DesktopSurface.typed). The runner never puts typed values into its messages; this holds even if one did. Intents
- * are the signed steps' own text and stay as written.
+ * Messages, log notes and read outputs leave the run masked: secrets, and the value of every variable the run typed into
+ * a field that is long enough to mask (DesktopSurface.typed). The runner never puts typed values into its messages; this
+ * holds even if one did, and a read of a field holding such a value shows [secret] in its place. Intents are the signed
+ * steps' own text and stay as written.
  */
 function outputMasker(base: (string | undefined)[], surface?: DesktopSurface): Masker {
   return createMasker([...base, ...(surface?.typed ?? []).filter((t) => t.length >= MIN_MASKED_TYPED)]);
 }
 
-/** Log notes masked for typed values. A read step's output text is the app's data, returned as read (masked for secrets). */
+/** Log notes and read outputs masked for secrets and typed variable values. */
 function maskedLog(log: StepLogEntry[], masker: Masker): StepLogEntry[] {
-  return log.map((e) => ({ ...e, ...(e.note !== undefined ? { note: masker.mask(e.note) } : {}) }));
+  return log.map((e) => ({
+    ...e, ...(e.note !== undefined ? { note: masker.mask(e.note) } : {}),
+    ...(e.output?.text !== undefined ? { output: { ...e.output, text: masker.mask(e.output.text) } } : {}),
+  }));
+}
+
+/** Read outputs (Data `values`) masked like the log. */
+function maskedOutputs(outputs: StepOutput[], masker: Masker): StepOutput[] {
+  return outputs.map((o) => (o.text !== undefined ? { ...o, text: masker.mask(o.text) } : o));
 }
 
 /**
  * Runs a desktop step set: trust gate, shape check, connect (certificate pinned before the token is sent), hello,
  * run.begin (a busy runner is retried for busyWaitMs), app.launch, the steps on the desktop surface, and run.end on
- * every path once the run began. One budget and one cancel signal cover everything. Never throws. Messages and log
- * notes are masked for secrets and typed values; read outputs and file names are masked for secrets.
+ * every path once the run began. One budget and one cancel signal cover everything. Never throws. Messages, log notes
+ * and read outputs are masked for secrets and typed variable values; file names are masked for secrets.
  */
 export async function runDesktopTask(input: DesktopTaskInput): Promise<DesktopTaskResult> {
   const t0 = Date.now();
@@ -203,7 +226,7 @@ export async function runDesktopTask(input: DesktopTaskInput): Promise<DesktopTa
     if (!session?.interactive || session.locked) return fail('runner_unavailable', desktopNotInteractive(session?.locked === true), ids);
 
     const leaseMs = Math.min(Math.max(input.leaseMs ?? DEFAULT_LEASE_MS, 5_000), 600_000);
-    const busyUntil = Date.now() + Math.min(Math.max(input.busyWaitMs ?? DEFAULT_BUSY_WAIT_MS, 0), deadline - Date.now());
+    const busyUntil = Date.now() + Math.min(Math.max(input.busyWaitMs ?? defaultBusyWaitMs(leaseMs), 0), deadline - Date.now());
     const id = randomUUID();
     for (;;) {
       try {
@@ -220,7 +243,13 @@ export async function runDesktopTask(input: DesktopTaskInput): Promise<DesktopTa
     runId = id;
     lease = client.startLease(runId, leaseMs);
     surface = createDesktopSurface(client, runId, script.app);
-    await surface.rpc('app.launch', { app: script.app });
+    try {
+      await surface.rpc('app.launch', { app: script.app });
+    } catch (err) {
+      // not_found from app.launch is the executable missing on the runner's machine: an installation problem, not drift.
+      if (err instanceof ElementNotFoundError) return fail('runner_unavailable', runnerAppMissing(script.app.exe.split(/[\\/]/).pop() ?? script.app.exe), ids);
+      throw err;
+    }
 
     const ctx: StepContext = {
       page: NO_PAGE, surface, script: script as unknown as Script, policy: NO_NETWORK, vars: input.vars ?? {},
@@ -252,7 +281,7 @@ export async function runDesktopTask(input: DesktopTaskInput): Promise<DesktopTa
     await desktop.refreshWindow();
     const m = outputMasker(secrets, surface);
     return {
-      ok: true, lane: 'script', name: script.name ?? null, version: version ?? null, hash, rows: [], files: res.state.downloads, outputs: res.state.outputs,
+      ok: true, lane: 'script', name: script.name ?? null, version: version ?? null, hash, rows: [], files: res.state.downloads, outputs: maskedOutputs(res.state.outputs, m),
       log: maskedLog(res.state.log, m), violations: [], blockedRequests: [],
       page: { url: m.mask(desktop.address()), title: m.mask(desktop.windowTitle()).slice(0, 200), status: null },
       verified: false, confirmed: false, writes: [], submitted: res.state.submitted, durationMs: Date.now() - t0,

@@ -70,7 +70,15 @@ export const RUNNER_ERROR_CODES = {
   timeout: -32007,
   no_run: -32008,
 } as const;
-export type RunnerErrorKind = keyof typeof RUNNER_ERROR_CODES | 'runner_error';
+export type RunnerErrorKind = keyof typeof RUNNER_ERROR_CODES | 'cannot_act' | 'runner_error';
+/** JSON-RPC's invalid params: the runner's answer to a malformed request, and its driver's to a control that cannot take the action. */
+export const INVALID_PARAMS = -32602;
+/**
+ * The runner's driver answers invalid params for an element that cannot take the action asked of it (WindowsDesktop:
+ * "the element does not take typed text", "the element cannot be checked or unchecked", "the element cannot expand"):
+ * the target now resolves to another kind of control, so the steps no longer match the app.
+ */
+const CANNOT_ACT = /^invalid params: the element (does not|cannot) /;
 
 /**
  * An error the runner answered with. `message` is the runner's (it never contains typed values); `code` the JSON-RPC
@@ -91,6 +99,8 @@ export class ElementNotUniqueError extends RunnerError { override readonly kind 
 export class ExpectedFileMissingError extends RunnerError { override readonly kind = 'expected_file_missing'; override name = 'ExpectedFileMissingError'; }
 export class RunnerTimeoutError extends RunnerError { override readonly kind = 'timeout'; override name = 'RunnerTimeoutError'; }
 export class NoRunError extends RunnerError { override readonly kind = 'no_run'; override name = 'NoRunError'; }
+/** The element the target matched cannot take the action (a fill on a button, a check on a text field): drift. */
+export class ElementCannotActError extends RunnerError { override readonly kind = 'cannot_act'; override name = 'ElementCannotActError'; }
 
 const BY_CODE: Record<number, new (code: number, message: string) => RunnerError> = {
   [RUNNER_ERROR_CODES.runner_busy]: RunnerBusyError,
@@ -107,7 +117,7 @@ const BY_CODE: Record<number, new (code: number, message: string) => RunnerError
 export function runnerError(code: unknown, message: unknown): RunnerError {
   const c = typeof code === 'number' && Number.isInteger(code) ? code : 0;
   const text = (typeof message === 'string' && message ? message : `runner error ${c}`).split('\n')[0].slice(0, 500);
-  const Kind = BY_CODE[c] ?? RunnerError;
+  const Kind = c === INVALID_PARAMS && CANNOT_ACT.test(text) ? ElementCannotActError : BY_CODE[c] ?? RunnerError;
   return new Kind(c, text);
 }
 

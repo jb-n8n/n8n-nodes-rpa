@@ -3,6 +3,7 @@ import {
   BROWSER_STEPS_NEED_BROWSER, browserLocatorOnDesktop, browserStepOnDesktop, DESKTOP_STEPS_NEED_RUNNER, desktopLocatorInBrowser, exportDirOnlyInFill,
   FIRST_STEP_GOTO, reservedTemplate,
 } from '../messages.js';
+import { DESKTOP_WRITE_VERBS, READ_NAME, stepChordProblem } from './desktop-vocabulary.js';
 
 export class ScriptShapeError extends Error {
   constructor(public readonly issues: string[]) {
@@ -401,21 +402,16 @@ function checkBrowserTemplates(steps: unknown, issues: string[], path = 'steps')
 }
 
 const DESKTOP_BASE_KEYS = new Set(['intent', 'optional', 'when', 'expect', 'checkpoint', 'timeoutMs', 'write']);
-/** Verbs that act on the app: only these may be declared writes. */
-const DESKTOP_WRITE_VERBS = new Set<string>(['click', 'fill', 'select', 'check', 'key']);
 const BROWSER_LOCATOR_KEYS = ['role', 'label', 'text', 'testId', 'css', 'name', 'exact', 'within', 'frame'];
 const WINDOW_KEYS = ['exe', 'title', 'titlePattern', 'automationId', 'className'];
 const COND_TEXT_KEYS = ['controlType', 'automationId', 'name', 'className'];
 const MAX_UIA_TEXT = 500;
 /**
- * A key chord in its one canonical spelling, so the runner's gated keys (compared as written) cannot be passed with
- * another spelling: modifiers in the order Ctrl, Alt, Shift, each at most once, then one key, letters uppercase.
- * No Win chords: they drive the Windows shell, not the app.
+ * The largest file an expectFile step may ask for: the desktop runner's ceiling (its policy's maxFileBytes may be at
+ * most 36 MiB, so that one answer stays under the 50 MiB frame limit). The runner's policy maxFileBytes (20 MiB by
+ * default) is the effective limit; a larger file is refused by the runner (policy_refused).
  */
-const KEY_CHORD = /^(?:Ctrl\+)?(?:Alt\+)?(?:Shift\+)?(?:Enter|Tab|Escape|Space|Backspace|Delete|Insert|Home|End|PageUp|PageDown|Up|Down|Left|Right|F(?:[1-9]|1[0-9]|2[0-4])|[A-Z0-9])$/;
-/** The largest file an expectFile step may ask for: it arrives base64 in one message, which the client caps. */
-export const MAX_EXPECTED_FILE_BYTES = 50 * 1024 * 1024;
-const READ_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+export const MAX_EXPECTED_FILE_BYTES = 36 * 1024 * 1024;
 const isText = (v: unknown, max = MAX_UIA_TEXT): v is string => isStr(v) && v.length <= max && !/[\r\n]/.test(v);
 
 function checkWindowSel(v: unknown, path: string, issues: string[]) {
@@ -536,7 +532,10 @@ function checkDesktopStep(s: unknown, path: string, issues: string[]) {
     case 'key':
       if (!isObj(v)) { issues.push(`${p} must be an object`); break; }
       checkKeys(v, ['key', 'target'], p, issues);
-      if (typeof v.key !== 'string' || !KEY_CHORD.test(v.key)) issues.push(`${p}.key must be a key chord such as Enter, Tab, Ctrl+S or F5 (modifiers in the order Ctrl, Alt, Shift; letters uppercase)`);
+      {
+        const problem = stepChordProblem(v.key);
+        if (problem) issues.push(`${p}.key ${problem}`);
+      }
       if (v.target !== undefined) checkDesktopLocator(v.target, `${p}.target`, issues);
       break;
     case 'expectFile':
@@ -544,7 +543,7 @@ function checkDesktopStep(s: unknown, path: string, issues: string[]) {
       checkKeys(v, ['pattern', 'check', 'maxBytes', 'mime'], p, issues);
       checkRegex(v.pattern, `${p}.pattern`, issues);
       checkDownloadFile(v, p, issues);
-      if (isInt(v.maxBytes, MAX_EXPECTED_FILE_BYTES + 1, Number.MAX_SAFE_INTEGER)) issues.push(`${p}.maxBytes must be at most ${MAX_EXPECTED_FILE_BYTES}`);
+      if (isInt(v.maxBytes, MAX_EXPECTED_FILE_BYTES + 1, Number.MAX_SAFE_INTEGER)) issues.push(`${p}.maxBytes must be at most ${MAX_EXPECTED_FILE_BYTES} (the most the desktop runner sends; its policy maxFileBytes, 20 MiB by default, is the effective limit)`);
       break;
   }
 }

@@ -5,7 +5,7 @@ import { poll } from '../steps/poll.js';
 import type { Surface } from '../surface/surface.js';
 import type { DesktopApp, DesktopLocator, Expect, Locator, UiaTarget } from '../types.js';
 import type { RunnerClient } from './client.js';
-import type { RunnerMethod, RunnerMethods, RunnerTarget } from './protocol.js';
+import { ElementNotFoundError, type RunnerMethod, type RunnerMethods, type RunnerTarget } from './protocol.js';
 
 /** The runner's Target for a step's locator: the primary target with the fallbacks inline. */
 export function runnerTarget(loc: DesktopLocator): RunnerTarget {
@@ -41,7 +41,7 @@ export interface DesktopSurface extends Surface {
   readonly errors: Map<number, Error>;
   /** Engine snapshot refs (e1, e2, …) to the runner's refs of the last snapshot. */
   readonly refs: Map<string, string>;
-  /** Every text the run typed or selected (rendered values): the desktop task masks them out of messages and logs. */
+  /** The value of every variable the run typed into a field: the desktop task masks them out of messages, logs and read outputs. */
   readonly typed: string[];
   /** Tells the surface which top-level step is running, for `errors`. */
   trackStep(current: () => number | undefined): void;
@@ -49,7 +49,10 @@ export interface DesktopSurface extends Surface {
   record(err: unknown): void;
   /** A runner call with this run's id, recorded on failure. `waitMs`: see RunnerClient.call. */
   rpc<M extends RunnerMethod>(method: M, params: Omit<RunnerMethods[M]['params'], 'runId'>, waitMs?: number): Promise<RunnerMethods[M]['result']>;
-  /** Refreshes the window `address()` names (a one-node snapshot). Never throws. */
+  /**
+   * Refreshes the window `address()` names (a one-node snapshot). When the run has no window left (not_found) the last
+   * known window stays; any other runner error is thrown.
+   */
   refreshWindow(): Promise<void>;
   /** The window title of the last snapshot ('' before any). */
   windowTitle(): string;
@@ -136,10 +139,12 @@ export function createDesktopSurface(client: RunnerClient, runId: string, app: D
     },
     async refreshWindow() {
       try {
-        const snap = await client.call('snapshot', { runId, maxNodes: 1, maxDepth: 0 });
+        // The smallest snapshot the runner takes (maxNodes and maxDepth are each at least 1): the window and its root.
+        const snap = await client.call('snapshot', { runId, maxNodes: 1, maxDepth: 1 });
         window = { title: snap.window.title, exe: snap.window.exe };
-      } catch {
-        // Keeps the last known window.
+      } catch (err) {
+        // The app closed its last window (not_found): the last known window stays. Anything else is a real fault.
+        if (!(err instanceof ElementNotFoundError)) throw err;
       }
     },
   };

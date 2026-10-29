@@ -2,14 +2,19 @@ import { existsSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { connectRunner } from '../src/desktop/client.js';
 import { createDesktopSurface } from '../src/desktop/surface.js';
-import { runDesktopTask, type DesktopTaskInput, type DesktopTaskResult } from '../src/desktop/task.js';
+import { DEFAULT_BUSY_WAIT_MS, DEFAULT_LEASE_MS, defaultBusyWaitMs, runDesktopTask, type DesktopTaskInput, type DesktopTaskResult } from '../src/desktop/task.js';
 import { CANCELLED } from '../src/lane/script-lane.js';
 import { runTask } from '../src/lane/task.js';
 import { DESKTOP_STEPS_NEED_RUNNER, RUNNER_BUSY, UNSIGNED_REQUIRED, desktopNotInteractive } from '../src/messages.js';
 import { createMasker } from '../src/secrets/mask.js';
 import { signScript } from '../src/sign.js';
 import type { DesktopLocator } from '../src/types.js';
-import { DEMO_PASSWORD, DEMO_USER, FakeRunner } from './fake-runner.js';
+import { NoRunError } from '../src/desktop/protocol.js';
+import { runBinaryTooLarge, runnerAppMissing } from '../src/messages.js';
+import { MAX_RUN_BINARY_BYTES } from '../src/steps/limits.js';
+import { MAX_EXPECTED_FILE_BYTES } from '../src/steps/parse.js';
+import { newRunState, runSteps, type StepContext } from '../src/steps/run.js';
+import { DEMO_PASSWORD, DEMO_POLICY, DEMO_USER, FakeRunner, RUNNER_MAX_FILE_BYTES } from './fake-runner.js';
 import { selfSignedCert } from './fake-runner-cert.js';
 
 const KEY = 'desktop-signing-key-0123456789abcdef';
@@ -28,8 +33,11 @@ const doc = (steps: unknown[], more: Record<string, unknown> = {}) => ({ surface
 /** The end-to-end step set: launch, sign in, search, read, export into {{$exportDir}}, return the CSV. */
 const E2E = doc([
   ...SIGN_IN,
-  { intent: 'Search for the customer', fill: { field: uia('txtSearch'), value: '{{var.customer}}' } },
-  { intent: 'Run the search', key: { key: 'Enter', target: uia('txtSearch') } },
+  // A literal search term: a value typed from a variable would be masked out of the reads (see the M8 test).
+  { intent: 'Search for the customer', fill: { field: uia('txtSearch'), value: 'ACME' } },
+  // Enter in the search box would be refused: the window holds a declared write control (btnPost), so keys without
+  // write: true are limited to navigation keys.
+  { intent: 'Run the search', click: uia('btnSearch', 'Button') },
   { intent: 'Wait for the first row', waitFor: { target: { uia: { path: [{ controlType: 'DataGrid', automationId: 'gridResults' }, { controlType: 'DataItem', index: 0 }] } } } },
   { intent: 'Read the count', read: { target: uia('lblCount', 'Text'), as: 'count' } },
   { intent: 'Read the grid', read: { target: uia('gridResults', 'DataGrid'), as: 'orders' } },
@@ -115,7 +123,7 @@ describe('desktop task: each handler', () => {
       { intent: 'Open only', check: { field: uia('chkOpenOnly', 'CheckBox') } },
       search(2), count('closedOpen'),
       { intent: 'Not open only', check: { field: uia('chkOpenOnly', 'CheckBox'), checked: false } },
-      { intent: 'Search by key', key: { key: 'Enter', target: uia('txtSearch') } },
+      { intent: 'Search by key', key: { key: 'Enter', target: uia('txtSearch') }, write: true },
       count('again'),
       { intent: 'Sign-in button gone', waitFor: { target: uia('btnSignIn', 'Button'), state: 'hidden' } },
     ]);
@@ -184,6 +192,65 @@ describe('desktop task: each handler', () => {
   });
 });
 
+describe('desktop task: calls the runner takes as the real one does', () => {
+  /** A surface and step context on a run of its own, as runDesktopTask builds them. */
+  async function onRun(runId: string) {
+    runner ??= await FakeRunner.start();
+    const client = await connectRunner(runner.endpoint);
+    await client.call('run.begin', { runId, leaseMs: 5000 });
+    await client.call('app.launch', { runId, app: { exe: 'ErpDemo.exe' } });
+    const surface = createDesktopSurface(client, runId, { exe: 'ErpDemo.exe' });
+    const ctx: StepContext = {
+      page: undefined as never, surface, script: doc([]) as never, policy: { startUrl: 'about:blank', navHosts: [], subresourceHosts: [], login: [], allowedSubmits: [] },
+      vars: {}, masker: createMasker([]), defaultTimeoutMs: 1000, violations: [],
+    };
+    surface.trackStep(() => ctx.stepIndex);
+    return { client, surface, ctx };
+  }
+
+  it('refreshWindow asks for the smallest valid snapshot and reads the window title (M1)', async () => {
+    const { client, surface } = await onRun('title');
+    await surface.refreshWindow();
+    expect(surface.windowTitle()).toBe('ERP Demo - Sign in');
+    expect(runner!.requests.at(-1)).toEqual({ method: 'snapshot', params: { runId: 'title', maxNodes: 1, maxDepth: 1 } });
+    // The runner refuses maxDepth 0 (it takes 1 to 100), as the real one does.
+    await expect(client.call('snapshot', { runId: 'title', maxNodes: 1, maxDepth: 0 })).rejects.toThrow('invalid params: maxDepth must be between 1 and 100');
+    // No window left keeps the last title; any other runner error is thrown, not swallowed.
+    runner!.lastApp!.windows = [];
+    await surface.refreshWindow();
+    expect(surface.windowTitle()).toBe('ERP Demo - Sign in');
+    await client.call('run.end', { runId: 'title' });
+    await expect(surface.refreshWindow()).rejects.toBeInstanceOf(NoRunError);
+    await client.close();
+  });
+
+  it('expectFile with no binary room left fails with the run limit and never asks the runner for 0 bytes (M2)', async () => {
+    const { client, ctx } = await onRun('room');
+    const state = newRunState();
+    // The run already holds its whole binary allowance (a stand-in buffer: only its length counts).
+    state.downloads.push({ fileName: 'big.bin', mimeType: 'application/octet-stream', data: { length: MAX_RUN_BINARY_BYTES } as Buffer, binaryName: 'file_0' });
+    const res = await runSteps(ctx, [{ intent: 'Return the CSV', expectFile: { pattern: '^orders\\.csv$' } }] as never, state);
+    expect(res.ok).toBe(false);
+    expect(!res.ok && res.failure.message).toBe(runBinaryTooLarge(MAX_RUN_BINARY_BYTES + 1));
+    expect(runner!.methods()).not.toContain('file.retrieve');
+    // The runner refuses maxBytes 0, as the real one does.
+    await expect(client.call('file.retrieve', { runId: 'room', pattern: 'x', timeoutMs: 100, maxBytes: 0 })).rejects.toThrow(/invalid params: maxBytes must be between 1 and/);
+    await client.call('run.end', { runId: 'room' });
+    await client.close();
+  });
+
+  it('file.retrieve asks for at most the room left, and the runner caps it at its policy (M3)', async () => {
+    runner = await FakeRunner.start({ policy: { ...DEMO_POLICY, maxFileBytes: 64 } });
+    const r = failed(await run(E2E));
+    expect({ code: r.code, message: r.message }).toEqual({
+      code: 'policy_violation', message: 'Return the CSV: policy_refused: the matching file is 82 bytes, over the limit of 64 bytes',
+    });
+    const asked = runner.requests.find((q) => q.method === 'file.retrieve');
+    expect(asked?.params.maxBytes).toBe(MAX_EXPECTED_FILE_BYTES);
+    expect(MAX_EXPECTED_FILE_BYTES).toBe(RUNNER_MAX_FILE_BYTES);
+  });
+});
+
 describe('desktop task: refusals and runner errors', () => {
   it('runner_busy: fails as busy at once with busyWaitMs 0, and waits for the lock otherwise', async () => {
     runner = await FakeRunner.start();
@@ -194,6 +261,18 @@ describe('desktop task: refusals and runner errors', () => {
     setTimeout(() => { clearTimeout(runner!.run!.timer); runner!.run = undefined; }, 1200);
     succeeded(await run(doc(SIGN_IN), { busyWaitMs: 5000 }));
   });
+
+  it('the default busy wait outlasts the lease, so a run left by a stopped n8n frees the runner in time (M12)', async () => {
+    expect(DEFAULT_BUSY_WAIT_MS).toBe(DEFAULT_LEASE_MS + 15_000);
+    expect(defaultBusyWaitMs(60_000)).toBe(75_000);
+    // The stopped n8n's run had this run's lease; without busyWaitMs this run waits it out.
+    runner = await FakeRunner.start();
+    runner.holdLock(5000);
+    const t0 = Date.now();
+    succeeded(await run(doc(SIGN_IN), { leaseMs: 5000 }));
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(4500);
+    expect(runner.expiredRuns).toEqual(['someone-else']);
+  }, 15_000);
 
   it('not_found names the target and the window title; not_unique gives the count', async () => {
     const missing = failed(await run(doc([{ intent: 'Click Help', click: uia('btnHelp', 'Button'), timeoutMs: 300 }])));
@@ -218,8 +297,60 @@ describe('desktop task: refusals and runner errors', () => {
     expect(runner!.lastApp?.posted).toBe(1);
     expect(runner!.requests.filter((q) => q.method === 'act' && q.params.write === true)).toHaveLength(1);
     const key = failed(await run(doc([...SIGN_IN, { intent: 'Save shortcut', key: { key: 'Ctrl+S' } }])));
-    expect({ code: key.code, message: key.message }).toEqual({ code: 'policy_violation', message: 'Save shortcut: the key Ctrl+S needs a declared write step' });
+    expect({ code: key.code, message: key.message }).toEqual({ code: 'policy_violation', message: 'Save shortcut: policy_refused: the gated key Ctrl+S needs write: true' });
     succeeded(await run(doc([...SIGN_IN, { intent: 'Save shortcut', key: { key: 'Ctrl+S' }, write: true }])));
+    // A gated key with extra modifiers is gated too (apps often ignore them), as on the runner.
+    const extra = failed(await run(doc([...SIGN_IN, { intent: 'Save shortcut', key: { key: 'Ctrl+Shift+S' } }])));
+    expect(extra.message).toBe('Save shortcut: policy_refused: the gated key Ctrl+Shift+S needs write: true');
+  });
+
+  it('while a window holds a declared write control, keys without write: true are navigation keys only, as on the runner', async () => {
+    // The sign-in window holds no write control: Enter signs in.
+    const enter = { intent: 'Press Enter', key: { key: 'Enter', target: uia('txtSearch') } };
+    const tab = { intent: 'Press Tab', key: { key: 'Tab', target: uia('txtSearch') } };
+    const refused = failed(await run(doc([...SIGN_IN, enter])));
+    expect({ code: refused.code, message: refused.message }).toEqual({
+      code: 'policy_violation',
+      message: 'Press Enter: policy_refused: the key Enter could reach a declared write control of this run and needs write: true (only Tab, arrows, Home, End, PageUp, PageDown and Escape do not)',
+    });
+    succeeded(await run(doc([...SIGN_IN, tab, { ...enter, write: true }])));
+    // Without a target the key goes to the focused element, under the same rule.
+    const focused = failed(await run(doc([...SIGN_IN, { intent: 'Press F5', key: { key: 'F5' } }])));
+    expect(focused.message).toMatch(/^Press F5: policy_refused: the key F5 could reach a declared write control/);
+  });
+
+  it('an allowed app whose executable is missing is an installation problem (runner_unavailable), never drift (M5)', async () => {
+    const r = failed(await run(doc(SIGN_IN), {}, { appMissing: true }));
+    expect({ code: r.code, message: r.message }).toEqual({ code: 'runner_unavailable', message: runnerAppMissing('ErpDemo.exe') });
+    expect(runner!.run).toBeUndefined();
+  });
+
+  it('a control that cannot take the action (the driver\'s invalid params) is drift, not incomplete (M5)', async () => {
+    const typeIntoButton = failed(await run(doc([{ intent: 'Type into Sign in', fill: { field: uia('btnSignIn', 'Button'), value: 'x' } }])));
+    expect({ code: typeIntoButton.code, message: typeIntoButton.message }).toEqual({
+      code: 'drift_detected', message: 'Type into Sign in: invalid params: the element does not take typed text',
+    });
+    const checkAnEdit = failed(await run(doc([{ intent: 'Tick the user name', check: { field: uia('txtUser') } }])));
+    expect({ code: checkAnEdit.code, message: checkAnEdit.message }).toEqual({
+      code: 'drift_detected', message: 'Tick the user name: invalid params: the element cannot be checked or unchecked',
+    });
+  });
+
+  it('read outputs (Data values and the log) are masked for the values the run typed from variables, as messages are (M8)', async () => {
+    const d = doc([
+      { intent: 'Type the user name', fill: { field: uia('txtUser'), value: 'id:{{var.user}}' } },
+      { intent: 'Type a literal into the password', fill: { field: uia('txtPassword'), value: 'literal-text' } },
+      { intent: 'Read the user name back', read: { target: uia('txtUser'), as: 'user' } },
+      { intent: 'Read the button', read: { target: uia('btnSignIn', 'Button'), as: 'button' } },
+    ]);
+    const r = succeeded(await run(d));
+    expect(r.outputs.map((o) => [o.as, o.text])).toEqual([['user', 'id:[secret]'], ['button', 'Sign in']]);
+    expect(r.log[2].output).toEqual({ text: 'id:[secret]' });
+    expect(JSON.stringify(r)).not.toContain(DEMO_USER);
+    // A failed run's log is masked the same way.
+    const f = failed(await run(doc([...d.steps as unknown[], { intent: 'Missing', click: uia('nothing', 'Button'), timeoutMs: 300 }])));
+    expect(f.log[2].output).toEqual({ text: 'id:[secret]' });
+    expect(JSON.stringify(f)).not.toContain(DEMO_USER);
   });
 
   it('an app outside the runner policy is refused at launch', async () => {
