@@ -93,6 +93,55 @@ internal static partial class Native
     public static extern bool Process32NextW(IntPtr snapshot, ref PROCESSENTRY32W entry);
 
     public const uint GA_ROOT = 2;
+    private const uint INPUT_KEYBOARD = 1;
+    private const uint KEYEVENTF_KEYUP = 0x0002;
+    private const uint KEYEVENTF_UNICODE = 0x0004;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct KEYBDINPUT
+    {
+        public ushort wVk;
+        public ushort wScan;
+        public uint dwFlags;
+        public uint time;
+        public IntPtr dwExtraInfo;
+    }
+
+    // INPUT is a union of MOUSEINPUT (the largest member), KEYBDINPUT and HARDWAREINPUT; pad to MOUSEINPUT's size.
+    [StructLayout(LayoutKind.Explicit)]
+    private struct InputUnion
+    {
+        [FieldOffset(0)] public KEYBDINPUT ki;
+        [FieldOffset(0)] private MouseInputPad mi;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MouseInputPad
+    {
+        public int dx, dy;
+        public uint mouseData, dwFlags, time;
+        public IntPtr dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct INPUT
+    {
+        public uint type;
+        public InputUnion u;
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint SendInput(uint count, INPUT[] inputs, int size);
+
+    /// <summary>One UTF-16 unit as a Unicode keystroke (VK_PACKET): no virtual key, no modifier state.</summary>
+    public static void SendUnicode(char c)
+    {
+        var inputs = new INPUT[2];
+        inputs[0].type = inputs[1].type = INPUT_KEYBOARD;
+        inputs[0].u.ki = new KEYBDINPUT { wScan = c, dwFlags = KEYEVENTF_UNICODE };
+        inputs[1].u.ki = new KEYBDINPUT { wScan = c, dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP };
+        if (SendInput(2, inputs, Marshal.SizeOf<INPUT>()) != 2) throw new InvalidOperationException("SendInput was blocked");
+    }
 
     [DllImport("user32.dll")]
     public static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);

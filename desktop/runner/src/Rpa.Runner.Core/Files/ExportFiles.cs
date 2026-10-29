@@ -57,6 +57,12 @@ public sealed class ExportFiles
     private static FileInfo? Newest(string root, Regex regex)
     {
         if (!Directory.Exists(root)) return null;
+        try { return NewestIn(root, regex); }
+        catch (DirectoryNotFoundException) { return null; } // the run ended meanwhile
+    }
+
+    private static FileInfo? NewestIn(string root, Regex regex)
+    {
         FileInfo? best = null;
         foreach (var f in new DirectoryInfo(root).EnumerateFiles("*", new EnumerationOptions
                  {

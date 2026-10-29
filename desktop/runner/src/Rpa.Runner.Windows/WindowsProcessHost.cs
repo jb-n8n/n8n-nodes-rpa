@@ -63,13 +63,19 @@ public sealed class WindowsProcessHost : SystemProcessHost
 
     public override string? GetExeName(int pid)
     {
+        var path = GetExePath(pid);
+        return path is null ? base.GetExeName(pid) : Path.GetFileName(path);
+    }
+
+    public override string? GetExePath(int pid)
+    {
         var h = Native.OpenProcess(Native.PROCESS_QUERY_LIMITED_INFORMATION, false, (uint)pid);
-        if (h == IntPtr.Zero) return base.GetExeName(pid);
+        if (h == IntPtr.Zero) return null;
         try
         {
             var sb = new StringBuilder(1024);
             var size = (uint)sb.Capacity;
-            return Native.QueryFullProcessImageName(h, 0, sb, ref size) ? Path.GetFileName(sb.ToString()) : base.GetExeName(pid);
+            return Native.QueryFullProcessImageName(h, 0, sb, ref size) ? sb.ToString() : null;
         }
         finally
         {

@@ -53,7 +53,8 @@ public sealed class TargetResolver
             try
             {
                 windows = _scope.RunWindows(run, candidates[i].Window);
-                visible = Match(windows, candidates[i].Path).Where(IsVisible).ToList();
+                // Elements another process hosts inside a run window (a re-parented window, a web view) do not count.
+                visible = Match(windows, candidates[i].Path).Where(n => IsVisible(n) && _scope.IsRunProcess(run, n.ProcessId)).ToList();
             }
             catch (ElementGoneException)
             {

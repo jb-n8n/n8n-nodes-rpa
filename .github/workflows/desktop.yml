@@ -1,9 +1,9 @@
 # The Windows desktop runner and the ERP Demo app (desktop/): the runner core's unit tests on Linux, then on
 # windows-latest (which has an interactive, unlocked desktop) a UI Automation spike, a build and self-contained win-x64
-# publish of the runner and the demo app (v1 and v2), and the protocol scenario: the published runner started with a
-# policy and a random token, and a test client driving the demo app through it end to end (sign in, search, read,
-# export to the run's export dir, retrieve the file, end the run) plus the refusals (401, busy, policy, not found, not
-# unique, lease expiry). Uses no repository secrets.
+# publish of the runner and the demo app (v1 and v2) plus a release zip, and the protocol scenario: the published
+# runner started with a policy and a random token, and a test client driving the demo app through it end to end (sign
+# in, search, read, export to the run's export dir, retrieve the file, end the run) plus the refusals (401, busy,
+# policy, not found, not unique, lease expiry). Uses no repository secrets.
 # Actions are pinned by full commit SHA.
 name: desktop
 
@@ -181,6 +181,32 @@ jobs:
             out/scenario
           retention-days: 14
           if-no-files-found: ignore
+
+      # One zip with the runner and both demo builds, and its SHA-256, for publishing as a release asset (Actions
+      # artifacts need a GitHub token to download; release assets do not). Nothing is published here.
+      - name: Package the release zip
+        timeout-minutes: 5
+        run: |
+          $stage = "$env:OUT\release-stage\rpa-desktop"
+          New-Item -ItemType Directory -Force "$stage", "$env:OUT\release" | Out-Null
+          Copy-Item -Recurse "$env:OUT\rpa-desktop-runner" "$stage\runner"
+          Copy-Item -Recurse "$env:OUT\erp-demo" "$stage\erp-demo"
+          Copy-Item LICENSE "$stage\LICENSE"
+          $zip = "$env:OUT\release\rpa-desktop-win-x64.zip"
+          Compress-Archive -Path "$stage" -DestinationPath $zip -CompressionLevel Optimal
+          $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
+          "$hash  rpa-desktop-win-x64.zip" | Set-Content -Encoding ascii -NoNewline "$zip.sha256"
+          Get-ChildItem "$env:OUT\release" | ForEach-Object { '{0} {1:N1} MB' -f $_.Name, ($_.Length / 1MB) }
+          Get-Content "$zip.sha256"
+
+      - name: Upload the release zip
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rpa-desktop-release
+          path: out/release
+          retention-days: 30
+          if-no-files-found: error
+          compression-level: 0
 
       - name: Upload the runner
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

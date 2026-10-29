@@ -31,7 +31,8 @@ public sealed record RunnerOptions
                                 or set the token itself in env RPA_RUNNER_TOKEN (at least 16 characters)
           --data-dir <path>     Certificate, logs and export directories (env RPA_RUNNER_DATA_DIR,
                                 default %ProgramData%\RPA Runner)
-          --policy <path>       Policy file (env RPA_RUNNER_POLICY, default <data dir>\policy.json)
+          --policy <path>       Policy file (env RPA_RUNNER_POLICY_FILE or RPA_RUNNER_POLICY,
+                                default <data dir>\policy.json)
         """;
 
     /// <summary>Thrown for settings the runner refuses to start with; the message never contains the token.</summary>
@@ -75,7 +76,7 @@ public sealed record RunnerOptions
         if (token.Any(char.IsWhiteSpace) || token.Any(char.IsControl)) throw new InvalidOptionsException("the token must not contain spaces or control characters");
 
         var dataDir = Path.GetFullPath(Get("--data-dir", "RPA_RUNNER_DATA_DIR") ?? DefaultDataDir());
-        var policy = Path.GetFullPath(Get("--policy", "RPA_RUNNER_POLICY") ?? Path.Combine(dataDir, "policy.json"));
+        var policy = Path.GetFullPath(Get("--policy", "RPA_RUNNER_POLICY_FILE") ?? env("RPA_RUNNER_POLICY") ?? Path.Combine(dataDir, "policy.json"));
         return new RunnerOptions { Port = port, Bind = bind, Token = token, DataDir = dataDir, PolicyPath = policy };
     }
 }

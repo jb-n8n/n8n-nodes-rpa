@@ -12,6 +12,9 @@ public sealed class RunnerPolicy
 {
     public const long DefaultMaxFileBytes = 20 * 1024 * 1024;
 
+    /// <summary>The largest file one protocol message can carry comfortably (base64 in a single WebSocket message).</summary>
+    public const long MaxFileBytesCeiling = 256L * 1024 * 1024;
+
     public IReadOnlyList<AllowedApp> AllowedApps { get; init; } = [];
     public IReadOnlyList<WriteControl> WriteControls { get; init; } = [];
     public IReadOnlyList<KeyChord> GatedKeys { get; init; } = [];
@@ -115,10 +118,14 @@ public sealed class RunnerPolicy
         }
 
         var max = shape.MaxFileBytes ?? DefaultMaxFileBytes;
-        if (max <= 0) throw new InvalidPolicyException($"{source}: maxFileBytes must be positive");
+        if (max <= 0 || max > MaxFileBytesCeiling) throw new InvalidPolicyException($"{source}: maxFileBytes must be between 1 and {MaxFileBytesCeiling}");
 
         return new RunnerPolicy { AllowedApps = apps, WriteControls = writes, GatedKeys = keys, MaxFileBytes = max };
     }
+
+    /// <summary>True when the full path is one of the allowedApps entries' pinned paths.</summary>
+    public bool IsAllowedPath(string? fullPath) =>
+        fullPath is not null && AllowedApps.Any(a => string.Equals(a.Path, System.IO.Path.GetFullPath(fullPath), StringComparison.OrdinalIgnoreCase));
 
     public bool IsAllowedExe(string? exeName) =>
         exeName is not null && AllowedApps.Any(a => string.Equals(a.Exe, exeName, StringComparison.OrdinalIgnoreCase));
@@ -161,5 +168,8 @@ public sealed class RunnerPolicy
             string.Equals(w.Exe, exeName, StringComparison.OrdinalIgnoreCase) &&
             string.Equals(w.AutomationId, automationId, StringComparison.Ordinal));
 
-    public bool IsGatedKey(KeyChord chord) => GatedKeys.Contains(chord);
+    /// <summary>A gated chord also gates the same key with extra modifiers (apps often ignore them: Ctrl+Shift+S often
+    /// still saves).</summary>
+    public bool IsGatedKey(KeyChord chord) => GatedKeys.Any(g =>
+        g.Key == chord.Key && (!g.Ctrl || chord.Ctrl) && (!g.Alt || chord.Alt) && (!g.Shift || chord.Shift) && (!g.Win || chord.Win));
 }

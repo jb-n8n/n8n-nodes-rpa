@@ -18,18 +18,24 @@ The runner is a user-mode program in the signed-in user's interactive session (i
 Windows service cannot). It listens on `wss://0.0.0.0:8765/rpa/v1` and refuses plain `ws://`.
 
 ```powershell
-$env:RPA_RUNNER_TOKEN = '<a long random token>'   # or --token-file <path>; never on the command line
-.\RpaRunner.exe                                    # --port, --bind, --data-dir, --policy: see --help
+$env:RPA_RUNNER_TOKEN_FILE = 'C:\ProgramData\RPA Runner\token'   # a file holding the token (or RPA_RUNNER_TOKEN)
+$env:RPA_RUNNER_POLICY_FILE = 'C:\ProgramData\RPA Runner\policy.json'
+.\RpaRunner.exe                       # also --port/RPA_RUNNER_PORT, --bind, --data-dir, --policy: see --help
 # RPA runner listening on wss://0.0.0.0:8765/rpa/v1, fingerprint 3A:...:7F
 ```
+
+The token is never accepted on the command line, and launched apps never inherit any `RPA_RUNNER_*` variable. The
+start line also goes to `<data dir>\logs\runner-<date>.log`.
 
 On first start the runner generates a self-signed certificate in the data directory (default
 `%ProgramData%\RPA Runner\`, private key protected with DPAPI for the runner's Windows user) and prints its SHA-256
 fingerprint; the n8n credential pins it. Logs go to `<data dir>\logs`. They record methods, outcomes and error codes,
 never tokens, typed values or file contents.
 
-The runner refuses to start without a policy file (default `<data dir>\policy.json`). Make it writable by
-administrators only. See [`runner/policy.example.json`](runner/policy.example.json):
+The runner refuses to start without a policy file (default `<data dir>\policy.json`), and refuses when anyone but
+administrators could change or replace it (its owner, its access rules, or its folder's). Prepare the data directory
+as an administrator: the runner leaves an existing directory's permissions alone and creates only new files and the
+`logs\` and `exports\` folders in it (those get an ACL for the runner's user, SYSTEM and Administrators). See [`runner/policy.example.json`](runner/policy.example.json):
 
 - `allowedApps`: the only executables `app.launch` starts. `exe` is the file name a step set names; `path` (required)
   pins the absolute local path that runs (UNC and device paths are refused). Optional: `sha256` pins the file's hash;
@@ -54,11 +60,23 @@ the foreground and the runner cannot bring the run's window back, the action is 
 the taskbar, the Start menu) are ignored. `mode: "repair"` allows only `focus`, `expand`, `read`, and `click` on tabs,
 list items and tree items.
 
+Key chords that reach the Windows shell rather than the app (anything with Win, Ctrl+Esc, Ctrl+Shift+Esc,
+Alt+Tab, Alt+Esc) are never sent. `type` goes only into editable text fields, as Unicode keystrokes (no shortcuts or
+mnemonics), and stops if the keyboard focus moves.
+
 **This is weaker than the browser's guarantee.** The browser policy is enforced on the network: every request and
 redirect is checked against an allow-list. A desktop app talks to its own back end, which the runner cannot filter.
 The runner limits which apps and windows a run touches, which controls and keys count as writes, and where files come
 from; what an allowed app does with an allowed click is up to the app. On a person's own desktop the runner acts with
-that person's access.
+that person's access. Two limits to keep in mind:
+
+- `write: true` and `mode: "repair"` are chosen by the caller. They keep honest mistakes and AI repair away from
+  writes; against a compromised n8n, what still holds is the allowed apps and windows, the shell-chord block, export
+  confinement and password redaction.
+- An allowed app's own file dialogs carry shell powers: through them a caller can copy files the runner's user can
+  read into the export directory, or start programs from a context menu (those programs are not the run's, so the
+  runner will not act on them). `file.retrieve` itself never returns files from elsewhere. A dedicated Windows user
+  with AppLocker is the real control.
 
 ## ERP Demo
 

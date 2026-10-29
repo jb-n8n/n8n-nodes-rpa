@@ -53,7 +53,19 @@ public sealed class RunnerService
 
     public RunManager Runs => _runs;
 
-    public JsonNode Invoke(string method, Params p, CancellationToken ct) => method switch
+    public JsonNode Invoke(string method, Params p, CancellationToken ct)
+    {
+        try
+        {
+            return Dispatch(method, p, ct);
+        }
+        catch (ElementGoneException)
+        {
+            throw RpcErrors.Timeout("the UI kept changing while the runner read it");
+        }
+    }
+
+    private JsonNode Dispatch(string method, Params p, CancellationToken ct) => method switch
     {
         "hello" => Hello(),
         "run.begin" => RunBegin(p),
@@ -139,14 +151,22 @@ public sealed class RunnerService
         if (!File.Exists(path)) throw RpcErrors.NotFound($"application executable \"{entry.Exe}\"", null);
         if (!entry.AllowUserWritable && _paths.IsWritableByRunnerUser(path))
             throw RpcErrors.PolicyRefused($"\"{entry.Exe}\" sits where the runner's own user can replace it; install it in a protected folder or set allowUserWritable in the policy");
-        if (entry.Sha256 is not null)
+        int pid;
+        // Held open (sharing reads only) from the hash check until the process has started, so the file cannot be
+        // swapped in between.
+        using (var f = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
         {
-            using var f = File.OpenRead(path);
-            if (!string.Equals(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(f)), entry.Sha256, StringComparison.Ordinal))
+            if (entry.Sha256 is not null &&
+                !string.Equals(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(f)), entry.Sha256, StringComparison.Ordinal))
                 throw RpcErrors.PolicyRefused($"\"{entry.Exe}\" does not match the sha256 the policy pins");
+            pid = _processes.Start(path, app.Args);
         }
-        var pid = _processes.Start(path, app.Args);
-        run.AddProcess(pid);
+        if (!run.TryAddProcess(pid))
+        {
+            // run.end (or the lease) ended the run while the app started: stop it now rather than leak it.
+            _processes.KillTree(pid);
+            throw RpcErrors.NoRun();
+        }
         _log.Info($"app.launch {Path.GetFileName(path)} pid={pid}");
         return new JsonObject { ["pid"] = pid };
     }
@@ -224,6 +244,8 @@ public sealed class RunnerService
         // Floor checks that need no UI.
         if (mode == ActMode.Repair && action is not (ActionKind.Focus or ActionKind.Expand or ActionKind.Read or ActionKind.Click))
             throw RpcErrors.PolicyRefused("repair mode allows only focus, expand, read, and click on tabs, list items and tree items");
+        if (chord is not null && IsSystemChord(chord))
+            throw RpcErrors.PolicyRefused($"the key {chord} reaches the Windows shell, not the app, and is never sent");
         if (chord is not null && _policy.IsGatedKey(chord))
         {
             if (mode == ActMode.Repair) throw RpcErrors.PolicyRefused($"the gated key {chord} is never allowed in repair mode");
@@ -260,6 +282,7 @@ public sealed class RunnerService
             if (!_scope.IsRunProcess(run, receiver.ProcessId))
                 throw RpcErrors.PolicyRefused("the input would reach a window of another application");
             CheckWriteControl(receiver, res.Window, write, mode, "the element under the pointer or with the keyboard focus");
+            if (mode == ActMode.Repair) CheckRepairReceiver(receiver, element);
         }
 
         while (true)
@@ -287,6 +310,28 @@ public sealed class RunnerService
                 CheckWriteControl(element, res.Window, write, mode, "the target");
             }
         }
+    }
+
+    /// <summary>Chords the Windows shell takes whatever has the focus: anything with Win, Ctrl+Esc, Ctrl+Shift+Esc,
+    /// Alt+Tab, Alt+Shift+Tab, Alt+Esc. They start or switch to programs outside the policy.</summary>
+    internal static bool IsSystemChord(KeyChord c) =>
+        c.Win ||
+        (c.Ctrl && c.Key == "Escape") ||
+        (c.Alt && c.Key is "Tab" or "Escape");
+
+    /// <summary>In repair mode the pointer must land on the target itself or an inert part of it (text, image, an unnamed
+    /// container), never on a button or other control nested inside a list item.</summary>
+    private static void CheckRepairReceiver(IUiNode receiver, IUiNode target)
+    {
+        var cur = receiver;
+        for (var i = 0; i < 16 && cur is not null; i++)
+        {
+            if (cur.Id == target.Id) return;
+            if (cur.ControlType is not ("Text" or "Image" or "Custom" or "Pane" or "Group"))
+                throw RpcErrors.PolicyRefused($"in repair mode the click would land on a {cur.ControlType} inside the target");
+            cur = cur.GetParent();
+        }
+        throw RpcErrors.PolicyRefused("in repair mode the click would land outside the target");
     }
 
     /// <summary>The keys that only move: Tab, Shift+Tab, arrows, Home, End, PageUp, PageDown, Escape, no other modifier.</summary>

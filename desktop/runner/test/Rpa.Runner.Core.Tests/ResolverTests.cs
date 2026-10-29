@@ -44,7 +44,7 @@ public sealed class ResolverTests : IDisposable
     [Fact]
     public void Index_applies_per_parent()
     {
-        var second = new FakeNode("List", "Second", "lstSecond");
+        var second = new FakeNode("List", "Second", "lstSecond", _w.ProcessId);
         second.Child("ListItem", "Row C").Child("ListItem", "Row D");
         _w.Add(second);
         // index 0 within each list: two matches.
@@ -148,9 +148,32 @@ public sealed class ResolverTests : IDisposable
         var dialog = new FakeNode("Window", "Export", "", 6000);
         dialog.Child("Button", "Save", "btnChildSave");
         _h.Processes.Names[6000] = "ErpDemo.exe";
+        _h.Processes.Paths[6000] = _h.AppPath;
         _h.Processes.Parents[6000] = launched;
         _h.Desktop.Windows.Add(dialog);
         _h.Ok("resolve", Resolve(Harness.T(new { automationId = "btnChildSave" })));
+    }
+
+    [Fact]
+    public void A_descendant_with_the_allowed_file_name_but_another_path_is_not_the_runs()
+    {
+        var launched = _h.Processes.Names.Keys.Single();
+        var planted = new FakeNode("Window", "Planted", "", 6100);
+        planted.Child("Button", "Run", "btnPlanted");
+        _h.Processes.Names[6100] = "ErpDemo.exe";
+        _h.Processes.Paths[6100] = Path.Combine(_h.Root, "exports", "ErpDemo.exe");
+        _h.Processes.Parents[6100] = launched;
+        _h.Desktop.Windows.Insert(0, planted);
+        _h.Err("resolve", Resolve(Harness.T(new { automationId = "btnPlanted" })), RpcErrors.NotFoundCode);
+    }
+
+    [Fact]
+    public void Elements_another_process_hosts_inside_a_run_window_do_not_count()
+    {
+        _h.Processes.Names[7100] = "msedgewebview2.exe";
+        _h.Processes.Paths[7100] = "/opt/edge/msedgewebview2.exe";
+        _w.Add(new FakeNode("Button", "Hosted", "btnHosted", 7100));
+        _h.Err("resolve", Resolve(Harness.T(new { automationId = "btnHosted" })), RpcErrors.NotFoundCode);
     }
 
     [Fact]

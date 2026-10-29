@@ -49,10 +49,11 @@ public sealed class WindowScope
 
     public string? ExeOf(int pid) => _processes.GetExeName(pid);
 
-    /// <summary>True when the process belongs to the run (launched by it, or a descendant) and is an allowed app.</summary>
+    /// <summary>True when the process belongs to the run (launched by it, or a descendant) and runs one of the policy's
+    /// pinned executables (by full path, not just the file name).</summary>
     public bool IsRunProcess(RunState run, int pid)
     {
-        if (!_policy.IsAllowedExe(_processes.GetExeName(pid))) return false;
+        if (!_policy.IsAllowedPath(_processes.GetExePath(pid))) return false;
         var launched = run.Processes;
         return launched.Contains(pid) || _processes.IsDescendantOf(pid, launched);
     }

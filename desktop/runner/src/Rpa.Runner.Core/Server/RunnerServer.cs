@@ -38,7 +38,9 @@ public sealed class RunnerServer : IAsyncDisposable
         RpcDispatcher dispatcher, RunnerLog log)
     {
         var expected = SHA256.HashData(Encoding.UTF8.GetBytes(token));
-        var builder = WebApplication.CreateSlimBuilder();
+        // No configuration from the environment or appsettings.json: nothing may add a plain-HTTP endpoint.
+        var builder = WebApplication.CreateSlimBuilder(new WebApplicationOptions { Args = [], ContentRootPath = AppContext.BaseDirectory });
+        builder.Configuration.Sources.Clear();
         builder.Logging.ClearProviders();
         builder.WebHost.ConfigureKestrel(k =>
         {
@@ -66,7 +68,9 @@ public sealed class RunnerServer : IAsyncDisposable
             }
             if (!TokenMatches(ctx.Request.Headers.Authorization.ToString(), expected))
             {
-                log.Warn($"refused a connection from {ctx.Connection.RemoteIpAddress}: wrong or missing token");
+                if (RefusalLogGate.ShouldLog(out var suppressed))
+                    log.Warn($"refused a connection from {ctx.Connection.RemoteIpAddress}: wrong or missing token" +
+                             (suppressed > 0 ? $" ({suppressed} more refused since the last entry)" : ""));
                 ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
                 ctx.Response.Headers.WWWAuthenticate = "Bearer";
                 return;
@@ -98,6 +102,28 @@ public sealed class RunnerServer : IAsyncDisposable
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         await _app.StopAsync(cts.Token);
         await _app.DisposeAsync();
+    }
+
+    /// <summary>At most one refused-token log line per second, so unauthenticated clients cannot flood the log.</summary>
+    private static class RefusalLogGate
+    {
+        private static long _lastTicks;
+        private static int _suppressed;
+
+        public static bool ShouldLog(out int suppressed)
+        {
+            var now = Environment.TickCount64;
+            var last = Interlocked.Read(ref _lastTicks);
+            if (now - last < 1000 && last != 0)
+            {
+                Interlocked.Increment(ref _suppressed);
+                suppressed = 0;
+                return false;
+            }
+            Interlocked.Exchange(ref _lastTicks, now);
+            suppressed = Interlocked.Exchange(ref _suppressed, 0);
+            return true;
+        }
     }
 
     internal static bool TokenMatches(string header, byte[] expectedHash)

@@ -210,9 +210,12 @@ public sealed class WindowsDesktop : IDesktop, IDisposable
     }
 
     /// <summary>
-    /// Types like a person: the field is cleared, then the text goes in through the keyboard, so the app sees the same
-    /// notifications as for real typing (a Save dialog ignores a file name set behind its back). A field without a
-    /// value pattern, or one whose value reads back different, falls back to setting the value directly.
+    /// Types like a person into an editable text field (Edit, Document, editable ComboBox): the field is cleared through
+    /// its value pattern, then each character goes in as a Unicode keystroke (no virtual keys, so no modifiers, mnemonics
+    /// or shortcuts), so the app sees real typing (a Save dialog ignores a file name set behind its back). Before every
+    /// character the window manager must still report the same foreground and focus window, and every 16 characters
+    /// the full receiver check runs again. Elements that are not editable text take the value directly or refuse; the
+    /// runner never sends editing keys (Ctrl+A, Delete) of its own.
     /// </summary>
     private void Type(UiaNode node, UiOperation op)
     {
@@ -220,26 +223,55 @@ public sealed class WindowsDesktop : IDesktop, IDisposable
         var text = op.Text ?? "";
         var value = el.Patterns.Value;
         var settable = value.IsSupported && !UiaNode.Guard(() => value.Pattern.IsReadOnly.ValueOrDefault);
-        // Control characters would act as keys (Enter could press a default button).
-        var keyboard = !text.Any(char.IsControl);
-        if (!keyboard && !settable)
-            throw RpcErrors.PolicyRefused("typed text for this field contains control characters; use a key action instead");
-        if (keyboard)
+        if (!settable) throw RpcErrors.InvalidParamsError("the element does not take typed text");
+        var ct = UiaNode.Guard(() => el.Properties.ControlType.ValueOrDefault);
+        var editable = ct is ControlType.Edit or ControlType.Document or ControlType.ComboBox;
+        if (!editable || text.Any(char.IsControl))
         {
-            UiaNode.Guard(() => el.Focus());
-            op.Guard(KeyboardReceiver(op));
-            if (settable) TrySetValue(el, "");
-            else
-            {
-                Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, (VirtualKeyShort)'A');
-                Keyboard.Type(VirtualKeyShort.DELETE);
-            }
-            if (text.Length > 0) Keyboard.Type(text);
-            Wait.UntilInputIsProcessed();
-            // A password field cannot be read back; for the rest, check what arrived.
-            if (!settable || node.IsPassword || node.Value == text) return;
+            if (!TrySetValue(el, text)) throw new RetryableActionException("the field did not take the text");
+            return;
         }
-        if (!settable || !TrySetValue(el, text)) throw new RetryableActionException("the field did not take the typed text");
+        UiaNode.Guard(() => el.Focus());
+        var receiver = TypingReceiver(op, node);
+        op.Guard(receiver);
+        TrySetValue(el, "");
+        var (fg, focus) = Win32Focus();
+        for (var i = 0; i < text.Length; i++)
+        {
+            if (i > 0 && i % 16 == 0)
+            {
+                op.Guard(TypingReceiver(op, node));
+                (fg, focus) = Win32Focus();
+            }
+            if (Win32Focus() != (fg, focus)) throw new RetryableActionException("the keyboard focus moved while typing");
+            Native.SendUnicode(text[i]);
+        }
+        Wait.UntilInputIsProcessed();
+        // A password field cannot be read back; for the rest, check what arrived.
+        if (node.IsPassword || node.Value == text) return;
+        if (!TrySetValue(el, text)) throw new RetryableActionException("the field did not take the typed text");
+    }
+
+    /// <summary>The keyboard receiver, which for typing must be the target itself or a part of it (an editable combo
+    /// box's edit).</summary>
+    private IUiNode TypingReceiver(UiOperation op, UiaNode target)
+    {
+        var receiver = KeyboardReceiver(op);
+        var cur = receiver;
+        for (var i = 0; i < 4 && cur is not null; i++)
+        {
+            if (cur.Id == target.Id) return receiver;
+            cur = cur.GetParent();
+        }
+        throw new RetryableActionException("the target field does not have the keyboard focus");
+    }
+
+    private static (IntPtr Foreground, IntPtr Focus) Win32Focus()
+    {
+        var fg = Native.GetForegroundWindow();
+        if (fg == IntPtr.Zero) return (IntPtr.Zero, IntPtr.Zero);
+        var info = new Native.GUITHREADINFO { cbSize = Marshal.SizeOf<Native.GUITHREADINFO>() };
+        return Native.GetGUIThreadInfo(Native.GetWindowThreadProcessId(fg, out _), ref info) ? (fg, info.hwndFocus) : (fg, IntPtr.Zero);
     }
 
     private static bool TrySetValue(AutomationElement el, string text)
@@ -272,11 +304,6 @@ public sealed class WindowsDesktop : IDesktop, IDisposable
             if (item is not null && item.Patterns.SelectionItem.IsSupported)
             {
                 Detached(() => item.Patterns.SelectionItem.Pattern.Select());
-                return;
-            }
-            if (p.Value.IsSupported && !UiaNode.Guard(() => p.Value.Pattern.IsReadOnly.ValueOrDefault))
-            {
-                UiaNode.Guard(() => p.Value.Pattern.SetValue(itemName));
                 return;
             }
             // Never echo the requested item: it came from the step.

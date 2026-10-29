@@ -14,6 +14,8 @@ RunnerOptions options;
 try
 {
     options = RunnerOptions.Parse(args, Environment.GetEnvironmentVariable);
+    // The token now lives in options only; drop it from this process's environment as well.
+    Environment.SetEnvironmentVariable("RPA_RUNNER_TOKEN", null);
 }
 catch (RunnerOptions.InvalidOptionsException e)
 {
@@ -30,8 +32,15 @@ var log = new RunnerLog(Path.Combine(options.DataDir, "logs"));
 log.Info($"RPA runner {version} starting (data dir {options.DataDir}, policy {options.PolicyPath})");
 
 if (File.Exists(options.PolicyPath))
-    foreach (var problem in PolicyFileCheck.Problems(options.PolicyPath))
-        log.Warn($"policy file: {problem}; make it writable by administrators only");
+{
+    var problems = PolicyFileCheck.Problems(options.PolicyPath);
+    foreach (var problem in problems) log.Error($"policy file: {problem}");
+    if (problems.Count > 0)
+    {
+        log.Error("cannot start: the policy file and its folder must be changeable by administrators only");
+        return 1;
+    }
+}
 
 using var desktop = new WindowsDesktop();
 RunnerHost host;

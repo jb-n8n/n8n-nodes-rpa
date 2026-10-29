@@ -33,7 +33,7 @@ public sealed class FakeNode : IUiNode
     public FakeNode Add(FakeNode child)
     {
         child.Parent = this;
-        if (child.ProcessId == 0) child.ProcessId = ProcessId;
+        child.Inherit(ProcessId);
         lock (_children) _children.Add(child);
         return this;
     }
@@ -49,6 +49,14 @@ public sealed class FakeNode : IUiNode
     public FakeNode Find(string automationIdOrName) =>
         TargetResolver.WalkFind(this, new Cond(null, automationIdOrName, null, null, null)).Cast<FakeNode>().FirstOrDefault()
         ?? TargetResolver.WalkFind(this, new Cond(null, null, automationIdOrName, null, null)).Cast<FakeNode>().First();
+
+    // A subtree built before it was attached takes its new parent's process.
+    private void Inherit(int pid)
+    {
+        if (ProcessId != 0 || pid == 0) return;
+        ProcessId = pid;
+        lock (_children) foreach (var c in _children) c.Inherit(pid);
+    }
 
     public IReadOnlyList<IUiNode> GetChildren()
     {
@@ -117,6 +125,7 @@ public sealed class FakeProcessHost : IProcessHost
 {
     private int _nextPid = 1000;
     public Dictionary<int, string> Names { get; } = [];
+    public Dictionary<int, string> Paths { get; } = [];
     public Dictionary<int, int> Parents { get; } = [];
     public List<int> Killed { get; } = [];
     public List<(string Path, IReadOnlyList<string> Args)> Started { get; } = [];
@@ -128,11 +137,17 @@ public sealed class FakeProcessHost : IProcessHost
     {
         var pid = _nextPid++;
         Names[pid] = NextName;
+        Paths[pid] = exePath;
         Started.Add((exePath, args));
+        OnStart?.Invoke(pid);
         return pid;
     }
 
+    /// <summary>Runs inside Start (for example to end the run while the app is starting).</summary>
+    public Action<int>? OnStart { get; set; }
+
     public string? GetExeName(int pid) => Names.TryGetValue(pid, out var n) ? n : null;
+    public string? GetExePath(int pid) => Paths.TryGetValue(pid, out var p) ? p : null;
     public int? GetParentPid(int pid) => Parents.TryGetValue(pid, out var p) ? p : null;
 
     public bool IsDescendantOf(int pid, IReadOnlyCollection<int> roots)

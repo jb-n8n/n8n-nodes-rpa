@@ -22,11 +22,29 @@ public sealed class RunState
     public TimeSpan Lease { get; }
     internal DateTimeOffset Deadline { get; set; }
     internal int InFlight { get; set; }
-    internal bool Ended { get; set; }
+    private bool _ended;
+
+    internal bool Ended
+    {
+        get { lock (_gate) return _ended; }
+        set { lock (_gate) _ended = value; }
+    }
+
+    /// <summary>Records a launched process; false when the run already ended (the caller must stop the process).
+    /// Shares a lock with <see cref="Ended"/>, so cleanup never misses a process added while the run ends.</summary>
+    public bool TryAddProcess(int pid)
+    {
+        lock (_gate)
+        {
+            if (_ended) return false;
+            _pids.Add(pid);
+            return true;
+        }
+    }
 
     public void AddProcess(int pid)
     {
-        lock (_gate) _pids.Add(pid);
+        if (!TryAddProcess(pid)) throw RpcErrors.NoRun();
     }
 
     public IReadOnlyCollection<int> Processes

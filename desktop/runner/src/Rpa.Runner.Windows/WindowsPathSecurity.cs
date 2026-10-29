@@ -21,18 +21,10 @@ public sealed class WindowsPathSecurity : IPathSecurity
 
     public void CreatePrivateDirectory(string path)
     {
-        var acl = PrivateAcl();
+        // An existing directory keeps its ACL: an administrator may have prepared it (the policy file and the token
+        // file inside must stay theirs), and re-applying ours would hand the runner's user control over them.
         var dir = new DirectoryInfo(path);
-        if (!dir.Exists)
-        {
-            dir.Create(acl);
-            return;
-        }
-        try { dir.SetAccessControl(acl); }
-        catch (Exception e) when (e is UnauthorizedAccessException or PrivilegeNotHeldException or InvalidOperationException)
-        {
-            // An administrator created it for us; their ACL stands.
-        }
+        if (!dir.Exists) dir.Create(PrivateAcl());
     }
 
     private static DirectorySecurity PrivateAcl()

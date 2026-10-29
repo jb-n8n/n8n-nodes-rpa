@@ -11,16 +11,26 @@ public class SystemProcessHost : IProcessHost
 
     public virtual int Start(string exePath, IReadOnlyList<string> args)
     {
+        var psi = StartInfo(exePath, args);
+        var p = Process.Start(psi) ?? throw new InvalidOperationException("the process did not start");
+        _started[p.Id] = p;
+        AfterStart(p);
+        return p.Id;
+    }
+
+    /// <summary>No shell, the app's own folder as working directory, and none of the runner's settings in the
+    /// environment (RPA_RUNNER_*: the token, its file, the policy path), so a launched app never inherits them.</summary>
+    public static ProcessStartInfo StartInfo(string exePath, IReadOnlyList<string> args)
+    {
         var psi = new ProcessStartInfo(exePath)
         {
             UseShellExecute = false,
             WorkingDirectory = Path.GetDirectoryName(exePath) ?? Environment.CurrentDirectory,
         };
         foreach (var a in args) psi.ArgumentList.Add(a);
-        var p = Process.Start(psi) ?? throw new InvalidOperationException("the process did not start");
-        _started[p.Id] = p;
-        AfterStart(p);
-        return p.Id;
+        foreach (var key in psi.Environment.Keys.Where(k => k.StartsWith("RPA_RUNNER_", StringComparison.OrdinalIgnoreCase)).ToList())
+            psi.Environment.Remove(key);
+        return psi;
     }
 
     /// <summary>Hook for platform waits (Windows waits for the app to become idle).</summary>
@@ -36,6 +46,19 @@ public class SystemProcessHost : IProcessHost
             return OperatingSystem.IsWindows() ? p.ProcessName + ".exe" : p.ProcessName;
         }
         catch (Exception e) when (e is ArgumentException or InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    public virtual string? GetExePath(int pid)
+    {
+        try
+        {
+            using var p = Process.GetProcessById(pid);
+            return p.MainModule?.FileName;
+        }
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException)
         {
             return null;
         }

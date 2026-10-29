@@ -25,7 +25,8 @@ public class PolicyTests
         Assert.False(p.IsWriteControl("Other.exe", "btnPost"));
         Assert.True(p.IsGatedKey(KeyChord.Parse("ctrl+s")));
         Assert.True(p.IsGatedKey(KeyChord.Parse("f11")));
-        Assert.False(p.IsGatedKey(KeyChord.Parse("Ctrl+Shift+S")));
+        Assert.True(p.IsGatedKey(KeyChord.Parse("Ctrl+Shift+S"))); // extra modifiers are gated too
+        Assert.False(p.IsGatedKey(KeyChord.Parse("Shift+S")));
         Assert.Equal(20971520, p.MaxFileBytes);
         var app = Assert.Single(p.AllowedApps);
         Assert.False(app.AllowUserWritable);
@@ -54,6 +55,7 @@ public class PolicyTests
     [InlineData("""{ "writeControls": [{ "exe": "ErpDemo.exe" }] }""")]
     [InlineData("""{ "gatedKeys": ["Ctrl+Banana"] }""")]
     [InlineData("""{ "maxFileBytes": 0 }""")]
+    [InlineData("""{ "maxFileBytes": 1073741824 }""")]
     [InlineData("""not json""")]
     public void Refuses_invalid_policies(string json)
     {

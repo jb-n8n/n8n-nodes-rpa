@@ -99,6 +99,9 @@ public interface IProcessHost
     /// <summary>The executable's file name ("ErpDemo.exe"), or null when the process is gone.</summary>
     string? GetExeName(int pid);
 
+    /// <summary>The executable's full path, or null when the process is gone or cannot be inspected.</summary>
+    string? GetExePath(int pid);
+
     /// <summary>The parent process id, or null when unknown.</summary>
     int? GetParentPid(int pid);
 

@@ -4,8 +4,8 @@ namespace Rpa.Runner.Core.Ui;
 /// could replace a file (then it is not really pinned).</summary>
 public interface IPathSecurity
 {
-    /// <summary>Creates the directory (or tightens an existing one the runner owns) so that only the runner's user,
-    /// SYSTEM and administrators can use it.</summary>
+    /// <summary>Creates the directory so that only the runner's user, SYSTEM and administrators can use it. An existing
+    /// directory is left as it is (an administrator may have prepared it).</summary>
     void CreatePrivateDirectory(string path);
 
     /// <summary>True when the runner's user can modify or replace the file (write it, or write its directory).</summary>
@@ -18,6 +18,7 @@ public sealed class DefaultPathSecurity : IPathSecurity
 {
     public void CreatePrivateDirectory(string path)
     {
+        if (Directory.Exists(path)) return;
         Directory.CreateDirectory(path);
         if (!OperatingSystem.IsWindows())
             File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);

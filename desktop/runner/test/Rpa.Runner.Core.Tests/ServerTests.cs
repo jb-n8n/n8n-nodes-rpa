@@ -115,6 +115,30 @@ public sealed class ServerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Environment_configuration_cannot_add_a_plain_http_endpoint()
+    {
+        var plainPort = 45000 + Random.Shared.Next(1000);
+        Environment.SetEnvironmentVariable("Kestrel__Endpoints__Plain__Url", $"http://127.0.0.1:{plainPort}");
+        Environment.SetEnvironmentVariable("ASPNETCORE_URLS", $"http://127.0.0.1:{plainPort + 1}");
+        try
+        {
+            var policy = Path.Combine(_dir, "policy.json");
+            var options = RunnerOptions.Parse(["--port", "0", "--bind", "127.0.0.1", "--data-dir", _dir, "--policy", policy],
+                name => name == "RPA_RUNNER_TOKEN" ? GoodToken : null);
+            await using var second = await RunnerHost.StartAsync(options, _desktop, new FakeProcessHost(), new NoKeyProtection(),
+                TimeProvider.System, RunnerLog.Silent, "0.1.0-test");
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+            await Assert.ThrowsAnyAsync<Exception>(() => http.GetAsync($"http://127.0.0.1:{plainPort}/rpa/v1"));
+            await Assert.ThrowsAnyAsync<Exception>(() => http.GetAsync($"http://127.0.0.1:{plainPort + 1}/rpa/v1"));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("Kestrel__Endpoints__Plain__Url", null);
+            Environment.SetEnvironmentVariable("ASPNETCORE_URLS", null);
+        }
+    }
+
+    [Fact]
     public async Task The_certificate_and_fingerprint_survive_a_restart()
     {
         var policy = Path.Combine(_dir, "policy.json");
@@ -169,6 +193,32 @@ public class OptionsTests
         var o2 = RunnerOptions.Parse(["--port", "9100"], n => env.GetValueOrDefault(n));
         Assert.Equal(9100, o2.Port);
         Assert.Equal(Path.GetFullPath("/tmp/rpa-x"), o2.DataDir);
+    }
+
+    [Fact]
+    public void Reads_the_policy_path_from_RPA_RUNNER_POLICY_FILE()
+    {
+        var env = new Dictionary<string, string> { ["RPA_RUNNER_TOKEN"] = Token, ["RPA_RUNNER_POLICY_FILE"] = "/etc/rpa/policy.json", ["RPA_RUNNER_POLICY"] = "/other.json" };
+        Assert.Equal(Path.GetFullPath("/etc/rpa/policy.json"), RunnerOptions.Parse([], n => env.GetValueOrDefault(n)).PolicyPath);
+    }
+
+    [Fact]
+    public void Launched_apps_never_inherit_the_runners_settings()
+    {
+        Environment.SetEnvironmentVariable("RPA_RUNNER_TOKEN", Token);
+        Environment.SetEnvironmentVariable("RPA_RUNNER_TOKEN_FILE", "/secret/token");
+        try
+        {
+            var psi = Rpa.Runner.Core.Ui.SystemProcessHost.StartInfo("/opt/erp/ErpDemo.exe", ["--ui", "v2"]);
+            Assert.DoesNotContain(psi.Environment.Keys, k => k.StartsWith("RPA_RUNNER_", StringComparison.OrdinalIgnoreCase));
+            Assert.False(psi.UseShellExecute);
+            Assert.Equal(["--ui", "v2"], psi.ArgumentList);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("RPA_RUNNER_TOKEN", null);
+            Environment.SetEnvironmentVariable("RPA_RUNNER_TOKEN_FILE", null);
+        }
     }
 
     [Fact]

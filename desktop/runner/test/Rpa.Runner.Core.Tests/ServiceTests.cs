@@ -141,6 +141,58 @@ public sealed class ServiceTests : IDisposable
         Assert.Contains(Path.GetFullPath(Path.Combine(_h.Root, "exports")), _h.Paths.Private);
     }
 
+    [Theory]
+    [InlineData("Win")]
+    [InlineData("Win+R")]
+    [InlineData("Win+2")]
+    [InlineData("Ctrl+Escape")]
+    [InlineData("Ctrl+Shift+Esc")]
+    [InlineData("Alt+Tab")]
+    [InlineData("Alt+Shift+Tab")]
+    [InlineData("Alt+Esc")]
+    public void Shell_chords_are_never_sent_even_with_write_true(string key)
+    {
+        _h.BeginWithApp();
+        var e = _h.Err("act", Act(Id("txtUser"), "key", new { value = key, write = true }), RpcErrors.PolicyRefusedCode);
+        Assert.Contains("shell", e["message"]!.GetValue<string>());
+        Assert.Empty(_h.Desktop.Performed);
+    }
+
+    [Theory]
+    [InlineData("Ctrl+Shift+S")]
+    [InlineData("Ctrl+Alt+S")]
+    [InlineData("Shift+F11")]
+    public void Gated_keys_also_gate_extra_modifiers(string key)
+    {
+        _h.BeginWithApp();
+        var e = _h.Err("act", Act(Id("txtUser"), "key", new { value = key }), RpcErrors.PolicyRefusedCode);
+        Assert.Contains("gated", e["message"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void A_run_end_while_the_app_starts_stops_the_app()
+    {
+        _h.Begin();
+        _h.Processes.OnStart = _ => _h.Runs.End(Harness.RunId);
+        _h.Err("app.launch", new { runId = Harness.RunId, app = new { exe = "ErpDemo.exe" } }, RpcErrors.NoRunCode);
+        Assert.Equal(_h.Processes.Paths.Keys, _h.Processes.Killed);
+    }
+
+    [Fact]
+    public void Repair_mode_clicks_must_land_on_the_target_or_an_inert_part_of_it()
+    {
+        var w = _h.BeginWithApp();
+        var row = w.Find("Row A");
+        var inner = new FakeNode("Button", "Delete row", "btnRowDelete");
+        row.Add(inner);
+        var caption = new FakeNode("Text", "Row A text", "");
+        row.Add(caption);
+        _h.Desktop.InputReceiver = inner;
+        _h.Err("act", Act(Harness.T(new { name = "Row A" }), "click", new { mode = "repair" }), RpcErrors.PolicyRefusedCode);
+        _h.Desktop.InputReceiver = caption;
+        _h.Ok("act", Act(Harness.T(new { name = "Row A" }), "click", new { mode = "repair" }));
+    }
+
     [Fact]
     public void Keyboard_input_with_an_unknown_focus_is_never_sent()
     {
