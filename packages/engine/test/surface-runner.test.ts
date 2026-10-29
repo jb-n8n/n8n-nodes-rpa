@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { Page } from 'playwright-core';
 import { createMasker } from '../src/secrets/mask.js';
 import { HANDLERS, registerHandlers } from '../src/steps/handlers/index.js';
-import { runSteps, surfaceOf, type Handler, type StepContext } from '../src/steps/run.js';
+import { runSteps, type Handler, type StepContext } from '../src/steps/run.js';
+import { surfaceOf } from '../src/surface/browser.js';
 import type { Surface } from '../src/surface/surface.js';
 import type { Expect, Locator, Step } from '../src/types.js';
 import { policyFor } from './helpers.js';
@@ -62,7 +63,7 @@ describe('the step runner on a non-browser surface', () => {
   });
 
   it('missing desktop handler names the surface', async () => {
-    const r = await runSteps(ctxWith(new FakeSurface()), [{ intent: 'Type', fill: { target: { css: '#q' }, value: 'x' } } as Step]);
+    const r = await runSteps(ctxWith(new FakeSurface()), [{ intent: 'Type', fill: { field: { css: '#q' }, value: 'x' } } as Step]);
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.failure.message).toBe('step type "fill" has no handler for the desktop surface');

@@ -8,7 +8,7 @@ import { verbOf } from './parse.js';
 import { PolicyError } from './errors.js';
 import { shownMessage } from './urls.js';
 import { BLOCKED_STOP } from '../messages.js';
-import { createBrowserSurface } from '../surface/browser.js';
+import { surfaceOf } from '../surface/browser.js';
 import type { Surface } from '../surface/surface.js';
 
 /**
@@ -54,11 +54,6 @@ export interface StepHooks {
   end(page: Page, ok: boolean, label: string): Promise<void>;
 }
 export type Handler = (ctx: StepContext, step: Step, state: RunState, timeoutMs: number) => Promise<number | void>;
-
-/** The context's surface: its own, else the browser surface over `ctx.page`. */
-export function surfaceOf(ctx: StepContext): Surface {
-  return ctx.surface ?? createBrowserSurface(() => ctx.page);
-}
 
 export function newRunState(): RunState {
   return { rows: [], evidence: [], downloads: [], outputs: [], detected: {}, lastCheckpoint: -1, log: [], credentialsSubmitted: false, submitClicked: false, extractRan: false, attributeFields: [], submitted: false };
