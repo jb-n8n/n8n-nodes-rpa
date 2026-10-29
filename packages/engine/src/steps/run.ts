@@ -1,10 +1,10 @@
 import type { Page } from 'playwright-core';
 import type { AllowedSubmit, WriteWindow } from '../browser/session.js';
 import { maskClipped, type Masker } from '../secrets/mask.js';
-import type { PortalPolicy, PortalSecrets, RunState, Script, Step, StepLogEntry, StepsResult, StepVerb, Violation } from '../types.js';
+import type { PortalPolicy, PortalSecrets, RunState, Script, Step, StepLogEntry, StepsResult, Violation } from '../types.js';
 import type { InterruptHandle } from './interrupts.js';
-import { HANDLERS } from './handlers/index.js';
-import { verbOf } from './parse.js';
+import { HANDLERS, type AnyVerb } from './handlers/index.js';
+import { desktopVerbOf, verbOf } from './parse.js';
 import { PolicyError } from './errors.js';
 import { shownMessage } from './urls.js';
 import { BLOCKED_STOP } from '../messages.js';
@@ -83,8 +83,9 @@ function messageOf(err: unknown, masker: Masker): string {
 }
 
 /** The log entry's `output` for a step that produced one: read values, or the binary name (never the bytes). */
-function logOutput(state: RunState, verb: StepVerb, outputsBefore: number, downloadsBefore: number): StepLogEntry['output'] | undefined {
-  if (verb === 'download' && state.downloads.length > downloadsBefore) return { binary: state.downloads[state.downloads.length - 1].binaryName };
+function logOutput(state: RunState, verb: AnyVerb, outputsBefore: number, downloadsBefore: number): StepLogEntry['output'] | undefined {
+  // A desktop expectFile returns its file the way a download does.
+  if ((verb === 'download' || verb === 'expectFile') && state.downloads.length > downloadsBefore) return { binary: state.downloads[state.downloads.length - 1].binaryName };
   if ((verb === 'screenshot' || verb === 'pdf' || verb === 'read') && state.outputs.length > outputsBefore) {
     const o = state.outputs[state.outputs.length - 1];
     return {
@@ -146,7 +147,8 @@ export async function runSteps(
         hookLabel = maskClipped(ctx.masker, opts.label ? `${opts.label}: ${step.intent}` : `Step ${at + 1}: ${step.intent}`, HOOK_LABEL_MAX);
         await hooks.start(ctx.page, hookLabel).catch(() => undefined);
       }
-      const verb = verbOf(step);
+      // Desktop steps are a different document (DesktopScript): their verbs include key and expectFile.
+      const verb: AnyVerb = surface.kind === 'browser' ? verbOf(step) : desktopVerbOf(step);
       const handler = HANDLERS[surface.kind][verb];
       if (!handler) throw new Error(`step type "${verb}" has no handler${surface.kind === 'browser' ? '' : ` for the ${surface.kind} surface`}`);
       // The write window belongs to one top-level step; nested (paginate) runs never get it.

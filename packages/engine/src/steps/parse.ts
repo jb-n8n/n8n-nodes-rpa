@@ -1,5 +1,8 @@
-import { STEP_VERBS, type Script, type Step, type StepVerb } from '../types.js';
-import { FIRST_STEP_GOTO } from '../messages.js';
+import { DESKTOP_VERBS, STEP_VERBS, type DesktopScript, type DesktopVerb, type Script, type Step, type StepVerb } from '../types.js';
+import {
+  BROWSER_STEPS_NEED_BROWSER, browserLocatorOnDesktop, browserStepOnDesktop, DESKTOP_STEPS_NEED_RUNNER, desktopLocatorInBrowser, exportDirOnlyInFill,
+  FIRST_STEP_GOTO, reservedTemplate,
+} from '../messages.js';
 
 export class ScriptShapeError extends Error {
   constructor(public readonly issues: string[]) {
@@ -8,6 +11,7 @@ export class ScriptShapeError extends Error {
   }
 }
 
+const SURFACE_INVALID = 'surface must be "browser" or "desktop"';
 const BASE_KEYS = new Set(['intent', 'optional', 'when', 'expect', 'checkpoint', 'timeoutMs']);
 const LOCATOR_KINDS = ['role', 'label', 'text', 'testId', 'css'] as const;
 const LOCATOR_KEYS = new Set([...LOCATOR_KINDS, 'name', 'exact', 'within', 'frame', 'fallbacks']);
@@ -84,6 +88,7 @@ export function downloadTemplateIssues(v: unknown): string[] {
 
 function checkLocator(v: unknown, path: string, issues: string[], allowFallbacks = true) {
   if (!isObj(v)) { issues.push(`${path} must be a locator object`); return; }
+  if (Object.hasOwn(v, 'uia')) { issues.push(desktopLocatorInBrowser(path)); return; }
   for (const k of Object.keys(v)) if (!LOCATOR_KEYS.has(k)) issues.push(`${path} has unknown key "${k}"`);
   const kinds = LOCATOR_KINDS.filter((k) => Object.hasOwn(v, k));
   if (kinds.length !== 1 || !isStr(v[kinds[0]])) issues.push(`${path} must have exactly one of ${LOCATOR_KINDS.join('/')} as a non-empty string`);
@@ -316,7 +321,11 @@ export function parseScript(input: unknown, opts: { defaultStartUrl?: string } =
   const issues: string[] = [];
   const doc: unknown = Array.isArray(input) ? { steps: input } : input;
   if (!isObj(doc)) throw new ScriptShapeError(['script must be an object']);
-  for (const k of Object.keys(doc)) if (!['name', 'version', 'startUrl', 'interrupts', 'steps'].includes(k)) issues.push(`script has unknown key "${k}"`);
+  // Fail closed on the surface: a desktop step set never runs in a browser, and an unknown surface is refused.
+  if (doc.surface === 'desktop') throw new ScriptShapeError([DESKTOP_STEPS_NEED_RUNNER]);
+  if (doc.surface !== undefined && doc.surface !== 'browser') throw new ScriptShapeError([SURFACE_INVALID]);
+  for (const k of Object.keys(doc)) if (!['surface', 'name', 'version', 'startUrl', 'interrupts', 'steps'].includes(k)) issues.push(`script has unknown key "${k}"`);
+  checkTemplates(doc, '', () => false, issues);
   if (doc.name !== undefined && !isStr(doc.name)) issues.push('name must be a non-empty string');
   if (doc.version !== undefined && !isInt(doc.version, 1, Number.MAX_SAFE_INTEGER)) issues.push('version must be a positive integer');
   let startUrl: string | undefined;
@@ -342,4 +351,219 @@ export function parseScript(input: unknown, opts: { defaultStartUrl?: string } =
   checkSteps(doc.steps, 'steps', issues, false);
   if (issues.length) throw new ScriptShapeError(issues);
   return structuredClone({ ...doc, startUrl }) as unknown as Script;
+}
+
+// Reserved templates. `{{$name}}` is kept apart from the steps' own `{{var.x}}` templates: the only one there is,
+// {{$exportDir}}, is the desktop runner's export directory, and it is accepted only in a desktop fill value.
+
+const TEMPLATE = /\{\{\s*([^}]*?)\s*\}\}/g;
+/** {{$exportDir}} as a fill value may write it (the same spacing renderVars accepts). */
+export const EXPORT_DIR_TOKEN = /\{\{\s*\$exportDir\s*\}\}/g;
+
+/**
+ * Refuses every `{{$...}}` template in any string of the document, except {{$exportDir}} where `exportDirAllowed`
+ * accepts the string's path. Paths are `steps[0].fill.value` style, without a leading dot.
+ */
+function checkTemplates(v: unknown, path: string, exportDirAllowed: (path: string) => boolean, issues: string[]) {
+  if (typeof v === 'string') {
+    for (const m of v.matchAll(TEMPLATE)) {
+      const expr = m[1];
+      if (!expr.startsWith('$')) continue;
+      const at = path || 'script';
+      if (expr !== '$exportDir') issues.push(reservedTemplate(at, expr));
+      else if (!exportDirAllowed(path)) issues.push(exportDirOnlyInFill(at));
+    }
+    return;
+  }
+  if (Array.isArray(v)) { v.forEach((x, i) => checkTemplates(x, `${path}[${i}]`, exportDirAllowed, issues)); return; }
+  if (isObj(v)) for (const [k, x] of Object.entries(v)) checkTemplates(x, path ? `${path}.${k}` : k, exportDirAllowed, issues);
+}
+
+const DESKTOP_BASE_KEYS = new Set(['intent', 'optional', 'when', 'expect', 'checkpoint', 'timeoutMs', 'write']);
+/** Verbs that act on the app: only these may be declared writes. */
+const DESKTOP_WRITE_VERBS = new Set<string>(['click', 'fill', 'select', 'check', 'key']);
+const BROWSER_LOCATOR_KEYS = ['role', 'label', 'text', 'testId', 'css', 'name', 'exact', 'within', 'frame'];
+const WINDOW_KEYS = ['exe', 'title', 'titlePattern', 'automationId', 'className'];
+const COND_TEXT_KEYS = ['controlType', 'automationId', 'name', 'className'];
+const MAX_UIA_TEXT = 500;
+/** A key chord as the runner sends it: modifiers joined with + before one key (Enter, Tab, Ctrl+S, F5, Alt+F4). */
+const KEY_CHORD = /^(?:(?:Ctrl|Alt|Shift|Win)\+){0,3}(?:Enter|Tab|Escape|Esc|Space|Backspace|Delete|Insert|Home|End|PageUp|PageDown|Up|Down|Left|Right|F(?:[1-9]|1[0-9]|2[0-4])|[A-Za-z0-9])$/;
+const READ_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+const isText = (v: unknown, max = MAX_UIA_TEXT): v is string => isStr(v) && v.length <= max && !/[\r\n]/.test(v);
+
+function checkWindowSel(v: unknown, path: string, issues: string[]) {
+  if (!isObj(v)) { issues.push(`${path} must be an object`); return; }
+  checkKeys(v, WINDOW_KEYS, path, issues);
+  if (!WINDOW_KEYS.some((k) => Object.hasOwn(v, k))) issues.push(`${path} needs at least one of ${WINDOW_KEYS.join(', ')}`);
+  for (const k of WINDOW_KEYS) {
+    if (v[k] === undefined) continue;
+    if (k === 'titlePattern') checkRegex(v[k], `${path}.${k}`, issues);
+    else if (!isText(v[k])) issues.push(`${path}.${k} must be a non-empty single-line string of at most ${MAX_UIA_TEXT} characters`);
+  }
+}
+
+function checkUiaTarget(v: unknown, path: string, issues: string[]) {
+  if (!isObj(v)) { issues.push(`${path} must be an object`); return; }
+  checkKeys(v, ['window', 'path'], path, issues);
+  if (v.window !== undefined) checkWindowSel(v.window, `${path}.window`, issues);
+  if (!Array.isArray(v.path) || v.path.length === 0 || v.path.length > 20) { issues.push(`${path}.path must be an array of 1 to 20 conditions`); return; }
+  v.path.forEach((c, i) => {
+    const at = `${path}.path[${i}]`;
+    if (!isObj(c)) { issues.push(`${at} must be an object`); return; }
+    checkKeys(c, [...COND_TEXT_KEYS, 'index'], at, issues);
+    if (!COND_TEXT_KEYS.some((k) => Object.hasOwn(c, k))) issues.push(`${at} needs at least one of ${COND_TEXT_KEYS.join(', ')}`);
+    for (const k of COND_TEXT_KEYS) if (c[k] !== undefined && !isText(c[k])) issues.push(`${at}.${k} must be a non-empty single-line string of at most ${MAX_UIA_TEXT} characters`);
+    if (c.index !== undefined && !isInt(c.index, 0, 10_000)) issues.push(`${at}.index must be an integer between 0 and 10000`);
+  });
+}
+
+function checkDesktopLocator(v: unknown, path: string, issues: string[], allowFallbacks = true) {
+  if (!isObj(v)) { issues.push(`${path} must be a locator object`); return; }
+  const browserKind = BROWSER_LOCATOR_KEYS.find((k) => Object.hasOwn(v, k));
+  if (browserKind) { issues.push(browserLocatorOnDesktop(path, browserKind)); return; }
+  checkKeys(v, ['uia', 'fallbacks'], path, issues);
+  if (!Object.hasOwn(v, 'uia')) { issues.push(`${path} must have uia`); return; }
+  checkUiaTarget(v.uia, `${path}.uia`, issues);
+  if (v.fallbacks === undefined) return;
+  if (!allowFallbacks) { issues.push(`${path} has nested fallbacks`); return; }
+  if (!Array.isArray(v.fallbacks) || v.fallbacks.length > 5) { issues.push(`${path}.fallbacks must be an array of at most 5 locators`); return; }
+  v.fallbacks.forEach((f, i) => {
+    if (isObj(f) && Object.hasOwn(f, 'fallbacks')) issues.push(`${path}.fallbacks[${i}] has nested fallbacks`);
+    else checkDesktopLocator(f, `${path}.fallbacks[${i}]`, issues, false);
+  });
+}
+
+function checkDesktopStep(s: unknown, path: string, issues: string[]) {
+  if (!isObj(s)) { issues.push(`${path} must be an object`); return; }
+  if (!isStr(s.intent) || s.intent.length > 200) issues.push(`${path}.intent must be a non-empty string of at most 200 characters`);
+  const verbs = Object.keys(s).filter((k) => !DESKTOP_BASE_KEYS.has(k));
+  const browserOnly = verbs.filter((k) => (STEP_VERBS as readonly string[]).includes(k) && !(DESKTOP_VERBS as readonly string[]).includes(k));
+  for (const k of browserOnly) issues.push(browserStepOnDesktop(path, k));
+  if (browserOnly.length) return;
+  const known = verbs.filter((k) => (DESKTOP_VERBS as readonly string[]).includes(k));
+  if (known.length !== 1 || verbs.length !== 1) {
+    const unknown = verbs.filter((k) => !(DESKTOP_VERBS as readonly string[]).includes(k));
+    if (known.length === 1 && unknown.length) unknown.forEach((k) => issues.push(`${path} has unknown key "${k}"`));
+    else issues.push(`${path} must have exactly one action (${DESKTOP_VERBS.join(', ')})`);
+    return;
+  }
+  const verb = known[0] as DesktopVerb;
+  if (s.optional !== undefined && typeof s.optional !== 'boolean') issues.push(`${path}.optional must be a boolean`);
+  if (s.checkpoint !== undefined && typeof s.checkpoint !== 'boolean') issues.push(`${path}.checkpoint must be a boolean`);
+  if (s.timeoutMs !== undefined && !isInt(s.timeoutMs, 100, 120_000)) issues.push(`${path}.timeoutMs must be an integer between 100 and 120000`);
+  if (s.write !== undefined) {
+    if (typeof s.write !== 'boolean') issues.push(`${path}.write must be a boolean`);
+    else if (s.write && !DESKTOP_WRITE_VERBS.has(verb)) issues.push(`${path}.write is only allowed on click, fill, select, check and key steps`);
+  }
+  if (s.when !== undefined) {
+    if (!isObj(s.when)) issues.push(`${path}.when must be an object`);
+    else {
+      checkKeys(s.when, ['visible'], `${path}.when`, issues);
+      checkDesktopLocator(s.when.visible, `${path}.when.visible`, issues);
+    }
+  }
+  if (s.expect !== undefined) {
+    if (!isObj(s.expect)) issues.push(`${path}.expect must be an object`);
+    else {
+      for (const k of ['url', 'heading']) if (Object.hasOwn(s.expect, k)) issues.push(`${path}.expect.${k} is a browser check, not allowed in a desktop step set`);
+      checkKeys(s.expect, ['url', 'heading', 'visible'], `${path}.expect`, issues);
+      if (s.expect.visible !== undefined) checkDesktopLocator(s.expect.visible, `${path}.expect.visible`, issues);
+    }
+  }
+  const v = s[verb];
+  const p = `${path}.${verb}`;
+  switch (verb) {
+    case 'click':
+      checkDesktopLocator(v, p, issues);
+      break;
+    case 'fill':
+      if (!isObj(v)) { issues.push(`${p} must be an object`); break; }
+      checkKeys(v, ['field', 'value'], p, issues);
+      checkDesktopLocator(v.field, `${p}.field`, issues);
+      if (typeof v.value !== 'string') issues.push(`${p}.value must be a string`);
+      break;
+    case 'select':
+      if (!isObj(v)) { issues.push(`${p} must be an object`); break; }
+      checkKeys(v, ['field', 'option'], p, issues);
+      checkDesktopLocator(v.field, `${p}.field`, issues);
+      if (!isStr(v.option)) issues.push(`${p}.option must be a non-empty string`);
+      break;
+    case 'check':
+      if (!isObj(v)) { issues.push(`${p} must be an object`); break; }
+      checkKeys(v, ['field', 'checked'], p, issues);
+      checkDesktopLocator(v.field, `${p}.field`, issues);
+      if (v.checked !== undefined && typeof v.checked !== 'boolean') issues.push(`${p}.checked must be a boolean`);
+      break;
+    case 'waitFor':
+      if (!isObj(v)) { issues.push(`${p} must be an object`); break; }
+      checkKeys(v, ['target', 'state'], p, issues);
+      checkDesktopLocator(v.target, `${p}.target`, issues);
+      if (v.state !== undefined && !['visible', 'hidden'].includes(v.state as string)) issues.push(`${p}.state must be "visible" or "hidden"`);
+      break;
+    case 'read':
+      if (!isObj(v)) { issues.push(`${p} must be an object`); break; }
+      checkKeys(v, ['target', 'as'], p, issues);
+      checkDesktopLocator(v.target, `${p}.target`, issues);
+      if (typeof v.as !== 'string' || !READ_NAME.test(v.as)) issues.push(`${p}.as must be a name of letters, digits and underscores (at most 64)`);
+      break;
+    case 'key':
+      if (!isObj(v)) { issues.push(`${p} must be an object`); break; }
+      checkKeys(v, ['key', 'target'], p, issues);
+      if (typeof v.key !== 'string' || !KEY_CHORD.test(v.key)) issues.push(`${p}.key must be a key chord such as Enter, Tab, Ctrl+S or F5`);
+      if (v.target !== undefined) checkDesktopLocator(v.target, `${p}.target`, issues);
+      break;
+    case 'expectFile':
+      if (!isObj(v)) { issues.push(`${p} must be an object`); break; }
+      checkKeys(v, ['pattern', 'check', 'maxBytes', 'mime'], p, issues);
+      checkRegex(v.pattern, `${p}.pattern`, issues);
+      checkDownloadFile(v, p, issues);
+      break;
+  }
+}
+
+/** A desktop step's verb (parseDesktopScript checked there is exactly one). */
+export function desktopVerbOf(step: object): DesktopVerb {
+  const v = DESKTOP_VERBS.find((k) => Object.hasOwn(step, k));
+  if (!v) throw new Error(`step "${(step as { intent?: string }).intent ?? ''}" has no desktop action`);
+  return v;
+}
+
+/** Whether a raw document declares itself a desktop step set (`surface: "desktop"`). Never throws. */
+export function isDesktopDocument(raw: unknown): boolean {
+  return isObj(raw) && raw.surface === 'desktop';
+}
+
+/**
+ * Checks a desktop step document (`{ surface: "desktop", name?, version?, app: { exe, args? }, interrupts?, steps }`)
+ * and returns a clone. Browser steps, browser locators and browser checks are refused, and so is every `{{$...}}`
+ * template except {{$exportDir}} in a fill value. Like parseScript, hashing and signatures use the raw input.
+ */
+export function parseDesktopScript(input: unknown): DesktopScript {
+  const issues: string[] = [];
+  if (!isObj(input)) throw new ScriptShapeError(['script must be an object']);
+  const doc = input;
+  if (doc.surface !== 'desktop') throw new ScriptShapeError([doc.surface === undefined || doc.surface === 'browser' ? BROWSER_STEPS_NEED_BROWSER : SURFACE_INVALID]);
+  checkKeys(doc, ['surface', 'name', 'version', 'app', 'interrupts', 'steps'], 'script', issues);
+  if (Object.hasOwn(doc, 'startUrl')) issues.push('startUrl is a browser setting, not allowed in a desktop step set: set app instead');
+  if (doc.name !== undefined && !isStr(doc.name)) issues.push('name must be a non-empty string');
+  if (doc.version !== undefined && !isInt(doc.version, 1, Number.MAX_SAFE_INTEGER)) issues.push('version must be a positive integer');
+  if (!isObj(doc.app)) issues.push('app must be an object with exe');
+  else {
+    checkKeys(doc.app, ['exe', 'args'], 'app', issues);
+    if (!isText(doc.app.exe, 260) || doc.app.exe.includes('{{')) issues.push('app.exe must be a non-empty single-line file name or path of at most 260 characters, without templates');
+    const args = doc.app.args;
+    if (args !== undefined && !(Array.isArray(args) && args.length <= 50 && args.every((a) => typeof a === 'string' && a.length <= 1000 && !a.includes('{{')))) {
+      issues.push('app.args must be at most 50 strings of at most 1000 characters, without templates');
+    }
+  }
+  // Overlay handlers are a browser feature for now: accepted only empty, so nothing in them is silently ignored.
+  if (doc.interrupts !== undefined && !(Array.isArray(doc.interrupts) && doc.interrupts.length === 0)) issues.push('interrupts are not supported in a desktop step set yet');
+  if (!Array.isArray(doc.steps) || doc.steps.length === 0) issues.push('steps must be a non-empty array');
+  else {
+    if (doc.steps.length > 200) issues.push('steps has more than 200 steps');
+    doc.steps.forEach((s, i) => checkDesktopStep(s, `steps[${i}]`, issues));
+  }
+  checkTemplates(doc, '', (path) => /^steps\[\d+\]\.fill\.value$/.test(path), issues);
+  if (issues.length) throw new ScriptShapeError(issues);
+  return structuredClone(doc) as unknown as DesktopScript;
 }

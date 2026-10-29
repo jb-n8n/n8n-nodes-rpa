@@ -11,6 +11,7 @@
       "type": "object",
       "required": ["steps"],
       "properties": {
+        "surface": { "const": "browser", "description": "What the steps drive. Absent or \"browser\" here; desktop step sets (\"desktop\") are a different document this schema does not cover." },
         "name": { "type": "string", "minLength": 1, "description": "The step list's name. Signed steps carry it, and the Data Tables are keyed by it." },
         "version": { "type": "integer", "minimum": 1, "maximum": 9007199254740991, "description": "The version of these steps. Sign Steps signs it; Run Steps checks it as Expected Version." },
         "startUrl": { "type": "string", "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://", "description": "An absolute http(s) URL where the run starts. Without it, the first step's absolute goto, else the node's Start URL." },

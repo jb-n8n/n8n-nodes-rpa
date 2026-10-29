@@ -242,6 +242,8 @@ describe('the step-document JSON Schema', () => {
       ['a startUrl that does not parse', { startUrl: 'http://exa mple.com', steps: [{ intent: 'x', click: loc }] }],
       // 5. lengths: parseScript counts UTF-16 code units, JSON Schema counts characters
       ['an intent of 101 emoji (202 code units)', doc({ intent: '😀'.repeat(101), click: loc })],
+      // 6. names that start with $ are reserved in templates ({{$exportDir}} belongs to desktop step sets)
+      ['a {{$...}} template', doc({ intent: 'x', fill: { field: loc, value: '{{$now}}' } })],
     ];
     for (const [what, d] of gaps) {
       expect(parses(d), `parseScript accepts ${what}`).toBe(false);

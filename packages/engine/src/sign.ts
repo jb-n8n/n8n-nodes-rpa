@@ -1,6 +1,6 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { FIRST_STEP_GOTO } from './messages.js';
-import { parseScript, ScriptShapeError } from './steps/parse.js';
+import { isDesktopDocument, parseDesktopScript, parseScript, ScriptShapeError } from './steps/parse.js';
 
 /** Domain separator of the step-list MAC. A v1 script MAC never verifies as a pw-steps/2 MAC. */
 export const MAC_DOMAIN = 'pw-steps/2';
@@ -30,8 +30,30 @@ export function scriptHash(script: unknown): string {
   return createHash('sha256').update(canonicalize(script)).digest('hex');
 }
 
-/** Host of the steps' start URL as the run opens it; '' when the document does not parse. */
+/**
+ * What a desktop step set binds where a browser step set binds its start host: `desktop app <exe>`, the app the run
+ * launches, as written in the document. A browser start host is a URL host and never contains a space, so no browser
+ * step set's binding can equal a desktop one; `exe` is single-line (parseDesktopScript), so it cannot move text into
+ * the next MAC field. The hash already covers `surface` and `app`; this keeps the bound line meaningful for desktop
+ * signatures (signed without a startUrl) and names the app in the MAC input.
+ */
+export const desktopBinding = (exe: string): string => `desktop app ${exe}`;
+
+/** desktopBinding of a desktop document, '' when it does not parse. */
+function desktopBindingOf(raw: unknown): string {
+  try {
+    return desktopBinding(parseDesktopScript(raw).app.exe);
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Host of the steps' start URL as the run opens it; '' when the document does not parse. For a desktop step set
+ * (`surface: "desktop"`), its desktopBinding instead.
+ */
 export function startHostOf(raw: unknown): string {
+  if (isDesktopDocument(raw)) return desktopBindingOf(raw);
   try {
     return new URL(parseScript(raw).startUrl).host;
   } catch {
@@ -41,6 +63,8 @@ export function startHostOf(raw: unknown): string {
 
 /** startHostOf, except that a document with no start of its own (no startUrl, no absolute first goto) throws FIRST_STEP_GOTO. */
 function signedStartHost(raw: unknown): string {
+  // A desktop step set has no start URL: it binds its app instead.
+  if (isDesktopDocument(raw)) return desktopBindingOf(raw);
   try {
     return new URL(parseScript(raw).startUrl).host;
   } catch (err) {
@@ -60,7 +84,10 @@ const LINE_BREAK = /[\r\n]/;
 /** The MAC joins its fields with '\n': a line break in a bound value could move text from one field to the next. */
 const multiLine = (b: SignBinding) => LINE_BREAK.test(b.approvedBy) || LINE_BREAK.test(b.siteLoginId ?? '');
 
-/** HMAC-SHA-256, lowercase hex, over `pw-steps/2\n<hash>\n<name>\n<version>\n<startHost>\n<siteLoginId or empty>\n<approvedBy>`. */
+/**
+ * HMAC-SHA-256, lowercase hex, over `pw-steps/2\n<hash>\n<name>\n<version>\n<startHost>\n<siteLoginId or empty>\n<approvedBy>`.
+ * `startHost` is a desktop step set's desktopBinding.
+ */
 function mac(key: string, hash: string, name: string, version: number, startHost: string, b: SignBinding): string {
   const input = [MAC_DOMAIN, hash, name, String(version), startHost, b.siteLoginId ?? '', b.approvedBy].join('\n');
   return createHmac('sha256', key).update(input).digest('hex');
