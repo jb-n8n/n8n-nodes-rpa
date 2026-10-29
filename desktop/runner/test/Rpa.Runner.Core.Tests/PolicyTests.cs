@@ -151,6 +151,10 @@ public class KeyChordTests
     [InlineData("F5", "F5")]
     [InlineData("alt+f4", "Alt+F4")]
     [InlineData("Ctrl + Shift + Esc", "Ctrl+Shift+Escape")]
+    [InlineData("Alt", "Alt")]
+    [InlineData("shift+ctrl", "Ctrl+Shift")]
+    [InlineData("Ctrl+Shift", "Ctrl+Shift")]
+    [InlineData("Win+Alt", "Alt+Win")]
     public void Normalises(string input, string expected) => Assert.Equal(expected, KeyChord.Parse(input).ToString());
 
     [Theory]
@@ -159,6 +163,26 @@ public class KeyChordTests
     [InlineData("Hyper+S")]
     [InlineData("F25")]
     [InlineData("Banana")]
+    [InlineData("Alt+Alt")]
+    [InlineData("Ctrl+Control+S")]
+    [InlineData("Shift+Ctrl+Shift")]
+    [InlineData("S+Ctrl")]
     public void Refuses_unknown_chords(string input) =>
         Assert.Equal(RpcErrors.InvalidParams, Assert.Throws<RpcException>(() => KeyChord.Parse(input)).Code);
+
+    [Theory]
+    [InlineData("Ctrl+Shift", "Shift+Ctrl")]
+    [InlineData("Shift+Control", "ctrl+SHIFT")]
+    [InlineData("Alt", "alt")]
+    [InlineData("Ctrl+Alt+Delete", "Alt+Control+Del")]
+    public void Every_spelling_of_a_chord_is_gated_alike(string gated, string requested)
+    {
+        var p = RunnerPolicy.Parse($$"""{ "gatedKeys": [{{System.Text.Json.JsonSerializer.Serialize(gated)}}] }""");
+        Assert.True(p.IsGatedKey(KeyChord.Parse(requested)));
+        Assert.Equal(KeyChord.Parse(gated), KeyChord.Parse(requested));
+    }
+
+    [Fact]
+    public void A_policy_with_an_unparseable_gated_key_does_not_load() =>
+        Assert.Throws<RunnerPolicy.InvalidPolicyException>(() => RunnerPolicy.Parse("""{ "gatedKeys": ["Alt+Alt"] }"""));
 }

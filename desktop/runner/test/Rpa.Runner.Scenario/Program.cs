@@ -165,8 +165,9 @@ internal sealed class Scenario(Uri url, string token, string fingerprint, string
 
             ok = await Step("export via File > Export... to {exportDir} with segments", async () =>
             {
-                await Act(TW(MainTitle, new { automationId = "mnuFile" }), "click");
-                await Act(T(new { automationId = "mnuExport" }), "click", timeoutMs: 5000);
+                // WinForms menu items expose no automation id, so menus are found by name.
+                await Act(TW(MainTitle, new { controlType = "MenuItem", name = "File" }), "click");
+                await Act(T(new { controlType = "MenuItem", name = "Export..." }), "click", timeoutMs: 5000);
                 await Call("resolve", new { runId = _runId, target = TW(SaveTitle, new { automationId = "1001", controlType = "Edit" }), timeoutMs = 15000 });
                 await SaveSnapshot("snapshot-save-dialog.json", new { title = SaveTitle }, maxNodes: 1500);
                 await Act(TW(SaveTitle, new { automationId = "1001", controlType = "Edit" }), "type",
@@ -230,9 +231,14 @@ internal sealed class Scenario(Uri url, string token, string fingerprint, string
                 await Act(TW(LoginTitle, new { automationId = "btnSignIn" }), "click");
                 await Call("resolve", new { runId = _runId, target = TW(MainTitle, new { automationId = "btnFind" }), timeoutMs = 15000 });
                 await ExpectError(-32004, () => Call("resolve", new { runId = _runId, target = TW(MainTitle, new { automationId = "btnSearch" }), timeoutMs = 0 }));
-                await ExpectError(-32004, () => Call("resolve", new { runId = _runId, target = TW(MainTitle, new { automationId = "mnuExport" }), timeoutMs = 0 }));
-                await Act(TW(MainTitle, new { automationId = "mnuReports" }), "click");
-                await Act(T(new { automationId = "mnuExportLineItems" }), "click", timeoutMs: 5000);
+                await Act(TW(MainTitle, new { controlType = "MenuItem", name = "File" }), "click");
+                await Call("resolve", new { runId = _runId, target = T(new { controlType = "MenuItem", name = "Exit" }), timeoutMs = 5000 });
+                await ExpectError(-32004, () => Call("resolve", new { runId = _runId, target = T(new { controlType = "MenuItem", name = "Export..." }), timeoutMs = 0 }));
+                // Close the File menu: Escape is a navigation key, allowed without write: true even with a menu open.
+                await Call("act", new { runId = _runId, action = "key", value = "Escape", timeoutMs = 5000 });
+                await Call("act", new { runId = _runId, action = "key", value = "Escape", timeoutMs = 5000 });
+                await Act(TW(MainTitle, new { controlType = "MenuItem", name = "Reports" }), "click");
+                await Act(T(new { controlType = "MenuItem", name = "Export line items..." }), "click", timeoutMs: 5000);
                 await Call("resolve", new { runId = _runId, target = TW("Confirm export", new { automationId = "btnConfirmExport" }), timeoutMs = 15000 });
                 await SaveSnapshot("snapshot-v2-confirm.json", new { title = "Confirm export" });
             }

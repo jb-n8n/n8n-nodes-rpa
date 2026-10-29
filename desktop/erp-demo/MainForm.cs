@@ -80,7 +80,7 @@ internal sealed class MainForm : Form
         var post = new Button { Name = "btnPost", Text = "Post", AutoSize = true, Margin = new Padding(6, 3, 3, 3) };
         post.Click += (_, _) => Post();
         row.Controls.Add(post);
-        _count = new Label { Name = "lblResultCount", AccessibleName = "Result count", Text = "", AutoSize = true, Margin = new Padding(16, 8, 0, 0) };
+        _count = new Label { Name = "lblResultCount", Text = "", AutoSize = true, Margin = new Padding(16, 8, 0, 0) };
         row.Controls.Add(_count);
         search.Controls.Add(row);
         AcceptButton = go;
