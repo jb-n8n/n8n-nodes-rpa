@@ -147,7 +147,8 @@ describe.each(Object.keys(FILES) as (keyof typeof FILES)[])('%s is a well-formed
       const p = table(n);
       const known = columnsOf[p.dataTableId.value];
       expect(known, `${n.name} uses an unknown table`).toBeDefined();
-      for (const c of p.filters?.conditions ?? []) expect(known).toContain(c.keyName);
+      // id is a system column every Data Table row has (n8n DATA_TABLE_SYSTEM_COLUMNS), so a filter may use it.
+      for (const c of p.filters?.conditions ?? []) expect([...known, 'id']).toContain(c.keyName);
       for (const col of Object.keys(p.columns?.value ?? {})) expect(known).toContain(col);
       for (const s of p.columns?.schema ?? []) expect(known).toContain(s.id);
     }
@@ -409,17 +410,30 @@ describe('3-approve-steps.json', () => {
     });
     expect(table(byName(t, 'Record rejection')).columns?.value).toEqual({ status: 'rejected', approvedBy: APPROVER, approvedAt: '={{ $now.toISO() }}' });
   });
-  it('Supersede older versions runs after Save signed steps: active rows of the same name below the new version become superseded', () => {
-    expect(targets(t, 'Save signed steps')).toEqual([['Supersede older versions']]);
+  it('Supersede older versions runs after Save signed steps: every other active row of the same name up to the new version becomes superseded (I1)', () => {
+    expect(targets(t, 'Save signed steps')).toEqual([['Supersede older versions', 'Email signed steps']]);
     expect(targets(t, 'Supersede older versions')).toEqual([]);
     const n = table(byName(t, 'Supersede older versions'));
     expect(n).toMatchObject({ resource: 'row', operation: 'update', dataTableId: { value: STEPS_TABLE }, matchType: 'allConditions' });
+    // A desktop import is always version 1: a second approval must retire the first (same version, another row), while a
+    // higher version approved meanwhile stays active. $json is the row Save signed steps wrote (n8n returns updated rows with their id).
     expect(n.filters?.conditions).toEqual([
       { keyName: 'name', condition: 'eq', keyValue: `={{ ${SETTINGS_NAME} }}` },
       { keyName: 'status', condition: 'eq', keyValue: 'active' },
-      { keyName: 'version', condition: 'lt', keyValue: "={{ $('Repaired steps received').item.json.version }}" },
+      { keyName: 'version', condition: 'lte', keyValue: "={{ $('Repaired steps received').item.json.version }}" },
+      { keyName: 'id', condition: 'neq', keyValue: '={{ $json.id }}' },
     ]);
     expect(n.columns?.value).toEqual({ status: 'superseded' });
+  });
+  it('Email signed steps confirms what was signed, naming the steps signed as writes for desktop steps (I2)', () => {
+    const p = byName(t, 'Email signed steps').parameters as { operation: string; toEmail: string; subject: string; text: string; emailFormat: string };
+    expect(p).toMatchObject({ operation: 'send', toEmail: APPROVER, emailFormat: 'text' });
+    const signed = { name: 'erp-1', version: 1, hash: 'h1', approvedBy: APPROVER, approvedAt: '2026-10-29T12:00:00.000Z', writeLine: 'Signed as writes: step 16 (Click Save)' };
+    const scope = (json: IDataObject) => ({ $: (name: string) => { expect(name).toBe('Sign steps'); return { item: { json } }; } });
+    expect(render(p.subject, scope(signed))).toBe('Signed: steps v1 for erp-1 are active');
+    expect(render(p.text, scope(signed))).toBe(`Steps v1 for erp-1 are signed and active (hash h1), approved by ${APPROVER} at 2026-10-29T12:00:00.000Z.\nSigned as writes: step 16 (Click Save)`);
+    const { writeLine: _w, ...browser } = signed;
+    expect(render(p.text, scope(browser))).toMatch(/are signed and active \(hash h1\), approved by .*\.\n$/);
   });
   it('Ask for approval waits at most approvalTimeoutHours; Timed out? is true when send-and-wait resumed without an answer', () => {
     const ask = byName(t, 'Ask for approval').parameters;
@@ -493,6 +507,20 @@ describe('3-approve-steps.json', () => {
       options: { limitWaitTime: byName(t, 'Ask for approval').parameters.options && (byName(t, 'Ask for approval').parameters.options as { limitWaitTime: unknown }).limitWaitTime },
     });
     expect(String(ask.message)).toContain('The import never marks a step as a write: in Write steps, list the numbers of the steps that save, post or submit');
+    // I2: the numbered change list is in the message and the candidates' numbers on the form; I3: what listing does, plainly.
+    const received = {
+      version: 1, name: 'erp-1', hash: 'h', digest: 'd', evidenceLine: 'Not replayed', safetyLine: 'desktop app: "ErpDemo.exe"',
+      changeList: 'Step 1: Wait for the window\nStep 2: Click Save <b>', safetyFlags: ['desktop app: "ErpDemo.exe"', 'candidate write: step 2 (Click Save) may save, post or submit: list 2 in Write Steps if it does (…)'],
+    };
+    const $ = (name: string) => ({ item: { json: name === 'Settings' ? { approvalTimeoutHours: 72 } : received } });
+    const message = render(String(ask.message), { $ });
+    expect(message).toContain('The steps, numbered as Write steps counts them:\nStep 1: Wait for the window\nStep 2: Click Save &lt;b&gt;\n');
+    expect(message).toContain('leaving a step unlisted does not stop it from saving unless its control is in the runner policy');
+    expect(message).not.toContain('Only listed steps may use');
+    const description = render(String((ask.options as IDataObject).responseFormDescription), { $ });
+    expect(description).toContain('from the numbered list in the email (candidates: step 2)');
+    expect(description).toContain('an unlisted step can still save through any other control');
+    expect(render(String((ask.options as IDataObject).responseFormDescription), { $: () => ({ item: { json: { ...received, safetyFlags: [] } } }) })).toContain('(candidates: none)');
     const answer = String(byName(t, 'Desktop answer').parameters.jsonOutput);
     expect(evaluate(answer, { $json: { data: { Decision: 'Approve', 'Write steps': '16', respondedAt: 'x' } } })).toEqual({ data: { approved: true, writeSteps: '16' } });
     expect(evaluate(answer, { $json: { data: { Decision: 'Reject', respondedAt: 'x' } } })).toEqual({ data: { approved: false, writeSteps: '' } });

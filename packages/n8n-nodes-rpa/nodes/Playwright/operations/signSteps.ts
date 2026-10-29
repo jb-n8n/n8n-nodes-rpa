@@ -360,7 +360,15 @@ function signDesktop(
     return c.refuse([errorMessage(error)]);
   }
   if (!result.ok) return c.refuse(result.reasons);
-  return c.record(signedRecord(result.row));
+  // What was signed as writes, by number and intent, so the approver's choice is confirmed in words.
+  const writes = result.row.writeSteps.map((n) => ({ step: n, intent: result.row.steps.steps[n - 1].intent }));
+  return c.record({ ...signedRecord(result.row), writeSteps: writes, writeLine: desktopWriteLine(writes) });
+}
+
+/** `Signed as writes: step 16 (Click Save)`, or none. */
+export function desktopWriteLine(writes: { step: number; intent: string }[]): string {
+  if (writes.length === 0) return 'Signed as writes: none (no step was listed in Write Steps)';
+  return `Signed as writes: ${writes.map((w) => `step ${w.step} (${w.intent.replace(/\s+/g, ' ').trim()})`).join(', ')}`;
 }
 
 /**

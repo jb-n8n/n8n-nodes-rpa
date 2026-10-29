@@ -7,6 +7,7 @@ import { checkDesktopTrust, runDesktopTask } from '../src/desktop/task.js';
 import { importSource } from '../src/import/index.js';
 import type { ImportItem, ImportOptions, ImportResult } from '../src/import/types.js';
 import { canonicalChord } from '../src/import/uipath.js';
+import { canonicalChord as sharedCanonicalChord } from '../src/steps/desktop-vocabulary.js';
 import {
   ctrlControlType, CTRL_ROLE_TO_CONTROL_TYPE, readDesktopSelector, uiaControlType, UIA_ROLE_TO_CONTROL_TYPE,
 } from '../src/import/uipath-desktop-selector.js';
@@ -269,7 +270,11 @@ describe('review fixes: clicks, secrets in arguments and expressions, chords, ti
   });
 
   it('shell chords are refused; Enter after a save path returns the file right away; odd window titles are reported', () => {
-    for (const [key, mods] of [['esc', 'Ctrl'], ['tab', 'Alt'], ['esc', 'Alt']]) expect(canonicalChord(key, mods)).toEqual({ error: expect.stringContaining('drives the Windows shell') });
+    // The parser's own rule (one shared definition): also with extra modifiers, as the runner judges a shell chord.
+    expect(canonicalChord).toBe(sharedCanonicalChord);
+    for (const [key, mods] of [['esc', 'Ctrl'], ['tab', 'Alt'], ['esc', 'Alt'], ['esc', 'Ctrl, Shift'], ['esc', 'Ctrl, Alt'], ['tab', 'Alt, Shift'], ['tab', 'Ctrl, Alt']]) {
+      expect(canonicalChord(key, mods), `${mods}+${key}`).toEqual({ error: expect.stringContaining('drives the Windows shell') });
+    }
     const save = `<ui:TypeInto DisplayName="Type Into 'File name:'" Text="C:\\Exports\\out.csv[k(enter)]"><ui:TypeInto.Target>${target("<uia automationid='1001' name='File name:' role='edit' />")}</ui:TypeInto.Target></ui:TypeInto>`;
     const r = importSource('uipath', xaml(open(`${save}${click('Search', "<uia automationid='btnSearch' role='button' />")}`, 'Export line items')), { name: 'e', hasSiteLogin: false });
     expect(r.desktopDrafts![0].script.steps.map((s) => Object.keys(s).find((k) => k !== 'intent'))).toEqual(['waitFor', 'fill', 'key', 'expectFile', 'click']);
@@ -341,8 +346,8 @@ describe('approving and signing an imported desktop draft', () => {
     expect(p).toMatchObject({ name: 'erp-1', baseVersion: null, version: 1, evidence: { count: 0, total: null, diff: { missing: [], extra: [] } } });
     expect(p.safetyFlags).toEqual([
       'desktop app: "ErpDemo.exe"',
-      'candidate write: step 4 (Press Enter in Password) may save, post or submit; it is not a write step unless you list 4 in Write Steps when you approve',
-      'candidate write: step 16 (Click Save) may save, post or submit; it is not a write step unless you list 16 in Write Steps when you approve',
+      'candidate write: step 4 (Press Enter in Password) may save, post or submit: list 4 in Write Steps if it does (the desktop runner refuses a write only on the controls and keys its policy lists, so leaving a step unlisted does not stop it from saving unless its control is in the runner policy)',
+      'candidate write: step 16 (Click Save) may save, post or submit: list 16 in Write Steps if it does (the desktop runner refuses a write only on the controls and keys its policy lists, so leaving a step unlisted does not stop it from saving unless its control is in the runner policy)',
       'file returned to n8n: step 17 returns the file matching "^line-items\\\\.csv$" from the run\'s export folder',
     ]);
     expect(p.changes).toHaveLength(17);

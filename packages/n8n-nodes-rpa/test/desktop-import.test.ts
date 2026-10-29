@@ -155,6 +155,33 @@ describe('approving imported desktop steps: Sign Steps with Write Steps', () => 
     expect(await sign(item, { approved: false, writeSteps: '16' })).toMatchObject({ status: 'rejected', hash: item.hash, steps: '' });
   });
 
+  it('numbers the change list for desktop steps, and Sign Steps names the steps it signed as writes with their intents (I2)', async () => {
+    const { repaired } = await importSample();
+    const item = repaired[0].json;
+    const lines = String(item.changeList).split('\n');
+    expect(lines).toHaveLength(17);
+    lines.forEach((l, i) => expect(l.startsWith(`Step ${i + 1}: `), l).toBe(true));
+    expect(lines[15]).toMatch(/^Step 16: Click Save \(click "Button" id "1" /);
+    // The numbered list is recomputed from the digest's fields, so the signature check still holds.
+    const record = await sign(item, { writeSteps: '16' });
+    expect(record).toMatchObject({ status: 'active', writeSteps: [{ step: 16, intent: 'Click Save' }], writeLine: 'Signed as writes: step 16 (Click Save)' });
+    const two = await sign(item, { writeSteps: '4, 16' });
+    expect(two).toMatchObject({ writeSteps: [{ step: 4, intent: 'Press Enter in Password' }, { step: 16, intent: 'Click Save' }], writeLine: 'Signed as writes: step 4 (Press Enter in Password), step 16 (Click Save)' });
+    const none = await sign(item, { writeSteps: '' });
+    expect(none).toMatchObject({ status: 'active', writeSteps: [], writeLine: 'Signed as writes: none (no step was listed in Write Steps)' });
+  });
+
+  it('says plainly that an unlisted step can still save unless the runner policy lists its control (I3)', async () => {
+    const { repaired } = await importSample();
+    expect(String(repaired[0].json.safetyLine)).toContain(
+      'candidate write: step 16 (Click Save) may save, post or submit: list 16 in Write Steps if it does (the desktop runner refuses a write only on the controls and keys its policy lists, so leaving a step unlisted does not stop it from saving unless its control is in the runner policy)',
+    );
+    const { signStepsProperties } = await import('../nodes/Playwright/description/signSteps.js');
+    const description = String(signStepsProperties.find((p) => p.name === 'writeSteps')!.description);
+    expect(description).toContain('leaving a step unlisted does not stop it from saving unless its control is in the runner policy');
+    expect(description).not.toContain('Only these steps may act');
+  });
+
   it('a Site Login on Sign Steps is not bound into a desktop signature (desktop runs refuse one)', async () => {
     const { repaired } = await importSample();
     const record = await sign(repaired[0].json, {}, { playwrightSiteLoginApi: { loginUrl: 'https://login.example.com/', username: 'someone', password: 'Long-password-1' } });

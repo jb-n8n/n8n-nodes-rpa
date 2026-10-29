@@ -78,9 +78,14 @@ export function isDesktopProposal(p: Proposal | DesktopProposal): p is DesktopPr
   return typeof steps === 'object' && steps !== null && Object.hasOwn(steps, 'surface') && (steps as { surface?: unknown }).surface === 'desktop';
 }
 
-/** Plain-English step changes, one per line. */
+/**
+ * Plain-English step changes, one per line. Desktop steps are a first version whose change list is every step in order,
+ * so each line carries its step number (`Step 16: Click Save (…)`): the number the approver lists in Write Steps. The
+ * numbers are added here, recomputed from the reviewed fields (the digest covers the changes, not this text).
+ */
 export function changeList(p: Proposal | DesktopProposal): string {
   if (p.changes.length === 0) return 'No step changes';
+  if (isDesktopProposal(p)) return p.changes.map((c, i) => `Step ${i + 1}: ${c.now === null ? `Removed: ${oneLine(c.was ?? '')}` : oneLine(c.now)}`).join('\n');
   return p.changes
     .map((c) => {
       const was = c.was === null ? null : oneLine(c.was);

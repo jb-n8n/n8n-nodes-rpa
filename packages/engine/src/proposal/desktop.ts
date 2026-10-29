@@ -5,6 +5,7 @@
 import { STEPS_CHANGED_AFTER_REVIEW, STEPS_HASH_MISMATCH, STEPS_NAME_MISMATCH, STEPS_VERSION_MISMATCH } from '../messages.js';
 import { createMasker } from '../secrets/mask.js';
 import { scriptHash, signScript } from '../sign.js';
+import { DESKTOP_WRITE_VERBS } from '../steps/desktop-vocabulary.js';
 import { desktopVerbOf, parseDesktopScript } from '../steps/parse.js';
 import type { DesktopLocator, DesktopScript, DesktopStep, UiaCond, UiaTarget, WindowSel } from '../types.js';
 import { oneLine } from './describe.js';
@@ -29,8 +30,6 @@ export interface SignedDesktopRow {
   writeSteps: number[];
 }
 
-/** Verbs a desktop step may declare a write on (parse.ts DESKTOP_WRITE_VERBS). */
-const WRITE_VERBS = new Set(['click', 'fill', 'select', 'check', 'key']);
 
 /** Words that make a control look like it saves, posts or submits (matched on its name, automation id and the step's intent). */
 const WRITE_WORDS = /\b(save|post|posting|submit|send|delete|remove|approve|release|book|pay|transfer|apply|confirm|commit|update|create|ok|yes)\b/i;
@@ -137,7 +136,11 @@ export function desktopSafetyFlags(script: DesktopScript): string[] {
     if ('expectFile' in s) flags.push(`file returned to n8n: step ${n} returns the file matching ${q(s.expectFile.pattern)} from the run's export folder`);
     if (s.write === true) flags.push(`write: step ${n} (${oneLine(s.intent)}) is a declared write step`);
     else if (looksLikeWrite(s)) {
-      flags.push(`candidate write: step ${n} (${oneLine(s.intent)}) may save, post or submit; it is not a write step unless you list ${n} in Write Steps when you approve`);
+      // Plain about what listing does: it marks the step for the runner's write gate, which covers only the controls and
+      // keys the runner's policy lists. It does not stop an unlisted step from saving through any other control.
+      flags.push(
+        `candidate write: step ${n} (${oneLine(s.intent)}) may save, post or submit: list ${n} in Write Steps if it does (the desktop runner refuses a write only on the controls and keys its policy lists, so leaving a step unlisted does not stop it from saving unless its control is in the runner policy)`,
+      );
     }
   });
   return flags;
@@ -191,7 +194,7 @@ export function declareWrites(script: DesktopScript, writeSteps: number[]): { ok
     const step = Number.isInteger(n) && n >= 1 && n <= out.steps.length ? out.steps[n - 1] : undefined;
     if (!step) { reasons.push(writeStepOutOfRange(n, out.steps.length)); continue; }
     const verb = desktopVerbOf(step);
-    if (!WRITE_VERBS.has(verb)) { reasons.push(writeStepNotAllowed(n, verb)); continue; }
+    if (!DESKTOP_WRITE_VERBS.has(verb)) { reasons.push(writeStepNotAllowed(n, verb)); continue; }
     step.write = true;
   }
   return reasons.length ? { ok: false, reasons } : { ok: true, script: out };

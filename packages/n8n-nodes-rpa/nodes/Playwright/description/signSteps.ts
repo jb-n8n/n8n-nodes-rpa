@@ -44,7 +44,7 @@ export const signStepsProperties: INodeProperties[] = [
     placeholder: '7, 9',
     hint: 'Desktop steps only. Leave empty when no step saves, posts or submits.',
     description:
-      'Desktop steps only: the numbers of the steps that save, post or submit, as the approver declared them (the safety flags list the candidates). Only these steps may act on the desktop runner\'s write controls and gated keys. Map it from the approval answer. Browser steps refuse a value here.',
+      'Desktop steps only: the numbers of the steps that save, post or submit, as the approver declared them (the change list numbers every step; the safety flags list the candidates). Listed steps are signed as writes, so the desktop runner lets them act on the write controls and gated keys of its policy. The runner refuses a write only on those: leaving a step unlisted does not stop it from saving unless its control is in the runner policy. Map it from the approval answer. Browser steps refuse a value here.',
     displayOptions: signSteps,
   },
 ];

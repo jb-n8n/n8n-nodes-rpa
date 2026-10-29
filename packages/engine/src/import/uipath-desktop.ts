@@ -9,6 +9,7 @@ import { parseDesktopScript, ScriptShapeError } from '../steps/parse.js';
 import type { DesktopLocator, DesktopScript, DesktopStep, UiaCond, UiaTarget, WindowSel } from '../types.js';
 import { cleanLabel } from './draft.js';
 import type { DesktopDraft, ImportItem, ImportReport } from './types.js';
+import { READ_NAME } from '../steps/desktop-vocabulary.js';
 
 /** One desktop activity, as the walker resolved it. `at` says where in the project it came from, for the report. */
 export type DesktopEvent =
@@ -36,7 +37,6 @@ export interface DesktopSequence {
 
 /** A step keeps its primary target and at most this many fallbacks (the step format allows five). */
 const MAX_FALLBACKS = 2;
-const READ_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 const TEMPLATE_VAR = /\{\{\s*var\.([A-Za-z0-9_]+)\s*\}\}/g;
 
 /** What a target names, for an intent: the last condition's name, else its automation id. */

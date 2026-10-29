@@ -3,7 +3,7 @@
   "nodes": [
     {
       "parameters": {
-        "content": "### Approve repaired steps (grey: leave as is)\nCalled by **RPA: 2 Data feed** or **RPA: 5 Import a bot** with a Repaired steps item. The approver gets the evidence, the change list, red safety flags and before/after screenshots, then an Approve / Reject email. **Mark pending** writes a `pending` row that expires after `approvalTimeoutHours`; while it is unexpired the feed reports a changed site instead of repairing again. Approve: **Sign steps** signs exactly the steps that were proven and **Save signed steps** sets the row `active`, and **Supersede older versions** sets earlier `active` rows of the same name to `superseded`. Reject or a refused signature: `rejected`. No answer in time: `expired`, and the next run repairs again. Desktop steps (imported from UiPath, not replayed) get a form instead of the buttons: **Decision** and **Write steps**, the steps that save, post or submit; **Sign steps** marks exactly those as writes before it signs.",
+        "content": "### Approve repaired steps (grey: leave as is)\nCalled by **RPA: 2 Data feed** or **RPA: 5 Import a bot** with a Repaired steps item. The approver gets the evidence, the change list, red safety flags and before/after screenshots, then an Approve / Reject email. **Mark pending** writes a `pending` row that expires after `approvalTimeoutHours`; while it is unexpired the feed reports a changed site instead of repairing again. Approve: **Sign steps** signs exactly the steps that were proven and **Save signed steps** sets the row `active`, **Supersede older versions** sets every other `active` row of the same name with this version or a lower one to `superseded` (so approving a desktop import again, always version 1, leaves one active row), and **Email signed steps** confirms what was signed, for desktop steps with the steps signed as writes. Reject or a refused signature: `rejected`. No answer in time: `expired`, and the next run repairs again. Desktop steps (imported from UiPath, not replayed) get a form instead of the buttons: **Decision** and **Write steps**, the numbers (from the numbered change list) of the steps that save, post or submit; **Sign steps** marks exactly those as writes before it signs. The runner refuses a write only on the controls and keys its policy lists, so an unlisted step can still save through any other control.",
         "height": 400,
         "width": 520,
         "color": 7
@@ -16,7 +16,7 @@
     },
     {
       "parameters": {
-        "content": "### Set once (green)\nPick the SMTP credential on **Email repaired steps**, **Ask for approval** and **Ask for approval (desktop steps)**, and the **RPA Site Login** and **RPA Step Signing** credentials on **Sign steps** (the same ones as Run steps in workflow 2; desktop signatures bind the app, never a Site Login). Use one approver address in **Email repaired steps**, **Ask for approval** and **Ask for approval (desktop steps)** (To), **Sign steps** (Approved By and Approver Allowlist) and **Record rejection**.\n\nConfiguration faults (a missing credential, a short signing key) also end in **Record rejection**: check the error on **Sign steps** before the feed runs again. Approve one Repaired steps item per version.",
+        "content": "### Set once (green)\nPick the SMTP credential on **Email repaired steps**, **Ask for approval**, **Ask for approval (desktop steps)** and **Email signed steps**, and the **RPA Site Login** and **RPA Step Signing** credentials on **Sign steps** (the same ones as Run steps in workflow 2; desktop signatures bind the app, never a Site Login). Use one approver address in **Email repaired steps**, **Ask for approval**, **Ask for approval (desktop steps)** and **Email signed steps** (To), **Sign steps** (Approved By and Approver Allowlist) and **Record rejection**.\n\nConfiguration faults (a missing credential, a short signing key) also end in **Record rejection**: check the error on **Sign steps** before the feed runs again. Approve one Repaired steps item per version.",
         "height": 400,
         "width": 460,
         "color": 4
@@ -161,10 +161,11 @@
         "fromEmail": "n8n-rpa@localhost",
         "toEmail": "approver@example.com",
         "subject": "=Approve desktop steps v{{ $('Repaired steps received').item.json.version }} for {{ $('Repaired steps received').item.json.name }}?",
-        "message": "=Steps v{{ String($('Repaired steps received').item.json.version ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }} for {{ String($('Repaired steps received').item.json.name ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\nEvidence: {{ String($('Repaired steps received').item.json.evidenceLine ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\nSafety flags: {{ String($('Repaired steps received').item.json.safetyLine ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\nHash: {{ String($('Repaired steps received').item.json.hash ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\nReview digest: {{ String($('Repaired steps received').item.json.digest ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\n\nApprove only if the change list in the previous email matches what you expect. These desktop steps were not replayed. The import never marks a step as a write: in Write steps, list the numbers of the steps that save, post or submit (the safety flags name the candidates), for example 16. Leave it empty if no step writes. Only listed steps may use the desktop runner's write controls. This request expires after {{ $('Settings').item.json.approvalTimeoutHours }} hours.",
+        "message": "=Steps v{{ String($('Repaired steps received').item.json.version ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }} for {{ String($('Repaired steps received').item.json.name ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\nEvidence: {{ String($('Repaired steps received').item.json.evidenceLine ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\nSafety flags: {{ String($('Repaired steps received').item.json.safetyLine ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\nHash: {{ String($('Repaired steps received').item.json.hash ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\nReview digest: {{ String($('Repaired steps received').item.json.digest ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\n\nThe steps, numbered as Write steps counts them:\n{{ String($('Repaired steps received').item.json.changeList ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\n\nApprove only if the change list in the previous email matches what you expect. These desktop steps were not replayed. The import never marks a step as a write: in Write steps, list the numbers of the steps that save, post or submit (the safety flags name the candidates), for example 16. Leave it empty if no step writes. Listed steps are signed as writes, so the desktop runner lets them use the write controls and gated keys of its policy. The runner refuses a write only on those: leaving a step unlisted does not stop it from saving unless its control is in the runner policy. This request expires after {{ $('Settings').item.json.approvalTimeoutHours }} hours.",
         "options": {
           "messageButtonLabel": "Review and decide",
           "responseFormTitle": "Approve desktop steps",
+          "responseFormDescription": "=Steps v{{ String($('Repaired steps received').item.json.version ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }} for {{ String($('Repaired steps received').item.json.name ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}. Write steps: the numbers of the steps that save, post or submit, from the numbered list in the email (candidates: {{ ($('Repaired steps received').item.json.safetyFlags ?? []).filter((f) => String(f).startsWith('candidate write: step ')).map((f) => 'step ' + /^candidate write: step (\\d+)/.exec(String(f))[1]).join(', ') || 'none' }}). The runner refuses a write only on the controls and keys its policy lists: an unlisted step can still save through any other control.",
           "limitWaitTime": {
             "values": { "limitType": "afterTimeInterval", "resumeAmount": "={{ $('Settings').item.json.approvalTimeoutHours }}", "resumeUnit": "hours" }
           }
@@ -345,7 +346,8 @@
           "conditions": [
             { "keyName": "name", "condition": "eq", "keyValue": "={{ $('Settings').item.json.name }}" },
             { "keyName": "status", "condition": "eq", "keyValue": "active" },
-            { "keyName": "version", "condition": "lt", "keyValue": "={{ $('Repaired steps received').item.json.version }}" }
+            { "keyName": "version", "condition": "lte", "keyValue": "={{ $('Repaired steps received').item.json.version }}" },
+            { "keyName": "id", "condition": "neq", "keyValue": "={{ $json.id }}" }
           ]
         },
         "columns": {
@@ -363,7 +365,25 @@
       "type": "n8n-nodes-base.dataTable",
       "typeVersion": 1.1,
       "position": [2640, -80],
-      "notes": "Earlier active rows of the same name become superseded, so only the version just approved is active. Runs already use the highest active version; this keeps the Data Table readable."
+      "notes": "Every other active row of the same name with this version or a lower one becomes superseded (its id is not the row Save signed steps just wrote), so only the steps just approved are active. A desktop import is always version 1, so approving it again retires the earlier approval. A higher version approved meanwhile stays active."
+    },
+    {
+      "parameters": {
+        "resource": "email",
+        "operation": "send",
+        "fromEmail": "n8n-rpa@localhost",
+        "toEmail": "approver@example.com",
+        "subject": "=Signed: steps v{{ $('Sign steps').item.json.version }} for {{ $('Sign steps').item.json.name }} are active",
+        "emailFormat": "text",
+        "text": "=Steps v{{ $('Sign steps').item.json.version }} for {{ $('Sign steps').item.json.name }} are signed and active (hash {{ $('Sign steps').item.json.hash }}), approved by {{ $('Sign steps').item.json.approvedBy }} at {{ $('Sign steps').item.json.approvedAt }}.\n{{ $('Sign steps').item.json.writeLine ?? '' }}",
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000319",
+      "name": "Email signed steps",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [2640, -260],
+      "notes": "Confirms what was signed. For desktop steps it names the steps signed as writes with their intents (Sign steps' writeLine), so the approver sees the Write steps choice took."
     },
     {
       "parameters": {
@@ -406,7 +426,7 @@
     "Timed out?": { "main": [[{ "node": "Record expiry", "type": "main", "index": 0 }], [{ "node": "Repaired steps to sign", "type": "main", "index": 0 }]] },
     "Repaired steps to sign": { "main": [[{ "node": "Sign steps", "type": "main", "index": 0 }]] },
     "Sign steps": { "main": [[{ "node": "Signed?", "type": "main", "index": 0 }], [{ "node": "Record rejection", "type": "main", "index": 0 }]] },
-    "Save signed steps": { "main": [[{ "node": "Supersede older versions", "type": "main", "index": 0 }]] },
+    "Save signed steps": { "main": [[{ "node": "Supersede older versions", "type": "main", "index": 0 }, { "node": "Email signed steps", "type": "main", "index": 0 }]] },
     "Signed?": { "main": [[{ "node": "Save signed steps", "type": "main", "index": 0 }], [{ "node": "Record rejection", "type": "main", "index": 0 }]] },
     "Desktop steps?": {
       "main": [[{ "node": "Ask for approval (desktop steps)", "type": "main", "index": 0 }], [{ "node": "Ask for approval", "type": "main", "index": 0 }]]
