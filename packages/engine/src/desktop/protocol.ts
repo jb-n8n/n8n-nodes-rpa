@@ -63,7 +63,9 @@ export interface RunnerMethods {
   windows: { params: { runId: string }; result: { windows: RunnerWindow[] } };
   /**
    * The clipboard's Unicode text ('' when it holds none). policy_refused unless the runner's policy sets clipboardRead
-   * and one of the run's windows holds the foreground, and for more than 1000 characters. -32601 from an older runner.
+   * and one of the run's windows holds the foreground; unless the text is the run's own copy (a process of the run owns
+   * the clipboard, it changed since the run's most recent act, and that act finished at most 10 s ago); and for more
+   * than 1000 characters. -32601 from an older runner.
    */
   'clipboard.read': { params: { runId: string }; result: { text: string } };
 }

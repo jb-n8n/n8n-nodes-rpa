@@ -1,6 +1,8 @@
 // Clipboard reads in desktop step sets: `read: { clipboard: true, as }` calls the runner's policy-gated clipboard.read,
 // for apps whose value is only available through a Copy button (a desktop authenticator app built on a web view). The
 // value goes to the run outputs (Data values) under its name and is masked everywhere else: the log, messages, views.
+// The runner returns only the run's own fresh copy: a process of the run owns the clipboard, it changed since the run's
+// most recent act, and that act finished at most 10 s earlier (the fake runner models the same checks).
 import { afterEach, describe, expect, it } from 'vitest';
 import { checkDesktopTrust, runDesktopTask, type DesktopTaskInput, type DesktopTaskResult } from '../src/desktop/task.js';
 import { RUNNER_TOO_OLD_FOR_CLIPBOARD } from '../src/messages.js';
@@ -8,7 +10,7 @@ import { describeDesktopStep, desktopSafetyFlags, desktopStepChanges } from '../
 import { signScript, verifyScript } from '../src/sign.js';
 import { parseDesktopScript, ScriptShapeError } from '../src/steps/parse.js';
 import type { DesktopLocator } from '../src/types.js';
-import { AUTH_CODES, AUTH_EXE, AUTH_POLICY, AUTH_USER, FakeRunner, MAX_CLIPBOARD_CHARS, type FakeRunnerOptions } from './fake-runner.js';
+import { AUTH_CODES, AUTH_EXE, AUTH_POLICY, AUTH_USER, CLIPBOARD_FRESHNESS_MS, FakeRunner, MAX_CLIPBOARD_CHARS, type FakeRunnerOptions } from './fake-runner.js';
 
 const KEY = 'desktop-signing-key-0123456789abcdef';
 const WHO = 'ops@example.com';
@@ -84,7 +86,7 @@ describe('desktop clipboard reads: the step format', () => {
     expect(desktopStepChanges(parsed).map((c) => c.now)[2]).toBe('Read the code (read the clipboard as "code")');
     expect(desktopSafetyFlags(parsed)).toEqual([
       'desktop app: "Authenticator.exe"',
-      'clipboard read: step 3 (Read the code) returns the clipboard\'s text to n8n as "code" (the desktop runner allows it only when its policy sets clipboardRead, and only while the run\'s window is in front)',
+      'clipboard read: step 3 (Read the code) returns the clipboard\'s text to n8n as "code" (the desktop runner allows it only when its policy sets clipboardRead, only while the run\'s window is in front, and only for text the run\'s app copied in the last step that acted on it, at most 10 seconds earlier)',
     ]);
   });
 });
@@ -115,9 +117,8 @@ describe('desktop clipboard reads on the fake runner', () => {
 
   it('a value that contains a typed variable value keeps that part masked in Data values', async () => {
     runner = await FakeRunner.start({ app: 'authenticator', policy: AUTH_POLICY });
-    const d = doc([SEARCH, READ]);
-    runner.clipboard = `${AUTH_USER} 445 120`;
-    const r = succeeded(await run(d));
+    runner.copyText = `${AUTH_USER} 445 120`;
+    const r = succeeded(await run(CODE_STEPS));
     expect(r.outputs.map((o) => [o.as, o.text])).toEqual([['code', '[secret] 445 120']]);
   });
 
@@ -140,10 +141,56 @@ describe('desktop clipboard reads on the fake runner', () => {
 
   it('refuses more than the runner\'s 1000 characters', async () => {
     runner = await FakeRunner.start({ app: 'authenticator', policy: AUTH_POLICY });
-    runner.clipboard = '7'.repeat(MAX_CLIPBOARD_CHARS + 1);
-    const r = failed(await run(doc([READ])));
+    runner.copyText = '7'.repeat(MAX_CLIPBOARD_CHARS + 1);
+    const r = failed(await run(CODE_STEPS));
     expect(r.code).toBe('policy_violation');
     expect(r.message).toContain('more than 1000 characters');
+  });
+
+  it('is policy_violation when another application owns the clipboard: a password copied right after the code never leaves', async () => {
+    const PASSWORD = 'hunter2-Pa55word';
+    runner = await FakeRunner.start({ app: 'authenticator', policy: AUTH_POLICY });
+    runner.beforeClipboardRead = () => runner!.copy(PASSWORD, 'other');
+    const r = failed(await run(CODE_STEPS));
+    expect({ code: r.code, message: r.message }).toEqual({
+      code: 'policy_violation',
+      message: 'Read the code: policy_refused: the clipboard is read only when a process of the run put the text there, and a window of "KeePass.exe" owns it',
+    });
+    expect(JSON.stringify(r)).not.toContain(PASSWORD);
+    // Text put there without an owner window (or by an application that has exited) is refused too.
+    await runner.close();
+    runner = await FakeRunner.start({ app: 'authenticator', policy: AUTH_POLICY });
+    runner.beforeClipboardRead = () => runner!.copy(PASSWORD, undefined);
+    const none = failed(await run(CODE_STEPS));
+    expect(none.message).toBe('Read the code: policy_refused: the clipboard is read only when a process of the run put the text there, and no window owns the clipboard');
+    expect(JSON.stringify(none)).not.toContain(PASSWORD);
+  });
+
+  it('is policy_violation when the clipboard has not changed since the run\'s most recent act', async () => {
+    // Text already on the clipboard before the run (even from the app itself: a person copied in it) and no copying act.
+    runner = await FakeRunner.start({ app: 'authenticator', policy: AUTH_POLICY });
+    runner.copy('hunter2-Pa55word', 'run');
+    const before = failed(await run(doc([READ])));
+    expect(before.message).toBe('Read the code: policy_refused: the clipboard is read only right after an act of the run copied to it, and the run has not acted yet');
+    const r = failed(await run(doc([SEARCH, READ])));
+    expect({ code: r.code, message: r.message }).toEqual({
+      code: 'policy_violation', message: 'Read the code: policy_refused: the clipboard has not changed since the run\'s last act, so the text is not the run\'s copy',
+    });
+    expect(JSON.stringify([before, r])).not.toContain('hunter2');
+    // A step that acts on the app between the copy and the read (a target read acts too) makes the copy not the latest act.
+    const between = failed(await run(doc([SEARCH, COPY, { intent: 'Read the search', read: { target: byName('Edit', 'Search'), as: 'search' } }, READ])));
+    expect(between.message).toBe('Read the code: policy_refused: the clipboard has not changed since the run\'s last act, so the text is not the run\'s copy');
+    expect(JSON.stringify(between)).not.toContain(CODE);
+  });
+
+  it(`is policy_violation more than ${CLIPBOARD_FRESHNESS_MS / 1000} seconds after the copying act`, async () => {
+    runner = await FakeRunner.start({ app: 'authenticator', policy: AUTH_POLICY });
+    runner.beforeClipboardRead = () => { runner!.clockOffsetMs += CLIPBOARD_FRESHNESS_MS + 1000; };
+    const r = failed(await run(CODE_STEPS));
+    expect({ code: r.code, message: r.message }).toEqual({
+      code: 'policy_violation', message: 'Read the code: policy_refused: the clipboard is read only within 10 seconds after the run\'s last act, and 11 seconds have passed',
+    });
+    expect(JSON.stringify(r)).not.toContain(CODE);
   });
 
   it('without helperProcesses in the policy, the web view\'s elements are another application\'s: drift', async () => {

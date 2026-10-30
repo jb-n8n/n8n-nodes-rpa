@@ -135,7 +135,7 @@ export function desktopSafetyFlags(script: DesktopScript): string[] {
     const n = i + 1;
     if ('expectFile' in s) flags.push(`file returned to n8n: step ${n} returns the file matching ${q(s.expectFile.pattern)} from the run's export folder`);
     if ('read' in s && 'clipboard' in s.read) {
-      flags.push(`clipboard read: step ${n} (${oneLine(s.intent)}) returns the clipboard's text to n8n as ${q(s.read.as)} (the desktop runner allows it only when its policy sets clipboardRead, and only while the run's window is in front)`);
+      flags.push(`clipboard read: step ${n} (${oneLine(s.intent)}) returns the clipboard's text to n8n as ${q(s.read.as)} (the desktop runner allows it only when its policy sets clipboardRead, only while the run's window is in front, and only for text the run's app copied in the last step that acted on it, at most 10 seconds earlier)`);
     }
     if (s.write === true) flags.push(`write: step ${n} (${oneLine(s.intent)}) is a declared write step`);
     else if (looksLikeWrite(s)) {

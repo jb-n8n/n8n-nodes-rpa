@@ -6,7 +6,8 @@
 // built on a web view, whose content lives in a helper process (msedgewebview2.exe) and whose codes are only available
 // through each entry's "Copy (<name>)" button and the clipboard. It enforces the runner's floor as the real one does: bearer
 // token on the upgrade, one run at a time with a lease, allowed apps, declared write controls and gated keys,
-// repair-mode limits, helper processes, the policy-gated clipboard.read, export directory confinement, and the
+// repair-mode limits, helper processes, the policy-gated clipboard.read (only the run's own fresh copy), export
+// directory confinement, and the
 // protocol's error codes. Targets resolve as the runner's
 // TargetResolver does: across every run window the window selector matches, each element counted once. Error messages
 // never contain typed values (unless a test turns on `echoTypedInErrors`, to prove the engine masks them anyway).
@@ -43,6 +44,8 @@ export const DEMO_POLICY: FakePolicy = {
 
 /** RunnerService.MaxClipboardChars: longer clipboard text is refused. */
 export const MAX_CLIPBOARD_CHARS = 1000;
+/** RunnerService.ClipboardFreshness: clipboard.read only this long after the run's most recent act finished. */
+export const CLIPBOARD_FRESHNESS_MS = 10_000;
 /** The runner's ceiling for one file.retrieve answer (RunnerPolicy.MaxFileBytesCeiling). */
 export const RUNNER_MAX_FILE_BYTES = 36 * 1024 * 1024;
 const INVALID_PARAMS = -32602;
@@ -245,7 +248,11 @@ function describeTarget(t: RunnerTarget): string {
   return t.path.map((c) => [c.controlType, c.automationId && `#${c.automationId}`, c.name !== undefined && `"${c.name}"`].filter(Boolean).join(' ')).join(' > ');
 }
 
-interface Run { runId: string; leaseMs: number; exportDir: string; timer: NodeJS.Timeout; app?: AppModel; focus?: El }
+interface Run {
+  runId: string; leaseMs: number; exportDir: string; timer: NodeJS.Timeout; app?: AppModel; focus?: El;
+  /** RunState.LastAct: the clipboard's sequence number before the run's most recent act, and when it finished. */
+  lastAct?: { seq: number; at: number };
+}
 
 export interface FakeRunnerOptions {
   token?: string;
@@ -304,8 +311,18 @@ export class FakeRunner {
   readonly app: 'orders' | 'erp' | 'authenticator';
   readonly noClipboardMethod: boolean;
   readonly helperOutsideRun: boolean;
-  /** The clipboard's text (the authenticator's Copy buttons set it; tests may too). */
+  /** The clipboard's text (the authenticator's Copy buttons set it through copy(); tests may too). */
   clipboard: string | undefined;
+  /** Whose window owns the clipboard: a process of the run, another application's, or none. */
+  clipboardOwner: 'run' | 'other' | undefined;
+  /** GetClipboardSequenceNumber: every copy() adds one. */
+  clipboardSeq = 1;
+  /** What the authenticator's Copy buttons copy instead of the entry's code (a test's own text). */
+  copyText: string | undefined;
+  /** Runs right before clipboard.read is answered (another application copying, time passing). */
+  beforeClipboardRead: (() => void) | undefined;
+  /** Added to the fake's clock (Date.now()), for the clipboard's freshness. */
+  clockOffsetMs = 0;
   /** Another application's window holds the foreground (clipboard.read is refused). */
   foregroundElsewhere = false;
   readonly erpUi: 'v1' | 'v2';
@@ -335,6 +352,17 @@ export class FakeRunner {
     this.helperOutsideRun = opts.helperOutsideRun ?? false;
     this.cert = selfSignedCert();
     this.fingerprint = this.cert.fingerprint;
+  }
+
+  /** An application's copy: new text, its owner, a new sequence number. */
+  copy(text: string | undefined, owner: 'run' | 'other' | undefined): void {
+    this.clipboard = text;
+    this.clipboardOwner = owner;
+    this.clipboardSeq++;
+  }
+
+  private now(): number {
+    return Date.now() + this.clockOffsetMs;
   }
 
   static async start(opts: FakeRunnerOptions = {}): Promise<FakeRunner> {
@@ -602,7 +630,8 @@ export class FakeRunner {
         if (!this.policy.allowedApps.some((a) => a.exe.toLowerCase() === exe.toLowerCase())) throw new RpcError(E.policy_refused, `app not allowed: ${exe}`);
         if (this.appMissing) throw new RpcError(E.not_found, `not_found: no element matched application executable "${exe}" (no matching window of the run)`);
         run.app = this.app === 'erp' ? new ErpApp(() => this.run?.exportDir, this.erpChangesFor((p.app as { args?: unknown }).args))
-          : this.app === 'authenticator' ? new AuthenticatorApp((text) => { this.clipboard = text; })
+          // The web view copies from its helper process: the run's while the helper descends from the app.
+          : this.app === 'authenticator' ? new AuthenticatorApp((text) => this.copy(this.copyText ?? text, this.helperOutsideRun ? 'other' : 'run'))
           : new DemoApp(() => this.run?.exportDir);
         this.lastApp = run.app;
         return { pid: 4242 };
@@ -687,12 +716,23 @@ export class FakeRunner {
       case 'clipboard.read': {
         if (this.noClipboardMethod) throw new RpcError(METHOD_NOT_FOUND, 'method not found');
         const run = this.requireRun(p);
-        // RunnerService.ClipboardRead: the policy flag, then the foreground (never brought back for a read), then the size.
+        this.beforeClipboardRead?.();
+        // RunnerService.ClipboardRead: the policy flag, then the foreground (never brought back for a read), then the
+        // run's most recent act and its age, then (with the clipboard open) its owner and its sequence number, then the size.
         if (!this.policy.clipboardRead) throw new RpcError(E.policy_refused, 'policy_refused: reading the clipboard is off in the runner\'s policy (clipboardRead)');
         if (this.foregroundElsewhere || !run.app || run.app.windows.length === 0) {
           const holder = this.foregroundElsewhere ? 'a window of "notepad.exe"' : 'no window';
           throw new RpcError(E.policy_refused, `policy_refused: the clipboard is read only while a window of the run holds the foreground, and ${holder} holds it`);
         }
+        const last = run.lastAct;
+        if (!last) throw new RpcError(E.policy_refused, 'policy_refused: the clipboard is read only right after an act of the run copied to it, and the run has not acted yet');
+        const age = this.now() - last.at;
+        if (age > CLIPBOARD_FRESHNESS_MS) {
+          throw new RpcError(E.policy_refused, `policy_refused: the clipboard is read only within ${CLIPBOARD_FRESHNESS_MS / 1000} seconds after the run's last act, and ${Math.floor(age / 1000)} seconds have passed`);
+        }
+        if (this.clipboardOwner === undefined) throw new RpcError(E.policy_refused, 'policy_refused: the clipboard is read only when a process of the run put the text there, and no window owns the clipboard');
+        if (this.clipboardOwner !== 'run') throw new RpcError(E.policy_refused, 'policy_refused: the clipboard is read only when a process of the run put the text there, and a window of "KeePass.exe" owns it');
+        if (this.clipboardSeq === last.seq) throw new RpcError(E.policy_refused, 'policy_refused: the clipboard has not changed since the run\'s last act, so the text is not the run\'s copy');
         const text = this.clipboard ?? '';
         if (text.length > MAX_CLIPBOARD_CHARS) throw new RpcError(E.policy_refused, `policy_refused: the clipboard holds more than ${MAX_CLIPBOARD_CHARS} characters`);
         return { text };
@@ -710,7 +750,19 @@ export class FakeRunner {
     return new Set<ErpChange>([...(ui === 'v2' ? ERP_V2 : []), ...this.erpChanges]);
   }
 
+  /** RunnerService.Act: every act, refused ones included, first records the clipboard's sequence number; when it ends,
+   * its time. */
   private async act(run: Run, p: Record<string, unknown>): Promise<unknown> {
+    const mark = { seq: this.clipboardSeq, at: this.now() };
+    run.lastAct = mark;
+    try {
+      return await this.actOnce(run, p);
+    } finally {
+      run.lastAct = { ...mark, at: this.now() };
+    }
+  }
+
+  private async actOnce(run: Run, p: Record<string, unknown>): Promise<unknown> {
     const action = String(p.action);
     const write = p.write === true;
     const repair = p.mode === 'repair';
