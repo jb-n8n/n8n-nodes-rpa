@@ -34,6 +34,8 @@ export const SIGNATURE_INVALID =
 export const SIGNATURE_WITHOUT_KEY = 'a signature is present but no Step Signing credential is attached';
 export const UNSIGNED_WRITES =
   'Unsigned steps cannot sign in, submit a form or download through a form. Sign them with Sign Steps, or turn on Options → Allow Unsigned Writes.';
+export const UNSIGNED_SECRET_FILL =
+  'Unsigned steps cannot type a secret into a password field (fill with secret: true). Sign them with Sign Steps; Allow Unsigned Writes does not cover it.';
 export const nameMismatch = (signed: string, expected: string) => `the signed steps are named "${signed}", not "${expected}"`;
 export const versionMismatch = (signed: number, expected: number) => `the signed steps are version ${signed}, but Expected Version is ${expected}`;
 export const startSiteMismatch = (signed: string, expected: string) => `the signed steps start on ${signed}, but this run starts on ${expected}`;
@@ -178,6 +180,7 @@ export const IMPORT_PROOF_FAILED = 'The imported steps ran, but replaying them i
 /** A desktop step set reached the browser lane (parseScript), or the reverse. */
 export const DESKTOP_STEPS_NEED_RUNNER = 'these are desktop steps (surface "desktop"): they run on a desktop runner, never in a browser. Attach an RPA Desktop Runner credential.';
 export const BROWSER_STEPS_NEED_BROWSER = 'these are browser steps: they run in a browser, never on a desktop runner. Attach an RPA Browser credential.';
+export const secretFillValue = (path: string) => `${path} must be exactly one {{var.name}} template (nothing before or after it) when secret is true`;
 export const reservedTemplate = (path: string, name: string) => `${path} uses {{${name}}}: names that start with $ are reserved`;
 export const exportDirOnlyInFill = (path: string) => `${path} uses {{$exportDir}}, which is allowed only in the value of a desktop fill step`;
 export const browserStepOnDesktop = (path: string, verb: string) => `${path}: "${verb}" is a browser step, not allowed in a desktop step set`;

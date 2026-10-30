@@ -226,6 +226,8 @@ async function executeScript(
   input: ScriptLaneInput, script: Script, runtime: LaneRuntime, t0: number, version: number | undefined, hash: string, capture: boolean,
   /** Receives the run state as soon as it exists, so the caller's catch path can still tell whether a write went out. */
   live: { state?: RunState } = {},
+  /** The trust gate verified a signature: only then may a fill with `secret` type. */
+  signed = false,
 ): Promise<ScriptRun> {
   const { session, masker } = runtime;
   const fail = (code: ErrorCode, message: string, extra: Partial<LaneFailure> = {}) =>
@@ -253,7 +255,7 @@ async function executeScript(
   }
 
   const ctx: StepContext = {
-    page: session.page, script, policy: input.policy, secrets: input.secrets, vars: input.vars ?? {},
+    page: session.page, script, policy: input.policy, secrets: input.secrets, vars: input.vars ?? {}, signed,
     masker, defaultTimeoutMs, violations: session.violations, interrupts, stepHooks: session.stepHooks, ...codeSettings(input),
     ...(input.output?.emptyPattern ? { emptyPattern: input.output.emptyPattern } : {}),
     ...(session.writeWindow ? { writeWindow: session.writeWindow } : {}),
@@ -401,7 +403,7 @@ export async function startScriptLane(
   let run: ScriptRun;
   const live: { state?: RunState } = {};
   try {
-    run = await executeScript(laneInput, script, runtime, t0, version, hash, !!opts.keepSessionOnDrift, live);
+    run = await executeScript(laneInput, script, runtime, t0, version, hash, !!opts.keepSessionOnDrift, live, gate.signed);
   } catch (err) {
     const message = shownMessage(String((err as Error)?.message ?? err), masker);
     const o = runtime.override();

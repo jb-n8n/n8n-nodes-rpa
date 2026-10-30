@@ -5,6 +5,9 @@ const TEMPLATE = /\{\{\s*([^}]*?)\s*\}\}/g;
 /** Longest value a template may render to. */
 export const MAX_RENDERED = 10_000;
 
+/** The one value a fill with `secret: true` may have: a single {{var.NAME}} template and nothing else. */
+export const SECRET_FILL_VALUE = /^\{\{\s*var\.([A-Za-z0-9_]+)\s*\}\}$/;
+
 /** Renders {{var.NAME}} from inputs. Secrets are never rendered here: only signIn uses them. */
 export function renderVars(template: string, vars: Record<string, string>, masker: Masker): string {
   const out = template.replace(TEMPLATE, (_m, expr: string) => {

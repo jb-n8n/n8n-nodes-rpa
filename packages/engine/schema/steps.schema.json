@@ -247,8 +247,11 @@
           "required": ["field", "value"],
           "properties": {
             "field": { "$ref": "#/definitions/locator" },
-            "value": { "type": "string", "description": "The text to type; may be {{var.name}}. Never a secret." }
+            "value": { "type": "string", "description": "The text to type; may be {{var.name}}. Never a Site Login credential. With secret: true it must be exactly one {{var.name}} template." },
+            "secret": { "type": "boolean", "description": "Only with secret: true may fill type into a password input. The value must be exactly one {{var.name}} template, is masked in everything the run shows, and the steps must be signed." }
           },
+          "if": { "required": ["secret"], "properties": { "secret": { "const": true } } },
+          "then": { "properties": { "value": { "type": "string", "pattern": "^\\{\\{\\s*var\\.[A-Za-z0-9_]+\\s*\\}\\}$" } } },
           "additionalProperties": false
         }
       },

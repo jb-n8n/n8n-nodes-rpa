@@ -99,7 +99,11 @@ export type Step = StepBase &
     | { goto: string; waitUntil?: WaitUntil }
     | { signIn: SignInSpec }
     | { click: Locator }
-    | { fill: { field: Locator; value: string } }
+    /**
+     * `secret: true` is the only way fill may type into a password input: `value` must then be exactly one {{var.name}}
+     * template, the rendered value is masked in everything the run shows, and only signed steps may use it.
+     */
+    | { fill: { field: Locator; value: string; secret?: boolean } }
     /** A string array selects exactly those options of a multi-select and clears the others. */
     | { select: { field: Locator; value: string | string[] } }
     | { check: { field: Locator; checked?: boolean } }

@@ -28,6 +28,8 @@ export interface StepContext {
   codeProvider?: CodeProvider;
   /** How long signIn waits for codeProvider, in ms. Default DEFAULT_CODE_TIMEOUT_MS (120 s). */
   codeTimeoutMs?: number;
+  /** True when the trust gate verified a signature for these steps (script lane); only then does a fill with `secret` type. */
+  signed?: boolean;
   vars: Record<string, string>;
   masker: Masker;
   defaultTimeoutMs: number;
