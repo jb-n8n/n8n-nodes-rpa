@@ -9,7 +9,7 @@ import { PolicyError } from '../errors.js';
 import { DETECTED_PREFIX } from '../../classify/classify.js';
 import {
   CODE_WORKFLOW_NOT_A_CODE, CODE_WORKFLOW_NOT_SET, CODE_WORKFLOW_REJECTED_TWICE, codeWorkflowFailed, codeWorkflowTimedOut, SIGNIN_NEEDS_SITE_LOGIN,
-  SIGNIN_NEXT_NO_PASSWORD,
+  SIGNIN_NEXT_NO_PASSWORD, signInCodeFieldMissing,
 } from '../../messages.js';
 import { isLoginPage } from '../urls.js';
 
@@ -92,8 +92,22 @@ async function editableNow(ctx: StepContext, loc: DslLocator): Promise<boolean> 
   return false;
 }
 
+/** What typing a code needs: its field and submit, and the checkboxes ticked between the two (signIn's totp.check). */
+interface CodeSpec { field: DslLocator; submit: DslLocator; check?: DslLocator[] }
+
+/**
+ * totp.check: tick each checkbox (setChecked true) after the code is typed and before its submit. Each must show within
+ * the timeout (a missing one fails the step before the code is submitted). Not a secret write: no login-page check.
+ */
+async function tickChecks(ctx: StepContext, check: DslLocator[] | undefined, timeout: number): Promise<void> {
+  for (const loc of check ?? []) {
+    const box = await resolveUnique(ctx.page, loc, timeout);
+    await box.locator.setChecked(true, { timeout });
+  }
+}
+
 /** Types the TOTP code into a declared login page's code field and submits it. Shared by signIn and the agent's enter_code tool. */
-export async function submitTotp(ctx: StepContext, spec: { field: DslLocator; submit: DslLocator }, timeout: number): Promise<void> {
+export async function submitTotp(ctx: StepContext, spec: CodeSpec, timeout: number): Promise<void> {
   const totpSecret = ctx.secrets?.totpSecret;
   if (!totpSecret) throw new Error(`${DETECTED_PREFIX}mfa_totp`);
   const field = await resolveUnique(ctx.page, spec.field, timeout);
@@ -108,6 +122,7 @@ export async function submitTotp(ctx: StepContext, spec: { field: DslLocator; su
   // masker (shared with the trace scrubbing) learns it, and the adjacent windows', before it is typed.
   ctx.masker.add([totp(totpSecret, now - 30_000), code, totp(totpSecret, now + 30_000)], { wholeNumber: true });
   await field.locator.fill(code, { timeout });
+  await tickChecks(ctx, spec.check, timeout);
   await button.locator.click({ timeout });
   await settle(ctx.page);
 }
@@ -180,7 +195,7 @@ async function codeRejected(ctx: StepContext, field: DslLocator, typed: ElementH
  * re-check the page, teach the run masker the code, type it and submit. A rejected code is asked for once more, in the
  * next 30-second code window; a second rejection stops the run (auth_blocked).
  */
-async function submitWorkflowCode(ctx: StepContext, spec: { field: DslLocator; submit: DslLocator }, timeout: number): Promise<void> {
+async function submitWorkflowCode(ctx: StepContext, spec: CodeSpec, timeout: number): Promise<void> {
   for (let attempt = 1; ; attempt++) {
     const field = await resolveUnique(ctx.page, spec.field, timeout);
     const button = await resolveUnique(ctx.page, spec.submit, timeout);
@@ -194,6 +209,8 @@ async function submitWorkflowCode(ctx: StepContext, spec: { field: DslLocator; s
     ctx.masker.add([code], { wholeNumber: true });
     await field.locator.fill(code, { timeout });
     const typed = await field.locator.elementHandle({ timeout });
+    // A rejected code reloads the page, so the boxes are ticked again on every attempt.
+    await tickChecks(ctx, spec.check, timeout);
     await button.locator.click({ timeout });
     await settle(ctx.page);
     if (!(await codeRejected(ctx, spec.field, typed, timeout))) return;
@@ -247,8 +264,9 @@ const signIn: Handler = async (ctx, step, state, timeout) => {
 };
 
 /**
- * After the password is typed (both paths): click submit, then, when the step declares a code and the page is still a
- * login page, wait for the code field (or a rejected password) and type the code.
+ * After the password is typed (both paths): click submit, then, when the step declares a code, wait for the code field
+ * (or a rejected password) and type the code. Without totp.via the code page must follow at once on a login page (else
+ * no code was asked); with via, the pages in between are clicked through first (throughVia).
  */
 async function submitPassword(ctx: StepContext, s: Pick<SignInSpec, 'password' | 'submit' | 'totp'>, pass: Locator, state: RunState, timeout: number): Promise<void> {
   const submit = await resolveUnique(ctx.page, s.submit, timeout);
@@ -257,19 +275,54 @@ async function submitPassword(ctx: StepContext, s: Pick<SignInSpec, 'password' |
   await submit.locator.click({ timeout });
   state.submitClicked = true;
   await settle(ctx.page);
-  if (!s.totp || !onLoginPage(ctx)) return;
+  if (!s.totp) return;
   const totpSpec = s.totp;
+  // The pages between the password and the code (via) need not be login pages: only the code page is checked, by the
+  // code's own checks before anything is typed.
+  if (!totpSpec.via && !onLoginPage(ctx)) return;
   const password = s.password;
   // The field we typed into is gone and a password field is visible again: the page reloaded with a rejection.
-  const reloaded = async () => !(await typed.evaluate((el) => el.isConnected).catch(() => false));
-  const next = await poll(async () => {
-    if (await isVisibleNow(ctx.page, totpSpec.field)) return 'totp';
-    if ((await reloaded()) && (await isVisibleNow(ctx.page, password))) return 'rejected';
-    return undefined;
-  }, Math.min(timeout, 5000));
+  const rejected = async () => !(await typed.evaluate((el) => el.isConnected).catch(() => false)) && (await isVisibleNow(ctx.page, password));
+  const next = totpSpec.via
+    ? await throughVia(ctx, totpSpec.field, totpSpec.via, rejected, timeout)
+    : await poll(async () => {
+      if (await isVisibleNow(ctx.page, totpSpec.field)) return 'totp';
+      if (await rejected()) return 'rejected';
+      return undefined;
+    }, Math.min(timeout, 5000));
   if (next !== 'totp') return;
   if (totpSpec.source === 'workflow') await submitWorkflowCode(ctx, totpSpec, timeout);
   else await submitTotp(ctx, totpSpec, timeout);
+}
+
+/**
+ * totp.via, after the password submit: wait up to `timeout` for the first of the via locators not passed yet, the code
+ * field or a rejected password. A via locator that shows is clicked (an earlier one that did not show is skipped, and
+ * one that shows together with the code field, a "Send code" button beside it, is still clicked first), and the wait
+ * starts over from the next one. Returns once the code field shows with no via locator left to click, or the password
+ * was rejected. Nothing typed and no login-page check: these clicks carry no secret, and the navigation policy still
+ * applies to wherever they lead. Throws signInCodeFieldMissing (drift) when a wait runs out.
+ */
+async function throughVia(
+  ctx: StepContext, field: DslLocator, via: DslLocator[], rejected: () => Promise<boolean>, timeout: number,
+): Promise<'totp' | 'rejected'> {
+  let from = 0;
+  let clicked = 0;
+  for (;;) {
+    const seen = await poll(async () => {
+      for (let i = from; i < via.length; i++) if (await isVisibleNow(ctx.page, via[i])) return { via: i };
+      if (await isVisibleNow(ctx.page, field)) return 'totp' as const;
+      if (await rejected()) return 'rejected' as const;
+      return undefined;
+    }, timeout);
+    if (!seen) throw new Error(signInCodeFieldMissing(Math.max(1, Math.round(timeout / 1000)), clicked, via.length));
+    if (typeof seen === 'string') return seen;
+    const button = await resolveUnique(ctx.page, via[seen.via], timeout);
+    await button.locator.click({ timeout });
+    clicked++;
+    from = seen.via + 1;
+    await settle(ctx.page);
+  }
 }
 
 /** How long the re-rendered username page must stay without a password field before next counts as rejected. */

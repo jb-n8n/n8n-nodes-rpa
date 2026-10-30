@@ -50,7 +50,7 @@ const EXPORTS = [
   'reviewDesktopLocator', 'reviewLocator', 'rowTextTooLarge', 'runAgentLoop', 'runBinaryTooLarge', 'runDesktopTask', 'runSteps', 'runTask',
   'runnerAddress', 'runnerAppMissing', 'runnerConnected', 'runnerError', 'runnerFingerprintMismatch', 'runnerTokenRefused',
   'runnerUnreachable', 'sanitizeFileName', 'screenshotMasks', 'screenshotTooTall', 'scriptHash', 'scrubTrace', 'secretInLocation',
-  'settle', 'shownFailure', 'signDesktopSteps', 'signScript', 'signSteps', 'snapshot', 'sniffMime', 'startHostOf', 'startSiteMismatch',
+  'settle', 'shownFailure', 'signDesktopSteps', 'signInCodeFieldMissing', 'signScript', 'signSteps', 'snapshot', 'sniffMime', 'startHostOf', 'startSiteMismatch',
   'stepChanges', 'stopTrace', 'stripShownPrefix', 'substituteVars', 'toErrorCode', 'tokenRefused', 'tooManyRows', 'totp', 'unsignedWrites',
   'validateScript', 'varInWriteLocator', 'verbOf', 'verifyRows', 'verifyScript', 'versionMismatch', 'violationMessage', 'wantTrace',
 ];
