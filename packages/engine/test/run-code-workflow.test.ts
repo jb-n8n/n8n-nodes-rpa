@@ -166,6 +166,8 @@ describe('signIn with a code from the workflow', () => {
       const r = await runSteps(ctx, WORKFLOW_STEPS);
       expect(r.ok).toBe(true);
       expect(provider).toHaveBeenCalledTimes(2);
+      // The retry requests no new code (nothing is clicked to send one): the second call gets the first call's requestedAt.
+      expect(provider.mock.calls[1][0].requestedAt).toBe(provider.mock.calls[0][0].requestedAt);
       expect(msUntilNextWindow).toHaveBeenCalled();
       expect(ctx.masker.mask(wrong)).toBe('[secret]');
     } finally { await session.close(); }

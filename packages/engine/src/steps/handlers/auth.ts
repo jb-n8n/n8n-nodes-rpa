@@ -1,6 +1,6 @@
 import type { ElementHandle, Locator } from 'playwright-core';
 import { msUntilNextWindow, totp } from '../../secrets/totp.js';
-import { DEFAULT_CODE_TIMEOUT_MS, type Locator as DslLocator, type PortalSecrets, type RunState, type SignInSpec, type Step } from '../../types.js';
+import { DEFAULT_CODE_TIMEOUT_MS, type CodeRequest, type Locator as DslLocator, type PortalSecrets, type RunState, type SignInSpec, type Step } from '../../types.js';
 import { build, candidatesOf, isVisibleNow, resolveUnique } from '../locator.js';
 import { poll, sleep } from '../poll.js';
 import { settle, type Handler, type StepContext } from '../run.js';
@@ -57,16 +57,27 @@ async function assertFieldOnLoginPage(ctx: StepContext, locator: Locator, kind: 
 }
 
 /**
- * A button about to be clicked during signIn (next, submit) must not post off the declared login pages: its own
- * formaction when it has one, else its form's action. A button outside any form (or not a form control) is not checked.
- * Otherwise a fatal signin violation, like assertFieldOnLoginPage.
+ * A button about to be clicked during signIn (next, submit, a totp.via button) must not post off the declared login
+ * pages: its own formaction when it has one, else its form's action. A button outside any form (or not a form control)
+ * is not checked. A via button must also not be in a form (its own, or the one it sits in) with a password field: the
+ * password is typed before the via clicks, and a via click must not be able to post it. Otherwise a fatal signin
+ * violation, like assertFieldOnLoginPage.
  */
-async function assertButtonPostsToLoginPage(ctx: StepContext, locator: Locator, kind: 'next' | 'submit'): Promise<void> {
-  const target = await locator.evaluate((el) => {
+async function assertButtonPostsToLoginPage(ctx: StepContext, locator: Locator, kind: 'next' | 'submit' | 'via'): Promise<void> {
+  const { target, withPassword } = await locator.evaluate((el) => {
     const b = el as HTMLButtonElement;
-    if (b.hasAttribute('formaction') && 'formAction' in b) return b.formAction;
-    return b.form?.action ?? null;
+    const form = b.form ?? el.closest('form');
+    return {
+      target: b.hasAttribute('formaction') && 'formAction' in b ? b.formAction : (b.form?.action ?? null),
+      withPassword: !!form && Array.from(form.elements).some((e) => e instanceof HTMLInputElement && e.type === 'password'),
+    };
   });
+  if (kind === 'via' && withPassword) {
+    let url = ctx.page.url();
+    try { const u = new URL(url); url = `${u.origin}${u.pathname}`; } catch { /* keep raw */ }
+    ctx.violations.push({ kind: 'signin', url, fatal: true });
+    throw new SignInPolicyError('signIn refused: the via button is in a form with a password field');
+  }
   if (target === null || inLoginList(ctx, target)) return;
   let url = target;
   try { const u = new URL(target); url = `${u.origin}${u.pathname}`; } catch { /* keep raw */ }
@@ -137,10 +148,11 @@ const CODE_REJECTED_WAIT_MS = 5000;
 const CODE_GONE_STABLE_MS = 1000;
 
 /**
- * Asks ctx.codeProvider for a code, racing it against ctx.codeTimeoutMs (a closed page ends the wait too). Returns the
- * code without spaces. Throws `detected:mfa_code: …` when there is no provider, it fails, times out or returns no code.
+ * Asks ctx.codeProvider for a code with `request`, racing it against ctx.codeTimeoutMs (a closed page ends the wait too).
+ * Returns the code without spaces. Throws `detected:mfa_code: …` when there is no provider, it fails, times out or
+ * returns no code.
  */
-async function codeFromWorkflow(ctx: StepContext): Promise<string> {
+async function codeFromWorkflow(ctx: StepContext, request: CodeRequest): Promise<string> {
   const provider = ctx.codeProvider;
   if (!provider) throw new Error(CODE_FAILURE + CODE_WORKFLOW_NOT_SET);
   const limit = ctx.codeTimeoutMs !== undefined && Number.isFinite(ctx.codeTimeoutMs) && ctx.codeTimeoutMs > 0 ? ctx.codeTimeoutMs : DEFAULT_CODE_TIMEOUT_MS;
@@ -152,7 +164,7 @@ async function codeFromWorkflow(ctx: StepContext): Promise<string> {
     ctx.page.once('close', onClose);
     let asked: Promise<string>;
     try {
-      asked = Promise.resolve(provider({ requestedAt: new Date().toISOString() }));
+      asked = Promise.resolve(provider({ requestedAt: request.requestedAt }));
     } catch (err) {
       asked = Promise.reject(err);
     }
@@ -193,15 +205,16 @@ async function codeRejected(ctx: StepContext, field: DslLocator, typed: ElementH
 /**
  * The code field of a signIn whose totp.source is 'workflow': ask the code provider (only now that the field shows),
  * re-check the page, teach the run masker the code, type it and submit. A rejected code is asked for once more, in the
- * next 30-second code window; a second rejection stops the run (auth_blocked).
+ * next 30-second code window; a second rejection stops the run (auth_blocked). Both asks send `request` (stamped by
+ * submitPassword when the code was requested): the retry clicks nothing that would make the site send a new code.
  */
-async function submitWorkflowCode(ctx: StepContext, spec: CodeSpec, timeout: number): Promise<void> {
+async function submitWorkflowCode(ctx: StepContext, spec: CodeSpec, timeout: number, request: CodeRequest): Promise<void> {
   for (let attempt = 1; ; attempt++) {
     const field = await resolveUnique(ctx.page, spec.field, timeout);
     const button = await resolveUnique(ctx.page, spec.submit, timeout);
     assertLoginPage(ctx);
     await assertFieldOnLoginPage(ctx, field.locator, 'totp');
-    const code = await codeFromWorkflow(ctx);
+    const code = await codeFromWorkflow(ctx, request);
     // The provider may take minutes: the page must still be the declared code page before anything is typed.
     assertLoginPage(ctx);
     await assertFieldOnLoginPage(ctx, field.locator, 'totp');
@@ -266,58 +279,70 @@ const signIn: Handler = async (ctx, step, state, timeout) => {
 /**
  * After the password is typed (both paths): click submit, then, when the step declares a code, wait for the code field
  * (or a rejected password) and type the code. Without totp.via the code page must follow at once on a login page (else
- * no code was asked); with via, the pages in between are clicked through first (throughVia).
+ * no code was asked); with via, the pages in between are clicked through first (throughVia). The code provider's
+ * requestedAt is stamped right before the password submit, and again right before the first via click: no later than
+ * the click that makes the site send the code, so a workflow that takes only mail sent after requestedAt finds it.
  */
 async function submitPassword(ctx: StepContext, s: Pick<SignInSpec, 'password' | 'submit' | 'totp'>, pass: Locator, state: RunState, timeout: number): Promise<void> {
   const submit = await resolveUnique(ctx.page, s.submit, timeout);
   const typed = await pass.elementHandle({ timeout });
   await assertButtonPostsToLoginPage(ctx, submit.locator, 'submit');
+  const request: CodeRequest = { requestedAt: new Date().toISOString() };
   await submit.locator.click({ timeout });
   state.submitClicked = true;
   await settle(ctx.page);
   if (!s.totp) return;
   const totpSpec = s.totp;
   // The pages between the password and the code (via) need not be login pages: only the code page is checked, by the
-  // code's own checks before anything is typed.
+  // code's own checks before anything is typed (throughVia gates each via button before its click).
   if (!totpSpec.via && !onLoginPage(ctx)) return;
   const password = s.password;
   // The field we typed into is gone and a password field is visible again: the page reloaded with a rejection.
   const rejected = async () => !(await typed.evaluate((el) => el.isConnected).catch(() => false)) && (await isVisibleNow(ctx.page, password));
   const next = totpSpec.via
-    ? await throughVia(ctx, totpSpec.field, totpSpec.via, rejected, timeout)
+    ? await throughVia(ctx, { field: totpSpec.field, password, via: totpSpec.via }, rejected, request, timeout)
     : await poll(async () => {
       if (await isVisibleNow(ctx.page, totpSpec.field)) return 'totp';
       if (await rejected()) return 'rejected';
       return undefined;
     }, Math.min(timeout, 5000));
   if (next !== 'totp') return;
-  if (totpSpec.source === 'workflow') await submitWorkflowCode(ctx, totpSpec, timeout);
+  if (totpSpec.source === 'workflow') await submitWorkflowCode(ctx, totpSpec, timeout, request);
   else await submitTotp(ctx, totpSpec, timeout);
 }
 
 /**
- * totp.via, after the password submit: wait up to `timeout` for the first of the via locators not passed yet, the code
- * field or a rejected password. A via locator that shows is clicked (an earlier one that did not show is skipped, and
+ * totp.via, after the password submit: wait up to `timeout` for a rejected password, the first of the via locators not
+ * passed yet, or the code field. A via locator that shows is clicked (an earlier one that did not show is skipped, and
  * one that shows together with the code field, a "Send code" button beside it, is still clicked first), and the wait
  * starts over from the next one. Returns once the code field shows with no via locator left to click, or the password
- * was rejected. Nothing typed and no login-page check: these clicks carry no secret, and the navigation policy still
- * applies to wherever they lead. Throws signInCodeFieldMissing (drift) when a wait runs out.
+ * was rejected (no via button is clicked then). No via button is clicked while the password field still shows. Nothing
+ * typed and the pages need not be login pages, but each button is gated like signIn's own buttons before its click
+ * (assertButtonPostsToLoginPage: no post off the login pages, not in a form with a password field). Re-stamps
+ * `request.requestedAt` right before the first click. Throws signInCodeFieldMissing (drift) when a wait runs out.
  */
 async function throughVia(
-  ctx: StepContext, field: DslLocator, via: DslLocator[], rejected: () => Promise<boolean>, timeout: number,
+  ctx: StepContext, spec: { field: DslLocator; password: DslLocator; via: DslLocator[] }, rejected: () => Promise<boolean>,
+  request: CodeRequest, timeout: number,
 ): Promise<'totp' | 'rejected'> {
+  const { field, password, via } = spec;
   let from = 0;
   let clicked = 0;
   for (;;) {
     const seen = await poll(async () => {
-      for (let i = from; i < via.length; i++) if (await isVisibleNow(ctx.page, via[i])) return { via: i };
-      if (await isVisibleNow(ctx.page, field)) return 'totp' as const;
       if (await rejected()) return 'rejected' as const;
+      // The password page is still there (the submit has not moved on yet): nothing on it is clicked.
+      if (!(await isVisibleNow(ctx.page, password))) {
+        for (let i = from; i < via.length; i++) if (await isVisibleNow(ctx.page, via[i])) return { via: i };
+      }
+      if (await isVisibleNow(ctx.page, field)) return 'totp' as const;
       return undefined;
     }, timeout);
     if (!seen) throw new Error(signInCodeFieldMissing(Math.max(1, Math.round(timeout / 1000)), clicked, via.length));
     if (typeof seen === 'string') return seen;
     const button = await resolveUnique(ctx.page, via[seen.via], timeout);
+    await assertButtonPostsToLoginPage(ctx, button.locator, 'via');
+    if (clicked === 0) request.requestedAt = new Date().toISOString();
     await button.locator.click({ timeout });
     clicked++;
     from = seen.via + 1;

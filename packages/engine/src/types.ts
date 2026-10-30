@@ -78,7 +78,11 @@ export interface SignInSpec {
 
 /** What a run tells the code provider when it asks for a one-time code. */
 export interface CodeRequest {
-  /** When the code field showed and the code was asked for (ISO 8601). */
+  /**
+   * When the run made the site send the code (ISO 8601): stamped right before the first totp.via click, or right before
+   * the password submit when no via button was clicked, so it is no later than the click that sent the code. The retry
+   * after a rejected code sends the same value (the run requests no new code then).
+   */
   requestedAt: string;
 }
 /**
