@@ -404,10 +404,11 @@ public sealed class ServiceTests : IDisposable
     public void Repair_mode_refuses_Escape_with_the_focus_on_a_write_control()
     {
         var w = _h.BeginWithApp();
-        _h.Desktop.Windows.Add(new FakeNode("Menu", "Reports", "", w.ProcessId));
+        // A drop-down of the window is open, so only the focused element's own check can refuse.
+        _h.Desktop.Windows.Add(new FakeNode("Menu", "Reports", "", w.ProcessId) { Owner = w });
         _h.Desktop.Focused = w.Find("btnPost");
         var e = _h.Err("act", new { runId = Harness.RunId, action = "key", value = "Escape", mode = "repair", timeoutMs = 0 }, RpcErrors.PolicyRefusedCode);
-        Assert.Contains("write control", e["message"]!.GetValue<string>());
+        Assert.Equal("policy_refused: the target is a declared write control; repair mode never acts on it", e["message"]!.GetValue<string>());
         Assert.Empty(_h.Desktop.Performed);
     }
 
@@ -504,6 +505,23 @@ public sealed class ServiceTests : IDisposable
         _h.Ok("act", new { runId = Harness.RunId, action = "key", value = "Escape", mode = "repair", timeoutMs = 0 });
         var op = Assert.Single(_h.Desktop.Performed);
         Assert.Same(dialog, op.Window);
+    }
+
+    [Fact]
+    public void Repair_mode_Escape_is_refused_when_its_window_cannot_be_read()
+    {
+        var main = _h.BeginWithApp();
+        // The foreground dialog as the Windows driver returns a window UI Automation could not wrap (HwndNode): its
+        // contents cannot be searched, so it may hold a write control that Escape presses.
+        var dialog = new FakeNode("Window", "Confirm export", "ConfirmExportForm") { Unreadable = true };
+        dialog.Child("Button", "Continue", "btnConfirmExport");
+        main.Add(dialog);
+        _h.Desktop.Windows.Insert(0, dialog);
+        _h.Desktop.Foreground = dialog;
+        _h.Desktop.Focused = dialog.Find("btnConfirmExport");
+        var e = _h.Err("act", RepairEscape, RpcErrors.PolicyRefusedCode);
+        Assert.Contains("allowed only while a menu is open", e["message"]!.GetValue<string>());
+        Assert.Empty(_h.Desktop.Performed);
     }
 
     [Theory]

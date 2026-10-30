@@ -122,5 +122,7 @@ internal sealed class HwndNode(IntPtr hwnd) : IUiNode
     public IntPtr Handle => hwnd;
     public IReadOnlyList<IUiNode> GetChildren() => [];
     public IUiNode? GetParent() => null;
-    public IReadOnlyList<IUiNode> FindDescendants(Cond cond) => [];
+    // Its contents cannot be read, so it cannot answer "holds no write control": callers that fail closed on a gone
+    // element (WindowHasWriteControl) treat it as holding one.
+    public IReadOnlyList<IUiNode> FindDescendants(Cond cond) => throw new ElementGoneException("the window cannot be read through UI Automation");
 }

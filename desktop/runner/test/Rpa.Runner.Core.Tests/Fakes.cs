@@ -27,6 +27,10 @@ public sealed class FakeNode : IUiNode
     /// <summary>The Win32 owner window (a popup menu's or dialog's owner).</summary>
     public FakeNode? Owner { get; set; }
 
+    /// <summary>When set, searching its subtree throws ElementGoneException (as the Windows driver's HwndNode does: a
+    /// window UI Automation could not wrap).</summary>
+    public bool Unreadable { get; set; }
+
     public string ControlType { get => Gone ? throw new ElementGoneException("gone") : _controlType; set => _controlType = value; }
     public string Name { get; set; }
     public string AutomationId { get; set; }
@@ -73,7 +77,7 @@ public sealed class FakeNode : IUiNode
         lock (_children) return _children.ToArray();
     }
     public IUiNode? GetParent() => Parent;
-    public IReadOnlyList<IUiNode> FindDescendants(Cond cond) => TargetResolver.WalkFind(this, cond);
+    public IReadOnlyList<IUiNode> FindDescendants(Cond cond) => Unreadable ? throw new ElementGoneException("unreadable") : TargetResolver.WalkFind(this, cond);
     public override string ToString() => $"{ControlType} {AutomationId} {Name}";
 }
 
