@@ -470,7 +470,7 @@ export function buildDraft(events: ImportEvent[], opts: ImportOptions, report: I
   if (opts.vars) substituteVars(steps, opts.vars, 0);
   for (const { step, event } of selects) {
     const s = steps[step] as Extract<Step, { select: unknown }>;
-    s.intent = describeEvent({ ...event, value: s.select.value });
+    s.intent = describeEvent({ ...event, value: [s.select.value].flat().join(', ') });
   }
 
   if (steps.length === 0) {

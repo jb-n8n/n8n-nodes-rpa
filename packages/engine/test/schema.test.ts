@@ -103,6 +103,8 @@ const EVERY_FIELD = {
     { intent: 'Click', click: { role: 'link', name: '', exact: false, frame: 'iframe#a', within: { testId: 'nav', within: { css: 'body' } }, fallbacks: [{ css: '#a' }, { text: 'A', exact: true }, { label: 'L' }, { testId: 't' }, { role: 'tab', within: { css: 'nav' } }] }, when: { visible: { css: '#c', fallbacks: [{ css: '#d' }] } }, expect: { url: '/next', heading: 'Next', visible: { text: 'Done' } } },
     { intent: 'Fill', fill: { field: { label: 'Name' }, value: '' } },
     { intent: 'Select', select: { field: { label: 'Kind' }, value: '{{var.kind}}' } },
+    { intent: 'Select many', select: { field: { label: 'Kinds' }, value: ['a', '{{var.kind}}'] } },
+    { intent: 'Open one by variable', click: { role: 'link', name: '{{var.item}}' } },
     { intent: 'Check', check: { field: { label: 'Agree' }, checked: false } },
     { intent: 'Check default', check: { field: { label: 'Agree' } } },
     { intent: 'Click all', clickAll: { target: loc, max: 100 } },

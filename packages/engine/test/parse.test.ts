@@ -182,3 +182,21 @@ describe('capture verbs', () => {
     expect(one({ intent: 't', extractTable: { table: { css: 'table' }, columns: 3 } })).toEqual(['steps[1].extractTable has unknown key "columns"']);
   });
 });
+
+describe('locator variables and multi-select', () => {
+  const doc = (steps: unknown[]) => ({ name: 'x', version: 1, startUrl: `${URL0}/acme/login`, steps: [{ intent: 'Open', goto: '/acme/login' }, ...steps] });
+  it('accepts {{var.x}} in a role name and a text locator, and a select value that is a string array', () => {
+    expect(() => parseScript(doc([
+      { intent: 'Open one', click: { role: 'link', name: '{{var.item}}' } },
+      { intent: 'Open text', click: { text: '{{var.item}} details', within: { role: 'navigation' } } },
+      { intent: 'Pick', select: { field: { css: '#regions' }, value: ['north', '{{var.region}}'] } },
+      { intent: 'Pick one', select: { field: { css: '#regions' }, value: 'north' } },
+    ]))).not.toThrow();
+  });
+  it('refuses a select value that is an empty array, a non-string array, or holds {{$...}}', () => {
+    const issues = (value: unknown) => { try { parseScript(doc([{ intent: 'Pick', select: { field: { css: '#r' }, value } }])); return []; } catch (e) { return (e as ScriptShapeError).issues; } };
+    expect(issues([]).join('\n')).toMatch(/select\.value/);
+    expect(issues([1]).join('\n')).toMatch(/select\.value/);
+    expect(issues(['{{$exportDir}}']).join('\n')).toMatch(/\{\{\$/);
+  });
+});

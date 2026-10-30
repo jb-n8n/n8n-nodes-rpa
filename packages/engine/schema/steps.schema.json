@@ -261,7 +261,13 @@
           "required": ["field", "value"],
           "properties": {
             "field": { "$ref": "#/definitions/locator" },
-            "value": { "type": "string", "description": "The option to choose; may be {{var.name}}." }
+            "value": {
+              "oneOf": [
+                { "type": "string" },
+                { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": 100 }
+              ],
+              "description": "The option to choose; may be {{var.name}}. For a multi-select, an array selects exactly those options and clears the others."
+            }
           },
           "additionalProperties": false
         }

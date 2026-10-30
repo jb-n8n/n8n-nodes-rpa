@@ -402,6 +402,7 @@ Every locator field has **Find By**:
 - Give short button and link names **Exact Match** (`exact: true`). A name like `Export` also matches `Export layout`, so the locator breaks the day a page adds such a control. Repair copes when that happens, but an exact locator never drifts for that reason.
 - A locator must match **exactly one** element, or the step fails with `drift_detected` and says how many it found. The only locator that may match many is Extract Data's **Item**.
 - Values accept n8n expressions.
+- **Variables in locators.** `{{var.name}}` may appear in the **Name** of a Role and Name locator and in a Visible Text locator (`{ "role": "link", "name": "{{var.item}}" }`), also in `within` and `fallbacks`; in a desktop step set, in the `name` of a UI Automation condition. It is rendered from the run's variables each run, like a `fill` value, and the signed steps keep the template text, so the signature does not change. It never applies to hosts, URLs or `{{$...}}` names, and a variable whose value holds a credential secret is refused (`an input value contains a credential secret`). Other `{{...}}` text in a locator stays literal.
 - To find the right locator, open the page in your browser, right-click the element and choose **Inspect**. The Accessibility pane shows its role and name (a `button` named `Submit` is **Role and Name**, `button` and `Submit`), and **Copy → Copy selector** gives a CSS selector.
 
 ## ID Pattern in 60 seconds
@@ -455,7 +456,7 @@ Every step has an `intent` (plain words, shown in logs and errors) and one verb.
 |---|---|
 | `goto` | `"https://..."`; optional `waitUntil`: `load`, `domcontentloaded` or `networkidle` (use the object form `{ "goto": "https://...", "waitUntil": "load" }`) |
 | `click`, `check` | a locator; `check` is `{ field, checked? }` |
-| `fill`, `select` | `{ field: <locator>, value }`; `value` may be `{{var.name}}` |
+| `fill`, `select` | `{ field: <locator>, value }`; `value` may be `{{var.name}}`. For `select` on a multi-select, `value` may be an array of strings, `["north", "{{var.region}}"]`: exactly those options end up selected and the others are cleared (a single string still selects one option) |
 | `clickAll` | `{ target, max }` clicks every match, at most `max` |
 | `waitFor` | `{ target?, state?, hasText?, minCount?, response? }` |
 | `paginate` | `{ next, until: "absent" or "disabled", max, each: [steps] }` |

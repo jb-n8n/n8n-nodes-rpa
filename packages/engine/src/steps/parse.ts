@@ -189,7 +189,9 @@ function checkStep(s: unknown, path: string, issues: string[], nested: boolean) 
       if (!isObj(v)) { issues.push(`${p} must be an object`); break; }
       checkKeys(v, ['field', 'value'], p, issues);
       checkLocator(v.field, `${p}.field`, issues);
-      if (typeof v.value !== 'string') issues.push(`${p}.value must be a string`);
+      if (verb === 'select' && Array.isArray(v.value)) {
+        if (v.value.length === 0 || v.value.length > 100 || !v.value.every((x) => typeof x === 'string')) issues.push(`${p}.value must be a string or a non-empty array of at most 100 strings`);
+      } else if (typeof v.value !== 'string') issues.push(`${p}.value must be a string${verb === 'select' ? ' or an array of strings' : ''}`);
       break;
     case 'check':
       if (!isObj(v)) { issues.push(`${p} must be an object`); break; }
@@ -396,6 +398,7 @@ function checkBrowserTemplates(steps: unknown, issues: string[], path = 'steps')
     for (const verb of ['fill', 'select']) {
       const v = s[verb];
       if (isObj(v) && typeof v.value === 'string') checkTemplates(v.value, `${at}.${verb}.value`, () => false, issues);
+      else if (isObj(v) && Array.isArray(v.value)) v.value.forEach((x, j) => { if (typeof x === 'string') checkTemplates(x, `${at}.${verb}.value[${j}]`, () => false, issues); });
     }
     if (isObj(s.paginate)) checkBrowserTemplates(s.paginate.each, issues, `${at}.paginate.each`);
   });

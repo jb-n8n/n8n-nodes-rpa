@@ -65,7 +65,7 @@ function stepAction(step: Step): string {
       + (totp ? `, code in ${reviewLocator(totp.field)}, submit ${reviewLocator(totp.submit)}` : '');
   } else if ('click' in step) s = `click ${reviewLocator(step.click)}`;
   else if ('fill' in step) s = `fill ${reviewLocator(step.fill.field)} with ${q(step.fill.value)}`;
-  else if ('select' in step) s = `select ${q(step.select.value)} in ${reviewLocator(step.select.field)}`;
+  else if ('select' in step) s = `select ${q([step.select.value].flat().join(', '))} in ${reviewLocator(step.select.field)}`;
   else if ('check' in step) s = `${step.check.checked === false ? 'uncheck' : 'check'} ${reviewLocator(step.check.field)}`;
   else if ('clickAll' in step) s = `click every ${reviewLocator(step.clickAll.target)}, at most ${step.clickAll.max}`;
   else if ('waitFor' in step) {

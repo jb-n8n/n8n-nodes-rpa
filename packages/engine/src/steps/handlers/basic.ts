@@ -197,7 +197,9 @@ const fill: Handler = async (ctx, step, _state, timeout) => {
 const select: Handler = async (ctx, step, _state, timeout) => {
   const s = step as S<'select'>;
   const { locator, candidate } = await resolveUnique(ctx.page, s.select.field, timeout);
-  await withoutPasswords(ctx, locator, () => locator.selectOption(renderVars(s.select.value, ctx.vars, ctx.masker), { timeout }));
+  await withoutPasswords(ctx, locator, () => locator.selectOption(
+    Array.isArray(s.select.value) ? s.select.value.map((v) => renderVars(v, ctx.vars, ctx.masker)) : renderVars(s.select.value, ctx.vars, ctx.masker), { timeout },
+  ));
   return candidate;
 };
 

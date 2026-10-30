@@ -270,3 +270,10 @@ test('/public/ never sets a cookie, and /acme/ still works', async () => {
   const login = await get('/acme/login');
   assert.equal(login.status, 200);
 });
+
+test('/public/multi is a multi-select with one option preselected', async () => {
+  const { status, body } = await html('/public/multi');
+  assert.equal(status, 200);
+  assert.match(body, /<select id="regions" multiple>/);
+  assert.equal(count(body, ' selected>'), 1);
+});
