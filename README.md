@@ -467,7 +467,7 @@ Every step has an `intent` (plain words, shown in logs and errors) and one verb.
 | `read` | `{ what: "text" / "html" / "title" / "url" }` |
 | `download` | `{ trigger, via?, maxBytes?, mime?, check? }`; `check` is `{ name?, minBytes?, columns?, minRows? }`, see File checks below |
 | `submit` | `{ path, host?, method?, button }` a declared write; the only write target allowed, and only while this step runs |
-| `signIn` | `{ username, next?, password, submit, totp? }` needs a Site Login; `totp` is `{ field, submit, source? }` |
+| `signIn` | `{ username, next?, password, submit, totp? }` needs a Site Login; `totp` is `{ field, submit, source?, via?, check? }` |
 | `popup` | `{ trigger }` clicks a link that opens a new tab and continues in it |
 | `detect` | `{ name, checks, require? }` waits for one of several elements |
 
@@ -479,6 +479,14 @@ A locator is an object: `{ "text": "Sign in" }`, `{ "label": "Email address" }`,
 
 ```json
 { "intent": "Sign in", "signIn": { "username": { "label": "Email" }, "next": { "role": "button", "name": "Next" }, "password": { "label": "Password" }, "submit": { "role": "button", "name": "Sign in" } } }
+```
+
+**Pages before the code.** Some identity providers show pages between the password and the code field, such as a choice of second factor or a "Send me the code" button, and a checkbox such as "Trust this browser" next to the code. Single sign-on binds the code to the browser session, so one `signIn` step does all of it. `totp.via` lists the buttons to click after the password is submitted (1 to 5 locators, in order): the step waits up to the step timeout for the next of them or the code field, clicks each button that shows, and skips one that does not show before a later button or the code field does. With `via`, the code field must show within the step timeout after the last click; otherwise the step fails as drift with `signIn: the one-time code field did not appear within <n> s after the password was submitted (<clicked> of <total> totp.via clicked)`, and no code is generated or asked for. `totp.check` lists checkboxes (1 to 5) to tick after the code is typed and before its submit; each must be on the code page, or the step fails before the code is submitted. Both work with `"source": "seed"` and `"source": "workflow"` (the workflow is asked only once the code field shows), are part of the signed step, and are shown in the change list. Nothing is typed on the `via` pages, so they need not be login pages; the password pages and the code page still must be. List a `via` page as a login page anyway when its button posts a form, because the session blocks a form post anywhere else.
+
+```json
+{ "intent": "Sign in", "signIn": { "username": { "label": "Email" }, "next": { "role": "button", "name": "Next" }, "password": { "label": "Password" }, "submit": { "role": "button", "name": "Sign in" },
+  "totp": { "field": { "label": "Code" }, "submit": { "role": "button", "name": "Verify" },
+    "via": [{ "role": "button", "name": "Use a verification code" }, { "role": "button", "name": "Send me the code" }], "check": [{ "label": "Trust this browser" }] } } }
 ```
 
 **Step schema.** `packages/engine/schema/steps.schema.json` is a JSON Schema (draft-07) of the step document, for autocomplete and checks while you write steps in an editor. The published package carries a copy at `dist/schema/steps.schema.json` (`node_modules/n8n-nodes-rpa/dist/schema/steps.schema.json`, or https://unpkg.com/n8n-nodes-rpa/dist/schema/steps.schema.json for a pinned version add `@<version>` after the package name). Map it to your step files in the editor settings rather than with a `$schema` key, because Run Steps refuses keys it does not know. In VS Code, `json.schemas` in `.vscode/settings.json`:

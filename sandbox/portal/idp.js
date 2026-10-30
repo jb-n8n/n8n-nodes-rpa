@@ -3,6 +3,8 @@
 //   /idp/login  email and password (field names follow Microsoft Entra's sign-in page, unverified)
 //   /idp/password (sso2 only) the password for the email, /idp/mfa a TOTP code, for the transaction the previous step opened
 //   /idp/kmsi   (sso2 only) POST only: the "Stay signed in?" answer, with its own transaction (the code page's response carries the page); IDP_KMSI=off skips it
+//   /idp/factor (IDP_FACTOR=choice) between the password and the code: pick "Use a verification code" (or the app, a dead end with no code field)
+//   /idp/sendcode (IDP_FACTOR=choice or send) "Send me the code", then the code page; IDP_TRUST=on adds a "Trust this browser" checkbox there
 //   then an auto-submitting POST of the assertion to SAP's assertion consumer service, /sap/saml2/acs (acsRoute).
 // Not SAML: the assertion is base64url JSON { user, exp, nonce }, a dot, and its HMAC-SHA256 under a per-process key.
 // The ACS checks the MAC, the expiry (60 s) and that the nonce was handed out and not used yet. State lives in memory,
@@ -23,7 +25,7 @@ const TX_MS = 5 * 60 * 1000;
 const MAX_ENTRIES = 200;
 const MAX_CODE_FAILS = 5;
 
-const transactions = new Map(); // tx -> { user, relay, exp, fails, stage }: one step waiting (stage 'password', 'mfa' or 'kmsi'); each step hands on a fresh tx
+const transactions = new Map(); // tx -> { user, relay, exp, fails, stage }: one step waiting (stage 'password', 'factor', 'send', 'mfa' or 'kmsi'); each step hands on a fresh tx
 const nonces = new Map(); // nonce -> { exp }: assertions handed out and not used yet
 
 export const resetIdp = () => { transactions.clear(); nonces.clear(); };
@@ -60,7 +62,7 @@ function acceptAssertion(value) {
   return claims;
 }
 
-/** The live transaction waiting at this stage ('password', 'mfa' or 'kmsi'), or null. */
+/** The live transaction waiting at this stage ('password', 'factor', 'send', 'mfa' or 'kmsi'), or null. */
 function liveTransaction(tx, stage = 'mfa') {
   const t = typeof tx === 'string' ? transactions.get(tx) : undefined;
   if (!t || t.exp < Date.now() || t.stage !== stage) return null;
@@ -75,7 +77,7 @@ const newTransaction = (relay, stage) => {
 const STYLE = `<style>body{font-family:"Segoe UI",Arial,sans-serif;background:#f2f2f2;margin:0}.box{width:380px;margin:80px auto;background:#fff;
 padding:40px;box-shadow:0 2px 6px rgba(0,0,0,.2)}.brand{font-weight:600;color:#555}h1{font-size:24px;font-weight:600;margin:12px 0 16px}
 .row{margin:12px 0}.row label{display:block;margin-bottom:4px}.row input{width:100%;box-sizing:border-box;padding:6px}
-.msg{color:#e81123;margin:8px 0}button{background:#0067b8;color:#fff;border:0;padding:8px 24px}</style>`;
+.row input[type=checkbox]{width:auto}.msg{color:#e81123;margin:8px 0}button{background:#0067b8;color:#fff;border:0;padding:8px 24px}</style>`;
 const shell = (title, body) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${title}</title>
 ${STYLE}</head><body><main class="box"><div class="brand">RPA Corp</div>
 ${body}
@@ -125,9 +127,30 @@ function mfaPage({ message = '', tx }) {
 <form method="post" action="/idp/mfa">
 <input type="hidden" name="tx" value="${esc(tx)}">
 <div class="row"><label for="otc">Code</label><input id="otc" name="otc" type="tel" inputmode="numeric" autocomplete="one-time-code"></div>
-<div class="row"><button type="submit" id="idSubmit_SAOTCC_Continue">Verify</button></div>
+${trustOn() ? '<div class="row"><label><input type="checkbox" id="trustBrowser" name="trust" value="yes"> Trust this browser</label></div>\n' : ''}<div class="row"><button type="submit" id="idSubmit_SAOTCC_Continue">Verify</button></div>
 </form>`);
 }
+
+// IDP_FACTOR: pages between the password and the code. Neither carries a secret; both post to their own path.
+function factorPage({ tx }) {
+  return shell('Verify your identity', `<h1>Verify your identity</h1><p>Choose how to verify it's you.</p>
+<form method="post" action="/idp/factor">
+<input type="hidden" name="tx" value="${esc(tx)}">
+<div class="row"><button type="submit" name="method" value="code" id="factorCode">Use a verification code</button></div>
+<div class="row"><button type="submit" name="method" value="app" id="factorApp">Approve a request on my app</button></div>
+</form>`);
+}
+
+function sendCodePage({ tx }) {
+  return shell('Get a verification code', `<h1>Get a verification code</h1><p>We will send a one-time code to your registered device.</p>
+<form method="post" action="/idp/sendcode">
+<input type="hidden" name="tx" value="${esc(tx)}">
+<div class="row"><button type="submit" id="sendCode">Send me the code</button></div>
+</form>`);
+}
+
+// The app factor: no code field and nothing to submit (the sandbox never approves it).
+const approvePage = () => shell('Approve the request', '<h1>Approve the request</h1><p>Open your authenticator app and approve the sign-in request.</p>');
 
 // The HTTP POST binding: the browser carries the assertion to the ACS itself. Without scripts, a Continue button does it.
 const postBindingPage = (assertion, relay) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Working...</title></head><body>
@@ -150,8 +173,20 @@ const toSignIn = (res, send) => { send(res, 302, '', { Location: '/idp/login' })
 const notAllowed = (res, send, allow) => { send(res, 405, 'Method not allowed', { Allow: allow, 'Content-Type': 'text/plain; charset=utf-8' }); return true; };
 
 const kmsiOn = () => process.env.IDP_KMSI !== 'off';
+/** IDP_FACTOR: 'choice' (a factor choice, then "Send me the code"), 'send' (only "Send me the code"), else straight to the code. */
+const factorMode = () => (process.env.IDP_FACTOR === 'choice' ? 'choice' : process.env.IDP_FACTOR === 'send' ? 'send' : 'off');
+const trustOn = () => process.env.IDP_TRUST === 'on';
+const TRUST_COOKIE = 'idp_trusted=1; Path=/idp; HttpOnly; SameSite=Lax';
 
-/** /idp/login, /idp/mfa and, with sso2, /idp/password and /idp/kmsi. True when it answered. The server calls it in realistic mode with single sign-on only. */
+/** Where a correct password leads: the factor choice, "Send me the code" or the code page, each with a fresh transaction. */
+function afterPassword(relay) {
+  const mode = factorMode();
+  if (mode === 'choice') return `/idp/factor?tx=${newTransaction(relay, 'factor')}`;
+  if (mode === 'send') return `/idp/sendcode?tx=${newTransaction(relay, 'send')}`;
+  return `/idp/mfa?tx=${newTransaction(relay, 'mfa')}`;
+}
+
+/** /idp/login, /idp/mfa and, with sso2, /idp/password and /idp/kmsi; with IDP_FACTOR, /idp/factor and /idp/sendcode. True when it answered. The server calls it in realistic mode with single sign-on only. */
 export async function idpRoute(req, res, url, send) {
   const two = sapLogin() === 'sso2';
   if (url.pathname === '/idp/login') {
@@ -177,7 +212,7 @@ export async function idpRoute(req, res, url, send) {
       send(res, 200, loginPage({ message: 'Your account or password is incorrect.', user, relay }));
       return true;
     }
-    send(res, 302, '', { Location: `/idp/mfa?tx=${newTransaction(relay, 'mfa')}` });
+    send(res, 302, '', { Location: afterPassword(relay) });
     return true;
   }
   if (two && url.pathname === '/idp/password') {
@@ -198,6 +233,42 @@ export async function idpRoute(req, res, url, send) {
       send(res, 200, passwordPage({ message: 'Your account or password is incorrect.', user: t.user, tx }));
       return true;
     }
+    transactions.delete(tx);
+    send(res, 302, '', { Location: afterPassword(t.relay) });
+    return true;
+  }
+  if (url.pathname === '/idp/factor' && factorMode() === 'choice') {
+    if (req.method === 'GET' || req.method === 'HEAD') {
+      const tx = url.searchParams.get('tx');
+      if (!liveTransaction(tx, 'factor')) return toSignIn(res, send);
+      send(res, 200, factorPage({ tx }));
+      return true;
+    }
+    if (req.method !== 'POST') return notAllowed(res, send, 'GET, POST');
+    const f = await formOrNull(req);
+    if (!f) return refuse(res, send);
+    const tx = f.tx ?? url.searchParams.get('tx');
+    const t = liveTransaction(tx, 'factor');
+    if (!t) return toSignIn(res, send);
+    if (f.method === 'app') { transactions.delete(tx); send(res, 200, approvePage()); return true; }
+    if (f.method !== 'code') { send(res, 200, factorPage({ tx })); return true; }
+    transactions.delete(tx);
+    send(res, 302, '', { Location: `/idp/sendcode?tx=${newTransaction(t.relay, 'send')}` });
+    return true;
+  }
+  if (url.pathname === '/idp/sendcode' && factorMode() !== 'off') {
+    if (req.method === 'GET' || req.method === 'HEAD') {
+      const tx = url.searchParams.get('tx');
+      if (!liveTransaction(tx, 'send')) return toSignIn(res, send);
+      send(res, 200, sendCodePage({ tx }));
+      return true;
+    }
+    if (req.method !== 'POST') return notAllowed(res, send, 'GET, POST');
+    const f = await formOrNull(req);
+    if (!f) return refuse(res, send);
+    const tx = f.tx ?? url.searchParams.get('tx');
+    const t = liveTransaction(tx, 'send');
+    if (!t) return toSignIn(res, send);
     transactions.delete(tx);
     send(res, 302, '', { Location: `/idp/mfa?tx=${newTransaction(t.relay, 'mfa')}` });
     return true;
@@ -233,14 +304,16 @@ export async function idpRoute(req, res, url, send) {
       send(res, 200, mfaPage({ message: "You didn't enter the expected verification code. Please try again.", tx }));
       return true;
     }
+    // A ticked "Trust this browser" with a valid code: the IdP remembers the browser (the cookie is all it does here).
+    const trusted = trustOn() && f.trust === 'yes' ? { 'Set-Cookie': TRUST_COOKIE } : {};
     if (two && kmsiOn()) {
       // The page is the code's response, so its own transaction stays out of URLs; the code page's one is used up.
       transactions.delete(tx);
-      send(res, 200, kmsiPage({ tx: newTransaction(t.relay, 'kmsi') }));
+      send(res, 200, kmsiPage({ tx: newTransaction(t.relay, 'kmsi') }), trusted);
       return true;
     }
     transactions.delete(tx);
-    send(res, 200, postBindingPage(issueAssertion(t.user), t.relay));
+    send(res, 200, postBindingPage(issueAssertion(t.user), t.relay), trusted);
     return true;
   }
   return false;

@@ -62,7 +62,10 @@ function stepAction(step: Step): string {
   else if ('signIn' in step) {
     const { username, next, password, submit, totp } = step.signIn;
     s = `sign in with ${reviewLocator(username)}, ${next ? `next ${reviewLocator(next)}, ` : ''}${reviewLocator(password)}, submit ${reviewLocator(submit)}`
-      + (totp ? `, code in ${reviewLocator(totp.field)}, submit ${reviewLocator(totp.submit)}` : '');
+      + (totp
+        ? `${totp.via ? `, then click ${totp.via.map(reviewLocator).join(', then ')} if shown` : ''}, code in ${reviewLocator(totp.field)}`
+          + `${totp.check ? `, tick ${totp.check.map(reviewLocator).join(', ')}` : ''}, submit ${reviewLocator(totp.submit)}`
+        : '');
   } else if ('click' in step) s = `click ${reviewLocator(step.click)}`;
   else if ('fill' in step) s = `fill ${reviewLocator(step.fill.field)} with ${q(step.fill.value)}`;
   else if ('select' in step) s = `select ${q([step.select.value].flat().join(', '))} in ${reviewLocator(step.select.field)}`;

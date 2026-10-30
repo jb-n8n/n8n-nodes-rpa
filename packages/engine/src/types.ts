@@ -64,6 +64,15 @@ export interface SignInSpec {
      * run's codeProvider (in n8n, a sub-workflow) once the code field shows; no TOTP secret is needed.
      */
     source?: 'seed' | 'workflow';
+    /**
+     * Pages between the password and the code field (a factor choice, "Send me the code"): after the password is
+     * submitted, each locator is clicked in order, each only if it shows before the code field does (waiting up to the
+     * step timeout), until the code field shows. A locator that never shows is skipped. With via, the code field must
+     * show within the step timeout after the last click, or the step fails.
+     */
+    via?: Locator[];
+    /** Checkboxes ticked after the code is typed and before its submit (e.g. "Trust this browser"). Each must be on the page. */
+    check?: Locator[];
   };
 }
 

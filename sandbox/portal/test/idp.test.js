@@ -453,3 +453,110 @@ test('a consumed password transaction is refused and a wrong password leaves it 
     assert.equal(again.headers.get('location'), '/idp/login');
   });
 });
+
+// Intermediate pages between the password and the code (IDP_FACTOR) and a trust checkbox on the code page (IDP_TRUST).
+async function withIdpEnv(vars, fn) {
+  const keys = ['SANDBOX_SAP_LOGIN', 'IDP_KMSI', 'IDP_FACTOR', 'IDP_TRUST'];
+  const prev = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+  for (const k of keys.slice(1)) delete process.env[k];
+  Object.assign(process.env, vars);
+  try { await fn(); } finally {
+    for (const k of keys) if (prev[k] === undefined) delete process.env[k]; else process.env[k] = prev[k];
+  }
+}
+/** The sso2 password step's redirect, after the email and the password. */
+async function afterPassword(relay = FLP) {
+  const next = await post('/idp/login', { loginfmt: IDP.user, RelayState: relay });
+  const pw = await post('/idp/password', { tx: txOf(next), passwd: IDP.password });
+  assert.equal(pw.status, 302);
+  return pw.headers.get('location');
+}
+
+test('IDP_FACTOR=choice: a factor choice, then "Send me the code", then the code page', async () => {
+  await withIdpEnv({ SANDBOX_SAP_LOGIN: 'sso2', IDP_KMSI: 'off', IDP_FACTOR: 'choice' }, async () => {
+    const factor = await afterPassword();
+    assert.match(factor, /^\/idp\/factor\?tx=[0-9a-f]{36}$/);
+    const page = await (await get(factor)).text();
+    assert.match(page, /<h1>Verify your identity<\/h1>/);
+    assert.match(page, /name="method" value="code"[^>]*>Use a verification code<\/button>/);
+    assert.match(page, /name="method" value="app"[^>]*>Approve a request on my app<\/button>/);
+    assert.doesNotMatch(page, /name="otc"/);
+    const ftx = hidden(page, 'tx');
+    // the factor transaction cannot skip to the code page
+    assert.equal((await get(`/idp/mfa?tx=${ftx}`)).headers.get('location'), '/idp/login');
+    const chosen = await post('/idp/factor', { tx: ftx, method: 'code' });
+    assert.equal(chosen.status, 302);
+    assert.match(chosen.headers.get('location'), /^\/idp\/sendcode\?tx=[0-9a-f]{36}$/);
+    // used up
+    assert.equal((await post('/idp/factor', { tx: ftx, method: 'code' })).headers.get('location'), '/idp/login');
+    const send = await (await get(chosen.headers.get('location'))).text();
+    assert.match(send, /<h1>Get a verification code<\/h1>/);
+    assert.match(send, /<button type="submit" id="sendCode">Send me the code<\/button>/);
+    assert.doesNotMatch(send, /name="otc"/);
+    const sent = await post('/idp/sendcode', { tx: hidden(send, 'tx') });
+    assert.equal(sent.status, 302);
+    assert.match(sent.headers.get('location'), /^\/idp\/mfa\?tx=[0-9a-f]{36}$/);
+    const mfa = await (await get(sent.headers.get('location'))).text();
+    assert.match(mfa, /<label for="otc">Code<\/label>/);
+    assert.doesNotMatch(mfa, /type="checkbox"/);
+    const done = await post('/idp/mfa', { tx: hidden(mfa, 'tx'), otc: totp(IDP.totpSecret) });
+    assert.match(await done.text(), /action="\/sap\/saml2\/acs"/);
+  });
+});
+
+test('IDP_FACTOR=choice: the app factor is a dead end with no code field; a forged transaction goes back to the sign-in', async () => {
+  await withIdpEnv({ SANDBOX_SAP_LOGIN: 'sso2', IDP_FACTOR: 'choice' }, async () => {
+    const ftx = txOf({ headers: new Headers({ location: await afterPassword() }) });
+    const app = await post('/idp/factor', { tx: ftx, method: 'app' });
+    assert.equal(app.status, 200);
+    const html = await app.text();
+    assert.match(html, /<h1>Approve the request<\/h1>/);
+    assert.doesNotMatch(html, /name="otc"|<form/);
+    for (const path of ['/idp/factor', '/idp/sendcode']) {
+      assert.equal((await post(path, { tx: 'nope', method: 'code' })).headers.get('location'), '/idp/login', path);
+      assert.equal((await get(`${path}?tx=nope`)).headers.get('location'), '/idp/login', path);
+    }
+  });
+});
+
+test('IDP_FACTOR=send: only the "Send me the code" page; sso (one page) gets the pages too', async () => {
+  await withIdpEnv({ SANDBOX_SAP_LOGIN: 'sso2', IDP_FACTOR: 'send' }, async () => {
+    assert.match(await afterPassword(), /^\/idp\/sendcode\?tx=[0-9a-f]{36}$/);
+  });
+  await withIdpEnv({ SANDBOX_SAP_LOGIN: 'sso', IDP_FACTOR: 'choice' }, async () => {
+    const res = await post('/idp/login', { loginfmt: IDP.user, passwd: IDP.password });
+    assert.equal(res.status, 302);
+    assert.match(res.headers.get('location'), /^\/idp\/factor\?tx=[0-9a-f]{36}$/);
+  });
+  await withIdpEnv({ SANDBOX_SAP_LOGIN: 'sso2' }, async () => {
+    assert.match(await afterPassword(), /^\/idp\/mfa\?tx=/);
+    assert.equal((await get('/idp/factor?tx=x')).status, 404);
+    assert.equal((await post('/idp/sendcode', { tx: 'x' })).status, 404);
+  });
+});
+
+test('IDP_TRUST=on: the code page has a trust checkbox; a ticked box with a valid code sets the trust cookie', async () => {
+  await withIdpEnv({ SANDBOX_SAP_LOGIN: 'sso2', IDP_KMSI: 'off', IDP_TRUST: 'on' }, async () => {
+    const page = await (await get(await afterPassword())).text();
+    assert.match(page, /<label><input type="checkbox" id="trustBrowser" name="trust" value="yes"> Trust this browser<\/label>/);
+    const tx = hidden(page, 'tx');
+    // a wrong code shows the box unticked again and sets nothing
+    const wrong = await post('/idp/mfa', { tx, otc: '000000x', trust: 'yes' });
+    assert.equal(wrong.status, 200);
+    assert.doesNotMatch(await wrong.text(), /checked/);
+    assert.deepEqual(setCookies(wrong), []);
+    const ok = await post('/idp/mfa', { tx, otc: totp(IDP.totpSecret), trust: 'yes' });
+    assert.equal(ok.status, 200);
+    assert.deepEqual(setCookies(ok), ['idp_trusted=1; Path=/idp; HttpOnly; SameSite=Lax']);
+    // unticked: no cookie
+    const tx2 = txOf({ headers: new Headers({ location: await afterPassword() }) });
+    assert.deepEqual(setCookies(await post('/idp/mfa', { tx: tx2, otc: totp(IDP.totpSecret) })), []);
+  });
+  // with the stay-signed-in page, the cookie comes with the code's answer too
+  await withIdpEnv({ SANDBOX_SAP_LOGIN: 'sso2', IDP_TRUST: 'on' }, async () => {
+    const tx = txOf({ headers: new Headers({ location: await afterPassword() }) });
+    const res = await post('/idp/mfa', { tx, otc: totp(IDP.totpSecret), trust: 'yes' });
+    assert.match(await res.text(), /Stay signed in\?/);
+    assert.deepEqual(setCookies(res), ['idp_trusted=1; Path=/idp; HttpOnly; SameSite=Lax']);
+  });
+});

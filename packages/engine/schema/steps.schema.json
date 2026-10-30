@@ -216,7 +216,9 @@
               "properties": {
                 "field": { "$ref": "#/definitions/locatorNoFrame" },
                 "submit": { "$ref": "#/definitions/locatorNoFrame" },
-                "source": { "enum": ["seed", "workflow"], "description": "Where the code comes from: \"seed\" (default) generates it from the Site Login's TOTP secret; \"workflow\" asks the node's One-Time Code Workflow once the code field shows." }
+                "source": { "enum": ["seed", "workflow"], "description": "Where the code comes from: \"seed\" (default) generates it from the Site Login's TOTP secret; \"workflow\" asks the node's One-Time Code Workflow once the code field shows." },
+                "via": { "type": "array", "minItems": 1, "maxItems": 5, "items": { "$ref": "#/definitions/locatorNoFrame" }, "description": "Buttons on pages between the password and the code field (a factor choice, \"Send me the code\"), clicked in order, each only if it shows before the code field does. With via, the code field must show within the step timeout." },
+                "check": { "type": "array", "minItems": 1, "maxItems": 5, "items": { "$ref": "#/definitions/locatorNoFrame" }, "description": "Checkboxes ticked after the code is typed and before its submit (e.g. \"Trust this browser\")." }
               },
               "additionalProperties": false
             }

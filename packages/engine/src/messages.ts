@@ -79,6 +79,9 @@ export const codeWorkflowTimedOut = (seconds: number) => `the one-time code work
 export const CODE_WORKFLOW_NOT_A_CODE = 'the one-time code workflow did not return a code of 6 to 10 digits';
 export const codeWorkflowFailed = (message: string) => `the one-time code workflow failed: ${message}`;
 export const CODE_WORKFLOW_REJECTED_TWICE = 'the site rejected the one-time code from the workflow twice';
+/** A signIn with totp.via: the code field did not show within the step timeout after the password or the last via click (drift). */
+export const signInCodeFieldMissing = (seconds: number, clicked: number, total: number) =>
+  `signIn: the one-time code field did not appear within ${seconds} s after the password was submitted (${clicked} of ${total} totp.via clicked)`;
 /** The agent's two-page sign_in typed the username and moved to the password page, but never ran its second call. */
 export const AGENT_SIGN_IN_UNFINISHED = 'the agent typed the username but did not finish signing in on the password page';
 

@@ -175,13 +175,21 @@ function checkStep(s: unknown, path: string, issues: string[], nested: boolean) 
       if (v.totp !== undefined) {
         if (!isObj(v.totp)) issues.push(`${p}.totp must be an object`);
         else {
-          checkKeys(v.totp, ['field', 'submit', 'source'], `${p}.totp`, issues);
+          checkKeys(v.totp, ['field', 'submit', 'source', 'via', 'check'], `${p}.totp`, issues);
           checkLocator(v.totp.field, `${p}.totp.field`, issues);
           checkLocator(v.totp.submit, `${p}.totp.submit`, issues);
           if (v.totp.source !== undefined && v.totp.source !== 'seed' && v.totp.source !== 'workflow') issues.push(`${p}.totp.source must be "seed" or "workflow"`);
+          for (const key of ['via', 'check'] as const) {
+            const list = v.totp[key];
+            if (list === undefined) continue;
+            if (!Array.isArray(list) || list.length === 0 || list.length > 5) { issues.push(`${p}.totp.${key} must be an array of 1 to 5 locators`); continue; }
+            list.forEach((loc, i) => checkLocator(loc, `${p}.totp.${key}[${i}]`, issues));
+          }
         }
       }
-      for (const [k, loc] of [['username', v.username], ['next', v.next], ['password', v.password], ['submit', v.submit], ['totp.field', (v.totp as Obj | undefined)?.field], ['totp.submit', (v.totp as Obj | undefined)?.submit]] as const) {
+      const totp = isObj(v.totp) ? v.totp : undefined;
+      const lists = (key: 'via' | 'check'): [string, unknown][] => (Array.isArray(totp?.[key]) ? (totp[key] as unknown[]).map((loc, i) => [`totp.${key}[${i}]`, loc]) : []);
+      for (const [k, loc] of [['username', v.username], ['next', v.next], ['password', v.password], ['submit', v.submit], ['totp.field', totp?.field], ['totp.submit', totp?.submit], ...lists('via'), ...lists('check')] as [string, unknown][]) {
         if (isObj(loc) && loc.frame !== undefined) issues.push(`${p}.${k} cannot use frame`);
       }
       break;
