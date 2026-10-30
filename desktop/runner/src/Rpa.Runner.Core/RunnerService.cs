@@ -293,6 +293,8 @@ public sealed class RunnerService
             CheckWriteControl(receiver, res.Window, write, mode, "the element under the pointer or with the keyboard focus");
             // Where the pointer lands; a repair-mode key (Escape) goes to the focused element, which is its target.
             if (mode == ActMode.Repair && action != ActionKind.Key) CheckRepairReceiver(receiver, element);
+            // Right before the key goes out: the popup menu that allowed a repair-mode Escape may have closed.
+            if (mode == ActMode.Repair && action == ActionKind.Key) CheckRepairEscape(run, res.Window);
         }
 
         while (true)
@@ -324,12 +326,43 @@ public sealed class RunnerService
     }
 
     /// <summary>Escape fires a form's cancel button (WinForms CancelButton, a Win32 dialog's IDCANCEL) whatever has the
-    /// focus, so in repair mode it is refused when its window holds a declared write control, unless a menu of the run is
-    /// open (then Escape only closes the menu).</summary>
+    /// focus, so in repair mode it is refused when its window holds a declared write control, unless a popup menu of that
+    /// window is open (then Escape only closes the menu).</summary>
     private void CheckRepairEscape(RunState run, IUiNode window)
     {
-        if (WindowHasWriteControl(window) && !RunMenuOpen(run))
+        if (WindowHasWriteControl(window) && !PopupMenuOpenFor(run, window))
             throw RpcErrors.PolicyRefused("in repair mode Escape could press a declared write control of this window (a cancel button), so it is allowed only while a menu is open");
+    }
+
+    /// <summary>
+    /// An allow decision, so it fails closed: true only when a popup menu is open for the window, that is a visible,
+    /// on-screen top-level window of the run that is a Menu (or a Win32 popup menu, class #32768) and is the foreground
+    /// window or owned (Win32 owner chain) by the window. A menu bar or any element inside the window never counts; a
+    /// window that goes away while being read, or an owner that cannot be told, means no.
+    /// </summary>
+    private bool PopupMenuOpenFor(RunState run, IUiNode window)
+    {
+        try
+        {
+            var fg = _desktop.GetForegroundWindow();
+            foreach (var w in _scope.RunWindows(run, null))
+            {
+                if (w.Id == window.Id) continue;
+                if (!(string.Equals(w.ControlType, "Menu", StringComparison.OrdinalIgnoreCase) || w.ClassName == "#32768") || w.IsOffscreen) continue;
+                if (fg is not null && fg.Id == w.Id) return true;
+                var owner = _desktop.GetOwnerWindow(w);
+                for (var i = 0; i < 8 && owner is not null; i++)
+                {
+                    if (owner.Id == window.Id) return true;
+                    owner = _desktop.GetOwnerWindow(owner);
+                }
+            }
+        }
+        catch (ElementGoneException)
+        {
+            return false;
+        }
+        return false;
     }
 
     /// <summary>The run's top-level windows (its processes' own and owned windows, never another application's): the

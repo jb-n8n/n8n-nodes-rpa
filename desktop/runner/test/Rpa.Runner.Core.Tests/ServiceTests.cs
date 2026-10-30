@@ -389,8 +389,8 @@ public sealed class ServiceTests : IDisposable
     {
         var w = _h.BeginWithApp();
         _h.Desktop.Focused = w.Find("txtUser");
-        // A menu drop-down of the run is open (the main window holds a write control, so Escape needs an open menu).
-        var dropDown = new FakeNode("Menu", "Reports", "", w.ProcessId);
+        // A menu drop-down of the main window is open (the main window holds a write control, so Escape needs it).
+        var dropDown = new FakeNode("Menu", "Reports", "", w.ProcessId) { Owner = w };
         dropDown.Child("MenuItem", "Export line items...");
         _h.Desktop.Windows.Add(dropDown);
         var r = _h.Ok("act", new { runId = Harness.RunId, action = "key", value = "Escape", mode = "repair", timeoutMs = 0 });
@@ -420,12 +420,74 @@ public sealed class ServiceTests : IDisposable
         Assert.Equal("policy_refused: in repair mode Escape could press a declared write control of this window (a cancel button), so it is allowed only while a menu is open",
             e["message"]!.GetValue<string>());
         Assert.Empty(_h.Desktop.Performed);
-        // With a menu of the run open, Escape only closes the menu.
-        var dropDown = new FakeNode("Menu", "Reports", "", w.ProcessId);
+        // With a popup menu owned by the window open, Escape only closes the menu.
+        var dropDown = new FakeNode("Menu", "Reports", "", w.ProcessId) { Owner = w };
         dropDown.Child("MenuItem", "Export line items...");
         _h.Desktop.Windows.Insert(0, dropDown);
         _h.Ok("act", new { runId = Harness.RunId, action = "key", value = "Escape", mode = "repair", timeoutMs = 0 });
         Assert.Same(w, Assert.Single(_h.Desktop.Performed).Window);
+    }
+
+    private static object RepairEscape => new { runId = Harness.RunId, action = "key", value = "Escape", mode = "repair", timeoutMs = 0 };
+
+    [Fact]
+    public void Repair_mode_Escape_does_not_count_a_menu_bar_as_an_open_menu()
+    {
+        var w = _h.BeginWithApp();
+        _h.Desktop.Focused = w.Find("txtUser");
+        var bar = new FakeNode("MenuBar", "Application", "mainMenu");
+        bar.Child("MenuItem", "Reports");
+        w.Add(bar);
+        w.Child("Menu", "Reports", "mnuReportsDropDown");
+        var e = _h.Err("act", RepairEscape, RpcErrors.PolicyRefusedCode);
+        Assert.Contains("allowed only while a menu is open", e["message"]!.GetValue<string>());
+        Assert.Empty(_h.Desktop.Performed);
+    }
+
+    [Fact]
+    public void Repair_mode_Escape_needs_the_popup_menu_to_belong_to_its_window()
+    {
+        var w = _h.BeginWithApp();
+        _h.Desktop.Focused = w.Find("txtUser");
+        // A popup menu of another run window (not the foreground, not owned by the main window).
+        var other = new FakeNode("Window", "Find", "dlgFind", w.ProcessId);
+        _h.Desktop.Windows.Add(other);
+        _h.Desktop.Windows.Insert(0, new FakeNode("Menu", "Context", "", w.ProcessId) { Owner = other });
+        _h.Err("act", RepairEscape, RpcErrors.PolicyRefusedCode);
+        Assert.Empty(_h.Desktop.Performed);
+    }
+
+    [Fact]
+    public void Repair_mode_Escape_fails_closed_when_the_popup_cannot_be_read()
+    {
+        var w = _h.BeginWithApp();
+        _h.Desktop.Focused = w.Find("txtUser");
+        _h.Desktop.Windows.Insert(0, new FakeNode("Menu", "Reports", "", w.ProcessId) { Owner = w, Gone = true });
+        _h.Err("act", RepairEscape, RpcErrors.PolicyRefusedCode);
+        Assert.Empty(_h.Desktop.Performed);
+    }
+
+    [Fact]
+    public void Repair_mode_Escape_allows_a_win32_popup_menu_owned_by_its_window()
+    {
+        var w = _h.BeginWithApp();
+        _h.Desktop.Focused = w.Find("txtUser");
+        _h.Desktop.Windows.Insert(0, new FakeNode("Pane", "", "", w.ProcessId) { ClassName = "#32768", Owner = w });
+        _h.Ok("act", RepairEscape);
+        Assert.Single(_h.Desktop.Performed);
+    }
+
+    [Fact]
+    public void Repair_mode_Escape_is_refused_when_the_popup_closes_before_the_key_is_sent()
+    {
+        var w = _h.BeginWithApp();
+        _h.Desktop.Focused = w.Find("txtUser");
+        var dropDown = new FakeNode("Menu", "Reports", "", w.ProcessId) { Owner = w };
+        _h.Desktop.Windows.Insert(0, dropDown);
+        _h.Desktop.BeforeInput = _ => _h.Desktop.Windows.Remove(dropDown);
+        var e = _h.Err("act", RepairEscape, RpcErrors.PolicyRefusedCode);
+        Assert.Contains("allowed only while a menu is open", e["message"]!.GetValue<string>());
+        Assert.Empty(_h.Desktop.Performed);
     }
 
     [Fact]

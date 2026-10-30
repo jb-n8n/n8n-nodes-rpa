@@ -80,6 +80,9 @@ public interface IDesktop
     /// <summary>The top-level window that contains the element.</summary>
     IUiNode? GetTopLevelWindowOf(IUiNode element);
 
+    /// <summary>The window that owns a top-level window (Win32 GW_OWNER), or null when it has none or it cannot be told.</summary>
+    IUiNode? GetOwnerWindow(IUiNode window);
+
     /// <summary>Brings a top-level window to the foreground; true when it is the foreground window afterwards.</summary>
     bool BringToForeground(IUiNode window);
 

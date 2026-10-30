@@ -146,6 +146,11 @@ internal static partial class Native
     [DllImport("user32.dll")]
     public static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
 
+    public const uint GW_OWNER = 4;
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetWindow(IntPtr hwnd, uint cmd);
+
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool GetGUIThreadInfo(uint idThread, ref GUITHREADINFO info);
 

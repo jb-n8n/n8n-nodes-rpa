@@ -95,6 +95,14 @@ public sealed class WindowsDesktop : IDesktop, IDisposable
         });
     }
 
+    public IUiNode? GetOwnerWindow(IUiNode window)
+    {
+        var h = window is UiaNode u ? u.Handle : window is HwndNode hn ? hn.Handle : IntPtr.Zero;
+        if (h == IntPtr.Zero) return null;
+        var owner = Native.GetWindow(h, Native.GW_OWNER);
+        return owner == IntPtr.Zero ? null : (IUiNode?)Wrap(owner) ?? new HwndNode(owner);
+    }
+
     public bool BringToForeground(IUiNode window)
     {
         var h = window is UiaNode u ? u.Handle : window is HwndNode hn ? hn.Handle : IntPtr.Zero;

@@ -11,7 +11,7 @@ public sealed class FakeNode : IUiNode
 
     public FakeNode(string controlType, string name = "", string automationId = "", int pid = 0)
     {
-        ControlType = controlType;
+        _controlType = controlType;
         Name = name;
         AutomationId = automationId;
         ProcessId = pid;
@@ -19,12 +19,22 @@ public sealed class FakeNode : IUiNode
     }
 
     public string Id { get; }
-    public string ControlType { get; set; }
+    private string _controlType;
+
+    /// <summary>When set, reading the control type, class or offscreen state throws ElementGoneException.</summary>
+    public bool Gone { get; set; }
+
+    /// <summary>The Win32 owner window (a popup menu's or dialog's owner).</summary>
+    public FakeNode? Owner { get; set; }
+
+    public string ControlType { get => Gone ? throw new ElementGoneException("gone") : _controlType; set => _controlType = value; }
     public string Name { get; set; }
     public string AutomationId { get; set; }
-    public string ClassName { get; set; } = "";
+    private string _className = "";
+    public string ClassName { get => Gone ? throw new ElementGoneException("gone") : _className; set => _className = value; }
     public bool IsEnabled { get; set; } = true;
-    public bool IsOffscreen { get; set; }
+    private bool _offscreen;
+    public bool IsOffscreen { get => Gone ? throw new ElementGoneException("gone") : _offscreen; set => _offscreen = value; }
     public bool IsPassword { get; set; }
     public int ProcessId { get; set; }
     public string? Value { get; set; }
@@ -82,6 +92,11 @@ public sealed class FakeDesktop : IDesktop
 
     public Func<UiOperation, string?>? OnPerform { get; set; }
 
+    /// <summary>Runs at the start of Perform, before any input guard (for example to close a menu right before the key).</summary>
+    public Action<UiOperation>? BeforeInput { get; set; }
+
+    public IUiNode? GetOwnerWindow(IUiNode window) => ((FakeNode)window).Owner;
+
     public SessionState GetSessionState() => Session;
     public IReadOnlyList<IUiNode> GetTopLevelWindows() => Windows;
     public IUiNode? GetForegroundWindow() => Foreground;
@@ -105,6 +120,7 @@ public sealed class FakeDesktop : IDesktop
 
     public string? Perform(UiOperation op)
     {
+        BeforeInput?.Invoke(op);
         if (op.Action is ActionKind.Type or ActionKind.Key)
         {
             // As the Windows driver does right before keyboard input: first the window manager's focus window (a bare

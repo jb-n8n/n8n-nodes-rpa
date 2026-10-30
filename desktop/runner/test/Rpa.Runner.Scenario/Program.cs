@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -259,6 +260,7 @@ internal sealed class Scenario(Uri url, string token, string fingerprint, string
         _runId = "repair-" + Guid.NewGuid().ToString("N")[..8];
         var failedBefore = _results.Count(r => !r.Ok);
         var begun = false;
+        var appPid = 0;
         List<JsonNode> baseline = [];
         try
         {
@@ -266,7 +268,7 @@ internal sealed class Scenario(Uri url, string token, string fingerprint, string
                 {
                     await Call("run.begin", new { runId = _runId, leaseMs = 120000 });
                     begun = true;
-                    await Call("app.launch", new { runId = _runId, app = new { exe = appV2Path } });
+                    appPid = (await Call("app.launch", new { runId = _runId, app = new { exe = appV2Path } }))["pid"]!.GetValue<int>();
                     await SignIn("btnFind");
                     baseline = await WaitWindows("after sign-in (baseline)",
                         l => l.Any(w => Str(w, "title") == MainTitle) && !l.Any(w => Str(w, "title") == LoginTitle));
@@ -286,6 +288,7 @@ internal sealed class Scenario(Uri url, string token, string fingerprint, string
                 dropDown = added.FirstOrDefault(w => Str(w, "className") != "SysShadow") ?? added.FirstOrDefault();
                 Expect(dropDown is not null, "a new window of the run is listed while the drop-down is open");
                 Observe($"drop-down window: {Describe(dropDown!)}; listed at index {list.IndexOf(dropDown!)} of {list.Count}");
+                ObserveOwnership(appPid);
             });
 
             await Step("repair b: while the drop-down is open, MenuItem \"Export line items...\" shows in a snapshot", async () =>
@@ -550,6 +553,30 @@ internal sealed class Scenario(Uri url, string token, string fingerprint, string
         return string.Join("; ", parts) + (nodes.Count > max ? $"; ... ({nodes.Count} nodes)" : "");
     }
 
+    /// <summary>What Win32 says about the app's top-level windows (owner, GUI thread): the runner's popup-menu
+    /// ownership test relies on it.</summary>
+    private static void ObserveOwnership(int pid)
+    {
+        try
+        {
+            var wins = Win32.VisibleWindowsOf(pid);
+            foreach (var w in wins)
+                Observe($"win32: hwnd=0x{w.Handle:X} title=\"{w.Title}\" class=\"{w.ClassName}\" GW_OWNER=0x{w.Owner:X} thread={w.Thread}");
+            var main = wins.FirstOrDefault(w => w.Title == MainTitle);
+            var popup = wins.FirstOrDefault(w => w.Title != MainTitle);
+            if (main is null || popup is null)
+            {
+                Observe("win32: main window or drop-down not found");
+                return;
+            }
+            Observe($"drop-down GW_OWNER=0x{popup.Owner:X} equals MainForm (0x{main.Handle:X}): {popup.Owner == main.Handle}; same GUI thread: {popup.Thread == main.Thread}");
+        }
+        catch (Exception e)
+        {
+            Observe($"win32: could not read the windows ({e.Message})");
+        }
+    }
+
     private static void Observe(string text) => Console.WriteLine($"    OBSERVE: {text}");
 
     private async Task LeaseExpiry()
@@ -675,5 +702,40 @@ internal sealed class Scenario(Uri url, string token, string fingerprint, string
             Console.WriteLine($"::error title=desktop scenario::{name}: {e.Message}");
             return false;
         }
+    }
+}
+
+/// <summary>A few user32 calls for observations only (the scenario never acts through them).</summary>
+internal static class Win32
+{
+    public sealed record Win(IntPtr Handle, string Title, string ClassName, IntPtr Owner, uint Thread);
+
+    private delegate bool EnumProc(IntPtr hwnd, IntPtr lParam);
+
+    [DllImport("user32.dll")] private static extern bool EnumWindows(EnumProc proc, IntPtr lParam);
+    [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hwnd);
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+    [DllImport("user32.dll")] private static extern IntPtr GetWindow(IntPtr hwnd, uint cmd);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(IntPtr hwnd, StringBuilder sb, int max);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr hwnd, StringBuilder sb, int max);
+
+    /// <summary>The process's visible top-level windows, front to back.</summary>
+    public static List<Win> VisibleWindowsOf(int pid)
+    {
+        var list = new List<Win>();
+        EnumWindows((h, _) =>
+        {
+            var thread = GetWindowThreadProcessId(h, out var p);
+            if (p == (uint)pid && IsWindowVisible(h))
+            {
+                var cls = new StringBuilder(256);
+                var title = new StringBuilder(256);
+                GetClassName(h, cls, cls.Capacity);
+                GetWindowText(h, title, title.Capacity);
+                list.Add(new Win(h, title.ToString(), cls.ToString(), GetWindow(h, 4 /* GW_OWNER */), thread));
+            }
+            return true;
+        }, IntPtr.Zero);
+        return list;
     }
 }
