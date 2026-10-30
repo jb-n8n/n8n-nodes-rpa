@@ -391,6 +391,8 @@ internal sealed class Scenario(Uri url, string token, string fingerprint, string
                 Observe($"Confirm export: index {list.IndexOf(confirm!)} of {list.Count}, {Describe(confirm!)}");
                 var snap = await SaveSnapshot("snapshot-repair-confirm-nowindow.json");
                 Observe($"snapshot without window selector: title=\"{snap["window"]!["title"]}\", nodes: {Brief(snap, 12)}");
+                var mainF1 = await SaveSnapshot("snapshot-repair-confirm-mainform.json", new { title = MainTitle });
+                Observe($"main-form snapshot with Confirm export open: {Nodes(mainF1).Count} nodes, has btnConfirmExport: {Nodes(mainF1).Any(n => Str(n, "automationId") == "btnConfirmExport")}, has Window \"Confirm export\": {HasNode(mainF1, "Window", "Confirm export")}");
                 await RepairEscape();
                 list = await WaitWindows("after Escape on Confirm export", l => !l.Any(w => Str(w, "title") == "Confirm export"));
                 var gone = !list.Any(w => Str(w, "title") == "Confirm export");
@@ -412,6 +414,8 @@ internal sealed class Scenario(Uri url, string token, string fingerprint, string
                 Observe($"Save dialog: index {list.IndexOf(save!)} of {list.Count}, {Describe(save!)}");
                 var snap = await SaveSnapshot("snapshot-repair-save-nowindow.json", maxNodes: 1500);
                 Observe($"snapshot without window selector: title=\"{snap["window"]!["title"]}\", root {NodeText(snap, 0)}, {Nodes(snap).Count} nodes{(snap["truncated"]?.GetValue<bool>() == true ? " (truncated)" : "")}");
+                var mainF2 = await SaveSnapshot("snapshot-repair-save-mainform.json", new { title = MainTitle }, maxNodes: 1500);
+                Observe($"main-form snapshot with the Save dialog open: {Nodes(mainF2).Count} nodes, has Edit 1001: {Nodes(mainF2).Any(n => Str(n, "controlType") == "Edit" && Str(n, "automationId") == "1001")}");
                 await RepairEscape();
                 list = await WaitWindows("after Escape on the Save dialog", l => !l.Any(w => Str(w, "title") == SaveTitle));
                 var gone = !list.Any(w => Str(w, "title") == SaveTitle);
