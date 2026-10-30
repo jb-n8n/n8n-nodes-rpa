@@ -36,7 +36,7 @@ public sealed class ServiceTests : IDisposable
     [Fact]
     public void Methods_other_than_hello_and_run_begin_need_the_active_run_id()
     {
-        foreach (var m in new[] { "run.heartbeat", "run.end", "app.launch", "snapshot", "isVisible", "resolve", "act", "file.retrieve", "screenshot" })
+        foreach (var m in new[] { "run.heartbeat", "run.end", "app.launch", "snapshot", "isVisible", "resolve", "act", "windows", "file.retrieve", "screenshot" })
             _h.Err(m, new { runId = "nope" }, RpcErrors.NoRunCode);
         _h.Begin();
         _h.Err("snapshot", new { runId = "other" }, RpcErrors.NoRunCode);
@@ -382,6 +382,232 @@ public sealed class ServiceTests : IDisposable
         _h.Err("act", Act(Id("btnSignIn"), "click", new { mode = "repair" }), RpcErrors.PolicyRefusedCode);
         _h.Err("act", Act(Id("btnPost"), "focus", new { mode = "repair", write = true }), RpcErrors.PolicyRefusedCode);
         _h.Err("act", Act(Id("txtUser"), "key", new { mode = "repair", value = "Ctrl+S", write = true }), RpcErrors.PolicyRefusedCode);
+    }
+
+    [Fact]
+    public void Repair_mode_allows_Escape_without_target()
+    {
+        var w = _h.BeginWithApp();
+        _h.Desktop.Focused = w.Find("txtUser");
+        // A menu drop-down of the main window is open (the main window holds a write control, so Escape needs it).
+        var dropDown = new FakeNode("Menu", "Reports", "", w.ProcessId) { Owner = w };
+        dropDown.Child("MenuItem", "Export line items...");
+        _h.Desktop.Windows.Add(dropDown);
+        var r = _h.Ok("act", new { runId = Harness.RunId, action = "key", value = "Escape", mode = "repair", timeoutMs = 0 });
+        Assert.Empty(r.AsObject());
+        var op = Assert.Single(_h.Desktop.Performed);
+        Assert.Equal("Escape", op.Key!.ToString());
+        Assert.Equal("txtUser", op.Element.AutomationId);
+    }
+
+    [Fact]
+    public void Repair_mode_refuses_Escape_with_the_focus_on_a_write_control()
+    {
+        var w = _h.BeginWithApp();
+        // A drop-down of the window is open, so only the focused element's own check can refuse.
+        _h.Desktop.Windows.Add(new FakeNode("Menu", "Reports", "", w.ProcessId) { Owner = w });
+        _h.Desktop.Focused = w.Find("btnPost");
+        var e = _h.Err("act", new { runId = Harness.RunId, action = "key", value = "Escape", mode = "repair", timeoutMs = 0 }, RpcErrors.PolicyRefusedCode);
+        Assert.Equal("policy_refused: the target is a declared write control; repair mode never acts on it", e["message"]!.GetValue<string>());
+        Assert.Empty(_h.Desktop.Performed);
+    }
+
+    [Fact]
+    public void Repair_mode_Escape_on_a_window_with_a_write_control_needs_an_open_menu()
+    {
+        var w = _h.BeginWithApp();
+        _h.Desktop.Focused = w.Find("txtUser");
+        var e = _h.Err("act", new { runId = Harness.RunId, action = "key", value = "Escape", mode = "repair", timeoutMs = 0 }, RpcErrors.PolicyRefusedCode);
+        Assert.Equal("policy_refused: in repair mode Escape could press a declared write control of this window (a cancel button), so it is allowed only while a menu is open",
+            e["message"]!.GetValue<string>());
+        Assert.Empty(_h.Desktop.Performed);
+        // With a popup menu owned by the window open, Escape only closes the menu.
+        var dropDown = new FakeNode("Menu", "Reports", "", w.ProcessId) { Owner = w };
+        dropDown.Child("MenuItem", "Export line items...");
+        _h.Desktop.Windows.Insert(0, dropDown);
+        _h.Ok("act", new { runId = Harness.RunId, action = "key", value = "Escape", mode = "repair", timeoutMs = 0 });
+        Assert.Same(w, Assert.Single(_h.Desktop.Performed).Window);
+    }
+
+    private static object RepairEscape => new { runId = Harness.RunId, action = "key", value = "Escape", mode = "repair", timeoutMs = 0 };
+
+    [Fact]
+    public void Repair_mode_Escape_does_not_count_a_menu_bar_as_an_open_menu()
+    {
+        var w = _h.BeginWithApp();
+        _h.Desktop.Focused = w.Find("txtUser");
+        var bar = new FakeNode("MenuBar", "Application", "mainMenu");
+        bar.Child("MenuItem", "Reports");
+        w.Add(bar);
+        w.Child("Menu", "Reports", "mnuReportsDropDown");
+        var e = _h.Err("act", RepairEscape, RpcErrors.PolicyRefusedCode);
+        Assert.Contains("allowed only while a menu is open", e["message"]!.GetValue<string>());
+        Assert.Empty(_h.Desktop.Performed);
+    }
+
+    [Fact]
+    public void Repair_mode_Escape_needs_the_popup_menu_to_belong_to_its_window()
+    {
+        var w = _h.BeginWithApp();
+        _h.Desktop.Focused = w.Find("txtUser");
+        // A popup menu of another run window (not the foreground, not owned by the main window).
+        var other = new FakeNode("Window", "Find", "dlgFind", w.ProcessId);
+        _h.Desktop.Windows.Add(other);
+        _h.Desktop.Windows.Insert(0, new FakeNode("Menu", "Context", "", w.ProcessId) { Owner = other });
+        _h.Err("act", RepairEscape, RpcErrors.PolicyRefusedCode);
+        Assert.Empty(_h.Desktop.Performed);
+    }
+
+    [Fact]
+    public void Repair_mode_Escape_fails_closed_when_the_popup_cannot_be_read()
+    {
+        var w = _h.BeginWithApp();
+        _h.Desktop.Focused = w.Find("txtUser");
+        _h.Desktop.Windows.Insert(0, new FakeNode("Menu", "Reports", "", w.ProcessId) { Owner = w, Gone = true });
+        _h.Err("act", RepairEscape, RpcErrors.PolicyRefusedCode);
+        Assert.Empty(_h.Desktop.Performed);
+    }
+
+    [Fact]
+    public void Repair_mode_Escape_allows_a_win32_popup_menu_owned_by_its_window()
+    {
+        var w = _h.BeginWithApp();
+        _h.Desktop.Focused = w.Find("txtUser");
+        _h.Desktop.Windows.Insert(0, new FakeNode("Pane", "", "", w.ProcessId) { ClassName = "#32768", Owner = w });
+        _h.Ok("act", RepairEscape);
+        Assert.Single(_h.Desktop.Performed);
+    }
+
+    [Fact]
+    public void Repair_mode_Escape_is_refused_when_the_popup_closes_before_the_key_is_sent()
+    {
+        var w = _h.BeginWithApp();
+        _h.Desktop.Focused = w.Find("txtUser");
+        var dropDown = new FakeNode("Menu", "Reports", "", w.ProcessId) { Owner = w };
+        _h.Desktop.Windows.Insert(0, dropDown);
+        _h.Desktop.BeforeInput = _ => _h.Desktop.Windows.Remove(dropDown);
+        var e = _h.Err("act", RepairEscape, RpcErrors.PolicyRefusedCode);
+        Assert.Contains("allowed only while a menu is open", e["message"]!.GetValue<string>());
+        Assert.Empty(_h.Desktop.Performed);
+    }
+
+    [Fact]
+    public void Repair_mode_Escape_reaches_a_dialog_the_run_window_owns()
+    {
+        var main = _h.BeginWithApp();
+        // UI Automation nests an owned dialog under its owner, while the window manager lists it as a top-level window.
+        var dialog = new FakeNode("Window", "Confirm export", "ConfirmExportForm");
+        dialog.Child("Button", "Continue", "btnConfirmExport");
+        main.Add(dialog);
+        _h.Desktop.Windows.Insert(0, dialog);
+        _h.Desktop.Foreground = dialog;
+        _h.Desktop.Focused = dialog.Find("btnConfirmExport");
+        _h.Ok("act", new { runId = Harness.RunId, action = "key", value = "Escape", mode = "repair", timeoutMs = 0 });
+        var op = Assert.Single(_h.Desktop.Performed);
+        Assert.Same(dialog, op.Window);
+    }
+
+    [Fact]
+    public void Repair_mode_Escape_is_refused_when_its_window_cannot_be_read()
+    {
+        var main = _h.BeginWithApp();
+        // The foreground dialog as the Windows driver returns a window UI Automation could not wrap (HwndNode): its
+        // contents cannot be searched, so it may hold a write control that Escape presses.
+        var dialog = new FakeNode("Window", "Confirm export", "ConfirmExportForm") { Unreadable = true };
+        dialog.Child("Button", "Continue", "btnConfirmExport");
+        main.Add(dialog);
+        _h.Desktop.Windows.Insert(0, dialog);
+        _h.Desktop.Foreground = dialog;
+        _h.Desktop.Focused = dialog.Find("btnConfirmExport");
+        var e = _h.Err("act", RepairEscape, RpcErrors.PolicyRefusedCode);
+        Assert.Contains("allowed only while a menu is open", e["message"]!.GetValue<string>());
+        Assert.Empty(_h.Desktop.Performed);
+    }
+
+    [Theory]
+    [InlineData("Enter", false)]
+    [InlineData("Tab", false)]
+    [InlineData("Down", false)]
+    [InlineData("Shift+Escape", false)]
+    [InlineData("Escape", true)]
+    public void Repair_mode_refuses_other_keys(string key, bool withTarget)
+    {
+        var w = _h.BeginWithApp();
+        _h.Desktop.Focused = w.Find("txtUser");
+        object p = withTarget
+            ? Act(Id("txtUser"), "key", new { value = key, mode = "repair" })
+            : new { runId = Harness.RunId, action = "key", value = key, mode = "repair", timeoutMs = 0 };
+        var e = _h.Err("act", p, RpcErrors.PolicyRefusedCode);
+        // The wire message is "<error name>: <reason>".
+        Assert.StartsWith("policy_refused: repair mode allows only", e["message"]!.GetValue<string>());
+        Assert.Empty(_h.Desktop.Performed);
+    }
+
+    [Fact]
+    public void Repair_mode_refuses_gated_Escape()
+    {
+        using var probe = new Harness();
+        using var h = new Harness($$"""
+            { "allowedApps": [{ "exe": "ErpDemo.exe", "path": {{System.Text.Json.JsonSerializer.Serialize(probe.AppPath)}} }], "gatedKeys": ["Escape"] }
+            """);
+        var w = h.BeginWithApp();
+        h.Desktop.Focused = w.Find("txtUser");
+        var e = h.Err("act", new { runId = Harness.RunId, action = "key", value = "Escape", mode = "repair", timeoutMs = 0 }, RpcErrors.PolicyRefusedCode);
+        Assert.Equal("policy_refused: the gated key Escape is never allowed in repair mode", e["message"]!.GetValue<string>());
+        Assert.Empty(h.Desktop.Performed);
+    }
+
+    [Fact]
+    public void Windows_lists_run_windows_foreground_first()
+    {
+        var main = _h.BeginWithApp();
+        main.ClassName = "WindowsForms10.Window.8.app";
+        var dialog = new FakeNode("Window", "Confirm export", "ConfirmForm", main.ProcessId) { ClassName = "WindowsForms10.Window.8.app.dlg" };
+        _h.Desktop.Windows.Insert(0, dialog);
+        _h.Desktop.Foreground = dialog;
+        var list = _h.Ok("windows", new { runId = Harness.RunId })["windows"]!.AsArray();
+        Assert.Equal(2, list.Count);
+        Assert.Equal("Confirm export", list[0]!["title"]!.GetValue<string>());
+        Assert.Equal("ErpDemo.exe", list[0]!["exe"]!.GetValue<string>());
+        Assert.Equal("ConfirmForm", list[0]!["automationId"]!.GetValue<string>());
+        Assert.Equal("WindowsForms10.Window.8.app.dlg", list[0]!["className"]!.GetValue<string>());
+        Assert.True(list[0]!["foreground"]!.GetValue<bool>());
+        Assert.Equal("ERP Demo - Line items", list[1]!["title"]!.GetValue<string>());
+        Assert.Equal("MainForm", list[1]!["automationId"]!.GetValue<string>());
+        Assert.False(list[1]!["foreground"]!.GetValue<bool>());
+        // The foreground window comes first even when it is not front-most; the rest stay in z-order.
+        _h.Desktop.Foreground = main;
+        list = _h.Ok("windows", new { runId = Harness.RunId })["windows"]!.AsArray();
+        Assert.Equal(["ERP Demo - Line items", "Confirm export"], list.Select(n => n!["title"]!.GetValue<string>()));
+        Assert.Equal([true, false], list.Select(n => n!["foreground"]!.GetValue<bool>()));
+        // At most 20.
+        for (var i = 0; i < 25; i++) _h.Desktop.Windows.Add(new FakeNode("Window", $"Extra {i}", "", main.ProcessId));
+        Assert.Equal(20, _h.Ok("windows", new { runId = Harness.RunId })["windows"]!.AsArray().Count);
+    }
+
+    [Fact]
+    public void Windows_never_lists_other_processes()
+    {
+        _h.BeginWithApp();
+        _h.Processes.Names[777] = "notepad.exe";
+        var foreign = new FakeNode("Window", "Untitled - Notepad", "", 777);
+        _h.Desktop.Windows.Insert(0, foreign);
+        _h.Desktop.Foreground = foreign;
+        var list = _h.Ok("windows", new { runId = Harness.RunId })["windows"]!.AsArray();
+        var only = Assert.Single(list);
+        Assert.Equal("ERP Demo - Line items", only!["title"]!.GetValue<string>());
+        Assert.False(only["foreground"]!.GetValue<bool>());
+        Assert.DoesNotContain("Notepad", list.ToJsonString());
+    }
+
+    [Fact]
+    public void Windows_needs_active_run()
+    {
+        _h.BeginWithApp();
+        var e = _h.Err("windows", new { runId = "other" }, RpcErrors.NoRunCode);
+        Assert.Equal("no_run", e["data"]!["name"]!.GetValue<string>());
+        _h.Desktop.Session = new SessionState(true, true, true);
+        _h.Err("windows", new { runId = Harness.RunId }, RpcErrors.DesktopUnavailableCode);
     }
 
     [Fact]

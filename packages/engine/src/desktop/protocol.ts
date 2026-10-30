@@ -27,6 +27,8 @@ export interface RunnerNode {
   value?: string;
   valueHidden?: true;
 }
+/** One top-level window of the run, as `windows` lists it. */
+export interface RunnerWindow { title: string; exe: string; automationId: string; className: string; foreground: boolean }
 
 export interface HelloResult {
   protocol: number;
@@ -42,7 +44,8 @@ export interface RunnerMethods {
   'app.launch': { params: { runId: string; app: DesktopApp }; result: { pid: number } };
   snapshot: {
     params: { runId: string; window?: WindowSel; maxNodes?: number; maxDepth?: number };
-    result: { window: { title: string; exe: string }; nodes: RunnerNode[] };
+    /** `truncated`: maxNodes or maxDepth cut the tree short. */
+    result: { window: { title: string; exe: string }; nodes: RunnerNode[]; truncated?: true };
   };
   isVisible: { params: { runId: string; target: RunnerTarget }; result: { visible: boolean } };
   resolve: { params: { runId: string; target: RunnerTarget; timeoutMs: number }; result: { candidate: number } };
@@ -56,6 +59,8 @@ export interface RunnerMethods {
   };
   'file.retrieve': { params: { runId: string; pattern: string; timeoutMs: number; maxBytes: number }; result: { name: string; size: number; base64: string } };
   screenshot: { params: { runId: string }; result: { base64: string } };
+  /** The run's top-level windows: the foreground window first when it is the run's, then front to back. */
+  windows: { params: { runId: string }; result: { windows: RunnerWindow[] } };
 }
 export type RunnerMethod = keyof RunnerMethods;
 
@@ -73,6 +78,8 @@ export const RUNNER_ERROR_CODES = {
 export type RunnerErrorKind = keyof typeof RUNNER_ERROR_CODES | 'cannot_act' | 'runner_error';
 /** JSON-RPC's invalid params: the runner's answer to a malformed request, and its driver's to a control that cannot take the action. */
 export const INVALID_PARAMS = -32602;
+/** JSON-RPC's method not found: a runner older than the method. */
+export const METHOD_NOT_FOUND = -32601;
 /**
  * The runner's driver answers invalid params for an element that cannot take the action asked of it (WindowsDesktop:
  * "the element does not take typed text", "the element cannot be checked or unchecked", "the element cannot expand"):

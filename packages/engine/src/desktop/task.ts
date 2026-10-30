@@ -26,7 +26,7 @@ import {
   DesktopUnavailableError, ElementCannotActError, ElementNotFoundError, ElementNotUniqueError, ExpectedFileMissingError, NoRunError, PolicyRefusedError, PROTOCOL_VERSION,
   RunnerBusyError, RunnerConnectError, RunnerDisconnectedError, RunnerTimeoutError,
 } from './protocol.js';
-import { createDesktopSurface, DesktopDriftError, type DesktopSurface } from './surface.js';
+import { createDesktopSurface, DesktopDriftError, MIN_MASKED_TYPED, type DesktopSurface } from './surface.js';
 import './handlers.js';
 
 /** One desktop run. Apart from the abort signal, everything is JSON-serialisable. */
@@ -67,8 +67,6 @@ const BUSY_RETRY_MS = 1_000;
  */
 export const LEASE_LOST = 'the runner no longer has this run: its lease ran out or the runner restarted';
 const END_WAIT_MS = 5_000;
-/** Typed values shorter than this are not masked out of messages (a one-letter value would mask every such letter). */
-const MIN_MASKED_TYPED = 4;
 
 /** Desktop steps have no browser page: any browser code reaching for it fails loudly instead of acting. */
 const NO_PAGE = new Proxy({}, { get() { throw new Error('a desktop run has no browser page'); } }) as Page;
