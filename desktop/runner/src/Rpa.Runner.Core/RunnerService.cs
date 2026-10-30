@@ -266,6 +266,7 @@ public sealed class RunnerService
         var what = target?.Describe() ?? "the focused element";
 
         CheckWriteControl(element, res.Window, write, mode, "the target");
+        if (mode == ActMode.Repair && action == ActionKind.Key) CheckRepairEscape(run, res.Window);
         if (mode == ActMode.Repair && action == ActionKind.Click && !RepairClickable.Contains(element.ControlType))
             throw RpcErrors.PolicyRefused($"repair mode may click only tabs, list items and tree items, not a {element.ControlType}");
         if (action == ActionKind.Read && Redaction.HidesValue(element))
@@ -317,8 +318,18 @@ public sealed class RunnerService
                 res = target is null ? FocusedResolution(run, deadline, ct) : _resolver.Resolve(run, target, Remaining(deadline), ct);
                 element = res.Element;
                 CheckWriteControl(element, res.Window, write, mode, "the target");
+                if (mode == ActMode.Repair && action == ActionKind.Key) CheckRepairEscape(run, res.Window);
             }
         }
+    }
+
+    /// <summary>Escape fires a form's cancel button (WinForms CancelButton, a Win32 dialog's IDCANCEL) whatever has the
+    /// focus, so in repair mode it is refused when its window holds a declared write control, unless a menu of the run is
+    /// open (then Escape only closes the menu).</summary>
+    private void CheckRepairEscape(RunState run, IUiNode window)
+    {
+        if (WindowHasWriteControl(window) && !RunMenuOpen(run))
+            throw RpcErrors.PolicyRefused("in repair mode Escape could press a declared write control of this window (a cancel button), so it is allowed only while a menu is open");
     }
 
     /// <summary>The run's top-level windows (its processes' own and owned windows, never another application's): the
@@ -387,22 +398,26 @@ public sealed class RunnerService
     private bool RunHasWriteControl(RunState run)
     {
         if (_policy.WriteControls.Count == 0) return false;
-        foreach (var window in _scope.RunWindows(run, null))
+        return _scope.RunWindows(run, null).Any(WindowHasWriteControl);
+    }
+
+    /// <summary>Whether the window or a descendant is a declared write control (an unreadable window counts as holding one).</summary>
+    private bool WindowHasWriteControl(IUiNode window)
+    {
+        if (_policy.WriteControls.Count == 0) return false;
+        try
         {
             var exe = _scope.ExeOf(window.ProcessId);
             foreach (var w in _policy.WriteControls)
             {
                 if (!string.Equals(w.Exe, exe, StringComparison.OrdinalIgnoreCase)) continue;
-                try
-                {
-                    if (string.Equals(window.AutomationId, w.AutomationId, StringComparison.Ordinal) ||
-                        window.FindDescendants(new Cond(null, w.AutomationId, null, null, null)).Count > 0) return true;
-                }
-                catch (ElementGoneException)
-                {
-                    return true;
-                }
+                if (string.Equals(window.AutomationId, w.AutomationId, StringComparison.Ordinal) ||
+                    window.FindDescendants(new Cond(null, w.AutomationId, null, null, null)).Count > 0) return true;
             }
+        }
+        catch (ElementGoneException)
+        {
+            return true;
         }
         return false;
     }

@@ -60,7 +60,10 @@ A run acts only on windows of processes it launched whose executable is allowed.
 the foreground and the runner cannot bring the run's window back, the action is refused; OS surfaces (notifications,
 the taskbar, the Start menu) are ignored. `mode: "repair"` allows only `focus`, `expand`, `read`, `key` with the value
 `Escape` and no target (it goes to the run's focused element, to close a menu or a dialog; an `Escape` listed in
-`gatedKeys` stays refused), and `click` on tabs, list items and tree items.
+`gatedKeys` stays refused), and `click` on tabs, list items and tree items. Because Escape fires a form's cancel
+button whatever has the focus, a repair-mode Escape is refused while its window holds a write control, unless a menu
+of the run is open. When an app's Escape itself writes (a cancel button that discards or posts), list `Escape` in
+`gatedKeys`.
 
 Key chords that reach the Windows shell rather than the app (anything with Win, Ctrl+Esc, Ctrl+Shift+Esc,
 Alt+Tab, Alt+Esc) are never sent. `type` goes only into editable text fields, as Unicode keystrokes (no shortcuts or

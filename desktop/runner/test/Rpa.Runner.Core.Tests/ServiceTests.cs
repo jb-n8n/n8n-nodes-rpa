@@ -389,11 +389,43 @@ public sealed class ServiceTests : IDisposable
     {
         var w = _h.BeginWithApp();
         _h.Desktop.Focused = w.Find("txtUser");
+        // A menu drop-down of the run is open (the main window holds a write control, so Escape needs an open menu).
+        var dropDown = new FakeNode("Menu", "Reports", "", w.ProcessId);
+        dropDown.Child("MenuItem", "Export line items...");
+        _h.Desktop.Windows.Add(dropDown);
         var r = _h.Ok("act", new { runId = Harness.RunId, action = "key", value = "Escape", mode = "repair", timeoutMs = 0 });
         Assert.Empty(r.AsObject());
         var op = Assert.Single(_h.Desktop.Performed);
         Assert.Equal("Escape", op.Key!.ToString());
         Assert.Equal("txtUser", op.Element.AutomationId);
+    }
+
+    [Fact]
+    public void Repair_mode_refuses_Escape_with_the_focus_on_a_write_control()
+    {
+        var w = _h.BeginWithApp();
+        _h.Desktop.Windows.Add(new FakeNode("Menu", "Reports", "", w.ProcessId));
+        _h.Desktop.Focused = w.Find("btnPost");
+        var e = _h.Err("act", new { runId = Harness.RunId, action = "key", value = "Escape", mode = "repair", timeoutMs = 0 }, RpcErrors.PolicyRefusedCode);
+        Assert.Contains("write control", e["message"]!.GetValue<string>());
+        Assert.Empty(_h.Desktop.Performed);
+    }
+
+    [Fact]
+    public void Repair_mode_Escape_on_a_window_with_a_write_control_needs_an_open_menu()
+    {
+        var w = _h.BeginWithApp();
+        _h.Desktop.Focused = w.Find("txtUser");
+        var e = _h.Err("act", new { runId = Harness.RunId, action = "key", value = "Escape", mode = "repair", timeoutMs = 0 }, RpcErrors.PolicyRefusedCode);
+        Assert.Equal("policy_refused: in repair mode Escape could press a declared write control of this window (a cancel button), so it is allowed only while a menu is open",
+            e["message"]!.GetValue<string>());
+        Assert.Empty(_h.Desktop.Performed);
+        // With a menu of the run open, Escape only closes the menu.
+        var dropDown = new FakeNode("Menu", "Reports", "", w.ProcessId);
+        dropDown.Child("MenuItem", "Export line items...");
+        _h.Desktop.Windows.Insert(0, dropDown);
+        _h.Ok("act", new { runId = Harness.RunId, action = "key", value = "Escape", mode = "repair", timeoutMs = 0 });
+        Assert.Same(w, Assert.Single(_h.Desktop.Performed).Window);
     }
 
     [Fact]

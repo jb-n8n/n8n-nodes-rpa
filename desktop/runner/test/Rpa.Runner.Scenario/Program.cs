@@ -310,21 +310,39 @@ internal sealed class Scenario(Uri url, string token, string fingerprint, string
                 Expect(seenIn.Count > 0, "MenuItem \"Export line items...\" is visible in at least one snapshot");
             });
 
-            await Step("repair c: key Escape (mode repair, no target) closes the drop-down", async () =>
+            await Step("repair c: key Escape (mode repair, no target) closes the drop-down; with no menu open it is refused", async () =>
             {
                 await RepairEscape();
                 var list = await WaitWindows("after one Escape", l => NewWindows(l, baseline).Count == 0);
                 Expect(NewWindows(list, baseline).Count == 0, "the drop-down window is gone");
+                // The bar may still be in menu mode with no drop-down. MainForm holds btnPost, so a repair-mode Escape
+                // is refused unless the runner sees an open menu; the refusal reason tells whether it saw one.
+                var seen = "";
+                try
+                {
+                    await RepairEscape();
+                    seen = "a menu (the repair Escape was allowed)";
+                }
+                catch (RunnerError e)
+                {
+                    Console.WriteLine($"    got {e.Code}: {e.RunnerMessage}");
+                    seen = e.Code == -32003 && e.RunnerMessage.Contains("allowed only while a menu is open", StringComparison.Ordinal)
+                        ? "no menu (the repair Escape was refused for the write control)"
+                        : $"refused otherwise ({e.Code})";
+                }
+                Observe($"menu bar after one Escape, no drop-down: the runner's open-menu check sees {seen}");
+                Expect(seen.StartsWith("no menu", StringComparison.Ordinal), "a repair-mode Escape on MainForm with no menu open is policy_refused (-32003)");
                 // Is the menu bar still in menu mode (Reports highlighted)? Then Down reopens a drop-down.
                 var reopened = await DownReopens("after one Escape", baseline);
                 Observe($"menu mode after one Escape: {(reopened ? "yes (Down reopened a drop-down)" : "no (Down opened nothing)")}");
                 if (reopened)
                 {
                     await RepairEscape();
-                    list = await WaitWindows("after Escape on the reopened drop-down", l => NewWindows(l, baseline).Count == 0);
-                    await RepairEscape();
-                    var again = await DownReopens("after two more Escapes", baseline);
-                    Observe($"menu mode after a second Escape: {(again ? "yes (Down reopened a drop-down)" : "no (Down opened nothing): the second Escape leaves the menu bar")}");
+                    await WaitWindows("after Escape on the reopened drop-down", l => NewWindows(l, baseline).Count == 0);
+                    // Leave menu mode with a step-mode Escape (repair mode may not, see above).
+                    await Call("act", new { runId = _runId, action = "key", value = "Escape", timeoutMs = 5000 });
+                    var again = await DownReopens("after a repair Escape and a step-mode Escape", baseline);
+                    Observe($"menu mode after the step-mode Escape: {(again ? "yes (Down reopened a drop-down)" : "no (Down opened nothing): the second Escape leaves the menu bar")}");
                 }
                 Observe($"Escapes needed to clean up: {await CloseNewWindows(baseline)}");
             });
