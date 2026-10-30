@@ -369,7 +369,7 @@ describe('README', () => {
 
   it('documents signIn.next in the Run Steps reference and both login pages in the safety model', () => {
     const ref = section('## Run Steps reference');
-    expect(ref).toContain('| `signIn` | `{ username, next?, password, submit, totp? }` needs a Site Login; `totp` is `{ field, submit, source? }` |');
+    expect(ref).toContain('| `signIn` | `{ username, next?, password, submit, totp? }` needs a Site Login; `totp` is `{ field, submit, source?, via?, check? }` |');
     const at = ref.slice(ref.indexOf('**Two-page sign-in.**'));
     for (const text of ['`signIn.next` is the button between them', 'only when the password field shows on a listed login page',
       'a rejected username stops the run before the password is typed', 'an ordinary `click` step with `when`',
