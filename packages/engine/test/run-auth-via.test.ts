@@ -155,14 +155,28 @@ describe('signIn with pages between the password and the code (totp.via)', () =>
     process.env.IDP_FACTOR = 'choice';
     process.env.IDP_TRUST = 'on';
     const seen: { url: string; fieldVisible: boolean }[] = [];
+    const asked: string[] = [];
     const { ctx, posts } = await atLogin({ secrets: NO_SEED });
-    ctx.codeProvider = async () => {
+    // When "Send me the code" was clicked, on the page's own clock.
+    let sentAt: number | undefined;
+    await ctx.page.exposeFunction('__sent', (when: number) => { sentAt ??= when; });
+    await ctx.page.addInitScript(() => {
+      document.addEventListener('click', (e) => {
+        if ((e.target as Element).closest('button')?.textContent?.includes('Send me the code')) void (window as unknown as { __sent: (w: number) => void }).__sent(Date.now());
+      }, true);
+    });
+    await ctx.page.reload();
+    ctx.codeProvider = async (req) => {
+      asked.push(req.requestedAt);
       seen.push({ url: new URL(ctx.page.url()).pathname, fieldVisible: await ctx.page.locator('#otc').isVisible() });
       return totp(SEED);
     };
     const r = await runSteps(ctx, [signInStep({ via: VIA, check: [TRUST], source: 'workflow' }), LANDED]);
     expect(r.ok).toBe(true);
     expect(seen).toEqual([{ url: '/idp/mfa', fieldVisible: true }]);
+    // requestedAt is stamped before the via clicks, so a workflow that takes only mail sent after it finds the code.
+    expect(sentAt).toBeDefined();
+    expect(Date.parse(asked[0])).toBeLessThanOrEqual(sentAt!);
     expect(paths(posts)).toEqual(['/idp/login', '/idp/password', '/idp/factor', '/idp/sendcode', '/idp/mfa', '/sap/saml2/acs']);
     expect(new URLSearchParams(posts.find((p) => p.path === '/idp/mfa')!.body).get('trust')).toBe('yes');
   });
