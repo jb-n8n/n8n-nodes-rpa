@@ -673,6 +673,13 @@ export class FakeRunner {
       // A key without a target goes to the foreground run window.
       const fg = run.app?.foreground;
       if (!fg) throw new RpcError(E.not_found, 'not_found: no element matched a window of the run (no matching window of the run)');
+      // RunnerService.CheckWriteControl on the focused element (the fake's focus: the last target acted on, while its
+      // window still holds it).
+      const focused = run.focus && (fg.root === run.focus || descendants(fg.root).includes(run.focus)) ? run.focus : undefined;
+      if (focused && this.isWriteControl(fg, focused)) {
+        if (repair) throw new RpcError(E.policy_refused, 'policy_refused: the target is a declared write control; repair mode never acts on it');
+        if (!write) throw new RpcError(E.policy_refused, 'policy_refused: the target is a declared write control and needs write: true');
+      }
       if (repair) this.checkRepairEscape(run, fg);
       this.checkKeyReach(run, chord, write);
       if (run.app?.onKey?.(chord, fg)) return {};
@@ -688,6 +695,11 @@ export class FakeRunner {
       throw new RpcError(E.policy_refused, `policy_refused: repair mode may click only tabs, list items and tree items, not a ${e.controlType}`);
     }
     if (chord) this.checkKeyReach(run, chord, write);
+    // WindowsDesktop.KeyboardReceiver: keyboard input (a key, typing into an edit) needs the foreground window to be the
+    // window the target resolved in. A dialog nested in the main form's tree, targeted through the main form, never is.
+    if ((action === 'key' || (action === 'type' && e.controlType === 'Edit')) && run.app && run.app.foreground !== win) {
+      throw new RpcError(E.timeout, `timeout: the run's window does not have the keyboard focus (${describeTarget(p.target as RunnerTarget)})`);
+    }
     run.focus = e;
     run.app?.beforeAct?.(e, action);
     switch (action) {

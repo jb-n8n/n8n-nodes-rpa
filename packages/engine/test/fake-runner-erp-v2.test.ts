@@ -240,6 +240,34 @@ describe('ERP Demo v2 in the fake runner', () => {
     expect(runner!.lastApp?.posted).toBe(0);
   });
 
+  it('a key without a target is refused while the focus is on a write control, as the runner refuses it', async () => {
+    await launch({ erpUi: 'v2' });
+    await signIn();
+    await act(t(MAIN, { automationId: 'btnPost' }), 'click', { write: true });
+    expect(await failure(key('Escape'))).toEqual({ code: -32003, message: 'policy_refused: the target is a declared write control and needs write: true' });
+    expect(await failure(key('Escape', { mode: 'repair' }))).toEqual({
+      code: -32003, message: 'policy_refused: the target is a declared write control; repair mode never acts on it',
+    });
+    await key('Escape', { write: true });
+  });
+
+  it('keyboard input needs the window the target resolved in to hold the foreground', async () => {
+    await launch({ erpUi: 'v2' });
+    await signIn();
+    await search();
+    await act(menuItem('Reports', MAIN), 'click');
+    await act(menuItem('Export line items...'), 'click');
+    await act(t({ title: 'Confirm export' }, { automationId: 'btnConfirmExport' }), 'click');
+    await waitSave();
+    // The Save dialog is nested in the main form's tree, but targeted through the main form the input would go nowhere.
+    const viaMain = t(MAIN, { controlType: 'Edit', automationId: '1001' });
+    const noFocus = { code: -32007, message: expect.stringContaining("the run's window does not have the keyboard focus") as unknown };
+    expect(await failure(act(viaMain, 'type', { value: 'x.csv' }))).toMatchObject(noFocus);
+    expect(await failure(key('End', { target: viaMain }))).toMatchObject(noFocus);
+    // Through the dialog's own window it types.
+    await act(t({ title: 'Export line items' }, { controlType: 'Edit', automationId: '1001' }), 'type', { value: 'x.csv' });
+  });
+
   it('expand on an element that cannot expand answers -32602; a ComboBox expands', async () => {
     await launch({ erpUi: 'v2' });
     await signIn();

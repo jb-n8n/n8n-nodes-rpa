@@ -56,7 +56,8 @@ export interface DesktopViewItem {
 }
 /**
  * A pruned UI Automation view of one window of the run, for the repair agent. Its refs come from a counter separate from
- * snapshot()'s `refStart`, so a view ref and a snapshot ref may share a name; each call clears the other's ref map.
+ * snapshot()'s `refStart`, so a view ref and a snapshot ref may share a name. snapshot() clears both ref maps; view()
+ * clears only its own, so the last snapshot's `refs` survive a view: never look a view ref up in `refs`.
  */
 export interface DesktopView { window: { title: string; exe: string }; truncated: boolean; items: DesktopViewItem[] }
 /** The raw runner node behind a view ref (unmasked: for the engine only, never for a message). */
