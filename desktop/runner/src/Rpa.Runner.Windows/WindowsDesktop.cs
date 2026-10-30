@@ -458,6 +458,57 @@ public sealed class WindowsDesktop : IDesktop, IDisposable
         return ms.ToArray();
     }
 
+    /// <summary>
+    /// Reads CF_UNICODETEXT (Windows converts plain and OEM text to it) on a short-lived STA thread of the runner, in
+    /// the runner's own interactive session. The clipboard is open only while the text is copied out; a clipboard
+    /// another application holds open is a retryable failure. At most maxChars + 1 characters are copied.
+    /// </summary>
+    public string? ReadClipboardText(int maxChars)
+    {
+        string? text = null;
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try { text = ReadClipboardOnThisThread(maxChars); }
+            catch (Exception e) { failure = e; }
+        })
+        { IsBackground = true, Name = "clipboard.read" };
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        if (!thread.Join(TimeSpan.FromSeconds(5))) throw new RetryableActionException("the clipboard did not answer");
+        if (failure is not null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(failure);
+        return text;
+    }
+
+    private static string? ReadClipboardOnThisThread(int maxChars)
+    {
+        if (!Native.OpenClipboard(IntPtr.Zero)) throw new RetryableActionException("another application holds the clipboard");
+        try
+        {
+            if (!Native.IsClipboardFormatAvailable(Native.CF_UNICODETEXT)) return null;
+            var handle = Native.GetClipboardData(Native.CF_UNICODETEXT);
+            if (handle == IntPtr.Zero) return null;
+            var ptr = Native.GlobalLock(handle);
+            if (ptr == IntPtr.Zero) return null;
+            try
+            {
+                var capacity = (long)(Native.GlobalSize(handle).ToUInt64() / 2);
+                var limit = (int)Math.Min(capacity, (long)maxChars + 1);
+                var length = 0;
+                while (length < limit && Marshal.ReadInt16(ptr, length * 2) != 0) length++;
+                return Marshal.PtrToStringUni(ptr, length);
+            }
+            finally
+            {
+                Native.GlobalUnlock(handle);
+            }
+        }
+        finally
+        {
+            Native.CloseClipboard();
+        }
+    }
+
     private static Point Center(Rectangle r) => new(r.Left + r.Width / 2, r.Top + r.Height / 2);
 
     private UiaNode? Wrap(IntPtr h)

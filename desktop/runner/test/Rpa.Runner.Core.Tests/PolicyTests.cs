@@ -104,6 +104,68 @@ public class PolicyTests
         var none = RunnerPolicy.Parse(Example);
         Assert.Equal(RpcErrors.PolicyRefusedCode, Assert.Throws<RpcException>(() => none.ResolveLaunch("ErpDemo.exe", ["--ui", "v2"])).Code);
     }
+
+    private static readonly string WebViewDir = Path.Combine(Path.GetTempPath(), "EdgeWebView", "Application");
+    private static readonly string HelperPattern = Path.Combine(WebViewDir, "*", "msedgewebview2.exe");
+
+    private static string HelperPolicy(string exe, string pattern) =>
+        $$"""{ "helperProcesses": [{ "exe": {{J(exe)}}, "pathPattern": {{J(pattern)}} }] }""";
+
+    [Fact]
+    public void Helper_processes_and_clipboard_read_are_off_by_default()
+    {
+        var p = RunnerPolicy.Parse(Example);
+        Assert.Empty(p.HelperProcesses);
+        Assert.False(p.ClipboardRead);
+        Assert.False(p.IsHelperPath(Path.Combine(WebViewDir, "156.0.4314.56", "msedgewebview2.exe")));
+        Assert.True(RunnerPolicy.Parse("""{ "clipboardRead": true }""").ClipboardRead);
+        Assert.False(RunnerPolicy.Parse("""{ "clipboardRead": false }""").ClipboardRead);
+    }
+
+    [Fact]
+    public void A_helper_pattern_matches_exactly_one_path_segment_for_its_star()
+    {
+        var p = RunnerPolicy.Parse(HelperPolicy("msedgewebview2.exe", HelperPattern));
+        var helper = Assert.Single(p.HelperProcesses);
+        Assert.Equal("msedgewebview2.exe", helper.Exe);
+        Assert.True(p.IsHelperPath(Path.Combine(WebViewDir, "156.0.4314.56", "msedgewebview2.exe")));
+        Assert.True(p.IsHelperPath(Path.Combine(WebViewDir, "157.0.1.2", "MSEDGEWEBVIEW2.EXE")));
+        Assert.True(p.IsHelperPath(Path.Combine(WebViewDir.ToUpperInvariant(), "157.0.1.2", "msedgewebview2.exe")));
+        Assert.False(p.IsHelperPath(null));
+        Assert.False(p.IsHelperPath(Path.Combine(WebViewDir, "msedgewebview2.exe")));                  // no version segment
+        Assert.False(p.IsHelperPath(Path.Combine(WebViewDir, "156.0", "sub", "msedgewebview2.exe")));  // two segments
+        Assert.False(p.IsHelperPath(Path.Combine(WebViewDir, "156.0", "other.exe")));
+        Assert.False(p.IsHelperPath(Path.Combine(Path.GetTempPath(), "Elsewhere", "Application", "156.0", "msedgewebview2.exe")));
+        Assert.False(p.IsHelperPath(Path.Combine(WebViewDir, "156.0", "..", "..", "msedgewebview2.exe")));
+        // A helper is never an app app.launch may start.
+        Assert.False(p.IsAllowedExe("msedgewebview2.exe"));
+        Assert.Equal(RpcErrors.PolicyRefusedCode, Assert.Throws<RpcException>(() => p.ResolveLaunch("msedgewebview2.exe", [])).Code);
+    }
+
+    [Fact]
+    public void Refuses_invalid_helper_processes()
+    {
+        var sep = Path.DirectorySeparatorChar;
+        var invalid = new[]
+        {
+            HelperPolicy("msedgewebview2.exe", Path.Combine(WebViewDir, "156.0", "msedgewebview2.exe")),                 // no star
+            HelperPolicy("msedgewebview2.exe", Path.Combine(WebViewDir, "*", "*", "msedgewebview2.exe")),                // two stars
+            HelperPolicy("msedgewebview2.exe", Path.Combine(WebViewDir, "156*", "msedgewebview2.exe")),                  // star inside a segment
+            HelperPolicy("msedgewebview2.exe", Path.Combine(WebViewDir, "*", "msedge?ebview2.exe")),                     // another wildcard
+            HelperPolicy("msedgewebview2.exe", Path.Combine(WebViewDir, "*")),                                           // star as the file
+            HelperPolicy("msedgewebview2.exe", Path.Combine(WebViewDir, "*", "other.exe")),                              // file is not exe
+            HelperPolicy("msedgewebview2.exe", $"EdgeWebView{sep}*{sep}msedgewebview2.exe"),                             // relative
+            HelperPolicy("msedgewebview2.exe", @"\\server\share\*\msedgewebview2.exe"),                                  // UNC
+            HelperPolicy("msedgewebview2.exe", "//server/share/*/msedgewebview2.exe"),
+            HelperPolicy(Path.Combine("x", "msedgewebview2.exe"), HelperPattern),                                        // exe with a folder
+            HelperPolicy("*.exe", HelperPattern),
+            """{ "helperProcesses": [{ "exe": "msedgewebview2.exe" }] }""",
+            $$"""{ "helperProcesses": [{ "exe": "msedgewebview2.exe", "pathPattern": {{J(HelperPattern)}}, "signer": "x" }] }""",
+            """{ "clipboardRead": "yes" }""",
+        };
+        foreach (var json in invalid)
+            Assert.Throws<RunnerPolicy.InvalidPolicyException>(() => RunnerPolicy.Parse(json));
+    }
 }
 
 public class ProcessAncestryTests

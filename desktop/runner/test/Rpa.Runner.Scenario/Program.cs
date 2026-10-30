@@ -165,6 +165,23 @@ internal sealed class Scenario(Uri url, string token, string fingerprint, string
                 Expect(cell == "1000-0001", $"the first grid cell is 1000-0001 (got \"{cell}\")");
             });
 
+            await Step("clipboard.read returns the clipboard's text while the run's window is in front, never logs it, and refuses over 1000 characters", async () =>
+            {
+                // The policy sets clipboardRead. The scenario puts the text on the clipboard itself (as an app's Copy
+                // button would) through Windows PowerShell's Set-Clipboard, which opens no window.
+                const string code = "988 374 \u00fc\u20ac";
+                SetClipboard(code);
+                var text = (await Call("clipboard.read", new { runId = _runId }))["text"]!.GetValue<string>();
+                Expect(text == code, $"the clipboard text comes back as it is (got {text.Length} characters)");
+                SetClipboard(new string('7', 1001));
+                var e = await ExpectError(-32003, () => Call("clipboard.read", new { runId = _runId }));
+                Expect(!e.RunnerMessage.Contains("7777", StringComparison.Ordinal), "the refusal carries no clipboard text");
+                var logs = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "RPA Runner", "logs");
+                var logged = Directory.Exists(logs) ? string.Concat(Directory.GetFiles(logs).Select(f => { using var r = new StreamReader(new FileStream(f, FileMode.Open, FileAccess.Read, FileShare.ReadWrite)); return r.ReadToEnd(); })) : "";
+                Expect(logged.Contains("clipboard.read", StringComparison.Ordinal), "the runner logged the clipboard.read calls");
+                Expect(!logged.Contains("988 374", StringComparison.Ordinal), "the runner's log never holds the clipboard text");
+            });
+
             ok = await Step("export via File > Export... to {exportDir} with segments", async () =>
             {
                 // WinForms menu items expose no automation id, so menus are found by name.
@@ -649,6 +666,17 @@ internal sealed class Scenario(Uri url, string token, string fingerprint, string
         {
             Console.WriteLine($"    (could not capture the failure state: {e.Message})");
         }
+    }
+
+    /// <summary>Puts Unicode text on the clipboard through Windows PowerShell (passed in the environment, never quoted
+    /// into a command line).</summary>
+    private static void SetClipboard(string text)
+    {
+        var psi = new ProcessStartInfo("powershell.exe") { UseShellExecute = false, CreateNoWindow = true };
+        foreach (var a in new[] { "-NoProfile", "-NonInteractive", "-Command", "Set-Clipboard -Value $env:RPA_SCENARIO_CLIPBOARD" }) psi.ArgumentList.Add(a);
+        psi.Environment["RPA_SCENARIO_CLIPBOARD"] = text;
+        using var p = Process.Start(psi) ?? throw new InvalidOperationException("powershell.exe did not start");
+        if (!p.WaitForExit(30000) || p.ExitCode != 0) throw new InvalidOperationException("Set-Clipboard failed");
     }
 
     private static bool Exited(int pid)

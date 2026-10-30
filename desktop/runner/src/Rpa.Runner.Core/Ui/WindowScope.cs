@@ -7,9 +7,9 @@ namespace Rpa.Runner.Core.Ui;
 
 /// <summary>
 /// Which windows a run may touch: top-level windows owned by a process the run launched (or a descendant of one) whose
-/// executable is in the policy's allowedApps. Child and owned windows of such a process (its dialogs, menus and
-/// pop-ups) are top-level windows of the same process, so they count. Named OS surfaces are ignored: never acted on,
-/// never a reason to refuse.
+/// executable is in the policy's allowedApps, or by a descendant that is one of the policy's helperProcesses (a web
+/// view's browser process). Child and owned windows of such a process (its dialogs, menus and pop-ups) are top-level
+/// windows of the same process, so they count. Named OS surfaces are ignored: never acted on, never a reason to refuse.
 /// </summary>
 public sealed class WindowScope
 {
@@ -50,12 +50,15 @@ public sealed class WindowScope
     public string? ExeOf(int pid) => _processes.GetExeName(pid);
 
     /// <summary>True when the process belongs to the run (launched by it, or a descendant) and runs one of the policy's
-    /// pinned executables (by full path, not just the file name).</summary>
+    /// pinned executables (by full path, not just the file name), or when it is a helper process of the policy (its exe
+    /// on its path pattern) that descends from a process the run launched. A helper is never the run's on its own: the
+    /// same executable started by anything else is another application.</summary>
     public bool IsRunProcess(RunState run, int pid)
     {
-        if (!_policy.IsAllowedPath(_processes.GetExePath(pid))) return false;
+        var path = _processes.GetExePath(pid);
         var launched = run.Processes;
-        return launched.Contains(pid) || _processes.IsDescendantOf(pid, launched);
+        if (_policy.IsAllowedPath(path)) return launched.Contains(pid) || _processes.IsDescendantOf(pid, launched);
+        return _policy.IsHelperPath(path) && _processes.IsDescendantOf(pid, launched);
     }
 
     public bool IsOsSurface(IUiNode window)

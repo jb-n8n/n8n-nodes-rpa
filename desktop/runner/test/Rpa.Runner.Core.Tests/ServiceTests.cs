@@ -36,7 +36,7 @@ public sealed class ServiceTests : IDisposable
     [Fact]
     public void Methods_other_than_hello_and_run_begin_need_the_active_run_id()
     {
-        foreach (var m in new[] { "run.heartbeat", "run.end", "app.launch", "snapshot", "isVisible", "resolve", "act", "windows", "file.retrieve", "screenshot" })
+        foreach (var m in new[] { "run.heartbeat", "run.end", "app.launch", "snapshot", "isVisible", "resolve", "act", "windows", "file.retrieve", "screenshot", "clipboard.read" })
             _h.Err(m, new { runId = "nope" }, RpcErrors.NoRunCode);
         _h.Begin();
         _h.Err("snapshot", new { runId = "other" }, RpcErrors.NoRunCode);
@@ -801,5 +801,201 @@ public sealed class ServiceTests : IDisposable
         Assert.Contains("-32601", (await _h.Dispatcher.HandleAsync("""{"jsonrpc":"2.0","id":1,"method":"nope"}""", default)));
         Assert.Contains("\"id\":\"abc\"", (await _h.Dispatcher.HandleAsync("""{"jsonrpc":"2.0","id":"abc","method":"hello"}""", default)));
         Assert.Null((await _h.Dispatcher.HandleAsync("""{"jsonrpc":"2.0","method":"hello"}""", default)));
+    }
+
+    // Helper processes (policy helperProcesses): a WebView2 app's UI lives in msedgewebview2.exe children of the app.
+
+    /// <summary>The run's main window with a web view pane hosted by another process, holding a "Copy (ops.bot)" button.</summary>
+    private static (FakeNode Window, FakeNode Copy) WithWebView(Harness h, int helperPid)
+    {
+        var w = h.BeginWithApp();
+        var view = new FakeNode("Pane", "Authenticator", "", helperPid);
+        var copy = new FakeNode("Button", "Copy (ops.bot)", "", helperPid);
+        view.Add(copy);
+        w.Add(view);
+        return (w, copy);
+    }
+
+    private static object CopyButton() => Harness.T(new { controlType = "Button", name = "Copy (ops.bot)" });
+
+    [Fact]
+    public void A_helper_process_counts_as_the_runs_only_when_it_descends_from_a_process_the_run_launched()
+    {
+        using var h = new Harness(helpers: true);
+        var (_, copy) = WithWebView(h, 2000);
+        var app = h.Processes.Names.Keys.Single(k => k != 2000);
+        h.Processes.Names[2000] = "msedgewebview2.exe";
+        h.Processes.Paths[2000] = h.HelperPath();
+        h.Processes.Parents[2000] = app;
+
+        // A descendant on the pattern's path: its elements resolve, and input may land on them.
+        h.Ok("resolve", new { runId = Harness.RunId, target = CopyButton(), timeoutMs = 0 });
+        h.Desktop.InputReceiver = copy;
+        h.Ok("act", Act(CopyButton(), "click"));
+
+        // Another version folder matches the one star segment too.
+        h.Processes.Paths[2000] = h.HelperPath("157.0.1.2");
+        h.Ok("resolve", new { runId = Harness.RunId, target = CopyButton(), timeoutMs = 0 });
+
+        // The same executable started by something else (not a descendant): never the run's.
+        h.Processes.Parents[2000] = 3000;
+        h.Err("resolve", new { runId = Harness.RunId, target = CopyButton(), timeoutMs = 0 }, RpcErrors.NotFoundCode);
+        var e = h.Err("act", Act(CopyButton(), "click"), RpcErrors.NotFoundCode);
+        Assert.Contains("Copy (ops.bot)", e["message"]!.GetValue<string>());
+
+        // A descendant from a path outside the pattern: never the run's.
+        h.Processes.Parents[2000] = app;
+        h.Processes.Paths[2000] = Path.Combine(h.Root, "EdgeWebView", "Application", "156.0", "sub", "msedgewebview2.exe");
+        h.Err("resolve", new { runId = Harness.RunId, target = CopyButton(), timeoutMs = 0 }, RpcErrors.NotFoundCode);
+        h.Processes.Paths[2000] = Path.Combine(h.Root, "Downloads", "156.0", "msedgewebview2.exe");
+        h.Err("resolve", new { runId = Harness.RunId, target = CopyButton(), timeoutMs = 0 }, RpcErrors.NotFoundCode);
+    }
+
+    [Fact]
+    public void Without_helper_processes_in_the_policy_a_web_view_child_is_another_application()
+    {
+        var (_, copy) = WithWebView(_h, 2000);
+        var app = _h.Processes.Names.Keys.Single(k => k != 2000);
+        _h.Processes.Names[2000] = "msedgewebview2.exe";
+        _h.Processes.Paths[2000] = _h.HelperPath();
+        _h.Processes.Parents[2000] = app;
+        _h.Err("resolve", new { runId = Harness.RunId, target = CopyButton(), timeoutMs = 0 }, RpcErrors.NotFoundCode);
+        // Input that would land on it (a click on the run's own control that the web view covers) is refused.
+        _h.Desktop.InputReceiver = copy;
+        var e = _h.Err("act", Act(Id("btnSignIn"), "click"), RpcErrors.PolicyRefusedCode);
+        Assert.Contains("another application", e["message"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void A_helper_window_of_the_run_is_listed_and_one_of_another_process_is_not()
+    {
+        using var h = new Harness(helpers: true);
+        h.BeginWithApp();
+        var app = h.Processes.Names.Keys.Single();
+        foreach (var (pid, parent) in new[] { (2000, app), (2001, 9999) })
+        {
+            h.Processes.Names[pid] = "msedgewebview2.exe";
+            h.Processes.Paths[pid] = h.HelperPath();
+            h.Processes.Parents[pid] = parent;
+            h.Desktop.Windows.Add(new FakeNode("Window", $"web view {pid}", "", pid));
+        }
+        var titles = h.Ok("windows", new { runId = Harness.RunId })["windows"]!.AsArray().Select(w => w!["title"]!.GetValue<string>()).ToList();
+        Assert.Contains("web view 2000", titles);
+        Assert.DoesNotContain("web view 2001", titles);
+    }
+
+    // clipboard.read (policy clipboardRead).
+
+    private const string Code = "988 374";
+
+    [Fact]
+    public void Clipboard_read_is_refused_without_the_policy_flag_and_never_touches_the_clipboard()
+    {
+        _h.BeginWithApp();
+        _h.Desktop.ClipboardText = Code;
+        var e = _h.Err("clipboard.read", new { runId = Harness.RunId }, RpcErrors.PolicyRefusedCode);
+        Assert.Contains("clipboardRead", e["message"]!.GetValue<string>());
+        Assert.DoesNotContain(Code, e.ToJsonString());
+        Assert.Equal(0, _h.Desktop.ClipboardReads);
+    }
+
+    [Fact]
+    public void Clipboard_read_is_refused_while_another_application_holds_the_foreground()
+    {
+        using var h = new Harness(policyExtra: ", \"clipboardRead\": true");
+        var w = h.BeginWithApp();
+        h.Desktop.ClipboardText = Code;
+        h.Processes.Names[777] = "notepad.exe";
+        h.Processes.Paths[777] = Path.Combine(h.Root, "Windows", "notepad.exe");
+        h.Desktop.Foreground = new FakeNode("Window", "Untitled - Notepad", "", 777);
+        var e = h.Err("clipboard.read", new { runId = Harness.RunId }, RpcErrors.PolicyRefusedCode);
+        Assert.Contains("foreground", e["message"]!.GetValue<string>());
+        Assert.DoesNotContain(Code, e.ToJsonString());
+        // Never brought back for a clipboard read: the text on the clipboard may be the other application's.
+        Assert.NotSame(w, h.Desktop.Foreground);
+        // No foreground window at all, and an OS surface in front, are refused too.
+        h.Desktop.Foreground = null;
+        h.Err("clipboard.read", new { runId = Harness.RunId }, RpcErrors.PolicyRefusedCode);
+        h.Processes.Names[4242] = "ShellExperienceHost.exe";
+        h.Desktop.Foreground = new FakeNode("Window", "New notification", "", 4242);
+        h.Err("clipboard.read", new { runId = Harness.RunId }, RpcErrors.PolicyRefusedCode);
+        Assert.Equal(0, h.Desktop.ClipboardReads);
+    }
+
+    [Fact]
+    public void Clipboard_read_returns_the_text_while_a_run_window_is_in_front_and_never_logs_it()
+    {
+        using var h = new Harness(policyExtra: ", \"clipboardRead\": true", fileLog: true);
+        h.BeginWithApp();
+        h.Desktop.ClipboardText = Code + " \u00fc\u20ac";
+        var r = h.Ok("clipboard.read", new { runId = Harness.RunId });
+        Assert.Equal(Code + " \u00fc\u20ac", r["text"]!.GetValue<string>());
+        Assert.Contains("clipboard.read", h.LogText());
+        Assert.DoesNotContain(Code, h.LogText());
+        // No text on the clipboard reads as empty text.
+        h.Desktop.ClipboardText = null;
+        Assert.Equal("", h.Ok("clipboard.read", new { runId = Harness.RunId })["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void Clipboard_read_with_a_helper_window_in_front_of_a_web_view_app()
+    {
+        using var h = new Harness(policyExtra: ", \"clipboardRead\": true", helpers: true);
+        var (_, copy) = WithWebView(h, 2000);
+        var app = h.Processes.Names.Keys.Single(k => k != 2000);
+        h.Processes.Names[2000] = "msedgewebview2.exe";
+        h.Processes.Paths[2000] = h.HelperPath();
+        h.Processes.Parents[2000] = app;
+        h.Desktop.InputReceiver = copy;
+        h.Desktop.OnPerform = op => { if (ReferenceEquals(op.Element, copy)) h.Desktop.ClipboardText = Code; return null; };
+        h.Ok("act", Act(CopyButton(), "click"));
+        Assert.Equal(Code, h.Ok("clipboard.read", new { runId = Harness.RunId })["text"]!.GetValue<string>());
+        // A helper's own top-level window in front counts as the run's while the helper descends from the run.
+        var helperWindow = new FakeNode("Window", "web view", "", 2000);
+        h.Desktop.Windows.Insert(0, helperWindow);
+        h.Desktop.Foreground = helperWindow;
+        Assert.Equal(Code, h.Ok("clipboard.read", new { runId = Harness.RunId })["text"]!.GetValue<string>());
+        h.Processes.Parents[2000] = 9999;
+        h.Err("clipboard.read", new { runId = Harness.RunId }, RpcErrors.PolicyRefusedCode);
+    }
+
+    [Fact]
+    public void Clipboard_read_refuses_more_than_1000_characters_without_returning_any()
+    {
+        using var h = new Harness(policyExtra: ", \"clipboardRead\": true");
+        h.BeginWithApp();
+        h.Desktop.ClipboardText = new string('7', RunnerService.MaxClipboardChars);
+        Assert.Equal(RunnerService.MaxClipboardChars, h.Ok("clipboard.read", new { runId = Harness.RunId })["text"]!.GetValue<string>().Length);
+        h.Desktop.ClipboardText = new string('7', RunnerService.MaxClipboardChars + 1);
+        var e = h.Err("clipboard.read", new { runId = Harness.RunId }, RpcErrors.PolicyRefusedCode);
+        Assert.Contains("1000", e["message"]!.GetValue<string>());
+        Assert.DoesNotContain("7777", e.ToJsonString());
+    }
+
+    [Fact]
+    public void Clipboard_read_retries_a_busy_clipboard_then_times_out()
+    {
+        using var h = new Harness(policyExtra: ", \"clipboardRead\": true");
+        h.BeginWithApp();
+        h.Desktop.ClipboardText = Code;
+        h.Desktop.ClipboardBusy = 2;
+        Assert.Equal(Code, h.Ok("clipboard.read", new { runId = Harness.RunId })["text"]!.GetValue<string>());
+        Assert.Equal(3, h.Desktop.ClipboardReads);
+        h.Desktop.ClipboardBusy = int.MaxValue;
+        var e = h.Err("clipboard.read", new { runId = Harness.RunId }, RpcErrors.TimeoutCode);
+        Assert.Contains("clipboard", e["message"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void Clipboard_read_needs_the_active_run_and_a_usable_desktop()
+    {
+        using var h = new Harness(policyExtra: ", \"clipboardRead\": true");
+        h.Desktop.ClipboardText = Code;
+        h.Err("clipboard.read", new { runId = Harness.RunId }, RpcErrors.NoRunCode);
+        h.BeginWithApp();
+        h.Err("clipboard.read", new { runId = "other" }, RpcErrors.NoRunCode);
+        h.Desktop.Session = new SessionState(true, true, true);
+        h.Err("clipboard.read", new { runId = Harness.RunId }, RpcErrors.DesktopUnavailableCode);
+        Assert.Equal(0, h.Desktop.ClipboardReads);
     }
 }

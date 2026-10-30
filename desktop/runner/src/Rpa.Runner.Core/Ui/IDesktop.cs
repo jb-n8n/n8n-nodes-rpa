@@ -91,6 +91,13 @@ public interface IDesktop
 
     /// <summary>A PNG of one window (its own pixels, not what overlaps it).</summary>
     byte[] CaptureWindowPng(IUiNode window);
+
+    /// <summary>
+    /// The clipboard's Unicode text, at most <paramref name="maxChars"/> + 1 characters (so the caller can tell longer
+    /// text), or null when it holds no text. Throws <see cref="RetryableActionException"/> while another application
+    /// holds the clipboard open. Callers never log the text.
+    /// </summary>
+    string? ReadClipboardText(int maxChars);
 }
 
 /// <summary>Starts, inspects and stops processes. The default implementation uses System.Diagnostics.Process.</summary>

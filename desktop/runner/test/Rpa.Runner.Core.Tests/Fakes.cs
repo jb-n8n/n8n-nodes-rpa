@@ -142,6 +142,27 @@ public sealed class FakeDesktop : IDesktop
     }
 
     public byte[] CaptureWindowPng(IUiNode window) => [0x89, 0x50, 0x4E, 0x47];
+
+    /// <summary>The clipboard's Unicode text (null: no text on it).</summary>
+    public string? ClipboardText { get; set; }
+
+    /// <summary>How many times the clipboard was read (including reads that found it busy).</summary>
+    public int ClipboardReads { get; private set; }
+
+    /// <summary>The next this many reads find the clipboard held by another application.</summary>
+    public int ClipboardBusy { get; set; }
+
+    public string? ReadClipboardText(int maxChars)
+    {
+        ClipboardReads++;
+        if (ClipboardBusy > 0)
+        {
+            ClipboardBusy--;
+            throw new RetryableActionException("another application holds the clipboard");
+        }
+        // As the Windows driver: at most maxChars + 1 characters, so the caller can tell the text is longer.
+        return ClipboardText is null || ClipboardText.Length <= maxChars ? ClipboardText : ClipboardText[..(maxChars + 1)];
+    }
 }
 
 /// <summary>Processes by id with fixed names; Start hands out new ids.</summary>
