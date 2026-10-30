@@ -180,9 +180,9 @@ export const runnerFingerprintMismatch = (where: string, presented: string) =>
 export const runnerTokenRefused = (where: string) => `The desktop runner at ${where} refused the token. Check the Token in the RPA Desktop Runner credential.`;
 export const RUNNER_DISCONNECTED = 'the desktop runner closed the connection';
 export const RUNNER_BUSY = 'the desktop runner is busy with another run';
-/** app.launch answered not_found: the allowed app is not installed where the runner's policy says. */
 /** clipboard.read answered "method not found": the runner predates clipboard reads. */
 export const RUNNER_TOO_OLD_FOR_CLIPBOARD = 'the desktop runner is older than clipboard reads (clipboard.read): update the runner to read the clipboard';
+/** app.launch answered not_found: the allowed app is not installed where the runner's policy says. */
 export const runnerAppMissing = (exe: string) =>
   `the desktop runner could not start ${exe}: it is not installed at the path the runner's policy names (allowedApps[].path). Install it there or correct the policy`;
 export const desktopNotInteractive = (locked: boolean) =>

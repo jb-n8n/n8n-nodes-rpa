@@ -1,8 +1,8 @@
 import type { Snapshot, SnapshotElement, SnapshotOptions } from '../agent/snapshot.js';
+import { RUNNER_TOO_OLD_FOR_CLIPBOARD } from '../messages.js';
 import { hidesValue } from '../secrets/credential-field.js';
 import { createMasker, maskClipped, type Masker } from '../secrets/mask.js';
 import { poll } from '../steps/poll.js';
-import { RUNNER_TOO_OLD_FOR_CLIPBOARD } from '../messages.js';
 import type { Surface } from '../surface/surface.js';
 import type { DesktopApp, DesktopLocator, Expect, Locator, UiaTarget, WindowSel } from '../types.js';
 import type { RunnerClient } from './client.js';

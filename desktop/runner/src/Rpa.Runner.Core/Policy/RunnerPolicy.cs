@@ -6,7 +6,8 @@ namespace Rpa.Runner.Core.Policy;
 
 /// <summary>
 /// The local policy file (the floor n8n cannot lower): allowed applications, helper processes, write controls, gated
-/// keys, the file size limit and whether a run may read the clipboard. Read once at start. Unknown fields are refused so a misspelt key cannot silently switch a check off.
+/// keys, the file size limit and whether a run may read the clipboard. Read once at start. Unknown fields are refused
+/// so a misspelt key cannot silently switch a check off.
 /// </summary>
 public sealed class RunnerPolicy
 {
