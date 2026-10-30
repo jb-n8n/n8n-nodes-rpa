@@ -61,6 +61,11 @@ export interface RunnerMethods {
   screenshot: { params: { runId: string }; result: { base64: string } };
   /** The run's top-level windows: the foreground window first when it is the run's, then front to back. */
   windows: { params: { runId: string }; result: { windows: RunnerWindow[] } };
+  /**
+   * The clipboard's Unicode text ('' when it holds none). policy_refused unless the runner's policy sets clipboardRead
+   * and one of the run's windows holds the foreground, and for more than 1000 characters. -32601 from an older runner.
+   */
+  'clipboard.read': { params: { runId: string }; result: { text: string } };
 }
 export type RunnerMethod = keyof RunnerMethods;
 

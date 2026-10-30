@@ -26,7 +26,7 @@ import {
   DesktopUnavailableError, ElementCannotActError, ElementNotFoundError, ElementNotUniqueError, ExpectedFileMissingError, NoRunError, PolicyRefusedError, PROTOCOL_VERSION,
   RunnerBusyError, RunnerConnectError, RunnerDisconnectedError, RunnerTimeoutError,
 } from './protocol.js';
-import { createDesktopSurface, DesktopDriftError, MIN_MASKED_TYPED, type DesktopSurface } from './surface.js';
+import { createDesktopSurface, DesktopDriftError, MIN_MASKED_TYPED, RunnerTooOldError, type DesktopSurface } from './surface.js';
 import './handlers.js';
 
 /** One desktop run. Apart from the abort signal, everything is JSON-serialisable. */
@@ -115,7 +115,10 @@ export function checkDesktopTrust(raw: unknown, trust: TrustInput): TrustResult 
 /** The error code of a desktop failure, from the error the failing step met. */
 function codeOf(err: unknown, message: string): ErrorCode {
   if (err instanceof RunnerBusyError) return 'busy';
-  if (err instanceof DesktopUnavailableError || err instanceof NoRunError || err instanceof RunnerDisconnectedError || err instanceof RunnerConnectError) {
+  if (
+    err instanceof DesktopUnavailableError || err instanceof NoRunError || err instanceof RunnerDisconnectedError || err instanceof RunnerConnectError
+    || err instanceof RunnerTooOldError
+  ) {
     return 'runner_unavailable';
   }
   if (err instanceof PolicyRefusedError) return 'policy_violation';
@@ -132,12 +135,13 @@ function codeOf(err: unknown, message: string): ErrorCode {
 
 /**
  * Messages, log notes and read outputs leave the run masked: secrets, and the value of every variable the run typed into
- * a field that is long enough to mask (DesktopSurface.typed). The runner never puts typed values into its messages; this
- * holds even if one did, and a read of a field holding such a value shows [secret] in its place. Intents are the signed
- * steps' own text and stay as written.
+ * a field and every clipboard text it read, when long enough to mask (DesktopSurface.typed). The runner never puts typed
+ * values into its messages; this holds even if one did, and a read of a field holding such a value shows [secret] in its
+ * place. Intents are the signed steps' own text and stay as written. `except`: one value left unmasked (a clipboard
+ * read's own output).
  */
-function outputMasker(base: (string | undefined)[], surface?: DesktopSurface): Masker {
-  return createMasker([...base, ...(surface?.typed ?? []).filter((t) => t.length >= MIN_MASKED_TYPED)]);
+function outputMasker(base: (string | undefined)[], surface?: DesktopSurface, except?: string): Masker {
+  return createMasker([...base, ...(surface?.typed ?? []).filter((t) => t.length >= MIN_MASKED_TYPED && t !== except)]);
 }
 
 /** Log notes and read outputs masked for secrets and typed variable values. */
@@ -148,9 +152,18 @@ function maskedLog(log: StepLogEntry[], masker: Masker): StepLogEntry[] {
   }));
 }
 
-/** Read outputs (Data `values`) masked like the log. */
-function maskedOutputs(outputs: StepOutput[], masker: Masker): StepOutput[] {
-  return outputs.map((o) => (o.text !== undefined ? { ...o, text: masker.mask(o.text) } : o));
+/**
+ * Read outputs (Data `values`) masked like the log, except that a clipboard read's output keeps its own value (the
+ * value is what the step returns; any typed variable value inside it stays masked).
+ */
+function maskedOutputs(outputs: StepOutput[], script: DesktopScript, secrets: (string | undefined)[], surface: DesktopSurface): StepOutput[] {
+  const masker = outputMasker(secrets, surface);
+  return outputs.map((o) => {
+    if (o.text === undefined) return o;
+    const step = script.steps[o.index];
+    const clipboard = step !== undefined && 'read' in step && 'clipboard' in step.read;
+    return { ...o, text: (clipboard ? outputMasker(secrets, surface, o.text) : masker).mask(o.text) };
+  });
 }
 
 /**
@@ -279,7 +292,7 @@ export async function runDesktopTask(input: DesktopTaskInput): Promise<DesktopTa
     await desktop.refreshWindow();
     const m = outputMasker(secrets, surface);
     return {
-      ok: true, lane: 'script', name: script.name ?? null, version: version ?? null, hash, rows: [], files: res.state.downloads, outputs: maskedOutputs(res.state.outputs, m),
+      ok: true, lane: 'script', name: script.name ?? null, version: version ?? null, hash, rows: [], files: res.state.downloads, outputs: maskedOutputs(res.state.outputs, script, secrets, surface),
       log: maskedLog(res.state.log, m), violations: [], blockedRequests: [],
       page: { url: m.mask(desktop.address()), title: m.mask(desktop.windowTitle()).slice(0, 200), status: null },
       verified: false, confirmed: false, writes: [], submitted: res.state.submitted, durationMs: Date.now() - t0,

@@ -2,6 +2,7 @@ import type { Snapshot, SnapshotElement, SnapshotOptions } from '../agent/snapsh
 import { hidesValue } from '../secrets/credential-field.js';
 import { createMasker, maskClipped, type Masker } from '../secrets/mask.js';
 import { poll } from '../steps/poll.js';
+import { RUNNER_TOO_OLD_FOR_CLIPBOARD } from '../messages.js';
 import type { Surface } from '../surface/surface.js';
 import type { DesktopApp, DesktopLocator, Expect, Locator, UiaTarget, WindowSel } from '../types.js';
 import type { RunnerClient } from './client.js';
@@ -77,7 +78,10 @@ export interface DesktopSurface extends Surface {
   readonly errors: Map<number, Error>;
   /** Engine snapshot refs (e1, e2, …) to the runner's refs of the last snapshot. */
   readonly refs: Map<string, string>;
-  /** The value of every variable the run typed into a field: the desktop task masks them out of messages, logs and read outputs. */
+  /**
+   * The value of every variable the run typed into a field, and every text it read from the clipboard: the desktop task
+   * masks them out of messages, logs, views and read outputs (a clipboard read's own output aside).
+   */
   readonly typed: string[];
   /** Tells the surface which top-level step is running, for `errors`. */
   trackStep(current: () => number | undefined): void;
@@ -106,6 +110,19 @@ export interface DesktopSurface extends Surface {
   view(masker: Masker, opts?: { window?: WindowSel; maxNodes?: number }): Promise<DesktopView>;
   /** The raw node behind a ref of the last view; undefined after a newer view or snapshot. */
   nodeOf(ref: string): DesktopViewNode | undefined;
+  /**
+   * The clipboard's text (the runner's clipboard.read), added to `typed` so it is masked everywhere but in its own read
+   * output. A runner older than the method fails with RUNNER_TOO_OLD_FOR_CLIPBOARD; every failure is recorded.
+   */
+  readClipboard(): Promise<string>;
+}
+
+/** A runner answered "method not found" to a method this run needs: the runner must be updated. */
+export class RunnerTooOldError extends RunnerError {
+  constructor(code: number, message: string) {
+    super(code, message);
+    this.name = 'RunnerTooOldError';
+  }
 }
 
 /** Creates the desktop surface for one run (run.begin already answered). */
@@ -234,6 +251,19 @@ export function createDesktopSurface(client: RunnerClient, runId: string, app: D
       return { window: { title: masker.mask(raw.title).slice(0, 200), exe: masker.mask(raw.exe) }, truncated, items };
     },
     nodeOf: (ref) => viewNodes.get(ref),
+    async readClipboard() {
+      let r: { text: string };
+      try {
+        r = await call('clipboard.read', {});
+      } catch (err) {
+        const e = err instanceof RunnerError && err.code === METHOD_NOT_FOUND ? new RunnerTooOldError(err.code, RUNNER_TOO_OLD_FOR_CLIPBOARD) : err;
+        record(e);
+        throw e;
+      }
+      const text = typeof r?.text === 'string' ? r.text : '';
+      if (text && !typed.includes(text)) typed.push(text);
+      return text;
+    },
     async refreshWindow() {
       try {
         // The smallest snapshot the runner takes (maxNodes and maxDepth are each at least 1): the window and its root.

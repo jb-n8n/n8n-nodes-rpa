@@ -523,12 +523,18 @@ function checkDesktopStep(s: unknown, path: string, issues: string[]) {
       checkDesktopLocator(v.target, `${p}.target`, issues);
       if (v.state !== undefined && !['visible', 'hidden'].includes(v.state as string)) issues.push(`${p}.state must be "visible" or "hidden"`);
       break;
-    case 'read':
+    case 'read': {
       if (!isObj(v)) { issues.push(`${p} must be an object`); break; }
-      checkKeys(v, ['target', 'as'], p, issues);
-      checkDesktopLocator(v.target, `${p}.target`, issues);
+      // An element's text (target), or the clipboard's (clipboard: true, read through the runner's policy-gated
+      // clipboard.read): exactly one of the two.
+      checkKeys(v, ['target', 'clipboard', 'as'], p, issues);
+      const clipboard = Object.hasOwn(v, 'clipboard');
+      if (clipboard && v.clipboard !== true) issues.push(`${p}.clipboard must be true (or leave it out and give a target)`);
+      else if (clipboard === Object.hasOwn(v, 'target')) issues.push(`${p} needs either a target or clipboard: true, not both`);
+      else if (!clipboard) checkDesktopLocator(v.target, `${p}.target`, issues);
       if (typeof v.as !== 'string' || !READ_NAME.test(v.as)) issues.push(`${p}.as must be a name of letters, digits and underscores (at most 64)`);
       break;
+    }
     case 'key':
       if (!isObj(v)) { issues.push(`${p} must be an object`); break; }
       checkKeys(v, ['key', 'target'], p, issues);

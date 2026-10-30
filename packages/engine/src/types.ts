@@ -325,10 +325,18 @@ export type DesktopStep = DesktopStepBase &
     | { select: { field: DesktopLocator; option: string } }
     | { check: { field: DesktopLocator; checked?: boolean } }
     | { waitFor: { target: DesktopLocator; state?: 'visible' | 'hidden' } }
-    | { read: { target: DesktopLocator; as: string } }
+    /**
+     * The element's text, or with `clipboard: true` (no target) the clipboard's text through the runner's policy-gated
+     * clipboard.read, for an app whose value is only available through a Copy button. Either way the text goes to the run
+     * outputs under `as`; a clipboard value is masked everywhere else (log, messages, views).
+     */
+    | { read: DesktopRead }
     | { key: { key: string; target?: DesktopLocator } }
     | { expectFile: { pattern: string; check?: FileCheck; maxBytes?: number; mime?: string[] } }
   );
+
+/** A desktop read: an element's text, or the clipboard's (see DesktopStep). */
+export type DesktopRead = { target: DesktopLocator; as: string } | { clipboard: true; as: string };
 
 export const DESKTOP_VERBS = ['click', 'fill', 'select', 'check', 'waitFor', 'read', 'key', 'expectFile'] as const;
 export type DesktopVerb = (typeof DESKTOP_VERBS)[number];
