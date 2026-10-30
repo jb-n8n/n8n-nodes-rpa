@@ -1,10 +1,12 @@
 // An in-process desktop runner for tests: a TLS WebSocket server speaking protocol 1 (JSON-RPC 2.0) over an in-memory
 // UI tree of a demo app: by default a small order search ("orders": sign-in form, order search, results grid, export
 // through a Save As dialog that writes a CSV into the run's export directory); with `app: 'erp'`, a model of the real
-// ERP Demo v1 in desktop/erp-demo (its window titles, automation ids, menu names, line items and CSV). It enforces the runner's floor as the real one does: bearer token on
-// the upgrade, one run at a time with a lease, allowed apps, declared write controls and gated keys, repair-mode limits,
-// export directory confinement, and the protocol's error codes. Error messages never contain typed values (unless a
-// test turns on `echoTypedInErrors`, to prove the engine masks them anyway).
+// ERP Demo in desktop/erp-demo, v1 or v2 (its window titles, automation ids, menus and drop-downs, dialogs, line items
+// and CSV, as the real runner showed them on windows-latest). It enforces the runner's floor as the real one does: bearer
+// token on the upgrade, one run at a time with a lease, allowed apps, declared write controls and gated keys,
+// repair-mode limits, export directory confinement, and the protocol's error codes. Targets resolve as the runner's
+// TargetResolver does: across every run window the window selector matches, each element counted once. Error messages
+// never contain typed values (unless a test turns on `echoTypedInErrors`, to prove the engine masks them anyway).
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -35,6 +37,11 @@ export const DEMO_POLICY: FakePolicy = {
 /** The runner's ceiling for one file.retrieve answer (RunnerPolicy.MaxFileBytesCeiling). */
 export const RUNNER_MAX_FILE_BYTES = 36 * 1024 * 1024;
 const INVALID_PARAMS = -32602;
+const METHOD_NOT_FOUND = -32601;
+/** RunnerService.RepairRefusal: a repair-mode action or key the floor never allows. */
+const REPAIR_REFUSAL = 'policy_refused: repair mode allows only focus, expand, read, Escape without a target, and click on tabs, list items and tree items';
+const REPAIR_ACTIONS = ['focus', 'expand', 'read', 'click', 'key'];
+const REPAIR_CLICKABLE = ['TabItem', 'ListItem', 'TreeItem'];
 
 /** A key chord as the runner reads it (KeyChord.Parse): modifier flags in any order and spelling, then the key. */
 interface Chord { ctrl: boolean; alt: boolean; shift: boolean; win: boolean; key: string }
@@ -94,8 +101,11 @@ interface El {
   items?: string[];
   children: El[];
   onClick?: () => void;
+  /** What ExpandCollapse.Expand does; an element without it (and not a ComboBox) cannot expand. */
+  onExpand?: () => void;
 }
-interface Win { title: string; exe: string; automationId: string; className: string; root: El; owner?: Win }
+/** A top-level window. `onCancel`: what Escape does to it (a form's CancelButton, a dialog's IDCANCEL). */
+interface Win { title: string; exe: string; automationId: string; className: string; root: El; owner?: Win; onCancel?: () => void }
 
 const el = (controlType: string, automationId: string, name: string, more: Partial<El> = {}): El => ({
   controlType, automationId, name, className: '', enabled: true, visible: true, children: [], ...more,
@@ -107,13 +117,18 @@ const ORDERS = [
   ['ORD-1003', 'Globex', 'Open', '300.00'],
 ];
 
-/** What the runner needs of an app model: its windows (foreground last) and what tests look at. */
+/** What the runner needs of an app model: its windows (back to front, so the front-most last) and what tests look at. */
 export interface AppModel {
   windows: Win[];
+  /** The window holding the foreground (the front-most one, unless the app says otherwise). */
   readonly foreground: Win;
   results: string[][];
   signInFailures: number;
   posted: number;
+  /** Called before an action on a resolved target (a click elsewhere closes an open menu). */
+  beforeAct?(e: El, action: string): void;
+  /** A key the app handles itself (Escape, menu mode) on the window that receives it; true when handled. */
+  onKey?(chord: Chord, win: Win): boolean;
 }
 
 /** The demo app's windows and behaviour. */
@@ -202,6 +217,14 @@ const winMatches = (w: Win, s: WindowSel) =>
   && (s.titlePattern === undefined || new RegExp(s.titlePattern).test(w.title)) && (s.automationId === undefined || w.automationId === s.automationId)
   && (s.className === undefined || w.className === s.className);
 
+/** A window selector as the runner describes it (WindowSel.ToString). */
+function describeWindow(s: WindowSel): string {
+  const fields: [string, string | undefined][] = [['exe', s.exe], ['title', s.title], ['titlePattern', s.titlePattern], ['automationId', s.automationId], ['className', s.className]];
+  return `{${fields.filter(([, v]) => v !== undefined).map(([k, v]) => `${k}="${v!.length > 80 ? `${v!.slice(0, 80)}...` : v}"`).join(', ')}}`;
+}
+/** The run's windows the selector matches (all without one), front to back, as WindowScope.RunWindows lists them. */
+const frontToBack = (app: AppModel, sel?: WindowSel) => [...app.windows].reverse().filter((w) => !sel || winMatches(w, sel));
+
 function describeTarget(t: RunnerTarget): string {
   return t.path.map((c) => [c.controlType, c.automationId && `#${c.automationId}`, c.name !== undefined && `"${c.name}"`].filter(Boolean).join(' ')).join(' > ');
 }
@@ -218,8 +241,14 @@ export interface FakeRunnerOptions {
   tlsMaxVersion?: 'TLSv1.2' | 'TLSv1.3';
   /** The allowed app's executable is not at its policy path (app.launch answers not_found, as the runner does). */
   appMissing?: boolean;
-  /** The app model: 'orders' (default) or 'erp', the real ERP Demo v1's controls. */
+  /** The app model: 'orders' (default) or 'erp', the real ERP Demo's controls. */
   app?: 'orders' | 'erp';
+  /** The ERP Demo's build: 'v1' (default) or 'v2' (= erpChanges rename, menu, confirm). app.launch args `--ui v1|v2` win over it. */
+  erpUi?: 'v1' | 'v2';
+  /** ERP Demo changes on top of the build, each on its own (see ErpChange). */
+  erpChanges?: ErpChange[];
+  /** A runner older than the `windows` method: it answers -32601. */
+  noWindowsMethod?: boolean;
 }
 
 export interface Received { method: string; params: Record<string, unknown> }
@@ -251,6 +280,9 @@ export class FakeRunner {
   lastApp: AppModel | undefined;
   /** Which app model app.launch starts. */
   readonly app: 'orders' | 'erp';
+  readonly erpUi: 'v1' | 'v2';
+  readonly erpChanges: ErpChange[];
+  readonly noWindowsMethod: boolean;
   lastExportDir: string | undefined;
   private lastTyped = '';
   private server: Server | undefined;
@@ -266,6 +298,9 @@ export class FakeRunner {
     this.appMissing = opts.appMissing ?? false;
     this.tlsMaxVersion = opts.tlsMaxVersion ?? 'TLSv1.3';
     this.app = opts.app ?? 'orders';
+    this.erpUi = opts.erpUi ?? 'v1';
+    this.erpChanges = opts.erpChanges ?? [];
+    this.noWindowsMethod = opts.noWindowsMethod ?? false;
     this.cert = selfSignedCert();
     this.fingerprint = this.cert.fingerprint;
   }
@@ -405,16 +440,18 @@ export class FakeRunner {
     let primaryCount = 0;
     for (let i = 0; i < tries.length; i++) {
       const t = tries[i];
-      const win = t.window ? [...app.windows].reverse().find((w) => winMatches(w, t.window!)) : app.foreground;
-      if (!win) continue;
-      let nodes: El[] = [win.root];
+      // Every run window the selector matches (all of them without one), front to back. An element in two of them (a
+      // drop-down is also in its owner's tree) counts once.
+      const wins = frontToBack(app, t.window);
+      if (wins.length === 0) continue;
+      let nodes: El[] = wins.map((w) => w.root);
       for (const c of t.path) {
-        const found = nodes.flatMap((n) => descendants(n)).filter((e) => condMatches(e, c));
+        const found = [...new Set(nodes.flatMap((n) => descendants(n)))].filter((e) => condMatches(e, c));
         nodes = c.index !== undefined ? (found[c.index] ? [found[c.index]] : []) : found;
       }
       const visible = nodes.filter((n) => n.visible);
       if (i === 0) primaryCount = visible.length;
-      if (visible.length === 1) return { el: visible[0], win, candidate: i };
+      if (visible.length === 1) return { el: visible[0], win: wins.find((w) => descendants(w.root).includes(visible[0])) ?? wins[0], candidate: i };
     }
     if (primaryCount > 1) throw new RpcError(E.not_unique, `${describeTarget(target)} matches ${primaryCount} elements`);
     throw new RpcError(E.not_found, `no element matched ${describeTarget(target)} in window "${app.foreground.title}"`);
@@ -454,7 +491,30 @@ export class FakeRunner {
   }
 
   private runHasWriteControl(run: Run): boolean {
-    return (run.app?.windows ?? []).some((w) => [w.root, ...descendants(w.root)].some((e) => this.isWriteControl(w, e)));
+    return (run.app?.windows ?? []).some((w) => this.windowHasWriteControl(w));
+  }
+
+  private windowHasWriteControl(win: Win): boolean {
+    return [win.root, ...descendants(win.root)].some((e) => this.isWriteControl(win, e));
+  }
+
+  /**
+   * RunnerService.CheckRepairEscape: Escape fires a form's cancel button whatever has the focus, so in repair mode it is
+   * refused when its window holds a declared write control, unless a popup menu of that window is open (a run window
+   * that is a Menu or a #32768, other than the window, that holds the foreground or is owned by the window).
+   */
+  private checkRepairEscape(run: Run, win: Win): void {
+    const app = run.app;
+    const ownedBy = (w: Win) => {
+      let owner = w.owner;
+      for (let i = 0; i < 8 && owner; i++, owner = owner.owner) if (owner === win) return true;
+      return false;
+    };
+    const popupOpen = (app?.windows ?? []).some((w) => w !== win && (w.root.controlType === 'Menu' || w.className === '#32768') && w.root.visible
+      && (w === app!.foreground || ownedBy(w)));
+    if (this.windowHasWriteControl(win) && !popupOpen) {
+      throw new RpcError(E.policy_refused, 'policy_refused: in repair mode Escape could press a declared write control of this window (a cancel button), so it is allowed only while a menu is open');
+    }
   }
 
   private runMenuOpen(run: Run): boolean {
@@ -497,29 +557,50 @@ export class FakeRunner {
         const exe = String((p.app as { exe?: string })?.exe ?? '').split(/[\\/]/).pop() ?? '';
         if (!this.policy.allowedApps.some((a) => a.exe.toLowerCase() === exe.toLowerCase())) throw new RpcError(E.policy_refused, `app not allowed: ${exe}`);
         if (this.appMissing) throw new RpcError(E.not_found, `not_found: no element matched application executable "${exe}" (no matching window of the run)`);
-        run.app = this.app === 'erp' ? new ErpApp(() => this.run?.exportDir) : new DemoApp(() => this.run?.exportDir);
+        run.app = this.app === 'erp' ? new ErpApp(() => this.run?.exportDir, this.erpChangesFor((p.app as { args?: unknown }).args)) : new DemoApp(() => this.run?.exportDir);
         this.lastApp = run.app;
         return { pid: 4242 };
       }
       case 'snapshot': {
         const run = this.requireRun(p);
-        optInt(p, 'maxNodes', 1, 5000);
-        optInt(p, 'maxDepth', 1, 100);
-        const win = run.app?.foreground;
-        if (!win) throw new RpcError(E.not_found, 'not_found: no element matched a window of the run (no matching window of the run)');
+        const sel = p.window as WindowSel | undefined;
         const max = optInt(p, 'maxNodes', 1, 5000) ?? 400;
         const maxDepth = optInt(p, 'maxDepth', 1, 100) ?? 25;
+        // WindowScope.CurrentWindow: the foreground window without a selector, else the front-most window it matches.
+        const win = sel ? (run.app ? frontToBack(run.app, sel)[0] : undefined) : run.app?.foreground;
+        if (!win) {
+          throw new RpcError(E.not_found, `not_found: no element matched ${sel ? `window ${describeWindow(sel)}` : 'a window of the run'} (no matching window of the run)`);
+        }
+        // SnapshotBuilder.Build: depth first, hidden subtrees left out; truncated once maxNodes is reached or maxDepth cuts children off.
         const nodes: RunnerNode[] = [];
-        const walk = (e: El, depth: number) => {
-          if (nodes.length >= max || !e.visible || depth > maxDepth) return;
+        let truncated = false;
+        const walk = (e: El, depth: number, root: boolean) => {
+          if (nodes.length >= max) { truncated = true; return; }
+          if (!root && !e.visible) return;
           nodes.push({
             ref: `r${nodes.length}`, depth, controlType: e.controlType, name: e.name, automationId: e.automationId, className: e.className, enabled: e.enabled,
             ...(e.isPassword ? (e.value ? { valueHidden: true as const } : {}) : e.value !== undefined ? { value: e.value } : {}),
           });
-          for (const c of e.children) walk(c, depth + 1);
+          if (depth >= maxDepth) { if (e.children.length > 0) truncated = true; return; }
+          for (const c of e.children) {
+            walk(c, depth + 1, false);
+            if (nodes.length >= max) { truncated = true; return; }
+          }
         };
-        walk(win.root, 0);
-        return { window: { title: win.title, exe: win.exe }, nodes };
+        walk(win.root, 0, true);
+        return { window: { title: win.title, exe: win.exe }, nodes, ...(truncated ? { truncated: true } : {}) };
+      }
+      case 'windows': {
+        if (this.noWindowsMethod) throw new RpcError(METHOD_NOT_FOUND, 'method not found');
+        const run = this.requireRun(p);
+        // RunnerService.Windows: the foreground window first, then front to back, at most 20.
+        const app = run.app;
+        const all = app ? frontToBack(app) : [];
+        const fg = app?.foreground;
+        return {
+          windows: [...all.filter((w) => w === fg), ...all.filter((w) => w !== fg)].slice(0, 20)
+            .map((w) => ({ title: w.title, exe: w.exe, automationId: w.automationId, className: w.className, foreground: w === fg })),
+        };
       }
       case 'isVisible': {
         const run = this.requireRun(p);
@@ -562,29 +643,49 @@ export class FakeRunner {
     }
   }
 
+  /** The ERP Demo's changes for this launch: `--ui v1|v2` in the args, else the runner's erpUi; then erpChanges. */
+  private erpChangesFor(args: unknown): Set<ErpChange> {
+    const list = Array.isArray(args) ? args.map(String) : [];
+    const at = list.indexOf('--ui');
+    const ui = at >= 0 && (list[at + 1] === 'v1' || list[at + 1] === 'v2') ? list[at + 1] : this.erpUi;
+    return new Set<ErpChange>([...(ui === 'v2' ? ERP_V2 : []), ...this.erpChanges]);
+  }
+
   private async act(run: Run, p: Record<string, unknown>): Promise<unknown> {
     const action = String(p.action);
     const write = p.write === true;
     const repair = p.mode === 'repair';
     const chord = action === 'key' ? parseChord(String(p.value ?? '')) : undefined;
-    if (repair && !['focus', 'expand', 'read', 'click'].includes(action)) {
-      throw new RpcError(E.policy_refused, 'repair mode allows only focus, expand, read and clicks on tabs, list items and tree items');
-    }
-    // The floor checks that need no UI, in the runner's order: shell chords, then gated keys.
+    // The floor checks that need no UI, in the runner's order: repair actions, shell chords, gated keys, repair keys.
+    if (repair && !REPAIR_ACTIONS.includes(action)) throw new RpcError(E.policy_refused, REPAIR_REFUSAL);
     if (chord && isSystemChord(chord)) throw new RpcError(E.policy_refused, `policy_refused: the key ${chordText(chord)} reaches the Windows shell, not the app, and is never sent`);
-    if (chord && this.isGatedKey(chord) && !write) throw new RpcError(E.policy_refused, `policy_refused: the gated key ${chordText(chord)} needs write: true`);
+    if (chord && this.isGatedKey(chord)) {
+      if (repair) throw new RpcError(E.policy_refused, `policy_refused: the gated key ${chordText(chord)} is never allowed in repair mode`);
+      if (!write) throw new RpcError(E.policy_refused, `policy_refused: the gated key ${chordText(chord)} needs write: true`);
+    }
+    // Repair may close a menu or dialog with Escape (to the focused element), and press no other key.
+    if (repair && chord && (p.target !== undefined || chordText(chord) !== 'Escape')) throw new RpcError(E.policy_refused, REPAIR_REFUSAL);
     if (chord && p.target === undefined) {
+      // A key without a target goes to the foreground run window.
+      const fg = run.app?.foreground;
+      if (!fg) throw new RpcError(E.not_found, 'not_found: no element matched a window of the run (no matching window of the run)');
+      if (repair) this.checkRepairEscape(run, fg);
       this.checkKeyReach(run, chord, write);
+      if (run.app?.onKey?.(chord, fg)) return {};
       if (chord.key === 'Enter' && !chord.ctrl && !chord.alt && !chord.shift) (run.focus as (El & { onEnter?: () => void }) | undefined)?.onEnter?.();
       return {};
     }
     const { el: e, win } = await this.findWithin(run, p.target as RunnerTarget, p.timeoutMs as number);
-    if (repair && !(['focus', 'expand', 'read'].includes(action) || (action === 'click' && ['TabItem', 'ListItem', 'TreeItem'].includes(e.controlType)))) {
-      throw new RpcError(E.policy_refused, 'repair mode allows only focus, expand, read and clicks on tabs, list items and tree items');
+    if (this.isWriteControl(win, e)) {
+      if (repair) throw new RpcError(E.policy_refused, 'policy_refused: the target is a declared write control; repair mode never acts on it');
+      if (!write) throw new RpcError(E.policy_refused, `${e.controlType} #${e.automationId} is a declared write control: the step must be a declared write`);
     }
-    if (this.isWriteControl(win, e) && !write) throw new RpcError(E.policy_refused, `${e.controlType} #${e.automationId} is a declared write control: the step must be a declared write`);
+    if (repair && action === 'click' && !REPAIR_CLICKABLE.includes(e.controlType)) {
+      throw new RpcError(E.policy_refused, `policy_refused: repair mode may click only tabs, list items and tree items, not a ${e.controlType}`);
+    }
     if (chord) this.checkKeyReach(run, chord, write);
     run.focus = e;
+    run.app?.beforeAct?.(e, action);
     switch (action) {
       case 'click':
       case 'doubleClick':
@@ -612,6 +713,7 @@ export class FakeRunner {
         e.value = action === 'check' ? 'On' : 'Off';
         return {};
       case 'key':
+        if (run.app?.onKey?.(chord!, win)) return {};
         if (chord?.key === 'Enter' && !chord.ctrl && !chord.alt && !chord.shift) (e as El & { onEnter?: () => void }).onEnter?.();
         return {};
       case 'read':
@@ -619,6 +721,10 @@ export class FakeRunner {
         if (e.controlType === 'DataGrid') return { text: e.children.map((r) => r.children.map((c) => c.name).join('\t')).join('\n') };
         return { text: e.value ?? e.name };
       case 'expand':
+        // WindowsDesktop.Expand: ExpandCollapse (a menu item with a drop-down, a combo box), else invalid params.
+        if (e.onExpand) e.onExpand();
+        else if (e.controlType !== 'ComboBox') throw new RpcError(INVALID_PARAMS, 'invalid params: the element cannot expand');
+        return {};
       case 'focus':
         return {};
       default:
@@ -628,8 +734,9 @@ export class FakeRunner {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// The ERP Demo v1 (desktop/erp-demo): the same window titles, automation ids and menu names as the WinForms app, and the
-// same deterministic line items and CSV. WinForms menu items have no automation id: they are found by name.
+// The ERP Demo (desktop/erp-demo): the same window titles, automation ids and menu names as the WinForms app, and the
+// same deterministic line items and CSV. WinForms menu items have no automation id: they are found by name. v1 by
+// default; v2 (--ui v2) is three changes, and the fake adds a fourth that the real app does not have (customSave).
 
 export const ERP_EXE = 'ErpDemo.exe';
 export const ERP_USER = 'clerk';
@@ -640,6 +747,18 @@ const ERP_STATUSES = ['Open', 'Cleared', 'Blocked'];
 const ERP_COUNTS: Record<string, number> = { 1000: 12, 2000: 7, 3000: 4 };
 const ERP_CURRENCIES: Record<string, string> = { 1000: 'EUR', 2000: 'USD' };
 export const ERP_CSV_HEADER = 'Document,Date,Company,Vendor,Amount,Currency,Status';
+/**
+ * One change to the ERP Demo, as an app upgrade makes it. 'rename': Search (btnSearch) becomes Find (btnFind). 'menu':
+ * File keeps only Exit; Export moves to a new top-level Reports menu as "Export line items...". 'confirm': Export asks
+ * first in a Confirm export form, whose Continue opens the Save dialog. 'customSave' (not in the real app): the export
+ * dialog is a WinForms form (#ExportForm) whose save button is Export (btnExportSave), not a Win32 Save dialog.
+ */
+export type ErpChange = 'rename' | 'menu' | 'confirm' | 'customSave';
+/** ERP Demo v2 (--ui v2): its changes. */
+export const ERP_V2: readonly ErpChange[] = ['rename', 'menu', 'confirm'];
+/** The class of the app's forms, and of its menu drop-downs (each a top-level window of its own), as UI Automation reports them. */
+const ERP_FORM_CLASS = 'WindowsForms10.Window.8.app.0.2bf8098_r6_ad1';
+const ERP_DROP_DOWN_CLASS = 'WindowsForms10.Window.808.app.0.2bf8098_r6_ad1';
 
 /** LineItems.Search of the ERP Demo: rows of [Document, Date, Company, Vendor, Amount, Currency, Status]. */
 export function erpLineItems(company: string, from: string, to: string): string[][] {
@@ -666,13 +785,48 @@ class ErpApp implements AppModel {
   posted = 0;
   /** Files the app saved, by full path (saving outside the export directory is allowed but never retrievable). */
   readonly saved: string[] = [];
+  private main: Win | undefined;
+  /** The menu bar's top-level items by name, each with its drop-down (a Menu holding the drop-down's items). */
+  private readonly menus = new Map<string, { item: El; dropDown: El }>();
+  /** The open drop-down's window; at most one is open. */
+  private dropDown: Win | undefined;
+  /**
+   * The menu bar's highlighted item while in menu mode. One Escape closes a drop-down but leaves the bar in menu mode
+   * (a Down or Enter without a target reopens the highlighted item's drop-down); a second Escape leaves menu mode, and
+   * so does any action on a target outside the menu.
+   */
+  private highlighted: string | undefined;
 
-  constructor(private readonly exportDir: () => string | undefined) {
+  constructor(private readonly exportDir: () => string | undefined, private readonly changes: ReadonlySet<ErpChange> = new Set()) {
     this.windows = [this.loginWindow()];
   }
 
+  /** A drop-down never takes the foreground: its owner keeps it. */
   get foreground(): Win {
-    return this.windows[this.windows.length - 1];
+    return [...this.windows].reverse().find((w) => w.root.controlType !== 'Menu') ?? this.windows[this.windows.length - 1];
+  }
+
+  beforeAct(e: El, action: string): void {
+    const inMenu = [...this.menus.values()].some((m) => m.item === e || descendants(m.dropDown).includes(e));
+    if (inMenu) return;
+    // A click, typing or a key elsewhere closes the open drop-down (reading or focusing does not).
+    if (action !== 'read' && action !== 'focus') this.closeMenu();
+    if (!this.dropDown) this.highlighted = undefined;
+  }
+
+  onKey(c: Chord, win: Win): boolean {
+    if (c.ctrl || c.alt || c.shift || c.win) return false;
+    if (c.key === 'Escape') {
+      if (this.dropDown) this.closeMenu();
+      else if (this.highlighted) this.highlighted = undefined;
+      else win.onCancel?.();
+      return true;
+    }
+    if ((c.key === 'Down' || c.key === 'Enter') && !this.dropDown && this.highlighted) {
+      this.openMenu(this.highlighted);
+      return true;
+    }
+    return false;
   }
 
   private loginWindow(): Win {
@@ -680,7 +834,7 @@ class ErpApp implements AppModel {
     const password = el('Edit', 'txtPassword', 'Password', { isPassword: true, className: 'WindowsForms10.EDIT.app.0.2bf8098_r6_ad1' });
     const error = el('Text', 'lblLoginError', '', { visible: false });
     const signIn = () => {
-      if (user.value === ERP_USER && password.value === ERP_PASSWORD) { this.windows = [this.mainWindow()]; return; }
+      if (user.value === ERP_USER && password.value === ERP_PASSWORD) { this.main = this.mainWindow(); this.windows = [this.main]; return; }
       error.name = 'User name or password is wrong.';
       error.visible = true;
       password.value = '';
@@ -690,7 +844,7 @@ class ErpApp implements AppModel {
     for (const field of [user, password]) (field as El & { onEnter?: () => void }).onEnter = signIn;
     const button = el('Button', 'btnSignIn', 'Sign in', { onClick: signIn });
     return {
-      title: 'ERP Demo - Sign in', exe: ERP_EXE, automationId: 'LoginForm', className: 'WindowsForms10.Window.8.app.0.2bf8098_r6_ad1',
+      title: 'ERP Demo - Sign in', exe: ERP_EXE, automationId: 'LoginForm', className: ERP_FORM_CLASS,
       root: el('Window', 'LoginForm', 'ERP Demo - Sign in', { children: [el('Text', 'lblUser', 'User name'), user, el('Text', 'lblPassword', 'Password'), password, error, button] }),
     };
   }
@@ -712,48 +866,113 @@ class ErpApp implements AppModel {
       count.name = `${this.results.length} line items`;
       detail.value = this.results[0] ? [this.results[0][0], this.results[0][1], this.results[0][3], this.results[0][4], this.results[0][5], this.results[0][6]].join(' ') : '';
     };
-    const fileMenu = el('MenuItem', '', 'File', { onClick: () => this.toggleFileMenu() });
-    const menu = el('MenuBar', 'mainMenu', '', { children: [fileMenu, el('MenuItem', '', 'Help')] });
+    // v1: File > Export..., Separator, Exit. 'menu': File > Exit, and Reports > Export line items... between File and Help.
+    this.menus.clear();
+    const command = (name: string, run: () => void) => el('MenuItem', '', name, { onClick: () => { this.closeMenu(); this.highlighted = undefined; run(); } });
+    const exit = command('Exit', () => { this.windows = []; });
+    const bar = [this.topMenu('File', this.changes.has('menu') ? [exit] : [command('Export...', () => this.export()), el('Separator', '', ''), exit])];
+    if (this.changes.has('menu')) bar.push(this.topMenu('Reports', [command('Export line items...', () => this.export())]));
+    // About shows a message box in the real app; the fake only closes the menu.
+    bar.push(this.topMenu('Help', [command('About', () => undefined)]));
+    const go = this.changes.has('rename') ? el('Button', 'btnFind', 'Find', { onClick: search }) : el('Button', 'btnSearch', 'Search', { onClick: search });
     const searchPanel = el('Group', 'grpSearch', 'Line items', {
       children: [el('Text', 'lblCompany', 'Company code'), company, el('Text', 'lblFrom', 'Date from'), from, el('Text', 'lblTo', 'Date to'), to,
-        el('Button', 'btnSearch', 'Search', { onClick: search }), el('Button', 'btnPost', 'Post', { onClick: () => { this.posted++; } }), count],
+        go, el('Button', 'btnPost', 'Post', { onClick: () => { this.posted++; } }), count],
     });
     return {
-      title: 'ERP Demo - Line items', exe: ERP_EXE, automationId: 'MainForm', className: 'WindowsForms10.Window.8.app.0.2bf8098_r6_ad1',
-      root: el('Window', 'MainForm', 'ERP Demo - Line items', { children: [menu, searchPanel, grid, el('Pane', 'pnlDetail', '', { children: [detail] }), el('StatusBar', 'statusBar', '', { children: [status] })] }),
+      title: 'ERP Demo - Line items', exe: ERP_EXE, automationId: 'MainForm', className: ERP_FORM_CLASS,
+      root: el('Window', 'MainForm', 'ERP Demo - Line items', { children: [el('MenuBar', 'mainMenu', '', { children: bar }), searchPanel, grid, el('Pane', 'pnlDetail', '', { children: [detail] }), el('StatusBar', 'statusBar', '', { children: [status] })] }),
     };
   }
 
-  private toggleFileMenu(): void {
-    const open = this.windows.find((w) => w.automationId === 'FileMenu');
-    if (open) { this.windows = this.windows.filter((w) => w !== open); return; }
-    const exportItem = el('MenuItem', '', 'Export...', { onClick: () => { this.windows = this.windows.filter((w) => w.automationId !== 'FileMenu'); this.windows.push(this.saveDialog()); } });
-    const exit = el('MenuItem', '', 'Exit');
-    // The drop-down is its own untitled window of the app (a ToolStripDropDown), as in WinForms.
-    this.windows.push({ title: '', exe: ERP_EXE, automationId: 'FileMenu', className: 'WindowsForms10.Window.20808.app.0.2bf8098_r6_ad1', root: el('Menu', '', 'File', { children: [exportItem, el('Separator', '', ''), exit] }) });
+  /** A top-level menu item: a click toggles its drop-down, expand opens it. */
+  private topMenu(name: string, items: El[]): El {
+    const item = el('MenuItem', '', name, { onClick: () => this.toggleMenu(name), onExpand: () => this.openMenu(name) });
+    this.menus.set(name, { item, dropDown: el('Menu', '', name, { children: items }) });
+    return item;
   }
 
+  /**
+   * Opens a drop-down, closing any other. It is a top-level window of its own (title the item's name, no automation id,
+   * owned by the main form, above it but never the foreground), and the main form's tree holds the same elements under
+   * the menu item: MenuItem "Reports" > Menu "Reports" > MenuItem "Export line items...".
+   */
+  private openMenu(name: string): void {
+    this.highlighted = name;
+    if (this.dropDown?.title === name) return;
+    this.closeMenu();
+    const m = this.menus.get(name)!;
+    m.item.children = [m.dropDown];
+    this.dropDown = { title: name, exe: ERP_EXE, automationId: '', className: ERP_DROP_DOWN_CLASS, owner: this.main, root: m.dropDown };
+    this.windows.push(this.dropDown);
+  }
+
+  private closeMenu(): void {
+    const open = this.dropDown;
+    if (!open) return;
+    this.menus.get(open.title)!.item.children = [];
+    this.windows = this.windows.filter((w) => w !== open);
+    this.dropDown = undefined;
+  }
+
+  private toggleMenu(name: string): void {
+    if (this.dropDown?.title !== name) { this.openMenu(name); return; }
+    this.closeMenu();
+    this.highlighted = undefined;
+  }
+
+  private close(win: Win): void {
+    this.windows = this.windows.filter((w) => w !== win);
+  }
+
+  private export(): void {
+    this.windows.push(this.changes.has('confirm') ? this.confirmDialog() : this.saveDialog());
+  }
+
+  /** 'confirm': a form of the app (the main form's class), owned by it; Escape presses Cancel. */
+  private confirmDialog(): Win {
+    const win: Win = {
+      title: 'Confirm export', exe: ERP_EXE, automationId: 'ConfirmExportForm', className: ERP_FORM_CLASS, owner: this.main,
+      onCancel: () => this.close(win),
+      root: el('Window', 'ConfirmExportForm', 'Confirm export', {
+        children: [
+          el('Text', 'lblConfirm', `Export ${this.results.length} line items to a CSV file?`),
+          el('Button', 'btnConfirmExport', 'Continue', { onClick: () => { this.close(win); this.windows.push(this.saveDialog()); } }),
+          el('Button', 'btnCancelExport', 'Cancel', { onClick: () => this.close(win) }),
+        ],
+      }),
+    };
+    return win;
+  }
+
+  /** The export dialog: the Win32 Save dialog, or with 'customSave' a form of the app. Saving writes the CSV where it is told. */
   private saveDialog(): Win {
     const file = el('Edit', '1001', 'File name:', { className: 'Edit', value: 'line-items.csv' });
-    const owner = this.foreground;
-    const close = () => { this.windows = this.windows.filter((w) => w.title !== 'Export line items'); };
-    const save = el('Button', '1', 'Save', {
-      className: 'Button',
-      onClick: () => {
-        const typed = file.value ?? '';
-        const cut = Math.max(typed.lastIndexOf('\\'), typed.lastIndexOf('/'));
-        const dir = cut >= 0 ? typed.slice(0, cut) : '';
-        const name = typed.slice(cut + 1);
-        const exportDir = this.exportDir();
-        if (name) this.saved.push(typed);
-        if (exportDir && dir === exportDir && name) writeFileSync(join(exportDir, name), erpCsv(this.results));
-        close();
-      },
-    });
-    const cancel = el('Button', '2', 'Cancel', { className: 'Button', onClick: close });
-    return {
-      title: 'Export line items', exe: ERP_EXE, automationId: '', className: '#32770', owner,
-      root: el('Window', '', 'Export line items', { children: [el('ComboBox', 'FileNameControlHost', 'File name:', { children: [file] }), save, cancel] }),
+    const save = () => {
+      const typed = file.value ?? '';
+      const cut = Math.max(typed.lastIndexOf('\\'), typed.lastIndexOf('/'));
+      const dir = cut >= 0 ? typed.slice(0, cut) : '';
+      const name = typed.slice(cut + 1);
+      const exportDir = this.exportDir();
+      if (name) this.saved.push(typed);
+      if (exportDir && dir === exportDir && name) writeFileSync(join(exportDir, name), erpCsv(this.results));
+      this.close(win);
     };
+    const cancel = () => this.close(win);
+    const win: Win = this.changes.has('customSave')
+      ? {
+          title: 'Export line items', exe: ERP_EXE, automationId: 'ExportForm', className: ERP_FORM_CLASS, owner: this.main, onCancel: cancel,
+          root: el('Window', 'ExportForm', 'Export line items', {
+            children: [file, el('Button', 'btnExportSave', 'Export', { onClick: save }), el('Button', 'btnExportCancel', 'Cancel', { onClick: cancel })],
+          }),
+        }
+      : {
+          title: 'Export line items', exe: ERP_EXE, automationId: '', className: '#32770', owner: this.main, onCancel: cancel,
+          root: el('Window', '', 'Export line items', {
+            children: [el('ComboBox', 'FileNameControlHost', 'File name:', { children: [file] }), el('Button', '1', 'Save', { className: 'Button', onClick: save }),
+              el('Button', '2', 'Cancel', { className: 'Button', onClick: cancel })],
+          }),
+        };
+    return win;
   }
 }
