@@ -55,6 +55,9 @@ const failure = (p: Promise<unknown>) => p.then(
   (e: unknown) => { if (!(e instanceof RunnerError)) throw e; return { code: e.code, message: e.message }; },
 );
 
+/** The Save dialog is open (it follows Continue at once). */
+const waitSave = async () => { expect(await titles()).toContain('Export line items'); };
+
 async function signIn(): Promise<void> {
   await act(t(LOGIN, { automationId: 'txtUser' }), 'type', { value: ERP_USER });
   await act(t(LOGIN, { automationId: 'txtPassword' }), 'type', { value: ERP_PASSWORD });
@@ -185,6 +188,28 @@ describe('ERP Demo v2 in the fake runner', () => {
     await key('Escape');
     expect(snap.nodes.length).toBeGreaterThan((await snapshot()).nodes.length);
     expect((await failure(resolve(menuItem('Export line items...')))).code).toBe(-32004);
+  });
+
+  it('an open owned dialog is also in the main form\'s tree, as UI Automation reports it', async () => {
+    await launch({ erpUi: 'v2' });
+    await signIn();
+    await search();
+    await act(menuItem('Reports', MAIN), 'click');
+    await act(menuItem('Export line items...'), 'click');
+    const main = await snapshot({ window: MAIN });
+    expect(main.nodes.some((n) => n.controlType === 'Button' && n.automationId === 'btnConfirmExport')).toBe(true);
+    expect(main.nodes.some((n) => n.controlType === 'Window' && n.name === 'Confirm export')).toBe(true);
+    // No selector: still the foreground window, the dialog.
+    expect((await snapshot()).window.title).toBe('Confirm export');
+    const button = t(MAIN, { controlType: 'Button', automationId: 'btnConfirmExport' });
+    for (const window of [MAIN, { exe: ERP_EXE }, { title: 'Confirm export' }, undefined]) {
+      expect(await resolve({ ...button, ...(window ? { window } : { window: undefined }) }), JSON.stringify(window)).toEqual({ candidate: 0 });
+    }
+    await act(t({ title: 'Confirm export' }, { automationId: 'btnConfirmExport' }), 'click');
+    expect((await snapshot({ window: MAIN })).nodes.some((n) => n.automationId === 'btnConfirmExport')).toBe(false);
+    await waitSave();
+    const withSave = await snapshot({ window: MAIN });
+    expect(withSave.nodes.some((n) => n.controlType === 'Edit' && n.automationId === '1001')).toBe(true);
   });
 
   it('repair mode refuses a Button click and Enter, allows expand on a MenuItem and Escape', async () => {

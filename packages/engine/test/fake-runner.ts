@@ -792,7 +792,7 @@ class ErpApp implements AppModel {
   private main: Win | undefined;
   /** The menu bar's top-level items by name, each with its drop-down (a Menu holding the drop-down's items). */
   private readonly menus = new Map<string, { item: El; dropDown: El }>();
-  /** The open drop-down's window; at most one is open. */
+  /** The open drop-down's window; at most one is open. Open dialogs nest the same way (see open()). */
   private dropDown: Win | undefined;
   /**
    * The menu bar's highlighted item while in menu mode. One Escape closes a drop-down but leaves the bar in menu mode
@@ -925,12 +925,22 @@ class ErpApp implements AppModel {
     this.highlighted = undefined;
   }
 
+  /**
+   * Opens a dialog of the main form: a top-level window of its own, and (as UI Automation reports an owned window) its
+   * root `Window` node also sits under the main form's root, the same El objects in both trees.
+   */
+  private open(win: Win): void {
+    this.windows.push(win);
+    this.main!.root.children.push(win.root);
+  }
+
   private close(win: Win): void {
     this.windows = this.windows.filter((w) => w !== win);
+    if (this.main) this.main.root.children = this.main.root.children.filter((c) => c !== win.root);
   }
 
   private export(): void {
-    this.windows.push(this.changes.has('confirm') ? this.confirmDialog() : this.saveDialog());
+    this.open(this.changes.has('confirm') ? this.confirmDialog() : this.saveDialog());
   }
 
   /** 'confirm': a form of the app (the main form's class), owned by it; Escape presses Cancel. */
@@ -941,7 +951,7 @@ class ErpApp implements AppModel {
       root: el('Window', 'ConfirmExportForm', 'Confirm export', {
         children: [
           el('Text', 'lblConfirm', `Export ${this.results.length} line items to a CSV file?`),
-          el('Button', 'btnConfirmExport', 'Continue', { onClick: () => { this.close(win); this.windows.push(this.saveDialog()); } }),
+          el('Button', 'btnConfirmExport', 'Continue', { onClick: () => { this.close(win); this.open(this.saveDialog()); } }),
           el('Button', 'btnCancelExport', 'Cancel', { onClick: () => this.close(win) }),
         ],
       }),
