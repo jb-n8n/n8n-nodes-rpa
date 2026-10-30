@@ -249,6 +249,8 @@ export interface FakeRunnerOptions {
   erpChanges?: ErpChange[];
   /** A runner older than the `windows` method: it answers -32601. */
   noWindowsMethod?: boolean;
+  /** A misbehaving app: every snapshot node's automationId and className get this many extra characters. */
+  padSnapshotIds?: number;
 }
 
 export interface Received { method: string; params: Record<string, unknown> }
@@ -283,6 +285,7 @@ export class FakeRunner {
   readonly erpUi: 'v1' | 'v2';
   readonly erpChanges: ErpChange[];
   readonly noWindowsMethod: boolean;
+  readonly padSnapshotIds: number;
   lastExportDir: string | undefined;
   private lastTyped = '';
   private server: Server | undefined;
@@ -301,6 +304,7 @@ export class FakeRunner {
     this.erpUi = opts.erpUi ?? 'v1';
     this.erpChanges = opts.erpChanges ?? [];
     this.noWindowsMethod = opts.noWindowsMethod ?? false;
+    this.padSnapshotIds = opts.padSnapshotIds ?? 0;
     this.cert = selfSignedCert();
     this.fingerprint = this.cert.fingerprint;
   }
@@ -578,7 +582,7 @@ export class FakeRunner {
           if (nodes.length >= max) { truncated = true; return; }
           if (!root && !e.visible) return;
           nodes.push({
-            ref: `r${nodes.length}`, depth, controlType: e.controlType, name: e.name, automationId: e.automationId, className: e.className, enabled: e.enabled,
+            ref: `r${nodes.length}`, depth, controlType: e.controlType, name: e.name, automationId: e.automationId + 'x'.repeat(this.padSnapshotIds), className: e.className + 'y'.repeat(this.padSnapshotIds), enabled: e.enabled,
             ...(e.isPassword ? (e.value ? { valueHidden: true as const } : {}) : e.value !== undefined ? { value: e.value } : {}),
           });
           if (depth >= maxDepth) { if (e.children.length > 0) truncated = true; return; }

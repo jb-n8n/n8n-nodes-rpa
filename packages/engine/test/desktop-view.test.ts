@@ -158,3 +158,17 @@ describe('desktop view', () => {
     expect(surface.nodeOf(second.items[0].ref)).toBeUndefined();
   });
 });
+
+describe('view clips automation ids and class names', () => {
+  it('keeps both at 80 characters', async () => {
+    const { surface, run } = await onErp({ padSnapshotIds: 200 });
+    await run([]);
+    const view = await surface.view(createMasker([]));
+    expect(view.items.length).toBeGreaterThan(0);
+    for (const i of view.items) {
+      expect(i.automationId.length).toBeLessThanOrEqual(80);
+      expect(i.className.length).toBeLessThanOrEqual(80);
+    }
+    expect(view.items.some((i) => i.automationId.length === 80)).toBe(true);
+  });
+});

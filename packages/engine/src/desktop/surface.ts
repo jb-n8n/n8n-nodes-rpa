@@ -45,14 +45,19 @@ export interface DesktopViewItem {
   name: string;
   /** Masked, at most 500 characters. */
   fullName: string;
+  /** Masked, at most 80 characters. */
   automationId: string;
+  /** Masked, at most 80 characters. */
   className: string;
   enabled: boolean;
   /** Masked, at most 80 characters; never a password or credential-like value. */
   value?: string;
   valueHidden?: true;
 }
-/** A pruned UI Automation view of one window of the run, for the repair agent. */
+/**
+ * A pruned UI Automation view of one window of the run, for the repair agent. Its refs come from a counter separate from
+ * snapshot()'s `refStart`, so a view ref and a snapshot ref may share a name; each call clears the other's ref map.
+ */
 export interface DesktopView { window: { title: string; exe: string }; truncated: boolean; items: DesktopViewItem[] }
 /** The raw runner node behind a view ref (unmasked: for the engine only, never for a message). */
 export interface DesktopViewNode { node: RunnerNode; parent?: string; window: { title: string; exe: string }; truncated: boolean }
@@ -86,7 +91,10 @@ export interface DesktopSurface extends Surface {
   refreshWindow(): Promise<void>;
   /** The window title of the last snapshot ('' before any). */
   windowTitle(): string;
-  /** The run's top-level windows (the runner's `windows`); [] from a runner older than the method. Other errors are thrown. */
+  /**
+   * The run's top-level windows (the runner's `windows`); [] from a runner older than the method. Other errors are thrown.
+   * The titles (and all other fields) are the runner's raw, unmasked app text: mask them before putting them in any message.
+   */
   windows(): Promise<RunnerWindow[]>;
   /**
    * A view of one window (the foreground window without a selector) with automation ids, classes and parents per ref.
@@ -218,7 +226,7 @@ export function createDesktopSurface(client: RunnerClient, runId: string, app: D
         const value = hidden || !n.value ? undefined : maskClipped(masker, n.value, NAME_CLIP);
         return {
           ref, ...(parent ? { parent } : {}), depth: n.depth, controlType: n.controlType, name: fullName.slice(0, NAME_CLIP), fullName,
-          automationId: masker.mask(n.automationId ?? ''), className: masker.mask(n.className ?? ''), enabled: n.enabled !== false,
+          automationId: maskClipped(masker, n.automationId ?? '', NAME_CLIP), className: maskClipped(masker, n.className ?? '', NAME_CLIP), enabled: n.enabled !== false,
           ...(value ? { value } : {}), ...(hidden && (n.valueHidden || n.value) ? { valueHidden: true as const } : {}),
         };
       });

@@ -62,8 +62,8 @@ the taskbar, the Start menu) are ignored. `mode: "repair"` allows only `focus`, 
 `Escape` and no target (it goes to the run's focused element, to close a menu or a dialog; an `Escape` listed in
 `gatedKeys` stays refused), and `click` on tabs, list items and tree items. Because Escape fires a form's cancel
 button whatever has the focus, a repair-mode Escape is refused while its window holds a write control, unless a popup
-menu of that window is open (a top-level menu window it owns; a menu bar does not count). When an app's Escape itself writes (a cancel button that discards or posts), list `Escape` in
-`gatedKeys`.
+menu of that window is open (a top-level menu window it owns; a menu bar does not count). When an app's Escape itself writes (a cancel button that discards or posts), list
+`Escape` in `gatedKeys`.
 
 Key chords that reach the Windows shell rather than the app (anything with Win, Ctrl+Esc, Ctrl+Shift+Esc,
 Alt+Tab, Alt+Esc) are never sent. `type` goes only into editable text fields, as Unicode keystrokes (no shortcuts or
