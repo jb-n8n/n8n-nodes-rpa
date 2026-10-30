@@ -208,6 +208,7 @@ export function validateScript(script: Script, ctx: PolicyContext): PolicyResult
 
     const maxLiteral = ctx.mode === 'proposal' ? MAX_LITERAL_PROPOSAL : MAX_LITERAL_LOAD;
     const literal = 'fill' in s ? s.fill.value : 'select' in s ? s.select.value : undefined;
+    if (ctx.mode === 'proposal' && 'fill' in s && s.fill.secret === true) violations.push(`${where}: an AI-written step cannot type a secret (fill with secret: true is only for steps you write and sign)`);
     if (literal !== undefined && literal.length > maxLiteral) violations.push(`limit: ${where}: value is longer than ${maxLiteral} characters`);
     if ('goto' in s) {
       const u = resolveGoto(s.goto, script.startUrl);

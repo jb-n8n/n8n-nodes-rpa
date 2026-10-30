@@ -69,6 +69,11 @@ describe('validateScript', () => {
     expect(validateScript(s, { ...p, previous: s }).ok).toBe(true);
     expect(validateScript(s, ctx).ok).toBe(true);
   });
+  it('in proposal mode, refuses fill with secret, and accepts it when loading signed steps', () => {
+    const s = add(baselineScript(portal.url), { intent: 'Type', fill: { field: { label: 'Export password' }, value: '{{var.pw}}', secret: true } });
+    expect(validateScript(s, { ...ctx, mode: 'proposal' as const, previous: s }).violations.join()).toMatch(/cannot type a secret/);
+    expect(validateScript(s, ctx).ok).toBe(true);
+  });
   it('raises safety flags for new submits, downloads and hosts compared with the previous version', () => {
     const prev = baselineScript(portal.url);
     const next = reportScript(portal.url, 2);

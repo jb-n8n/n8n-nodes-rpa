@@ -1,6 +1,7 @@
 import type { BrowserContext, Locator as PwLocator, Request } from 'playwright-core';
-import { formPostsElsewhere, notHttp, offListSite, PASSWORD_FILL_REFUSED, PASSWORD_FILL_REFUSED_STEPS } from '../../messages.js';
-import { renderVars } from '../../secrets/render.js';
+import { formPostsElsewhere, notHttp, offListSite, PASSWORD_FILL_REFUSED, PASSWORD_FILL_REFUSED_STEPS, secretFillValue, UNSIGNED_SECRET_FILL } from '../../messages.js';
+import type { Masker } from '../../secrets/mask.js';
+import { renderVars, SECRET_FILL_VALUE } from '../../secrets/render.js';
 import type { RunState, Step } from '../../types.js';
 import { PolicyError } from '../errors.js';
 import { formTarget as formTargetInPage, type FormTarget } from '../form-target.js';
@@ -147,9 +148,10 @@ function refusePassword(ctx: StepContext): never {
 /**
  * fill/select never type into a password input: only signIn types passwords. Checked before
  * typing, and again afterwards, because a field can turn into a password input on focus: then its value is cleared and
- * the step fails the same way.
+ * the step fails the same way. A fill with `secret` skips both checks: it is the one step that may type a password.
  */
-async function withoutPasswords(ctx: StepContext, locator: PwLocator, act: () => Promise<unknown>): Promise<void> {
+async function withoutPasswords(ctx: StepContext, locator: PwLocator, act: () => Promise<unknown>, allowPassword = false): Promise<void> {
+  if (allowPassword) return void await act();
   if (await passwordControl(locator, false)) refusePassword(ctx);
   try {
     await act();
@@ -187,10 +189,36 @@ const click: Handler = async (ctx, step, state, timeout) => {
   return candidate;
 };
 
+/** Rendered values of fill.secret steps, per run masker: the masker holds them, so renderVars would refuse a second use. */
+const typedSecrets = new WeakMap<Masker, Set<string>>();
+
+/**
+ * The value of a fill with `secret`: only for signed steps, exactly one {{var.name}} template, never a Site Login
+ * credential (renderVars refuses it), and added to the run's masker before anything is typed.
+ */
+function renderSecretFill(ctx: StepContext, template: string): string {
+  if (!ctx.signed) {
+    ctx.violations.push({ kind: 'signin', url: ctx.masker.mask(shownUrl(ctx.page.url())).slice(0, 300), fatal: true });
+    throw new PolicyError(UNSIGNED_SECRET_FILL);
+  }
+  const m = SECRET_FILL_VALUE.exec(template);
+  if (!m) throw new Error(secretFillValue('fill.value'));
+  const known = typedSecrets.get(ctx.masker) ?? new Set<string>();
+  typedSecrets.set(ctx.masker, known);
+  const raw = Object.hasOwn(ctx.vars, m[1]) ? ctx.vars[m[1]] : undefined;
+  const value = typeof raw === 'string' && known.has(raw) ? raw : renderVars(template, ctx.vars, ctx.masker);
+  ctx.masker.add([value]);
+  known.add(value);
+  return value;
+}
+
 const fill: Handler = async (ctx, step, _state, timeout) => {
   const s = step as S<'fill'>;
+  const secret = s.fill.secret === true;
+  // Before the page is touched: an unsigned or malformed secret fill never locates its field.
+  const value = secret ? renderSecretFill(ctx, s.fill.value) : undefined;
   const { locator, candidate } = await resolveUnique(ctx.page, s.fill.field, timeout);
-  await withoutPasswords(ctx, locator, () => locator.fill(renderVars(s.fill.value, ctx.vars, ctx.masker), { timeout }));
+  await withoutPasswords(ctx, locator, () => locator.fill(value ?? renderVars(s.fill.value, ctx.vars, ctx.masker), { timeout }), secret);
   return candidate;
 };
 

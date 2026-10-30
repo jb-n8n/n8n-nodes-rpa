@@ -223,11 +223,23 @@ describe('the step-document JSON Schema', () => {
       ['optional as a string', doc(step({ click: loc, optional: 'yes' }))],
       ['a when without visible', doc(step({ click: loc, when: {} }))],
       ['an unknown expect key', doc(step({ click: loc, expect: { title: 'T' } }))],
+      ['a secret fill with text around the template', doc(step({ fill: { field: loc, value: 'x{{var.p}}', secret: true } }))],
+      ['a secret fill with a literal', doc(step({ fill: { field: loc, value: 'literal', secret: true } }))],
+      ['a secret that is not a boolean', doc(step({ fill: { field: loc, value: '{{var.p}}', secret: 'yes' } }))],
+      ['secret on select', doc(step({ select: { field: loc, value: '{{var.p}}', secret: true } }))],
     ];
     expect(invalid.length).toBeGreaterThanOrEqual(10);
     for (const [what, d] of invalid) {
       expect(parses(d), `parseScript accepts ${what}`).toBe(false);
       expect(validateDocument(d), `the schema accepts ${what}`).toBe(false);
+    }
+  });
+
+  it('the schema accepts a secret fill with one var template, spaces included, and secret: false with any value', () => {
+    const doc = (value: string, secret: boolean) => ({ startUrl: URL_BASE, steps: [{ intent: 'x', fill: { field: loc, value, secret } }] });
+    for (const d of [doc('{{var.pw}}', true), doc('{{ var.pw }}', true), doc('literal', false)]) {
+      expect(parses(d)).toBe(true);
+      expect(validateDocument(d), errorsOf(validateDocument)).toBe(true);
     }
   });
 

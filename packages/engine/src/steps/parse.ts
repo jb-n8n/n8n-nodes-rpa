@@ -1,8 +1,9 @@
 import { DESKTOP_VERBS, STEP_VERBS, type DesktopScript, type DesktopVerb, type Script, type Step, type StepVerb } from '../types.js';
 import {
   BROWSER_STEPS_NEED_BROWSER, browserLocatorOnDesktop, browserStepOnDesktop, DESKTOP_STEPS_NEED_RUNNER, desktopLocatorInBrowser, exportDirOnlyInFill,
-  FIRST_STEP_GOTO, reservedTemplate,
+  FIRST_STEP_GOTO, reservedTemplate, secretFillValue,
 } from '../messages.js';
+import { SECRET_FILL_VALUE } from '../secrets/render.js';
 import { DESKTOP_WRITE_VERBS, READ_NAME, stepChordProblem } from './desktop-vocabulary.js';
 
 export class ScriptShapeError extends Error {
@@ -188,11 +189,15 @@ function checkStep(s: unknown, path: string, issues: string[], nested: boolean) 
     case 'fill':
     case 'select':
       if (!isObj(v)) { issues.push(`${p} must be an object`); break; }
-      checkKeys(v, ['field', 'value'], p, issues);
+      checkKeys(v, verb === 'fill' ? ['field', 'value', 'secret'] : ['field', 'value'], p, issues);
       checkLocator(v.field, `${p}.field`, issues);
       if (verb === 'select' && Array.isArray(v.value)) {
         if (v.value.length === 0 || v.value.length > 100 || !v.value.every((x) => typeof x === 'string')) issues.push(`${p}.value must be a string or a non-empty array of at most 100 strings`);
       } else if (typeof v.value !== 'string') issues.push(`${p}.value must be a string${verb === 'select' ? ' or an array of strings' : ''}`);
+      if (verb === 'fill' && v.secret !== undefined) {
+        if (typeof v.secret !== 'boolean') issues.push(`${p}.secret must be a boolean`);
+        else if (v.secret && typeof v.value === 'string' && !SECRET_FILL_VALUE.test(v.value)) issues.push(secretFillValue(`${p}.value`));
+      }
       break;
     case 'check':
       if (!isObj(v)) { issues.push(`${p} must be an object`); break; }
