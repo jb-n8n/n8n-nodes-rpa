@@ -1,6 +1,6 @@
 // A small typed stand-in for n8n's execute context: only what the operations use (NodeContext).
 import {
-  NodeConnectionTypes, type ContextType, type IBinaryData, type ICredentialDataDecryptedObject, type IContextObject, type IDataObject, type INode,
+  NodeConnectionTypes, type ContextType, type ExecuteWorkflowData, type IExecuteWorkflowInfo, type IBinaryData, type ICredentialDataDecryptedObject, type IContextObject, type IDataObject, type INode,
   type INodeCredentials, type INodeExecutionData, type INodeParameters, type NodeTypeAndVersion,
 } from 'n8n-workflow';
 import type { NodeContext } from '../nodes/Playwright/context.js';
@@ -28,6 +28,8 @@ export interface HarnessOptions {
   nodeName?: string;
   /** What getBinaryMetadata returns as fileSize, by binary data id (filesystem-stored binaries carry an id, not the bytes). */
   binaryFileSizes?: Record<string, number>;
+  /** Stands in for n8n's executeWorkflow (a sub-workflow run). Absent: calling it throws. */
+  executeWorkflow?: (workflowInfo: IExecuteWorkflowInfo, inputData?: INodeExecutionData[]) => Promise<ExecuteWorkflowData>;
 }
 export interface Harness extends NodeContext {
   readonly modelRequests: number;
@@ -137,6 +139,10 @@ export function harness(o: HarnessOptions): Harness {
     getExecutionCancelSignal: () => o.signal,
     continueOnFail: () => o.continueOnFail ?? false,
     getExecutionId: () => 'exec-1',
+    async executeWorkflow(workflowInfo: IExecuteWorkflowInfo, inputData?: INodeExecutionData[]): Promise<ExecuteWorkflowData> {
+      if (!o.executeWorkflow) throw new Error('executeWorkflow is not set up in this test');
+      return o.executeWorkflow(workflowInfo, inputData);
+    },
     helpers: {
       async prepareBinaryData(binaryData: Buffer, filePath?: string, mimeType?: string): Promise<IBinaryData> {
         return { data: binaryData.toString('base64'), mimeType: mimeType ?? 'application/octet-stream', ...(filePath ? { fileName: filePath } : {}), bytes: binaryData.length };

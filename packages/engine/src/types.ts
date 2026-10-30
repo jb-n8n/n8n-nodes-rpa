@@ -56,8 +56,29 @@ export interface SignInSpec {
   next?: Locator;
   password: Locator;
   submit: Locator;
-  totp?: { field: Locator; submit: Locator };
+  totp?: {
+    field: Locator;
+    submit: Locator;
+    /**
+     * Where the code comes from. 'seed' (default): generated from the Site Login's TOTP secret. 'workflow': asked of the
+     * run's codeProvider (in n8n, a sub-workflow) once the code field shows; no TOTP secret is needed.
+     */
+    source?: 'seed' | 'workflow';
+  };
 }
+
+/** What a run tells the code provider when it asks for a one-time code. */
+export interface CodeRequest {
+  /** When the code field showed and the code was asked for (ISO 8601). */
+  requestedAt: string;
+}
+/**
+ * Supplies the one-time code for a signIn whose totp.source is 'workflow'. Resolves to 6 to 10 digits (spaces allowed,
+ * they are removed). Its error message is shown in the run's failure, so it must never contain the code.
+ */
+export type CodeProvider = (req: CodeRequest) => Promise<string>;
+/** How long a run waits for the code provider by default. */
+export const DEFAULT_CODE_TIMEOUT_MS = 120_000;
 export interface SubmitTarget {
   path: string;
   host?: string;

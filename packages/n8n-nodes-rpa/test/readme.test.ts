@@ -358,9 +358,18 @@ describe('README', () => {
       'six rules', 'compiles', '`detect.require`', 'absolute `goto`', 'parses as a URL', 'stricter than Run Steps', '`http:host`', 'UTF-16', '`{{$...}}`']) expect(at, text).toContain(text);
   });
 
+  it('documents the One-Time Code Workflow in the Run Steps reference', () => {
+    const ref = section('## Run Steps reference');
+    const options = ref.split('\n').find((l) => l.startsWith('| **Options** |')) ?? '';
+    expect(options).toContain('**One-Time Code Workflow**, **Code Timeout (Seconds)** (120)');
+    const at = ref.slice(ref.indexOf('**Code from a workflow.**'));
+    for (const text of ['`"source": "workflow"`', '**Execute Workflow Trigger**', '`{ requestedAt }`', 'exactly one item whose `code` is 6 to 10 digits',
+      'never appears in the output, logs or errors', 'runs the workflow once more', '`auth_blocked`', 'a configuration error']) expect(at, text).toContain(text);
+  });
+
   it('documents signIn.next in the Run Steps reference and both login pages in the safety model', () => {
     const ref = section('## Run Steps reference');
-    expect(ref).toContain('| `signIn` | `{ username, next?, password, submit, totp? }` needs a Site Login |');
+    expect(ref).toContain('| `signIn` | `{ username, next?, password, submit, totp? }` needs a Site Login; `totp` is `{ field, submit, source? }` |');
     const at = ref.slice(ref.indexOf('**Two-page sign-in.**'));
     for (const text of ['`signIn.next` is the button between them', 'only when the password field shows on a listed login page',
       'a rejected username stops the run before the password is typed', 'an ordinary `click` step with `when`',

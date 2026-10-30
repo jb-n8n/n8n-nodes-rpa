@@ -175,9 +175,10 @@ function checkStep(s: unknown, path: string, issues: string[], nested: boolean) 
       if (v.totp !== undefined) {
         if (!isObj(v.totp)) issues.push(`${p}.totp must be an object`);
         else {
-          checkKeys(v.totp, ['field', 'submit'], `${p}.totp`, issues);
+          checkKeys(v.totp, ['field', 'submit', 'source'], `${p}.totp`, issues);
           checkLocator(v.totp.field, `${p}.totp.field`, issues);
           checkLocator(v.totp.submit, `${p}.totp.submit`, issues);
+          if (v.totp.source !== undefined && v.totp.source !== 'seed' && v.totp.source !== 'workflow') issues.push(`${p}.totp.source must be "seed" or "workflow"`);
         }
       }
       for (const [k, loc] of [['username', v.username], ['next', v.next], ['password', v.password], ['submit', v.submit], ['totp.field', (v.totp as Obj | undefined)?.field], ['totp.submit', (v.totp as Obj | undefined)?.submit]] as const) {

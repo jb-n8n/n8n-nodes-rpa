@@ -2,7 +2,7 @@ import type { Page } from 'playwright-core';
 import { openSession, violationMessage, type Session, type StorageState } from '../browser/session.js';
 import { PolicyError } from '../steps/errors.js';
 import { classifyFailure, DETECTED_PREFIX, shownFailure, stripShownPrefix, toErrorCode } from '../classify/classify.js';
-import { BLOCKED_STOP, inputTooLong } from '../messages.js';
+import { BLOCKED_STOP, CODE_WORKFLOW_NOT_SET, inputTooLong } from '../messages.js';
 import { effectivePolicy } from '../policy/derive.js';
 import { loginDetectIndex } from '../policy/login-block.js';
 import { loginBlockEnd, validateScript } from '../policy/validate.js';
@@ -18,7 +18,7 @@ import { parseScript } from '../steps/parse.js';
 import { newRunState, runSteps, type StepContext } from '../steps/run.js';
 import { stopTrace, wantTrace, type SaveTrace } from '../trace/trace.js';
 import type {
-  BrowserEndpoint, DownloadedFile, ErrorCode, OutputSpec, PageInfo, PortalPolicy, PortalSecrets, RequestRecord, Row, RunState, Script,
+  BrowserEndpoint, CodeProvider, DownloadedFile, ErrorCode, OutputSpec, PageInfo, PortalPolicy, PortalSecrets, RequestRecord, Row, RunState, Script,
   StepFailure, StepLogEntry, StepOutput, Violation,
 } from '../types.js';
 import { verifyRows } from '../verify/verify.js';
@@ -38,6 +38,10 @@ export interface ScriptLaneInput {
   policy: PortalPolicy;
   /** Site Login secrets; absent without a Site Login. */
   secrets?: PortalSecrets;
+  /** Supplies the one-time code for a signIn whose totp.source is 'workflow'. Required by such steps (CODE_WORKFLOW_NOT_SET). */
+  codeProvider?: CodeProvider;
+  /** How long signIn waits for codeProvider, in ms (default 120 000). */
+  codeTimeoutMs?: number;
   /** Browser viewport; Playwright's default when absent. */
   viewport?: { width: number; height: number };
   vars?: Record<string, string>;
@@ -91,6 +95,27 @@ export type LaneFailure = {
 export type LaneResult = LaneSuccess | LaneFailure;
 
 export { screenshotMasks } from '../steps/masks.js';
+
+/**
+ * Whether a raw step document has a signIn whose code comes from the workflow (totp.source 'workflow'). signIn is only
+ * allowed at the top level. Never throws.
+ */
+export function takesCodeFromWorkflow(raw: unknown): boolean {
+  const steps = Array.isArray(raw) ? raw : raw && typeof raw === 'object' ? (raw as { steps?: unknown }).steps : undefined;
+  if (!Array.isArray(steps)) return false;
+  return steps.some((s) => {
+    const totp = (s as { signIn?: { totp?: { source?: unknown } } } | null)?.signIn?.totp;
+    return !!totp && typeof totp === 'object' && totp.source === 'workflow';
+  });
+}
+
+/** The run's code provider settings for a step context: only the ones that are set. */
+export function codeSettings(input: { codeProvider?: CodeProvider; codeTimeoutMs?: number }): { codeProvider?: CodeProvider; codeTimeoutMs?: number } {
+  return {
+    ...(input.codeProvider ? { codeProvider: input.codeProvider } : {}),
+    ...(input.codeTimeoutMs !== undefined ? { codeTimeoutMs: input.codeTimeoutMs } : {}),
+  };
+}
 
 /** The run masker: every Site Login secret (when attached), the endpoint token and the signing key. */
 export function laneMasker(input: { secrets?: PortalSecrets; endpoint: BrowserEndpoint; signingKey?: string }): Masker {
@@ -229,7 +254,7 @@ async function executeScript(
 
   const ctx: StepContext = {
     page: session.page, script, policy: input.policy, secrets: input.secrets, vars: input.vars ?? {},
-    masker, defaultTimeoutMs, violations: session.violations, interrupts, stepHooks: session.stepHooks,
+    masker, defaultTimeoutMs, violations: session.violations, interrupts, stepHooks: session.stepHooks, ...codeSettings(input),
     ...(input.output?.emptyPattern ? { emptyPattern: input.output.emptyPattern } : {}),
     ...(session.writeWindow ? { writeWindow: session.writeWindow } : {}),
     armSubmit: (target) => session.armSubmit(target),
@@ -338,6 +363,10 @@ export async function startScriptLane(
   }
   const version = script.version;
   const hash = scriptHash(input.script);
+  // Steps that take the sign-in code from a workflow cannot run without one: refused before any browser opens.
+  if (!input.codeProvider && takesCodeFromWorkflow(input.script)) {
+    return { run: { result: laneFailure(t0, masker, 'policy_violation', CODE_WORKFLOW_NOT_SET, { version, hash }) } };
+  }
   // The policy the run uses: block-and-log writes only for unsigned steps without a Site Login, and
   // for Run Steps without a Site Login the declared submit / download.via targets on navigation hosts as the allowed
   // submissions. Built before validation: its allowedSubmits are what the declared targets are checked against.

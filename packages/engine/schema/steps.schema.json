@@ -215,7 +215,8 @@
               "required": ["field", "submit"],
               "properties": {
                 "field": { "$ref": "#/definitions/locatorNoFrame" },
-                "submit": { "$ref": "#/definitions/locatorNoFrame" }
+                "submit": { "$ref": "#/definitions/locatorNoFrame" },
+                "source": { "enum": ["seed", "workflow"], "description": "Where the code comes from: \"seed\" (default) generates it from the Site Login's TOTP secret; \"workflow\" asks the node's One-Time Code Workflow once the code field shows." }
               },
               "additionalProperties": false
             }
