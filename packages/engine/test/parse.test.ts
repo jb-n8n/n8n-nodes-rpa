@@ -200,3 +200,35 @@ describe('locator variables and multi-select', () => {
     expect(issues(['{{$exportDir}}']).join('\n')).toMatch(/\{\{\$/);
   });
 });
+
+describe('run variables in locators of write steps', () => {
+  const V = { role: 'button', name: '{{var.who}}' };
+  const si = (over: Record<string, unknown> = {}) => ({
+    intent: 'In', signIn: { username: { label: 'U' }, password: { label: 'P' }, submit: { role: 'button', name: 'Go' }, ...over },
+  });
+  const refused = (step: unknown, at: RegExp) => expect(issuesOf(withStep(step)).join('\n')).toMatch(at);
+  it('refuses {{var.*}} in every signIn locator', () => {
+    for (const k of ['username', 'next', 'password', 'submit']) refused(si({ [k]: V }), new RegExp(`steps\\[0\\]\\.signIn\\.${k}`));
+    refused(si({ username: { role: 'textbox', name: 'a', within: { text: '{{ var.x }}' }, } }), /var/);
+    refused(si({ username: { text: '{{var.x}}' } }), /signIn\.username/);
+    for (const k of ['field', 'submit']) refused(si({ totp: { field: { label: 'C' }, submit: { text: 'ok' }, [k]: V } }), new RegExp(`signIn\\.totp\\.${k}`));
+    refused(si({ submit: { role: 'button', name: 'Go', fallbacks: [{ text: '{{var.x}}' }] } }), /signIn\.submit\.fallbacks/);
+  });
+  it('refuses {{var.*}} in submit and download locators, also in when and expect and nested in paginate', () => {
+    refused({ intent: 'S', submit: { path: '/x', button: V } }, /steps\[0\]\.submit\.button/);
+    refused({ intent: 'D', download: { trigger: V } }, /steps\[0\]\.download\.trigger/);
+    refused({ intent: 'D', download: { trigger: { text: 'x' }, via: { path: '/d' } }, when: { visible: V } }, /steps\[0\]\.when/);
+    refused({ intent: 'D', download: { trigger: { text: 'x' } }, expect: { visible: V } }, /steps\[0\]\.expect/);
+    const nested = { intent: 'P', paginate: { next: { text: 'N' }, until: 'absent', max: 2, each: [{ intent: 'D', download: { trigger: V } }] } };
+    refused(nested, /each\[0\]\.download\.trigger/);
+  });
+  it('still allows a variable in a non-write click, waitFor, extract and fill value', () => {
+    for (const step of [
+      { intent: 'C', click: V },
+      { intent: 'W', waitFor: { target: { text: '{{var.t}}' } } },
+      { intent: 'E', extract: { scope: { css: 'table' }, item: V } },
+      { intent: 'F', fill: { field: { label: 'Q' }, value: '{{var.q}}' } },
+      { intent: 'D', download: { trigger: { text: 'x' }, via: { path: '/d/{{var.id}}' } } },
+    ]) expect(issuesOf(withStep(step))).toEqual([]);
+  });
+});

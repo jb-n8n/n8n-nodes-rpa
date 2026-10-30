@@ -127,6 +127,8 @@ export const PASSWORD_FILL_REFUSED = 'Fill and Submit Form cannot fill password 
 export const PASSWORD_FILL_REFUSED_STEPS = 'fill cannot type into a password field: passwords are typed only by signIn with a Site Login';
 export const formPostsElsewhere = (host: string, hosts: string[]): string => `the form posts to ${host}, which is not allowed. This run only submits to ${hosts.join(', ')}.`;
 export const WINDOW_STEP_NOT_CLICK = 'the write window must be on a click step';
+/** A {{var.x}} in a locator of a step that writes or types secrets: a run variable must never steer a write. */
+export const varInWriteLocator = (at: string): string => `${at}: {{var.*}} is not allowed in a locator of a step that writes or signs in; use a fixed locator`;
 export const renderedTooLong = (n: number): string => `limit: a rendered value is longer than ${n} characters`;
 export const inputTooLong = (name: string, n: number): string => `limit: input "${name}" is longer than ${n} characters`;
 

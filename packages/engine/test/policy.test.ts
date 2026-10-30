@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { SIGNIN_NEEDS_SITE_LOGIN, WINDOW_STEP_NOT_CLICK } from '../src/messages.js';
-import { loginBlockEnd, MAX_LITERAL_LOAD, MAX_LITERAL_PROPOSAL, validateScript } from '../src/policy/validate.js';
+import { SIGNIN_NEEDS_SITE_LOGIN, varInWriteLocator, WINDOW_STEP_NOT_CLICK } from '../src/messages.js';
+import { loginBlockEnd, MAX_LITERAL_LOAD, MAX_LITERAL_PROPOSAL, MAX_SELECT_VALUES, MAX_SELECT_TOTAL, validateScript } from '../src/policy/validate.js';
 import { parseScript } from '../src/steps/parse.js';
 import type { Script, Step } from '../src/types.js';
 import { baselineScript, policyFor, reportScript, SECRETS } from './helpers.js';
@@ -46,6 +46,26 @@ describe('validateScript', () => {
     const pick = add(baselineScript(portal.url), { intent: 'Pick', select: { field: { css: '#s' }, value: 'y'.repeat(1025) } });
     expect(validateScript(pick, ctx).violations).toEqual(['limit: step "Pick": value is longer than 1024 characters']);
     expect([MAX_LITERAL_PROPOSAL, MAX_LITERAL_LOAD]).toEqual([64, 1024]);
+  });
+  it('caps each element, the element count and the total length of a multi-select value', () => {
+    const pick = (value: string[], intent = 'Pick') => add(baselineScript(portal.url), { intent, select: { field: { css: '#s' }, value } });
+    expect(validateScript(pick(['a', 'b']), ctx).ok).toBe(true);
+    expect(validateScript(pick(['y'.repeat(1024)]), ctx).ok).toBe(true);
+    expect(validateScript(pick(['a', 'y'.repeat(1025)]), ctx).violations).toEqual(['limit: step "Pick": value is longer than 1024 characters']);
+    expect(validateScript(pick(['a', 'y'.repeat(65)]), { ...ctx, mode: 'proposal' }).violations).toContain('limit: step "Pick": value is longer than 64 characters');
+    expect(validateScript(pick(Array(MAX_SELECT_VALUES).fill('a')), ctx).ok).toBe(true);
+    expect(validateScript(pick(Array(MAX_SELECT_VALUES + 1).fill('a')), ctx).violations).toEqual([`limit: step "Pick": more than ${MAX_SELECT_VALUES} values`]);
+    const long = Array(MAX_SELECT_VALUES).fill('z'.repeat(MAX_SELECT_TOTAL / MAX_SELECT_VALUES + 1));
+    expect(validateScript(pick(long), ctx).violations).toEqual([`limit: step "Pick": values are together longer than ${MAX_SELECT_TOTAL} characters`]);
+    expect([MAX_SELECT_VALUES, MAX_SELECT_TOTAL]).toEqual([50, 4096]);
+  });
+  it('refuses {{var.*}} in the locators of the write window step, allows it elsewhere', () => {
+    const base = baselineScript(portal.url);
+    const win = (step: number, s: Script) => validateScript(s, { ...ctx, policy: { ...policy, writeWindow: { step, maxPosts: 3, hosts: [portal.host] } } });
+    const clickAt = (i: number, click: { role: string; name: string }) => ({ ...base, steps: base.steps.map((st, j) => (j === i ? ({ ...st, click } as Step) : st)) });
+    const s3 = clickAt(3, { role: 'button', name: '{{var.who}}' });
+    expect(win(3, s3).violations).toEqual([varInWriteLocator('step "' + s3.steps[3].intent + '"')]);
+    expect(win(1, s3).ok).toBe(true); // not the window step: the variable is a plain locator
   });
   it('the write window must sit on a top-level click step', () => {
     const at = (step: number) => validateScript(baselineScript(portal.url), { ...ctx, policy: { ...policy, writeWindow: { step, maxPosts: 3, hosts: [portal.host] } } });
