@@ -12,18 +12,27 @@ public sealed class Harness : IDisposable
 {
     public const string RunId = "run-1";
 
-    public Harness(string? policyJson = null, bool realTime = true)
+    /// <param name="policyExtra">Fields added to the default policy, each with a leading comma (<c>, "clipboardRead": true</c>).</param>
+    /// <param name="helpers">The default policy also allows <see cref="HelperPattern"/> as a helper process.</param>
+    /// <param name="fileLog">Log to <see cref="LogDir"/> (so a test can read what the runner logged).</param>
+    public Harness(string? policyJson = null, bool realTime = true, string policyExtra = "", bool helpers = false, bool fileLog = false)
     {
         Root = Directory.CreateTempSubdirectory("rpa-runner-test-").FullName;
         AppPath = Path.Combine(Root, "apps", "ErpDemo.exe");
+        HelperPattern = Path.Combine(Root, "EdgeWebView", "Application", "*", "msedgewebview2.exe");
+        LogDir = Path.Combine(Root, "logs");
+        Log = fileLog ? new RunnerLog(LogDir, console: false) : RunnerLog.Silent;
         Directory.CreateDirectory(Path.GetDirectoryName(AppPath)!);
         File.WriteAllText(AppPath, "fake");
+        var helperPolicy = helpers
+            ? $$""", "helperProcesses": [{ "exe": "msedgewebview2.exe", "pathPattern": {{JsonSerializer.Serialize(HelperPattern)}} }]"""
+            : "";
         Policy = RunnerPolicy.Parse(policyJson ?? $$"""
             {
               "allowedApps": [{ "exe": "ErpDemo.exe", "path": {{JsonSerializer.Serialize(AppPath)}}, "allowedArgs": [["--ui", "v2"]] }],
               "writeControls": [{ "exe": "ErpDemo.exe", "automationId": "btnPost" }],
               "gatedKeys": ["Ctrl+S", "F11"],
-              "maxFileBytes": 1024
+              "maxFileBytes": 1024{{helperPolicy}}{{policyExtra}}
             }
             """);
         Time = realTime ? null : new FakeTimeProvider(DateTimeOffset.Parse("2026-10-29T10:00:00Z"));
@@ -35,12 +44,25 @@ public sealed class Harness : IDisposable
 
     public string Root { get; }
     public string AppPath { get; }
+
+    /// <summary>A WebView2-style helper path pattern under the root: <c>EdgeWebView/Application/*/msedgewebview2.exe</c>.</summary>
+    public string HelperPattern { get; }
+
+    /// <summary>Where the log goes with <c>fileLog</c>.</summary>
+    public string LogDir { get; }
+
+    /// <summary>A path <see cref="HelperPattern"/> matches: a version folder in place of the star.</summary>
+    public string HelperPath(string version = "156.0.4314.56") => HelperPattern.Replace("*", version, StringComparison.Ordinal);
+
+    /// <summary>Everything logged so far (with <c>fileLog</c>).</summary>
+    public string LogText() =>
+        Directory.Exists(LogDir) ? string.Concat(Directory.GetFiles(LogDir).Select(File.ReadAllText)) : "";
     public RunnerPolicy Policy { get; }
     public FakeTimeProvider? Time { get; }
     public FakeDesktop Desktop { get; } = new();
     public FakeProcessHost Processes { get; } = new();
     public FakePathSecurity Paths { get; } = new();
-    public RunnerLog Log { get; } = RunnerLog.Silent;
+    public RunnerLog Log { get; }
     public RunManager Runs { get; }
     public RunnerService Service { get; }
     public RpcDispatcher Dispatcher { get; }

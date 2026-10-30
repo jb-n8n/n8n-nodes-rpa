@@ -51,7 +51,14 @@ public sealed class RunState
     {
         get { lock (_gate) return _pids.ToArray(); }
     }
+
+    /// <summary>The run's most recent act: the clipboard's sequence number right before it, and when it finished (or
+    /// started, while it is still running). Null before the run's first act. clipboard.read compares against it.</summary>
+    internal ActMark? LastAct { get; set; }
 }
+
+/// <summary>The clipboard's sequence number before an act of the run, and the time of that act.</summary>
+internal sealed record ActMark(uint ClipboardSequence, DateTimeOffset At);
 
 /// <summary>
 /// One run at a time (the run lock), held under a lease. run.heartbeat renews the lease, and so does the end of every

@@ -5,8 +5,9 @@ using Rpa.Runner.Core.Protocol;
 namespace Rpa.Runner.Core.Policy;
 
 /// <summary>
-/// The local policy file (the floor n8n cannot lower): allowed applications, write controls, gated keys and the file
-/// size limit. Read once at start. Unknown fields are refused so a misspelt key cannot silently switch a check off.
+/// The local policy file (the floor n8n cannot lower): allowed applications, helper processes, write controls, gated
+/// keys, the file size limit and whether a run may read the clipboard. Read once at start. Unknown fields are refused
+/// so a misspelt key cannot silently switch a check off.
 /// </summary>
 public sealed class RunnerPolicy
 {
@@ -20,6 +21,10 @@ public sealed class RunnerPolicy
     public IReadOnlyList<WriteControl> WriteControls { get; init; } = [];
     public IReadOnlyList<KeyChord> GatedKeys { get; init; } = [];
     public long MaxFileBytes { get; init; } = DefaultMaxFileBytes;
+    public IReadOnlyList<HelperProcess> HelperProcesses { get; init; } = [];
+
+    /// <summary><c>clipboardRead</c> (default false): whether clipboard.read may read the clipboard's text.</summary>
+    public bool ClipboardRead { get; init; }
 
     /// <summary>
     /// An application app.launch may start. <c>exe</c> is the file name that app.launch requests and window checks match
@@ -33,12 +38,49 @@ public sealed class RunnerPolicy
 
     public sealed record WriteControl(string Exe, string AutomationId);
 
+    /// <summary>
+    /// A process an allowed app starts to host its UI (a WebView2 app's <c>msedgewebview2.exe</c>). It counts as the
+    /// run's only while it descends from a process the run launched, and app.launch never starts it. <c>pathPattern</c>
+    /// is an absolute local path ending in <c>exe</c> with exactly one segment that is <c>*</c>, which matches any one
+    /// folder name (the runtime's version folder, which changes on every update).
+    /// </summary>
+    public sealed record HelperProcess(string Exe, string PathPattern)
+    {
+        internal string[] Segments { get; } = SplitPath(PathPattern);
+
+        public bool Matches(string fullPath)
+        {
+            var parts = SplitPath(fullPath);
+            if (parts.Length != Segments.Length) return false;
+            for (var i = 0; i < parts.Length; i++)
+            {
+                if (Segments[i] == "*")
+                {
+                    if (parts[i].Length == 0 || parts[i] is "." or "..") return false;
+                }
+                else if (!string.Equals(Segments[i], parts[i], StringComparison.OrdinalIgnoreCase)) return false;
+            }
+            return true;
+        }
+    }
+
+    private static string[] SplitPath(string path) =>
+        path.Split([System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar]);
+
     private sealed class FileShape
     {
         public List<AppShape>? AllowedApps { get; set; }
         public List<WriteShape>? WriteControls { get; set; }
         public List<string>? GatedKeys { get; set; }
         public long? MaxFileBytes { get; set; }
+        public List<HelperShape>? HelperProcesses { get; set; }
+        public bool? ClipboardRead { get; set; }
+    }
+
+    private sealed class HelperShape
+    {
+        public string? Exe { get; set; }
+        public string? PathPattern { get; set; }
     }
 
     private sealed class AppShape
@@ -121,12 +163,43 @@ public sealed class RunnerPolicy
         var max = shape.MaxFileBytes ?? DefaultMaxFileBytes;
         if (max <= 0 || max > MaxFileBytesCeiling) throw new InvalidPolicyException($"{source}: maxFileBytes must be between 1 and {MaxFileBytesCeiling}");
 
-        return new RunnerPolicy { AllowedApps = apps, WriteControls = writes, GatedKeys = keys, MaxFileBytes = max };
+        var helpers = new List<HelperProcess>();
+        foreach (var hp in shape.HelperProcesses ?? [])
+        {
+            if (string.IsNullOrWhiteSpace(hp.Exe) || hp.Exe.IndexOfAny(['\\', '/', '*', '?']) >= 0)
+                throw new InvalidPolicyException($"{source}: helperProcesses[].exe must be a file name such as \"msedgewebview2.exe\"");
+            if (hp.PathPattern is null)
+                throw new InvalidPolicyException($"{source}: helperProcesses[].pathPattern is required (the absolute path of {hp.Exe}, one folder written as *)");
+            if (IsUncOrDevice(hp.PathPattern) || !System.IO.Path.IsPathFullyQualified(hp.PathPattern))
+                throw new InvalidPolicyException($"{source}: helperProcesses[].pathPattern must be an absolute local path (no UNC or device paths)");
+            var full = System.IO.Path.GetFullPath(hp.PathPattern);
+            var segments = SplitPath(full);
+            if (!string.Equals(segments[^1], hp.Exe, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidPolicyException($"{source}: helperProcesses[].pathPattern must end in the exe file name");
+            if (segments.Count(x => x == "*") != 1 || segments.Any(x => x != "*" && x.IndexOfAny(['*', '?']) >= 0))
+                throw new InvalidPolicyException($"{source}: helperProcesses[].pathPattern must have exactly one folder written as * and no other wildcards");
+            helpers.Add(new HelperProcess(hp.Exe, full));
+        }
+
+        return new RunnerPolicy
+        {
+            AllowedApps = apps, WriteControls = writes, GatedKeys = keys, MaxFileBytes = max, HelperProcesses = helpers,
+            ClipboardRead = shape.ClipboardRead ?? false,
+        };
     }
 
     /// <summary>True when the full path is one of the allowedApps entries' pinned paths.</summary>
     public bool IsAllowedPath(string? fullPath) =>
         fullPath is not null && AllowedApps.Any(a => string.Equals(a.Path, System.IO.Path.GetFullPath(fullPath), StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>True when the full path matches one of the helperProcesses entries (its exe and its pattern).</summary>
+    public bool IsHelperPath(string? fullPath)
+    {
+        if (fullPath is null || HelperProcesses.Count == 0) return false;
+        var full = System.IO.Path.GetFullPath(fullPath);
+        var name = System.IO.Path.GetFileName(full);
+        return HelperProcesses.Any(h => string.Equals(h.Exe, name, StringComparison.OrdinalIgnoreCase) && h.Matches(full));
+    }
 
     public bool IsAllowedExe(string? exeName) =>
         exeName is not null && AllowedApps.Any(a => string.Equals(a.Exe, exeName, StringComparison.OrdinalIgnoreCase));

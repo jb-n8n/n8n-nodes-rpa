@@ -91,7 +91,28 @@ public interface IDesktop
 
     /// <summary>A PNG of one window (its own pixels, not what overlaps it).</summary>
     byte[] CaptureWindowPng(IUiNode window);
+
+    /// <summary>
+    /// The clipboard's sequence number (GetClipboardSequenceNumber): it changes every time the clipboard's content
+    /// changes. 0 when the runner cannot see the clipboard.
+    /// </summary>
+    uint GetClipboardSequenceNumber();
+
+    /// <summary>
+    /// Opens the clipboard and, while it is open, calls <paramref name="check"/> with the process that owns it (the
+    /// process of its owner window, null when no window owns it) and its sequence number. <paramref name="check"/>
+    /// throws to refuse; then no text is read. Otherwise returns the clipboard's Unicode text, at most
+    /// <paramref name="maxChars"/> + 1 characters (so the caller can tell longer text), or null when it holds no text.
+    /// Throws <see cref="RetryableActionException"/> while another application holds the clipboard open. Callers never
+    /// log the text.
+    /// </summary>
+    string? ReadClipboardText(int maxChars, Action<ClipboardState> check);
 }
+
+/// <summary>Who owns the clipboard and its sequence number, read while the clipboard is open.</summary>
+/// <param name="OwnerProcessId">The process of the clipboard's owner window; null when no window owns it.</param>
+/// <param name="SequenceNumber">GetClipboardSequenceNumber at that moment.</param>
+public readonly record struct ClipboardState(int? OwnerProcessId, uint SequenceNumber);
 
 /// <summary>Starts, inspects and stops processes. The default implementation uses System.Diagnostics.Process.</summary>
 public interface IProcessHost

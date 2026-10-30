@@ -165,6 +165,32 @@ internal sealed class Scenario(Uri url, string token, string fingerprint, string
                 Expect(cell == "1000-0001", $"the first grid cell is 1000-0001 (got \"{cell}\")");
             });
 
+            await Step("clipboard.read returns the run's app's fresh copy, refuses another application's, never logs the text", async () =>
+            {
+                // The policy sets clipboardRead. The app's Copy button puts the detail on the clipboard: the app's
+                // process owns it and the clipboard changed since the act began.
+                const string detail1 = "1000-0001 2026-01-05 Granite Tools 189.19 EUR Cleared";
+                await Act(TW(MainTitle, new { automationId = "btnCopyDetail" }), "click");
+                var text = await ReadClipboardAfterCopy();
+                Expect(text == detail1, $"the copied detail comes back as it is (got {text.Length} characters)");
+                // Another application (Windows PowerShell's Set-Clipboard, which opens no window) copies a secret while
+                // the run's window keeps the foreground: it owns the clipboard (or nobody does once it exited).
+                SetClipboard("hunter2 988 374");
+                var e = await ExpectError(-32003, () => Call("clipboard.read", new { runId = _runId }));
+                Observe($"another application's copy: {e.RunnerMessage}");
+                Expect(e.RunnerMessage.Contains("owns it", StringComparison.Ordinal) || e.RunnerMessage.Contains("no window owns the clipboard", StringComparison.Ordinal),
+                    "refused because a process outside the run (or no window) owns the clipboard");
+                Expect(!e.RunnerMessage.Contains("hunter2", StringComparison.Ordinal), "the refusal carries no clipboard text");
+                // An act that copies nothing: the clipboard has not changed since the run's last act.
+                await Read(TW(MainTitle, new { automationId = "txtDetail" }));
+                await ExpectError(-32003, () => Call("clipboard.read", new { runId = _runId }));
+                var logs = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "RPA Runner", "logs");
+                var logged = Directory.Exists(logs) ? string.Concat(Directory.GetFiles(logs).Select(f => { using var r = new StreamReader(new FileStream(f, FileMode.Open, FileAccess.Read, FileShare.ReadWrite)); return r.ReadToEnd(); })) : "";
+                Expect(logged.Contains("clipboard.read", StringComparison.Ordinal), "the runner logged the clipboard.read calls");
+                Expect(!logged.Contains("Granite Tools 189.19", StringComparison.Ordinal) && !logged.Contains("hunter2", StringComparison.Ordinal),
+                    "the runner's log never holds the clipboard text");
+            });
+
             ok = await Step("export via File > Export... to {exportDir} with segments", async () =>
             {
                 // WinForms menu items expose no automation id, so menus are found by name.
@@ -649,6 +675,34 @@ internal sealed class Scenario(Uri url, string token, string fingerprint, string
         {
             Console.WriteLine($"    (could not capture the failure state: {e.Message})");
         }
+    }
+
+    /// <summary>clipboard.read right after a copying act. UI Automation's Invoke may return before the app's click
+    /// handler has copied, so a refusal for an unchanged clipboard is retried for a moment.</summary>
+    private async Task<string> ReadClipboardAfterCopy()
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                return (await Call("clipboard.read", new { runId = _runId }))["text"]!.GetValue<string>();
+            }
+            catch (RunnerError e) when (attempt < 10 && e.Code == -32003 && e.RunnerMessage.Contains("has not changed", StringComparison.Ordinal))
+            {
+                await Task.Delay(200);
+            }
+        }
+    }
+
+    /// <summary>Puts Unicode text on the clipboard through Windows PowerShell (passed in the environment, never quoted
+    /// into a command line).</summary>
+    private static void SetClipboard(string text)
+    {
+        var psi = new ProcessStartInfo("powershell.exe") { UseShellExecute = false, CreateNoWindow = true };
+        foreach (var a in new[] { "-NoProfile", "-NonInteractive", "-Command", "Set-Clipboard -Value $env:RPA_SCENARIO_CLIPBOARD" }) psi.ArgumentList.Add(a);
+        psi.Environment["RPA_SCENARIO_CLIPBOARD"] = text;
+        using var p = Process.Start(psi) ?? throw new InvalidOperationException("powershell.exe did not start");
+        if (!p.WaitForExit(30000) || p.ExitCode != 0) throw new InvalidOperationException("Set-Clipboard failed");
     }
 
     private static bool Exited(int pid)

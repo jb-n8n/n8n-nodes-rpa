@@ -18,6 +18,15 @@ public sealed class RunnerService
     public const int DefaultMaxDepth = 25;
     public const long MaxTimeoutMs = 600000;
     public const int MaxWindows = 20;
+
+    /// <summary>The longest clipboard text clipboard.read returns; longer text is refused, never cut.</summary>
+    public const int MaxClipboardChars = 1000;
+
+    /// <summary>How long clipboard.read waits for another application to let go of the clipboard.</summary>
+    private static readonly TimeSpan ClipboardWait = TimeSpan.FromSeconds(2);
+
+    /// <summary>clipboard.read is allowed only this long after the run's most recent act.</summary>
+    public static readonly TimeSpan ClipboardFreshness = TimeSpan.FromSeconds(10);
     private const long DefaultActTimeoutMs = 10000;
     private const long DefaultFileTimeoutMs = 30000;
 
@@ -83,6 +92,7 @@ public sealed class RunnerService
         "windows" => WithRun(p, ct, Windows),
         "file.retrieve" => WithRun(p, ct, FileRetrieve, ui: false),
         "screenshot" => WithRun(p, ct, Screenshot),
+        "clipboard.read" => WithRun(p, ct, ClipboardRead),
         _ => throw new RpcException(RpcErrors.MethodNotFound, "method_not_found", "method not found"),
     };
 
@@ -213,6 +223,22 @@ public sealed class RunnerService
     }
 
     private JsonNode Act(RunState run, Params p, CancellationToken ct)
+    {
+        // Every act, before anything else: clipboard.read later needs the clipboard to have changed since this mark
+        // (the act's own copy), and the act to have finished at most ClipboardFreshness ago.
+        var mark = new ActMark(_desktop.GetClipboardSequenceNumber(), _time.GetUtcNow());
+        run.LastAct = mark;
+        try
+        {
+            return ActOnce(run, p, ct);
+        }
+        finally
+        {
+            run.LastAct = mark with { At = _time.GetUtcNow() };
+        }
+    }
+
+    private JsonNode ActOnce(RunState run, Params p, CancellationToken ct)
     {
         var action = p.ReqAction("action");
         // An extension to the contract: key may omit the target and goes to the run's focused element.
@@ -544,6 +570,67 @@ public sealed class RunnerService
         RequireSession();
         var window = _scope.CurrentWindow(run) ?? throw RpcErrors.NotFound("a window of the run", null);
         return new JsonObject { ["base64"] = Convert.ToBase64String(_desktop.CaptureWindowPng(window)) };
+    }
+
+    /// <summary>
+    /// The clipboard's text, for an app whose value is only available through a Copy button (a desktop authenticator
+    /// app). Off unless the policy sets clipboardRead, and only while one of the run's windows holds the foreground: the
+    /// run never brings its window back for a read, since the text on the clipboard may then be another application's.
+    /// The text must also be the run's own copy: a process of the run (helper processes included) owns the clipboard,
+    /// its content changed since the run's most recent act, and that act finished at most
+    /// <see cref="ClipboardFreshness"/> ago. So text another application or a person copied (a password) is never
+    /// returned. The text is never logged and never put in an error. Longer than <see cref="MaxClipboardChars"/> is
+    /// refused.
+    /// </summary>
+    private JsonNode ClipboardRead(RunState run, Params p, CancellationToken ct)
+    {
+        if (!_policy.ClipboardRead)
+            throw RpcErrors.PolicyRefused("reading the clipboard is off in the runner's policy (clipboardRead)");
+        RequireSession();
+        var fg = _desktop.GetForegroundWindow();
+        if (fg is null || !_scope.IsRunProcess(run, fg.ProcessId))
+        {
+            var holder = fg is null ? "no window" : $"a window of \"{_scope.ExeOf(fg.ProcessId) ?? "unknown"}\"";
+            throw RpcErrors.PolicyRefused($"the clipboard is read only while a window of the run holds the foreground, and {holder} holds it");
+        }
+        var last = run.LastAct
+            ?? throw RpcErrors.PolicyRefused("the clipboard is read only right after an act of the run copied to it, and the run has not acted yet");
+        var age = _time.GetUtcNow() - last.At;
+        if (age > ClipboardFreshness)
+            throw RpcErrors.PolicyRefused($"the clipboard is read only within {ClipboardFreshness.TotalSeconds:0} seconds after the run's last act, and {Math.Floor(age.TotalSeconds):0} seconds have passed");
+
+        // Runs while the clipboard is open, so the owner and the sequence number are those of the text read after it.
+        void Check(ClipboardState state)
+        {
+            if (state.OwnerProcessId is not int owner)
+                throw RpcErrors.PolicyRefused("the clipboard is read only when a process of the run put the text there, and no window owns the clipboard");
+            if (!_scope.IsRunProcess(run, owner))
+                throw RpcErrors.PolicyRefused($"the clipboard is read only when a process of the run put the text there, and a window of \"{_scope.ExeOf(owner) ?? "unknown"}\" owns it");
+            if (state.SequenceNumber == last.ClipboardSequence)
+                throw RpcErrors.PolicyRefused("the clipboard has not changed since the run's last act, so the text is not the run's copy");
+        }
+
+        var deadline = _time.GetUtcNow() + ClipboardWait;
+        string? text;
+        while (true)
+        {
+            try
+            {
+                text = _desktop.ReadClipboardText(MaxClipboardChars, Check);
+                break;
+            }
+            catch (RetryableActionException e)
+            {
+                if (_time.GetUtcNow() >= deadline) throw RpcErrors.Timeout($"{e.Message} (clipboard.read)");
+                ct.ThrowIfCancellationRequested();
+                Thread.Sleep(TargetResolver.PollInterval);
+            }
+        }
+        text ??= "";
+        if (text.Length > MaxClipboardChars)
+            throw RpcErrors.PolicyRefused($"the clipboard holds more than {MaxClipboardChars} characters");
+        _log.Info($"clipboard.read chars={text.Length}");
+        return new JsonObject { ["text"] = text };
     }
 
     private TimeSpan Remaining(DateTimeOffset deadline)

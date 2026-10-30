@@ -142,6 +142,49 @@ public sealed class FakeDesktop : IDesktop
     }
 
     public byte[] CaptureWindowPng(IUiNode window) => [0x89, 0x50, 0x4E, 0x47];
+
+    /// <summary>The clipboard's Unicode text (null: no text on it). Setting it alone changes neither the owner nor the
+    /// sequence number; <see cref="Copy"/> does what an application's copy does.</summary>
+    public string? ClipboardText { get; set; }
+
+    /// <summary>The process of the clipboard's owner window (null: no window owns it).</summary>
+    public int? ClipboardOwnerPid { get; set; }
+
+    /// <summary>GetClipboardSequenceNumber: every <see cref="Copy"/> adds one.</summary>
+    public uint ClipboardSequence { get; set; } = 7;
+
+    /// <summary>How many times the clipboard was opened (including opens that found it busy).</summary>
+    public int ClipboardReads { get; private set; }
+
+    /// <summary>How many times text was copied out of the open clipboard (after the check let it through).</summary>
+    public int ClipboardTextReads { get; private set; }
+
+    /// <summary>The next this many reads find the clipboard held by another application.</summary>
+    public int ClipboardBusy { get; set; }
+
+    /// <summary>An application's copy: new text, its owner window's process, and a new sequence number.</summary>
+    public void Copy(string? text, int? ownerPid)
+    {
+        ClipboardText = text;
+        ClipboardOwnerPid = ownerPid;
+        ClipboardSequence++;
+    }
+
+    public uint GetClipboardSequenceNumber() => ClipboardSequence;
+
+    public string? ReadClipboardText(int maxChars, Action<ClipboardState> check)
+    {
+        ClipboardReads++;
+        if (ClipboardBusy > 0)
+        {
+            ClipboardBusy--;
+            throw new RetryableActionException("another application holds the clipboard");
+        }
+        check(new ClipboardState(ClipboardOwnerPid, ClipboardSequence));
+        ClipboardTextReads++;
+        // As the Windows driver: at most maxChars + 1 characters, so the caller can tell the text is longer.
+        return ClipboardText is null || ClipboardText.Length <= maxChars ? ClipboardText : ClipboardText[..(maxChars + 1)];
+    }
 }
 
 /// <summary>Processes by id with fixed names; Start hands out new ids.</summary>

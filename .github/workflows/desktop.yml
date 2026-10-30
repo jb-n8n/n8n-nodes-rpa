@@ -131,6 +131,8 @@ jobs:
             writeControls = @(@{ exe = 'ErpDemo.exe'; automationId = 'btnPost' })
             gatedKeys     = @('Ctrl+S', 'F11')
             maxFileBytes  = 20971520
+            helperProcesses = @(@{ exe = 'msedgewebview2.exe'; pathPattern = 'C:\Program Files (x86)\Microsoft\EdgeWebView\Application\*\msedgewebview2.exe' })
+            clipboardRead = $true
           } | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 (Join-Path $data 'policy.json')
           $bytes = [byte[]]::new(32); [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
           $env:RPA_RUNNER_TOKEN = [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
