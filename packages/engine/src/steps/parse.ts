@@ -418,7 +418,7 @@ function checkBrowserTemplates(steps: unknown, issues: string[], path = 'steps')
 const VAR_TEMPLATE = /\{\{\s*var\.[A-Za-z0-9_]+\s*\}\}/;
 /**
  * Keys that hold text, not a locator: never rendered into a locator, so a variable there is not refused here (a
- * download's `via` path, a fill or select value, a key chord, an expected url or heading).
+ * download's `via` target, a fill or select value, a key chord, an expected url or heading).
  */
 const NON_LOCATOR_KEYS = new Set(['intent', 'via', 'value', 'option', 'key', 'url', 'heading']);
 
@@ -426,7 +426,8 @@ const NON_LOCATOR_KEYS = new Set(['intent', 'via', 'value', 'option', 'key', 'ur
 function varsInLocators(v: unknown, path: string, out: string[]) {
   if (typeof v === 'string') { if (VAR_TEMPLATE.test(v)) out.push(path); return; }
   if (Array.isArray(v)) { v.forEach((x, i) => varsInLocators(x, `${path}[${i}]`, out)); return; }
-  if (isObj(v)) for (const [k, x] of Object.entries(v)) if (!(NON_LOCATOR_KEYS.has(k) && (typeof x === 'string' || k === 'via'))) varsInLocators(x, `${path}.${k}`, out);
+  // A download's or submit's `via` is a target object (path, host, method); signIn.totp.via is a list of locators and is checked.
+  if (isObj(v)) for (const [k, x] of Object.entries(v)) if (!(NON_LOCATOR_KEYS.has(k) && (typeof x === 'string' || (k === 'via' && !Array.isArray(x))))) varsInLocators(x, `${path}.${k}`, out);
 }
 
 /**

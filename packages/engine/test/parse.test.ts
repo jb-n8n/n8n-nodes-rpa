@@ -213,6 +213,7 @@ describe('run variables in locators of write steps', () => {
     refused(si({ username: { text: '{{var.x}}' } }), /signIn\.username/);
     for (const k of ['field', 'submit']) refused(si({ totp: { field: { label: 'C' }, submit: { text: 'ok' }, [k]: V } }), new RegExp(`signIn\\.totp\\.${k}`));
     refused(si({ submit: { role: 'button', name: 'Go', fallbacks: [{ text: '{{var.x}}' }] } }), /signIn\.submit\.fallbacks/);
+    for (const k of ['via', 'check']) refused(si({ totp: { field: { label: 'C' }, submit: { text: 'ok' }, [k]: [{ text: 'fine' }, V] } }), new RegExp(`signIn\\.totp\\.${k}\\[1\\]`));
   });
   it('refuses {{var.*}} in submit and download locators, also in when and expect and nested in paginate', () => {
     refused({ intent: 'S', submit: { path: '/x', button: V } }, /steps\[0\]\.submit\.button/);
