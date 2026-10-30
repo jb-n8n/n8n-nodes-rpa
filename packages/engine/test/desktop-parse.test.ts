@@ -256,3 +256,24 @@ describe('desktop step sets: signing', () => {
     expect(checkDesktopTrust(doc, { required: true })).toEqual({ ok: false, code: 'script_untrusted', message: UNSIGNED_REQUIRED });
   });
 });
+
+describe('run variables in locators of desktop write steps', () => {
+  const V = { uia: { path: [{ controlType: 'Button', name: '{{var.who}}' }] } };
+  it('refuses {{var.*}} in any locator of a write: true step', () => {
+    const cases: [Record<string, unknown>, RegExp][] = [
+      [{ intent: 'a', write: true, click: V }, /steps\[0\]\.click/],
+      [{ intent: 'a', write: true, fill: { field: V, value: 'x' } }, /steps\[0\]\.fill\.field/],
+      [{ intent: 'a', write: true, select: { field: V, option: 'o' } }, /steps\[0\]\.select\.field/],
+      [{ intent: 'a', write: true, check: { field: V } }, /steps\[0\]\.check\.field/],
+      [{ intent: 'a', write: true, key: { key: 'Enter', target: V } }, /steps\[0\]\.key\.target/],
+      [{ intent: 'a', write: true, click: uia('b'), when: { visible: V } }, /steps\[0\]\.when/],
+      [{ intent: 'a', write: true, click: uia('b'), expect: { visible: V } }, /steps\[0\]\.expect/],
+      [{ intent: 'a', write: true, click: { ...uia('b'), fallbacks: [V] } }, /steps\[0\]\.click\.fallbacks/],
+    ];
+    for (const [step, at] of cases) expect(issuesOf(() => parseDesktopScript(desktop([step]))).join('\n')).toMatch(at);
+  });
+  it('still allows a variable in a non-write step', () => {
+    expect(() => parseDesktopScript(desktop([{ intent: 'a', click: V }, { intent: 'b', waitFor: { target: V } }]))).not.toThrow();
+    expect(() => parseDesktopScript(desktop([{ intent: 'a', write: false, click: V }]))).not.toThrow();
+  });
+});

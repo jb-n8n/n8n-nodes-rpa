@@ -1,6 +1,6 @@
 import type { PortalPolicy, PortalSecrets, Script, Step } from '../types.js';
 import { verbOf } from '../steps/parse.js';
-import { secretInLocation, SIGNIN_NEEDS_SITE_LOGIN, WINDOW_STEP_NOT_CLICK } from '../messages.js';
+import { secretInLocation, SIGNIN_NEEDS_SITE_LOGIN, varInWriteLocator, WINDOW_STEP_NOT_CLICK } from '../messages.js';
 import { createMasker } from '../secrets/mask.js';
 import { canonicalize } from '../sign.js';
 import { interruptAction } from '../proposal/describe.js';
@@ -25,6 +25,12 @@ const MIN_SECRET_LEN_FOR_LITERAL_CHECK = 4;
 /** Literal fill/select values: AI-compiled (proposal) steps vs steps loaded for a run. */
 export const MAX_LITERAL_PROPOSAL = 64;
 export const MAX_LITERAL_LOAD = 1_024;
+/**
+ * A multi-select value (select.value as an array): each element obeys the literal limit above; at most this many
+ * elements, and at most this many characters over all elements together (the 1,024-character load limit times four).
+ */
+export const MAX_SELECT_VALUES = 50;
+export const MAX_SELECT_TOTAL = 4_096;
 
 export function flattenSteps(steps: Step[]): Step[] {
   const out: Step[] = [];
@@ -102,6 +108,15 @@ function* allStrings(value: unknown, path: string = ''): Generator<{ path: strin
       }
     }
   }
+}
+
+const VAR_TEMPLATE = /\{\{\s*var\.[A-Za-z0-9_]+\s*\}\}/;
+/** True when a locator of the step (click, when, expect.visible, fallbacks; never the intent) holds a {{var.x}}. */
+function hasVarInLocators(v: unknown): boolean {
+  if (typeof v === 'string') return VAR_TEMPLATE.test(v);
+  if (Array.isArray(v)) return v.some(hasVarInLocators);
+  if (v && typeof v === 'object') return Object.entries(v).some(([k, x]) => k !== 'intent' && k !== 'url' && k !== 'heading' && hasVarInLocators(x));
+  return false;
 }
 
 function collect(script: Script) {
@@ -208,7 +223,10 @@ export function validateScript(script: Script, ctx: PolicyContext): PolicyResult
 
     const maxLiteral = ctx.mode === 'proposal' ? MAX_LITERAL_PROPOSAL : MAX_LITERAL_LOAD;
     const literal = 'fill' in s ? s.fill.value : 'select' in s ? s.select.value : undefined;
-    if (literal !== undefined && literal.length > maxLiteral) violations.push(`limit: ${where}: value is longer than ${maxLiteral} characters`);
+    const literals = literal === undefined ? [] : Array.isArray(literal) ? literal : [literal];
+    if (literals.some((v) => v.length > maxLiteral)) violations.push(`limit: ${where}: value is longer than ${maxLiteral} characters`);
+    if (literals.length > MAX_SELECT_VALUES) violations.push(`limit: ${where}: more than ${MAX_SELECT_VALUES} values`);
+    else if (literals.reduce((n, v) => n + v.length, 0) > MAX_SELECT_TOTAL) violations.push(`limit: ${where}: values are together longer than ${MAX_SELECT_TOTAL} characters`);
     if ('goto' in s) {
       const u = resolveGoto(s.goto, script.startUrl);
       if (!u) { violations.push(`${where}: goto must be a literal http(s) URL or path; templates are allowed only in the query or fragment`); continue; }
@@ -229,6 +247,8 @@ export function validateScript(script: Script, ctx: PolicyContext): PolicyResult
     const at = policy.writeWindow.step;
     const target = Number.isInteger(at) && at >= 0 ? script.steps[at] : undefined;
     if (!target || !('click' in target)) violations.push(WINDOW_STEP_NOT_CLICK);
+    // A run variable must never steer the click that opens the write window.
+    else if (hasVarInLocators(target)) violations.push(varInWriteLocator(`step "${target.intent}"`));
   }
   if (signIns > 0 && !ctx.secrets) violations.push(SIGNIN_NEEDS_SITE_LOGIN);
 

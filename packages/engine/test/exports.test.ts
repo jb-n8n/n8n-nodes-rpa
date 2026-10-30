@@ -19,7 +19,7 @@ const EXPORTS = [
   'IMPORT_NOT_ADOPTABLE', 'IMPORT_PROOF_FAILED', 'IMPORT_REFUSES_WRITES', 'IMPORT_UNSUPPORTED_TARGET', 'INPUT_CONTAINS_SECRET',
   'INVALID_PARAMS', 'InvalidPolicyError', 'LOOKS_DESTRUCTIVE', 'MAC_DOMAIN', 'MAX_AGENT_ACTIONS', 'MAX_AGENT_TOKENS', 'MAX_BUDGET_MS',
   'MAX_CAPTURE_BYTES', 'MAX_EXPECTED_FILE_BYTES', 'MAX_LITERAL_LOAD', 'MAX_LITERAL_PROPOSAL', 'MAX_RENDERED', 'MAX_ROWS',
-  'MAX_RUN_BINARY_BYTES', 'MAX_SCREENSHOT_HEIGHT', 'MAX_TEXT_BYTES', 'MAX_TYPED', 'METHOD_NOT_FOUND', 'MIME', 'MIN_PROVE_MS', 'NOT_A_TABLE',
+  'MAX_RUN_BINARY_BYTES', 'MAX_SCREENSHOT_HEIGHT', 'MAX_SELECT_TOTAL', 'MAX_SELECT_VALUES', 'MAX_TEXT_BYTES', 'MAX_TYPED', 'METHOD_NOT_FOUND', 'MIME', 'MIN_PROVE_MS', 'NOT_A_TABLE',
   'NO_REVIEW_DIGEST', 'NO_STEPS_NO_REPAIR', 'NO_TOTP_SECRET', 'NoFreeSessionError', 'NoRunError', 'PAGE_SHOWS_CREDENTIAL', 'PAGINATE_MAX',
   'PAGINATE_NEXT_WAIT_MS', 'PASSWORD_FILL_REFUSED', 'PASSWORD_FILL_REFUSED_STEPS', 'PDF_NEEDS_HEADLESS', 'PDF_TIMED_OUT',
   'PLAYWRIGHT_VERSION', 'PROTOCOL_VERSION', 'PROVE_RESERVE_MS', 'PolicyError', 'PolicyRefusedError', 'PrivateNetworkError', 'REF_ATTR',
@@ -52,7 +52,7 @@ const EXPORTS = [
   'runnerUnreachable', 'sanitizeFileName', 'screenshotMasks', 'screenshotTooTall', 'scriptHash', 'scrubTrace', 'secretInLocation',
   'settle', 'shownFailure', 'signDesktopSteps', 'signScript', 'signSteps', 'snapshot', 'sniffMime', 'startHostOf', 'startSiteMismatch',
   'stepChanges', 'stopTrace', 'stripShownPrefix', 'substituteVars', 'toErrorCode', 'tokenRefused', 'tooManyRows', 'totp', 'unsignedWrites',
-  'validateScript', 'verbOf', 'verifyRows', 'verifyScript', 'versionMismatch', 'violationMessage', 'wantTrace',
+  'validateScript', 'varInWriteLocator', 'verbOf', 'verifyRows', 'verifyScript', 'versionMismatch', 'violationMessage', 'wantTrace',
 ];
 
 describe('engine exports', () => {

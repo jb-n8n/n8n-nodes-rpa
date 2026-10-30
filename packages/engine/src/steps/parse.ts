@@ -1,7 +1,7 @@
 import { DESKTOP_VERBS, STEP_VERBS, type DesktopScript, type DesktopVerb, type Script, type Step, type StepVerb } from '../types.js';
 import {
   BROWSER_STEPS_NEED_BROWSER, browserLocatorOnDesktop, browserStepOnDesktop, DESKTOP_STEPS_NEED_RUNNER, desktopLocatorInBrowser, exportDirOnlyInFill,
-  FIRST_STEP_GOTO, reservedTemplate,
+  FIRST_STEP_GOTO, reservedTemplate, varInWriteLocator,
 } from '../messages.js';
 import { DESKTOP_WRITE_VERBS, READ_NAME, stepChordProblem } from './desktop-vocabulary.js';
 
@@ -332,6 +332,7 @@ export function parseScript(input: unknown, opts: { defaultStartUrl?: string } =
   if (surface !== undefined && surface !== 'browser') throw new ScriptShapeError([SURFACE_INVALID]);
   for (const k of Object.keys(doc)) if (!['surface', 'name', 'version', 'startUrl', 'interrupts', 'steps'].includes(k)) issues.push(`script has unknown key "${k}"`);
   checkBrowserTemplates(doc.steps, issues);
+  checkBrowserWriteLocators(doc.steps, issues);
   if (doc.name !== undefined && !isStr(doc.name)) issues.push('name must be a non-empty string');
   if (doc.version !== undefined && !isInt(doc.version, 1, Number.MAX_SAFE_INTEGER)) issues.push('version must be a positive integer');
   let startUrl: string | undefined;
@@ -402,6 +403,40 @@ function checkBrowserTemplates(steps: unknown, issues: string[], path = 'steps')
       else if (isObj(v) && Array.isArray(v.value)) v.value.forEach((x, j) => { if (typeof x === 'string') checkTemplates(x, `${at}.${verb}.value[${j}]`, () => false, issues); });
     }
     if (isObj(s.paginate)) checkBrowserTemplates(s.paginate.each, issues, `${at}.paginate.each`);
+  });
+}
+
+/** Any `{{var.x}}` reference, with the spacing renderVars accepts. */
+const VAR_TEMPLATE = /\{\{\s*var\.[A-Za-z0-9_]+\s*\}\}/;
+/**
+ * Keys that hold text, not a locator: never rendered into a locator, so a variable there is not refused here (a
+ * download's `via` path, a fill or select value, a key chord, an expected url or heading).
+ */
+const NON_LOCATOR_KEYS = new Set(['intent', 'via', 'value', 'option', 'key', 'url', 'heading']);
+
+/** The paths of every locator string under `v` that holds a `{{var.x}}` reference. */
+function varsInLocators(v: unknown, path: string, out: string[]) {
+  if (typeof v === 'string') { if (VAR_TEMPLATE.test(v)) out.push(path); return; }
+  if (Array.isArray(v)) { v.forEach((x, i) => varsInLocators(x, `${path}[${i}]`, out)); return; }
+  if (isObj(v)) for (const [k, x] of Object.entries(v)) if (!(NON_LOCATOR_KEYS.has(k) && (typeof x === 'string' || k === 'via'))) varsInLocators(x, `${path}.${k}`, out);
+}
+
+/**
+ * A run variable must never steer a write: signIn, submit and download steps (and, for a desktop step set, any step
+ * with write: true) may not hold `{{var.x}}` in any locator, including `when`, `expect` and fallbacks. Walks paginate
+ * bodies. The write window step is checked by the policy (it is declared there, not in the steps).
+ */
+function checkBrowserWriteLocators(steps: unknown, issues: string[], path = 'steps') {
+  if (!Array.isArray(steps)) return;
+  steps.forEach((s, i) => {
+    if (!isObj(s)) return;
+    const at = `${path}[${i}]`;
+    if (['signIn', 'submit', 'download'].some((verb) => Object.hasOwn(s, verb))) {
+      const hits: string[] = [];
+      varsInLocators(s, at, hits);
+      hits.forEach((h) => issues.push(varInWriteLocator(h)));
+    }
+    if (isObj(s.paginate)) checkBrowserWriteLocators(s.paginate.each, issues, `${at}.paginate.each`);
   });
 }
 
@@ -610,6 +645,12 @@ export function parseDesktopScript(input: unknown): DesktopScript {
     });
   }
   checkTemplates(doc, '', (path) => /^steps\[\d+\]\.fill\.value$/.test(path), issues);
+  if (Array.isArray(doc.steps)) doc.steps.forEach((s, i) => {
+    if (!isObj(s) || s.write !== true) return;
+    const hits: string[] = [];
+    varsInLocators(s, `steps[${i}]`, hits);
+    hits.forEach((h) => issues.push(varInWriteLocator(h)));
+  });
   if (issues.length) throw new ScriptShapeError(issues);
   return structuredClone(doc) as unknown as DesktopScript;
 }
