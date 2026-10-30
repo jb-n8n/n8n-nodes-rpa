@@ -1,7 +1,7 @@
 import type { Page } from 'playwright-core';
 import type { AllowedSubmit, WriteWindow } from '../browser/session.js';
 import { maskClipped, type Masker } from '../secrets/mask.js';
-import type { PortalPolicy, PortalSecrets, RunState, Script, Step, StepLogEntry, StepsResult, Violation } from '../types.js';
+import type { CodeProvider, PortalPolicy, PortalSecrets, RunState, Script, Step, StepLogEntry, StepsResult, Violation } from '../types.js';
 import type { InterruptHandle } from './interrupts.js';
 import { HANDLERS, type AnyVerb } from './handlers/index.js';
 import { desktopVerbOf, verbOf } from './parse.js';
@@ -23,6 +23,10 @@ export interface StepContext {
   policy: PortalPolicy;
   /** Site Login secrets, only for signIn; absent without a Site Login. */
   secrets?: PortalSecrets;
+  /** Supplies the one-time code for a signIn whose totp.source is 'workflow'; absent: such a signIn fails (auth_blocked). */
+  codeProvider?: CodeProvider;
+  /** How long signIn waits for codeProvider, in ms. Default DEFAULT_CODE_TIMEOUT_MS (120 s). */
+  codeTimeoutMs?: number;
   vars: Record<string, string>;
   masker: Masker;
   defaultTimeoutMs: number;

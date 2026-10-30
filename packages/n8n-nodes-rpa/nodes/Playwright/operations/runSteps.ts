@@ -1,5 +1,5 @@
 import { NodeConnectionTypes, NodeOperationError, type IDataObject, type INodeExecutionData, type IPairedItemData } from 'n8n-workflow';
-import type { BrowserEndpoint, DownloadTemplate, ErrorCode, FileCheck, OutputSpec, PortalPolicy, TaskInput, TaskResult } from 'n8n-rpa-engine';
+import type { BrowserEndpoint, CodeProvider, DownloadTemplate, ErrorCode, FileCheck, OutputSpec, PortalPolicy, TaskInput, TaskResult } from 'n8n-rpa-engine';
 import { browserConfig, ConfigError, CREDENTIALS, policyFor, signingKey, siteLoginConfig, UrlPolicyError, type SiteLogin } from '../config.js';
 import type { NodeContext } from '../context.js';
 import { nodeOutputs } from '../description/io.js';
@@ -73,6 +73,10 @@ export interface RunStepsParams {
   maxActions: number;
   maxTokens: number;
   breakerResetKey: string;
+  /** Options → One-Time Code Workflow: the workflow ID, '' when not set. */
+  codeWorkflowId: string;
+  /** Options → Code Timeout (Seconds), in ms. */
+  codeTimeoutMs: number;
   common: CommonOptions;
 }
 
@@ -168,7 +172,40 @@ export function readRunStepsParams(ctx: NodeContext, i: number): RunStepsParams 
     maxActions: clamp(Math.floor(asNumber(opt('maxActions'), 40)), 1, 200),
     maxTokens: clamp(Math.floor(asNumber(opt('maxTokens'), 200_000)), 1000, 1_000_000),
     breakerResetKey,
+    codeWorkflowId: asString(opt('codeWorkflowId')).trim(),
+    codeTimeoutMs: clamp(Math.floor(asNumber(opt('codeTimeout'), 120)), 1, 300) * 1000,
     common,
+  };
+}
+
+/** A one-time code as the engine takes it: 6 to 10 characters of digits and spaces (the engine's WORKFLOW_CODE). */
+export const ONE_TIME_CODE = /^[0-9 ]{6,10}$/;
+const NOT_ONE_ITEM = (n: number) => `it returned ${n} items; it must return exactly one item with a code field`;
+const NO_CODE_FIELD = 'its item has no code field of 6 to 10 digits';
+
+/**
+ * The engine's codeProvider for Options → One-Time Code Workflow: runs that workflow with one item { requestedAt } and
+ * takes json.code from its single output item. Everything else it returns is dropped. Its errors never carry the code:
+ * a returned value is never repeated, and a failing workflow's message keeps only its first line, with numbers of four or
+ * more digits removed. The engine shows these errors after "the one-time code workflow failed: ".
+ */
+export function codeProviderFor(ctx: Pick<NodeContext, 'executeWorkflow'>, workflowId: string): CodeProvider {
+  return async ({ requestedAt }) => {
+    let result: Awaited<ReturnType<NodeContext['executeWorkflow']>> | undefined;
+    let failed: unknown;
+    try {
+      result = await ctx.executeWorkflow({ id: workflowId }, [{ json: { requestedAt } }]);
+    } catch (error) {
+      failed = error;
+    }
+    // Thrown outside the catch block (as parseJson does): the message is rebuilt, never the workflow's error as is.
+    if (!result) throw new Error(`it stopped with an error: ${errorMessage(failed).split('\n')[0].replace(/\d{4,}/g, '[number]').slice(0, 200)}`);
+    const items = (result.data?.[0] ?? []).filter((item) => item !== null && item !== undefined);
+    if (items.length !== 1) throw new Error(NOT_ONE_ITEM(items.length));
+    const code: unknown = items[0].json?.code;
+    const text = typeof code === 'number' && Number.isSafeInteger(code) && code >= 0 ? String(code) : code;
+    if (typeof text !== 'string' || !ONE_TIME_CODE.test(text)) throw new Error(NO_CODE_FIELD);
+    return text;
   };
 }
 
@@ -341,6 +378,7 @@ async function runStepsItem(ctx: NodeContext, engine: Engine, i: number, deps: R
     trust,
     policy,
     ...(siteLogin ? { secrets: siteLogin.secrets } : {}),
+    ...(p.codeWorkflowId ? { codeProvider: codeProviderFor(ctx, p.codeWorkflowId), codeTimeoutMs: p.codeTimeoutMs } : {}),
     endpoint,
     ...(p.output ? { output: p.output } : {}),
     vars: p.vars,

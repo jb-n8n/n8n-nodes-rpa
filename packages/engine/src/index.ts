@@ -17,7 +17,7 @@ export * from './browser/address.js';
 export * from './steps/run.js';
 export * from './steps/locator.js';
 export * from './steps/interrupts.js';
-export { SignInPolicyError, isLoginPage } from './steps/handlers/auth.js';
+export { SignInPolicyError, isLoginPage, WORKFLOW_CODE } from './steps/handlers/auth.js';
 export { PolicyError } from './steps/errors.js';
 export { sanitizeFileName, sniffMime, DEFAULT_MAX_BYTES, DEFAULT_MIME, MIME, binaryName } from './steps/handlers/files.js';
 export { MAX_TEXT_BYTES, MAX_SCREENSHOT_HEIGHT, MAX_CAPTURE_BYTES } from './steps/handlers/capture.js';

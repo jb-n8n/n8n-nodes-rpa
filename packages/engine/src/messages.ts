@@ -69,6 +69,16 @@ export const BLOCKED_STOP = 'stopped: a blocked request was attempted';
 export const SIGNIN_NEEDS_SITE_LOGIN = 'signIn needs a Site Login credential';
 /** A two-page signIn clicked next, but the password field did not appear within the step timeout (drift). A username page that comes back is `detected:login_failed` instead. */
 export const SIGNIN_NEXT_NO_PASSWORD = 'signIn: after Next the password field did not appear';
+
+// signIn with totp.source 'workflow': the one-time code comes from the run's code provider (the node's One-Time Code
+// Workflow). The step failure is `detected:mfa_code: <one of these>` (auth_blocked); none of them carries the code.
+/** The steps take the code from a workflow, but the run has no code provider: a configuration error. */
+export const CODE_WORKFLOW_NOT_SET =
+  'the sign-in takes its one-time code from a workflow, but no One-Time Code Workflow is set (Options → One-Time Code Workflow)';
+export const codeWorkflowTimedOut = (seconds: number) => `the one-time code workflow did not return a code within ${seconds} s`;
+export const CODE_WORKFLOW_NOT_A_CODE = 'the one-time code workflow did not return a code of 6 to 10 digits';
+export const codeWorkflowFailed = (message: string) => `the one-time code workflow failed: ${message}`;
+export const CODE_WORKFLOW_REJECTED_TWICE = 'the site rejected the one-time code from the workflow twice';
 /** The agent's two-page sign_in typed the username and moved to the password page, but never ran its second call. */
 export const AGENT_SIGN_IN_UNFINISHED = 'the agent typed the username but did not finish signing in on the password page';
 

@@ -1,13 +1,16 @@
-import type { Locator } from 'playwright-core';
+import type { ElementHandle, Locator } from 'playwright-core';
 import { msUntilNextWindow, totp } from '../../secrets/totp.js';
-import type { Locator as DslLocator, PortalSecrets, RunState, SignInSpec, Step } from '../../types.js';
+import { DEFAULT_CODE_TIMEOUT_MS, type Locator as DslLocator, type PortalSecrets, type RunState, type SignInSpec, type Step } from '../../types.js';
 import { build, candidatesOf, isVisibleNow, resolveUnique } from '../locator.js';
 import { poll, sleep } from '../poll.js';
 import { settle, type Handler, type StepContext } from '../run.js';
 import { registerHandlers } from './index.js';
 import { PolicyError } from '../errors.js';
 import { DETECTED_PREFIX } from '../../classify/classify.js';
-import { SIGNIN_NEEDS_SITE_LOGIN, SIGNIN_NEXT_NO_PASSWORD } from '../../messages.js';
+import {
+  CODE_WORKFLOW_NOT_A_CODE, CODE_WORKFLOW_NOT_SET, CODE_WORKFLOW_REJECTED_TWICE, codeWorkflowFailed, codeWorkflowTimedOut, SIGNIN_NEEDS_SITE_LOGIN,
+  SIGNIN_NEXT_NO_PASSWORD,
+} from '../../messages.js';
 import { isLoginPage } from '../urls.js';
 
 type S<K extends string> = Extract<Step, Record<K, unknown>>;
@@ -109,6 +112,98 @@ export async function submitTotp(ctx: StepContext, spec: { field: DslLocator; su
   await settle(ctx.page);
 }
 
+/** What a code provider must return: 6 to 10 characters of digits and spaces (the spaces are removed before typing). */
+export const WORKFLOW_CODE = /^[0-9 ]{6,10}$/;
+/** Prefix of every failure of a code from the workflow: classified auth_blocked (a second factor the run could not answer). */
+const CODE_FAILURE = `${DETECTED_PREFIX}mfa_code: `;
+/** How long a submitted code may take to leave the code page before it counts as rejected. */
+const CODE_REJECTED_WAIT_MS = 5000;
+/** How long the code field must stay gone from a loaded document before the code counts as accepted. */
+const CODE_GONE_STABLE_MS = 1000;
+
+/**
+ * Asks ctx.codeProvider for a code, racing it against ctx.codeTimeoutMs (a closed page ends the wait too). Returns the
+ * code without spaces. Throws `detected:mfa_code: …` when there is no provider, it fails, times out or returns no code.
+ */
+async function codeFromWorkflow(ctx: StepContext): Promise<string> {
+  const provider = ctx.codeProvider;
+  if (!provider) throw new Error(CODE_FAILURE + CODE_WORKFLOW_NOT_SET);
+  const limit = ctx.codeTimeoutMs !== undefined && Number.isFinite(ctx.codeTimeoutMs) && ctx.codeTimeoutMs > 0 ? ctx.codeTimeoutMs : DEFAULT_CODE_TIMEOUT_MS;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onClose: (() => void) | undefined;
+  const outcome = await new Promise<{ value: unknown } | { error: string }>((resolve) => {
+    timer = setTimeout(() => resolve({ error: CODE_FAILURE + codeWorkflowTimedOut(limit / 1000) }), limit);
+    onClose = () => resolve({ error: 'the page closed while the run waited for the one-time code' });
+    ctx.page.once('close', onClose);
+    let asked: Promise<string>;
+    try {
+      asked = Promise.resolve(provider({ requestedAt: new Date().toISOString() }));
+    } catch (err) {
+      asked = Promise.reject(err);
+    }
+    asked.then(
+      (value) => resolve({ value }),
+      (err: unknown) => resolve({ error: CODE_FAILURE + codeWorkflowFailed((err instanceof Error ? err.message : String(err)).split('\n')[0].slice(0, 200)) }),
+    );
+  });
+  clearTimeout(timer);
+  if (onClose) ctx.page.off('close', onClose);
+  if ('error' in outcome) throw new Error(outcome.error);
+  if (typeof outcome.value !== 'string' || !WORKFLOW_CODE.test(outcome.value)) throw new Error(CODE_FAILURE + CODE_WORKFLOW_NOT_A_CODE);
+  return outcome.value.replace(/ /g, '');
+}
+
+/**
+ * After a code was submitted: true when the site kept the code page (a new code field after a reload, or the same field
+ * still showing after CODE_REJECTED_WAIT_MS), false once the run left the login pages or the field stayed gone.
+ */
+async function codeRejected(ctx: StepContext, field: DslLocator, typed: ElementHandle, timeout: number): Promise<boolean> {
+  let goneSince: number | undefined;
+  const seen = await poll(async () => {
+    if (!onLoginPage(ctx)) return 'accepted';
+    if (await isVisibleNow(ctx.page, field)) {
+      goneSince = undefined;
+      return (await typed.evaluate((el) => el.isConnected).catch(() => false)) ? undefined : 'rejected';
+    }
+    // The field may be gone only while the next document loads: accepted once it stays gone on a loaded document.
+    const loaded = await ctx.page.evaluate(() => document.readyState !== 'loading').catch(() => false);
+    if (!loaded) { goneSince = undefined; return undefined; }
+    goneSince ??= Date.now();
+    return Date.now() - goneSince >= CODE_GONE_STABLE_MS ? 'accepted' : undefined;
+  }, Math.min(timeout, CODE_REJECTED_WAIT_MS));
+  if (seen) return seen === 'rejected';
+  return onLoginPage(ctx) && (await isVisibleNow(ctx.page, field));
+}
+
+/**
+ * The code field of a signIn whose totp.source is 'workflow': ask the code provider (only now that the field shows),
+ * re-check the page, teach the run masker the code, type it and submit. A rejected code is asked for once more, in the
+ * next 30-second code window; a second rejection stops the run (auth_blocked).
+ */
+async function submitWorkflowCode(ctx: StepContext, spec: { field: DslLocator; submit: DslLocator }, timeout: number): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    const field = await resolveUnique(ctx.page, spec.field, timeout);
+    const button = await resolveUnique(ctx.page, spec.submit, timeout);
+    assertLoginPage(ctx);
+    await assertFieldOnLoginPage(ctx, field.locator, 'totp');
+    const code = await codeFromWorkflow(ctx);
+    // The provider may take minutes: the page must still be the declared code page before anything is typed.
+    assertLoginPage(ctx);
+    await assertFieldOnLoginPage(ctx, field.locator, 'totp');
+    // As with a generated code: the masker (shared with the trace scrubbing) learns the code before it is typed.
+    ctx.masker.add([code], { wholeNumber: true });
+    await field.locator.fill(code, { timeout });
+    const typed = await field.locator.elementHandle({ timeout });
+    await button.locator.click({ timeout });
+    await settle(ctx.page);
+    if (!(await codeRejected(ctx, spec.field, typed, timeout))) return;
+    if (attempt >= 2) throw new Error(CODE_FAILURE + CODE_WORKFLOW_REJECTED_TWICE);
+    await sleep(msUntilNextWindow(Date.now()) + 250);
+    // A slow site may have accepted the code after all while the run waited: then there is nothing to ask again.
+    if (!onLoginPage(ctx) || !(await isVisibleNow(ctx.page, spec.field))) return;
+  }
+}
+
 /**
  * The checks every sign-in starts with (the signIn step and the agent's sign_in): a Site Login is attached, no
  * credentials were submitted yet in this run, and the page is a declared login page. Returns the Site Login secrets.
@@ -173,7 +268,8 @@ async function submitPassword(ctx: StepContext, s: Pick<SignInSpec, 'password' |
     return undefined;
   }, Math.min(timeout, 5000));
   if (next !== 'totp') return;
-  await submitTotp(ctx, totpSpec, timeout);
+  if (totpSpec.source === 'workflow') await submitWorkflowCode(ctx, totpSpec, timeout);
+  else await submitTotp(ctx, totpSpec, timeout);
 }
 
 /** How long the re-rendered username page must stay without a password field before next counts as rejected. */

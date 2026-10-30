@@ -158,7 +158,8 @@ describe('Run Steps and Sign Steps fields', () => {
     const forRunOrSign = optionEntries.filter((o) => (o.displayOptions?.show?.['/operation'] ?? []).some((op) => op === 'runSteps' || op === 'signSteps'));
     expect(forRunOrSign.map((o) => o.name)).toEqual([
       'timeout', 'maxSeconds', 'viewport', 'allowedHosts', 'allowPrivateNetwork', 'idPattern', 'totalPattern', 'requiredFields', 'emptyPattern',
-      'variables', 'name', 'expectedVersion', 'allowUnsignedWrites', 'deliverUnconfirmed', 'maxActions', 'maxTokens', 'breakerResetKey', 'saveTrace', 'maxItems',
+      'variables', 'name', 'expectedVersion', 'allowUnsignedWrites', 'deliverUnconfirmed', 'maxActions', 'maxTokens', 'codeWorkflowId', 'codeTimeout', 'breakerResetKey', 'saveTrace',
+      'maxItems',
     ]);
     for (const name of ['deliverUnconfirmed', 'maxActions', 'maxTokens']) expect(option(name).displayOptions?.show).toEqual({ '/operation': ['runSteps'], '/aiRepair': [true] });
     expect(option('maxItems').displayOptions?.show).toEqual({ '/operation': ALL_OPERATIONS }); // every operation, quick ones included
@@ -196,7 +197,7 @@ describe('Run Steps and Sign Steps fields', () => {
         timeout: 20, maxSeconds: 120, viewport: { size: { width: 1024, height: 700 } }, allowedHosts: 'cdn.example.com, img.example.com', allowPrivateNetwork: true,
         idPattern: 'INV-\\d{4}', totalPattern: '(\\d+) results', requiredFields: 'title, date', emptyPattern: 'No results found',
         variables: { values: [{ name: 'from', value: '2026-01-01' }] }, name: 'invoices', expectedVersion: '3', allowUnsignedWrites: true, deliverUnconfirmed: true,
-        maxActions: 50, maxTokens: 300000, breakerResetKey: '2026-10-06', saveTrace: 'always', maxItems: 5,
+        maxActions: 50, maxTokens: 300000, codeWorkflowId: 'wf-code-1', codeTimeout: 60, breakerResetKey: '2026-10-06', saveTrace: 'always', maxItems: 5,
       },
     };
     const p = readRunStepsParams(harness({ params, rawParameters: params }), 0);
@@ -204,6 +205,7 @@ describe('Run Steps and Sign Steps fields', () => {
     expect(p).toMatchObject({
       startUrl: 'https://example.com/', requireSignedSteps: false, aiRepair: true, goal: 'Read the table', vars: { from: '2026-01-01' }, name: 'invoices',
       expectedVersion: 3, allowUnsignedWrites: true, deliverUnconfirmed: true, maxActions: 50, maxTokens: 300000, breakerResetKey: '2026-10-06',
+      codeWorkflowId: 'wf-code-1', codeTimeoutMs: 60000,
       output: { idPattern: 'INV-\\d{4}', totalPattern: '(\\d+) results', requiredFields: ['title', 'date'], emptyPattern: 'No results found' },
       common: {
         timeoutMs: 20000, maxSeconds: 120, viewport: { width: 1024, height: 700 }, allowedHosts: ['cdn.example.com', 'img.example.com'],

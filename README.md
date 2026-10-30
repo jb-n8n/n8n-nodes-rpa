@@ -433,7 +433,7 @@ Run Steps runs a list of browser steps. It is the operation for sites behind a l
 | **Signature**, **Approved By** | From the signed row. Map them from the same item as the steps. |
 | **AI Repair** | Off by default. On shows **Goal** and adds a **Model** input and a second output, **Repaired Steps**. See the rules below. |
 | **Expected File (First Version)** | Shown with AI Repair. Seeds the checks on the download step when AI builds the first version of steps that download a file: **File Type**, **File Name Pattern (Regex)**, **Minimum Size (Bytes)**, **Required Columns** and **Minimum Rows**. Steps that already exist carry their own checks, so this field is ignored for them. |
-| **Options** | **Name**, **Expected Version**, **Variables**, **ID Pattern (Regex)**, **Stated Total Pattern (Regex)**, **Required Fields**, **Text That Means No Results (Regex)**, **Allow Unsigned Writes**, **Deliver Unconfirmed Rows**, **Max Agent Actions** (40), **Max LLM Tokens** (200,000), **Login Breaker Reset Key**, plus Timeout, Max Seconds, Viewport, Also Allow These Sites, Allow Private Network, Debug Trace and Max Items. |
+| **Options** | **Name**, **Expected Version**, **Variables**, **ID Pattern (Regex)**, **Stated Total Pattern (Regex)**, **Required Fields**, **Text That Means No Results (Regex)**, **Allow Unsigned Writes**, **Deliver Unconfirmed Rows**, **Max Agent Actions** (40), **Max LLM Tokens** (200,000), **One-Time Code Workflow**, **Code Timeout (Seconds)** (120), **Login Breaker Reset Key**, plus Timeout, Max Seconds, Viewport, Also Allow These Sites, Allow Private Network, Debug Trace and Max Items. |
 
 Credentials: **RPA Browser** (required), **RPA Site Login** (optional; with it every allowed site comes from the credential and **Also Allow These Sites** must be empty), **RPA Step Signing** (when Require Signed Steps is on or a Signature is set), **RPA Redis** (optional; needed in queue mode with a Site Login).
 
@@ -466,13 +466,15 @@ Every step has an `intent` (plain words, shown in logs and errors) and one verb.
 | `read` | `{ what: "text" / "html" / "title" / "url" }` |
 | `download` | `{ trigger, via?, maxBytes?, mime?, check? }`; `check` is `{ name?, minBytes?, columns?, minRows? }`, see File checks below |
 | `submit` | `{ path, host?, method?, button }` a declared write; the only write target allowed, and only while this step runs |
-| `signIn` | `{ username, next?, password, submit, totp? }` needs a Site Login |
+| `signIn` | `{ username, next?, password, submit, totp? }` needs a Site Login; `totp` is `{ field, submit, source? }` |
 | `popup` | `{ trigger }` clicks a link that opens a new tab and continues in it |
 | `detect` | `{ name, checks, require? }` waits for one of several elements |
 
 A locator is an object: `{ "text": "Sign in" }`, `{ "label": "Email address" }`, `{ "role": "button", "name": "Submit" }`, `{ "testId": "submit-button" }` or `{ "css": "table.results" }`, with optional `exact`, `within`, `frame` and `fallbacks` (other locators tried in order).
 
 **Two-page sign-in.** For a site that asks for the username on one page and the password on the next (identity-first sign-ins such as Microsoft Entra's), `signIn.next` is the button between them: the step types the username, clicks `next` and types the password only when the password field shows on a listed login page, so a rejected username stops the run before the password is typed: `login_failed` when the site sends the username page back; an inline error on the same page times out as drift (and AI repair is not attempted once the username was typed). A "Stay signed in?" prompt after it is an ordinary `click` step with `when`.
+
+**Code from a workflow.** By default the sign-in code is generated from the Site Login's **TOTP Secret** (`"source": "seed"`). When the code comes from somewhere else, such as an email or a desktop authenticator app, set `"source": "workflow"` in the step's `totp` and pick a workflow under **Options → One-Time Code Workflow** (its ID). That workflow starts with an **Execute Workflow Trigger**, receives one item `{ requestedAt }` once the code field shows, and must return exactly one item whose `code` is 6 to 10 digits (spaces are removed). The run waits up to **Code Timeout (Seconds)** (120) for it, inside **Max Seconds**. The code is masked like every secret and never appears in the output, logs or errors; everything else the workflow returns is dropped. If the site rejects the code, the run waits for the next 30-second code window and runs the workflow once more. No answer in time, no valid code, or a second rejection fails `auth_blocked`; steps with `"source": "workflow"` and no One-Time Code Workflow are a configuration error.
 
 ```json
 { "intent": "Sign in", "signIn": { "username": { "label": "Email" }, "next": { "role": "button", "name": "Next" }, "password": { "label": "Password" }, "submit": { "role": "button", "name": "Sign in" } } }
