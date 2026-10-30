@@ -5,6 +5,7 @@ import type { CodeProvider, PortalPolicy, PortalSecrets, RunState, Script, Step,
 import type { InterruptHandle } from './interrupts.js';
 import { HANDLERS, type AnyVerb } from './handlers/index.js';
 import { desktopVerbOf, verbOf } from './parse.js';
+import { renderLocators } from './render-locators.js';
 import { PolicyError } from './errors.js';
 import { shownMessage } from './urls.js';
 import { BLOCKED_STOP } from '../messages.js';
@@ -142,7 +143,9 @@ export async function runSteps(
       if (hookLabel !== undefined) await hooks?.end(ctx.page, ok, hookLabel).catch(() => undefined);
     };
     try {
-      if (step.when && !(await surface.isVisible(step.when.visible))) {
+      // {{var.x}} in a locator is rendered for this run into a copy; the step itself keeps its template.
+      const live = renderLocators(step, ctx.vars, ctx.masker);
+      if (live.when && !(await surface.isVisible(live.when.visible))) {
         log('skipped', 0, { note: 'condition not met' });
         if (!opts.nested) await opts.afterStep?.(i);
         continue;
@@ -159,11 +162,11 @@ export async function runSteps(
       ctx.writeStep = !opts.nested && ctx.policy.writeWindow !== undefined && ctx.policy.writeWindow.step === i;
       let candidate: number | void;
       try {
-        candidate = await handler(ctx, step, state, timeout);
+        candidate = await handler(ctx, live, state, timeout);
       } finally {
         ctx.writeStep = false;
       }
-      if (step.expect) await surface.checkExpect(step.expect, timeout);
+      if (live.expect) await surface.checkExpect(live.expect, timeout);
       if (step.checkpoint && !opts.nested) state.lastCheckpoint = i;
       const output = logOutput(state, verb, outputsBefore, downloadsBefore);
       log('ok', Date.now() - t0, { ...(typeof candidate === 'number' ? { candidate } : {}), ...(output ? { output } : {}) });

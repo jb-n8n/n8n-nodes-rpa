@@ -91,7 +91,8 @@ export type Step = StepBase &
     | { signIn: SignInSpec }
     | { click: Locator }
     | { fill: { field: Locator; value: string } }
-    | { select: { field: Locator; value: string } }
+    /** A string array selects exactly those options of a multi-select and clears the others. */
+    | { select: { field: Locator; value: string | string[] } }
     | { check: { field: Locator; checked?: boolean } }
     | { clickAll: { target: Locator; max: number } }
     | {
