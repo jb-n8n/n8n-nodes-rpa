@@ -63,8 +63,9 @@ as an administrator: the runner leaves an existing directory's permissions alone
   signature (a Microsoft publisher check is a follow-up); the path pattern and the descent from an allowed app are the
   control.
 - `clipboardRead` (default `false`): lets `clipboard.read` return the clipboard's text, for apps whose value is only
-  available through a Copy button (a desktop authenticator app). Any app on the desktop can put text on the clipboard,
-  so turn it on only for runners whose step sets need it.
+  available through a Copy button (a desktop authenticator app). The runner returns only text the run's own app copied
+  right after one of the run's acts (see `clipboard.read` below), never what another application or a person put
+  there; still, turn it on only for runners whose step sets need it.
 
 Each launched app runs in its own Windows job object: the run's windows are those of processes in it, and the run's end
 (or its expired lease, or the runner exiting) ends the whole process tree. The data, log and export directories get an
@@ -100,7 +101,8 @@ that person's access. Two limits to keep in mind:
 ## ERP Demo
 
 Sign in as `clerk` / `demo1234`, pick a company code (1000, 2000, 3000), search, select a row, Post it, or export the
-results as CSV (a Save dialog). The data is fixed, so tests can assert exact rows. v2 is the same app after an
+results as CSV (a Save dialog). **Copy** (automation id `btnCopyDetail`) puts the selected row's detail on the
+clipboard. The data is fixed, so tests can assert exact rows. v2 is the same app after an
 "upgrade": Search is now **Find** (automation id `btnFind`), Export moved from **File** to a new **Reports** menu
 (**Export line items...**), and a confirmation dialog comes before the Save dialog. Choose the default at build time
 (`-p:ErpDemoUi=v2`) or at run time (`ErpDemo.exe --ui v2`).
@@ -136,10 +138,26 @@ returns `{ windows: [{ title, exe, automationId, className, foreground }] }`, th
 owned windows, such as dialogs and open menu drop-downs, never another application's), the foreground window first
 (`foreground: true`, only when it is the run's), then front to back, at most 20.
 
-`clipboard.read { runId }` returns `{ text }`, the clipboard's Unicode text (`""` when it holds none). It is
-`policy_refused` unless the policy sets `clipboardRead`, and while the foreground window is not one of the run's (the
-runner never brings its window back for a read: the text could then be another application's). Text longer than 1000
-characters is refused, not cut. A clipboard another application holds open is retried for 2 seconds, then `timeout`.
-The runner reads it on a short-lived STA thread in its own session and never logs the text or puts it in an error (the
+`clipboard.read { runId }` returns `{ text }`, the clipboard's Unicode text (`""` when it holds none). It returns only
+the run's own copy, so text another application or a person copied (a password) never leaves the machine. It is
+`policy_refused`:
+
+- unless the policy sets `clipboardRead`;
+- while the foreground window is not one of the run's (the runner never brings its window back for a read: the text
+  could then be another application's);
+- before the run's first `act`, and more than 10 seconds after the run's most recent `act` finished;
+- unless a process of the run owns the clipboard: the process of the clipboard's owner window (`GetClipboardOwner`,
+  read while the runner holds the clipboard open) is a process the run launched (or a descendant of one) running one
+  of the policy's pinned apps, or a helper process of the policy that descends from one (a WebView2 app copies from
+  its `msedgewebview2.exe`). No owner window (text put there without one, or by an application that has exited) is
+  refused too;
+- unless the clipboard changed since the run's most recent `act`: the runner records the clipboard's sequence number
+  (`GetClipboardSequenceNumber`) before every `act`, refused ones included, and the number read with the text must
+  differ. So the read must follow the act that copied (a click on the app's Copy button) with no other act in
+  between.
+
+The owner and the sequence number are checked while the clipboard is open, before any text is copied out of it. Text
+longer than 1000 characters is refused, not cut. A clipboard another application holds open is retried for 2
+seconds, then `timeout`. The runner reads it on a short-lived STA thread in its own session and never logs the text or puts it in an error (the
 log records `clipboard.read chars=<n>`). A runner older than the method answers -32601. The protocol stays version 1:
 the method and the policy fields are additions.

@@ -888,11 +888,26 @@ public sealed class ServiceTests : IDisposable
 
     private const string Code = "988 374";
 
+    /// <summary>The run's app process (the one app.launch started).</summary>
+    private static int AppPid(Harness h) => h.Processes.Names.First(kv => kv.Value == "ErpDemo.exe").Key;
+
+    /// <summary>Clicks the main window's btnInner, which (as an app's Copy button) copies the text from the run's app:
+    /// the app's process owns the clipboard and its sequence number moves on.</summary>
+    private static void CopyInApp(Harness h, string? text)
+    {
+        h.Desktop.OnPerform = op =>
+        {
+            if (op.Element.AutomationId == "btnInner") h.Desktop.Copy(text, op.Element.ProcessId);
+            return null;
+        };
+        h.Ok("act", Act(Id("btnInner"), "click"));
+    }
+
     [Fact]
     public void Clipboard_read_is_refused_without_the_policy_flag_and_never_touches_the_clipboard()
     {
         _h.BeginWithApp();
-        _h.Desktop.ClipboardText = Code;
+        CopyInApp(_h, Code);
         var e = _h.Err("clipboard.read", new { runId = Harness.RunId }, RpcErrors.PolicyRefusedCode);
         Assert.Contains("clipboardRead", e["message"]!.GetValue<string>());
         Assert.DoesNotContain(Code, e.ToJsonString());
@@ -904,7 +919,7 @@ public sealed class ServiceTests : IDisposable
     {
         using var h = new Harness(policyExtra: ", \"clipboardRead\": true");
         var w = h.BeginWithApp();
-        h.Desktop.ClipboardText = Code;
+        CopyInApp(h, Code);
         h.Processes.Names[777] = "notepad.exe";
         h.Processes.Paths[777] = Path.Combine(h.Root, "Windows", "notepad.exe");
         h.Desktop.Foreground = new FakeNode("Window", "Untitled - Notepad", "", 777);
@@ -923,18 +938,93 @@ public sealed class ServiceTests : IDisposable
     }
 
     [Fact]
-    public void Clipboard_read_returns_the_text_while_a_run_window_is_in_front_and_never_logs_it()
+    public void Clipboard_read_returns_a_fresh_copy_of_the_runs_app_and_never_logs_it()
     {
         using var h = new Harness(policyExtra: ", \"clipboardRead\": true", fileLog: true);
         h.BeginWithApp();
-        h.Desktop.ClipboardText = Code + " \u00fc\u20ac";
+        CopyInApp(h, Code + " \u00fc\u20ac");
         var r = h.Ok("clipboard.read", new { runId = Harness.RunId });
         Assert.Equal(Code + " \u00fc\u20ac", r["text"]!.GetValue<string>());
         Assert.Contains("clipboard.read", h.LogText());
         Assert.DoesNotContain(Code, h.LogText());
-        // No text on the clipboard reads as empty text.
-        h.Desktop.ClipboardText = null;
+        // Read again after the same act: the clipboard still changed since it.
+        Assert.Equal(Code + " \u00fc\u20ac", h.Ok("clipboard.read", new { runId = Harness.RunId })["text"]!.GetValue<string>());
+        // The app emptied the clipboard: no text reads as empty text.
+        h.Desktop.Copy(null, AppPid(h));
         Assert.Equal("", h.Ok("clipboard.read", new { runId = Harness.RunId })["text"]!.GetValue<string>());
+        // A newer act that copied nothing: the clipboard has not changed since the run's most recent act.
+        h.Ok("act", Act(Id("btnSignIn"), "click"));
+        var e = h.Err("clipboard.read", new { runId = Harness.RunId }, RpcErrors.PolicyRefusedCode);
+        Assert.Contains("not changed since the run's last act", e["message"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void Clipboard_read_is_refused_when_another_application_owns_the_clipboard()
+    {
+        using var h = new Harness(policyExtra: ", \"clipboardRead\": true");
+        h.BeginWithApp();
+        h.Processes.Names[777] = "KeePass.exe";
+        h.Processes.Paths[777] = Path.Combine(h.Root, "KeePass", "KeePass.exe");
+        // The run's app copied, then a password manager (or a person in another app) copied a password right after it,
+        // while the run's window kept the foreground.
+        CopyInApp(h, Code);
+        h.Desktop.Copy("hunter2-password", 777);
+        var e = h.Err("clipboard.read", new { runId = Harness.RunId }, RpcErrors.PolicyRefusedCode);
+        Assert.Contains("a window of \"KeePass.exe\" owns it", e["message"]!.GetValue<string>());
+        Assert.DoesNotContain("hunter2", e.ToJsonString());
+        // The owner is checked while the clipboard is open, before any text is copied out of it.
+        Assert.Equal(1, h.Desktop.ClipboardReads);
+        Assert.Equal(0, h.Desktop.ClipboardTextReads);
+        // Even a copy the run's own act set off: a process outside the run owns it.
+        h.Desktop.OnPerform = op => { h.Desktop.Copy("hunter2-password", 777); return null; };
+        h.Ok("act", Act(Id("btnInner"), "click"));
+        h.Err("clipboard.read", new { runId = Harness.RunId }, RpcErrors.PolicyRefusedCode);
+        // No owner window at all (copied without one, or the owner window is gone) is refused too.
+        h.Desktop.Copy("hunter2-password", null);
+        e = h.Err("clipboard.read", new { runId = Harness.RunId }, RpcErrors.PolicyRefusedCode);
+        Assert.Contains("no window owns the clipboard", e["message"]!.GetValue<string>());
+        Assert.Equal(0, h.Desktop.ClipboardTextReads);
+    }
+
+    [Fact]
+    public void Clipboard_read_is_refused_when_the_clipboard_has_not_changed_since_the_runs_last_act()
+    {
+        using var h = new Harness(policyExtra: ", \"clipboardRead\": true");
+        h.BeginWithApp();
+        // Text already on the clipboard before the run acted (here even owned by the run's app: a person copied in it).
+        h.Desktop.Copy("hunter2-password", AppPid(h));
+        var e = h.Err("clipboard.read", new { runId = Harness.RunId }, RpcErrors.PolicyRefusedCode);
+        Assert.Contains("has not acted yet", e["message"]!.GetValue<string>());
+        Assert.Equal(0, h.Desktop.ClipboardReads);
+        // An act that copies nothing: the sequence number is the one recorded before it.
+        h.Ok("act", Act(Id("btnSignIn"), "click"));
+        e = h.Err("clipboard.read", new { runId = Harness.RunId }, RpcErrors.PolicyRefusedCode);
+        Assert.Contains("has not changed since the run's last act", e["message"]!.GetValue<string>());
+        Assert.DoesNotContain("hunter2", e.ToJsonString());
+        Assert.Equal(0, h.Desktop.ClipboardTextReads);
+        // A refused act counts as an act too: the mark is taken before anything else.
+        CopyInApp(h, Code);
+        h.Err("act", Act(Id("btnPost"), "click"), RpcErrors.PolicyRefusedCode);
+        h.Err("clipboard.read", new { runId = Harness.RunId }, RpcErrors.PolicyRefusedCode);
+    }
+
+    [Fact]
+    public void Clipboard_read_is_refused_more_than_10_seconds_after_the_runs_last_act()
+    {
+        using var h = new Harness(realTime: false, policyExtra: ", \"clipboardRead\": true");
+        var time = h.Time!;
+        h.BeginWithApp();
+        CopyInApp(h, Code);
+        time.Advance(RunnerService.ClipboardFreshness);
+        Assert.Equal(Code, h.Ok("clipboard.read", new { runId = Harness.RunId })["text"]!.GetValue<string>());
+        time.Advance(TimeSpan.FromSeconds(1));
+        var e = h.Err("clipboard.read", new { runId = Harness.RunId }, RpcErrors.PolicyRefusedCode);
+        Assert.Contains("within 10 seconds after the run's last act, and 11 seconds have passed", e["message"]!.GetValue<string>());
+        Assert.DoesNotContain(Code, e.ToJsonString());
+        Assert.Equal(1, h.Desktop.ClipboardReads);
+        // A new copying act makes it fresh again.
+        CopyInApp(h, Code);
+        Assert.Equal(Code, h.Ok("clipboard.read", new { runId = Harness.RunId })["text"]!.GetValue<string>());
     }
 
     [Fact]
@@ -947,7 +1037,8 @@ public sealed class ServiceTests : IDisposable
         h.Processes.Paths[2000] = h.HelperPath();
         h.Processes.Parents[2000] = app;
         h.Desktop.InputReceiver = copy;
-        h.Desktop.OnPerform = op => { if (ReferenceEquals(op.Element, copy)) h.Desktop.ClipboardText = Code; return null; };
+        // The web view copies from its browser process (the helper): the helper owns the clipboard.
+        h.Desktop.OnPerform = op => { if (ReferenceEquals(op.Element, copy)) h.Desktop.Copy(Code, 2000); return null; };
         h.Ok("act", Act(CopyButton(), "click"));
         Assert.Equal(Code, h.Ok("clipboard.read", new { runId = Harness.RunId })["text"]!.GetValue<string>());
         // A helper's own top-level window in front counts as the run's while the helper descends from the run.
@@ -955,6 +1046,14 @@ public sealed class ServiceTests : IDisposable
         h.Desktop.Windows.Insert(0, helperWindow);
         h.Desktop.Foreground = helperWindow;
         Assert.Equal(Code, h.Ok("clipboard.read", new { runId = Harness.RunId })["text"]!.GetValue<string>());
+        // The same helper exe outside the run owns no clipboard text the run may read.
+        h.Desktop.Foreground = h.Desktop.Windows.Single(w => w.ProcessId == app);
+        h.Processes.Names[2001] = "msedgewebview2.exe";
+        h.Processes.Paths[2001] = h.HelperPath();
+        h.Desktop.Copy("hunter2-password", 2001);
+        h.Err("clipboard.read", new { runId = Harness.RunId }, RpcErrors.PolicyRefusedCode);
+        h.Desktop.Copy(Code, 2000);
+        h.Desktop.Foreground = helperWindow;
         h.Processes.Parents[2000] = 9999;
         h.Err("clipboard.read", new { runId = Harness.RunId }, RpcErrors.PolicyRefusedCode);
     }
@@ -964,9 +1063,9 @@ public sealed class ServiceTests : IDisposable
     {
         using var h = new Harness(policyExtra: ", \"clipboardRead\": true");
         h.BeginWithApp();
-        h.Desktop.ClipboardText = new string('7', RunnerService.MaxClipboardChars);
+        CopyInApp(h, new string('7', RunnerService.MaxClipboardChars));
         Assert.Equal(RunnerService.MaxClipboardChars, h.Ok("clipboard.read", new { runId = Harness.RunId })["text"]!.GetValue<string>().Length);
-        h.Desktop.ClipboardText = new string('7', RunnerService.MaxClipboardChars + 1);
+        CopyInApp(h, new string('7', RunnerService.MaxClipboardChars + 1));
         var e = h.Err("clipboard.read", new { runId = Harness.RunId }, RpcErrors.PolicyRefusedCode);
         Assert.Contains("1000", e["message"]!.GetValue<string>());
         Assert.DoesNotContain("7777", e.ToJsonString());
@@ -977,7 +1076,7 @@ public sealed class ServiceTests : IDisposable
     {
         using var h = new Harness(policyExtra: ", \"clipboardRead\": true");
         h.BeginWithApp();
-        h.Desktop.ClipboardText = Code;
+        CopyInApp(h, Code);
         h.Desktop.ClipboardBusy = 2;
         Assert.Equal(Code, h.Ok("clipboard.read", new { runId = Harness.RunId })["text"]!.GetValue<string>());
         Assert.Equal(3, h.Desktop.ClipboardReads);

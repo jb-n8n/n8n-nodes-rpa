@@ -28,6 +28,12 @@ internal static partial class Native
     [DllImport("user32.dll", SetLastError = true)]
     public static extern IntPtr GetClipboardData(uint uFormat);
 
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetClipboardOwner();
+
+    [DllImport("user32.dll")]
+    public static extern uint GetClipboardSequenceNumber();
+
     [DllImport("kernel32.dll", SetLastError = true)]
     public static extern IntPtr GlobalLock(IntPtr hMem);
 
