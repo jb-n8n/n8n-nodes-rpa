@@ -19,7 +19,7 @@
     "fflate": "0.8.3"
   },
   "devDependencies": {
-    "@types/node": "26.6.5",
+    "@types/node": "26.6.6",
     "n8n-workflow": "2.44.2",
     "typescript": "5.9.3",
     "vite": "8.3.5",
