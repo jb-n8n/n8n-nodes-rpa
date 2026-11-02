@@ -93,7 +93,7 @@ services:
       - "127.0.0.1:38025:8025" # inbox UI; n8n sends to mailpit:1025
 
   postgres:
-    image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24 # n8n 2.41 supports Postgres 17 and later
+    image: postgres:18-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5 # n8n 2.41 supports Postgres 17 and later
     restart: unless-stopped
     user: "70:70" # the image's postgres user, so the entrypoint needs no capabilities to switch to it
     environment:
