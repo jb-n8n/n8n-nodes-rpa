@@ -52,7 +52,7 @@ const EXPORTS = [
   'runnerUnreachable', 'sanitizeFileName', 'screenshotMasks', 'screenshotTooTall', 'scriptHash', 'scrubTrace', 'secretFillValue', 'secretInLocation',
   'settle', 'shownFailure', 'signDesktopSteps', 'signInCodeFieldMissing', 'signScript', 'signSteps', 'snapshot', 'sniffMime', 'startHostOf', 'startSiteMismatch',
   'stepChanges', 'stopTrace', 'stripShownPrefix', 'substituteVars', 'toErrorCode', 'tokenRefused', 'tooManyRows', 'totp', 'unsignedWrites',
-  'validateScript', 'varInWriteLocator', 'verbOf', 'verifyRows', 'verifyScript', 'versionMismatch', 'violationMessage', 'wantTrace',
+  'validateScript', 'varInWriteLocator', 'varNotRendered', 'verbOf', 'verifyRows', 'verifyScript', 'versionMismatch', 'violationMessage', 'wantTrace',
 ];
 
 describe('engine exports', () => {
