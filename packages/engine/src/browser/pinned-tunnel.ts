@@ -65,9 +65,8 @@ export async function openPinnedTunnel(
 
   let taken = false;
   const server = createServer((client) => {
-    // One connection per tunnel: Playwright connects once. Every later connection is closed here, unread. The listener
-    // stays bound until close(): a port given up now could be bound by another local process, and a client that
-    // connects after that would send its upgrade request, with the token, to that process.
+    // One connection per tunnel: Playwright connects once. Every later connection is closed here, unread. The tunnel
+    // keeps listening until close(), so it does not give up the port while the client may still connect.
     if (taken) {
       client.destroy();
       return;

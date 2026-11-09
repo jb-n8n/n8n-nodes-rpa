@@ -77,7 +77,8 @@ Schema of the step document for editor autocomplete, at `dist/schema/steps.schem
 
 ## Credentials
 
-- **RPA Browser**: where the browser runs (above), an optional token and Slow Motion.
+- **RPA Browser**: where the browser runs (above), an optional token, Slow Motion, and for a `wss://` browser server
+  with its own certificate, the certificate's SHA-256 fingerprint, checked before the token is sent.
 - **RPA Site Login**: the login page, username, password and optional TOTP secret for one site, and the sites the
   browser may open and the forms it may submit. Secrets reach the page only through a sign-in step and are masked in
   every output, log and trace.
