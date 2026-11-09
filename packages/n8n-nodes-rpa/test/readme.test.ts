@@ -219,6 +219,13 @@ describe('README', () => {
     for (const text of ['Require Signed Steps', 'Expected Version', 'Variables', '{{var.name}}', 'AI Repair', 'Allow Unsigned Writes']) expect(s, text).toContain(text);
   });
 
+  it('documents the select row with the multi-select limits', () => {
+    const s = section('## Run Steps reference');
+    expect(s).toContain('| `fill`, `select` | `{ field: <locator>, value }`; `value` may be `{{var.name}}`. `fill` also takes `secret: true` (see **Typing a secret into a password field**). '
+      + 'For `select` on a multi-select, `value` may be an array of strings, `["north", "{{var.region}}"]`: exactly those options end up selected and the others are cleared '
+      + '(a single string still selects one option). The array holds at most 50 values, of at most 4096 characters over all values together |');
+  });
+
   it('lists the Run Steps Data fields, durationMs and llmTokens included', () => {
     const s = section('## Run Steps reference');
     expect(s).toContain('{ url, title, status, name, version, hash, lane, confirmed, llmCalls, durationMs, llmTokens, log, rows?, files?, blockedRequests?, submitted? }');

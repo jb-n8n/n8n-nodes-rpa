@@ -457,7 +457,7 @@ Every step has an `intent` (plain words, shown in logs and errors) and one verb.
 |---|---|
 | `goto` | `"https://..."`; optional `waitUntil`: `load`, `domcontentloaded` or `networkidle` (use the object form `{ "goto": "https://...", "waitUntil": "load" }`) |
 | `click`, `check` | a locator; `check` is `{ field, checked? }` |
-| `fill`, `select` | `{ field: <locator>, value }`; `value` may be `{{var.name}}`. `fill` also takes `secret: true` (see **Typing a secret into a password field**). For `select` on a multi-select, `value` may be an array of strings, `["north", "{{var.region}}"]`: exactly those options end up selected and the others are cleared (a single string still selects one option) |
+| `fill`, `select` | `{ field: <locator>, value }`; `value` may be `{{var.name}}`. `fill` also takes `secret: true` (see **Typing a secret into a password field**). For `select` on a multi-select, `value` may be an array of strings, `["north", "{{var.region}}"]`: exactly those options end up selected and the others are cleared (a single string still selects one option). The array holds at most 50 values, of at most 4096 characters over all values together |
 | `clickAll` | `{ target, max }` clicks every match, at most `max` |
 | `waitFor` | `{ target?, state?, hasText?, minCount?, response? }` |
 | `paginate` | `{ next, until: "absent" or "disabled", max, each: [steps] }` |
