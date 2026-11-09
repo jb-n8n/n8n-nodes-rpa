@@ -89,10 +89,49 @@ describe('validateScript', () => {
     expect(validateScript(s, { ...p, previous: s }).ok).toBe(true);
     expect(validateScript(s, ctx).ok).toBe(true);
   });
-  it('in proposal mode, refuses fill with secret, and accepts it when loading signed steps', () => {
+  it('in proposal mode, refuses a fill with secret that is new, and accepts it when loading signed steps', () => {
     const s = add(baselineScript(portal.url), { intent: 'Type', fill: { field: { label: 'Export password' }, value: '{{var.pw}}', secret: true } });
-    expect(validateScript(s, { ...ctx, mode: 'proposal' as const, previous: s }).violations.join()).toMatch(/cannot type a secret/);
+    // No signed base (a first approval, an import): every secret fill is new.
+    expect(validateScript(s, { ...ctx, mode: 'proposal' as const }).violations.join()).toMatch(/cannot type a secret/);
+    // Added to a base that had none.
+    expect(validateScript(s, { ...ctx, mode: 'proposal' as const, previous: baselineScript(portal.url) }).violations.join()).toMatch(/cannot type a secret/);
     expect(validateScript(s, ctx).ok).toBe(true);
+  });
+  describe('in proposal mode, a signed fill with secret the repair kept', () => {
+    const FILL: Step = { intent: 'Type the export password', fill: { field: { label: 'Export password' }, value: '{{var.pw}}', secret: true } };
+    const OPEN: Step = { intent: 'Open the export', click: { role: 'button', name: 'Export' } };
+    const base = add(baselineScript(portal.url), FILL, OPEN);
+    const p = (script: Script) => validateScript(script, { ...ctx, mode: 'proposal' as const, previous: base });
+    const secretViolations = (script: Script) => p(script).violations.filter((v) => /cannot type a secret/.test(v));
+    it('is allowed when it is the same step at the same index, before the first changed step', () => {
+      // Nothing changed at all.
+      expect(p(base)).toMatchObject({ ok: true });
+      // A step after it changed.
+      const repaired = add(baselineScript(portal.url), FILL, { intent: 'Open the export', click: { role: 'link', name: 'Export' } });
+      expect(p(repaired)).toMatchObject({ ok: true, violations: [] });
+      // A step added after it.
+      expect(secretViolations(add(base, { intent: 'Read', read: { what: 'url' } }))).toEqual([]);
+      // The same step in a paginate body that did not change.
+      const nested = add(baselineScript(portal.url), { intent: 'Pages', paginate: { next: { text: 'Next' }, until: 'absent', max: 2, each: [FILL] } }, OPEN);
+      const nestedRepair = structuredClone(nested);
+      (nestedRepair.steps[nestedRepair.steps.length - 1] as { click: object }).click = { text: 'Export' };
+      expect(validateScript(nestedRepair, { ...ctx, mode: 'proposal' as const, previous: nested }).violations.filter((v) => /cannot type a secret/.test(v))).toEqual([]);
+    });
+    it('is refused when it changed, moved, or sits at or after the first changed step', () => {
+      // Changed: another field, another variable, or no longer exactly the signed step.
+      expect(secretViolations(add(baselineScript(portal.url), { ...FILL, fill: { ...FILL.fill, field: { label: 'Password' } } } as Step, OPEN))).toHaveLength(1);
+      expect(secretViolations(add(baselineScript(portal.url), { ...FILL, fill: { ...FILL.fill, value: '{{var.other}}' } } as Step, OPEN))).toHaveLength(1);
+      expect(secretViolations(add(baselineScript(portal.url), { ...FILL, intent: 'Type it' }, OPEN))).toHaveLength(1);
+      // Moved: one index later behind a new step, or after the step that followed it.
+      expect(secretViolations(add(baselineScript(portal.url), { intent: 'Wait', waitFor: { target: { label: 'Export password' } } }, FILL, OPEN))).toHaveLength(1);
+      expect(secretViolations(add(baselineScript(portal.url), OPEN, FILL))).toHaveLength(1);
+      // The same step at the same index, after a changed step.
+      const earlier = structuredClone(base);
+      (earlier.steps[0] as { intent: string }).intent = 'Open the sign-in page again';
+      expect(secretViolations(earlier)).toHaveLength(1);
+      // A second, added copy after the kept one.
+      expect(secretViolations(add(base, FILL))).toHaveLength(1);
+    });
   });
   it('raises safety flags for new submits, downloads and hosts compared with the previous version', () => {
     const prev = baselineScript(portal.url);

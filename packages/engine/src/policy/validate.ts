@@ -119,6 +119,24 @@ function hasVarInLocators(v: unknown): boolean {
   return false;
 }
 
+const isSecretFill = (s: Step) => 'fill' in s && s.fill.secret === true;
+
+/**
+ * The top-level steps of a proposal whose fill with `secret: true` (its own, or one in its paginate body) an AI repair
+ * may keep: the step is byte-identical (canonical form) to the same-index step of the signed base and comes before the
+ * first step that differs from the base, so the repair neither added, changed nor moved it, and nothing it changed runs
+ * before it. Without a base, none.
+ */
+function keptSecretFills(script: Script, previous: Script | undefined): Set<number> {
+  const kept = new Set<number>();
+  if (!previous) return kept;
+  for (let i = 0; i < script.steps.length && i < previous.steps.length; i++) {
+    if (canonicalize(script.steps[i]) !== canonicalize(previous.steps[i])) break;
+    kept.add(i);
+  }
+  return kept;
+}
+
 function collect(script: Script) {
   const steps = flattenSteps(script.steps);
   const hosts = new Set<string>([new URL(script.startUrl).host]);
@@ -214,6 +232,17 @@ export function validateScript(script: Script, ctx: PolicyContext): PolicyResult
   const observed = new Set((ctx.observedNavigations ?? []).flatMap((u) => { try { return [pageKey(new URL(u))]; } catch { return []; } }));
   observed.add(pageKey(startUrl));
 
+  // An AI-written step cannot type a secret; a repair may keep a signed one unchanged where it was (keptSecretFills).
+  if (ctx.mode === 'proposal') {
+    const kept = keptSecretFills(script, ctx.previous);
+    script.steps.forEach((top, i) => {
+      if (kept.has(i)) return;
+      for (const s of flattenSteps([top])) {
+        if (isSecretFill(s)) violations.push(`step "${s.intent}": an AI-written step cannot type a secret (fill with secret: true is only for steps you write and sign; a repair may only keep a signed one unchanged, at its place, before the first step it changes)`);
+      }
+    });
+  }
+
   let signIns = 0;
   for (let stepIndex = 0; stepIndex < mine.steps.length; stepIndex++) {
     const s = mine.steps[stepIndex];
@@ -223,7 +252,6 @@ export function validateScript(script: Script, ctx: PolicyContext): PolicyResult
 
     const maxLiteral = ctx.mode === 'proposal' ? MAX_LITERAL_PROPOSAL : MAX_LITERAL_LOAD;
     const literal = 'fill' in s ? s.fill.value : 'select' in s ? s.select.value : undefined;
-    if (ctx.mode === 'proposal' && 'fill' in s && s.fill.secret === true) violations.push(`${where}: an AI-written step cannot type a secret (fill with secret: true is only for steps you write and sign)`);
     const literals = literal === undefined ? [] : Array.isArray(literal) ? literal : [literal];
     if (literals.some((v) => v.length > maxLiteral)) violations.push(`limit: ${where}: value is longer than ${maxLiteral} characters`);
     if (literals.length > MAX_SELECT_VALUES) violations.push(`limit: ${where}: more than ${MAX_SELECT_VALUES} values`);
