@@ -152,7 +152,8 @@ existing entry and does not take its place:
   (`a policy change cannot turn allowUserWritable off for <path>`).
 
 A change file may be written by a user who is not an administrator (a recorder, for example), and the lines the tool
-prints are all the administrator sees before saying yes. So a change has to be small enough to read:
+prints are all the administrator sees before saying yes. So the tool limits a change and the length of what it prints
+for it:
 
 | Refused | Message |
 |---|---|
@@ -162,6 +163,7 @@ prints are all the administrator sees before saying yes. So a change has to be s
 | A name, path, id or argument longer than 260 characters | `a value in the change is longer than 260 characters` |
 | A short (8.3) name such as `C:\PROGRA~1\...` in an app `path` or a helper `pathPattern` (any `~` followed by a digit): it would name an existing entry's file without being that entry | `write the full path, not a short (8.3) name: <the path>` |
 | An entry that is not an object, or an argument that is not text | `an entry in <key> must be an object`, `an allowed argument must be text` |
+| A summary longer than 8,000 characters: every line the tool prints for the change before it asks, from the first line to the count line, line breaks counted. A value shown as `\uXXXX` escapes is six times as long as it is in the file. | `the summary of this change would be longer than 8000 characters; split it into smaller changes` |
 
 ### What the tool prints
 
@@ -196,9 +198,10 @@ the quotes show where each value starts and ends. Everything else the tool print
 has control and format characters written as `\uXXXX` too.
 
 These measures make a misleading change harder to write; they do not replace reading the lines. Read each of them and
-the count line, and answer `n` when anything is unclear. Limits that remain: a change within the limits above can
-still print more lines than a window shows at once, and the tool cannot tell whether a path that looks right is the
-program you mean.
+the count line, and answer `n` when anything is unclear. Limits that remain: a summary may be up to 8,000 characters
+long (100 rows of a window 80 columns wide), which is more than a small window shows at once, so scroll up to the first
+line (`Creating a new policy ...` or `Changing the policy ...`) before you answer; and the tool cannot tell whether a
+path that looks right is the program you mean.
 
 ### What the tool writes, and what it trusts
 

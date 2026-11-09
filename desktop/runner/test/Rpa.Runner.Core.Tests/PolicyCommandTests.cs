@@ -284,6 +284,59 @@ public class PolicyCommandTests
     }
 
     [Fact]
+    public void A_summary_longer_than_8000_characters_is_refused_before_it_is_printed()
+    {
+        const string refusal = "the summary of this change would be longer than 8000 characters; split it into smaller changes";
+        // 33 entries, well inside every other limit. The last id sets the summary's length to the character.
+        static string Controls(int lastId) => "{ \"writeControls\": [" +
+            string.Join(", ", Enumerable.Range(0, 32).Select(i => $"{{ \"exe\": \"ErpDemo.exe\", \"automationId\": \"{i:D2}{new string('x', 200)}\" }}")) +
+            $", {{ \"exe\": \"ErpDemo.exe\", \"automationId\": \"z{new string('x', lastId)}\" }}] }}";
+
+        // What counts: every line up to the prompt (the first line, the summary, the count line), each with one
+        // character for its line break, as this test's writer ends lines.
+        var tool = new Tool();
+        tool.Files.Text[ChangePath] = Controls(0);
+        Assert.Equal(3, tool.Run("n\n", "apply", ChangePath, "--policy", PolicyPath));
+        var room = 8000 - (tool.Output.Length - Prompt.Length);
+        Assert.InRange(room, 1, 250);
+
+        tool.Files.Text[ChangePath] = Controls(room);
+        Assert.Equal(3, tool.Run("n\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Equal(8000, tool.Output.Length - Prompt.Length);
+        Assert.StartsWith($"{Changing()}\nAdd write control \"ErpDemo.exe\" / \"00xxx", tool.Output);
+        Assert.Equal(0, tool.Run("", "apply", ChangePath, "--yes", "--policy", PolicyPath));
+
+        foreach (var options in new string[][] { [], ["--yes"] })
+        {
+            tool = new Tool();
+            tool.Files.Text[ChangePath] = Controls(room + 1);
+            Assert.Equal(1, tool.Run("y\n", ["apply", ChangePath, "--policy", PolicyPath, .. options]));
+            Assert.Equal($"{Changing()}\n{refusal}\n", tool.Output);
+            Assert.Empty(tool.Files.Writes);
+            Assert.Equal(0, tool.Restarts);
+        }
+    }
+
+    [Fact]
+    public void A_change_that_is_small_in_bytes_and_long_when_escaped_is_refused()
+    {
+        // One app with two argument lists of 20 arguments: under 3,000 bytes in the file. Each of its 2,360 delete
+        // characters (one byte, not printable) is six characters in the summary.
+        var lists = string.Join(", ", Enumerable.Range(0, 2).Select(i => "[" + string.Join(", ", Enumerable.Repeat($"\"{i}{new string('\u007f', 59)}\"", 20)) + "]"));
+        var tool = new Tool();
+        tool.Files.Text[ChangePath] = $$"""{ "allowedApps": [{ "exe": "ErpDemo.exe", "path": {{J(ErpPath)}}, "allowUserWritable": true, "allowedArgs": [{{lists}}] }] }""";
+        Assert.InRange(Encoding.UTF8.GetByteCount(tool.Files.Text[ChangePath]), 2400, 3000);
+        Assert.Equal(1, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Equal($"{Changing()}\nthe summary of this change would be longer than 8000 characters; split it into smaller changes\n", tool.Output);
+        Assert.Empty(tool.Files.Writes);
+
+        // With one list of four such arguments the same app is shown, warning and all.
+        tool.Files.Text[ChangePath] = $$"""{ "allowedApps": [{ "exe": "ErpDemo.exe", "path": {{J(ErpPath)}}, "allowUserWritable": true, "allowedArgs": [[{{string.Join(", ", Enumerable.Repeat($"\"{new string('\u007f', 59)}\"", 4))}}]] }] }""";
+        Assert.Equal(3, tool.Run("n\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Contains($"\n{AllowErp}\nWARNING: {L(ErpPath)} can be changed by the runner's own user\n  with arguments: \"\\u007F", tool.Output);
+    }
+
+    [Fact]
     public void A_refused_change_exits_1_and_says_why()
     {
         var tool = new Tool();

@@ -35,6 +35,13 @@ public static class PolicyCommand
     /// <summary>A change file larger than this is refused unread: its summary would not fit above the prompt.</summary>
     public const long MaxChangeFileBytes = 256 * 1024;
 
+    /// <summary>
+    /// The most the tool prints before it asks: the first line, the summary lines and the count line together, each
+    /// with one character for its line break. A longer summary is refused (a value can be six times its length when
+    /// it is shown as escapes, so the limits on a change alone do not keep its summary short).
+    /// </summary>
+    public const int MaxSummaryLength = 8000;
+
     public const string Usage = """
         Usage: RpaPolicy show [--policy <path>]
                RpaPolicy apply <change.json> [--yes] [--policy <path>]
@@ -233,15 +240,13 @@ public static class PolicyCommand
     private static int Change(string change, Arguments arguments, TextReader input, TextWriter output, IPolicyFiles files, Action restartRunner)
     {
         var current = ExistingPolicy(arguments.PolicyPath, files);
-        if (current is null)
-        {
-            Print(output, $"Creating a new policy at {arguments.PolicyPath}.");
-        }
-        else
+        var first = $"Creating a new policy at {arguments.PolicyPath}.";
+        if (current is not null)
         {
             var today = PolicyChange.Parse(current, "the current policy");
-            Print(output, $"Changing the policy at {arguments.PolicyPath} ({today.AllowedApps.Count} app(s), {today.HelperProcesses.Count} helper process pattern(s) today).");
+            first = $"Changing the policy at {arguments.PolicyPath} ({today.AllowedApps.Count} app(s), {today.HelperProcesses.Count} helper process pattern(s) today).";
         }
+        Print(output, first);
 
         var result = PolicyChange.Apply(current ?? "", change);
         if (result.Summary.Count == 0)
@@ -249,6 +254,8 @@ public static class PolicyCommand
             Print(output, "Nothing to change.");
             return 0;
         }
+        if (result.Summary.Prepend(first).Sum(line => Visible(line).Length + 1) > MaxSummaryLength)
+            return Fail(output, $"the summary of this change would be longer than {MaxSummaryLength} characters; split it into smaller changes");
         foreach (var line in result.Summary) Print(output, line);
         if (!arguments.Yes)
         {
