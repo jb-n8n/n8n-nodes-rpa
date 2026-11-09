@@ -1,14 +1,19 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createServer as createHttpServer, type Server as HttpServer } from 'node:http';
+import { connect as netConnect } from 'node:net';
+import { createServer as createTlsServer, type Server as TlsServer } from 'node:tls';
 import { chromium, type Browser, type BrowserServer } from 'playwright-core';
 import { createGate, MIN_TOKEN_LENGTH } from 'n8n-rpa-gate';
-import { BrowserUnavailableError, NoFreeSessionError, openSession, SESSION_WAIT_MS } from '../src/browser/session.js';
+import { BrowserUnavailableError, NoFreeSessionError, openSession, SESSION_WAIT_MS, type ConnectServer } from '../src/browser/session.js';
 import { openLaneRuntime, CANCELLED } from '../src/lane/script-lane.js';
 import { runTask } from '../src/lane/task.js';
-import { browserUnreachable, noFreeBrowserSession, tokenRefused } from '../src/messages.js';
+import {
+  BROWSER_FINGERPRINT_INVALID, BROWSER_FINGERPRINT_MISMATCH, BROWSER_FINGERPRINT_NEEDS_WSS, browserUnreachable, noFreeBrowserSession, tokenRefused,
+} from '../src/messages.js';
 import { createMasker } from '../src/secrets/mask.js';
 import type { BrowserEndpoint } from '../src/types.js';
 import { fakeModel } from './fake-model.js';
+import { selfSignedCert } from './fake-runner-cert.js';
 import { baselineScript, policyFor, SECRETS, signedLaneInput } from './helpers.js';
 import { bound } from './timing.js';
 
@@ -223,5 +228,113 @@ describe('what is not waited on', () => {
     expect(err).toBeInstanceOf(BrowserUnavailableError);
     expect((err as Error).message).not.toBe(noFreeBrowserSession(`ws://127.0.0.1:${port}/`, 0));
     expect(Date.now() - t0).toBeLessThan(bound(1000));
+  });
+});
+
+/**
+ * A Browser Server reached over wss:// with a self-signed certificate, trusted by its SHA-256 fingerprint. The server
+ * is the real gate in front of the real run-server, behind a TLS listener that records the bytes it decrypted.
+ */
+describe('a wss:// browser server pinned by its certificate fingerprint', () => {
+  const served = selfSignedCert('browser-server');
+  const other = selfSignedCert('browser-server');
+  let gate: Gate;
+  let tls: TlsServer;
+  let url = '';
+  let received = 0;
+  beforeAll(async () => {
+    const started = await startGate();
+    gate = started.gate;
+    tls = createTlsServer({ key: served.key, cert: served.cert }, (socket) => {
+      const upstream = netConnect(started.port, '127.0.0.1');
+      socket.on('data', (chunk: Buffer) => { received += chunk.length; });
+      socket.on('error', () => upstream.destroy());
+      upstream.on('error', () => socket.destroy());
+      socket.pipe(upstream).pipe(socket);
+    });
+    // A client that leaves during the handshake (a refused certificate) is not this server's concern.
+    tls.on('tlsClientError', () => undefined);
+    await new Promise<void>((r) => tls.listen(0, '127.0.0.1', r));
+    url = `wss://127.0.0.1:${(tls.address() as { port: number }).port}/`;
+  });
+  afterAll(async () => { await new Promise((r) => tls.close(r)); await closeGate(gate); });
+
+  /** Whether a TCP connect to the loopback port of `wsUrl` is refused. */
+  const refused = (wsUrl: string) => new Promise<boolean>((resolve) => {
+    const s = netConnect(Number(new URL(wsUrl).port), '127.0.0.1');
+    s.once('connect', () => { s.destroy(); resolve(false); });
+    s.once('error', (e: NodeJS.ErrnoException) => resolve(e.code === 'ECONNREFUSED'));
+  });
+  /** The connect seam: records the URL the session hands to chromium.connect, then connects for real. */
+  const recording = (urls: string[]): ConnectServer => (wsUrl, options) => {
+    urls.push(wsUrl);
+    return chromium.connect(wsUrl, options);
+  };
+
+  it('a fingerprint with ws:// or outside Browser Server mode is refused', async () => {
+    const urls: string[] = [];
+    const fingerprint = served.fingerprint;
+    for (const refusedEndpoint of [
+      { mode: 'playwright', wsUrl: 'ws://10.0.0.5:3000', fingerprint },
+      { mode: 'cdp', wsUrl: 'wss://x', fingerprint },
+      { mode: 'local', fingerprint },
+    ] satisfies BrowserEndpoint[]) {
+      const err = await openSession({ endpoint: refusedEndpoint, policy, masker, connectServer: recording(urls) }).catch((e: Error) => e);
+      expect(err).toBeInstanceOf(BrowserUnavailableError);
+      expect((err as Error).message).toBe(BROWSER_FINGERPRINT_NEEDS_WSS);
+    }
+    expect(urls).toEqual([]);
+  });
+
+  it('a malformed fingerprint is refused before any connection', async () => {
+    const urls: string[] = [];
+    const err = await openSession({ endpoint: endpoint(url, { fingerprint: 'abc' }), policy, masker, connectServer: recording(urls) }).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(BrowserUnavailableError);
+    expect((err as Error).message).toBe(BROWSER_FINGERPRINT_INVALID);
+    expect(urls).toEqual([]);
+  });
+
+  it('a wrong fingerprint fails as browser unavailable with the mismatch message', async () => {
+    received = 0;
+    const sessions = gate.stats().sessionsTotal;
+    const urls: string[] = [];
+    const t0 = Date.now();
+    const err = await openSession({ endpoint: endpoint(url, { fingerprint: other.fingerprint }), policy, masker, connectServer: recording(urls) })
+      .catch((e: Error) => e);
+    expect(err).toBeInstanceOf(BrowserUnavailableError);
+    expect((err as Error).message).toBe(BROWSER_FINGERPRINT_MISMATCH);
+    expect(Date.now() - t0).toBeLessThan(bound(2000));
+    // Neither the upgrade request nor the token left this process, and the tunnel is gone.
+    expect(received).toBe(0);
+    expect(gate.stats().sessionsTotal).toBe(sessions);
+    expect(urls).toHaveLength(1);
+    expect(await refused(urls[0])).toBe(true);
+  });
+
+  it('a matching fingerprint connects through a loopback tunnel that closes with the session', async () => {
+    const urls: string[] = [];
+    const sessions = gate.stats().sessionsTotal;
+    const s = await openSession({ endpoint: endpoint(url, { fingerprint: served.fingerprint.toLowerCase() }), policy, masker, connectServer: recording(urls) });
+    try {
+      expect(urls).toHaveLength(1);
+      expect(urls[0]).toMatch(/^ws:\/\/127\.0\.0\.1:\d+\/$/);
+      expect(await s.page.evaluate(() => 1 + 1)).toBe(2);
+      // The token went through the tunnel to the gate, which checks it before it admits a session.
+      expect(gate.stats().sessionsTotal).toBe(sessions + 1);
+      expect(await refused(urls[0])).toBe(false);
+    } finally { await s.close(); }
+    await expect.poll(() => refused(urls[0])).toBe(true);
+  });
+
+  it('no fingerprint leaves wss:// connecting as before', async () => {
+    const urls: string[] = [];
+    const wsUrl = 'wss://browser.example:3000/pw?session=abc';
+    const err = await openSession({
+      endpoint: endpoint(wsUrl), policy, masker,
+      connectServer: async (given) => { urls.push(given); throw new Error('connect ECONNREFUSED'); },
+    }).catch((e: Error) => e);
+    expect(urls).toEqual([wsUrl]);
+    expect(err).toBeInstanceOf(BrowserUnavailableError);
+    expect((err as Error).message).toBe(browserUnreachable('wss://browser.example:3000/pw'));
   });
 });
