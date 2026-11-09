@@ -91,6 +91,9 @@ function fixtureDrafts(): { at: string; doc: unknown }[] {
 
 const URL_BASE = 'http://localhost:8080';
 const loc = { css: '#x' };
+/** Locators with a run variable where the run renders it (a role's name, a visible text). */
+const V_ROLE = { role: 'button', name: '{{var.who}}' };
+const V_TEXT = { text: 'Row {{var.who}}' };
 /** One document with every verb and every optional field parseScript knows, so the schema is checked for breadth. */
 const EVERY_FIELD = {
   name: 'every-field',
@@ -105,6 +108,8 @@ const EVERY_FIELD = {
     { intent: 'Select', select: { field: { label: 'Kind' }, value: '{{var.kind}}' } },
     { intent: 'Select many', select: { field: { label: 'Kinds' }, value: ['a', '{{var.kind}}'] } },
     { intent: 'Open one by variable', click: { role: 'link', name: '{{var.item}}' } },
+    { intent: 'Open one by its text', click: { text: '{{var.item}} details', within: { role: 'region', name: '{{ var.region }}' }, fallbacks: [{ role: 'link', name: '{{var.item}}' }, { text: '{{var.item}}' }] }, when: { visible: V_TEXT }, expect: { visible: V_ROLE } },
+    { intent: 'Download by variable path', download: { trigger: { text: 'Export' }, via: { path: '/export/{{var.id}}' } } },
     { intent: 'Check', check: { field: { label: 'Agree' }, checked: false } },
     { intent: 'Check default', check: { field: { label: 'Agree' } } },
     { intent: 'Click all', clickAll: { target: loc, max: 100 } },
@@ -227,6 +232,35 @@ describe('the step-document JSON Schema', () => {
       ['a secret fill with a literal', doc(step({ fill: { field: loc, value: 'literal', secret: true } }))],
       ['a secret that is not a boolean', doc(step({ fill: { field: loc, value: '{{var.p}}', secret: 'yes' } }))],
       ['secret on select', doc(step({ select: { field: loc, value: '{{var.p}}', secret: true } }))],
+      // A run variable never steers a write: no {{var.*}} in any locator of signIn, submit or download (when and expect too).
+      ...[
+        ['username', { username: V_ROLE, password: loc, submit: loc }],
+        ['next', { username: loc, next: V_TEXT, password: loc, submit: loc }],
+        ['password', { username: loc, password: { label: 'P', fallbacks: [V_TEXT] }, submit: loc }],
+        ['submit', { username: loc, password: loc, submit: { css: '#go', within: V_ROLE } }],
+        ['totp.field', { username: loc, password: loc, submit: loc, totp: { field: V_TEXT, submit: loc } }],
+        ['totp.submit', { username: loc, password: loc, submit: loc, totp: { field: loc, submit: V_ROLE } }],
+        ['totp.via', { username: loc, password: loc, submit: loc, totp: { field: loc, submit: loc, via: [loc, V_ROLE] } }],
+        ['totp.check', { username: loc, password: loc, submit: loc, totp: { field: loc, submit: loc, check: [V_TEXT] } }],
+      ].map(([k, signIn]) => [`a {{var.*}} in signIn.${k as string}`, doc(step({ signIn }))] as [string, unknown]),
+      ['a {{var.*}} in a submit button', doc(step({ submit: { button: V_ROLE, path: '/save' } }))],
+      ['a {{var.*}} in a submit path', doc(step({ submit: { button: loc, path: '/save/{{var.id}}' } }))],
+      ['a {{var.*}} in a download trigger', doc(step({ download: { trigger: V_TEXT } }))],
+      ['a {{var.*}} in a download file check', doc(step({ download: { trigger: loc, check: { name: '^{{var.month}}' } } }))],
+      ['a {{var.*}} in when.visible of a download', doc(step({ download: { trigger: loc }, when: { visible: V_TEXT } }))],
+      ['a {{var.*}} in expect.visible of a submit', doc(step({ submit: { button: loc, path: '/save' }, expect: { visible: { css: '#ok', fallbacks: [V_ROLE] } } }))],
+      ['a {{var.*}} in a download inside paginate', doc(step({ paginate: { next: loc, until: 'absent', max: 2, each: [step({ download: { trigger: V_ROLE } })] } }))],
+      // A {{var.*}} where the run never renders it: anything but a role locator's name and a text locator's text.
+      ['a {{var.*}} in a label locator', doc(step({ click: { label: '{{var.x}}' } }))],
+      ['a {{var.*}} in a testId locator', doc(step({ click: { testId: 'row-{{var.x}}' } }))],
+      ['a {{var.*}} in a css locator', doc(step({ click: { css: '#{{ var.x }}' } }))],
+      ['a {{var.*}} in a frame', doc(step({ click: { css: '#a', frame: 'iframe[name="{{var.x}}"]' } }))],
+      ['a {{var.*}} in a role', doc(step({ click: { role: '{{var.x}}' } }))],
+      ['a {{var.*}} in the name of a label locator', doc(step({ click: { label: 'Q', name: '{{var.x}}' } }))],
+      ['a {{var.*}} in a within label', doc(step({ click: { css: '#a', within: { label: '{{var.x}}' } } }))],
+      ['a {{var.*}} in a fallback css', doc(step({ click: { css: '#a', fallbacks: [{ css: '#{{var.x}}' }] } }))],
+      ['a {{var.*}} in an interrupt text', { ...doc(step({ click: loc })), interrupts: [{ target: V_TEXT, click: loc }] }],
+      ['a {{var.*}} in an interrupt role name', { ...doc(step({ click: loc })), interrupts: [{ target: loc, click: V_ROLE }] }],
     ];
     expect(invalid.length).toBeGreaterThanOrEqual(10);
     for (const [what, d] of invalid) {
