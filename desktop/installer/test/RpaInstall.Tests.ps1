@@ -375,8 +375,15 @@ Describe 'The installer scripts' {
     $newTokens.Count | Should -Be 0
   }
 
-  It 'are all there: the installer, the uninstaller, the module and the three installed scripts' {
+  It 'are all there: the installer, the uninstaller, the module and the four installed scripts' {
     foreach ($name in 'Install-Rpa.ps1', 'Uninstall-Rpa.ps1', 'RpaInstall.psm1') { Join-Path $script:InstallerDir $name | Should -Exist }
-    foreach ($name in 'start-runner.ps1', 'start-browser.ps1', 'Show-RpaConnection.ps1') { Join-Path (Join-Path $script:InstallerDir 'scripts') $name | Should -Exist }
+    foreach ($name in 'start-loop.ps1', 'start-runner.ps1', 'start-browser.ps1', 'Show-RpaConnection.ps1') { Join-Path (Join-Path $script:InstallerDir 'scripts') $name | Should -Exist }
+  }
+
+  It '<Name> holds no loop of its own and runs start-loop.ps1' -ForEach @(@{ Name = 'start-runner.ps1' }, @{ Name = 'start-browser.ps1' }) {
+    $path = Join-Path (Join-Path $script:InstallerDir 'scripts') $Name
+    $ast = [Management.Automation.Language.Parser]::ParseFile($path, [ref]$null, [ref]$null)
+    @($ast.FindAll({ param($node) $node -is [Management.Automation.Language.LoopStatementAst] }, $true)).Count | Should -Be 0
+    (Get-Content -Raw -LiteralPath $path) | Should -Match "Join-Path \`$PSScriptRoot 'start-loop\.ps1'"
   }
 }
