@@ -134,6 +134,11 @@ export const formPostsElsewhere = (host: string, hosts: string[]): string => `th
 export const WINDOW_STEP_NOT_CLICK = 'the write window must be on a click step';
 /** A {{var.x}} in a locator of a step that writes or types secrets: a run variable must never steer a write. */
 export const varInWriteLocator = (at: string): string => `${at}: {{var.*}} is not allowed in a locator of a step that writes or signs in; use a fixed locator`;
+/**
+ * A {{var.x}} in a locator key the run never renders (label, testId, css, frame, role, a window selector, a UI Automation
+ * controlType, automationId or className, any key of a pop-up handler): it would be matched as literal text.
+ */
+export const varNotRendered = (at: string): string => `${at}: {{var.*}} is never rendered here; a run variable is rendered only in the name of a Role and Name locator, the text of a Visible Text locator (both in steps, not in pop-up handlers) and the name of a UI Automation condition`;
 export const renderedTooLong = (n: number): string => `limit: a rendered value is longer than ${n} characters`;
 export const inputTooLong = (name: string, n: number): string => `limit: input "${name}" is longer than ${n} characters`;
 

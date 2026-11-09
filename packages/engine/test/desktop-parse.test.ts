@@ -257,6 +257,28 @@ describe('desktop step sets: signing', () => {
   });
 });
 
+describe('run variables in desktop locator keys that are never rendered', () => {
+  it('refuses {{var.*}} in the window selector and in a condition\'s controlType, automationId and className', () => {
+    const V = '{{var.v}}';
+    const cases: [Record<string, unknown>, RegExp][] = [
+      [{ intent: 'a', click: { uia: { window: { title: V }, path: [{ automationId: 'b' }] } } }, /steps\[0\]\.click\.uia\.window\.title: .*never rendered/],
+      [{ intent: 'a', click: { uia: { window: { exe: `${V}.exe` }, path: [{ automationId: 'b' }] } } }, /steps\[0\]\.click\.uia\.window\.exe: .*never rendered/],
+      [{ intent: 'a', click: { uia: { window: { titlePattern: `^${V}$` }, path: [{ automationId: 'b' }] } } }, /window\.titlePattern: .*never rendered/],
+      [{ intent: 'a', click: { uia: { window: { automationId: V }, path: [{ automationId: 'b' }] } } }, /window\.automationId: .*never rendered/],
+      [{ intent: 'a', click: { uia: { window: { className: V }, path: [{ automationId: 'b' }] } } }, /window\.className: .*never rendered/],
+      [{ intent: 'a', click: { uia: { path: [{ automationId: V }] } } }, /steps\[0\]\.click\.uia\.path\[0\]\.automationId: .*never rendered/],
+      [{ intent: 'a', click: { uia: { path: [{ controlType: V, name: 'x' }] } } }, /path\[0\]\.controlType: .*never rendered/],
+      [{ intent: 'a', click: { uia: { path: [{ className: V }] } } }, /path\[0\]\.className: .*never rendered/],
+      [{ intent: 'a', waitFor: { target: { ...uia('b'), fallbacks: [{ uia: { path: [{ automationId: V }] } }] } } }, /waitFor\.target\.fallbacks\[0\]\.uia\.path\[0\]\.automationId: .*never rendered/],
+      [{ intent: 'a', click: uia('b'), when: { visible: { uia: { window: { title: V }, path: [{ name: 'x' }] } } } }, /steps\[0\]\.when\.visible\.uia\.window\.title: .*never rendered/],
+    ];
+    for (const [step, at] of cases) expect(desktopIssues(desktop([step])).join('\n'), JSON.stringify(step)).toMatch(at);
+  });
+  it('still accepts {{var.*}} in a condition\'s name, which the run renders', () => {
+    expect(desktopIssues(desktop([{ intent: 'a', click: { uia: { window: { title: 'Orders' }, path: [{ controlType: 'ListItem', name: 'Row {{var.row}}' }] } } }]))).toEqual([]);
+  });
+});
+
 describe('run variables in locators of desktop write steps', () => {
   const V = { uia: { path: [{ controlType: 'Button', name: '{{var.who}}' }] } };
   it('refuses {{var.*}} in any locator of a write: true step', () => {

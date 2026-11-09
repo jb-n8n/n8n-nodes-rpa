@@ -1,7 +1,7 @@
 import { DESKTOP_VERBS, STEP_VERBS, type DesktopScript, type DesktopVerb, type Script, type Step, type StepVerb } from '../types.js';
 import {
   BROWSER_STEPS_NEED_BROWSER, browserLocatorOnDesktop, browserStepOnDesktop, DESKTOP_STEPS_NEED_RUNNER, desktopLocatorInBrowser, exportDirOnlyInFill,
-  FIRST_STEP_GOTO, reservedTemplate, secretFillValue, varInWriteLocator,
+  FIRST_STEP_GOTO, reservedTemplate, secretFillValue, varInWriteLocator, varNotRendered,
 } from '../messages.js';
 import { SECRET_FILL_VALUE } from '../secrets/render.js';
 import { DESKTOP_WRITE_VERBS, READ_NAME, stepChordProblem } from './desktop-vocabulary.js';
@@ -88,22 +88,37 @@ export function downloadTemplateIssues(v: unknown): string[] {
   return issues;
 }
 
-function checkLocator(v: unknown, path: string, issues: string[], allowFallbacks = true) {
+/** Locator keys that hold text the run could render: the kind's own value, its name and its frame. */
+const LOCATOR_TEXT_KEYS = [...LOCATOR_KINDS, 'name', 'frame'] as const;
+
+/**
+ * `rendered`: whether the run renders {{var.x}} in this locator (renderLocators: a step's locators, not a pop-up
+ * handler's). Even then only a role locator's name and a text locator's text are rendered; a {{var.x}} anywhere else
+ * would be matched as literal text, so it is refused.
+ */
+function checkLocator(v: unknown, path: string, issues: string[], allowFallbacks = true, rendered = true) {
   if (!isObj(v)) { issues.push(`${path} must be a locator object`); return; }
   if (Object.hasOwn(v, 'uia')) { issues.push(desktopLocatorInBrowser(path)); return; }
   for (const k of Object.keys(v)) if (!LOCATOR_KEYS.has(k)) issues.push(`${path} has unknown key "${k}"`);
   const kinds = LOCATOR_KINDS.filter((k) => Object.hasOwn(v, k));
   if (kinds.length !== 1 || !isStr(v[kinds[0]])) issues.push(`${path} must have exactly one of ${LOCATOR_KINDS.join('/')} as a non-empty string`);
+  const kind = kinds.length === 1 ? kinds[0] : undefined;
+  for (const k of LOCATOR_TEXT_KEYS) {
+    const x = v[k];
+    if (typeof x !== 'string' || !VAR_TEMPLATE.test(x)) continue;
+    const renders = rendered && ((kind === 'role' && k === 'name') || (kind === 'text' && k === 'text'));
+    if (!renders) issues.push(varNotRendered(`${path}.${k}`));
+  }
   if (v.name !== undefined && typeof v.name !== 'string') issues.push(`${path}.name must be a string`);
   if (v.exact !== undefined && typeof v.exact !== 'boolean') issues.push(`${path}.exact must be a boolean`);
   if (v.frame !== undefined && !isStr(v.frame)) issues.push(`${path}.frame must be a CSS selector`);
-  if (v.within !== undefined) checkLocator(v.within, `${path}.within`, issues, false);
+  if (v.within !== undefined) checkLocator(v.within, `${path}.within`, issues, false, rendered);
   if (v.fallbacks !== undefined) {
     if (!allowFallbacks) { issues.push(`${path} has nested fallbacks`); return; }
     if (!Array.isArray(v.fallbacks) || v.fallbacks.length > 5) { issues.push(`${path}.fallbacks must be an array of at most 5 locators`); return; }
     v.fallbacks.forEach((f, i) => {
       if (isObj(f) && Object.hasOwn(f, 'fallbacks')) issues.push(`${path}.fallbacks[${i}] has nested fallbacks`);
-      else checkLocator(f, `${path}.fallbacks[${i}]`, issues, false);
+      else checkLocator(f, `${path}.fallbacks[${i}]`, issues, false, rendered);
     });
   }
 }
@@ -364,8 +379,9 @@ export function parseScript(input: unknown, opts: { defaultStartUrl?: string } =
     else doc.interrupts.forEach((it, i) => {
       if (!isObj(it)) { issues.push(`interrupts[${i}] must be an object`); return; }
       checkKeys(it, ['target', 'click'], `interrupts[${i}]`, issues);
-      checkLocator(it.target, `interrupts[${i}].target`, issues, false);
-      checkLocator(it.click, `interrupts[${i}].click`, issues, false);
+      // Pop-up handlers are never rendered: no {{var.x}} in any of their keys.
+      checkLocator(it.target, `interrupts[${i}].target`, issues, false, false);
+      checkLocator(it.click, `interrupts[${i}].click`, issues, false, false);
     });
   }
   checkSteps(doc.steps, 'steps', issues, false);
@@ -475,6 +491,8 @@ function checkWindowSel(v: unknown, path: string, issues: string[]) {
     if (v[k] === undefined) continue;
     if (k === 'titlePattern') checkRegex(v[k], `${path}.${k}`, issues);
     else if (!isText(v[k])) issues.push(`${path}.${k} must be a non-empty single-line string of at most ${MAX_UIA_TEXT} characters`);
+    // The window selector is never rendered (renderLocators renders a condition's name only).
+    if (typeof v[k] === 'string' && VAR_TEMPLATE.test(v[k])) issues.push(varNotRendered(`${path}.${k}`));
   }
 }
 
@@ -489,6 +507,8 @@ function checkUiaTarget(v: unknown, path: string, issues: string[]) {
     checkKeys(c, [...COND_TEXT_KEYS, 'index'], at, issues);
     if (!COND_TEXT_KEYS.some((k) => Object.hasOwn(c, k))) issues.push(`${at} needs at least one of ${COND_TEXT_KEYS.join(', ')}`);
     for (const k of COND_TEXT_KEYS) if (c[k] !== undefined && !isText(c[k])) issues.push(`${at}.${k} must be a non-empty single-line string of at most ${MAX_UIA_TEXT} characters`);
+    // Only a condition's name is rendered; controlType, automationId and className are matched as written.
+    for (const k of COND_TEXT_KEYS) if (k !== 'name' && typeof c[k] === 'string' && VAR_TEMPLATE.test(c[k])) issues.push(varNotRendered(`${at}.${k}`));
     if (c.index !== undefined && !isInt(c.index, 0, 10_000)) issues.push(`${at}.index must be an integer between 0 and 10000`);
   });
 }
