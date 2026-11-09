@@ -116,32 +116,41 @@ file. Windows shows its administrator prompt when the tool starts, because only 
 - `show` prints the policy file, and says why when the runner would refuse it.
 - `allow-app <path-to-exe>` adds the application to `allowedApps` with its file name and full path. `--pin-hash` also
   pins the file's SHA-256, so the runner starts only this exact file (run the command again after the app is updated).
+  An app the policy already has keeps its allowed argument lists, and its pin unless `--pin-hash` gives a new one.
 - `apply <change.json>` adds what a change file lists. A change file is a JSON object with any of `allowedApps`,
   `writeControls`, `gatedKeys`, `helperProcesses` and `clipboardRead`, written as in the policy file.
 - Every command takes `--policy <path>` (default `%ProgramData%\RPA Runner\policy.json`). `apply` and `allow-app` take
   `--yes`, which writes without asking.
 
 A change only adds. Entries the policy already has are skipped, `clipboardRead` may only be `true`, and `maxFileBytes`
-or an unknown key is refused: to remove an entry or change the file size limit, edit the policy file by hand. The one
-replacement is an `allowedApps` entry with the same `exe` and `path` as an existing one (in any letter case): the new
-entry takes the old one's place, with only the options the new entry sets. A change whose result the runner would
-refuse is refused, and nothing is written.
+or an unknown key is refused: to remove an entry or change the file size limit, edit the policy file by hand. A change
+whose result the runner would refuse is refused, and nothing is written.
+
+An `allowedApps` entry with the same `exe` and `path` as an existing one (in any letter case) is merged into the
+existing entry and never takes its place:
+
+- `sha256` sets the pin or changes it. An entry without `sha256` keeps the existing pin; a change cannot remove one.
+- `allowedArgs` lists are added to the existing lists (a list is the same when its strings are equal, in order); a
+  change cannot remove one.
+- `allowUserWritable: true` turns it on. Left out, it stays as it is. `false` for an entry where it is on is refused
+  (`a policy change cannot turn allowUserWritable off for <path>`).
 
 The lines the tool prints before it asks:
 
 | Line | Meaning |
 |---|---|
 | `Allow app <exe> at <path>` | A new `allowedApps` entry. ` (SHA-256 pinned)` follows when it sets `sha256`. |
-| `Update app <exe> at <path>` | The entry for this exe and path is replaced. |
-| `WARNING: <path> can be changed by the runner's own user` | The app above sets `allowUserWritable: true`. |
+| `Update app <exe> at <path> (<what changes>)` | The existing entry for this exe and path changes. In the parentheses, joined by `; `: `SHA-256 pinned` (it had no pin), `SHA-256 pin changed`, `allowed arguments added`, `user-writable path allowed`. |
+| `WARNING: <path> can be changed by the runner's own user` | The app above is new with `allowUserWritable: true`, or the update turns it on. |
 | `Add write control <exe> / <automationId>` | A new `writeControls` entry. |
 | `Add gated key <chord>` | A new `gatedKeys` entry. |
 | `Add helper process <exe> at <pathPattern>` | A new `helperProcesses` entry. |
 | `Turn on clipboard read` | `clipboardRead` becomes `true`. |
 
 `Nothing to change.` means the policy already has everything; the file is not written. Otherwise the tool writes the
-new policy (the file keeps its permissions), keeps the old one beside it as `policy.json.<yyyyMMdd-HHmmss>.bak`, and
-ends the running `RpaRunner.exe`, which reads the policy only at start. The runner's start script starts it again
+new policy (the file keeps its permissions), keeps the old one beside it as `policy.json.<yyyyMMdd-HHmmss>.bak`
+(`-2.bak`, `-3.bak` and so on when that name is taken: a backup never overwrites an earlier one), and ends the running
+`RpaRunner.exe`, which reads the policy only at start. The runner's start script starts it again
 within 10 seconds; start a runner you started by hand again yourself. The tool writes the whole file in one layout
 (two-space indent, the key order of the example), so comments in a hand-edited policy are not kept; the backup still
 has them.

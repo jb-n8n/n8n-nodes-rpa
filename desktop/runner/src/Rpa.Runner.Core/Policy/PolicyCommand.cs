@@ -10,8 +10,8 @@ public interface IPolicyFiles
     /// <summary>The file's text, or null when there is no such file.</summary>
     string? Read(string path);
 
-    /// <summary>Replaces the policy file's text. An existing file is kept beside it as
-    /// <see cref="PolicyCommand.BackupPath"/> names it.</summary>
+    /// <summary>Replaces the policy file's text. An existing file is kept beside it under the name
+    /// <see cref="PolicyCommand.BackupPath"/> gives.</summary>
     void WriteWithBackup(string path, string json, DateTimeOffset now);
 
     byte[] ReadAllBytes(string path);
@@ -38,9 +38,17 @@ public static class PolicyCommand
 
     private sealed record Arguments(string Command, string? Target, string PolicyPath, bool Yes, bool PinHash);
 
-    /// <summary><c>policy.json.&lt;yyyyMMdd-HHmmss&gt;.bak</c> beside the policy file.</summary>
-    public static string BackupPath(string policyPath, DateTimeOffset now) =>
-        $"{policyPath}.{now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture)}.bak";
+    /// <summary>
+    /// <c>policy.json.&lt;yyyyMMdd-HHmmss&gt;.bak</c> beside the policy file. A backup never takes the place of an
+    /// earlier one: when that name exists it is <c>...-2.bak</c>, then <c>...-3.bak</c>, and so on.
+    /// </summary>
+    public static string BackupPath(string policyPath, DateTimeOffset now, Func<string, bool> exists)
+    {
+        var stem = $"{policyPath}.{now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture)}";
+        var backup = $"{stem}.bak";
+        for (var n = 2; exists(backup); n++) backup = $"{stem}-{n}.bak";
+        return backup;
+    }
 
     public static int Run(string[] args, TextReader input, TextWriter output, IPolicyFiles files, Action restartRunner)
     {

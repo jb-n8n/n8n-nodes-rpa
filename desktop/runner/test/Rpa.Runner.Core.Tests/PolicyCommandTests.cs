@@ -26,9 +26,11 @@ public class PolicyCommandTests
 
         public string? Read(string path) => Text.GetValueOrDefault(path);
 
+        /// <summary>As RpaPolicy.exe does: the old text goes to the name PolicyCommand.BackupPath gives.</summary>
         public void WriteWithBackup(string path, string json, DateTimeOffset now)
         {
             Writes.Add((path, json, now));
+            if (Text.TryGetValue(path, out var old)) Text[PolicyCommand.BackupPath(path, now, Text.ContainsKey)] = old;
             Text[path] = json;
         }
 
@@ -133,10 +135,34 @@ public class PolicyCommandTests
         byte[] exe = [0x4d, 0x5a, 0x90, 0x00, 0x03];
         tool.Files.Bytes[ErpPath] = exe;
         Assert.Equal(0, tool.Run("", "allow-app", ErpPath, "--pin-hash", "--yes", "--policy", PolicyPath));
-        Assert.Equal($"Update app ErpDemo.exe at {ErpPath}\n{Updated}\n", tool.Output);
+        Assert.Equal($"Update app ErpDemo.exe at {ErpPath} (SHA-256 pinned)\n{Updated}\n", tool.Output);
         app = Assert.Single(RunnerPolicy.Parse(tool.Files.Writes[1].Json).AllowedApps);
         Assert.Equal(Convert.ToHexString(SHA256.HashData(exe)), app.Sha256);
         Assert.Equal(2, tool.Restarts);
+    }
+
+    [Fact]
+    public void Allow_app_on_an_existing_app_keeps_its_argument_lists_and_its_pin()
+    {
+        var tool = new Tool();
+        byte[] v1 = [1, 2, 3], v2 = [4, 5, 6];
+        var pinned = Convert.ToHexString(SHA256.HashData(v1));
+        tool.Files.Text[PolicyPath] = $$"""
+            { "allowedApps": [{ "exe": "ErpDemo.exe", "path": {{J(ErpPath)}}, "sha256": "{{pinned}}",
+                                "allowedArgs": [["--ui", "v1"], ["--ui", "v2"]], "allowUserWritable": true }] }
+            """;
+
+        Assert.Equal(0, tool.Run("", "allow-app", ErpPath, "--yes", "--policy", PolicyPath));
+        Assert.Equal("Nothing to change.\n", tool.Output);
+        Assert.Empty(tool.Files.Writes);
+
+        tool.Files.Bytes[ErpPath] = v2;
+        Assert.Equal(0, tool.Run("", "allow-app", ErpPath, "--pin-hash", "--yes", "--policy", PolicyPath));
+        Assert.Equal($"Update app ErpDemo.exe at {ErpPath} (SHA-256 pin changed)\n{Updated}\n", tool.Output);
+        var app = Assert.Single(RunnerPolicy.Parse(Assert.Single(tool.Files.Writes).Json).AllowedApps);
+        Assert.Equal(Convert.ToHexString(SHA256.HashData(v2)), app.Sha256);
+        Assert.Equal(["--ui v1", "--ui v2"], app.AllowedArgs.Select(list => string.Join(' ', list)));
+        Assert.True(app.AllowUserWritable);
     }
 
     [Fact]
@@ -240,7 +266,26 @@ public class PolicyCommandTests
     public void The_backup_sits_beside_the_policy_with_the_time_in_its_name()
     {
         var now = new DateTimeOffset(2026, 11, 9, 14, 5, 9, TimeSpan.FromHours(1));
-        Assert.Equal(PolicyPath + ".20261109-140509.bak", PolicyCommand.BackupPath(PolicyPath, now));
-        Assert.Equal("policy.json.20261109-140509.bak", Path.GetFileName(PolicyCommand.BackupPath(PolicyPath, now)));
+        var backup = PolicyCommand.BackupPath(PolicyPath, now, _ => false);
+        Assert.Equal(PolicyPath + ".20261109-140509.bak", backup);
+        Assert.Equal("policy.json.20261109-140509.bak", Path.GetFileName(backup));
+    }
+
+    [Fact]
+    public void Writes_at_the_same_time_never_share_a_backup()
+    {
+        var now = new DateTimeOffset(2026, 11, 9, 14, 5, 9, TimeSpan.FromHours(1));
+        var files = new FakeFiles();
+        files.Text[PolicyPath] = "first";
+        files.WriteWithBackup(PolicyPath, "second", now);
+        files.WriteWithBackup(PolicyPath, "third", now);
+        files.WriteWithBackup(PolicyPath, "fourth", now);
+        files.WriteWithBackup(PolicyPath, "fifth", now.AddSeconds(1));
+        Assert.Equal("fifth", files.Text[PolicyPath]);
+        Assert.Equal("first", files.Text[PolicyPath + ".20261109-140509.bak"]);
+        Assert.Equal("second", files.Text[PolicyPath + ".20261109-140509-2.bak"]);
+        Assert.Equal("third", files.Text[PolicyPath + ".20261109-140509-3.bak"]);
+        Assert.Equal("fourth", files.Text[PolicyPath + ".20261109-140510.bak"]);
+        Assert.Equal(5, files.Text.Count);
     }
 }

@@ -13,8 +13,9 @@ public sealed record PolicyChangeResult(string Json, IReadOnlyList<string> Summa
 /// Merges a change file into the policy. A change is a JSON object with any of <c>allowedApps</c>,
 /// <c>writeControls</c>, <c>gatedKeys</c>, <c>helperProcesses</c> and <c>clipboardRead</c>, in the policy file's own
 /// shape. It only adds: lists are unioned, <c>clipboardRead</c> may only be <c>true</c>, and <c>maxFileBytes</c> and
-/// unknown keys are refused. The one replacement: an <c>allowedApps</c> entry with the exe and path of an existing
-/// entry (case-insensitive) takes its place.
+/// unknown keys are refused. An <c>allowedApps</c> entry with the exe and path of an existing entry (case-insensitive)
+/// is merged into it: a <c>sha256</c> sets or changes the pin (none keeps it), <c>allowedArgs</c> lists are added, and
+/// <c>allowUserWritable</c> can be turned on but not off.
 /// </summary>
 public static class PolicyChange
 {
@@ -45,26 +46,41 @@ public static class PolicyChange
     public static PolicyChangeResult Apply(string currentJson, string changeJson)
     {
         var current = string.IsNullOrWhiteSpace(currentJson) ? new RunnerPolicy() : RunnerPolicy.Parse(currentJson, "the current policy");
-        CheckKeys(changeJson);
+        var writableOff = CheckKeys(changeJson);
         var change = RunnerPolicy.Parse(changeJson, "the change");
         var summary = new List<string>();
 
         var apps = current.AllowedApps.ToList();
-        foreach (var app in change.AllowedApps)
+        for (var i = 0; i < change.AllowedApps.Count; i++)
         {
+            var app = change.AllowedApps[i];
             var at = apps.FindIndex(a => Same(a.Exe, app.Exe) && Same(a.Path, app.Path));
-            if (at >= 0 && SameOptions(apps[at], app)) continue;
-            if (at >= 0)
-            {
-                apps[at] = app;
-                summary.Add($"Update app {app.Exe} at {app.Path}");
-            }
-            else
+            if (at < 0)
             {
                 apps.Add(app);
                 summary.Add($"Allow app {app.Exe} at {app.Path}{(app.Sha256 is null ? "" : " (SHA-256 pinned)")}");
+                if (app.AllowUserWritable) summary.Add(Warning(app.Path));
+                continue;
             }
-            if (app.AllowUserWritable) summary.Add($"WARNING: {app.Path} can be changed by the runner's own user");
+
+            // The existing entry takes what the change adds and loses nothing; it keeps its own spelling.
+            var old = apps[at];
+            if (old.AllowUserWritable && writableOff.Contains(i))
+                throw new RunnerPolicy.InvalidPolicyException($"a policy change cannot turn allowUserWritable off for {old.Path}");
+            var args = old.AllowedArgs.ToList();
+            foreach (var list in app.AllowedArgs)
+            {
+                if (!args.Any(l => l.SequenceEqual(list, StringComparer.Ordinal))) args.Add(list);
+            }
+            var turnedOn = app.AllowUserWritable && !old.AllowUserWritable;
+            var parts = new List<string>();
+            if (app.Sha256 is not null && app.Sha256 != old.Sha256) parts.Add(old.Sha256 is null ? "SHA-256 pinned" : "SHA-256 pin changed");
+            if (args.Count > old.AllowedArgs.Count) parts.Add("allowed arguments added");
+            if (turnedOn) parts.Add("user-writable path allowed");
+            if (parts.Count == 0) continue;
+            apps[at] = old with { Sha256 = app.Sha256 ?? old.Sha256, AllowedArgs = args, AllowUserWritable = old.AllowUserWritable || turnedOn };
+            summary.Add($"Update app {old.Exe} at {old.Path} ({string.Join("; ", parts)})");
+            if (turnedOn) summary.Add(Warning(old.Path));
         }
 
         var writes = current.WriteControls.ToList();
@@ -109,9 +125,14 @@ public static class PolicyChange
         return new PolicyChangeResult(json, summary);
     }
 
-    /// <summary>The top-level rules a policy file does not have: no maxFileBytes, no unknown key, clipboardRead only true.</summary>
-    private static void CheckKeys(string changeJson)
+    /// <summary>
+    /// The top-level rules a policy file does not have: no maxFileBytes, no unknown key, clipboardRead only true.
+    /// Returns the positions of the allowedApps entries that write <c>allowUserWritable: false</c>, which the parsed
+    /// policy cannot tell from an entry that leaves it out.
+    /// </summary>
+    private static HashSet<int> CheckKeys(string changeJson)
     {
+        var writableOff = new HashSet<int>();
         JsonDocument document;
         try
         {
@@ -133,15 +154,20 @@ public static class PolicyChange
                     throw new RunnerPolicy.InvalidPolicyException($"the change: unknown key \"{property.Name}\"");
                 if (property.NameEquals("clipboardRead") && property.Value.ValueKind != JsonValueKind.True)
                     throw new RunnerPolicy.InvalidPolicyException("the change: clipboardRead may only be true (a change only adds)");
+                if (property.NameEquals("allowedApps") && property.Value.ValueKind == JsonValueKind.Array)
+                {
+                    writableOff = property.Value.EnumerateArray().Select((app, at) => (app, at))
+                        .Where(x => x.app.ValueKind == JsonValueKind.Object && x.app.TryGetProperty("allowUserWritable", out var value) && value.ValueKind == JsonValueKind.False)
+                        .Select(x => x.at).ToHashSet();
+                }
             }
         }
+        return writableOff;
     }
 
     private static bool Same(string a, string b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
 
-    private static bool SameOptions(RunnerPolicy.AllowedApp a, RunnerPolicy.AllowedApp b) =>
-        a.Sha256 == b.Sha256 && a.AllowUserWritable == b.AllowUserWritable && a.AllowedArgs.Count == b.AllowedArgs.Count &&
-        a.AllowedArgs.Zip(b.AllowedArgs).All(pair => pair.First.SequenceEqual(pair.Second, StringComparer.Ordinal));
+    private static string Warning(string path) => $"WARNING: {path} can be changed by the runner's own user";
 
     private static bool Deceptive(char c) =>
         char.IsControl(c) || char.GetUnicodeCategory(c) is UnicodeCategory.Format or UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator;

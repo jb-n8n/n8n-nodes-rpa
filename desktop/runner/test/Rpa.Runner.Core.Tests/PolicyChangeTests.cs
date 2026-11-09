@@ -67,16 +67,130 @@ public class PolicyChangeTests
         Assert.Equal(sha.ToUpperInvariant(), Assert.Single(RunnerPolicy.Parse(result.Json).AllowedApps).Sha256);
     }
 
-    [Fact]
-    public void Replaces_an_app_with_the_same_exe_and_path()
+    private static readonly string ShaA = new string('A', 64), ShaB = new string('B', 64);
+
+    /// <summary>A policy with the ERP Demo entry and these options, e.g. <c>"sha256": "..."</c>.</summary>
+    private static string Policy(string options = "") => PolicyChange.Apply("", AppChange(ErpPath, options == "" ? "" : ", " + options)).Json;
+
+    private static (IReadOnlyList<string> Summary, RunnerPolicy.AllowedApp App) Merge(string current, string options)
     {
-        var current = PolicyChange.Apply("", AppChange(ErpPath)).Json;
+        var result = PolicyChange.Apply(current, AppChange(ErpPath, options == "" ? "" : ", " + options));
+        return (result.Summary, Assert.Single(RunnerPolicy.Parse(result.Json).AllowedApps));
+    }
+
+    [Fact]
+    public void Merges_an_app_with_the_same_exe_and_path_into_the_existing_entry()
+    {
+        var current = Policy("""  "allowedArgs": [["--ui", "v1"]]""");
         var upper = Path.Combine(Root, "ERP Demo", "ERPDEMO.EXE");
-        var change = $$"""{ "allowedApps": [{ "exe": "ERPDEMO.EXE", "path": {{J(upper)}}, "allowedArgs": [["--ui", "v2"]] }] }""";
+        var change = $$"""{ "allowedApps": [{ "exe": "ERPDEMO.EXE", "path": {{J(upper)}}, "sha256": "{{ShaA}}" }] }""";
         var result = PolicyChange.Apply(current, change);
-        Assert.Equal([$"Update app ERPDEMO.EXE at {upper}"], result.Summary);
+        Assert.Equal([$"Update app ErpDemo.exe at {ErpPath} (SHA-256 pinned)"], result.Summary);
+        if (OperatingSystem.IsWindows())
+            Assert.Equal([@"Update app ErpDemo.exe at C:\Program Files\ERP Demo\ErpDemo.exe (SHA-256 pinned)"], result.Summary);
         var app = Assert.Single(RunnerPolicy.Parse(result.Json).AllowedApps);
-        Assert.Equal(["--ui", "v2"], Assert.Single(app.AllowedArgs));
+        Assert.Equal(("ErpDemo.exe", ErpPath, ShaA), (app.Exe, app.Path, app.Sha256));
+        Assert.Equal(["--ui", "v1"], Assert.Single(app.AllowedArgs));
+    }
+
+    [Fact]
+    public void A_change_without_sha256_keeps_an_existing_pin()
+    {
+        var (summary, app) = Merge(Policy($"\"sha256\": \"{ShaA}\""), """  "allowedArgs": [["--ui", "v2"]]""");
+        Assert.Equal([$"Update app ErpDemo.exe at {ErpPath} (allowed arguments added)"], summary);
+        Assert.Equal(ShaA, app.Sha256);
+
+        (summary, app) = Merge(Policy($"\"sha256\": \"{ShaA}\""), "");
+        Assert.Empty(summary);
+        Assert.Equal(ShaA, app.Sha256);
+    }
+
+    [Fact]
+    public void A_sha256_sets_or_changes_the_pin()
+    {
+        var (summary, app) = Merge(Policy(), $"\"sha256\": \"{ShaA}\"");
+        Assert.Equal([$"Update app ErpDemo.exe at {ErpPath} (SHA-256 pinned)"], summary);
+        Assert.Equal(ShaA, app.Sha256);
+
+        (summary, app) = Merge(Policy($"\"sha256\": \"{ShaA}\""), $"\"sha256\": \"{ShaB}\"");
+        Assert.Equal([$"Update app ErpDemo.exe at {ErpPath} (SHA-256 pin changed)"], summary);
+        Assert.Equal(ShaB, app.Sha256);
+
+        (summary, _) = Merge(Policy($"\"sha256\": \"{ShaA}\""), $"\"sha256\": \"{ShaA.ToLowerInvariant()}\"");
+        Assert.Empty(summary);
+    }
+
+    [Fact]
+    public void Argument_lists_are_unioned_without_duplicates()
+    {
+        var current = Policy("""  "allowedArgs": [["--ui", "v1"], ["--ui", "v2"]]""");
+        var (summary, app) = Merge(current, """  "allowedArgs": [["--ui", "v2"], ["v2", "--ui"], ["--ui"], ["--ui"], ["--UI", "v1"]]""");
+        Assert.Equal([$"Update app ErpDemo.exe at {ErpPath} (allowed arguments added)"], summary);
+        Assert.Equal(["--ui v1", "--ui v2", "v2 --ui", "--ui", "--UI v1"], app.AllowedArgs.Select(list => string.Join(' ', list)));
+
+        (summary, app) = Merge(current, """  "allowedArgs": [["--ui", "v2"], ["--ui", "v1"]]""");
+        Assert.Empty(summary);
+        Assert.Equal(2, app.AllowedArgs.Count);
+
+        // A change without lists removes none.
+        (summary, app) = Merge(current, "");
+        Assert.Empty(summary);
+        Assert.Equal(2, app.AllowedArgs.Count);
+    }
+
+    [Fact]
+    public void AllowUserWritable_can_be_turned_on_but_not_off()
+    {
+        var (summary, app) = Merge(Policy(), """  "allowUserWritable": true""");
+        Assert.Equal(
+            [$"Update app ErpDemo.exe at {ErpPath} (user-writable path allowed)", $"WARNING: {ErpPath} can be changed by the runner's own user"],
+            summary);
+        Assert.True(app.AllowUserWritable);
+
+        var writable = Policy("""  "allowUserWritable": true""");
+        (summary, app) = Merge(writable, "");
+        Assert.Empty(summary);
+        Assert.True(app.AllowUserWritable);
+
+        (summary, app) = Merge(writable, """  "allowUserWritable": true""");
+        Assert.Empty(summary);
+        Assert.True(app.AllowUserWritable);
+
+        var e = Assert.Throws<RunnerPolicy.InvalidPolicyException>(() => Merge(writable, """  "allowUserWritable": false, "allowedArgs": [["--ui", "v1"]]"""));
+        Assert.Equal($"a policy change cannot turn allowUserWritable off for {ErpPath}", e.Message);
+
+        (summary, app) = Merge(Policy(), """  "allowUserWritable": false""");
+        Assert.Empty(summary);
+        Assert.False(app.AllowUserWritable);
+    }
+
+    [Fact]
+    public void An_update_lists_everything_that_changes_in_order()
+    {
+        var current = Policy($"\"sha256\": \"{ShaA}\", \"allowedArgs\": [[\"--ui\", \"v1\"]]");
+        var (summary, app) = Merge(current, $"\"allowUserWritable\": true, \"allowedArgs\": [[\"--ui\", \"v2\"]], \"sha256\": \"{ShaB}\"");
+        Assert.Equal(
+            [
+                $"Update app ErpDemo.exe at {ErpPath} (SHA-256 pin changed; allowed arguments added; user-writable path allowed)",
+                $"WARNING: {ErpPath} can be changed by the runner's own user",
+            ],
+            summary);
+        Assert.Equal((ShaB, 2, true), (app.Sha256, app.AllowedArgs.Count, app.AllowUserWritable));
+
+        (summary, _) = Merge(Policy(), $"\"sha256\": \"{ShaB}\", \"allowedArgs\": [[\"--ui\", \"v2\"]]");
+        Assert.Equal([$"Update app ErpDemo.exe at {ErpPath} (SHA-256 pinned; allowed arguments added)"], summary);
+    }
+
+    [Fact]
+    public void An_app_listed_twice_in_one_change_is_added_then_merged()
+    {
+        var change = $$"""
+            { "allowedApps": [{ "exe": "ErpDemo.exe", "path": {{J(ErpPath)}}, "allowedArgs": [["--ui", "v1"]] },
+                              { "exe": "ErpDemo.exe", "path": {{J(ErpPath)}}, "allowedArgs": [["--ui", "v2"]] }] }
+            """;
+        var result = PolicyChange.Apply("", change);
+        Assert.Equal([$"Allow app ErpDemo.exe at {ErpPath}", $"Update app ErpDemo.exe at {ErpPath} (allowed arguments added)"], result.Summary);
+        Assert.Equal(2, Assert.Single(RunnerPolicy.Parse(result.Json).AllowedApps).AllowedArgs.Count);
     }
 
     [Fact]

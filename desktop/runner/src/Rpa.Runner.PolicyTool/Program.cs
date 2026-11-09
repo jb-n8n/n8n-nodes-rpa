@@ -19,7 +19,7 @@ internal sealed class PolicyFiles : IPolicyFiles
         try
         {
             File.WriteAllText(temporary, json);
-            if (File.Exists(path)) File.Replace(temporary, path, PolicyCommand.BackupPath(path, now));
+            if (File.Exists(path)) File.Replace(temporary, path, PolicyCommand.BackupPath(path, now, File.Exists));
             else File.Move(temporary, path);
         }
         finally
