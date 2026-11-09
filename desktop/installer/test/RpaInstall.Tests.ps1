@@ -1,31 +1,63 @@
 # Pester tests for the Windows installer (desktop/installer). They cover what runs anywhere: the plan the installer
 # makes from its parameters and hand-made facts about the machine (Get-RpaInstallPlan touches nothing), the secret
 # generator, how a user name is read, Show-RpaConnection.ps1 against a made-up install, and that every script still
-# parses as Windows PowerShell 5.1. The install itself (users, permissions, tasks, firewall) runs only on Windows and is
-# driven end to end by the desktop workflow.
+# parses as Windows PowerShell 5.1. A few tests need Windows and are skipped elsewhere. The install itself (users,
+# permissions, tasks, firewall) runs only on Windows and is driven end to end by the desktop workflow.
 #
 #   Invoke-Pester desktop/installer/test
 
 BeforeAll {
   $script:InstallerDir = Split-Path -Parent $PSScriptRoot
   Import-Module (Join-Path $script:InstallerDir 'RpaInstall.psm1') -Force
+  $script:DataDir = 'C:\ProgramData\RPA Runner'
 
-  # Install-Rpa.ps1 with no arguments.
+  # Install-Rpa.ps1 -AllowFrom 10.0.0.5 and nothing else.
   function New-TestParameters([hashtable]$Change = @{}) {
     $parameters = @{
       User = 'rpa-runner'; UserPassword = $null; RunnerPort = 8765; BrowserPort = 3000
+      AllowFrom = @('10.0.0.5'); AllowFromAnyAddress = $false
       NoBrowser = $false; NoFirewall = $false; AutoSignIn = $false; Force = $false
     }
     foreach ($key in $Change.Keys) { $parameters[$key] = $Change[$key] }
     $parameters
   }
 
-  # A clean, supported machine: an administrator on 64-bit Windows Server 2022, nothing installed, no such user.
+  # What Get-RpaMachineFacts says about one path in the data directory.
+  function New-PathState([string]$Kind = 'ours') {
+    switch ($Kind) {
+      'missing' { @{ Exists = $false; IsLink = $false; OwnerTrusted = $false; Owner = '' } }
+      'ours' { @{ Exists = $true; IsLink = $false; OwnerTrusted = $true; Owner = 'BUILTIN\Administrators' } }
+      'link' { @{ Exists = $true; IsLink = $true; OwnerTrusted = $true; Owner = 'BUILTIN\Administrators' } }
+      'theirs' { @{ Exists = $true; IsLink = $false; OwnerTrusted = $false; Owner = 'BOT-PC\mallory' } }
+    }
+  }
+
+  # A clean, supported machine: an administrator on 64-bit Windows Server 2022, nothing installed, no such user, no
+  # data directory.
   function New-TestFacts([hashtable]$Change = @{}) {
     $facts = @{
       IsAdmin = $true; Is64Bit = $true; OsBuild = 20348
-      UserExists = $false; UserIsDomain = $false; UserPasswordExpires = $false
+      UserExists = $false; UserIsDomain = $false; UserIsAdmin = $false; UserAdminUnknown = $false
+      UserPasswordExpires = $false; UserPasswordWrong = $false; UserPasswordProblem = $null
       PortsInUse = @{}; Installed = $false; RunnerRunning = $false
+      InstalledRunnerPort = $null; InstalledBrowserPort = $null; InstalledBrowser = $false
+      InstalledAllowFrom = $null; InstalledAutoSignInForUser = $false
+      DataDir = $script:DataDir; LogDir = "$($script:DataDir)\logs"
+      DataDirState = New-PathState 'missing'; LogDirState = New-PathState 'missing'
+      DataFiles = @{ 'policy.json' = New-PathState 'missing'; 'token' = New-PathState 'missing'; 'browser-token' = New-PathState 'missing' }
+      TaskFolderOwner = $null; PublicNetwork = $false
+    }
+    foreach ($key in $Change.Keys) { $facts[$key] = $Change[$key] }
+    $facts
+  }
+
+  # The same machine after Install-Rpa.ps1 -AllowFrom 10.0.0.5 -UserPassword ... ran on it.
+  function New-InstalledFacts([hashtable]$Change = @{}) {
+    $facts = New-TestFacts @{
+      Installed = $true; UserExists = $true
+      InstalledRunnerPort = 8765; InstalledBrowserPort = 3000; InstalledBrowser = $true; InstalledAllowFrom = @('10.0.0.5')
+      DataDirState = New-PathState 'ours'; LogDirState = New-PathState 'ours'
+      DataFiles = @{ 'policy.json' = New-PathState 'ours'; 'token' = New-PathState 'ours'; 'browser-token' = New-PathState 'ours' }
     }
     foreach ($key in $Change.Keys) { $facts[$key] = $Change[$key] }
     $facts
@@ -70,8 +102,29 @@ Describe 'Get-RpaInstallPlan' {
     }
 
     It 'does not refuse a port in use on an upgrade (the installed runner and browser hold them)' {
-      $facts = New-TestFacts @{ Installed = $true; UserExists = $true; PortsInUse = @{ 8765 = 'RpaRunner'; 3000 = 'node' } }
+      $facts = New-InstalledFacts @{ PortsInUse = @{ 8765 = 'RpaRunner'; 3000 = 'node' } }
       (Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts $facts).Refusals.Count | Should -Be 0
+    }
+
+    It 'on an upgrade that changes a port, refuses the new port when a program uses it' {
+      $facts = New-InstalledFacts @{ PortsInUse = @{ 8765 = 'RpaRunner'; 3000 = 'node'; 9000 = 'httpd' } }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ RunnerPort = 9000 }) -Facts $facts
+      $plan.Refusals | Should -BeExactly @('Port 9000 is in use by httpd. Choose another with -RunnerPort or -BrowserPort.')
+
+      # The browser was not installed before, so its port is new too.
+      $facts = New-InstalledFacts @{ InstalledBrowser = $false; PortsInUse = @{ 3000 = 'node' } }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts $facts
+      $plan.Refusals | Should -BeExactly @('Port 3000 is in use by node. Choose another with -RunnerPort or -BrowserPort.')
+    }
+
+    It 'refuses the same port for the runner and the browser' {
+      $parameters = New-TestParameters @{ UserPassword = New-TestPassword; RunnerPort = 9000; BrowserPort = 9000 }
+      $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts)
+      $plan.Refusals | Should -BeExactly @('-RunnerPort and -BrowserPort are both 9000. Give each its own port.')
+      $plan.Steps.Count | Should -Be 0
+
+      $parameters.NoBrowser = $true
+      (Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts)).Refusals.Count | Should -Be 0
     }
 
     It 'refuses a domain user that does not exist' {
@@ -81,9 +134,27 @@ Describe 'Get-RpaInstallPlan' {
       $plan.Steps.Count | Should -Be 0
     }
 
+    It 'refuses an existing user that is an administrator' {
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-TestFacts @{ UserExists = $true; UserIsAdmin = $true })
+      $plan.Refusals | Should -BeExactly @('rpa-runner is an administrator. The bot user must be a standard user.')
+      $plan.Steps.Count | Should -Be 0
+    }
+
     It 'refuses -AutoSignIn for an existing user without -UserPassword' {
+      $text = '-AutoSignIn for the existing user rpa-runner needs -UserPassword. A password the installer generated earlier is not known to anyone: set a new password for rpa-runner and pass it, or remove rpa-runner so the installer creates it again.'
       $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ AutoSignIn = $true }) -Facts (New-TestFacts @{ UserExists = $true })
-      $plan.Refusals | Should -BeExactly @('-AutoSignIn for the existing user rpa-runner needs -UserPassword.')
+      $plan.Refusals | Should -BeExactly @($text)
+      $plan.Steps.Count | Should -Be 0
+
+      # Also on an upgrade of an install that did not turn automatic sign-in on for this user.
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ AutoSignIn = $true }) -Facts (New-InstalledFacts)
+      $plan.Refusals | Should -BeExactly @($text)
+    }
+
+    It 'refuses a -UserPassword that is not the password of the existing user' {
+      $parameters = New-TestParameters @{ AutoSignIn = $true; UserPassword = New-TestPassword }
+      $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts @{ UserExists = $true; UserPasswordWrong = $true })
+      $plan.Refusals | Should -BeExactly @('The password given for rpa-runner is not correct.')
       $plan.Steps.Count | Should -Be 0
     }
 
@@ -94,7 +165,7 @@ Describe 'Get-RpaInstallPlan' {
     }
 
     It 'on an upgrade with the runner running, refuses without -Force and warns with it' {
-      $facts = New-TestFacts @{ Installed = $true; UserExists = $true; RunnerRunning = $true }
+      $facts = New-InstalledFacts @{ RunnerRunning = $true }
       $text = 'The runner is running; a run in progress will fail. Use -Force to continue.'
 
       $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts $facts
@@ -105,6 +176,129 @@ Describe 'Get-RpaInstallPlan' {
       $plan.Refusals.Count | Should -Be 0
       $plan.Warnings | Should -BeExactly @($text)
       $plan.Steps[0] | Should -BeExactly 'stop running services'
+    }
+  }
+
+  Context 'who may connect' {
+    BeforeAll { $script:SayWhich = 'Say which addresses may connect: -AllowFrom <n8n address>, or -AllowFromAnyAddress, or -NoFirewall.' }
+
+    It 'refuses a first install with firewall rules and neither -AllowFrom nor -AllowFromAnyAddress' {
+      $parameters = New-TestParameters @{ UserPassword = New-TestPassword; AllowFrom = @() }
+      $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts)
+      $plan.Refusals | Should -BeExactly @($script:SayWhich)
+      $plan.Steps.Count | Should -Be 0
+    }
+
+    It 'refuses -AllowFrom together with -AllowFromAnyAddress' {
+      $parameters = New-TestParameters @{ UserPassword = New-TestPassword; AllowFromAnyAddress = $true }
+      (Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts)).Refusals | Should -BeExactly @($script:SayWhich)
+    }
+
+    It 'refuses <Value>, which is not an IP address or range' -ForEach @(
+      @{ Value = 'n8n.example.com' }, @{ Value = 'LocalSubnet' }, @{ Value = '10.0.0.256' }, @{ Value = '10.0.0.0/33' }
+      @{ Value = '10.0.0' }, @{ Value = '7' }, @{ Value = '10.0.0.5-10.0.0.9' }, @{ Value = 'fd00::/129' }, @{ Value = '10.0.0.5/' }
+    ) {
+      $parameters = New-TestParameters @{ UserPassword = New-TestPassword; AllowFrom = @('10.0.0.5', $Value) }
+      $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts)
+      $plan.Refusals | Should -BeExactly @("-AllowFrom: $Value is not an IP address or a range such as 10.0.0.0/24.")
+      $plan.Steps.Count | Should -Be 0
+    }
+
+    It 'takes IPv4 and IPv6 addresses and ranges, and hands them to the firewall steps' {
+      $given = @('10.0.0.5', '10.0.0.0/24', 'fd00::1', 'fd00::/8')
+      $parameters = New-TestParameters @{ UserPassword = New-TestPassword; AllowFrom = $given }
+      $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts)
+      $plan.Refusals.Count | Should -Be 0
+      $plan.AllowFrom | Should -BeExactly $given
+    }
+
+    It '-AllowFromAnyAddress lets any address in' {
+      $parameters = New-TestParameters @{ UserPassword = New-TestPassword; AllowFrom = @(); AllowFromAnyAddress = $true }
+      $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts)
+      $plan.Refusals.Count | Should -Be 0
+      $plan.AllowFrom | Should -BeExactly @('any')
+    }
+
+    It 'an upgrade without either parameter keeps the recorded choice' {
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ AllowFrom = @() }) -Facts (New-InstalledFacts @{ InstalledAllowFrom = @('10.1.2.3', '10.9.0.0/16') })
+      $plan.Refusals.Count | Should -Be 0
+      $plan.AllowFrom | Should -BeExactly @('10.1.2.3', '10.9.0.0/16')
+
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ AllowFrom = @() }) -Facts (New-InstalledFacts @{ InstalledAllowFrom = 'any' })
+      $plan.AllowFrom | Should -BeExactly @('any')
+
+      # An install made with -NoFirewall recorded nothing, so the upgrade has to say.
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ AllowFrom = @() }) -Facts (New-InstalledFacts @{ InstalledAllowFrom = $null })
+      $plan.Refusals | Should -BeExactly @($script:SayWhich)
+    }
+
+    It '-NoFirewall needs neither and makes no rule' {
+      $parameters = New-TestParameters @{ UserPassword = New-TestPassword; AllowFrom = @(); NoFirewall = $true }
+      $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts)
+      $plan.Refusals.Count | Should -Be 0
+      $plan.AllowFrom | Should -BeNullOrEmpty
+    }
+  }
+
+  Context 'what is already in the data directory' {
+    BeforeAll { $script:Parameters = New-TestParameters @{ UserPassword = New-TestPassword } }
+
+    It 'refuses a data directory that is a link or junction' {
+      $plan = Get-RpaInstallPlan -Parameters $script:Parameters -Facts (New-TestFacts @{ DataDirState = New-PathState 'link' })
+      $plan.Refusals | Should -BeExactly @('C:\ProgramData\RPA Runner is a link or junction. Remove it and run the installer again.')
+      $plan.Steps.Count | Should -Be 0
+    }
+
+    It 'refuses a data directory that someone else owns' {
+      $plan = Get-RpaInstallPlan -Parameters $script:Parameters -Facts (New-TestFacts @{ DataDirState = New-PathState 'theirs' })
+      $plan.Refusals | Should -BeExactly @('C:\ProgramData\RPA Runner exists and is owned by BOT-PC\mallory. Check what is in it, remove it, and run the installer again.')
+      $plan.Steps.Count | Should -Be 0
+    }
+
+    It 'refuses logs that is a link or junction, on a first install and on an upgrade' {
+      $text = 'C:\ProgramData\RPA Runner\logs is a link or junction. Remove it and run the installer again.'
+      $facts = New-TestFacts @{ DataDirState = New-PathState 'ours'; LogDirState = New-PathState 'link' }
+      (Get-RpaInstallPlan -Parameters $script:Parameters -Facts $facts).Refusals | Should -BeExactly @($text)
+
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-InstalledFacts @{ LogDirState = New-PathState 'link' })
+      $plan.Refusals | Should -BeExactly @($text)
+      $plan.Steps.Count | Should -Be 0
+    }
+
+    It 'takes over a logs folder that is no link, whoever owns it (the bot user may have made it again)' {
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-InstalledFacts @{ LogDirState = New-PathState 'theirs' })
+      $plan.Refusals.Count | Should -Be 0
+    }
+
+    It 'refuses an existing <Name> that someone else owns' -ForEach @(@{ Name = 'policy.json' }, @{ Name = 'token' }, @{ Name = 'browser-token' }) {
+      $files = @{ 'policy.json' = New-PathState 'missing'; 'token' = New-PathState 'missing'; 'browser-token' = New-PathState 'missing' }
+      $files[$Name] = New-PathState 'theirs'
+      $plan = Get-RpaInstallPlan -Parameters $script:Parameters -Facts (New-TestFacts @{ DataDirState = New-PathState 'ours'; DataFiles = $files })
+      $plan.Refusals | Should -BeExactly @("C:\ProgramData\RPA Runner\$Name exists and is owned by BOT-PC\mallory. Check what is in it, remove it, and run the installer again.")
+      $plan.Steps.Count | Should -Be 0
+    }
+
+    It 'refuses an existing <Name> that is a link' -ForEach @(@{ Name = 'policy.json' }, @{ Name = 'token' }, @{ Name = 'browser-token' }) {
+      $files = @{ 'policy.json' = New-PathState 'ours'; 'token' = New-PathState 'ours'; 'browser-token' = New-PathState 'ours' }
+      $files[$Name] = New-PathState 'link'
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-InstalledFacts @{ DataFiles = $files })
+      $plan.Refusals | Should -BeExactly @("C:\ProgramData\RPA Runner\$Name is a link or junction. Remove it and run the installer again.")
+      $plan.Steps.Count | Should -Be 0
+    }
+
+    It 'a first install over a data directory that Administrators or SYSTEM own keeps its files and writes what is missing' {
+      $files = @{ 'policy.json' = New-PathState 'ours'; 'token' = New-PathState 'ours'; 'browser-token' = New-PathState 'missing' }
+      $facts = New-TestFacts @{ DataDirState = New-PathState 'ours'; LogDirState = New-PathState 'ours'; DataFiles = $files }
+      $plan = Get-RpaInstallPlan -Parameters $script:Parameters -Facts $facts
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Steps | Should -Contain 'write browser-token'
+      foreach ($step in 'write policy', 'write token') { $plan.Steps | Should -Not -Contain $step }
+    }
+
+    It 'refuses a scheduled task folder that someone else owns' {
+      $plan = Get-RpaInstallPlan -Parameters $script:Parameters -Facts (New-TestFacts @{ TaskFolderOwner = 'BOT-PC\mallory' })
+      $plan.Refusals | Should -BeExactly @('The scheduled task folder \RPA\ exists and is owned by BOT-PC\mallory. Check what is in it, remove it, and run the installer again.')
+      $plan.Steps.Count | Should -Be 0
     }
   }
 
@@ -119,6 +313,28 @@ Describe 'Get-RpaInstallPlan' {
     It 'gives no warning on a clean first install' {
       $parameters = New-TestParameters @{ UserPassword = New-TestPassword }
       (Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts)).Warnings.Count | Should -Be 0
+    }
+
+    It 'warns when it could not be checked whether the user is an administrator' {
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-TestFacts @{ UserExists = $true; UserAdminUnknown = $true })
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Warnings | Should -BeExactly @('Could not check whether rpa-runner is an administrator. The bot user must be a standard user.')
+    }
+
+    It 'warns when the given password could not be checked' {
+      $parameters = New-TestParameters @{ AutoSignIn = $true; UserPassword = New-TestPassword }
+      $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts @{ UserExists = $true; UserPasswordProblem = 'The account is disabled.' })
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Warnings | Should -BeExactly @('The password given for rpa-runner could not be checked: The account is disabled.')
+    }
+
+    It 'warns that the firewall rules let nothing in on a Public network' {
+      $parameters = New-TestParameters @{ UserPassword = New-TestPassword }
+      $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts @{ PublicNetwork = $true })
+      $plan.Warnings | Should -BeExactly @('This machine is on a network that Windows treats as Public. The firewall rules are for Domain and Private networks, so they let nothing in on that network.')
+
+      $parameters.NoFirewall = $true
+      (Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts @{ PublicNetwork = $true })).Warnings.Count | Should -Be 0
     }
   }
 
@@ -137,16 +353,15 @@ Describe 'Get-RpaInstallPlan' {
         'add the browser firewall rule'
         'register the runner task'
         'register the browser task'
+        'write install.json'
         'store sign-in password'
         'turn on automatic sign-in'
         'keep the desktop unlocked'
-        'write install.json'
       )
     }
 
     It 'an upgrade keeps the policy, tokens and user' {
-      $facts = New-TestFacts @{ Installed = $true; UserExists = $true }
-      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts $facts
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-InstalledFacts)
       $plan.Refusals.Count | Should -Be 0
       foreach ($step in 'write policy', 'write token', 'write browser-token', 'create user') { $plan.Steps | Should -Not -Contain $step }
       $plan.Steps | Should -BeExactly @(
@@ -160,6 +375,15 @@ Describe 'Get-RpaInstallPlan' {
         'write install.json'
         'start tasks'
       )
+    }
+
+    It 'an upgrade writes a file that is missing: browser-token after an install with -NoBrowser' {
+      $files = @{ 'policy.json' = New-PathState 'ours'; 'token' = New-PathState 'ours'; 'browser-token' = New-PathState 'missing' }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-InstalledFacts @{ InstalledBrowser = $false; DataFiles = $files })
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Steps | Should -Contain 'write browser-token'
+      foreach ($step in 'write policy', 'write token', 'create user') { $plan.Steps | Should -Not -Contain $step }
+      [array]::IndexOf($plan.Steps, 'write browser-token') | Should -BeGreaterThan ([array]::IndexOf($plan.Steps, 'protect the data directory'))
     }
 
     It 'a domain user that exists gets tasks and no create user step' {
@@ -188,8 +412,7 @@ Describe 'Get-RpaInstallPlan' {
     }
 
     It '-NoBrowser on an upgrade removes the browser task and firewall rule of the earlier install' {
-      $facts = New-TestFacts @{ Installed = $true; UserExists = $true }
-      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ NoBrowser = $true }) -Facts $facts
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ NoBrowser = $true }) -Facts (New-InstalledFacts)
       $plan.Steps | Should -Contain 'remove the browser firewall rule'
       $plan.Steps | Should -Contain 'remove the browser task'
       foreach ($step in 'register the browser task', 'add the browser firewall rule') { $plan.Steps | Should -Not -Contain $step }
@@ -203,9 +426,10 @@ Describe 'Get-RpaInstallPlan' {
       $plan.Steps | Should -Contain 'register the browser task'
     }
 
-    It '-AutoSignIn adds the three sign-in steps, in order' {
+    It '-AutoSignIn adds the three sign-in steps, in order, after install.json is written' {
       $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ AutoSignIn = $true }) -Facts (New-TestFacts)
       @($plan.Steps | Where-Object { $script:SignInSteps -contains $_ }) | Should -BeExactly $script:SignInSteps
+      [array]::IndexOf($plan.Steps, 'write install.json') | Should -BeLessThan ([array]::IndexOf($plan.Steps, 'store sign-in password'))
     }
 
     It 'without -AutoSignIn no sign-in step is listed' {
@@ -215,6 +439,33 @@ Describe 'Get-RpaInstallPlan' {
       foreach ($step in $script:SignInSteps) { $plan.Steps | Should -Not -Contain $step }
       $plan.Steps | Should -Contain 'create user'
     }
+
+    It 'an upgrade with -AutoSignIn keeps automatic sign-in an earlier run turned on for the same user: no -UserPassword, no sign-in step' {
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ AutoSignIn = $true }) -Facts (New-InstalledFacts @{ InstalledAutoSignInForUser = $true })
+      $plan.Refusals.Count | Should -Be 0
+      foreach ($step in $script:SignInSteps) { $plan.Steps | Should -Not -Contain $step }
+    }
+
+    It 'that upgrade with -UserPassword stores the password again and changes nothing else about sign-in' {
+      $parameters = New-TestParameters @{ AutoSignIn = $true; UserPassword = New-TestPassword }
+      $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-InstalledFacts @{ InstalledAutoSignInForUser = $true })
+      $plan.Refusals.Count | Should -Be 0
+      @($plan.Steps | Where-Object { $script:SignInSteps -contains $_ }) | Should -BeExactly @('store sign-in password')
+    }
+  }
+}
+
+Describe 'Invoke-RpaInstallPlan' {
+  It 'checks every step name before it runs the first step' {
+    $plan = @{ Refusals = @(); Warnings = @(); Steps = @('copy program files', 'make coffee') }
+    { Invoke-RpaInstallPlan -Plan $plan -Parameters (New-TestParameters) -SourceDir $script:InstallerDir } |
+      Should -Throw -ExpectedMessage 'The installer has no step "make coffee"; nothing was changed.'
+  }
+
+  It 'runs no plan that has a refusal' {
+    $plan = @{ Refusals = @('no'); Warnings = @(); Steps = @() }
+    { Invoke-RpaInstallPlan -Plan $plan -Parameters (New-TestParameters) -SourceDir $script:InstallerDir } |
+      Should -Throw -ExpectedMessage 'The plan has refusals; nothing was changed.'
   }
 }
 
@@ -237,6 +488,21 @@ Describe 'New-RpaSecret' {
 
   It 'gives a new value every time' {
     ((New-RpaSecret -Length 48) -ceq (New-RpaSecret -Length 48)) | Should -BeFalse
+  }
+
+  # PowerShell's module logging records the parameters of every command and what a pipeline hands to it.
+  It 'sends no character of the secret through a pipeline or to a command' {
+    $ast = (Get-Command New-RpaSecret).ScriptBlock.Ast
+    @($ast.FindAll({ param($node) $node -is [Management.Automation.Language.PipelineAst] -and $node.PipelineElements.Count -gt 1 }, $true)).Count | Should -Be 0
+    $commands = @($ast.FindAll({ param($node) $node -is [Management.Automation.Language.CommandAst] }, $true) | ForEach-Object { $_.GetCommandName() })
+    # Only the two empty arrays it fills.
+    $commands | Should -BeExactly @('New-Object', 'New-Object')
+  }
+
+  It 'the module turns no plain text into a SecureString with a command' {
+    $source = Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir 'RpaInstall.psm1')
+    $source | Should -Not -Match 'ConvertTo-SecureString'
+    $source | Should -Not -Match 'AsPlainText'
   }
 }
 
@@ -454,5 +720,64 @@ Describe 'The installer scripts' {
     $ast = [Management.Automation.Language.Parser]::ParseFile($path, [ref]$null, [ref]$null)
     @($ast.FindAll({ param($node) $node -is [Management.Automation.Language.LoopStatementAst] }, $true)).Count | Should -Be 0
     (Get-Content -Raw -LiteralPath $path) | Should -Match "Join-Path \`$PSScriptRoot 'start-loop\.ps1'"
+  }
+
+  # The installer runs as an administrator; a tool found along PATH could come from a folder other users can write to.
+  It '<Name> starts no Windows tool by its bare name' -ForEach @(@{ Name = 'RpaInstall.psm1' }, @{ Name = 'Install-Rpa.ps1' }, @{ Name = 'Uninstall-Rpa.ps1' }) {
+    $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $script:InstallerDir $Name), [ref]$null, [ref]$null)
+    $bare = @($ast.FindAll({ param($node) $node -is [Management.Automation.Language.CommandAst] }, $true) |
+        ForEach-Object { $_.GetCommandName() } | Where-Object { $_ -match '^(icacls|reg|powercfg|robocopy|cmd|schtasks|net|sc|takeown|shutdown)(\.exe)?$' })
+    $bare.Count | Should -Be 0
+  }
+
+  It 'Install-Rpa.ps1 judges who can change its folder before it loads anything else from it' {
+    $path = Join-Path $script:InstallerDir 'Install-Rpa.ps1'
+    $source = Get-Content -Raw -LiteralPath $path
+    $refusal = $source.IndexOf("'{0} can be changed by {1}. Unpack the package in a folder only you or administrators can change, and run it from there.'")
+    $refusal | Should -BeGreaterThan 0
+    $ast = [Management.Automation.Language.Parser]::ParseFile($path, [ref]$null, [ref]$null)
+    $loads = @($ast.FindAll({ param($node) $node -is [Management.Automation.Language.CommandAst] -and ($node.GetCommandName() -eq 'Import-Module' -or $node.InvocationOperator -eq 'Dot') }, $true))
+    $loads.Count | Should -Be 1
+    $loads[0].Extent.StartOffset | Should -BeGreaterThan $refusal
+  }
+
+  Context 'on Windows' {
+    BeforeAll {
+      # A copy of the installer in a folder of its own, whose access rules the test sets. The runs below can install
+      # nothing: both ports are the same, which the plan refuses before any step.
+      $script:Package = Join-Path ([IO.Path]::GetTempPath()) ('rpa-package-' + [guid]::NewGuid().ToString('N'))
+      function Invoke-TestInstaller {
+        $output = @(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $script:Package 'Install-Rpa.ps1') -RunnerPort 7 -BrowserPort 7 -AllowFromAnyAddress)
+        @{ Output = $output; ExitCode = $LASTEXITCODE }
+      }
+      if ($env:OS -eq 'Windows_NT') {
+        New-Item -ItemType Directory -Path $script:Package | Out-Null
+        Copy-Item -LiteralPath (Join-Path $script:InstallerDir 'Install-Rpa.ps1'), (Join-Path $script:InstallerDir 'RpaInstall.psm1') -Destination $script:Package
+        $me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+        & icacls.exe $script:Package /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "*$($me):(OI)(CI)F" | Out-Null
+      }
+    }
+
+    AfterAll {
+      if (Test-Path -LiteralPath $script:Package) { Remove-Item -LiteralPath $script:Package -Recurse -Force }
+    }
+
+    It 'Install-Rpa.ps1 runs from a folder only administrators, SYSTEM and the person running it can change' -Skip:($env:OS -ne 'Windows_NT') {
+      $run = Invoke-TestInstaller
+      ($run.Output -join "`n") | Should -Not -Match 'can be changed by'
+      $run.Output | Should -Contain 'Nothing was changed.'
+      $run.ExitCode | Should -Be 1
+    }
+
+    It 'Install-Rpa.ps1 refuses to run from a folder that other users can change' -Skip:($env:OS -ne 'Windows_NT') {
+      & icacls.exe $script:Package /grant '*S-1-5-32-545:(OI)(CI)M' | Out-Null
+      $users = (New-Object Security.Principal.SecurityIdentifier 'S-1-5-32-545').Translate([Security.Principal.NTAccount]).Value
+      $run = Invoke-TestInstaller
+      $run.Output | Should -BeExactly @(
+        "$($script:Package) can be changed by $users. Unpack the package in a folder only you or administrators can change, and run it from there."
+        'Nothing was changed.'
+      )
+      $run.ExitCode | Should -Be 1
+    }
   }
 }

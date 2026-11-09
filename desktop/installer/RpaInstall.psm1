@@ -6,9 +6,20 @@
 #                          it looks at nothing but its two arguments
 #   Invoke-RpaInstallPlan  runs exactly the listed steps, in order (Windows only)
 #
-# The commands for permissions, the stored sign-in password, the registry and the scheduled tasks come from the AWS
-# test bed's first-boot script (deploy/terraform/modules/aws-ec2-desktop-runner/setup.ps1.tftpl), where they are proven.
-# No function here prints, logs or returns a secret.
+# The stored sign-in password, the registry values, the scheduled task settings and the access rules of the data
+# directory come from the AWS test bed's first-boot script (deploy/terraform/modules/aws-ec2-desktop-runner/
+# setup.ps1.tftpl).
+#
+# Who is not trusted: the bot user (and anything running as it) and every other standard user. The bot user can create
+# files in the data directory and change what is in logs\. So the installer refuses a link or junction where it expects
+# the data directory, logs\, policy.json or a token, refuses one of those that someone other than Administrators or
+# SYSTEM owns (logs\ it takes over instead), passes /L to every icacls call, and deletes folders with rd, which does
+# not enter a junction.
+#
+# Secrets: New-RpaSecret returns a new secret to its caller. No other function returns one in plain text, and none
+# prints or logs one. A token is made inside the function that writes its file, and a generated password inside the
+# function that creates the user; neither is ever a parameter of a command or goes through a pipeline, because
+# PowerShell's module logging records both.
 
 $script:MinimumBuild = 17763
 $script:TaskPath = '\RPA\'
@@ -18,16 +29,63 @@ $script:RunnerRule = 'RPA-Runner-In'
 $script:BrowserRule = 'RPA-Browser-In'
 $script:StarterPolicy = '{ "allowedApps": [], "maxFileBytes": 20971520 }'
 $script:Winlogon = 'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
-$script:WinlogonPath = 'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
 $script:Utf8 = New-Object Text.UTF8Encoding $false
+# Administrators and SYSTEM: the only owners the installer accepts for what it finds in the data directory.
+$script:TrustedOwners = @('S-1-5-32-544', 'S-1-5-18')
+# The data directory's files the bot user may read and never change, and the step that writes each when it is missing.
+$script:DataFiles = [ordered]@{ 'policy.json' = 'write policy'; 'token' = 'write token'; 'browser-token' = 'write browser-token' }
+$script:SignInSteps = @('store sign-in password', 'turn on automatic sign-in', 'keep the desktop unlocked')
+$script:KnownSteps = @(
+  'stop running services', 'copy program files', 'create user', 'protect the data directory', 'write policy',
+  'write token', 'write browser-token', 'add the runner firewall rule', 'add the browser firewall rule',
+  'remove the browser firewall rule', 'register the runner task', 'register the browser task',
+  'remove the browser task', 'write install.json', 'store sign-in password', 'turn on automatic sign-in',
+  'keep the desktop unlocked', 'start tasks')
+# Where a user's registry is loaded for a moment when that user is not signed in.
+$script:HiveMount = 'HKU\RpaBotUser'
+$script:MountedSid = $null
 
 # ---------------------------------------------------------------------------------------------------------------------
 # The plan (runs anywhere)
 # ---------------------------------------------------------------------------------------------------------------------
 
+# An IPv4 or IPv6 address, or a range in CIDR form (10.0.0.0/24). Nothing else: no name, no keyword, no list.
+function Test-RpaAddress([string]$Text) {
+  $address = $Text
+  $prefix = $null
+  $slash = $Text.IndexOf('/')
+  if ($slash -ge 0) {
+    $address = $Text.Substring(0, $slash)
+    $prefix = $Text.Substring($slash + 1)
+    if ($prefix -notmatch '^\d{1,3}$') { return $false }
+  }
+  if ($address -match '^\d{1,3}(\.\d{1,3}){3}$') {
+    foreach ($part in $address.Split('.')) { if ([int]$part -gt 255) { return $false } }
+    return ($null -eq $prefix -or [int]$prefix -le 32)
+  }
+  $parsed = $null
+  if ($address -match '^[0-9A-Fa-f:]+$' -and $address.Contains(':') -and [Net.IPAddress]::TryParse($address, [ref]$parsed)) {
+    return ($null -eq $prefix -or [int]$prefix -le 128)
+  }
+  $false
+}
+
+# The refusal for something found in the data directory that the installer will not use, or nothing. -State is what
+# Get-RpaPathState returns. A link is refused always; an owner other than Administrators or SYSTEM where -CheckOwner
+# is given.
+function Get-RpaPathRefusal([string]$Path, $State, [bool]$CheckOwner) {
+  if (-not $State -or -not $State.Exists) { return $null }
+  if ($State.IsLink) { return ('{0} is a link or junction. Remove it and run the installer again.' -f $Path) }
+  if ($CheckOwner -and -not $State.OwnerTrusted) {
+    return ('{0} exists and is owned by {1}. Check what is in it, remove it, and run the installer again.' -f $Path, $State.Owner)
+  }
+  $null
+}
+
 # Decides what an install does. -Parameters holds Install-Rpa.ps1's parameters (User, UserPassword, RunnerPort,
-# BrowserPort, NoBrowser, NoFirewall, AutoSignIn, Force); -Facts is what Get-RpaMachineFacts returns. With a refusal
-# there are no steps: the installer changes nothing.
+# BrowserPort, NoBrowser, NoFirewall, AllowFrom, AllowFromAnyAddress, AutoSignIn, Force); -Facts is what
+# Get-RpaMachineFacts returns. With a refusal there are no steps: the installer changes nothing. AllowFrom in the
+# result is what the firewall rules let in: addresses and ranges, or the one word any, or nothing without rules.
 function Get-RpaInstallPlan {
   param(
     [Parameter(Mandatory = $true)][hashtable]$Parameters,
@@ -36,8 +94,14 @@ function Get-RpaInstallPlan {
   $user = [string]$Parameters.User
   $hasPassword = $null -ne $Parameters.UserPassword
   $browser = -not $Parameters.NoBrowser
+  $firewall = -not $Parameters.NoFirewall
   $autoSignIn = [bool]$Parameters.AutoSignIn
   $upgrade = [bool]$Facts.Installed
+  $runnerPort = [int]$Parameters.RunnerPort
+  $browserPort = [int]$Parameters.BrowserPort
+  # Automatic sign-in that an earlier run turned on for this same user stays as it is.
+  $signInKept = $autoSignIn -and $upgrade -and [bool]$Facts.InstalledAutoSignInForUser
+  $allowFrom = $null
   $refusals = New-Object Collections.Generic.List[string]
   $warnings = New-Object Collections.Generic.List[string]
   $steps = New-Object Collections.Generic.List[string]
@@ -49,25 +113,68 @@ function Get-RpaInstallPlan {
   }
 
   if ($refusals.Count -eq 0) {
-    # On an upgrade the installed runner and browser hold the ports.
-    if (-not $upgrade) {
-      $ports = @([int]$Parameters.RunnerPort)
-      if ($browser) { $ports += [int]$Parameters.BrowserPort }
+    if ($browser -and $runnerPort -eq $browserPort) {
+      $refusals.Add(('-RunnerPort and -BrowserPort are both {0}. Give each its own port.' -f $runnerPort))
+    } else {
+      # On an upgrade the installed runner and browser hold their ports, so only a port that changes is checked.
+      $ports = @()
+      if (-not ($upgrade -and $Facts.InstalledRunnerPort -eq $runnerPort)) { $ports += $runnerPort }
+      if ($browser -and -not ($upgrade -and $Facts.InstalledBrowser -and $Facts.InstalledBrowserPort -eq $browserPort)) { $ports += $browserPort }
       foreach ($port in $ports) {
-        $process = $Facts.PortsInUse[$port]
+        $process = $null
+        if ($Facts.PortsInUse) { $process = $Facts.PortsInUse[$port] }
         if ($process) { $refusals.Add(('Port {0} is in use by {1}. Choose another with -RunnerPort or -BrowserPort.' -f $port, $process)) }
       }
     }
+
     if ($Facts.UserIsDomain -and -not $Facts.UserExists) {
       $refusals.Add(('{0} does not exist. Create it in your directory first; the installer only creates local users.' -f $user))
     }
+    # The runner treats its own user as an administrator when it is one, so the bot user must not be.
+    if ($Facts.UserExists -and $Facts.UserIsAdmin) {
+      $refusals.Add(('{0} is an administrator. The bot user must be a standard user.' -f $user))
+    }
     # An existing user's password is never changed, so automatic sign-in can only store one that is given.
-    if ($autoSignIn -and $Facts.UserExists -and -not $hasPassword) {
-      $refusals.Add(('-AutoSignIn for the existing user {0} needs -UserPassword.' -f $user))
+    if ($autoSignIn -and $Facts.UserExists -and -not $hasPassword -and -not $signInKept) {
+      $refusals.Add(('-AutoSignIn for the existing user {0} needs -UserPassword. A password the installer generated earlier is not known to anyone: set a new password for {0} and pass it, or remove {0} so the installer creates it again.' -f $user))
+    }
+    if ($autoSignIn -and $Facts.UserExists -and $hasPassword -and $Facts.UserPasswordWrong) {
+      $refusals.Add(('The password given for {0} is not correct.' -f $user))
     }
     if (-not $upgrade -and -not $Facts.UserExists -and -not $Facts.UserIsDomain -and -not $autoSignIn -and -not $hasPassword) {
       $refusals.Add(('Give -UserPassword for the new user {0}, or use -AutoSignIn to have a random password stored for automatic sign-in.' -f $user))
     }
+
+    if ($firewall) {
+      $given = @($Parameters.AllowFrom | Where-Object { $_ })
+      $any = [bool]$Parameters.AllowFromAnyAddress
+      if ($given.Count -gt 0 -and -not $any) { $allowFrom = $given }
+      elseif ($any -and $given.Count -eq 0) { $allowFrom = @('any') }
+      elseif (-not $any -and $upgrade -and $Facts.InstalledAllowFrom) { $allowFrom = @($Facts.InstalledAllowFrom) }
+      else { $refusals.Add('Say which addresses may connect: -AllowFrom <n8n address>, or -AllowFromAnyAddress, or -NoFirewall.') }
+      foreach ($address in $given) {
+        if (-not (Test-RpaAddress $address)) { $refusals.Add(('-AllowFrom: {0} is not an IP address or a range such as 10.0.0.0/24.' -f $address)) }
+      }
+    }
+
+    # What is already in the data directory: nothing a standard user could have put there is used.
+    $dataRefusal = Get-RpaPathRefusal $Facts.DataDir $Facts.DataDirState $true
+    if ($dataRefusal) { $refusals.Add($dataRefusal) }
+    else {
+      $logsRefusal = Get-RpaPathRefusal $Facts.LogDir $Facts.LogDirState $false
+      if ($logsRefusal) { $refusals.Add($logsRefusal) }
+      foreach ($name in $script:DataFiles.Keys) {
+        $state = $null
+        if ($Facts.DataFiles) { $state = $Facts.DataFiles[$name] }
+        $fileRefusal = Get-RpaPathRefusal ('{0}\{1}' -f $Facts.DataDir, $name) $state $true
+        if ($fileRefusal) { $refusals.Add($fileRefusal) }
+      }
+    }
+    # A task folder a standard user made first stays that user's, also after the tasks in it are registered again.
+    if ($Facts.TaskFolderOwner) {
+      $refusals.Add(('The scheduled task folder {0} exists and is owned by {1}. Check what is in it, remove it, and run the installer again.' -f $script:TaskPath, $Facts.TaskFolderOwner))
+    }
+
     if ($upgrade -and $Facts.RunnerRunning) {
       $text = 'The runner is running; a run in progress will fail. Use -Force to continue.'
       if ($Parameters.Force) { $warnings.Add($text) } else { $refusals.Add($text) }
@@ -75,51 +182,63 @@ function Get-RpaInstallPlan {
     if ($autoSignIn -and $Facts.UserExists -and $Facts.UserPasswordExpires) {
       $warnings.Add(("{0}'s password expires; automatic sign-in stops working when it does." -f $user))
     }
+    if ($Facts.UserExists -and $Facts.UserAdminUnknown) {
+      $warnings.Add(('Could not check whether {0} is an administrator. The bot user must be a standard user.' -f $user))
+    }
+    if ($Facts.UserPasswordProblem) {
+      $warnings.Add(('The password given for {0} could not be checked: {1}' -f $user, $Facts.UserPasswordProblem))
+    }
+    if ($firewall -and $Facts.PublicNetwork) {
+      $warnings.Add('This machine is on a network that Windows treats as Public. The firewall rules are for Domain and Private networks, so they let nothing in on that network.')
+    }
   }
 
   if ($refusals.Count -eq 0) {
     # An upgrade replaces the program files and keeps the user, the policy and both tokens (and the certificates,
-    # which no step touches). The program files come before the user, and automatic sign-in comes last, so that a
-    # failed copy leaves no new user behind and no sign-in is switched on for an install that did not finish.
+    # which no step touches). The program files come before the user, so that a failed copy leaves no new user behind.
+    # install.json is written before the sign-in steps, so that the uninstaller knows about them even when one fails.
     if ($upgrade) { $steps.Add('stop running services') }
     $steps.Add('copy program files')
     if (-not $upgrade -and -not $Facts.UserExists) { $steps.Add('create user') }
     $steps.Add('protect the data directory')
-    if (-not $upgrade) {
-      $steps.Add('write policy')
-      $steps.Add('write token')
-      if ($browser) { $steps.Add('write browser-token') }
+    # A file that is there is never written again; one that is missing is written, on a first install and on an upgrade.
+    foreach ($name in $script:DataFiles.Keys) {
+      if ($name -eq 'browser-token' -and -not $browser) { continue }
+      $state = $null
+      if ($Facts.DataFiles) { $state = $Facts.DataFiles[$name] }
+      if (-not $state -or -not $state.Exists) { $steps.Add($script:DataFiles[$name]) }
     }
-    if (-not $Parameters.NoFirewall) {
+    if ($firewall) {
       $steps.Add('add the runner firewall rule')
       if ($browser) { $steps.Add('add the browser firewall rule') } elseif ($upgrade) { $steps.Add('remove the browser firewall rule') }
     }
     $steps.Add('register the runner task')
     if ($browser) { $steps.Add('register the browser task') } elseif ($upgrade) { $steps.Add('remove the browser task') }
-    if ($autoSignIn) {
-      $steps.Add('store sign-in password')
-      $steps.Add('turn on automatic sign-in')
-      $steps.Add('keep the desktop unlocked')
-    }
     $steps.Add('write install.json')
+    if ($autoSignIn) {
+      if (-not $signInKept) { foreach ($step in $script:SignInSteps) { $steps.Add($step) } }
+      elseif ($hasPassword) { $steps.Add('store sign-in password') }
+    }
     if ($upgrade) { $steps.Add('start tasks') }
   }
 
-  @{ Refusals = $refusals.ToArray(); Warnings = $warnings.ToArray(); Steps = $steps.ToArray() }
+  @{ Refusals = $refusals.ToArray(); Warnings = $warnings.ToArray(); Steps = $steps.ToArray(); AllowFrom = $allowFrom }
 }
 
 # 64 symbols, so a random byte modulo 64 is uniform; retried until it has an upper, a lower and a digit and no part of
 # an account or full name (Windows' complexity rule refuses a password containing rpa, runner or admin). Letters,
-# digits, - and _ need no escaping in a header, a URL or a shell.
+# digits, - and _ need no escaping in a header, a URL or a shell. No command and no pipeline touches the characters.
 function New-RpaSecret {
   param([Parameter(Mandatory = $true)][ValidateRange(8, 1024)][int]$Length)
   $alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
   $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
   try {
+    $bytes = New-Object byte[] $Length
+    $chars = New-Object char[] $Length
     do {
-      $bytes = New-Object byte[] $Length
       $rng.GetBytes($bytes)
-      $s = -join ($bytes | ForEach-Object { $alphabet[$_ % 64] })
+      for ($i = 0; $i -lt $Length; $i++) { $chars[$i] = $alphabet[$bytes[$i] % 64] }
+      $s = -join $chars
     } until ($s -cmatch '[A-Z]' -and $s -cmatch '[a-z]' -and $s -cmatch '[0-9]' -and $s -notmatch 'rpa|runner|admin')
   } finally { $rng.Dispose() }
   $s
@@ -174,6 +293,40 @@ function Read-RpaInstallFile([string]$Path) {
   Get-Content -Raw -LiteralPath $Path -Encoding UTF8 | ConvertFrom-Json
 }
 
+function Get-RpaAccountName([Security.Principal.SecurityIdentifier]$Sid) {
+  try { $Sid.Translate([Security.Principal.NTAccount]).Value } catch { $Sid.Value }
+}
+
+# What is at a path, without following it: whether anything is there, whether it is a link or junction (a reparse
+# point), and who owns it. An owner that cannot be read is not trusted.
+function Get-RpaPathState([string]$Path) {
+  $state = @{ Exists = $false; IsLink = $false; OwnerTrusted = $false; Owner = '' }
+  try { $attributes = [IO.File]::GetAttributes($Path) }
+  catch {
+    $cause = $_.Exception.GetBaseException()
+    if ($cause -is [IO.FileNotFoundException] -or $cause -is [IO.DirectoryNotFoundException]) { return $state }
+    throw
+  }
+  $state.Exists = $true
+  $state.IsLink = [bool]($attributes -band [IO.FileAttributes]::ReparsePoint)
+  try {
+    $owner = (Get-Acl -LiteralPath $Path).GetOwner([Security.Principal.SecurityIdentifier])
+    $state.OwnerTrusted = $script:TrustedOwners -contains $owner.Value
+    $state.Owner = Get-RpaAccountName $owner
+  } catch { $state.Owner = 'someone whose name cannot be read' }
+  $state
+}
+
+# The owner of the scheduled task folder when it is there and that owner is not Administrators or SYSTEM, else nothing.
+function Get-RpaTaskFolderOwner {
+  $scheduler = New-Object -ComObject Schedule.Service
+  $null = $scheduler.Connect()
+  try { $sddl = [string]$scheduler.GetFolder($script:TaskPath.TrimEnd('\')).GetSecurityDescriptor(1) } catch { return $null }
+  $security = New-Object Security.AccessControl.RawSecurityDescriptor $sddl
+  if (-not $security.Owner -or $script:TrustedOwners -contains $security.Owner.Value) { return $null }
+  Get-RpaAccountName $security.Owner
+}
+
 # The facts Get-RpaInstallPlan judges. Changes nothing.
 function Get-RpaMachineFacts {
   param([Parameter(Mandatory = $true)][hashtable]$Parameters)
@@ -181,18 +334,47 @@ function Get-RpaMachineFacts {
   $layout = Get-RpaLayout
   $account = Get-RpaAccount -User $Parameters.User -ComputerName $env:COMPUTERNAME
   $facts = @{
-    IsAdmin             = Test-RpaAdministrator
-    Is64Bit             = [Environment]::Is64BitOperatingSystem
-    OsBuild             = [Environment]::OSVersion.Version.Build
-    UserExists          = $false
-    UserIsDomain        = $account.IsDomain
-    UserPasswordExpires = $false
-    PortsInUse          = @{}
-    Installed           = Test-Path -LiteralPath $layout.InstallFile
-    RunnerRunning       = [bool](Get-Process -Name 'RpaRunner' -ErrorAction SilentlyContinue)
+    IsAdmin                    = Test-RpaAdministrator
+    Is64Bit                    = [Environment]::Is64BitOperatingSystem
+    OsBuild                    = [Environment]::OSVersion.Version.Build
+    UserExists                 = $false
+    UserIsDomain               = $account.IsDomain
+    UserIsAdmin                = $false
+    UserAdminUnknown           = $false
+    UserPasswordExpires        = $false
+    UserPasswordWrong          = $false
+    UserPasswordProblem        = $null
+    PortsInUse                 = @{}
+    Installed                  = Test-Path -LiteralPath $layout.InstallFile
+    InstalledRunnerPort        = $null
+    InstalledBrowserPort       = $null
+    InstalledBrowser           = $false
+    InstalledAllowFrom         = $null
+    InstalledAutoSignInForUser = $false
+    RunnerRunning              = $false
+    DataDir                    = $layout.DataDir
+    LogDir                     = $layout.LogDir
+    DataDirState               = $null
+    LogDirState                = $null
+    DataFiles                  = @{}
+    TaskFolderOwner            = $null
+    PublicNetwork              = $false
   }
   # The plan refuses on these before it reads the rest, and an older Windows lacks the commands used below.
   if (-not $facts.IsAdmin -or -not $facts.Is64Bit -or $facts.OsBuild -lt $script:MinimumBuild) { return $facts }
+
+  # The installed runner only: a runner someone runs from another folder is not touched by an upgrade.
+  $runner = Join-Path (Join-Path $layout.InstallDir 'runner') 'RpaRunner.exe'
+  $facts.RunnerRunning = [bool](Get-CimInstance -ClassName Win32_Process -Filter "Name='RpaRunner.exe'" | Where-Object { $_.ExecutablePath -eq $runner })
+
+  $install = Read-RpaInstallFile $layout.InstallFile
+  if ($install) {
+    $facts.InstalledRunnerPort = [int]$install.runnerPort
+    $facts.InstalledBrowserPort = [int]$install.browserPort
+    $facts.InstalledBrowser = $install.browser -eq $true
+    if ($install.allowFrom) { $facts.InstalledAllowFrom = @($install.allowFrom) }
+    $facts.InstalledAutoSignInForUser = ($install.autoSignIn -eq $true) -and ([string]$install.user -eq $account.Display)
+  }
 
   if ($account.IsDomain) {
     try {
@@ -200,10 +382,10 @@ function Get-RpaMachineFacts {
       $facts.UserExists = $true
     } catch { $facts.UserExists = $false }
     if ($facts.UserExists) {
-      # 0x10000: the account's "password never expires" flag. When the directory cannot be asked, no warning.
+      # 0x10000: the account's "password never expires" flag. When the directory does not say, no warning.
       try {
         $flags = ([ADSI]('WinNT://{0}/{1},user' -f $account.Domain, $account.Name)).UserFlags.Value
-        $facts.UserPasswordExpires = -not ($flags -band 0x10000)
+        if ($null -ne $flags) { $facts.UserPasswordExpires = -not ([int]$flags -band 0x10000) }
       } catch { $facts.UserPasswordExpires = $false }
     }
   } else {
@@ -213,22 +395,59 @@ function Get-RpaMachineFacts {
       $facts.UserPasswordExpires = $null -ne $local.PasswordExpires
     }
   }
+  if ($facts.UserExists) {
+    Add-RpaNativeTypes
+    # A member of Administrators, directly or through a group that is a member.
+    try {
+      $administrators = ((New-Object Security.Principal.SecurityIdentifier 'S-1-5-32-544').Translate([Security.Principal.NTAccount]).Value -split '\\')[-1]
+      $name = $account.Name
+      if ($account.IsDomain) { $name = $account.Qualified }
+      $facts.UserIsAdmin = @([RpaAccounts]::LocalGroups($name)) -contains $administrators
+    } catch { $facts.UserAdminUnknown = $true }
+    # A password that would be stored for automatic sign-in is tried first. 1326 is Windows' "the user name or
+    # password is incorrect"; 1385 means the password is right and only this kind of logon is not allowed.
+    if ($Parameters.AutoSignIn -and $Parameters.UserPassword) {
+      $domain = '.'
+      if ($account.IsDomain) { $domain = $account.Domain }
+      $code = [RpaAccounts]::CheckPassword($domain, $account.Name, $Parameters.UserPassword)
+      if ($code -eq 1326) { $facts.UserPasswordWrong = $true }
+      elseif ($code -ne 0 -and $code -ne 1385) { $facts.UserPasswordProblem = (New-Object ComponentModel.Win32Exception $code).Message }
+    }
+  }
 
-  $ports = @([int]$Parameters.RunnerPort)
-  if (-not $Parameters.NoBrowser) { $ports += [int]$Parameters.BrowserPort }
-  foreach ($port in $ports) {
+  foreach ($port in @([int]$Parameters.RunnerPort, [int]$Parameters.BrowserPort)) {
     $listener = Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($listener) {
       $process = Get-Process -Id $listener.OwningProcess -ErrorAction SilentlyContinue
       if ($process) { $facts.PortsInUse[$port] = $process.ProcessName } else { $facts.PortsInUse[$port] = 'process {0}' -f $listener.OwningProcess }
     }
   }
+
+  $facts.DataDirState = Get-RpaPathState $layout.DataDir
+  $facts.LogDirState = Get-RpaPathState $layout.LogDir
+  foreach ($name in $script:DataFiles.Keys) { $facts.DataFiles[$name] = Get-RpaPathState (Join-Path $layout.DataDir $name) }
+  $facts.TaskFolderOwner = Get-RpaTaskFolderOwner
+  $facts.PublicNetwork = [bool](Get-NetConnectionProfile -ErrorAction SilentlyContinue | Where-Object { $_.NetworkCategory -eq 'Public' })
   $facts
 }
 
+# The full path of a tool that ships with Windows (icacls, reg, powercfg, robocopy, cmd). The installer runs as an
+# administrator, so it does not look these up along PATH, where a folder other users can write to may come first.
+function Get-RpaSystemTool([string]$Name) {
+  Join-Path ([Environment]::SystemDirectory) $Name
+}
+
+# Runs a Windows tool and fails when its exit code says so, with what the tool wrote. What a tool writes to its error
+# stream does not end the run by itself (it would, when the installer's output is redirected). No secret is ever an
+# argument of one of these tools.
 function Invoke-RpaNative([string]$Exe, [string[]]$Arguments) {
-  & $Exe @Arguments | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw ('{0} {1} failed with exit code {2}' -f $Exe, $Arguments[0], $LASTEXITCODE) }
+  $ErrorActionPreference = 'Continue'
+  $tool = Get-RpaSystemTool $Exe
+  $output = @(& $tool @Arguments 2>&1)
+  if ($LASTEXITCODE -ne 0) {
+    $said = (@($output | ForEach-Object { "$_".Trim() } | Where-Object { $_ }) -join ' ')
+    throw ('{0} {1} failed with exit code {2}: {3}' -f $Exe, $Arguments[0], $LASTEXITCODE, $said)
+  }
 }
 
 function Set-RpaRegistryValue([string]$Key, [string]$Name, [string]$Type, [string]$Data) {
@@ -267,82 +486,50 @@ function Stop-RpaServices([string]$InstallDir) {
   throw ('Could not stop {0}.' -f (($running | ForEach-Object { $_.Name } | Sort-Object -Unique) -join ', '))
 }
 
+# Deletes a folder and everything in it with cmd's rd, which removes a link or junction inside without entering it
+# (Remove-Item in Windows PowerShell 5.1 enters it and deletes what it points at). The \\?\ form lets rd reach paths
+# longer than 260 characters. A folder that is itself a link is refused. rd reports success also when it left
+# something behind, so the result is checked.
+function Remove-RpaTree([string]$Path) {
+  $state = Get-RpaPathState $Path
+  if (-not $state.Exists) { return }
+  if ($state.IsLink) { throw ('{0} is a link or junction. Remove it and run this again.' -f $Path) }
+  # What rd writes about a file it could not delete must not end this function; the check below decides.
+  $ErrorActionPreference = 'Continue'
+  & (Get-RpaSystemTool 'cmd.exe') /d /c ('rd /s /q "\\?\{0}"' -f $Path) 2>&1 | Out-Null
+  if ((Get-RpaPathState $Path).Exists) { throw ('Could not remove {0}. Close what is using it and run this again.' -f $Path) }
+}
+
 # Replaces each file and folder of the package in the install directory. install.json is not in the package, so an
-# upgrade keeps it until the last step writes the new one.
+# upgrade keeps it. Folders are copied with robocopy, which copies paths longer than 260 characters (Copy-Item in
+# Windows PowerShell 5.1 does not) and takes the destination folder's access rules for what it writes.
 function Copy-RpaProgramFiles([string]$SourceDir, [string]$InstallDir) {
   New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
   foreach ($item in Get-ChildItem -LiteralPath $SourceDir -Force) {
     $target = Join-Path $InstallDir $item.Name
-    if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force }
-    Copy-Item -LiteralPath $item.FullName -Destination $target -Recurse -Force
+    if ($item.PSIsContainer) {
+      Remove-RpaTree $target
+      & (Get-RpaSystemTool 'robocopy.exe') $item.FullName $target /E /XJ /R:2 /W:2 /NFL /NDL /NJH /NJS /NP | Out-Null
+      # robocopy: 8 and above mean that something was not copied.
+      if ($LASTEXITCODE -ge 8) { throw ('Could not copy {0} (robocopy exit code {1}).' -f $item.Name, $LASTEXITCODE) }
+    } else {
+      Copy-Item -LiteralPath $item.FullName -Destination $target -Force
+    }
   }
 }
 
-# A standard local user (member of Users only) whose password never expires. Without -UserPassword the password is
-# random and is only ever stored for automatic sign-in (the plan refuses a new user with neither). Returns the password
-# for that step.
-function New-RpaUser([hashtable]$Account, [Security.SecureString]$Password) {
-  if (-not $Password) {
-    # Windows' complexity rule also refuses a password that holds a part of the account's own name.
-    $parts = @($Account.Name -split '[^A-Za-z0-9]' | Where-Object { $_.Length -ge 3 })
-    do { $plain = New-RpaSecret -Length 32 } while (@($parts | Where-Object { $plain.IndexOf($_, [StringComparison]::OrdinalIgnoreCase) -ge 0 }).Count -gt 0)
-    $Password = ConvertTo-SecureString $plain -AsPlainText -Force
-    $plain = $null
-  }
-  New-LocalUser -Name $Account.Name -Password $Password -PasswordNeverExpires -UserMayNotChangePassword -AccountNeverExpires -FullName 'RPA Runner' -Description 'Runs the RPA desktop runner and browser' | Out-Null
-  Add-LocalGroupMember -SID 'S-1-5-32-545' -Member $Account.Name -ErrorAction SilentlyContinue
-  $Password
-}
-
-# %ProgramData%\RPA Runner: administrators own it. The bot user may read, create files (the runner's and the browser
-# host's certificates) and write logs, but cannot change or delete what it did not create: policy.json and the tokens.
-# The owner is set because the runner refuses a policy whose folder anyone but administrators owns, and a folder made
-# by an administrator can be owned by that person's own account. (The test bed's setup ran as SYSTEM.)
-function Protect-RpaDataDirectory([hashtable]$Layout, [string]$Sid) {
-  New-Item -ItemType Directory -Force -Path $Layout.DataDir, $Layout.LogDir | Out-Null
-  $ref = '*{0}:' -f $Sid
-  Invoke-RpaNative icacls.exe @($Layout.DataDir, '/inheritance:r', '/grant:r', '*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F', '*S-1-3-0:(OI)(CI)(IO)F', "$($ref)(OI)(CI)RX")
-  Invoke-RpaNative icacls.exe @($Layout.DataDir, '/grant', "$($ref)(AD,WD)")
-  Invoke-RpaNative icacls.exe @($Layout.LogDir, '/grant', "$($ref)(OI)(CI)M")
-  Invoke-RpaNative icacls.exe @($Layout.DataDir, '/setowner', '*S-1-5-32-544')
-}
-
-# Writes a file the bot user may only read, and only when it is missing: SYSTEM and Administrators in full, the bot
-# user read, nothing inherited, owned by Administrators. Used for policy.json and both tokens.
-function New-RpaProtectedFile([string]$Path, [string]$Text, [string]$Sid) {
-  if (Test-Path -LiteralPath $Path) { return }
-  [IO.File]::WriteAllText($Path, $Text, $script:Utf8)
-  Invoke-RpaNative icacls.exe @($Path, '/inheritance:r', '/grant:r', '*S-1-5-18:F', '*S-1-5-32-544:F', ('*{0}:R' -f $Sid))
-  Invoke-RpaNative icacls.exe @($Path, '/setowner', '*S-1-5-32-544')
-}
-
-function Set-RpaFirewallRule([string]$Name, [string]$DisplayName, [int]$Port) {
-  Remove-NetFirewallRule -Name $Name -ErrorAction SilentlyContinue
-  New-NetFirewallRule -Name $Name -DisplayName $DisplayName -Direction Inbound -Protocol TCP -LocalPort $Port -Action Allow -Profile Any | Out-Null
-}
-
-# A task that runs a start script in the bot user's session at its logon: interactive (so it can drive the desktop),
-# not elevated, no time limit. The start script starts its program again whenever it exits.
-function Register-RpaTask([string]$Name, [string]$ScriptPath, [string]$Account) {
-  $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f $ScriptPath)
-  $trigger = New-ScheduledTaskTrigger -AtLogOn -User $Account
-  $principal = New-ScheduledTaskPrincipal -UserId $Account -LogonType Interactive -RunLevel Limited
-  $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)
-  Register-ScheduledTask -TaskPath $script:TaskPath -TaskName $Name -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
-}
-
-function Unregister-RpaTask([string]$Name) {
-  Unregister-ScheduledTask -TaskPath $script:TaskPath -TaskName $Name -Confirm:$false -ErrorAction SilentlyContinue
-}
-
-# Stores and removes an LSA private secret, the way Windows itself keeps the auto-logon password (LSA secret
-# DefaultPassword). Store is the test bed's; Remove passes no data, which deletes the secret.
-function Add-RpaLsaSecretType {
+# The compiled helpers: the LSA secret Windows itself reads the automatic sign-in password from (Store is the test
+# bed's; Remove passes no data, which deletes the secret), a password check, the local groups of a user, and the
+# creation of a user's profile. A password goes in as a SecureString and is turned into plain text only in unmanaged
+# memory that is wiped afterwards.
+function Add-RpaNativeTypes {
   if ('RpaLsaSecret' -as [type]) { return }
   Add-Type -TypeDefinition @'
 using System;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using System.Security;
+using System.Text;
 public static class RpaLsaSecret {
   [StructLayout(LayoutKind.Sequential)]
   struct UnicodeString { public ushort Length; public ushort MaximumLength; public IntPtr Buffer; }
@@ -362,16 +549,23 @@ public static class RpaLsaSecret {
     u.MaximumLength = (ushort)(s.Length * 2 + 2);
     return u;
   }
-  public static void Store(string key, string value) {
+  static IntPtr Open() {
     ObjectAttributes attributes = new ObjectAttributes();
     attributes.Length = Marshal.SizeOf(typeof(ObjectAttributes));
     IntPtr policy;
     uint status = LsaOpenPolicy(IntPtr.Zero, ref attributes, PolicyCreateSecret, out policy);
     if (status != 0) throw new Win32Exception(LsaNtStatusToWinError(status));
+    return policy;
+  }
+  public static void Store(string key, SecureString value) {
+    IntPtr policy = Open();
     UnicodeString k = Make(key);
-    UnicodeString v = Make(value);
+    UnicodeString v = new UnicodeString();
+    v.Buffer = Marshal.SecureStringToGlobalAllocUnicode(value);
+    v.Length = (ushort)(value.Length * 2);
+    v.MaximumLength = (ushort)(value.Length * 2 + 2);
     try {
-      status = LsaStorePrivateData(policy, ref k, ref v);
+      uint status = LsaStorePrivateData(policy, ref k, ref v);
       if (status != 0) throw new Win32Exception(LsaNtStatusToWinError(status));
     } finally {
       Marshal.ZeroFreeGlobalAllocUnicode(v.Buffer);
@@ -380,14 +574,10 @@ public static class RpaLsaSecret {
     }
   }
   public static void Remove(string key) {
-    ObjectAttributes attributes = new ObjectAttributes();
-    attributes.Length = Marshal.SizeOf(typeof(ObjectAttributes));
-    IntPtr policy;
-    uint status = LsaOpenPolicy(IntPtr.Zero, ref attributes, PolicyCreateSecret, out policy);
-    if (status != 0) throw new Win32Exception(LsaNtStatusToWinError(status));
+    IntPtr policy = Open();
     UnicodeString k = Make(key);
     try {
-      status = LsaRemovePrivateData(policy, ref k, IntPtr.Zero);
+      uint status = LsaRemovePrivateData(policy, ref k, IntPtr.Zero);
       if (status != 0 && status != StatusObjectNameNotFound) throw new Win32Exception(LsaNtStatusToWinError(status));
     } finally {
       Marshal.FreeHGlobal(k.Buffer);
@@ -395,91 +585,410 @@ public static class RpaLsaSecret {
     }
   }
 }
+public static class RpaAccounts {
+  [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+  static extern bool LogonUser(string user, string domain, IntPtr password, int logonType, int logonProvider, out IntPtr token);
+  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+  [DllImport("netapi32.dll", CharSet = CharSet.Unicode)]
+  static extern int NetUserGetLocalGroups(string server, string user, int level, int flags, out IntPtr buffer, int preferredLength, out int entriesRead, out int totalEntries);
+  [DllImport("netapi32.dll")] static extern int NetApiBufferFree(IntPtr buffer);
+  [DllImport("userenv.dll", CharSet = CharSet.Unicode)]
+  static extern int CreateProfile(string sid, string userName, StringBuilder path, uint pathLength);
+  const int LogonNetwork = 3;
+  const int IncludeIndirect = 1;
+  const int ProfileExists = unchecked((int)0x800700B7);
+  // 0 when Windows accepts the password for a network logon, else the Windows error code. Nothing is started.
+  public static int CheckPassword(string domain, string user, SecureString password) {
+    IntPtr plain = Marshal.SecureStringToGlobalAllocUnicode(password);
+    try {
+      IntPtr token;
+      if (LogonUser(user, domain, plain, LogonNetwork, 0, out token)) { CloseHandle(token); return 0; }
+      return Marshal.GetLastWin32Error();
+    } finally {
+      Marshal.ZeroFreeGlobalAllocUnicode(plain);
+    }
+  }
+  // The local groups a user is in, directly or through a group that is a member of one.
+  public static string[] LocalGroups(string user) {
+    IntPtr buffer;
+    int read;
+    int total;
+    int status = NetUserGetLocalGroups(null, user, 0, IncludeIndirect, out buffer, -1, out read, out total);
+    if (status != 0) throw new Win32Exception(status);
+    try {
+      string[] names = new string[read];
+      for (int i = 0; i < read; i++) names[i] = Marshal.PtrToStringUni(Marshal.ReadIntPtr(buffer, i * IntPtr.Size));
+      return names;
+    } finally {
+      NetApiBufferFree(buffer);
+    }
+  }
+  // Makes the profile of a user that has never signed in. A profile that is there already is left alone.
+  public static void CreateUserProfile(string sid, string userName) {
+    StringBuilder path = new StringBuilder(260);
+    int result = CreateProfile(sid, userName, path, (uint)path.Capacity);
+    if (result != 0 && result != ProfileExists) Marshal.ThrowExceptionForHR(result);
+  }
+}
 '@
 }
 
-# Winlogon reads the password from the LSA secret DefaultPassword; the registry value DefaultPassword is never written.
-function Set-RpaSignInPassword([Security.SecureString]$Password) {
-  if (-not $Password) { throw 'There is no password to store for automatic sign-in.' }
-  Add-RpaLsaSecretType
-  [RpaLsaSecret]::Store('DefaultPassword', (New-Object Net.NetworkCredential('', $Password)).Password)
+# A standard local user (member of Users only) whose password never expires. Without -UserPassword the password is
+# random, is made here and is only ever stored for automatic sign-in (the plan refuses a new user with neither).
+# Returns the password as a SecureString for that step.
+function New-RpaUser([hashtable]$Account, [Security.SecureString]$Password) {
+  if (-not $Password) {
+    # Windows' complexity rule also refuses a password that holds a part of the account's own name.
+    $parts = @($Account.Name -split '[^A-Za-z0-9]')
+    do {
+      $plain = New-RpaSecret -Length 32
+      $clash = $false
+      foreach ($part in $parts) {
+        if ($part.Length -ge 3 -and $plain.IndexOf($part, [StringComparison]::OrdinalIgnoreCase) -ge 0) { $clash = $true }
+      }
+    } while ($clash)
+    $Password = New-Object Security.SecureString
+    foreach ($char in $plain.ToCharArray()) { $Password.AppendChar($char) }
+    $Password.MakeReadOnly()
+    $plain = $null
+  }
+  New-LocalUser -Name $Account.Name -Password $Password -PasswordNeverExpires -UserMayNotChangePassword -AccountNeverExpires -FullName 'RPA Runner' -Description 'Runs the RPA desktop runner and browser' | Out-Null
+  Add-LocalGroupMember -SID 'S-1-5-32-545' -Member $Account.Name -ErrorAction SilentlyContinue
+  $Password
 }
 
-function Enable-RpaAutoSignIn([hashtable]$Account) {
-  Set-RpaRegistryValue $script:Winlogon 'AutoAdminLogon' 'REG_SZ' '1'
-  Set-RpaRegistryValue $script:Winlogon 'ForceAutoLogon' 'REG_SZ' '1'
-  Set-RpaRegistryValue $script:Winlogon 'DefaultUserName' 'REG_SZ' $Account.Name
-  Set-RpaRegistryValue $script:Winlogon 'DefaultDomainName' 'REG_SZ' $Account.Domain
-  Remove-ItemProperty -Path $script:WinlogonPath -Name 'DefaultPassword', 'AutoLogonCount' -ErrorAction SilentlyContinue
+# Removes a user this run created, with the profile a sign-in step may have made for it.
+function Remove-RpaUser([hashtable]$Account, [string]$Sid) {
+  Get-CimInstance -ClassName Win32_UserProfile -Filter ("SID='{0}'" -f $Sid) -ErrorAction SilentlyContinue | Remove-CimInstance -ErrorAction SilentlyContinue
+  Remove-LocalUser -Name $Account.Name
 }
 
-# Turns automatic sign-in off and removes the stored password, unless someone has pointed automatic sign-in at another
-# account since the install. Returns whether it turned it off.
-function Disable-RpaAutoSignIn([string]$UserName) {
-  $current = (Get-ItemProperty -Path $script:WinlogonPath -Name 'DefaultUserName' -ErrorAction SilentlyContinue).DefaultUserName
-  if ($current -ne $UserName) { return $false }
-  Set-RpaRegistryValue $script:Winlogon 'AutoAdminLogon' 'REG_SZ' '0'
-  Remove-ItemProperty -Path $script:WinlogonPath -Name 'ForceAutoLogon' -ErrorAction SilentlyContinue
-  Add-RpaLsaSecretType
-  [RpaLsaSecret]::Remove('DefaultPassword')
+# The access rules of the data directory, in the form Windows writes them (SDDL), each protected from inheriting:
+#   the directory  SYSTEM and Administrators in full; the bot user may read, and create files and folders (the
+#                  certificates, exports\), which it then owns; it cannot change or delete what it did not create
+#   logs\          the same, and the bot user may change and delete what is in it
+#   a file         SYSTEM and Administrators in full; the bot user may read (policy.json and the tokens)
+# They give the same rights as the test bed's icacls commands. Administrators own all of them: the runner refuses a
+# policy whose file or folder anyone else owns.
+function Get-RpaAccessRules([string]$Kind, [string]$Sid) {
+  switch ($Kind) {
+    'directory' { 'D:PAI(A;OICIIO;FA;;;CO)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;{0})(A;;DCLC;;;{0})' -f $Sid }
+    'logs' { 'D:PAI(A;OICIIO;FA;;;CO)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1301bf;;;{0})' -f $Sid }
+    'file' { 'D:PAI(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;{0})' -f $Sid }
+  }
+}
+
+# Gives something that is already there its owner (Administrators) and its access rules, replacing the rules whole:
+# an entry someone added for itself is gone afterwards. icacls /restore is the one icacls form that replaces instead
+# of merging. With /L icacls works on a link itself, not on what it points at, should one be swapped in after the
+# checks. The rules file is written to the install directory, which only administrators can write to.
+function Set-RpaAccessRules([string]$Path, [string]$Rules, [string]$WorkDir) {
+  $file = Join-Path $WorkDir ('access-{0}.tmp' -f [guid]::NewGuid().ToString('N'))
+  [IO.File]::WriteAllText($file, ("{0}`r`n{1}`r`n" -f (Split-Path -Leaf $Path), $Rules), [Text.Encoding]::Unicode)
+  try {
+    Invoke-RpaNative icacls.exe @($Path, '/setowner', '*S-1-5-32-544', '/L')
+    Invoke-RpaNative icacls.exe @((Split-Path -Parent $Path), '/restore', $file, '/L')
+  } finally {
+    Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
+  }
+}
+
+# Looks again, just before it is used, at something the plan already judged: the facts can be minutes old.
+function Assert-RpaPathUsable([string]$Path, [bool]$CheckOwner) {
+  $refusal = Get-RpaPathRefusal $Path (Get-RpaPathState $Path) $CheckOwner
+  if ($refusal) { throw $refusal }
+}
+
+# %ProgramData%\RPA Runner and logs\. A folder that is missing is created in one call with its owner and access rules,
+# so there is no moment in which it has others. One that is there is used only when it is no link and, for the data
+# directory, Administrators or SYSTEM own it; then its rules are replaced. policy.json and the tokens get their rules
+# again on every run, which also gives another -User its read access.
+function Protect-RpaDataDirectory([hashtable]$Layout, [string]$Sid) {
+  foreach ($folder in @(@{ Path = $Layout.DataDir; Kind = 'directory'; CheckOwner = $true }, @{ Path = $Layout.LogDir; Kind = 'logs'; CheckOwner = $false })) {
+    $rules = Get-RpaAccessRules $folder.Kind $Sid
+    if (-not (Get-RpaPathState $folder.Path).Exists) {
+      $security = New-Object Security.AccessControl.DirectorySecurity
+      $security.SetSecurityDescriptorSddlForm('O:BA' + $rules)
+      [void][IO.Directory]::CreateDirectory($folder.Path, $security)
+    }
+    # Also after creating it: CreateDirectory does not say when someone else made the folder a moment earlier.
+    Assert-RpaPathUsable $folder.Path $folder.CheckOwner
+    Set-RpaAccessRules $folder.Path $rules $Layout.InstallDir
+  }
+  foreach ($name in $script:DataFiles.Keys) {
+    $path = Join-Path $Layout.DataDir $name
+    if (-not (Get-RpaPathState $path).Exists) { continue }
+    Assert-RpaPathUsable $path $true
+    Set-RpaAccessRules $path (Get-RpaAccessRules 'file' $Sid) $Layout.InstallDir
+  }
+}
+
+# Writes a new file the bot user may only read: created with its owner and access rules in one call, and only when
+# nothing is there (a file someone put there in the meantime makes this fail). With -SecretLength the content is a new
+# secret made here; the text is UTF-8 without a byte order mark and without a line break at the end.
+function New-RpaProtectedFile {
+  param([string]$Path, [string]$Sid, [string]$Text, [int]$SecretLength)
+  $security = New-Object Security.AccessControl.FileSecurity
+  $security.SetSecurityDescriptorSddlForm('O:BA' + (Get-RpaAccessRules 'file' $Sid))
+  if ($SecretLength -gt 0) { $Text = New-RpaSecret -Length $SecretLength }
+  $bytes = $script:Utf8.GetBytes($Text)
+  $stream = New-Object IO.FileStream($Path, [IO.FileMode]::CreateNew, [Security.AccessControl.FileSystemRights]::Write, [IO.FileShare]::None, 4096, [IO.FileOptions]::None, $security)
+  try { $stream.Write($bytes, 0, $bytes.Length) } finally { $stream.Dispose() }
+}
+
+# Inbound, for the one program on the one port, from the given addresses only (or from any), on Domain and Private
+# networks. Not on Public networks.
+function Set-RpaFirewallRule([string]$Name, [string]$DisplayName, [int]$Port, [string]$Program, [string[]]$AllowFrom) {
+  Remove-NetFirewallRule -Name $Name -ErrorAction SilentlyContinue
+  $remote = $AllowFrom
+  if (@($AllowFrom).Count -eq 1 -and $AllowFrom[0] -eq 'any') { $remote = 'Any' }
+  New-NetFirewallRule -Name $Name -DisplayName $DisplayName -Direction Inbound -Protocol TCP -LocalPort $Port -Program $Program -RemoteAddress $remote -Action Allow -Profile Domain, Private | Out-Null
+}
+
+# A task that runs a start script in the bot user's session at its logon: interactive (so it can drive the desktop),
+# not elevated, no time limit. The start script starts its program again whenever it exits. A task of that name that
+# is already there is removed first and not overwritten: an overwritten task keeps its owner and access rules, and a
+# standard user can make one before the installer does.
+function Register-RpaTask([string]$Name, [string]$ScriptPath, [string]$Account) {
+  Unregister-RpaTask $Name
+  $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f $ScriptPath)
+  $trigger = New-ScheduledTaskTrigger -AtLogOn -User $Account
+  $principal = New-ScheduledTaskPrincipal -UserId $Account -LogonType Interactive -RunLevel Limited
+  $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)
+  Register-ScheduledTask -TaskPath $script:TaskPath -TaskName $Name -Action $action -Trigger $trigger -Principal $principal -Settings $settings | Out-Null
+}
+
+function Unregister-RpaTask([string]$Name) {
+  Unregister-ScheduledTask -TaskPath $script:TaskPath -TaskName $Name -Confirm:$false -ErrorAction SilentlyContinue
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Automatic sign-in: every change is recorded in install.json before it is made, and put back by the uninstaller.
+# ---------------------------------------------------------------------------------------------------------------------
+
+# What names a recorded change: two records with the same identity are the same setting.
+function Get-RpaChangeId($Change) {
+  '{0}|{1}|{2}' -f $Change.kind, $Change.key, $Change.name
+}
+
+# Writes install.json from the run's state: what the start scripts, Show-RpaConnection.ps1 and the uninstaller read.
+function Save-RpaInstallFile([hashtable]$Run) {
+  [IO.File]::WriteAllText($Run.Layout.InstallFile, ($Run.Install | ConvertTo-Json -Depth 5), $script:Utf8)
+}
+
+# Records what a sign-in step is about to change and writes the record to install.json at once, before the change. A
+# setting an earlier run recorded keeps that first record, so the uninstaller puts back what was there before the
+# first install.
+function Add-RpaSignInChange([hashtable]$Run, [Collections.IDictionary]$Change) {
+  $id = Get-RpaChangeId $Change
+  foreach ($known in $Run.Install.signInChanges) { if ((Get-RpaChangeId $known) -eq $id) { return } }
+  $record = New-Object psobject -Property $Change
+  $Run.Install.signInChanges = @($Run.Install.signInChanges) + $record
+  $Run.NewChanges = @($Run.NewChanges) + $record
+  Save-RpaInstallFile $Run
+}
+
+# The registry key to use for a recorded key: HKU\<SID>\... is under the mount point while that user's registry is
+# loaded from its file.
+function Resolve-RpaRegistryKey([string]$Key) {
+  if ($script:MountedSid -and $Key.StartsWith(('HKU\{0}\' -f $script:MountedSid), [StringComparison]::OrdinalIgnoreCase)) {
+    return $script:HiveMount + $Key.Substring(4 + $script:MountedSid.Length)
+  }
+  $Key
+}
+
+# A registry value as it is now, in the form install.json keeps it: whether it exists, and its type and data.
+function Get-RpaRegistryRecord([string]$Key, [string]$Name) {
+  $record = [ordered]@{ kind = 'registry'; key = $Key; name = $Name; existed = $false }
+  $actual = Resolve-RpaRegistryKey $Key
+  $at = $actual.IndexOf('\')
+  $root = [Microsoft.Win32.Registry]::LocalMachine
+  if ($actual.Substring(0, $at) -eq 'HKU') { $root = [Microsoft.Win32.Registry]::Users }
+  $open = $root.OpenSubKey($actual.Substring($at + 1))
+  if (-not $open) { return $record }
+  try {
+    if (@($open.GetValueNames()) -notcontains $Name) { return $record }
+    $data = $open.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    $record.existed = $true
+    switch ($open.GetValueKind($Name)) {
+      'DWord' { $record.type = 'REG_DWORD'; $record.value = [string][BitConverter]::ToUInt32([BitConverter]::GetBytes([int]$data), 0) }
+      'QWord' { $record.type = 'REG_QWORD'; $record.value = [string][BitConverter]::ToUInt64([BitConverter]::GetBytes([long]$data), 0) }
+      'ExpandString' { $record.type = 'REG_EXPAND_SZ'; $record.value = [string]$data }
+      'MultiString' { $record.type = 'REG_MULTI_SZ'; $record.value = @($data) -join '\0' }
+      'Binary' { $record.type = 'REG_BINARY'; $record.value = -join (@($data) | ForEach-Object { $_.ToString('X2') }) }
+      default { $record.type = 'REG_SZ'; $record.value = [string]$data }
+    }
+  } finally { $open.Dispose() }
+  $record
+}
+
+# Sets a registry value for a sign-in step, after recording what was there.
+function Set-RpaSignInValue([hashtable]$Run, [string]$Key, [string]$Name, [string]$Type, [string]$Data) {
+  Add-RpaSignInChange $Run (Get-RpaRegistryRecord $Key $Name)
+  Set-RpaRegistryValue (Resolve-RpaRegistryKey $Key) $Name $Type $Data
+}
+
+# Removes a registry value for a sign-in step, after recording what was there.
+function Remove-RpaSignInValue([hashtable]$Run, [string]$Key, [string]$Name) {
+  $record = Get-RpaRegistryRecord $Key $Name
+  if (-not $record.existed) { return }
+  Add-RpaSignInChange $Run $record
+  Invoke-RpaNative reg.exe @('delete', (Resolve-RpaRegistryKey $Key), '/v', $Name, '/f')
+}
+
+# Makes the registry of a user reachable under HKU\<SID>: it is there while the user is signed in; otherwise it is
+# loaded from the user's own profile until Dismount-RpaUserHive. Never from the default profile, which every later
+# user of the machine would inherit. Returns whether it loaded the file.
+function Mount-RpaUserHive([string]$Sid) {
+  if (Test-Path -LiteralPath ('Registry::HKEY_USERS\{0}' -f $Sid)) { return $false }
+  $profileKey = 'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\{0}' -f $Sid
+  $profileDir = (Get-ItemProperty -LiteralPath $profileKey -ErrorAction SilentlyContinue).ProfileImagePath
+  if (-not $profileDir) { throw 'The user has no profile on this machine.' }
+  $hive = Join-Path $profileDir 'NTUSER.DAT'
+  $state = Get-RpaPathState $hive
+  if (-not $state.Exists) { throw ('{0} is missing.' -f $hive) }
+  if ($state.IsLink) { throw ('{0} is a link.' -f $hive) }
+  Invoke-RpaNative reg.exe @('load', $script:HiveMount, $hive)
+  $script:MountedSid = $Sid
   $true
 }
 
-# Nothing may lock or cover the desktop: no lock screen, no inactivity lock, no screen saver, no Lock command, no
-# Server Manager or network prompt at logon, display never off. The first group is for the whole machine. The user's
-# own settings go into that user's registry: the loaded one when the user is signed in, the profile's file when there
-# is a profile, and otherwise the default profile, which the user's profile is copied from at its first logon (and so
-# is the profile of any user created later).
-function Set-RpaDesktopUnlocked([string]$Sid) {
-  $policies = 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
-  Set-RpaRegistryValue 'HKLM\SOFTWARE\Policies\Microsoft\Windows\Personalization' 'NoLockScreen' 'REG_DWORD' '1'
-  Set-RpaRegistryValue $policies 'InactivityTimeoutSecs' 'REG_DWORD' '0'
-  Set-RpaRegistryValue $policies 'EnableFirstLogonAnimation' 'REG_DWORD' '0'
-  if (Test-Path -LiteralPath 'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\ServerManager') {
-    Set-RpaRegistryValue 'HKLM\SOFTWARE\Microsoft\ServerManager' 'DoNotOpenServerManagerAtLogon' 'REG_DWORD' '1'
-  }
-  Invoke-RpaNative reg.exe @('add', 'HKLM\SYSTEM\CurrentControlSet\Control\Network\NewNetworkWindowOff', '/f')
-  Get-ScheduledTask -TaskName 'ServerManager' -ErrorAction SilentlyContinue | Disable-ScheduledTask | Out-Null
-  Invoke-RpaNative powercfg.exe @('/change', 'monitor-timeout-ac', '0')
-  Invoke-RpaNative powercfg.exe @('/change', 'standby-timeout-ac', '0')
+function Dismount-RpaUserHive([bool]$Mounted) {
+  if (-not $Mounted) { return }
+  $script:MountedSid = $null
+  # An open key keeps the file loaded; .NET closes the ones it no longer uses when it collects.
+  [GC]::Collect()
+  [GC]::WaitForPendingFinalizers()
+  Invoke-RpaNative reg.exe @('unload', $script:HiveMount)
+}
 
-  $root = 'HKU\{0}' -f $Sid
-  $loadedHere = $false
-  if (-not (Test-Path -LiteralPath ('Registry::HKEY_USERS\{0}' -f $Sid))) {
-    $profileList = 'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList'
-    $profileDir = (Get-ItemProperty -LiteralPath ('{0}\{1}' -f $profileList, $Sid) -ErrorAction SilentlyContinue).ProfileImagePath
-    if (-not $profileDir -or -not (Test-Path -LiteralPath (Join-Path $profileDir 'NTUSER.DAT'))) {
-      $profileDir = (Get-ItemProperty -LiteralPath $profileList).Default
-      if (-not $profileDir) { $profileDir = Join-Path $env:SystemDrive 'Users\Default' }
-    }
-    $root = 'HKU\RpaBotUser'
-    Invoke-RpaNative reg.exe @('load', $root, (Join-Path $profileDir 'NTUSER.DAT'))
-    $loadedHere = $true
+# The current value of a power timeout on mains power, in seconds, or nothing when powercfg does not show it. The
+# value lines end in a hex number; the last two are the mains and the battery value, whatever the display language.
+function Get-RpaPowerTimeout([string]$Subgroup, [string]$Setting) {
+  $numbers = @()
+  $ErrorActionPreference = 'Continue'
+  foreach ($line in @(& (Get-RpaSystemTool 'powercfg.exe') /query SCHEME_CURRENT $Subgroup $Setting 2>$null)) {
+    if ($line -match '0x([0-9A-Fa-f]{8})\s*$') { $numbers += [Convert]::ToUInt32($Matches[1], 16) }
   }
-  try {
-    foreach ($key in "$root\Control Panel\Desktop", "$root\Software\Policies\Microsoft\Windows\Control Panel\Desktop") {
-      Set-RpaRegistryValue $key 'ScreenSaveActive' 'REG_SZ' '0'
-      Set-RpaRegistryValue $key 'ScreenSaverIsSecure' 'REG_SZ' '0'
+  if ($numbers.Count -lt 2) { return $null }
+  $numbers[$numbers.Count - 2]
+}
+
+# Winlogon reads the password from the LSA secret DefaultPassword; the registry value DefaultPassword is never written.
+function Set-RpaSignInPassword([hashtable]$Run) {
+  if (-not $Run.Password) { throw 'There is no password to store for automatic sign-in.' }
+  Add-RpaNativeTypes
+  Add-RpaSignInChange $Run ([ordered]@{ kind = 'secret'; key = 'DefaultPassword'; name = '' })
+  [RpaLsaSecret]::Store('DefaultPassword', $Run.Password)
+}
+
+function Enable-RpaAutoSignIn([hashtable]$Run) {
+  Set-RpaSignInValue $Run $script:Winlogon 'AutoAdminLogon' 'REG_SZ' '1'
+  Set-RpaSignInValue $Run $script:Winlogon 'ForceAutoLogon' 'REG_SZ' '1'
+  Set-RpaSignInValue $Run $script:Winlogon 'DefaultUserName' 'REG_SZ' $Run.Account.Name
+  Set-RpaSignInValue $Run $script:Winlogon 'DefaultDomainName' 'REG_SZ' $Run.Account.Domain
+  Remove-RpaSignInValue $Run $script:Winlogon 'AutoLogonCount'
+  # A password kept in the registry in plain text by an earlier setup is removed and, being a secret, not recorded.
+  Remove-ItemProperty -LiteralPath ('Registry::HKEY_LOCAL_MACHINE{0}' -f $script:Winlogon.Substring(4)) -Name 'DefaultPassword' -ErrorAction SilentlyContinue
+}
+
+# Nothing may lock or cover the desktop. For the whole machine: no lock screen, no lock when idle, no first sign-in
+# animation, no Server Manager or network prompt at logon, display and sleep timeouts never. For the bot user: no
+# screen saver and no Lock command, written into that user's own registry (its profile is created first when it has
+# never signed in).
+function Set-RpaDesktopUnlocked([hashtable]$Run) {
+  $policies = 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+  Set-RpaSignInValue $Run 'HKLM\SOFTWARE\Policies\Microsoft\Windows\Personalization' 'NoLockScreen' 'REG_DWORD' '1'
+  Set-RpaSignInValue $Run $policies 'InactivityTimeoutSecs' 'REG_DWORD' '0'
+  Set-RpaSignInValue $Run $policies 'EnableFirstLogonAnimation' 'REG_DWORD' '0'
+  if (Test-Path -LiteralPath 'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\ServerManager') {
+    Set-RpaSignInValue $Run 'HKLM\SOFTWARE\Microsoft\ServerManager' 'DoNotOpenServerManagerAtLogon' 'REG_DWORD' '1'
+  }
+  $networkPrompt = 'HKLM\SYSTEM\CurrentControlSet\Control\Network\NewNetworkWindowOff'
+  if (-not (Test-Path -LiteralPath ('Registry::HKEY_LOCAL_MACHINE{0}' -f $networkPrompt.Substring(4)))) {
+    Add-RpaSignInChange $Run ([ordered]@{ kind = 'key'; key = $networkPrompt; name = '' })
+    Invoke-RpaNative reg.exe @('add', $networkPrompt, '/f')
+  }
+  foreach ($task in @(Get-ScheduledTask -TaskName 'ServerManager' -ErrorAction SilentlyContinue | Where-Object { $_.State -ne 'Disabled' })) {
+    Add-RpaSignInChange $Run ([ordered]@{ kind = 'task'; key = $task.TaskPath; name = $task.TaskName })
+    $task | Disable-ScheduledTask | Out-Null
+  }
+  foreach ($timeout in @(@{ Subgroup = 'SUB_VIDEO'; Setting = 'VIDEOIDLE'; Name = 'monitor-timeout-ac' }, @{ Subgroup = 'SUB_SLEEP'; Setting = 'STANDBYIDLE'; Name = 'standby-timeout-ac' })) {
+    $seconds = Get-RpaPowerTimeout $timeout.Subgroup $timeout.Setting
+    if ($null -ne $seconds -and $seconds -ne 0) {
+      Add-RpaSignInChange $Run ([ordered]@{ kind = 'power'; key = $timeout.Subgroup; name = $timeout.Setting; value = [string]$seconds })
     }
-    Set-RpaRegistryValue "$root\Software\Microsoft\Windows\CurrentVersion\Policies\System" 'DisableLockWorkstation' 'REG_DWORD' '1'
+    Invoke-RpaNative powercfg.exe @('/change', $timeout.Name, '0')
+  }
+
+  Add-RpaNativeTypes
+  [RpaAccounts]::CreateUserProfile($Run.Sid, $Run.Account.Name)
+  $user = 'HKU\{0}' -f $Run.Sid
+  $mounted = Mount-RpaUserHive $Run.Sid
+  try {
+    foreach ($key in "$user\Control Panel\Desktop", "$user\Software\Policies\Microsoft\Windows\Control Panel\Desktop") {
+      Set-RpaSignInValue $Run $key 'ScreenSaveActive' 'REG_SZ' '0'
+      Set-RpaSignInValue $Run $key 'ScreenSaverIsSecure' 'REG_SZ' '0'
+    }
+    Set-RpaSignInValue $Run "$user\Software\Microsoft\Windows\CurrentVersion\Policies\System" 'DisableLockWorkstation' 'REG_DWORD' '1'
   } finally {
-    if ($loadedHere) { Invoke-RpaNative reg.exe @('unload', $root) }
+    Dismount-RpaUserHive $mounted
   }
 }
 
-# install.json: what the start scripts, Show-RpaConnection.ps1 and the uninstaller read. autoSignIn stays true on an
-# upgrade run without -AutoSignIn, because it records that the installer turned automatic sign-in on.
-function Write-RpaInstallFile([hashtable]$Layout, [hashtable]$Account, [hashtable]$Parameters, [bool]$AutoSignIn) {
-  $previous = Read-RpaInstallFile $Layout.InstallFile
-  $install = [ordered]@{
-    version     = ([string](Get-Content -LiteralPath (Join-Path $Layout.InstallDir 'VERSION') -TotalCount 1)).Trim()
-    user        = $Account.Display
-    runnerPort  = [int]$Parameters.RunnerPort
-    browserPort = [int]$Parameters.BrowserPort
-    browser     = -not $Parameters.NoBrowser
-    autoSignIn  = $AutoSignIn -or [bool]($previous -and $previous.autoSignIn -eq $true)
+# Puts one recorded change back. Throws when it cannot.
+function Restore-RpaSignInChange($Change) {
+  switch ([string]$Change.kind) {
+    'registry' {
+      $key = Resolve-RpaRegistryKey ([string]$Change.key)
+      if ($Change.existed) {
+        $data = [string]$Change.value
+        # Automatic sign-in that was on for someone before the install cannot come back: its stored password was
+        # replaced. Turning it on without one would only produce failed sign-ins.
+        if ($Change.key -eq $script:Winlogon -and $Change.name -eq 'AutoAdminLogon') { $data = '0' }
+        Set-RpaRegistryValue $key ([string]$Change.name) ([string]$Change.type) $data
+      } elseif ((Get-RpaRegistryRecord ([string]$Change.key) ([string]$Change.name)).existed) {
+        Invoke-RpaNative reg.exe @('delete', $key, '/v', [string]$Change.name, '/f')
+      }
+    }
+    'key' {
+      if (Test-Path -LiteralPath ('Registry::HKEY_LOCAL_MACHINE{0}' -f ([string]$Change.key).Substring(4))) {
+        Invoke-RpaNative reg.exe @('delete', [string]$Change.key, '/f')
+      }
+    }
+    'task' { Get-ScheduledTask -TaskPath ([string]$Change.key) -TaskName ([string]$Change.name) -ErrorAction SilentlyContinue | Enable-ScheduledTask | Out-Null }
+    'power' {
+      Invoke-RpaNative powercfg.exe @('/setacvalueindex', 'SCHEME_CURRENT', [string]$Change.key, [string]$Change.name, [string]$Change.value)
+      Invoke-RpaNative powercfg.exe @('/setactive', 'SCHEME_CURRENT')
+    }
+    'secret' {
+      Add-RpaNativeTypes
+      [RpaLsaSecret]::Remove('DefaultPassword')
+    }
   }
-  [IO.File]::WriteAllText($Layout.InstallFile, ($install | ConvertTo-Json), $script:Utf8)
+}
+
+# Puts recorded changes back, the last one first. The values of a user go into that user's registry, loaded from its
+# profile when the user is not signed in. With -KeepWinlogon the automatic sign-in values and the stored password are
+# left alone (someone has pointed automatic sign-in at another account since). Returns what could not be put back.
+function Restore-RpaSignInChanges([object[]]$Changes, [bool]$KeepWinlogon) {
+  $failed = @()
+  $ordered = @($Changes)
+  [array]::Reverse($ordered)
+  foreach ($change in $ordered) {
+    $key = [string]$change.key
+    if ($KeepWinlogon -and ($change.kind -eq 'secret' -or $key -eq $script:Winlogon)) { continue }
+    $mounted = $false
+    try {
+      if ($change.kind -eq 'registry' -and $key -match '^HKU\\(S-[0-9-]+)\\') { $mounted = Mount-RpaUserHive $Matches[1] }
+      Restore-RpaSignInChange $change
+    } catch {
+      $failed += ('{0} {1} {2}: {3}' -f $change.kind, $key, $change.name, $_.Exception.Message).Trim()
+    } finally {
+      try { Dismount-RpaUserHive $mounted } catch { $failed += $_.Exception.Message }
+    }
+  }
+  $failed
 }
 
 # Starts the tasks again in the bot user's session after an upgrade. When that user is not signed in nothing starts,
@@ -490,8 +999,36 @@ function Start-RpaTasks {
   }
 }
 
+# After a failed step: puts back the sign-in changes this run made and removes a user this run created, so that the
+# installer can be run again with the same parameters. A first install that got as far as install.json loses it again;
+# an upgrade keeps it, without this run's sign-in records. When a change cannot be put back, install.json stays as it
+# is, so that Uninstall-Rpa.ps1 still knows about it.
+function Undo-RpaFailedRun([hashtable]$Run) {
+  $failed = @()
+  if (@($Run.NewChanges).Count -gt 0) {
+    Write-Host '  undo: put back the sign-in settings this run changed'
+    $failed = @(Restore-RpaSignInChanges $Run.NewChanges $false)
+    foreach ($line in $failed) { Write-Host ('    could not put back: {0}' -f $line) }
+  }
+  if ($failed.Count -eq 0 -and $Run.WroteInstallFile) {
+    if ($Run.Upgrade) {
+      $newIds = @($Run.NewChanges | ForEach-Object { Get-RpaChangeId $_ })
+      $Run.Install.signInChanges = @($Run.Install.signInChanges | Where-Object { $newIds -notcontains (Get-RpaChangeId $_) })
+      $Run.Install.autoSignIn = $Run.AutoSignInBefore
+      Save-RpaInstallFile $Run
+    } else {
+      Remove-Item -LiteralPath $Run.Layout.InstallFile -Force -ErrorAction SilentlyContinue
+    }
+  }
+  if ($Run.CreatedUser) {
+    Write-Host ('  undo: remove the user {0}, which this run created' -f $Run.Account.Display)
+    try { Remove-RpaUser $Run.Account $Run.Sid } catch { Write-Host ('    could not remove {0}: {1}' -f $Run.Account.Display, $_.Exception.Message) }
+  }
+}
+
 # Runs exactly the steps of the plan, in order, and names each as it starts. -SourceDir is the unpacked package (the
-# folder Install-Rpa.ps1 is in). What can be checked without changing anything is checked first.
+# folder Install-Rpa.ps1 is in). What can be checked without changing anything is checked first: the plan, every step
+# name, the package and the user. When a step fails, the sign-in changes and the user of this run are undone.
 function Invoke-RpaInstallPlan {
   param(
     [Parameter(Mandatory = $true)][hashtable]$Plan,
@@ -502,6 +1039,9 @@ function Invoke-RpaInstallPlan {
   $ProgressPreference = 'SilentlyContinue'
   if (@($Plan.Refusals).Count -gt 0) { throw 'The plan has refusals; nothing was changed.' }
   $steps = @($Plan.Steps)
+  foreach ($step in $steps) {
+    if ($script:KnownSteps -notcontains $step) { throw ('The installer has no step "{0}"; nothing was changed.' -f $step) }
+  }
   $layout = Get-RpaLayout
   $account = Get-RpaAccount -User $Parameters.User -ComputerName $env:COMPUTERNAME
   $runnerPort = [int]$Parameters.RunnerPort
@@ -510,18 +1050,30 @@ function Invoke-RpaInstallPlan {
 
   $source = (Resolve-Path -LiteralPath $SourceDir).ProviderPath.TrimEnd('\')
   if ($source -eq $layout.InstallDir) { throw 'Run Install-Rpa.ps1 from the unpacked package, not from the install directory.' }
-  $needed = @('VERSION', 'runner\RpaRunner.exe', 'scripts\start-runner.ps1', 'scripts\Show-RpaConnection.ps1')
+  $needed = @('VERSION', 'runner\RpaRunner.exe', 'scripts\start-loop.ps1', 'scripts\start-runner.ps1', 'scripts\Show-RpaConnection.ps1')
   if (-not $Parameters.NoBrowser) { $needed += 'browser\node.exe', 'browser\host\host.mjs', 'scripts\start-browser.ps1' }
   foreach ($file in $needed) {
     if (-not (Test-Path -LiteralPath (Join-Path $source $file))) {
       throw ('{0} is missing from {1}. Unpack the whole package and run Install-Rpa.ps1 from that folder.' -f $file, $source)
     }
   }
+
+  $previous = Read-RpaInstallFile $layout.InstallFile
+  $run = @{
+    Layout           = $layout
+    Account          = $account
+    Sid              = $null
+    Password         = $Parameters.UserPassword
+    Upgrade          = [bool]$previous
+    AutoSignInBefore = [bool]($previous -and $previous.autoSignIn -eq $true)
+    Install          = $null
+    NewChanges       = @()
+    CreatedUser      = $false
+    WroteInstallFile = $false
+  }
   # The user's security identifier goes into permissions by number, so no name can be misread. A user that the plan
   # does not create must exist now (an upgrade keeps the user of the first install).
-  $sid = $null
-  if ($steps -notcontains 'create user') { $sid = Get-RpaSid $account }
-  $password = $Parameters.UserPassword
+  if ($steps -notcontains 'create user') { $run.Sid = Get-RpaSid $account }
 
   foreach ($step in $steps) {
     Write-Host ('  {0}' -f $step)
@@ -530,46 +1082,74 @@ function Invoke-RpaInstallPlan {
         'stop running services' { Stop-RpaServices $layout.InstallDir }
         'copy program files' { Copy-RpaProgramFiles $source $layout.InstallDir }
         'create user' {
-          $password = New-RpaUser $account $password
-          $sid = Get-RpaSid $account
+          $run.Password = New-RpaUser $account $run.Password
+          $run.CreatedUser = $true
+          $run.Sid = Get-RpaSid $account
         }
-        'protect the data directory' { Protect-RpaDataDirectory $layout $sid }
-        'write policy' { New-RpaProtectedFile (Join-Path $layout.DataDir 'policy.json') $script:StarterPolicy $sid }
-        'write token' { New-RpaProtectedFile (Join-Path $layout.DataDir 'token') (New-RpaSecret -Length 48) $sid }
-        'write browser-token' { New-RpaProtectedFile (Join-Path $layout.DataDir 'browser-token') (New-RpaSecret -Length 48) $sid }
-        'add the runner firewall rule' { Set-RpaFirewallRule $script:RunnerRule ('RPA desktop runner (TCP {0})' -f $runnerPort) $runnerPort }
-        'add the browser firewall rule' { Set-RpaFirewallRule $script:BrowserRule ('RPA browser (TCP {0})' -f $browserPort) $browserPort }
+        'protect the data directory' { Protect-RpaDataDirectory $layout $run.Sid }
+        'write policy' { New-RpaProtectedFile -Path (Join-Path $layout.DataDir 'policy.json') -Sid $run.Sid -Text $script:StarterPolicy }
+        'write token' { New-RpaProtectedFile -Path (Join-Path $layout.DataDir 'token') -Sid $run.Sid -SecretLength 48 }
+        'write browser-token' { New-RpaProtectedFile -Path (Join-Path $layout.DataDir 'browser-token') -Sid $run.Sid -SecretLength 48 }
+        'add the runner firewall rule' { Set-RpaFirewallRule $script:RunnerRule ('RPA desktop runner (TCP {0})' -f $runnerPort) $runnerPort (Join-Path (Join-Path $layout.InstallDir 'runner') 'RpaRunner.exe') $Plan.AllowFrom }
+        'add the browser firewall rule' { Set-RpaFirewallRule $script:BrowserRule ('RPA browser (TCP {0})' -f $browserPort) $browserPort (Join-Path (Join-Path $layout.InstallDir 'browser') 'node.exe') $Plan.AllowFrom }
         'remove the browser firewall rule' { Remove-NetFirewallRule -Name $script:BrowserRule -ErrorAction SilentlyContinue }
         'register the runner task' { Register-RpaTask $script:RunnerTask (Join-Path $scripts 'start-runner.ps1') $account.Qualified }
         'register the browser task' { Register-RpaTask $script:BrowserTask (Join-Path $scripts 'start-browser.ps1') $account.Qualified }
         'remove the browser task' { Unregister-RpaTask $script:BrowserTask }
-        'store sign-in password' { Set-RpaSignInPassword $password }
-        'turn on automatic sign-in' { Enable-RpaAutoSignIn $account }
-        'keep the desktop unlocked' { Set-RpaDesktopUnlocked $sid }
-        'write install.json' { Write-RpaInstallFile $layout $account $Parameters ($steps -contains 'turn on automatic sign-in') }
+        'write install.json' {
+          # autoSignIn says that the installer turned automatic sign-in on, in this run or an earlier one; it is
+          # written before the sign-in steps run. allowFrom keeps an earlier choice when this run made no rules.
+          $allowFrom = $null
+          if ($previous -and $previous.allowFrom) { $allowFrom = $previous.allowFrom }
+          if ($Plan.AllowFrom) {
+            $allowFrom = @($Plan.AllowFrom)
+            if ($allowFrom.Count -eq 1 -and $allowFrom[0] -eq 'any') { $allowFrom = 'any' }
+          }
+          $changes = @()
+          if ($previous -and $previous.signInChanges) { $changes = @($previous.signInChanges) }
+          $run.Install = [ordered]@{
+            version       = ([string](Get-Content -LiteralPath (Join-Path $layout.InstallDir 'VERSION') -TotalCount 1)).Trim()
+            user          = $account.Display
+            runnerPort    = $runnerPort
+            browserPort   = $browserPort
+            browser       = -not $Parameters.NoBrowser
+            autoSignIn    = ($steps -contains 'turn on automatic sign-in') -or $run.AutoSignInBefore
+            allowFrom     = $allowFrom
+            signInChanges = $changes
+          }
+          Save-RpaInstallFile $run
+          $run.WroteInstallFile = $true
+        }
+        'store sign-in password' { Set-RpaSignInPassword $run }
+        'turn on automatic sign-in' { Enable-RpaAutoSignIn $run }
+        'keep the desktop unlocked' { Set-RpaDesktopUnlocked $run }
         'start tasks' { Start-RpaTasks }
-        default { throw 'The installer has no such step.' }
       }
     } catch {
-      throw ('The step "{0}" failed: {1}' -f $step, $_.Exception.Message)
+      $message = 'The step "{0}" failed: {1}' -f $step, $_.Exception.Message
+      Undo-RpaFailedRun $run
+      throw $message
     }
   }
 }
 
-# What Uninstall-Rpa.ps1 does: removes the tasks, the firewall rules and the install directory, and turns automatic
-# sign-in off only when install.json says the installer turned it on. The data directory goes only with -RemoveData;
-# the Windows user is never removed. Returns what the uninstaller reports: the user, and whether automatic sign-in was
-# on and whether it was turned off.
+# What Uninstall-Rpa.ps1 does: removes the tasks, the firewall rules and the install directory, and puts back what
+# -AutoSignIn changed, from the records in install.json. The data directory goes only with -RemoveData; the Windows
+# user is never removed. Returns what the uninstaller reports.
 function Invoke-RpaUninstall {
   param([switch]$RemoveData)
   $ErrorActionPreference = 'Stop'
   $ProgressPreference = 'SilentlyContinue'
   $layout = Get-RpaLayout
   $install = Read-RpaInstallFile $layout.InstallFile
-  $result = @{ User = $null; AutoSignIn = $false; AutoSignInOff = $false; Layout = $layout }
+  $result = @{ User = $null; AutoSignIn = $false; SignInKept = $false; NotRestored = @(); Layout = $layout }
   if ($install) {
     $result.User = [string]$install.user
     $result.AutoSignIn = $install.autoSignIn -eq $true
+  }
+  # Refused before anything is removed: rd would delete the link, and the data would stay where it points.
+  if ($RemoveData -and (Get-RpaPathState $layout.DataDir).IsLink) {
+    throw ('{0} is a link or junction. Remove it and run this again.' -f $layout.DataDir)
   }
 
   Write-Host '  stop running services'
@@ -585,19 +1165,22 @@ function Invoke-RpaUninstall {
   } catch { }
   Write-Host '  remove the firewall rules'
   Remove-NetFirewallRule -Name $script:RunnerRule, $script:BrowserRule -ErrorAction SilentlyContinue
-  if ($result.AutoSignIn) {
-    Write-Host '  turn off automatic sign-in'
+  if ($install -and @($install.signInChanges).Count -gt 0) {
+    Write-Host '  put back what -AutoSignIn changed'
+    # Unless someone has pointed automatic sign-in at another account since the install.
     $account = Get-RpaAccount -User $result.User -ComputerName $env:COMPUTERNAME
-    $result.AutoSignInOff = Disable-RpaAutoSignIn $account.Name
+    $current = (Get-ItemProperty -LiteralPath ('Registry::HKEY_LOCAL_MACHINE{0}' -f $script:Winlogon.Substring(4)) -Name 'DefaultUserName' -ErrorAction SilentlyContinue).DefaultUserName
+    $result.SignInKept = $result.AutoSignIn -and ($current -ne $account.Name)
+    $result.NotRestored = @(Restore-RpaSignInChanges @($install.signInChanges) $result.SignInKept)
   }
   Write-Host '  remove the program files'
   # A folder that is someone's current directory cannot be removed, and the uninstaller may be run from inside it.
   if ((Get-Location).ProviderPath.StartsWith($layout.InstallDir, [StringComparison]::OrdinalIgnoreCase)) { Set-Location -LiteralPath $env:SystemRoot }
   if ([Environment]::CurrentDirectory.StartsWith($layout.InstallDir, [StringComparison]::OrdinalIgnoreCase)) { [Environment]::CurrentDirectory = $env:SystemRoot }
-  if (Test-Path -LiteralPath $layout.InstallDir) { Remove-Item -LiteralPath $layout.InstallDir -Recurse -Force }
-  if ($RemoveData -and (Test-Path -LiteralPath $layout.DataDir)) {
+  Remove-RpaTree $layout.InstallDir
+  if ($RemoveData) {
     Write-Host '  remove the data directory'
-    Remove-Item -LiteralPath $layout.DataDir -Recurse -Force
+    Remove-RpaTree $layout.DataDir
   }
   $result
 }
