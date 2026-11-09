@@ -103,8 +103,11 @@ async function editableNow(ctx: StepContext, loc: DslLocator): Promise<boolean> 
   return false;
 }
 
-/** What typing a code needs: its field and submit, and the checkboxes ticked between the two (signIn's totp.check). */
-interface CodeSpec { field: DslLocator; submit: DslLocator; check?: DslLocator[] }
+/**
+ * What typing a code needs: its field and submit, the checkboxes ticked between the two (signIn's totp.check), and
+ * signIn's totp.via (its last button sends the code again on a retry, see resendCode).
+ */
+interface CodeSpec { field: DslLocator; submit: DslLocator; check?: DslLocator[]; via?: DslLocator[] }
 
 /**
  * totp.check: tick each checkbox (setChecked true) after the code is typed and before its submit. Each must show within
@@ -208,9 +211,13 @@ async function codeRejected(ctx: StepContext, field: DslLocator, typed: ElementH
 
 /**
  * The code field of a signIn whose totp.source is 'workflow': ask the code provider (only now that the field shows),
- * re-check the page, teach the run masker the code, type it and submit. A rejected code is asked for once more, in the
- * next 30-second code window; a second rejection stops the run (auth_blocked). Both asks send `request` (stamped by
- * submitPassword when the code was requested): the retry clicks nothing that would make the site send a new code.
+ * re-check the page, teach the run masker the code, type it and submit. A rejected code is asked for once more; a second
+ * rejection stops the run (auth_blocked). Before the retry:
+ * - with totp.via, when the code page shows the last via button (the one that sends the code, "Send me the code"):
+ *   resendCode clicks it again, through the same gate as the via clicks, and re-stamps `request.requestedAt` right
+ *   before the click, so an email-code workflow takes the new code, not the rejected one;
+ * - otherwise (no via, or no such button on the code page, as for a code from an authenticator app): the run waits for
+ *   the next 30-second code window and asks again with the same `request` (stamped by submitPassword), clicking nothing.
  */
 async function submitWorkflowCode(ctx: StepContext, spec: CodeSpec, timeout: number, request: CodeRequest): Promise<void> {
   for (let attempt = 1; ; attempt++) {
@@ -232,10 +239,28 @@ async function submitWorkflowCode(ctx: StepContext, spec: CodeSpec, timeout: num
     await settle(ctx.page);
     if (!(await codeRejected(ctx, spec.field, typed, timeout))) return;
     if (attempt >= 2) throw new Error(CODE_FAILURE + CODE_WORKFLOW_REJECTED_TWICE);
+    if (await resendCode(ctx, spec.via, request, timeout)) continue;
     await sleep(msUntilNextWindow(Date.now()) + 250);
     // A slow site may have accepted the code after all while the run waited: then there is nothing to ask again.
     if (!onLoginPage(ctx) || !(await isVisibleNow(ctx.page, spec.field))) return;
   }
+}
+
+/**
+ * The retry of a rejected workflow code: when the declared code page shows the last of `via` (the button that sends the
+ * code), click it again. Gated like every via click (assertButtonPostsToLoginPage 'via': no post off the login pages, not
+ * in a form with a password field); `request.requestedAt` is re-stamped right before the click. Returns false, clicking
+ * nothing, without via or when the button is not on the page.
+ */
+async function resendCode(ctx: StepContext, via: DslLocator[] | undefined, request: CodeRequest, timeout: number): Promise<boolean> {
+  const send = via?.at(-1);
+  if (!send || !onLoginPage(ctx) || !(await isVisibleNow(ctx.page, send))) return false;
+  const button = await resolveUnique(ctx.page, send, timeout);
+  await assertButtonPostsToLoginPage(ctx, button.locator, 'via');
+  request.requestedAt = new Date().toISOString();
+  await button.locator.click({ timeout });
+  await settle(ctx.page);
+  return true;
 }
 
 /**

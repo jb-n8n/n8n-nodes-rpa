@@ -68,7 +68,8 @@ export interface SignInSpec {
      * Pages between the password and the code field (a factor choice, "Send me the code"): after the password is
      * submitted, each locator is clicked in order, each only if it shows before the code field does (waiting up to the
      * step timeout), until the code field shows. A locator that never shows is skipped. With via, the code field must
-     * show within the step timeout after the last click, or the step fails.
+     * show within the step timeout after the last click, or the step fails. With source 'workflow', the retry after a
+     * rejected code clicks the last locator again when the code page shows it (a code sent anew).
      */
     via?: Locator[];
     /** Checkboxes ticked after the code is typed and before its submit (e.g. "Trust this browser"). Each must be on the page. */
@@ -81,7 +82,8 @@ export interface CodeRequest {
   /**
    * When the run made the site send the code (ISO 8601): stamped right before the first totp.via click, or right before
    * the password submit when no via button was clicked, so it is no later than the click that sent the code. The retry
-   * after a rejected code sends the same value (the run requests no new code then).
+   * after a rejected code clicks the last via button again when the code page shows it, and sends a new value stamped
+   * right before that click; otherwise it sends the same value (the run requests no new code then).
    */
   requestedAt: string;
 }

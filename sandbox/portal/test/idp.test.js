@@ -456,7 +456,7 @@ test('a consumed password transaction is refused and a wrong password leaves it 
 
 // Intermediate pages between the password and the code (IDP_FACTOR) and a trust checkbox on the code page (IDP_TRUST).
 async function withIdpEnv(vars, fn) {
-  const keys = ['SANDBOX_SAP_LOGIN', 'IDP_KMSI', 'IDP_FACTOR', 'IDP_TRUST'];
+  const keys = ['SANDBOX_SAP_LOGIN', 'IDP_KMSI', 'IDP_FACTOR', 'IDP_TRUST', 'IDP_RESEND'];
   const prev = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
   for (const k of keys.slice(1)) delete process.env[k];
   Object.assign(process.env, vars);
@@ -532,6 +532,38 @@ test('IDP_FACTOR=send: only the "Send me the code" page; sso (one page) gets the
     assert.match(await afterPassword(), /^\/idp\/mfa\?tx=/);
     assert.equal((await get('/idp/factor?tx=x')).status, 404);
     assert.equal((await post('/idp/sendcode', { tx: 'x' })).status, 404);
+  });
+});
+
+test('IDP_RESEND=on: the code page has "Send me the code" again; it hands out a new code page and uses the old one up', async () => {
+  await withIdpEnv({ SANDBOX_SAP_LOGIN: 'sso2', IDP_KMSI: 'off', IDP_FACTOR: 'send', IDP_RESEND: 'on' }, async () => {
+    const send = await (await get(await afterPassword())).text();
+    const sent = await post('/idp/sendcode', { tx: hidden(send, 'tx') });
+    const mfa = await (await get(sent.headers.get('location'))).text();
+    assert.match(mfa, /<label for="otc">Code<\/label>/);
+    // its own form, without the code field, posting to the send path
+    assert.match(mfa, /<form method="post" action="\/idp\/sendcode">\n<input type="hidden" name="tx" value="[0-9a-f]{36}">\n<div class="row"><button type="submit" id="resendCode">Send me the code<\/button><\/div>\n<\/form>/);
+    const tx = hidden(mfa, 'tx');
+    const wrong = await post('/idp/mfa', { tx, otc: '000000x' });
+    assert.match(await wrong.text(), /id="resendCode"/);
+    const again = await post('/idp/sendcode', { tx });
+    assert.equal(again.status, 302);
+    assert.match(again.headers.get('location'), /^\/idp\/mfa\?tx=[0-9a-f]{36}$/);
+    // the old code page is used up
+    assert.equal((await post('/idp/mfa', { tx, otc: totp(IDP.totpSecret) })).headers.get('location'), '/idp/login');
+    const next = await (await get(again.headers.get('location'))).text();
+    const done = await post('/idp/mfa', { tx: hidden(next, 'tx'), otc: totp(IDP.totpSecret) });
+    assert.match(await done.text(), /action="\/sap\/saml2\/acs"/);
+  });
+  // off (or without the send page): the code page has no send button, and a code page's tx cannot send
+  await withIdpEnv({ SANDBOX_SAP_LOGIN: 'sso2', IDP_KMSI: 'off', IDP_FACTOR: 'send' }, async () => {
+    const sent = await post('/idp/sendcode', { tx: hidden(await (await get(await afterPassword())).text(), 'tx') });
+    const mfa = await (await get(sent.headers.get('location'))).text();
+    assert.doesNotMatch(mfa, /Send me the code/);
+    assert.equal((await post('/idp/sendcode', { tx: hidden(mfa, 'tx') })).headers.get('location'), '/idp/login');
+  });
+  await withIdpEnv({ SANDBOX_SAP_LOGIN: 'sso2', IDP_RESEND: 'on' }, async () => {
+    assert.doesNotMatch(await (await get(await afterPassword())).text(), /Send me the code/);
   });
 });
 

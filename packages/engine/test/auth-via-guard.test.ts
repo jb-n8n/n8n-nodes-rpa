@@ -23,6 +23,11 @@ type Mode = {
    * 'stay': Sign in posts nothing; "Send me the code" shows in its own form while the password field stays.
    */
   script?: 'spa' | 'stay';
+  /**
+   * The code page shows "Send me the code" again, in its own form: posting to this action ('/send', or one off the
+   * login pages), or 'with-password' in a form that also holds a password field.
+   */
+  resend?: string;
 };
 let mode: Mode;
 let posts: { path: string; body: URLSearchParams }[];
@@ -49,7 +54,10 @@ const loginPage = (error = '') => page(
       document.getElementById('later').hidden = false;
     }, 200));</script>` : ''),
 );
-const codePage = () => page(`<form method="post" action="/mfa"><label for="code">Code</label><input id="code" name="otc"><button type="submit">Verify</button></form>`);
+const resendForm = () => (mode.resend === 'with-password'
+  ? `<form method="post" action="/send"><label for="pin">PIN</label><input id="pin" name="pin" type="password"><button type="submit">Send me the code</button></form>`
+  : mode.resend ? sendForm(mode.resend) : '');
+const codePage = () => page(`<form method="post" action="/mfa"><label for="code">Code</label><input id="code" name="otc"><button type="submit">Verify</button></form>${resendForm()}`);
 
 beforeAll(async () => {
   server = createServer((req, res) => {
@@ -194,6 +202,47 @@ describe('signIn totp.via buttons are gated', () => {
       expect(clicks.map((c) => c.text)).toEqual(['Sign in', 'Send me the code', 'Verify']);
       expect(paths()).toEqual(['/login', '/send', '/mfa']);
       expect(ctx.violations).toEqual([]);
+    } finally { await session.close(); }
+  });
+});
+
+describe('the retry after a rejected workflow code clicks the send button again only through the via gate', () => {
+  const NO_SEED: PortalSecrets = { username: SECRETS.username, password: SECRETS.password };
+  for (const [resend, message] of [
+    ['/elsewhere/send', 'signIn refused: the via button does not post to a declared login page'],
+    ['with-password', 'signIn refused: the via button is in a form with a password field'],
+  ] as const) {
+    it(`a send button on the code page ${resend === 'with-password' ? 'in a form with a password field' : 'that posts off the login pages'} is refused, not clicked`, async () => {
+      mode.resend = resend;
+      const { ctx, clicks } = await at(NO_SEED);
+      const asked: CodeRequest[] = [];
+      ctx.codeProvider = async (req) => { asked.push(req); return '000000'; };
+      try {
+        const r = await runSteps(ctx, [signIn(true, 'workflow')]);
+        if (r.ok) throw new Error('expected failure');
+        expect(r.failure.message).toBe(message);
+        expect(ctx.violations.some((v) => v.kind === 'signin' && v.fatal)).toBe(true);
+        expect(asked).toHaveLength(1);
+        expect(clicks.map((c) => c.text)).toEqual(['Sign in', 'Send me the code', 'Verify']);
+        expect(paths()).toEqual(['/login', '/send', '/mfa']);
+      } finally { await session.close(); }
+    });
+  }
+
+  it('a send button on the code page that passes the gate is clicked again and the code asked for once more', async () => {
+    mode.resend = '/send';
+    const { ctx, clicks } = await at(NO_SEED);
+    const asked: CodeRequest[] = [];
+    ctx.codeProvider = async (req) => { asked.push({ ...req }); return asked.length === 1 ? '000000' : totp(SECRETS.totpSecret!); };
+    try {
+      const r = await runSteps(ctx, [signIn(true, 'workflow')]);
+      if (!r.ok) throw new Error(r.failure.message);
+      expect(ctx.page.url()).toBe(`${origin}/home`);
+      expect(clicks.map((c) => c.text)).toEqual(['Sign in', 'Send me the code', 'Verify', 'Send me the code', 'Verify']);
+      expect(paths()).toEqual(['/login', '/send', '/mfa', '/send', '/mfa']);
+      const resent = clicks.filter((c) => c.text === 'Send me the code')[1].at;
+      expect(Date.parse(asked[1].requestedAt)).toBeGreaterThan(Date.parse(asked[0].requestedAt));
+      expect(Date.parse(asked[1].requestedAt)).toBeLessThanOrEqual(resent);
     } finally { await session.close(); }
   });
 });

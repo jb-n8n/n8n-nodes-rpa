@@ -4,7 +4,8 @@
 //   /idp/password (sso2 only) the password for the email, /idp/mfa a TOTP code, for the transaction the previous step opened
 //   /idp/kmsi   (sso2 only) POST only: the "Stay signed in?" answer, with its own transaction (the code page's response carries the page); IDP_KMSI=off skips it
 //   /idp/factor (IDP_FACTOR=choice) between the password and the code: pick "Use a verification code" (or the app, a dead end with no code field)
-//   /idp/sendcode (IDP_FACTOR=choice or send) "Send me the code", then the code page; IDP_TRUST=on adds a "Trust this browser" checkbox there
+//   /idp/sendcode (IDP_FACTOR=choice or send) "Send me the code", then the code page; IDP_TRUST=on adds a "Trust this browser" checkbox there,
+//               and IDP_RESEND=on (with IDP_FACTOR) adds "Send me the code" again, in its own form: a new code page, the old one used up
 //   then an auto-submitting POST of the assertion to SAP's assertion consumer service, /sap/saml2/acs (acsRoute).
 // Not SAML: the assertion is base64url JSON { user, exp, nonce }, a dot, and its HMAC-SHA256 under a per-process key.
 // The ACS checks the MAC, the expiry (60 s) and that the nonce was handed out and not used yet. State lives in memory,
@@ -128,7 +129,11 @@ function mfaPage({ message = '', tx }) {
 <input type="hidden" name="tx" value="${esc(tx)}">
 <div class="row"><label for="otc">Code</label><input id="otc" name="otc" type="tel" inputmode="numeric" autocomplete="one-time-code"></div>
 ${trustOn() ? '<div class="row"><label><input type="checkbox" id="trustBrowser" name="trust" value="yes"> Trust this browser</label></div>\n' : ''}<div class="row"><button type="submit" id="idSubmit_SAOTCC_Continue">Verify</button></div>
-</form>`);
+</form>${resendOn() ? `
+<form method="post" action="/idp/sendcode">
+<input type="hidden" name="tx" value="${esc(tx)}">
+<div class="row"><button type="submit" id="resendCode">Send me the code</button></div>
+</form>` : ''}`);
 }
 
 // IDP_FACTOR: pages between the password and the code. Neither carries a secret; both post to their own path.
@@ -176,6 +181,8 @@ const kmsiOn = () => process.env.IDP_KMSI !== 'off';
 /** IDP_FACTOR: 'choice' (a factor choice, then "Send me the code"), 'send' (only "Send me the code"), else straight to the code. */
 const factorMode = () => (process.env.IDP_FACTOR === 'choice' ? 'choice' : process.env.IDP_FACTOR === 'send' ? 'send' : 'off');
 const trustOn = () => process.env.IDP_TRUST === 'on';
+/** IDP_RESEND=on: the code page sends the code again (an email code that did not arrive or was mistyped); needs IDP_FACTOR's send path. */
+const resendOn = () => process.env.IDP_RESEND === 'on' && factorMode() !== 'off';
 const TRUST_COOKIE = 'idp_trusted=1; Path=/idp; HttpOnly; SameSite=Lax';
 
 /** Where a correct password leads: the factor choice, "Send me the code" or the code page, each with a fresh transaction. */
@@ -267,7 +274,8 @@ export async function idpRoute(req, res, url, send) {
     const f = await formOrNull(req);
     if (!f) return refuse(res, send);
     const tx = f.tx ?? url.searchParams.get('tx');
-    const t = liveTransaction(tx, 'send');
+    // IDP_RESEND: the code page's own transaction may send again too.
+    const t = liveTransaction(tx, 'send') ?? (resendOn() ? liveTransaction(tx, 'mfa') : null);
     if (!t) return toSignIn(res, send);
     transactions.delete(tx);
     send(res, 302, '', { Location: `/idp/mfa?tx=${newTransaction(t.relay, 'mfa')}` });
