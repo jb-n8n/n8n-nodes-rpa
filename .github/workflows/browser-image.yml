@@ -3,8 +3,8 @@
 # tests before publish, provenance, an owner approval gate). Only reviewed code is published: a browser-v* tag whose
 # commit is on main, or a dispatch on main; any other ref fails in the first step of each job.
 # Two jobs, so third-party code never runs with publish rights:
-# - test (contents: read only): installs the workspace (pnpm, lifecycle scripts), builds linux/amd64 and runs the docker
-#   tests (images/browser/test) against it.
+# - test (contents: read only): installs the workspace (pnpm, lifecycle scripts), runs the browser host's tests
+#   (images/browser/host/test), builds linux/amd64 and runs the docker tests (images/browser/test) against it.
 # - publish (needs test; environment ghcr; packages/id-token/attestations write): no Node, no install, no repository
 #   scripts. A fresh builder builds linux/amd64 and linux/arm64 from the Dockerfile with BuildKit provenance and an SBOM,
 #   pushes, and attests the pushed digest (`gh attestation verify oci://ghcr.io/jb-n8n/rpa-browser:<version> --owner
@@ -59,6 +59,11 @@ jobs:
           node-version: 22
           package-manager-cache: false
       - run: pnpm install --frozen-lockfile
+      # The browser host (images/browser/host) is not in the image, but it runs the same gate; its tests use Node
+      # built-ins only and need no image. The glob, not the directory: Node 22's `node --test <dir>` treats the
+      # directory as a module and fails.
+      - name: Browser host tests
+        run: node --test "images/browser/host/test/*.test.js"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
           driver-opts: image=moby/buildkit:v0.34.1@sha256:99368f3e46177c6405b9740e4461d91cee004128daeecca78d4ceac50ec1da5c
