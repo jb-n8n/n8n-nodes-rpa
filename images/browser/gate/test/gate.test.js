@@ -3,10 +3,15 @@ import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { createServer, request } from 'node:http';
+import { request as httpsRequest } from 'node:https';
 import { connect } from 'node:net';
 import { spawn, spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { networkInterfaces, tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ALLOWED_LAUNCH_OPTIONS, createGate, MIN_TOKEN_LENGTH, MIN_UPSTREAM_PATH_SECRET } from '../gate.mjs';
+import { selfSignedCert } from '../selfsigned.mjs';
 
 const TOKEN = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
 /** The random run-server path the compose stack generates at container start (128 bits, hex). */
@@ -487,7 +492,7 @@ test('the session limit must be 1-64', () => {
   assert.equal(createGate({ token: TOKEN, upstreamPort: 1, upstreamPath: UPSTREAM_PATH }).stats().capacity, 4, 'the default is 4');
 });
 
-/** Runs the gate as the main module; resolves once it listens, with its port and a log reader. */
+/** Runs the gate as the main module; resolves once it listens, with its port and a log reader. An env value of undefined unsets it. */
 async function spawnGate(t, env) {
   const child = spawn(process.execPath, [GATE_FILE], {
     env: { ...process.env, BROWSER_GATE_TOKEN: TOKEN, BROWSER_UPSTREAM_PATH: UPSTREAM_PATH, BROWSER_GATE_PORT: '0', BROWSER_GATE_METRICS_PORT: '0', ...env },
@@ -497,8 +502,9 @@ async function spawnGate(t, env) {
   child.stderr.on('data', (c) => { log += c; });
   const exited = once(child, 'exit');
   t.after(() => child.kill('SIGKILL'));
-  await until(() => /listening on :(\d+)/.test(log), 'the gate to listen', 10_000);
-  return { child, exited, port: Number(/listening on :(\d+)/.exec(log)[1]), log: () => log };
+  // "listening on :3000", or "listening on 127.0.0.1:3000" with BROWSER_GATE_HOST.
+  await until(() => /listening on \S*:(\d+)/.test(log), 'the gate to listen', 10_000);
+  return { child, exited, port: Number(/listening on \S*:(\d+)/.exec(log)[1]), log: () => log };
 }
 
 test('the main module validates the session limit, drain time and metrics port', () => {
@@ -673,5 +679,202 @@ test('the main module listens on IPv4 and IPv6 (dual-stack) for sessions and met
   for (const host of ['127.0.0.1', '::1']) {
     assert.equal((await requestTo({ host, port: g.port, path: '/healthz' })).status, 200, `healthz on ${host}`);
     assert.equal((await requestTo({ host, port: metricsPort, path: '/metrics' })).status, 200, `metrics on ${host}`);
+  }
+});
+
+// ---- TLS, a token file and a bind address (the gate on a machine without a container in front of it). ----
+
+/** A directory of the test's own for key, certificate and token files, removed after it. */
+function tempDir(t) {
+  const dir = mkdtempSync(join(tmpdir(), 'rpa-gate-test-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
+/** A file in dir with this content, readable by the owner only; returns its path. */
+function fileIn(dir, name, content) {
+  const path = join(dir, name);
+  writeFileSync(path, content, { mode: 0o600 });
+  return path;
+}
+
+/** An upgrade request over TLS; the certificate is its own trust anchor and names no host, so the name is not checked. */
+function upgradeTls(port, cert, headers = {}, path = '/pw?session=1') {
+  return new Promise((resolve, reject) => {
+    const req = httpsRequest({
+      host: '127.0.0.1', port, path, ca: cert, checkServerIdentity: () => undefined, agent: false,
+      headers: { Connection: 'Upgrade', Upgrade: 'websocket', ...headers },
+    });
+    req.on('upgrade', (res, socket) => resolve({ status: res.statusCode, socket, fingerprint: socket.getPeerCertificate().fingerprint256 }));
+    req.on('response', (res) => { res.resume(); resolve({ status: res.statusCode }); });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+/** What a plain-text request gets back until the connection ends. A reset counts as the end, not as a failure. */
+function rawUntilClosed(port, text) {
+  return new Promise((resolve) => {
+    const chunks = [];
+    const s = connect({ host: '127.0.0.1', port }, () => s.write(text));
+    s.on('data', (c) => chunks.push(c));
+    s.on('error', () => {});
+    s.on('close', () => resolve(Buffer.concat(chunks).toString('latin1')));
+  });
+}
+
+/** Runs the gate as the main module with a start-up mistake in env and waits for it to exit. An env value of undefined unsets it. */
+function startUp(env) {
+  return spawnSync(process.execPath, [GATE_FILE], {
+    env: { ...process.env, BROWSER_GATE_TOKEN: TOKEN, BROWSER_UPSTREAM_PATH: UPSTREAM_PATH, BROWSER_GATE_PORT: '0', BROWSER_UPSTREAM_PORT: '1', BROWSER_GATE_METRICS_PORT: '0', ...env },
+    encoding: 'utf8', timeout: 10_000,
+  });
+}
+
+test('with tls an authorised wss upgrade is forwarded and a plain ws upgrade to the same port gets no 101', async (t) => {
+  const { key, cert, fingerprint } = selfSignedCert();
+  const { gate: g, port, upstream: up } = await ownGate(t, { tls: { key, cert } });
+  const { status, socket, fingerprint: served } = await upgradeTls(port, cert, AUTH);
+  assert.equal(status, 101);
+  assert.equal(served, fingerprint, 'the gate serves the certificate it was given');
+  socket.write('ping');
+  const [chunk] = await once(socket, 'data');
+  assert.equal(chunk.toString(), 'ping');
+  socket.destroy();
+  assert.equal(up.seen.requests.length, 1);
+  assert.equal(up.seen.requests[0].url, `${UPSTREAM_PATH}?session=1`);
+  assert.equal(up.seen.requests[0].headers.authorization, undefined, 'the token is not passed on to the run-server');
+  // The same checks apply over TLS.
+  assert.equal((await upgradeTls(port, cert)).status, 401);
+  assert.equal((await upgradeTls(port, cert, { ...AUTH, 'x-playwright-proxy': '*' })).status, 403);
+  await until(() => g.stats().active === 0, 'the session to end');
+
+  const plain = await rawUntilClosed(port, AUTHORISED_UPGRADE);
+  assert.doesNotMatch(plain, /HTTP\/1\.1 101/);
+  assert.equal(up.seen.connections, 1, 'a plain-text upgrade never reaches the run-server');
+  assert.equal(g.stats().sessionsTotal, 1);
+  // Half a pair would make a TLS server with nothing to serve.
+  for (const tls of [{ key }, { cert }, {}, 'on']) {
+    assert.throws(() => createGate({ token: TOKEN, upstreamPort: 1, upstreamPath: UPSTREAM_PATH, tls }), /tls must be \{ key, cert \}/);
+  }
+});
+
+test('the main module serves TLS from the key and certificate files, and says so at start', async (t) => {
+  const up = await fakeUpstream();
+  t.after(() => close(up.server));
+  const { key, cert, fingerprint } = selfSignedCert();
+  const dir = tempDir(t);
+  const g = await spawnGate(t, {
+    BROWSER_GATE_TLS_KEY_FILE: fileIn(dir, 'gate.key', key), BROWSER_GATE_TLS_CERT_FILE: fileIn(dir, 'gate.crt', cert),
+    BROWSER_UPSTREAM_PORT: String(up.port),
+  });
+  assert.match(g.log(), /browser-gate: listening on :\d+ with TLS \(max sessions 4\)/);
+  const { status, socket, fingerprint: served } = await upgradeTls(g.port, cert, AUTH);
+  assert.equal(status, 101);
+  assert.equal(served, fingerprint);
+  socket.destroy();
+  assert.doesNotMatch(await rawUntilClosed(g.port, AUTHORISED_UPGRADE), /HTTP\/1\.1 101/);
+  assert.doesNotMatch(g.log(), /PRIVATE KEY/);
+});
+
+test("the token file's content is used and trimmed", async (t) => {
+  const up = await fakeUpstream();
+  t.after(() => close(up.server));
+  // Spaces, a Windows line end and the byte order mark some editors and shells put first are all trimmed.
+  const tokenFile = fileIn(tempDir(t), 'token', `\uFEFF  ${TOKEN}\r\n`);
+  const g = await spawnGate(t, { BROWSER_GATE_TOKEN: undefined, BROWSER_GATE_TOKEN_FILE: tokenFile, BROWSER_UPSTREAM_PORT: String(up.port) });
+  const ok = await upgrade(g.port, AUTH);
+  assert.equal(ok.status, 101);
+  ok.socket.destroy();
+  assert.equal((await upgrade(g.port, { Authorization: `Bearer ${TOKEN.slice(0, -1)}x` })).status, 401);
+  assert.doesNotMatch(g.log(), new RegExp(TOKEN));
+  // An empty BROWSER_GATE_TOKEN (a compose file that passes the variable through) counts as unset.
+  const empty = await spawnGate(t, { BROWSER_GATE_TOKEN: '', BROWSER_GATE_TOKEN_FILE: tokenFile, BROWSER_UPSTREAM_PORT: String(up.port) });
+  const again = await upgrade(empty.port, AUTH);
+  assert.equal(again.status, 101);
+  again.socket.destroy();
+});
+
+test('both token sources set exits 1 with a message naming both', (t) => {
+  const tokenFile = fileIn(tempDir(t), 'token', `${TOKEN}\n`);
+  const run = startUp({ BROWSER_GATE_TOKEN_FILE: tokenFile });
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /^browser-gate: set BROWSER_GATE_TOKEN or BROWSER_GATE_TOKEN_FILE, not both$/m);
+  assert.doesNotMatch(run.stderr + run.stdout, new RegExp(TOKEN));
+});
+
+test('a token file that cannot be read or holds a short token exits 1 without showing its content', (t) => {
+  const dir = tempDir(t);
+  const missing = startUp({ BROWSER_GATE_TOKEN: undefined, BROWSER_GATE_TOKEN_FILE: join(dir, 'no-such-file') });
+  assert.equal(missing.status, 1);
+  assert.match(missing.stderr, /^browser-gate: cannot read BROWSER_GATE_TOKEN_FILE: ENOENT$/m);
+  const short = startUp({ BROWSER_GATE_TOKEN: undefined, BROWSER_GATE_TOKEN_FILE: fileIn(dir, 'token', 'short-token-content\n') });
+  assert.equal(short.status, 1);
+  assert.match(short.stderr, /^browser-gate: BROWSER_GATE_TOKEN_FILE must hold a token of at least 32 characters$/m);
+  assert.doesNotMatch(short.stderr + short.stdout, /short-token-content/);
+});
+
+test('only one of the two TLS files exits 1', (t) => {
+  const { key, cert } = selfSignedCert();
+  const dir = tempDir(t);
+  const only = [{ BROWSER_GATE_TLS_KEY_FILE: fileIn(dir, 'gate.key', key) }, { BROWSER_GATE_TLS_CERT_FILE: fileIn(dir, 'gate.crt', cert) }];
+  for (const env of only) {
+    const run = startUp(env);
+    assert.equal(run.status, 1, Object.keys(env)[0]);
+    assert.match(run.stderr, /^browser-gate: set BROWSER_GATE_TLS_KEY_FILE and BROWSER_GATE_TLS_CERT_FILE together, or neither$/m);
+    assert.doesNotMatch(run.stdout, /listening/);
+  }
+});
+
+test('TLS files that cannot be read or do not hold a key and its certificate exit 1', (t) => {
+  const { key, cert } = selfSignedCert();
+  const dir = tempDir(t);
+  const keyFile = fileIn(dir, 'gate.key', key);
+  const certFile = fileIn(dir, 'gate.crt', cert);
+  const missing = startUp({ BROWSER_GATE_TLS_KEY_FILE: keyFile, BROWSER_GATE_TLS_CERT_FILE: join(dir, 'no-such-file') });
+  assert.equal(missing.status, 1);
+  assert.match(missing.stderr, /^browser-gate: cannot read BROWSER_GATE_TLS_CERT_FILE: ENOENT$/m);
+  const unusable = [
+    { BROWSER_GATE_TLS_KEY_FILE: keyFile, BROWSER_GATE_TLS_CERT_FILE: fileIn(dir, 'not-a.crt', 'not a certificate\n') },
+    // A certificate made for another key.
+    { BROWSER_GATE_TLS_KEY_FILE: keyFile, BROWSER_GATE_TLS_CERT_FILE: fileIn(dir, 'other.crt', selfSignedCert().cert) },
+    // The two files swapped.
+    { BROWSER_GATE_TLS_KEY_FILE: certFile, BROWSER_GATE_TLS_CERT_FILE: keyFile },
+  ];
+  for (const env of unusable) {
+    const run = startUp(env);
+    assert.equal(run.status, 1, env.BROWSER_GATE_TLS_CERT_FILE);
+    assert.match(run.stderr, /^browser-gate: BROWSER_GATE_TLS_KEY_FILE and BROWSER_GATE_TLS_CERT_FILE do not hold a usable key and its certificate \(\w+\)$/m);
+    assert.doesNotMatch(run.stderr + run.stdout, /PRIVATE KEY|listening/);
+  }
+});
+
+/** Whether a TCP connect to host:port succeeds within a second. */
+function reachable(host, port) {
+  return new Promise((resolve) => {
+    const s = connect({ host, port });
+    const done = (result) => { s.destroy(); resolve(result); };
+    s.setTimeout(1000, () => done(false));
+    s.once('connect', () => done(true));
+    s.once('error', () => done(false));
+  });
+}
+
+test('BROWSER_GATE_HOST=127.0.0.1 listens on loopback only', async (t) => {
+  const up = await fakeUpstream();
+  t.after(() => close(up.server));
+  const metricsPort = await freePort();
+  const g = await spawnGate(t, { BROWSER_GATE_HOST: '127.0.0.1', BROWSER_UPSTREAM_PORT: String(up.port), BROWSER_GATE_METRICS_PORT: String(metricsPort) });
+  await until(() => g.log().includes(`metrics on 127.0.0.1:${metricsPort}/metrics`), 'the metrics line');
+  assert.match(g.log(), new RegExp(`browser-gate: listening on 127\\.0\\.0\\.1:${g.port} \\(max sessions 4\\)`));
+  assert.equal((await requestTo({ port: g.port, path: '/healthz' })).status, 200);
+  assert.equal((await requestTo({ port: metricsPort, path: '/metrics' })).status, 200);
+  // Every other address of this machine: the IPv6 loopback and the addresses of its network interfaces.
+  const others = Object.values(networkInterfaces()).flat().filter((a) => a.family === 'IPv4' && !a.internal).map((a) => a.address);
+  if (await hasIpv6Loopback()) others.push('::1');
+  if (others.length === 0) return t.skip('this machine has no address but 127.0.0.1');
+  for (const host of others) {
+    assert.equal(await reachable(host, g.port), false, `sessions on ${host}`);
+    assert.equal(await reachable(host, metricsPort), false, `metrics on ${host}`);
   }
 });
