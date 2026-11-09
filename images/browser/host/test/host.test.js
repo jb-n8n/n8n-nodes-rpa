@@ -160,7 +160,7 @@ const alive = (pid) => {
 function commandLine(pid) {
   const run = WINDOWS
     ? spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`], { encoding: 'utf8' })
-    : spawnSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' });
+    : spawnSync('ps', ['-ww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8' });
   assert.equal(run.status, 0, 'the command line can be read');
   return run.stdout.trim();
 }
