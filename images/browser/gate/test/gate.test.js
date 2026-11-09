@@ -5,12 +5,13 @@ import { once } from 'node:events';
 import { createServer, request } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { connect } from 'node:net';
+import { connect as tlsConnect } from 'node:tls';
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { networkInterfaces, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { ALLOWED_LAUNCH_OPTIONS, createGate, MIN_TOKEN_LENGTH, MIN_UPSTREAM_PATH_SECRET, TLS_HANDSHAKE_TIMEOUT_MS, TLS_MAX_CONNECTIONS } from '../gate.mjs';
+import { ALLOWED_LAUNCH_OPTIONS, createGate, MIN_TOKEN_LENGTH, MIN_UPSTREAM_PATH_SECRET, TLS_HANDSHAKE_TIMEOUT_MS, TLS_MAX_CONNECTIONS, TLS_REQUEST_DEADLINE_MS } from '../gate.mjs';
 import { selfSignedCert } from '../selfsigned.mjs';
 
 const TOKEN = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
@@ -888,9 +889,9 @@ async function otherLocalAddresses() {
 }
 
 /** A plain GET over TLS; resolves with the status and body. */
-function getTls(port, cert, path) {
+function getTls(port, cert, path, host = '127.0.0.1') {
   return new Promise((resolve, reject) => {
-    httpsRequest({ host: '127.0.0.1', port, path, ca: cert, checkServerIdentity: () => undefined, agent: false }, (res) => {
+    httpsRequest({ host, port, path, ca: cert, checkServerIdentity: () => undefined, agent: false }, (res) => {
       let body = '';
       res.setEncoding('utf8');
       res.on('data', (c) => { body += c; });
@@ -909,12 +910,19 @@ function tlsFiles(t) {
 test('BROWSER_GATE_HOST=127.0.0.1 listens on loopback only', async (t) => {
   const up = await fakeUpstream();
   t.after(() => close(up.server));
-  const g = await spawnGate(t, { BROWSER_GATE_HOST: '127.0.0.1', BROWSER_UPSTREAM_PORT: String(up.port) });
+  const metricsPort = await freePort();
+  const g = await spawnGate(t, { BROWSER_GATE_HOST: '127.0.0.1', BROWSER_UPSTREAM_PORT: String(up.port), BROWSER_GATE_METRICS_PORT: String(metricsPort) });
+  // Without TLS and without BROWSER_GATE_METRICS_HOST, the metrics port follows the bind address.
+  await until(() => g.log().includes(`browser-gate: metrics on 127.0.0.1:${metricsPort}/metrics`), 'the metrics line');
   assert.match(g.log(), new RegExp(`browser-gate: listening on 127\\.0\\.0\\.1:${g.port} \\(max sessions 4\\)`));
   assert.equal((await requestTo({ port: g.port, path: '/healthz' })).status, 200);
+  assert.equal((await requestTo({ port: metricsPort, path: '/metrics' })).status, 200);
   const others = await otherLocalAddresses();
   if (others.length === 0) return t.skip('this machine has no address but 127.0.0.1');
-  for (const host of others) assert.equal(await reachable(host, g.port), false, `sessions on ${host}`);
+  for (const host of others) {
+    assert.equal(await reachable(host, g.port), false, `sessions on ${host}`);
+    assert.equal(await reachable(host, metricsPort), false, `metrics on ${host}`);
+  }
 });
 
 test('BROWSER_GATE_HOST=::1 listens on the IPv6 loopback and the start line shows [::1]:port', async (t) => {
@@ -942,16 +950,20 @@ test('healthz answers over TLS', async (t) => {
 
 // ---- Metrics are plain HTTP without a token: where the gate serves TLS itself, they stay on 127.0.0.1 unless told otherwise. ----
 
-test('without TLS the metrics port listens as before, whatever BROWSER_GATE_HOST says', async (t) => {
-  if (!(await hasIpv6Loopback())) return t.skip('no IPv6 loopback on this machine');
+test('with TLS and BROWSER_GATE_HOST set to another address, metrics still listen on 127.0.0.1', async (t) => {
+  const [other] = (await otherLocalAddresses()).reverse();
+  if (other === undefined) return t.skip('this machine has no address but 127.0.0.1');
   const up = await fakeUpstream();
   t.after(() => close(up.server));
   const metricsPort = await freePort();
-  const g = await spawnGate(t, { BROWSER_GATE_HOST: '127.0.0.1', BROWSER_UPSTREAM_PORT: String(up.port), BROWSER_GATE_METRICS_PORT: String(metricsPort) });
-  await until(() => g.log().includes(`browser-gate: metrics on :${metricsPort}/metrics`), 'the metrics line');
-  for (const host of ['127.0.0.1', '::1']) {
-    assert.equal((await requestTo({ host, port: metricsPort, path: '/metrics' })).status, 200, `metrics on ${host}`);
-  }
+  const { env, cert } = tlsFiles(t);
+  const g = await spawnGate(t, { ...env, BROWSER_GATE_HOST: other, BROWSER_UPSTREAM_PORT: String(up.port), BROWSER_GATE_METRICS_PORT: String(metricsPort) });
+  await until(() => g.log().includes(`browser-gate: metrics on 127.0.0.1:${metricsPort}/metrics`), 'the metrics line');
+  assert.equal((await requestTo({ port: metricsPort, path: '/metrics' })).status, 200);
+  assert.equal(await reachable(other, metricsPort), false, `metrics on ${other}`);
+  // The session port is on the named address, with TLS, and not on 127.0.0.1.
+  assert.equal((await getTls(g.port, cert, '/healthz', other)).status, 200);
+  assert.equal(await reachable('127.0.0.1', g.port), false, 'sessions on 127.0.0.1');
 });
 
 test('with TLS and no BROWSER_GATE_METRICS_HOST, metrics answer on 127.0.0.1 only', async (t) => {
@@ -1025,4 +1037,84 @@ test('with tls a connection that sends nothing is closed after the handshake tim
   await once(idle, 'connect');
   await sleep(400);
   assert.equal(closed, false, 'the plain gate has not closed the silent connection');
+});
+
+// ---- The request deadline after the TLS handshake: a peer without the token cannot sit on the connection cap. ----
+
+/** A TLS connection to the gate that has finished the handshake; `closed` resolves with the milliseconds until the gate closed it. */
+async function tlsClient(t, port, cert) {
+  const socket = tlsConnect({ host: '127.0.0.1', port, ca: cert, checkServerIdentity: () => undefined });
+  t.after(() => socket.destroy());
+  socket.on('error', () => {});
+  socket.resume();
+  await once(socket, 'secureConnect');
+  const started = Date.now();
+  const closed = once(socket, 'close').then(() => Date.now() - started);
+  return { socket, closed };
+}
+
+test('a TLS connection that finishes the handshake and sends nothing is closed within the request deadline', async (t) => {
+  assert.equal(TLS_REQUEST_DEADLINE_MS, 10_000);
+  const { key, cert } = selfSignedCert();
+  const g = await ownGate(t, { tls: { key, cert }, tlsRequestDeadlineMs: 300 });
+  const silent = await tlsClient(t, g.port, cert);
+  const took = await silent.closed;
+  assert.ok(took >= 250 && took < 3000, `closed after ${took} ms`);
+  assert.equal(g.gate.stats().sessionsTotal, 0);
+});
+
+test('a TLS connection that sends half a request, or one request and then nothing, is closed within the request deadline', async (t) => {
+  const { key, cert } = selfSignedCert();
+  const g = await ownGate(t, { tls: { key, cert }, tlsRequestDeadlineMs: 300 });
+  // The upgrade's headers, never finished.
+  const half = await tlsClient(t, g.port, cert);
+  half.socket.write(`GET / HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nAuthorization: Bearer ${TOKEN}\r\n`);
+  const halfTook = await half.closed;
+  assert.ok(halfTook >= 250 && halfTook < 3000, `half a request: closed after ${halfTook} ms`);
+  // Headers that announce a body that never comes.
+  const noBody = await tlsClient(t, g.port, cert);
+  noBody.socket.write('POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 1000\r\n\r\n');
+  const noBodyTook = await noBody.closed;
+  assert.ok(noBodyTook < 3000, `a body that never comes: closed after ${noBodyTook} ms`);
+  // A whole request, answered, and then an idle kept-alive connection.
+  const idle = await tlsClient(t, g.port, cert);
+  idle.socket.write('GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n');
+  const idleTook = await idle.closed;
+  assert.ok(idleTook < 3000, `an idle kept-alive connection: closed after ${idleTook} ms`);
+  assert.equal(g.gate.stats().sessionsTotal, 0);
+});
+
+test('an authorised session stays open past the request deadline', async (t) => {
+  const { key, cert } = selfSignedCert();
+  const g = await ownGate(t, { tls: { key, cert }, tlsRequestDeadlineMs: 300 });
+  const { status, socket } = await upgradeTls(g.port, cert, AUTH);
+  assert.equal(status, 101);
+  t.after(() => socket.destroy());
+  let closed = false;
+  socket.on('close', () => { closed = true; });
+  // Four deadlines, with nothing sent in either direction.
+  await sleep(1200);
+  assert.equal(closed, false, 'the session is still open');
+  assert.equal(g.gate.stats().active, 1);
+  socket.write('still here');
+  const [chunk] = await once(socket, 'data');
+  assert.equal(chunk.toString(), 'still here');
+});
+
+test('without tls the request timeouts are the ones Node sets', async (t) => {
+  const plain = await ownGate(t, { tlsRequestDeadlineMs: 300 });
+  const stock = createServer();
+  for (const name of ['headersTimeout', 'requestTimeout', 'keepAliveTimeout']) {
+    assert.equal(plain.gate.server[name], stock[name], name);
+  }
+  // A plain connection that sends nothing outlives the deadline a TLS gate would apply.
+  const idle = connect({ host: '127.0.0.1', port: plain.port });
+  t.after(() => idle.destroy());
+  let closed = false;
+  idle.on('close', () => { closed = true; });
+  idle.on('error', () => {});
+  idle.resume();
+  await once(idle, 'connect');
+  await sleep(1200);
+  assert.equal(closed, false);
 });
