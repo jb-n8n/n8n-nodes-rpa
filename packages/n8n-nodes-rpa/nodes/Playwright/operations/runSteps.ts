@@ -187,7 +187,8 @@ const NO_CODE_FIELD = 'its item has no code field of 6 to 10 digits';
  * The engine's codeProvider for Options → One-Time Code Workflow: runs that workflow with one item { requestedAt } and
  * takes json.code from its single output item. Everything else it returns is dropped. Its errors never carry the code:
  * a returned value is never repeated, and a failing workflow's message keeps only its first line, with numbers of four or
- * more digits removed. The engine shows these errors after "the one-time code workflow failed: ".
+ * more digits removed, spaces between the digits included ("123 456"). The engine shows these errors after "the one-time
+ * code workflow failed: ".
  */
 export function codeProviderFor(ctx: Pick<NodeContext, 'executeWorkflow'>, workflowId: string): CodeProvider {
   return async ({ requestedAt }) => {
@@ -199,7 +200,7 @@ export function codeProviderFor(ctx: Pick<NodeContext, 'executeWorkflow'>, workf
       failed = error;
     }
     // Thrown outside the catch block (as parseJson does): the message is rebuilt, never the workflow's error as is.
-    if (!result) throw new Error(`it stopped with an error: ${errorMessage(failed).split('\n')[0].replace(/\d{4,}/g, '[number]').slice(0, 200)}`);
+    if (!result) throw new Error(`it stopped with an error: ${errorMessage(failed).split('\n')[0].replace(/\d[\d ]{2,}\d/g, '[number]').slice(0, 200)}`);
     const items = (result.data?.[0] ?? []).filter((item) => item !== null && item !== undefined);
     if (items.length !== 1) throw new Error(NOT_ONE_ITEM(items.length));
     const code: unknown = items[0].json?.code;
