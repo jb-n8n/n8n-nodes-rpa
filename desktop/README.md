@@ -8,6 +8,7 @@
 | `runner/src/Rpa.Runner.Core` | The platform-neutral part (net8.0): the WebSocket server (TLS, bearer token), JSON-RPC, the run lock and lease, the local policy floor, target resolution, snapshots and file retrieval. |
 | `runner/src/Rpa.Runner.Windows` | The Windows driver (net8.0-windows): UI Automation through [FlaUI](https://github.com/FlaUI/FlaUI) (MIT), session health, the foreground check, window capture. |
 | `runner/src/Rpa.Runner` | The executable, `RpaRunner.exe`. |
+| `runner/src/Rpa.Runner.PolicyTool` | The policy tool, `RpaPolicy.exe`: shows a change to the policy file, asks, and applies it as an administrator. |
 | `runner/test/Rpa.Runner.Core.Tests` | Unit tests of the core with a fake desktop (run anywhere). |
 | `runner/test/Rpa.Runner.Scenario` | The protocol test client CI runs against the real runner and the ERP Demo on Windows. |
 | `erp-demo` | ERP Demo: a small "legacy ERP" WinForms app with a v1 and a v2 UI. |
@@ -97,6 +98,56 @@ that person's access. Two limits to keep in mind:
   read into the export directory, or start programs from a context menu (those programs are not the run's, so the
   runner will not act on them). `file.retrieve` itself never returns files from elsewhere. A dedicated Windows user
   with AppLocker is the real control.
+
+## Changing the policy
+
+`RpaPolicy.exe` changes the policy file for you. It prints what a change does in plain lines, asks, and writes the
+file. Windows shows its administrator prompt when the tool starts, because only administrators may change the policy.
+
+```powershell
+.\RpaPolicy.exe show
+.\RpaPolicy.exe allow-app "C:\Program Files\ERP Demo\ErpDemo.exe" --pin-hash
+# Allow app ErpDemo.exe at C:\Program Files\ERP Demo\ErpDemo.exe (SHA-256 pinned)
+# Apply these changes? [y/N] y
+# Policy updated. The runner restarts within 10 seconds and uses the new policy.
+.\RpaPolicy.exe apply change.json
+```
+
+- `show` prints the policy file, and says why when the runner would refuse it.
+- `allow-app <path-to-exe>` adds the application to `allowedApps` with its file name and full path. `--pin-hash` also
+  pins the file's SHA-256, so the runner starts only this exact file (run the command again after the app is updated).
+- `apply <change.json>` adds what a change file lists. A change file is a JSON object with any of `allowedApps`,
+  `writeControls`, `gatedKeys`, `helperProcesses` and `clipboardRead`, written as in the policy file.
+- Every command takes `--policy <path>` (default `%ProgramData%\RPA Runner\policy.json`). `apply` and `allow-app` take
+  `--yes`, which writes without asking.
+
+A change only adds. Entries the policy already has are skipped, `clipboardRead` may only be `true`, and `maxFileBytes`
+or an unknown key is refused: to remove an entry or change the file size limit, edit the policy file by hand. The one
+replacement is an `allowedApps` entry with the same `exe` and `path` as an existing one (in any letter case): the new
+entry takes the old one's place, with only the options the new entry sets. A change whose result the runner would
+refuse is refused, and nothing is written.
+
+The lines the tool prints before it asks:
+
+| Line | Meaning |
+|---|---|
+| `Allow app <exe> at <path>` | A new `allowedApps` entry. ` (SHA-256 pinned)` follows when it sets `sha256`. |
+| `Update app <exe> at <path>` | The entry for this exe and path is replaced. |
+| `WARNING: <path> can be changed by the runner's own user` | The app above sets `allowUserWritable: true`. |
+| `Add write control <exe> / <automationId>` | A new `writeControls` entry. |
+| `Add gated key <chord>` | A new `gatedKeys` entry. |
+| `Add helper process <exe> at <pathPattern>` | A new `helperProcesses` entry. |
+| `Turn on clipboard read` | `clipboardRead` becomes `true`. |
+
+`Nothing to change.` means the policy already has everything; the file is not written. Otherwise the tool writes the
+new policy (the file keeps its permissions), keeps the old one beside it as `policy.json.<yyyyMMdd-HHmmss>.bak`, and
+ends the running `RpaRunner.exe`, which reads the policy only at start. The runner's start script starts it again
+within 10 seconds; start a runner you started by hand again yourself. The tool writes the whole file in one layout
+(two-space indent, the key order of the example), so comments in a hand-edited policy are not kept; the backup still
+has them.
+
+Exit codes: 0 applied or nothing to change, 1 refused or invalid, 2 wrong arguments (the usage is printed), 3 declined
+at the prompt.
 
 ## ERP Demo
 

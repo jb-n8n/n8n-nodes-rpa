@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The policy tool, RpaPolicy.exe: shows and applies changes to the runner's policy file. Its manifest asks for
+       administrator rights. The commands themselves are in Rpa.Runner.Core (PolicyCommand, PolicyChange). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <AssemblyName>RpaPolicy</AssemblyName>
+    <RootNamespace>Rpa.Runner.PolicyTool</RootNamespace>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Rpa.Runner.Core\Rpa.Runner.Core.csproj" />
+  </ItemGroup>
+</Project>
