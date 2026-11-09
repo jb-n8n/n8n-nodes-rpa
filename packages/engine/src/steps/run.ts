@@ -1,10 +1,12 @@
 import type { Page } from 'playwright-core';
 import type { AllowedSubmit, WriteWindow } from '../browser/session.js';
 import { maskClipped, type Masker } from '../secrets/mask.js';
-import type { PortalPolicy, PortalSecrets, RunState, Script, Step, StepLogEntry, StepsResult, Violation } from '../types.js';
+import type { CodeProvider, PortalPolicy, PortalSecrets, RunState, Script, Step, StepLogEntry, StepsResult, Violation } from '../types.js';
 import type { InterruptHandle } from './interrupts.js';
 import { HANDLERS, type AnyVerb } from './handlers/index.js';
 import { desktopVerbOf, verbOf } from './parse.js';
+import { renderLocators } from './render-locators.js';
+import { registerSecretFills } from '../secrets/secret-fills.js';
 import { PolicyError } from './errors.js';
 import { shownMessage } from './urls.js';
 import { BLOCKED_STOP } from '../messages.js';
@@ -23,6 +25,12 @@ export interface StepContext {
   policy: PortalPolicy;
   /** Site Login secrets, only for signIn; absent without a Site Login. */
   secrets?: PortalSecrets;
+  /** Supplies the one-time code for a signIn whose totp.source is 'workflow'; absent: such a signIn fails (auth_blocked). */
+  codeProvider?: CodeProvider;
+  /** How long signIn waits for codeProvider, in ms. Default DEFAULT_CODE_TIMEOUT_MS (120 s). */
+  codeTimeoutMs?: number;
+  /** True when the trust gate verified a signature for these steps (script lane); only then does a fill with `secret` type. */
+  signed?: boolean;
   vars: Record<string, string>;
   masker: Masker;
   defaultTimeoutMs: number;
@@ -112,6 +120,8 @@ export async function runSteps(
   } = {},
 ): Promise<StepsResult> {
   const surface = surfaceOf(ctx);
+  // Every variable a secret fill types is masked from the first step on, not only once its own step runs.
+  if (!opts.nested) registerSecretFills(steps, ctx.vars, ctx.masker);
   // Step hooks take a Playwright page: they belong to browser runs only.
   const hooks = surface.kind === 'browser' ? ctx.stepHooks : undefined;
   // startAt 1: the lane already ran step 0 (the start page) and logged it.
@@ -138,7 +148,9 @@ export async function runSteps(
       if (hookLabel !== undefined) await hooks?.end(ctx.page, ok, hookLabel).catch(() => undefined);
     };
     try {
-      if (step.when && !(await surface.isVisible(step.when.visible))) {
+      // {{var.x}} in a locator is rendered for this run into a copy; the step itself keeps its template.
+      const live = renderLocators(step, ctx.vars, ctx.masker);
+      if (live.when && !(await surface.isVisible(live.when.visible))) {
         log('skipped', 0, { note: 'condition not met' });
         if (!opts.nested) await opts.afterStep?.(i);
         continue;
@@ -155,11 +167,11 @@ export async function runSteps(
       ctx.writeStep = !opts.nested && ctx.policy.writeWindow !== undefined && ctx.policy.writeWindow.step === i;
       let candidate: number | void;
       try {
-        candidate = await handler(ctx, step, state, timeout);
+        candidate = await handler(ctx, live, state, timeout);
       } finally {
         ctx.writeStep = false;
       }
-      if (step.expect) await surface.checkExpect(step.expect, timeout);
+      if (live.expect) await surface.checkExpect(live.expect, timeout);
       if (step.checkpoint && !opts.nested) state.lastCheckpoint = i;
       const output = logOutput(state, verb, outputsBefore, downloadsBefore);
       log('ok', Date.now() - t0, { ...(typeof candidate === 'number' ? { candidate } : {}), ...(output ? { output } : {}) });

@@ -171,6 +171,11 @@ export async function publicRoute(req, res, url) {
     const next = page2 ? '' : '<a class="next" href="/public/list?page=2">Next page</a>';
     return send(res, 200, publicPage('Items', `<p class="count">${count}</p><ul class="items">${shown.map(item).join('')}</ul>${next}`));
   }
+  if (p === '/public/multi') {
+    // A multi-select with one option preselected, so a run can show that selecting a set clears the others.
+    const opts = ['north', 'south', 'east', 'west'].map((v) => `<option value="${v}"${v === 'west' ? ' selected' : ''}>${v}</option>`).join('');
+    return send(res, 200, publicPage('Multi select', `<h1>Multi select</h1><label for="regions">Regions</label><select id="regions" multiple>${opts}</select>`));
+  }
   if (p === '/public/list-dup') {
     const dup = '<ul class="items"><li class="item"><a class="title" href="/public/items/SKU-2101" title="Item SKU-2101">Dup mug</a> '
       + '<span class="code">SKU-2101</span> <span class="price">$1.00</span> <span class="price">$2.00</span></li></ul>';

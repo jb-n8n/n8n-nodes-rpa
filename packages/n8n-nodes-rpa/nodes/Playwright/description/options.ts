@@ -306,6 +306,25 @@ export const OPTION_ENTRIES: INodeProperties[] = [
     displayOptions: withAiRepair,
   },
   {
+    displayName: 'One-Time Code Workflow',
+    name: 'codeWorkflowId',
+    type: 'string',
+    default: '',
+    placeholder: 'e.g. 4nQkZp2r8XyT1bLm',
+    description:
+      'ID of the workflow that supplies the sign-in code when the steps\' sign-in takes its code from a workflow ("source": "workflow"). It starts with an Execute Workflow Trigger, receives requestedAt and must return exactly one item with a code field of 6 to 10 digits.',
+    displayOptions: only(['runSteps']),
+  },
+  {
+    displayName: 'Code Timeout (Seconds)',
+    name: 'codeTimeout',
+    type: 'number',
+    default: 120,
+    typeOptions: { minValue: 1, maxValue: 300 },
+    description: 'How long the sign-in waits for the One-Time Code Workflow. Max Seconds still bounds the whole run.',
+    displayOptions: only(['runSteps']),
+  },
+  {
     displayName: 'Login Breaker Reset Key',
     name: 'breakerResetKey',
     type: 'string',

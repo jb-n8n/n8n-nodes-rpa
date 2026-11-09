@@ -56,8 +56,44 @@ export interface SignInSpec {
   next?: Locator;
   password: Locator;
   submit: Locator;
-  totp?: { field: Locator; submit: Locator };
+  totp?: {
+    field: Locator;
+    submit: Locator;
+    /**
+     * Where the code comes from. 'seed' (default): generated from the Site Login's TOTP secret. 'workflow': asked of the
+     * run's codeProvider (in n8n, a sub-workflow) once the code field shows; no TOTP secret is needed.
+     */
+    source?: 'seed' | 'workflow';
+    /**
+     * Pages between the password and the code field (a factor choice, "Send me the code"): after the password is
+     * submitted, each locator is clicked in order, each only if it shows before the code field does (waiting up to the
+     * step timeout), until the code field shows. A locator that never shows is skipped. With via, the code field must
+     * show within the step timeout after the last click, or the step fails. With source 'workflow', the retry after a
+     * rejected code clicks the last locator again when the code page shows it (a code sent anew).
+     */
+    via?: Locator[];
+    /** Checkboxes ticked after the code is typed and before its submit (e.g. "Trust this browser"). Each must be on the page. */
+    check?: Locator[];
+  };
 }
+
+/** What a run tells the code provider when it asks for a one-time code. */
+export interface CodeRequest {
+  /**
+   * When the run made the site send the code (ISO 8601): stamped right before the first totp.via click, or right before
+   * the password submit when no via button was clicked, so it is no later than the click that sent the code. The retry
+   * after a rejected code clicks the last via button again when the code page shows it, and sends a new value stamped
+   * right before that click; otherwise it sends the same value (the run requests no new code then).
+   */
+  requestedAt: string;
+}
+/**
+ * Supplies the one-time code for a signIn whose totp.source is 'workflow'. Resolves to 6 to 10 digits (spaces allowed,
+ * they are removed). Its error message is shown in the run's failure, so it must never contain the code.
+ */
+export type CodeProvider = (req: CodeRequest) => Promise<string>;
+/** How long a run waits for the code provider by default. */
+export const DEFAULT_CODE_TIMEOUT_MS = 120_000;
 export interface SubmitTarget {
   path: string;
   host?: string;
@@ -69,8 +105,13 @@ export type Step = StepBase &
     | { goto: string; waitUntil?: WaitUntil }
     | { signIn: SignInSpec }
     | { click: Locator }
-    | { fill: { field: Locator; value: string } }
-    | { select: { field: Locator; value: string } }
+    /**
+     * `secret: true` is the only way fill may type into a password input: `value` must then be exactly one {{var.name}}
+     * template, the rendered value is masked in everything the run shows, and only signed steps may use it.
+     */
+    | { fill: { field: Locator; value: string; secret?: boolean } }
+    /** A string array selects exactly those options of a multi-select and clears the others. */
+    | { select: { field: Locator; value: string | string[] } }
     | { check: { field: Locator; checked?: boolean } }
     | { clickAll: { target: Locator; max: number } }
     | {
@@ -325,10 +366,18 @@ export type DesktopStep = DesktopStepBase &
     | { select: { field: DesktopLocator; option: string } }
     | { check: { field: DesktopLocator; checked?: boolean } }
     | { waitFor: { target: DesktopLocator; state?: 'visible' | 'hidden' } }
-    | { read: { target: DesktopLocator; as: string } }
+    /**
+     * The element's text, or with `clipboard: true` (no target) the clipboard's text through the runner's policy-gated
+     * clipboard.read, for an app whose value is only available through a Copy button. Either way the text goes to the run
+     * outputs under `as`; a clipboard value is masked everywhere else (log, messages, views).
+     */
+    | { read: DesktopRead }
     | { key: { key: string; target?: DesktopLocator } }
     | { expectFile: { pattern: string; check?: FileCheck; maxBytes?: number; mime?: string[] } }
   );
+
+/** A desktop read: an element's text, or the clipboard's (see DesktopStep). */
+export type DesktopRead = { target: DesktopLocator; as: string } | { clipboard: true; as: string };
 
 export const DESKTOP_VERBS = ['click', 'fill', 'select', 'check', 'waitFor', 'read', 'key', 'expectFile'] as const;
 export type DesktopVerb = (typeof DESKTOP_VERBS)[number];

@@ -182,3 +182,92 @@ describe('capture verbs', () => {
     expect(one({ intent: 't', extractTable: { table: { css: 'table' }, columns: 3 } })).toEqual(['steps[1].extractTable has unknown key "columns"']);
   });
 });
+
+describe('locator variables and multi-select', () => {
+  const doc = (steps: unknown[]) => ({ name: 'x', version: 1, startUrl: `${URL0}/acme/login`, steps: [{ intent: 'Open', goto: '/acme/login' }, ...steps] });
+  it('accepts {{var.x}} in a role name and a text locator, and a select value that is a string array', () => {
+    expect(() => parseScript(doc([
+      { intent: 'Open one', click: { role: 'link', name: '{{var.item}}' } },
+      { intent: 'Open text', click: { text: '{{var.item}} details', within: { role: 'navigation' } } },
+      { intent: 'Pick', select: { field: { css: '#regions' }, value: ['north', '{{var.region}}'] } },
+      { intent: 'Pick one', select: { field: { css: '#regions' }, value: 'north' } },
+    ]))).not.toThrow();
+  });
+  it('refuses a select value that is an empty array, a non-string array, or holds {{$...}}', () => {
+    const issues = (value: unknown) => { try { parseScript(doc([{ intent: 'Pick', select: { field: { css: '#r' }, value } }])); return []; } catch (e) { return (e as ScriptShapeError).issues; } };
+    expect(issues([]).join('\n')).toMatch(/select\.value/);
+    expect(issues([1]).join('\n')).toMatch(/select\.value/);
+    expect(issues(['{{$exportDir}}']).join('\n')).toMatch(/\{\{\$/);
+  });
+});
+
+describe('run variables in locator keys that are never rendered', () => {
+  const at = (step: unknown) => issuesOf(withStep(step)).join('\n');
+  it('refuses {{var.*}} in label, testId, css, frame and role, and in a name or text of another kind', () => {
+    const cases: [unknown, RegExp][] = [
+      [{ label: '{{var.x}}' }, /steps\[0\]\.click\.label: \{\{var\.\*\}\} is never rendered here/],
+      [{ testId: 'row-{{ var.x }}' }, /steps\[0\]\.click\.testId: .*never rendered/],
+      [{ css: '#{{var.x}}' }, /steps\[0\]\.click\.css: .*never rendered/],
+      [{ css: '#a', frame: 'iframe[name="{{var.x}}"]' }, /steps\[0\]\.click\.frame: .*never rendered/],
+      [{ role: '{{var.x}}' }, /steps\[0\]\.click\.role: .*never rendered/],
+      [{ label: 'Q', name: '{{var.x}}' }, /steps\[0\]\.click\.name: .*never rendered/],
+      [{ css: '#a', within: { label: '{{var.x}}' } }, /steps\[0\]\.click\.within\.label: .*never rendered/],
+      [{ css: '#a', fallbacks: [{ testId: '{{var.x}}' }] }, /steps\[0\]\.click\.fallbacks\[0\]\.testId: .*never rendered/],
+    ];
+    for (const [loc, want] of cases) expect(at({ intent: 'C', click: loc }), JSON.stringify(loc)).toMatch(want);
+    expect(at({ intent: 'F', fill: { field: { label: '{{var.f}}' }, value: 'x' } })).toMatch(/steps\[0\]\.fill\.field\.label: .*never rendered/);
+    expect(at({ intent: 'C', click: { css: '#x' }, when: { visible: { css: '.{{var.c}}' } } })).toMatch(/steps\[0\]\.when\.visible\.css: .*never rendered/);
+    expect(at({ intent: 'E', extract: { scope: { css: 'main' }, idPattern: 'N', fields: { a: { locator: { testId: '{{var.t}}' } } } } })).toMatch(/extract\.fields\.a\.locator\.testId: .*never rendered/);
+    const nested = { intent: 'P', paginate: { next: { text: 'N' }, until: 'absent', max: 2, each: [{ intent: 'C', click: { css: '#{{var.x}}' } }] } };
+    expect(at(nested)).toMatch(/each\[0\]\.click\.css: .*never rendered/);
+  });
+  it('refuses {{var.*}} anywhere in an interrupt locator: pop-up handlers are never rendered', () => {
+    const doc = { ...baselineScript(URL0), interrupts: [{ target: { text: '{{var.x}}' }, click: { role: 'button', name: '{{var.y}}' } }] };
+    const issues = issuesOf(doc).join('\n');
+    expect(issues).toMatch(/interrupts\[0\]\.target\.text: .*never rendered/);
+    expect(issues).toMatch(/interrupts\[0\]\.click\.name: .*never rendered/);
+  });
+  it('still accepts the rendered keys: a role name and a visible text, in within and fallbacks too', () => {
+    for (const loc of [
+      { role: 'link', name: '{{var.item}}' },
+      { text: 'Row {{var.item}}' },
+      { css: '#list', within: { role: 'region', name: '{{var.region}}' } },
+      { css: '#a', fallbacks: [{ text: '{{var.item}}' }, { role: 'link', name: '{{ var.item }}' }] },
+    ]) expect(issuesOf(withStep({ intent: 'C', click: loc })), JSON.stringify(loc)).toEqual([]);
+    // Text that is not a run variable stays literal anywhere.
+    expect(issuesOf(withStep({ intent: 'C', click: { css: '[data-x="{{ $ctrl.x }}"]' } }))).toEqual([]);
+  });
+});
+
+describe('run variables in locators of write steps', () => {
+  const V = { role: 'button', name: '{{var.who}}' };
+  const si = (over: Record<string, unknown> = {}) => ({
+    intent: 'In', signIn: { username: { label: 'U' }, password: { label: 'P' }, submit: { role: 'button', name: 'Go' }, ...over },
+  });
+  const refused = (step: unknown, at: RegExp) => expect(issuesOf(withStep(step)).join('\n')).toMatch(at);
+  it('refuses {{var.*}} in every signIn locator', () => {
+    for (const k of ['username', 'next', 'password', 'submit']) refused(si({ [k]: V }), new RegExp(`steps\\[0\\]\\.signIn\\.${k}`));
+    refused(si({ username: { role: 'textbox', name: 'a', within: { text: '{{ var.x }}' }, } }), /var/);
+    refused(si({ username: { text: '{{var.x}}' } }), /signIn\.username/);
+    for (const k of ['field', 'submit']) refused(si({ totp: { field: { label: 'C' }, submit: { text: 'ok' }, [k]: V } }), new RegExp(`signIn\\.totp\\.${k}`));
+    refused(si({ submit: { role: 'button', name: 'Go', fallbacks: [{ text: '{{var.x}}' }] } }), /signIn\.submit\.fallbacks/);
+    for (const k of ['via', 'check']) refused(si({ totp: { field: { label: 'C' }, submit: { text: 'ok' }, [k]: [{ text: 'fine' }, V] } }), new RegExp(`signIn\\.totp\\.${k}\\[1\\]`));
+  });
+  it('refuses {{var.*}} in submit and download locators, also in when and expect and nested in paginate', () => {
+    refused({ intent: 'S', submit: { path: '/x', button: V } }, /steps\[0\]\.submit\.button/);
+    refused({ intent: 'D', download: { trigger: V } }, /steps\[0\]\.download\.trigger/);
+    refused({ intent: 'D', download: { trigger: { text: 'x' }, via: { path: '/d' } }, when: { visible: V } }, /steps\[0\]\.when/);
+    refused({ intent: 'D', download: { trigger: { text: 'x' } }, expect: { visible: V } }, /steps\[0\]\.expect/);
+    const nested = { intent: 'P', paginate: { next: { text: 'N' }, until: 'absent', max: 2, each: [{ intent: 'D', download: { trigger: V } }] } };
+    refused(nested, /each\[0\]\.download\.trigger/);
+  });
+  it('still allows a variable in a non-write click, waitFor, extract and fill value', () => {
+    for (const step of [
+      { intent: 'C', click: V },
+      { intent: 'W', waitFor: { target: { text: '{{var.t}}' } } },
+      { intent: 'E', extract: { scope: { css: 'table' }, item: V } },
+      { intent: 'F', fill: { field: { label: 'Q' }, value: '{{var.q}}' } },
+      { intent: 'D', download: { trigger: { text: 'x' }, via: { path: '/d/{{var.id}}' } } },
+    ]) expect(issuesOf(withStep(step))).toEqual([]);
+  });
+});

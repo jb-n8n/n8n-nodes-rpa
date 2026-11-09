@@ -1,4 +1,5 @@
 import type { Snapshot, SnapshotElement, SnapshotOptions } from '../agent/snapshot.js';
+import { RUNNER_TOO_OLD_FOR_CLIPBOARD } from '../messages.js';
 import { hidesValue } from '../secrets/credential-field.js';
 import { createMasker, maskClipped, type Masker } from '../secrets/mask.js';
 import { poll } from '../steps/poll.js';
@@ -77,8 +78,13 @@ export interface DesktopSurface extends Surface {
   readonly errors: Map<number, Error>;
   /** Engine snapshot refs (e1, e2, …) to the runner's refs of the last snapshot. */
   readonly refs: Map<string, string>;
-  /** The value of every variable the run typed into a field: the desktop task masks them out of messages, logs and read outputs. */
+  /** The value of every variable the run typed into a field: the desktop task masks them out of messages, logs, views and read outputs. */
   readonly typed: string[];
+  /**
+   * Every text the run read from the clipboard, kept apart from `typed`: masked like typed values everywhere but in the
+   * read's own output, where a text that is also a typed variable value still stays masked.
+   */
+  readonly clipboard: string[];
   /** Tells the surface which top-level step is running, for `errors`. */
   trackStep(current: () => number | undefined): void;
   /** Records an error against the running step. */
@@ -106,6 +112,19 @@ export interface DesktopSurface extends Surface {
   view(masker: Masker, opts?: { window?: WindowSel; maxNodes?: number }): Promise<DesktopView>;
   /** The raw node behind a ref of the last view; undefined after a newer view or snapshot. */
   nodeOf(ref: string): DesktopViewNode | undefined;
+  /**
+   * The clipboard's text (the runner's clipboard.read), added to `clipboard` so it is masked everywhere but in its own
+   * read output. A runner older than the method fails with RUNNER_TOO_OLD_FOR_CLIPBOARD; every failure is recorded.
+   */
+  readClipboard(): Promise<string>;
+}
+
+/** A runner answered "method not found" to a method this run needs: the runner must be updated. */
+export class RunnerTooOldError extends RunnerError {
+  constructor(code: number, message: string) {
+    super(code, message);
+    this.name = 'RunnerTooOldError';
+  }
 }
 
 /** Creates the desktop surface for one run (run.begin already answered). */
@@ -113,6 +132,7 @@ export function createDesktopSurface(client: RunnerClient, runId: string, app: D
   const errors = new Map<number, Error>();
   const refs = new Map<string, string>();
   const typed: string[] = [];
+  const clipboard: string[] = [];
   let current: () => number | undefined = () => undefined;
   let window = { title: '', exe: app.exe.split(/[\\/]/).pop() ?? app.exe };
   /** The raw nodes of the last view, by ref; cleared on every view and snapshot. */
@@ -143,7 +163,7 @@ export function createDesktopSurface(client: RunnerClient, runId: string, app: D
 
   const surface: DesktopSurface = {
     kind: 'desktop',
-    client, runId, app, errors, refs, typed,
+    client, runId, app, errors, refs, typed, clipboard,
     trackStep: (fn) => { current = fn; },
     record,
     rpc,
@@ -208,8 +228,8 @@ export function createDesktopSurface(client: RunnerClient, runId: string, app: D
     async view(given: Masker, opts: { window?: WindowSel; maxNodes?: number } = {}): Promise<DesktopView> {
       viewNodes.clear();
       const snap = await rpc('snapshot', { ...(opts.window ? { window: opts.window } : {}), maxNodes: opts.maxNodes ?? 400 });
-      // The run's typed variable values are masked here too, whatever masker the caller built.
-      const long = typed.filter((t) => t.length >= MIN_MASKED_TYPED && !given.secrets.includes(t));
+      // The run's typed variable values and clipboard texts are masked here too, whatever masker the caller built.
+      const long = [...typed, ...clipboard].filter((t) => t.length >= MIN_MASKED_TYPED && !given.secrets.includes(t));
       const masker = long.length ? createMasker([...given.secrets, ...long]) : given;
       const raw = { title: snap.window.title, exe: snap.window.exe };
       const truncated = snap.truncated === true;
@@ -234,6 +254,19 @@ export function createDesktopSurface(client: RunnerClient, runId: string, app: D
       return { window: { title: masker.mask(raw.title).slice(0, 200), exe: masker.mask(raw.exe) }, truncated, items };
     },
     nodeOf: (ref) => viewNodes.get(ref),
+    async readClipboard() {
+      let r: { text: string };
+      try {
+        r = await call('clipboard.read', {});
+      } catch (err) {
+        const e = err instanceof RunnerError && err.code === METHOD_NOT_FOUND ? new RunnerTooOldError(err.code, RUNNER_TOO_OLD_FOR_CLIPBOARD) : err;
+        record(e);
+        throw e;
+      }
+      const text = typeof r?.text === 'string' ? r.text : '';
+      if (text && !clipboard.includes(text)) clipboard.push(text);
+      return text;
+    },
     async refreshWindow() {
       try {
         // The smallest snapshot the runner takes (maxNodes and maxDepth are each at least 1): the window and its root.

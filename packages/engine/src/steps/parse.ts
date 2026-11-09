@@ -1,8 +1,9 @@
 import { DESKTOP_VERBS, STEP_VERBS, type DesktopScript, type DesktopVerb, type Script, type Step, type StepVerb } from '../types.js';
 import {
   BROWSER_STEPS_NEED_BROWSER, browserLocatorOnDesktop, browserStepOnDesktop, DESKTOP_STEPS_NEED_RUNNER, desktopLocatorInBrowser, exportDirOnlyInFill,
-  FIRST_STEP_GOTO, reservedTemplate,
+  FIRST_STEP_GOTO, reservedTemplate, secretFillValue, varInWriteLocator, varNotRendered,
 } from '../messages.js';
+import { SECRET_FILL_VALUE } from '../secrets/render.js';
 import { DESKTOP_WRITE_VERBS, READ_NAME, stepChordProblem } from './desktop-vocabulary.js';
 
 export class ScriptShapeError extends Error {
@@ -87,22 +88,37 @@ export function downloadTemplateIssues(v: unknown): string[] {
   return issues;
 }
 
-function checkLocator(v: unknown, path: string, issues: string[], allowFallbacks = true) {
+/** Locator keys that hold text the run could render: the kind's own value, its name and its frame. */
+const LOCATOR_TEXT_KEYS = [...LOCATOR_KINDS, 'name', 'frame'] as const;
+
+/**
+ * `rendered`: whether the run renders {{var.x}} in this locator (renderLocators: a step's locators, not a pop-up
+ * handler's). Even then only a role locator's name and a text locator's text are rendered; a {{var.x}} anywhere else
+ * would be matched as literal text, so it is refused.
+ */
+function checkLocator(v: unknown, path: string, issues: string[], allowFallbacks = true, rendered = true) {
   if (!isObj(v)) { issues.push(`${path} must be a locator object`); return; }
   if (Object.hasOwn(v, 'uia')) { issues.push(desktopLocatorInBrowser(path)); return; }
   for (const k of Object.keys(v)) if (!LOCATOR_KEYS.has(k)) issues.push(`${path} has unknown key "${k}"`);
   const kinds = LOCATOR_KINDS.filter((k) => Object.hasOwn(v, k));
   if (kinds.length !== 1 || !isStr(v[kinds[0]])) issues.push(`${path} must have exactly one of ${LOCATOR_KINDS.join('/')} as a non-empty string`);
+  const kind = kinds.length === 1 ? kinds[0] : undefined;
+  for (const k of LOCATOR_TEXT_KEYS) {
+    const x = v[k];
+    if (typeof x !== 'string' || !VAR_TEMPLATE.test(x)) continue;
+    const renders = rendered && ((kind === 'role' && k === 'name') || (kind === 'text' && k === 'text'));
+    if (!renders) issues.push(varNotRendered(`${path}.${k}`));
+  }
   if (v.name !== undefined && typeof v.name !== 'string') issues.push(`${path}.name must be a string`);
   if (v.exact !== undefined && typeof v.exact !== 'boolean') issues.push(`${path}.exact must be a boolean`);
   if (v.frame !== undefined && !isStr(v.frame)) issues.push(`${path}.frame must be a CSS selector`);
-  if (v.within !== undefined) checkLocator(v.within, `${path}.within`, issues, false);
+  if (v.within !== undefined) checkLocator(v.within, `${path}.within`, issues, false, rendered);
   if (v.fallbacks !== undefined) {
     if (!allowFallbacks) { issues.push(`${path} has nested fallbacks`); return; }
     if (!Array.isArray(v.fallbacks) || v.fallbacks.length > 5) { issues.push(`${path}.fallbacks must be an array of at most 5 locators`); return; }
     v.fallbacks.forEach((f, i) => {
       if (isObj(f) && Object.hasOwn(f, 'fallbacks')) issues.push(`${path}.fallbacks[${i}] has nested fallbacks`);
-      else checkLocator(f, `${path}.fallbacks[${i}]`, issues, false);
+      else checkLocator(f, `${path}.fallbacks[${i}]`, issues, false, rendered);
     });
   }
 }
@@ -175,21 +191,36 @@ function checkStep(s: unknown, path: string, issues: string[], nested: boolean) 
       if (v.totp !== undefined) {
         if (!isObj(v.totp)) issues.push(`${p}.totp must be an object`);
         else {
-          checkKeys(v.totp, ['field', 'submit'], `${p}.totp`, issues);
+          checkKeys(v.totp, ['field', 'submit', 'source', 'via', 'check'], `${p}.totp`, issues);
           checkLocator(v.totp.field, `${p}.totp.field`, issues);
           checkLocator(v.totp.submit, `${p}.totp.submit`, issues);
+          if (v.totp.source !== undefined && v.totp.source !== 'seed' && v.totp.source !== 'workflow') issues.push(`${p}.totp.source must be "seed" or "workflow"`);
+          for (const key of ['via', 'check'] as const) {
+            const list = v.totp[key];
+            if (list === undefined) continue;
+            if (!Array.isArray(list) || list.length === 0 || list.length > 5) { issues.push(`${p}.totp.${key} must be an array of 1 to 5 locators`); continue; }
+            list.forEach((loc, i) => checkLocator(loc, `${p}.totp.${key}[${i}]`, issues));
+          }
         }
       }
-      for (const [k, loc] of [['username', v.username], ['next', v.next], ['password', v.password], ['submit', v.submit], ['totp.field', (v.totp as Obj | undefined)?.field], ['totp.submit', (v.totp as Obj | undefined)?.submit]] as const) {
+      const totp = isObj(v.totp) ? v.totp : undefined;
+      const lists = (key: 'via' | 'check'): [string, unknown][] => (Array.isArray(totp?.[key]) ? (totp[key] as unknown[]).map((loc, i) => [`totp.${key}[${i}]`, loc]) : []);
+      for (const [k, loc] of [['username', v.username], ['next', v.next], ['password', v.password], ['submit', v.submit], ['totp.field', totp?.field], ['totp.submit', totp?.submit], ...lists('via'), ...lists('check')] as [string, unknown][]) {
         if (isObj(loc) && loc.frame !== undefined) issues.push(`${p}.${k} cannot use frame`);
       }
       break;
     case 'fill':
     case 'select':
       if (!isObj(v)) { issues.push(`${p} must be an object`); break; }
-      checkKeys(v, ['field', 'value'], p, issues);
+      checkKeys(v, verb === 'fill' ? ['field', 'value', 'secret'] : ['field', 'value'], p, issues);
       checkLocator(v.field, `${p}.field`, issues);
-      if (typeof v.value !== 'string') issues.push(`${p}.value must be a string`);
+      if (verb === 'select' && Array.isArray(v.value)) {
+        if (v.value.length === 0 || v.value.length > 100 || !v.value.every((x) => typeof x === 'string')) issues.push(`${p}.value must be a string or a non-empty array of at most 100 strings`);
+      } else if (typeof v.value !== 'string') issues.push(`${p}.value must be a string${verb === 'select' ? ' or an array of strings' : ''}`);
+      if (verb === 'fill' && v.secret !== undefined) {
+        if (typeof v.secret !== 'boolean') issues.push(`${p}.secret must be a boolean`);
+        else if (v.secret && typeof v.value === 'string' && !SECRET_FILL_VALUE.test(v.value)) issues.push(secretFillValue(`${p}.value`));
+      }
       break;
     case 'check':
       if (!isObj(v)) { issues.push(`${p} must be an object`); break; }
@@ -329,6 +360,7 @@ export function parseScript(input: unknown, opts: { defaultStartUrl?: string } =
   if (surface !== undefined && surface !== 'browser') throw new ScriptShapeError([SURFACE_INVALID]);
   for (const k of Object.keys(doc)) if (!['surface', 'name', 'version', 'startUrl', 'interrupts', 'steps'].includes(k)) issues.push(`script has unknown key "${k}"`);
   checkBrowserTemplates(doc.steps, issues);
+  checkBrowserWriteLocators(doc.steps, issues);
   if (doc.name !== undefined && !isStr(doc.name)) issues.push('name must be a non-empty string');
   if (doc.version !== undefined && !isInt(doc.version, 1, Number.MAX_SAFE_INTEGER)) issues.push('version must be a positive integer');
   let startUrl: string | undefined;
@@ -347,8 +379,9 @@ export function parseScript(input: unknown, opts: { defaultStartUrl?: string } =
     else doc.interrupts.forEach((it, i) => {
       if (!isObj(it)) { issues.push(`interrupts[${i}] must be an object`); return; }
       checkKeys(it, ['target', 'click'], `interrupts[${i}]`, issues);
-      checkLocator(it.target, `interrupts[${i}].target`, issues, false);
-      checkLocator(it.click, `interrupts[${i}].click`, issues, false);
+      // Pop-up handlers are never rendered: no {{var.x}} in any of their keys.
+      checkLocator(it.target, `interrupts[${i}].target`, issues, false, false);
+      checkLocator(it.click, `interrupts[${i}].click`, issues, false, false);
     });
   }
   checkSteps(doc.steps, 'steps', issues, false);
@@ -396,8 +429,44 @@ function checkBrowserTemplates(steps: unknown, issues: string[], path = 'steps')
     for (const verb of ['fill', 'select']) {
       const v = s[verb];
       if (isObj(v) && typeof v.value === 'string') checkTemplates(v.value, `${at}.${verb}.value`, () => false, issues);
+      else if (isObj(v) && Array.isArray(v.value)) v.value.forEach((x, j) => { if (typeof x === 'string') checkTemplates(x, `${at}.${verb}.value[${j}]`, () => false, issues); });
     }
     if (isObj(s.paginate)) checkBrowserTemplates(s.paginate.each, issues, `${at}.paginate.each`);
+  });
+}
+
+/** Any `{{var.x}}` reference, with the spacing renderVars accepts. */
+const VAR_TEMPLATE = /\{\{\s*var\.[A-Za-z0-9_]+\s*\}\}/;
+/**
+ * Keys that hold text, not a locator: never rendered into a locator, so a variable there is not refused here (a
+ * download's `via` target, a fill or select value, a key chord, an expected url or heading).
+ */
+const NON_LOCATOR_KEYS = new Set(['intent', 'via', 'value', 'option', 'key', 'url', 'heading']);
+
+/** The paths of every locator string under `v` that holds a `{{var.x}}` reference. */
+function varsInLocators(v: unknown, path: string, out: string[]) {
+  if (typeof v === 'string') { if (VAR_TEMPLATE.test(v)) out.push(path); return; }
+  if (Array.isArray(v)) { v.forEach((x, i) => varsInLocators(x, `${path}[${i}]`, out)); return; }
+  // A download's or submit's `via` is a target object (path, host, method); signIn.totp.via is a list of locators and is checked.
+  if (isObj(v)) for (const [k, x] of Object.entries(v)) if (!(NON_LOCATOR_KEYS.has(k) && (typeof x === 'string' || (k === 'via' && !Array.isArray(x))))) varsInLocators(x, `${path}.${k}`, out);
+}
+
+/**
+ * A run variable must never steer a write: signIn, submit and download steps (and, for a desktop step set, any step
+ * with write: true) may not hold `{{var.x}}` in any locator, including `when`, `expect` and fallbacks. Walks paginate
+ * bodies. The write window step is checked by the policy (it is declared there, not in the steps).
+ */
+function checkBrowserWriteLocators(steps: unknown, issues: string[], path = 'steps') {
+  if (!Array.isArray(steps)) return;
+  steps.forEach((s, i) => {
+    if (!isObj(s)) return;
+    const at = `${path}[${i}]`;
+    if (['signIn', 'submit', 'download'].some((verb) => Object.hasOwn(s, verb))) {
+      const hits: string[] = [];
+      varsInLocators(s, at, hits);
+      hits.forEach((h) => issues.push(varInWriteLocator(h)));
+    }
+    if (isObj(s.paginate)) checkBrowserWriteLocators(s.paginate.each, issues, `${at}.paginate.each`);
   });
 }
 
@@ -422,6 +491,8 @@ function checkWindowSel(v: unknown, path: string, issues: string[]) {
     if (v[k] === undefined) continue;
     if (k === 'titlePattern') checkRegex(v[k], `${path}.${k}`, issues);
     else if (!isText(v[k])) issues.push(`${path}.${k} must be a non-empty single-line string of at most ${MAX_UIA_TEXT} characters`);
+    // The window selector is never rendered (renderLocators renders a condition's name only).
+    if (typeof v[k] === 'string' && VAR_TEMPLATE.test(v[k])) issues.push(varNotRendered(`${path}.${k}`));
   }
 }
 
@@ -436,6 +507,8 @@ function checkUiaTarget(v: unknown, path: string, issues: string[]) {
     checkKeys(c, [...COND_TEXT_KEYS, 'index'], at, issues);
     if (!COND_TEXT_KEYS.some((k) => Object.hasOwn(c, k))) issues.push(`${at} needs at least one of ${COND_TEXT_KEYS.join(', ')}`);
     for (const k of COND_TEXT_KEYS) if (c[k] !== undefined && !isText(c[k])) issues.push(`${at}.${k} must be a non-empty single-line string of at most ${MAX_UIA_TEXT} characters`);
+    // Only a condition's name is rendered; controlType, automationId and className are matched as written.
+    for (const k of COND_TEXT_KEYS) if (k !== 'name' && typeof c[k] === 'string' && VAR_TEMPLATE.test(c[k])) issues.push(varNotRendered(`${at}.${k}`));
     if (c.index !== undefined && !isInt(c.index, 0, 10_000)) issues.push(`${at}.index must be an integer between 0 and 10000`);
   });
 }
@@ -523,12 +596,18 @@ function checkDesktopStep(s: unknown, path: string, issues: string[]) {
       checkDesktopLocator(v.target, `${p}.target`, issues);
       if (v.state !== undefined && !['visible', 'hidden'].includes(v.state as string)) issues.push(`${p}.state must be "visible" or "hidden"`);
       break;
-    case 'read':
+    case 'read': {
       if (!isObj(v)) { issues.push(`${p} must be an object`); break; }
-      checkKeys(v, ['target', 'as'], p, issues);
-      checkDesktopLocator(v.target, `${p}.target`, issues);
+      // An element's text (target), or the clipboard's (clipboard: true, read through the runner's policy-gated
+      // clipboard.read): exactly one of the two.
+      checkKeys(v, ['target', 'clipboard', 'as'], p, issues);
+      const clipboard = Object.hasOwn(v, 'clipboard');
+      if (clipboard && v.clipboard !== true) issues.push(`${p}.clipboard must be true (or leave it out and give a target)`);
+      else if (clipboard === Object.hasOwn(v, 'target')) issues.push(`${p} needs either a target or clipboard: true, not both`);
+      else if (!clipboard) checkDesktopLocator(v.target, `${p}.target`, issues);
       if (typeof v.as !== 'string' || !READ_NAME.test(v.as)) issues.push(`${p}.as must be a name of letters, digits and underscores (at most 64)`);
       break;
+    }
     case 'key':
       if (!isObj(v)) { issues.push(`${p} must be an object`); break; }
       checkKeys(v, ['key', 'target'], p, issues);
@@ -600,6 +679,12 @@ export function parseDesktopScript(input: unknown): DesktopScript {
     });
   }
   checkTemplates(doc, '', (path) => /^steps\[\d+\]\.fill\.value$/.test(path), issues);
+  if (Array.isArray(doc.steps)) doc.steps.forEach((s, i) => {
+    if (!isObj(s) || s.write !== true) return;
+    const hits: string[] = [];
+    varsInLocators(s, `steps[${i}]`, hits);
+    hits.forEach((h) => issues.push(varInWriteLocator(h)));
+  });
   if (issues.length) throw new ScriptShapeError(issues);
   return structuredClone(doc) as unknown as DesktopScript;
 }

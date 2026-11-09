@@ -13,7 +13,7 @@ import { screenshotMasks } from '../steps/masks.js';
 import { sleep } from '../steps/poll.js';
 import { hostOf, isLoginPage, shownMessage } from '../steps/urls.js';
 import { runSteps, type StepContext } from '../steps/run.js';
-import type { BrowserEndpoint, OutputSpec, ErrorCode, PortalPolicy, PortalSecrets, Row, Script, Violation } from '../types.js';
+import type { BrowserEndpoint, CodeProvider, OutputSpec, ErrorCode, PortalPolicy, PortalSecrets, Row, Script, Violation } from '../types.js';
 import { verifyRows } from '../verify/verify.js';
 
 const TOTP_WINDOW_MS = 30_000;
@@ -23,6 +23,9 @@ export interface ProveInput {
   policy: PortalPolicy;
   /** Site Login secrets; absent without a Site Login. */
   secrets?: PortalSecrets;
+  /** A full replay's signIn with totp.source 'workflow' asks this for the code (the run's codeProvider). */
+  codeProvider?: CodeProvider;
+  codeTimeoutMs?: number;
   vars?: Record<string, string>;
   output: OutputSpec;
   endpoint: BrowserEndpoint;
@@ -213,6 +216,7 @@ async function proveInner(input: ProveInput): Promise<ProveResult> {
     }
     const ctx: StepContext = {
       page: session.page, script, policy, secrets: input.secrets, vars: input.vars ?? {}, masker,
+      ...(input.codeProvider ? { codeProvider: input.codeProvider } : {}), ...(input.codeTimeoutMs !== undefined ? { codeTimeoutMs: input.codeTimeoutMs } : {}),
       defaultTimeoutMs: input.defaultStepTimeoutMs ?? 8000, violations: session.violations, interrupts, stepHooks: session.stepHooks,
     };
     const run = await runSteps(ctx, steps, undefined, { label: 'Proof' });

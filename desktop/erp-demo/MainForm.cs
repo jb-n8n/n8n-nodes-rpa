@@ -106,7 +106,11 @@ internal sealed class MainForm : Form
 
         var detailPanel = new Panel { Name = "pnlDetail", Dock = DockStyle.Bottom, Height = 70, Padding = new Padding(6) };
         _detail = new TextBox { Name = "txtDetail", AccessibleName = "Detail", ReadOnly = true, Multiline = true, Dock = DockStyle.Fill };
+        // Copies the detail to the clipboard, as apps whose value is only available through a Copy button do.
+        var copy = new Button { Name = "btnCopyDetail", Text = "Copy", Dock = DockStyle.Right, Width = 70 };
+        copy.Click += (_, _) => CopyDetail();
         detailPanel.Controls.Add(_detail);
+        detailPanel.Controls.Add(copy);
         detailPanel.Controls.Add(new Label { Name = "lblDetail", Text = "Detail", Dock = DockStyle.Top, Height = 18 });
 
         var bar = new StatusStrip { Name = "statusBar" };
@@ -118,6 +122,19 @@ internal sealed class MainForm : Form
         Controls.Add(search);
         Controls.Add(menu);
         Controls.Add(bar);
+    }
+
+    private void CopyDetail()
+    {
+        if (_detail.Text.Length == 0) return;
+        try
+        {
+            Clipboard.SetText(_detail.Text);
+        }
+        catch (System.Runtime.InteropServices.ExternalException)
+        {
+            _status.Text = "The clipboard is busy; try again.";
+        }
     }
 
     private void Search()

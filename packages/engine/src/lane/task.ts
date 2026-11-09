@@ -12,16 +12,16 @@ import { downloadTemplateIssues, parseScript } from '../steps/parse.js';
 import { shownMessage } from '../steps/urls.js';
 import { newRunState, type StepContext } from '../steps/run.js';
 import {
-  expectedFileInvalid, FIRST_RUN_NEEDS_NAME, FIRST_RUN_NEEDS_TARGET, NO_STEPS_NO_REPAIR, REPAIR_ALREADY_RAN, REPAIR_DOWNLOAD_NEEDS_CHECK, REPAIR_SIGN_IN_HALF_DONE, REPAIR_NEEDS_ID_AND_EXTRACT, REPAIR_NO_CAPTURES,
+  CODE_WORKFLOW_NOT_SET, expectedFileInvalid, FIRST_RUN_NEEDS_NAME, FIRST_RUN_NEEDS_TARGET, NO_STEPS_NO_REPAIR, REPAIR_ALREADY_RAN, REPAIR_DOWNLOAD_NEEDS_CHECK, REPAIR_SIGN_IN_HALF_DONE, REPAIR_NEEDS_ID_AND_EXTRACT, REPAIR_NO_CAPTURES,
   REPAIR_ONE_DOWNLOAD, REPAIR_REFUSED_WRITES,
 } from '../messages.js';
 import type { SaveTrace } from '../trace/trace.js';
 import type {
-  BrowserEndpoint, DownloadedFile, ErrorCode, OutputSpec, PageInfo, PortalPolicy, PortalSecrets, RequestRecord, Row, Script, StepLogEntry,
+  BrowserEndpoint, CodeProvider, DownloadedFile, ErrorCode, OutputSpec, PageInfo, PortalPolicy, PortalSecrets, RequestRecord, Row, Script, StepLogEntry,
   StepOutput, Violation,
 } from '../types.js';
 import {
-  CANCELLED, laneFailure, laneMasker, openLaneRuntime, startScriptLane, traceOn,
+  CANCELLED, codeSettings, laneFailure, laneMasker, openLaneRuntime, startScriptLane, takesCodeFromWorkflow, traceOn,
   type LaneFailure, type LaneRuntime, type LaneSuccess,
 } from './script-lane.js';
 import { openStartPage, startPageFailure } from './start-page.js';
@@ -55,6 +55,13 @@ export interface TaskInput {
   trust: TrustInput;
   policy: PortalPolicy;
   secrets?: PortalSecrets;
+  /**
+   * Supplies the one-time code for a signIn whose totp.source is 'workflow' (in n8n: the One-Time Code Workflow). Steps
+   * that need it and have none are a configuration error before any browser opens.
+   */
+  codeProvider?: CodeProvider;
+  /** How long signIn waits for codeProvider, in ms (default 120 000). */
+  codeTimeoutMs?: number;
   endpoint: BrowserEndpoint;
   output?: OutputSpec;
   vars?: Record<string, string>;
@@ -218,6 +225,9 @@ export async function runTask(input: TaskInput): Promise<TaskResult> {
     const refused = repairPrecondition(input.script, input.output, repair);
     if (refused) return { ...laneFailure(t0, maskerOf(input), 'policy_violation', refused), lane: empty ? 'agent' : 'script', configError: true };
   }
+  if (!input.codeProvider && takesCodeFromWorkflow(input.script)) {
+    return { ...laneFailure(t0, maskerOf(input), 'policy_violation', CODE_WORKFLOW_NOT_SET), lane: 'script', configError: true };
+  }
   if (empty) {
     if (!repair) return { ...laneFailure(t0, maskerOf(input), 'drift_detected', NO_STEPS_NO_REPAIR), lane: 'agent' };
     if (repair.alreadyRan) return { ...laneFailure(t0, maskerOf(input), 'drift_detected', REPAIR_ALREADY_RAN), lane: 'agent' };
@@ -317,6 +327,7 @@ async function firstRun(input: TaskInput, repair: RepairInput, t0: number, kind:
     const ctx: StepContext = {
       page: session.page, script, policy: input.policy, secrets: input.secrets, vars: input.vars ?? {},
       masker, defaultTimeoutMs: input.defaultStepTimeoutMs ?? 8000, violations: session.violations, interrupts, stepHooks: session.stepHooks,
+      ...codeSettings(input),
     };
     return await agentLane(input, repair, { kind, ...(repair.download ? { download: repair.download } : {}), runtime, ctx, prior: newRunState(), t0 });
   } catch (err) {

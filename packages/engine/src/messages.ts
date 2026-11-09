@@ -34,6 +34,8 @@ export const SIGNATURE_INVALID =
 export const SIGNATURE_WITHOUT_KEY = 'a signature is present but no Step Signing credential is attached';
 export const UNSIGNED_WRITES =
   'Unsigned steps cannot sign in, submit a form or download through a form. Sign them with Sign Steps, or turn on Options → Allow Unsigned Writes.';
+export const UNSIGNED_SECRET_FILL =
+  'Unsigned steps cannot type a secret into a password field (fill with secret: true). Sign them with Sign Steps; Allow Unsigned Writes does not cover it.';
 export const nameMismatch = (signed: string, expected: string) => `the signed steps are named "${signed}", not "${expected}"`;
 export const versionMismatch = (signed: number, expected: number) => `the signed steps are version ${signed}, but Expected Version is ${expected}`;
 export const startSiteMismatch = (signed: string, expected: string) => `the signed steps start on ${signed}, but this run starts on ${expected}`;
@@ -69,6 +71,19 @@ export const BLOCKED_STOP = 'stopped: a blocked request was attempted';
 export const SIGNIN_NEEDS_SITE_LOGIN = 'signIn needs a Site Login credential';
 /** A two-page signIn clicked next, but the password field did not appear within the step timeout (drift). A username page that comes back is `detected:login_failed` instead. */
 export const SIGNIN_NEXT_NO_PASSWORD = 'signIn: after Next the password field did not appear';
+
+// signIn with totp.source 'workflow': the one-time code comes from the run's code provider (the node's One-Time Code
+// Workflow). The step failure is `detected:mfa_code: <one of these>` (auth_blocked); none of them carries the code.
+/** The steps take the code from a workflow, but the run has no code provider: a configuration error. */
+export const CODE_WORKFLOW_NOT_SET =
+  'the sign-in takes its one-time code from a workflow, but no One-Time Code Workflow is set (Options → One-Time Code Workflow)';
+export const codeWorkflowTimedOut = (seconds: number) => `the one-time code workflow did not return a code within ${seconds} s`;
+export const CODE_WORKFLOW_NOT_A_CODE = 'the one-time code workflow did not return a code of 6 to 10 digits';
+export const codeWorkflowFailed = (message: string) => `the one-time code workflow failed: ${message}`;
+export const CODE_WORKFLOW_REJECTED_TWICE = 'the site rejected the one-time code from the workflow twice';
+/** A signIn with totp.via: the code field did not show within the step timeout after the password or the last via click (drift). */
+export const signInCodeFieldMissing = (seconds: number, clicked: number, total: number) =>
+  `signIn: the one-time code field did not appear within ${seconds} s after the password was submitted (${clicked} of ${total} totp.via clicked)`;
 /** The agent's two-page sign_in typed the username and moved to the password page, but never ran its second call. */
 export const AGENT_SIGN_IN_UNFINISHED = 'the agent typed the username but did not finish signing in on the password page';
 
@@ -117,6 +132,13 @@ export const PASSWORD_FILL_REFUSED = 'Fill and Submit Form cannot fill password 
 export const PASSWORD_FILL_REFUSED_STEPS = 'fill cannot type into a password field: passwords are typed only by signIn with a Site Login';
 export const formPostsElsewhere = (host: string, hosts: string[]): string => `the form posts to ${host}, which is not allowed. This run only submits to ${hosts.join(', ')}.`;
 export const WINDOW_STEP_NOT_CLICK = 'the write window must be on a click step';
+/** A {{var.x}} in a locator of a step that writes or types secrets: a run variable must never steer a write. */
+export const varInWriteLocator = (at: string): string => `${at}: {{var.*}} is not allowed in a locator of a step that writes or signs in; use a fixed locator`;
+/**
+ * A {{var.x}} in a locator key the run never renders (label, testId, css, frame, role, a window selector, a UI Automation
+ * controlType, automationId or className, any key of a pop-up handler): it would be matched as literal text.
+ */
+export const varNotRendered = (at: string): string => `${at}: {{var.*}} is never rendered here; a run variable is rendered only in the name of a Role and Name locator, the text of a Visible Text locator (both in steps, not in pop-up handlers) and the name of a UI Automation condition`;
 export const renderedTooLong = (n: number): string => `limit: a rendered value is longer than ${n} characters`;
 export const inputTooLong = (name: string, n: number): string => `limit: input "${name}" is longer than ${n} characters`;
 
@@ -163,6 +185,7 @@ export const IMPORT_PROOF_FAILED = 'The imported steps ran, but replaying them i
 /** A desktop step set reached the browser lane (parseScript), or the reverse. */
 export const DESKTOP_STEPS_NEED_RUNNER = 'these are desktop steps (surface "desktop"): they run on a desktop runner, never in a browser. Attach an RPA Desktop Runner credential.';
 export const BROWSER_STEPS_NEED_BROWSER = 'these are browser steps: they run in a browser, never on a desktop runner. Attach an RPA Browser credential.';
+export const secretFillValue = (path: string) => `${path} must be exactly one {{var.name}} template (nothing before or after it) when secret is true`;
 export const reservedTemplate = (path: string, name: string) => `${path} uses {{${name}}}: names that start with $ are reserved`;
 export const exportDirOnlyInFill = (path: string) => `${path} uses {{$exportDir}}, which is allowed only in the value of a desktop fill step`;
 export const browserStepOnDesktop = (path: string, verb: string) => `${path}: "${verb}" is a browser step, not allowed in a desktop step set`;
@@ -180,6 +203,8 @@ export const runnerFingerprintMismatch = (where: string, presented: string) =>
 export const runnerTokenRefused = (where: string) => `The desktop runner at ${where} refused the token. Check the Token in the RPA Desktop Runner credential.`;
 export const RUNNER_DISCONNECTED = 'the desktop runner closed the connection';
 export const RUNNER_BUSY = 'the desktop runner is busy with another run';
+/** clipboard.read answered "method not found": the runner predates clipboard reads. */
+export const RUNNER_TOO_OLD_FOR_CLIPBOARD = 'the desktop runner is older than clipboard reads (clipboard.read): update the runner to read the clipboard';
 /** app.launch answered not_found: the allowed app is not installed where the runner's policy says. */
 export const runnerAppMissing = (exe: string) =>
   `the desktop runner could not start ${exe}: it is not installed at the path the runner's policy names (allowedApps[].path). Install it there or correct the policy`;

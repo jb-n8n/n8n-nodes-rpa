@@ -2,9 +2,13 @@
 // UI tree of a demo app: by default a small order search ("orders": sign-in form, order search, results grid, export
 // through a Save As dialog that writes a CSV into the run's export directory); with `app: 'erp'`, a model of the real
 // ERP Demo in desktop/erp-demo, v1 or v2 (its window titles, automation ids, menus and drop-downs, dialogs, line items
-// and CSV, as the real runner showed them on windows-latest). It enforces the runner's floor as the real one does: bearer
+// and CSV, as the real runner showed them on windows-latest); with `app: 'authenticator'`, a desktop authenticator app
+// built on a web view, whose content lives in a helper process (msedgewebview2.exe) and whose codes are only available
+// through each entry's "Copy (<name>)" button and the clipboard. It enforces the runner's floor as the real one does: bearer
 // token on the upgrade, one run at a time with a lease, allowed apps, declared write controls and gated keys,
-// repair-mode limits, export directory confinement, and the protocol's error codes. Targets resolve as the runner's
+// repair-mode limits, helper processes, the policy-gated clipboard.read (only the run's own fresh copy), export
+// directory confinement, and the
+// protocol's error codes. Targets resolve as the runner's
 // TargetResolver does: across every run window the window selector matches, each element counted once. Error messages
 // never contain typed values (unless a test turns on `echoTypedInErrors`, to prove the engine masks them anyway).
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -26,6 +30,10 @@ export interface FakePolicy {
   writeControls: { exe: string; automationId: string }[];
   gatedKeys: string[];
   maxFileBytes: number;
+  /** RunnerPolicy.HelperProcesses: a helper's elements count only while it descends from the app (the fake does not model paths). */
+  helperProcesses?: { exe: string; pathPattern: string }[];
+  /** RunnerPolicy.ClipboardRead (default false). */
+  clipboardRead?: boolean;
 }
 export const DEMO_POLICY: FakePolicy = {
   allowedApps: [{ exe: DEMO_EXE }],
@@ -34,6 +42,10 @@ export const DEMO_POLICY: FakePolicy = {
   maxFileBytes: 20 * 1024 * 1024,
 };
 
+/** RunnerService.MaxClipboardChars: longer clipboard text is refused. */
+export const MAX_CLIPBOARD_CHARS = 1000;
+/** RunnerService.ClipboardFreshness: clipboard.read only this long after the run's most recent act finished. */
+export const CLIPBOARD_FRESHNESS_MS = 10_000;
 /** The runner's ceiling for one file.retrieve answer (RunnerPolicy.MaxFileBytesCeiling). */
 export const RUNNER_MAX_FILE_BYTES = 36 * 1024 * 1024;
 const INVALID_PARAMS = -32602;
@@ -100,7 +112,14 @@ interface El {
   isPassword?: boolean;
   items?: string[];
   children: El[];
+  /**
+   * The process hosting the element when it is not the app's own: a helper process (a web view's browser process)
+   * that the app started, or one that some other program started.
+   */
+  host?: 'helper' | 'otherHelper';
   onClick?: () => void;
+  /** Runs after `type` set the value. */
+  onType?: () => void;
   /** What ExpandCollapse.Expand does; an element without it (and not a ComboBox) cannot expand. */
   onExpand?: () => void;
 }
@@ -229,7 +248,11 @@ function describeTarget(t: RunnerTarget): string {
   return t.path.map((c) => [c.controlType, c.automationId && `#${c.automationId}`, c.name !== undefined && `"${c.name}"`].filter(Boolean).join(' ')).join(' > ');
 }
 
-interface Run { runId: string; leaseMs: number; exportDir: string; timer: NodeJS.Timeout; app?: AppModel; focus?: El }
+interface Run {
+  runId: string; leaseMs: number; exportDir: string; timer: NodeJS.Timeout; app?: AppModel; focus?: El;
+  /** RunState.LastAct: the clipboard's sequence number before the run's most recent act, and when it finished. */
+  lastAct?: { seq: number; at: number };
+}
 
 export interface FakeRunnerOptions {
   token?: string;
@@ -241,8 +264,8 @@ export interface FakeRunnerOptions {
   tlsMaxVersion?: 'TLSv1.2' | 'TLSv1.3';
   /** The allowed app's executable is not at its policy path (app.launch answers not_found, as the runner does). */
   appMissing?: boolean;
-  /** The app model: 'orders' (default) or 'erp', the real ERP Demo's controls. */
-  app?: 'orders' | 'erp';
+  /** The app model: 'orders' (default), 'erp' (the real ERP Demo's controls) or 'authenticator' (a web view app). */
+  app?: 'orders' | 'erp' | 'authenticator';
   /** The ERP Demo's build: 'v1' (default) or 'v2' (= erpChanges rename, menu, confirm). app.launch args `--ui v1|v2` win over it. */
   erpUi?: 'v1' | 'v2';
   /** ERP Demo changes on top of the build, each on its own (see ErpChange). */
@@ -251,6 +274,10 @@ export interface FakeRunnerOptions {
   noWindowsMethod?: boolean;
   /** A misbehaving app: every snapshot node's automationId and className get this many extra characters. */
   padSnapshotIds?: number;
+  /** A runner older than `clipboard.read`: it answers -32601. */
+  noClipboardMethod?: boolean;
+  /** The authenticator's web view helper does not descend from the app (some other program started it). */
+  helperOutsideRun?: boolean;
 }
 
 export interface Received { method: string; params: Record<string, unknown> }
@@ -281,7 +308,23 @@ export class FakeRunner {
   /** The demo app of the last run (kept after run.end for assertions). */
   lastApp: AppModel | undefined;
   /** Which app model app.launch starts. */
-  readonly app: 'orders' | 'erp';
+  readonly app: 'orders' | 'erp' | 'authenticator';
+  readonly noClipboardMethod: boolean;
+  readonly helperOutsideRun: boolean;
+  /** The clipboard's text (the authenticator's Copy buttons set it through copy(); tests may too). */
+  clipboard: string | undefined;
+  /** Whose window owns the clipboard: a process of the run, another application's, or none. */
+  clipboardOwner: 'run' | 'other' | undefined;
+  /** GetClipboardSequenceNumber: every copy() adds one. */
+  clipboardSeq = 1;
+  /** What the authenticator's Copy buttons copy instead of the entry's code (a test's own text). */
+  copyText: string | undefined;
+  /** Runs right before clipboard.read is answered (another application copying, time passing). */
+  beforeClipboardRead: (() => void) | undefined;
+  /** Added to the fake's clock (Date.now()), for the clipboard's freshness. */
+  clockOffsetMs = 0;
+  /** Another application's window holds the foreground (clipboard.read is refused). */
+  foregroundElsewhere = false;
   readonly erpUi: 'v1' | 'v2';
   readonly erpChanges: ErpChange[];
   readonly noWindowsMethod: boolean;
@@ -305,8 +348,21 @@ export class FakeRunner {
     this.erpChanges = opts.erpChanges ?? [];
     this.noWindowsMethod = opts.noWindowsMethod ?? false;
     this.padSnapshotIds = opts.padSnapshotIds ?? 0;
+    this.noClipboardMethod = opts.noClipboardMethod ?? false;
+    this.helperOutsideRun = opts.helperOutsideRun ?? false;
     this.cert = selfSignedCert();
     this.fingerprint = this.cert.fingerprint;
+  }
+
+  /** An application's copy: new text, its owner, a new sequence number. */
+  copy(text: string | undefined, owner: 'run' | 'other' | undefined): void {
+    this.clipboard = text;
+    this.clipboardOwner = owner;
+    this.clipboardSeq++;
+  }
+
+  private now(): number {
+    return Date.now() + this.clockOffsetMs;
   }
 
   static async start(opts: FakeRunnerOptions = {}): Promise<FakeRunner> {
@@ -412,7 +468,7 @@ export class FakeRunner {
         (result) => ({ jsonrpc: '2.0', id: msg.id, result }),
         (err: unknown) => {
           const e = err instanceof RpcError ? err : new RpcError(-32603, 'internal error');
-          return { jsonrpc: '2.0', id: msg.id, error: { code: e.code, message: this.echoTypedInErrors ? `${e.message} (last typed: ${this.lastTyped})` : e.message } };
+          return { jsonrpc: '2.0', id: msg.id, error: { code: e.code, message: this.echoTypedInErrors ? `${e.message} (last typed: ${this.lastTyped}${this.clipboard ? `; clipboard: ${this.clipboard}` : ''})` : e.message } };
         },
       ).then((reply) => { if (!socket.destroyed) socket.write(encodeFrame(OPCODE.text, Buffer.from(JSON.stringify(reply)), false)); });
     }
@@ -437,7 +493,18 @@ export class FakeRunner {
     run.timer = setTimeout(() => { this.expiredRuns.push(run.runId); if (this.run === run) this.endRun(); }, run.leaseMs);
   }
 
-  private find(run: Run, target: RunnerTarget): { el: El; win: Win; candidate: number } {
+  /**
+   * WindowScope.IsRunProcess for an element: the app's own, or a helper process the policy lists that descends from the
+   * app. A helper some other program started never counts.
+   */
+  private isRunElement(e: El): boolean {
+    if (!e.host) return true;
+    if (e.host === 'otherHelper' || this.helperOutsideRun) return false;
+    return (this.policy.helperProcesses ?? []).some((h) => h.exe.toLowerCase() === WEBVIEW_EXE.toLowerCase());
+  }
+
+  /** `anyProcess`: TargetResolver.AnyVisible (isVisible) does not filter by process; Resolve and act do. */
+  private find(run: Run, target: RunnerTarget, anyProcess = false): { el: El; win: Win; candidate: number } {
     const app = run.app;
     if (!app || app.windows.length === 0) throw new RpcError(E.not_found, `no window for ${describeTarget(target)}`);
     const tries = [target, ...(target.fallbacks ?? [])];
@@ -453,7 +520,8 @@ export class FakeRunner {
         const found = [...new Set(nodes.flatMap((n) => descendants(n)))].filter((e) => condMatches(e, c));
         nodes = c.index !== undefined ? (found[c.index] ? [found[c.index]] : []) : found;
       }
-      const visible = nodes.filter((n) => n.visible);
+      // Elements another process hosts inside a run window (a web view) count only when that process is the run's.
+      const visible = nodes.filter((n) => n.visible && (anyProcess || this.isRunElement(n)));
       if (i === 0) primaryCount = visible.length;
       if (visible.length === 1) return { el: visible[0], win: wins.find((w) => descendants(w.root).includes(visible[0])) ?? wins[0], candidate: i };
     }
@@ -561,7 +629,10 @@ export class FakeRunner {
         const exe = String((p.app as { exe?: string })?.exe ?? '').split(/[\\/]/).pop() ?? '';
         if (!this.policy.allowedApps.some((a) => a.exe.toLowerCase() === exe.toLowerCase())) throw new RpcError(E.policy_refused, `app not allowed: ${exe}`);
         if (this.appMissing) throw new RpcError(E.not_found, `not_found: no element matched application executable "${exe}" (no matching window of the run)`);
-        run.app = this.app === 'erp' ? new ErpApp(() => this.run?.exportDir, this.erpChangesFor((p.app as { args?: unknown }).args)) : new DemoApp(() => this.run?.exportDir);
+        run.app = this.app === 'erp' ? new ErpApp(() => this.run?.exportDir, this.erpChangesFor((p.app as { args?: unknown }).args))
+          // The web view copies from its helper process: the run's while the helper descends from the app.
+          : this.app === 'authenticator' ? new AuthenticatorApp((text) => this.copy(this.copyText ?? text, this.helperOutsideRun ? 'other' : 'run'))
+          : new DemoApp(() => this.run?.exportDir);
         this.lastApp = run.app;
         return { pid: 4242 };
       }
@@ -609,7 +680,7 @@ export class FakeRunner {
       case 'isVisible': {
         const run = this.requireRun(p);
         try {
-          this.find(run, p.target as RunnerTarget);
+          this.find(run, p.target as RunnerTarget, true);
           return { visible: true };
         } catch (err) {
           if (err instanceof RpcError && err.code === E.not_unique) return { visible: true };
@@ -642,6 +713,30 @@ export class FakeRunner {
       case 'screenshot':
         this.requireRun(p);
         return { base64: '' };
+      case 'clipboard.read': {
+        if (this.noClipboardMethod) throw new RpcError(METHOD_NOT_FOUND, 'method not found');
+        const run = this.requireRun(p);
+        this.beforeClipboardRead?.();
+        // RunnerService.ClipboardRead: the policy flag, then the foreground (never brought back for a read), then the
+        // run's most recent act and its age, then (with the clipboard open) its owner and its sequence number, then the size.
+        if (!this.policy.clipboardRead) throw new RpcError(E.policy_refused, 'policy_refused: reading the clipboard is off in the runner\'s policy (clipboardRead)');
+        if (this.foregroundElsewhere || !run.app || run.app.windows.length === 0) {
+          const holder = this.foregroundElsewhere ? 'a window of "notepad.exe"' : 'no window';
+          throw new RpcError(E.policy_refused, `policy_refused: the clipboard is read only while a window of the run holds the foreground, and ${holder} holds it`);
+        }
+        const last = run.lastAct;
+        if (!last) throw new RpcError(E.policy_refused, 'policy_refused: the clipboard is read only right after an act of the run copied to it, and the run has not acted yet');
+        const age = this.now() - last.at;
+        if (age > CLIPBOARD_FRESHNESS_MS) {
+          throw new RpcError(E.policy_refused, `policy_refused: the clipboard is read only within ${CLIPBOARD_FRESHNESS_MS / 1000} seconds after the run's last act, and ${Math.floor(age / 1000)} seconds have passed`);
+        }
+        if (this.clipboardOwner === undefined) throw new RpcError(E.policy_refused, 'policy_refused: the clipboard is read only when a process of the run put the text there, and no window owns the clipboard');
+        if (this.clipboardOwner !== 'run') throw new RpcError(E.policy_refused, 'policy_refused: the clipboard is read only when a process of the run put the text there, and a window of "KeePass.exe" owns it');
+        if (this.clipboardSeq === last.seq) throw new RpcError(E.policy_refused, 'policy_refused: the clipboard has not changed since the run\'s last act, so the text is not the run\'s copy');
+        const text = this.clipboard ?? '';
+        if (text.length > MAX_CLIPBOARD_CHARS) throw new RpcError(E.policy_refused, `policy_refused: the clipboard holds more than ${MAX_CLIPBOARD_CHARS} characters`);
+        return { text };
+      }
       default:
         throw new RpcError(-32601, `unknown method ${method}`);
     }
@@ -655,7 +750,19 @@ export class FakeRunner {
     return new Set<ErpChange>([...(ui === 'v2' ? ERP_V2 : []), ...this.erpChanges]);
   }
 
+  /** RunnerService.Act: every act, refused ones included, first records the clipboard's sequence number; when it ends,
+   * its time. */
   private async act(run: Run, p: Record<string, unknown>): Promise<unknown> {
+    const mark = { seq: this.clipboardSeq, at: this.now() };
+    run.lastAct = mark;
+    try {
+      return await this.actOnce(run, p);
+    } finally {
+      run.lastAct = { ...mark, at: this.now() };
+    }
+  }
+
+  private async actOnce(run: Run, p: Record<string, unknown>): Promise<unknown> {
     const action = String(p.action);
     const write = p.write === true;
     const repair = p.mode === 'repair';
@@ -714,6 +821,7 @@ export class FakeRunner {
         const text = segments.map((s) => ('exportDir' in s ? run.exportDir : s.text)).join('');
         this.lastTyped = text;
         e.value = text;
+        e.onType?.();
         return {};
       }
       case 'select': {
@@ -1000,5 +1108,43 @@ class ErpApp implements AppModel {
           }),
         };
     return win;
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// A desktop authenticator app built on a web view: the app's own window holds a web view pane whose elements belong to
+// a helper process (msedgewebview2.exe). Each entry is a button "Copy (<name>)" whose digits are folded into its label,
+// so the code is only available by clicking it and reading the clipboard. The Search box filters the entries.
+
+export const AUTH_EXE = 'Authenticator.exe';
+export const WEBVIEW_EXE = 'msedgewebview2.exe';
+export const WEBVIEW_PATTERN = 'C:\\Program Files (x86)\\Microsoft\\EdgeWebView\\Application\\*\\msedgewebview2.exe';
+export const AUTH_USER = 'ops.bot';
+/** The codes the app shows, by entry name (a space in the middle, as the app shows them). */
+export const AUTH_CODES: Readonly<Record<string, string>> = { [AUTH_USER]: '988 374', 'other.user': '120 559' };
+export const AUTH_POLICY: FakePolicy = {
+  allowedApps: [{ exe: AUTH_EXE }], writeControls: [], gatedKeys: [], maxFileBytes: 20 * 1024 * 1024,
+  helperProcesses: [{ exe: WEBVIEW_EXE, pathPattern: WEBVIEW_PATTERN }], clipboardRead: true,
+};
+
+class AuthenticatorApp implements AppModel {
+  windows: Win[];
+  results: string[][] = [];
+  signInFailures = 0;
+  posted = 0;
+
+  constructor(private readonly copy: (text: string) => void) {
+    const entries = Object.entries(AUTH_CODES).map(([name, code]) => el('Button', '', `Copy (${name})`, { host: 'helper', onClick: () => this.copy(code) }));
+    const search = el('Edit', '', 'Search', { host: 'helper' });
+    search.onType = () => {
+      const q = (search.value ?? '').toLowerCase();
+      entries.forEach((e, i) => { e.visible = Object.keys(AUTH_CODES)[i].toLowerCase().includes(q); });
+    };
+    const view = el('Pane', '', 'Authenticator', { host: 'helper', className: 'Chrome_RenderWidgetHostHWND', children: [search, el('List', '', 'Entries', { host: 'helper', children: entries })] });
+    this.windows = [{ title: 'Authenticator', exe: AUTH_EXE, automationId: '', className: 'AppWindow', root: el('Window', '', 'Authenticator', { children: [view] }) }];
+  }
+
+  get foreground(): Win {
+    return this.windows[this.windows.length - 1];
   }
 }

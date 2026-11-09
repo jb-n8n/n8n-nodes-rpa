@@ -351,7 +351,7 @@ describe('approving and signing an imported desktop draft', () => {
     expect(reasons(sign(edited))).toEqual(expect.arrayContaining(['the steps do not match the hash that was reviewed', 'the repaired steps changed after they were reviewed']));
     // Flags that hide a candidate write, with a matching digest: refused.
     const hidden = { ...p, safetyFlags: p.safetyFlags.filter((f) => !f.includes('step 16')) };
-    expect(reasons(sign(hidden, [], proposalDigest(hidden)))).toContain('the safety flags do not list the app, the returned files, the declared writes and the candidate writes the steps have');
+    expect(reasons(sign(hidden, [], proposalDigest(hidden)))).toContain('the safety flags do not list the app, the returned files, the clipboard reads, the declared writes and the candidate writes the steps have');
     // The change list must show every step, in order, as added: a missing, reordered, padded or foreign entry is refused.
     const MISMATCH = 'the change list does not show every step of the steps, in order, as added';
     const lists = {

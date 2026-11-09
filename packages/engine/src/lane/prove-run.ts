@@ -5,7 +5,7 @@ import { loginBlockEnd } from '../policy/validate.js';
 import { proveScript, type ProveInput, type ProveResult } from '../prove/prove.js';
 import type { Row } from '../types.js';
 import type { Handoff } from './agent-lane.js';
-import { traceOn } from './script-lane.js';
+import { codeSettings, traceOn } from './script-lane.js';
 import type { TaskInput } from './task.js';
 
 export const MIN_PROVE_MS = 5_000;
@@ -25,7 +25,7 @@ export async function runProve(input: TaskInput, h: Handoff, loop: AgentLoopResu
   const remaining = runtime.deadline - Date.now();
   if (remaining < MIN_PROVE_MS) return skip('there was no time left to prove the script');
   const common: ProveInput = {
-    script: compiled.script, policy: noWritePolicy(input.policy), secrets: input.secrets, ...(input.vars ? { vars: input.vars } : {}), output: input.output ?? {},
+    script: compiled.script, policy: noWritePolicy(input.policy), secrets: input.secrets, ...codeSettings(input), ...(input.vars ? { vars: input.vars } : {}), output: input.output ?? {},
     endpoint: input.endpoint, masker, ...(input.defaultStepTimeoutMs ? { defaultStepTimeoutMs: input.defaultStepTimeoutMs } : {}),
     budgetMs: remaining, deadlineMs: runtime.deadline, ...(input.signal ? { signal: input.signal } : {}),
     agentRows: rows, checkFallbacksFrom: compiled.suffixFrom, trace: traceOn(input.saveTrace),

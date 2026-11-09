@@ -135,7 +135,11 @@ const waitFor: Handler = async (ctx, step, _state, timeout) => {
 
 const read: Handler = async (ctx, step, state, timeout) => {
   const s = step as unknown as D<'read'>;
-  const r = await actOn(ctx, s, s.read.target, 'read', state, timeout);
+  // A clipboard read has no target: the runner reads the clipboard (policy-gated) and the surface masks the value
+  // everywhere but in this step's own output.
+  const r = 'clipboard' in s.read
+    ? { text: await desktopOf(ctx).readClipboard(), candidate: undefined }
+    : await actOn(ctx, s, s.read.target, 'read', state, timeout);
   // Masked for secrets here; the desktop task masks the outputs again for the typed variable values once the run ends.
   const { text, truncated } = truncateUtf8(ctx.masker.mask(r.text ?? ''), MAX_TEXT_BYTES);
   state.outputs.push({ index: ctx.stepIndex ?? 0, verb: 'read', as: s.read.as, text, ...(truncated ? { truncated: true } : {}) });

@@ -1,6 +1,6 @@
 import type {
-  AINodeConnectionType, ContextType, IBinaryData, IContextObject, ICredentialDataDecryptedObject, IDataObject, INode, INodeExecutionData,
-  NodeConnectionType, NodeTypeAndVersion,
+  AINodeConnectionType, ContextType, ExecuteWorkflowData, IBinaryData, IContextObject, ICredentialDataDecryptedObject, IDataObject, IExecuteWorkflowInfo, INode,
+  INodeExecutionData, NodeConnectionType, NodeTypeAndVersion,
 } from 'n8n-workflow';
 
 /**
@@ -20,6 +20,8 @@ export interface NodeContext {
   getExecutionCancelSignal(): AbortSignal | undefined;
   continueOnFail(): boolean;
   getExecutionId(): string;
+  /** Runs another workflow and waits for its output (Run Steps → One-Time Code Workflow). */
+  executeWorkflow(workflowInfo: IExecuteWorkflowInfo, inputData?: INodeExecutionData[]): Promise<ExecuteWorkflowData>;
   helpers: {
     prepareBinaryData(binaryData: Buffer, filePath?: string, mimeType?: string): Promise<IBinaryData>;
     /** The input item's binary under the property name, or n8n's error when it has none. */

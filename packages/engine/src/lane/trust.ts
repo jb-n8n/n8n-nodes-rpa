@@ -1,5 +1,5 @@
 import {
-  nameMismatch, SIGNATURE_INVALID, SIGNATURE_WITHOUT_KEY, startSiteMismatch, UNSIGNED_REQUIRED, UNSIGNED_WRITES, versionMismatch,
+  nameMismatch, SIGNATURE_INVALID, SIGNATURE_WITHOUT_KEY, startSiteMismatch, UNSIGNED_REQUIRED, UNSIGNED_SECRET_FILL, UNSIGNED_WRITES, versionMismatch,
 } from '../messages.js';
 import { flattenSteps } from '../policy/validate.js';
 import { startHostOf, verifyScript } from '../sign.js';
@@ -47,6 +47,11 @@ export function unsignedWrites(steps: Step[]): string[] {
     .map((s) => s.intent);
 }
 
+/** Whether any step, paginate bodies included, is a fill with `secret: true`. */
+export function hasSecretFill(steps: Step[]): boolean {
+  return flattenSteps(steps).some((s) => 'fill' in s && s.fill.secret === true);
+}
+
 const refuse = (message: string): TrustResult => ({ ok: false, code: 'script_untrusted', message });
 function tryParse(raw: unknown, defaultStartUrl: string): Script | undefined {
   try {
@@ -60,7 +65,7 @@ function tryParse(raw: unknown, defaultStartUrl: string): Script | undefined {
 /**
  * The trust gate. It runs before the browser opens, in this order: first-run exemption; a present signature is
  * always verified (no key → SIGNATURE_WITHOUT_KEY; invalid → UNSIGNED_REQUIRED when required, else SIGNATURE_INVALID);
- * absent and required → UNSIGNED_REQUIRED; unsigned writes without Allow Unsigned Writes → UNSIGNED_WRITES; signed
+ * absent and required → UNSIGNED_REQUIRED; a fill with secret in unsigned steps → UNSIGNED_SECRET_FILL; unsigned writes without Allow Unsigned Writes → UNSIGNED_WRITES; signed
  * steps must then match Expected Name, Expected Version and the run's start site. A document that does not parse
  * passes the gate when nothing else refuses it, and the shape check reports it as policy_violation.
  */
@@ -81,6 +86,8 @@ export function checkTrust(raw: unknown, trust: TrustInput, ctx: { policy: Porta
   }
   if (trust.required) return refuse(UNSIGNED_REQUIRED);
   if (!script) return { ok: true, signed: false };
+  // Stricter than the unsigned-writes switch: a secret fill is never run from unsigned steps.
+  if (hasSecretFill(script.steps)) return refuse(UNSIGNED_SECRET_FILL);
   if (!trust.allowUnsignedWrites && unsignedWrites(script.steps).length > 0) return refuse(UNSIGNED_WRITES);
   return { ok: true, signed: false };
 }

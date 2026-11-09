@@ -34,25 +34,60 @@
       "type": "object",
       "required": ["target", "click"],
       "properties": {
-        "target": { "$ref": "#/definitions/locatorInner" },
-        "click": { "$ref": "#/definitions/locatorInner" }
+        "target": { "$ref": "#/definitions/interruptLocator" },
+        "click": { "$ref": "#/definitions/interruptLocator" }
       },
       "additionalProperties": false
     },
     "nonEmptyString": { "type": "string", "minLength": 1 },
     "regex": { "type": "string", "minLength": 1, "description": "A JavaScript regular expression (it must compile)." },
+    "varTemplate": { "type": "string", "pattern": "\\{\\{\\s*var\\.[A-Za-z0-9_]+\\s*\\}\\}", "description": "A string that holds a {{var.name}} template (a run variable)." },
+    "noVarLocator": {
+      "type": "object",
+      "description": "A locator no run variable may steer: no {{var.name}} in its name or text, within or fallbacks included (the other keys never take one).",
+      "properties": {
+        "name": { "not": { "$ref": "#/definitions/varTemplate" } },
+        "text": { "not": { "$ref": "#/definitions/varTemplate" } },
+        "within": { "$ref": "#/definitions/noVarLocator" },
+        "fallbacks": { "type": "array", "items": { "$ref": "#/definitions/noVarLocator" } }
+      }
+    },
+    "interruptLocator": {
+      "description": "A pop-up handler's locator: never rendered, so no {{var.name}} anywhere.",
+      "allOf": [
+        { "$ref": "#/definitions/locatorInner" },
+        { "$ref": "#/definitions/noVarLocator" }
+      ]
+    },
+    "writeLocator": {
+      "description": "A locator of a step that writes (submit, download): no {{var.name}} anywhere, so a run variable never steers a write.",
+      "allOf": [
+        { "$ref": "#/definitions/locator" },
+        { "$ref": "#/definitions/noVarLocator" }
+      ]
+    },
+    "writeWhen": {
+      "type": "object",
+      "description": "The when of a step that writes or signs in: its locator holds no {{var.name}}.",
+      "properties": { "visible": { "$ref": "#/definitions/noVarLocator" } }
+    },
+    "writeExpect": {
+      "type": "object",
+      "description": "The expect of a step that writes or signs in: its locator holds no {{var.name}}.",
+      "properties": { "visible": { "$ref": "#/definitions/noVarLocator" } }
+    },
     "locator": {
       "type": "object",
       "description": "Exactly one of role, label, text, testId or css, with optional name, exact, within, frame and fallbacks.",
       "properties": {
-        "role": { "type": "string", "minLength": 1, "description": "An ARIA role, such as button or link. Add name for its accessible name." },
-        "label": { "type": "string", "minLength": 1, "description": "The form label of a field." },
-        "text": { "type": "string", "minLength": 1, "description": "Visible text." },
-        "testId": { "type": "string", "minLength": 1, "description": "A data-testid value." },
-        "css": { "type": "string", "minLength": 1, "description": "A CSS selector." },
-        "name": { "type": "string", "description": "The accessible name, for a role locator." },
+        "role": { "type": "string", "minLength": 1, "not": { "$ref": "#/definitions/varTemplate" }, "description": "An ARIA role, such as button or link. Add name for its accessible name." },
+        "label": { "type": "string", "minLength": 1, "not": { "$ref": "#/definitions/varTemplate" }, "description": "The form label of a field." },
+        "text": { "type": "string", "minLength": 1, "description": "Visible text. May hold {{var.name}}, rendered each run." },
+        "testId": { "type": "string", "minLength": 1, "not": { "$ref": "#/definitions/varTemplate" }, "description": "A data-testid value." },
+        "css": { "type": "string", "minLength": 1, "not": { "$ref": "#/definitions/varTemplate" }, "description": "A CSS selector." },
+        "name": { "type": "string", "description": "The accessible name, for a role locator. May hold {{var.name}}, rendered each run (only beside role)." },
         "exact": { "type": "boolean", "description": "Whether the name or text must match exactly." },
-        "frame": { "type": "string", "minLength": 1, "description": "A CSS selector of the iframe to search inside." },
+        "frame": { "type": "string", "minLength": 1, "not": { "$ref": "#/definitions/varTemplate" }, "description": "A CSS selector of the iframe to search inside." },
         "within": { "$ref": "#/definitions/locatorInner" },
         "fallbacks": {
           "type": "array",
@@ -64,39 +99,40 @@
       "additionalProperties": false,
       "oneOf": [
         { "required": ["role"] },
-        { "required": ["label"] },
-        { "required": ["text"] },
-        { "required": ["testId"] },
-        { "required": ["css"] }
+        { "required": ["label"], "properties": { "name": { "not": { "$ref": "#/definitions/varTemplate" } } } },
+        { "required": ["text"], "properties": { "name": { "not": { "$ref": "#/definitions/varTemplate" } } } },
+        { "required": ["testId"], "properties": { "name": { "not": { "$ref": "#/definitions/varTemplate" } } } },
+        { "required": ["css"], "properties": { "name": { "not": { "$ref": "#/definitions/varTemplate" } } } }
       ]
     },
     "locatorInner": {
       "type": "object",
       "description": "A locator without fallbacks (inside within, a fallback or an interrupt).",
       "properties": {
-        "role": { "type": "string", "minLength": 1 },
-        "label": { "type": "string", "minLength": 1 },
+        "role": { "type": "string", "minLength": 1, "not": { "$ref": "#/definitions/varTemplate" } },
+        "label": { "type": "string", "minLength": 1, "not": { "$ref": "#/definitions/varTemplate" } },
         "text": { "type": "string", "minLength": 1 },
-        "testId": { "type": "string", "minLength": 1 },
-        "css": { "type": "string", "minLength": 1 },
+        "testId": { "type": "string", "minLength": 1, "not": { "$ref": "#/definitions/varTemplate" } },
+        "css": { "type": "string", "minLength": 1, "not": { "$ref": "#/definitions/varTemplate" } },
         "name": { "type": "string" },
         "exact": { "type": "boolean" },
-        "frame": { "type": "string", "minLength": 1 },
+        "frame": { "type": "string", "minLength": 1, "not": { "$ref": "#/definitions/varTemplate" } },
         "within": { "$ref": "#/definitions/locatorInner" }
       },
       "additionalProperties": false,
       "oneOf": [
         { "required": ["role"] },
-        { "required": ["label"] },
-        { "required": ["text"] },
-        { "required": ["testId"] },
-        { "required": ["css"] }
+        { "required": ["label"], "properties": { "name": { "not": { "$ref": "#/definitions/varTemplate" } } } },
+        { "required": ["text"], "properties": { "name": { "not": { "$ref": "#/definitions/varTemplate" } } } },
+        { "required": ["testId"], "properties": { "name": { "not": { "$ref": "#/definitions/varTemplate" } } } },
+        { "required": ["css"], "properties": { "name": { "not": { "$ref": "#/definitions/varTemplate" } } } }
       ]
     },
     "locatorNoFrame": {
-      "description": "A sign-in locator: no frame.",
+      "description": "A sign-in locator: no frame, and no {{var.name}} anywhere (a run variable never steers a sign-in).",
       "allOf": [
         { "$ref": "#/definitions/locator" },
+        { "$ref": "#/definitions/noVarLocator" },
         { "not": { "type": "object", "required": ["frame"] } }
       ]
     },
@@ -104,9 +140,9 @@
       "type": "object",
       "description": "What the downloaded file must be. Part of what Sign Steps signs.",
       "properties": {
-        "name": { "$ref": "#/definitions/regex", "description": "A regular expression the sanitized file name must match." },
+        "name": { "$ref": "#/definitions/regex", "not": { "$ref": "#/definitions/varTemplate" }, "description": "A regular expression the sanitized file name must match. No {{var.name}}: a download writes, and a run variable never steers it." },
         "minBytes": { "type": "integer", "minimum": 1, "maximum": 209715200 },
-        "columns": { "type": "array", "minItems": 1, "maxItems": 50, "items": { "type": "string", "minLength": 1, "maxLength": 200 } },
+        "columns": { "type": "array", "minItems": 1, "maxItems": 50, "items": { "type": "string", "minLength": 1, "maxLength": 200, "not": { "$ref": "#/definitions/varTemplate" } } },
         "minRows": { "type": "integer", "minimum": 0, "maximum": 1000000000 }
       },
       "additionalProperties": false
@@ -200,7 +236,7 @@
       "type": "object",
       "required": ["signIn"],
       "properties": {
-        "intent": true, "optional": true, "when": true, "expect": true, "checkpoint": true, "timeoutMs": true,
+        "intent": true, "optional": true, "when": { "$ref": "#/definitions/writeWhen" }, "expect": { "$ref": "#/definitions/writeExpect" }, "checkpoint": true, "timeoutMs": true,
         "signIn": {
           "type": "object",
           "description": "Types the RPA Site Login's username, password and code. Needs a Site Login.",
@@ -215,7 +251,10 @@
               "required": ["field", "submit"],
               "properties": {
                 "field": { "$ref": "#/definitions/locatorNoFrame" },
-                "submit": { "$ref": "#/definitions/locatorNoFrame" }
+                "submit": { "$ref": "#/definitions/locatorNoFrame" },
+                "source": { "enum": ["seed", "workflow"], "description": "Where the code comes from: \"seed\" (default) generates it from the Site Login's TOTP secret; \"workflow\" asks the node's One-Time Code Workflow once the code field shows." },
+                "via": { "type": "array", "minItems": 1, "maxItems": 5, "items": { "$ref": "#/definitions/locatorNoFrame" }, "description": "Buttons on pages between the password and the code field (a factor choice, \"Send me the code\"), clicked in order, each only if it shows before the code field does. With via, the code field must show within the step timeout. With source \"workflow\", the retry after a rejected code clicks the last one again when the code page shows it." },
+                "check": { "type": "array", "minItems": 1, "maxItems": 5, "items": { "$ref": "#/definitions/locatorNoFrame" }, "description": "Checkboxes ticked after the code is typed and before its submit (e.g. \"Trust this browser\")." }
               },
               "additionalProperties": false
             }
@@ -244,8 +283,11 @@
           "required": ["field", "value"],
           "properties": {
             "field": { "$ref": "#/definitions/locator" },
-            "value": { "type": "string", "description": "The text to type; may be {{var.name}}. Never a secret." }
+            "value": { "type": "string", "description": "The text to type; may be {{var.name}}. Never a Site Login credential. With secret: true it must be exactly one {{var.name}} template." },
+            "secret": { "type": "boolean", "description": "Only with secret: true may fill type into a password input. The value must be exactly one {{var.name}} template, is masked in everything the run shows, and the steps must be signed." }
           },
+          "if": { "required": ["secret"], "properties": { "secret": { "const": true } } },
+          "then": { "properties": { "value": { "type": "string", "pattern": "^\\{\\{\\s*var\\.[A-Za-z0-9_]+\\s*\\}\\}$" } } },
           "additionalProperties": false
         }
       },
@@ -261,7 +303,13 @@
           "required": ["field", "value"],
           "properties": {
             "field": { "$ref": "#/definitions/locator" },
-            "value": { "type": "string", "description": "The option to choose; may be {{var.name}}." }
+            "value": {
+              "oneOf": [
+                { "type": "string" },
+                { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": 100 }
+              ],
+              "description": "The option to choose; may be {{var.name}}. For a multi-select, an array selects exactly those options and clears the others."
+            }
           },
           "additionalProperties": false
         }
@@ -384,15 +432,15 @@
       "type": "object",
       "required": ["submit"],
       "properties": {
-        "intent": true, "optional": true, "when": true, "expect": true, "checkpoint": true, "timeoutMs": true,
+        "intent": true, "optional": true, "when": { "$ref": "#/definitions/writeWhen" }, "expect": { "$ref": "#/definitions/writeExpect" }, "checkpoint": true, "timeoutMs": true,
         "submit": {
           "type": "object",
           "description": "A declared write: the only write target allowed, and only while this step runs.",
           "required": ["button", "path"],
           "properties": {
-            "button": { "$ref": "#/definitions/locator" },
-            "path": { "type": "string", "pattern": "^/" },
-            "host": { "type": "string", "minLength": 1 },
+            "button": { "$ref": "#/definitions/writeLocator" },
+            "path": { "type": "string", "pattern": "^/", "not": { "$ref": "#/definitions/varTemplate" } },
+            "host": { "type": "string", "minLength": 1, "not": { "$ref": "#/definitions/varTemplate" } },
             "method": { "$ref": "#/definitions/method" }
           },
           "additionalProperties": false
@@ -404,12 +452,12 @@
       "type": "object",
       "required": ["download"],
       "properties": {
-        "intent": true, "optional": true, "when": true, "expect": true, "checkpoint": true, "timeoutMs": true,
+        "intent": true, "optional": true, "when": { "$ref": "#/definitions/writeWhen" }, "expect": { "$ref": "#/definitions/writeExpect" }, "checkpoint": true, "timeoutMs": true,
         "download": {
           "type": "object",
           "required": ["trigger"],
           "properties": {
-            "trigger": { "$ref": "#/definitions/locator" },
+            "trigger": { "$ref": "#/definitions/writeLocator" },
             "via": {
               "type": "object",
               "description": "A download through a form post (a declared write).",
@@ -422,7 +470,7 @@
               "additionalProperties": false
             },
             "maxBytes": { "type": "integer", "minimum": 1, "maximum": 209715200 },
-            "mime": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+            "mime": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1, "not": { "$ref": "#/definitions/varTemplate" } } },
             "check": { "$ref": "#/definitions/fileCheck" }
           },
           "additionalProperties": false
