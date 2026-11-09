@@ -14,6 +14,8 @@ internal sealed class PolicyFiles : IPolicyFiles
 {
     public string? Read(string path) => File.Exists(path) ? File.ReadAllText(path) : null;
 
+    public long? Length(string path) => new FileInfo(path) is { Exists: true } file ? file.Length : null;
+
     public byte[] ReadAllBytes(string path) => File.ReadAllBytes(path);
 
     /// <summary>

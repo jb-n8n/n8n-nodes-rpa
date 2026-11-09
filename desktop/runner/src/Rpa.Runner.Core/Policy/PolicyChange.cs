@@ -1,12 +1,15 @@
 using System.Globalization;
+using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 
 namespace Rpa.Runner.Core.Policy;
 
-/// <summary>The policy file's new text, and one plain line per thing the change adds or updates (empty when the policy
-/// already has all of it).</summary>
+/// <summary>The policy file's new text, and the lines an administrator reads before approving it: one per thing the
+/// change adds or updates, warnings under the lines they belong to, and a count line last (empty when the policy
+/// already has everything).</summary>
 public sealed record PolicyChangeResult(string Json, IReadOnlyList<string> Summary);
 
 /// <summary>
@@ -16,9 +19,21 @@ public sealed record PolicyChangeResult(string Json, IReadOnlyList<string> Summa
 /// unknown keys are refused. An <c>allowedApps</c> entry with the exe and path of an existing entry (case-insensitive)
 /// is merged into it: a <c>sha256</c> sets or changes the pin (none keeps it), <c>allowedArgs</c> lists are added, and
 /// <c>allowUserWritable</c> can be turned on but not off.
+/// <para>
+/// The summary is all the administrator approves, and a change file may come from a user who is not one. So a change
+/// is small enough to read (limits on entries, arguments and value lengths), every value is shown as a JSON string
+/// literal in plain ASCII, and the lines that widen what may run come last, next to the prompt.
+/// </para>
 /// </summary>
 public static class PolicyChange
 {
+    public const int MaxEntries = 40;
+    public const int MaxArguments = 20;
+    public const int MaxValueLength = 260;
+
+    private const string NonAsciiWarning = @"WARNING: this line holds characters outside plain ASCII, shown as \u escapes";
+    private const string HelperWarning = "WARNING: any program at this path counts as part of the app that started it";
+
     private static readonly string[] ChangeKeys = ["allowedApps", "writeControls", "gatedKeys", "helperProcesses", "clipboardRead"];
 
     // Keys in the order of policy.example.json; an entry's unset options are left out.
@@ -38,6 +53,8 @@ public static class PolicyChange
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
+    private static RunnerPolicy.InvalidPolicyException Refused(string message) => new(message);
+
     /// <summary>
     /// The policy with the change merged in. <paramref name="currentJson"/> may be empty (no policy yet). Throws
     /// <see cref="RunnerPolicy.InvalidPolicyException"/> for a change that is refused, and when the current policy or
@@ -46,56 +63,73 @@ public static class PolicyChange
     public static PolicyChangeResult Apply(string currentJson, string changeJson)
     {
         var current = string.IsNullOrWhiteSpace(currentJson) ? new RunnerPolicy() : RunnerPolicy.Parse(currentJson, "the current policy");
-        var writableOff = CheckKeys(changeJson);
+        var writableOff = CheckChange(changeJson);
         var change = RunnerPolicy.Parse(changeJson, "the change");
-        var summary = new List<string>();
+        CheckSize(change);
 
-        var apps = current.AllowedApps.ToList();
-        for (var i = 0; i < change.AllowedApps.Count; i++)
+        var lines = new List<string>();
+        void Add(string format, params string[] values)
         {
-            var app = change.AllowedApps[i];
-            var at = apps.FindIndex(a => Same(a.Exe, app.Exe) && Same(a.Path, app.Path));
-            if (at < 0)
-            {
-                var lists = NewLists([], app.AllowedArgs);
-                apps.Add(app with { AllowedArgs = lists });
-                summary.Add($"Allow app {app.Exe} at {app.Path}{(app.Sha256 is null ? "" : " (SHA-256 pinned)")}");
-                summary.AddRange(lists.Select(ArgumentsLine));
-                if (app.AllowUserWritable) summary.Add(Warning(app.Path));
-                continue;
-            }
-
-            // The existing entry takes what the change adds and loses nothing; it keeps its own spelling.
-            var old = apps[at];
-            if (old.AllowUserWritable && writableOff.Contains(i))
-                throw new RunnerPolicy.InvalidPolicyException($"a policy change cannot turn allowUserWritable off for {old.Path}");
-            var added = NewLists(old.AllowedArgs, app.AllowedArgs);
-            var turnedOn = app.AllowUserWritable && !old.AllowUserWritable;
-            var parts = new List<string>();
-            if (app.Sha256 is not null && app.Sha256 != old.Sha256) parts.Add(old.Sha256 is null ? "SHA-256 pinned" : "SHA-256 pin changed");
-            if (added.Count > 0) parts.Add("allowed arguments added");
-            if (turnedOn) parts.Add("user-writable path allowed");
-            if (parts.Count == 0) continue;
-            apps[at] = old with { Sha256 = app.Sha256 ?? old.Sha256, AllowedArgs = [.. old.AllowedArgs, .. added], AllowUserWritable = old.AllowUserWritable || turnedOn };
-            summary.Add($"Update app {old.Exe} at {old.Path} ({string.Join("; ", parts)})");
-            summary.AddRange(added.Select(ArgumentsLine));
-            if (turnedOn) summary.Add(Warning(old.Path));
+            lines.Add(string.Format(CultureInfo.InvariantCulture, format, values.Select(Literal).ToArray<object>()));
+            if (values.Any(value => value.Any(c => c is < ' ' or > '~'))) lines.Add(NonAsciiWarning);
         }
 
+        // Lines that only tighten come first; the lines that widen what may run follow, nearest the prompt.
         var writes = current.WriteControls.ToList();
         foreach (var write in change.WriteControls)
         {
             if (writes.Any(w => Same(w.Exe, write.Exe) && w.AutomationId == write.AutomationId)) continue;
             writes.Add(write);
-            summary.Add($"Add write control {write.Exe} / {write.AutomationId}");
+            Add("Add write control {0} / {1}", write.Exe, write.AutomationId);
         }
+        var addedWrites = writes.Count - current.WriteControls.Count;
 
         var keys = current.GatedKeys.ToList();
         foreach (var key in change.GatedKeys)
         {
             if (keys.Contains(key)) continue;
             keys.Add(key);
-            summary.Add($"Add gated key {key}");
+            Add("Add gated key {0}", key.ToString());
+        }
+        var addedKeys = keys.Count - current.GatedKeys.Count;
+
+        var apps = current.AllowedApps.ToList();
+        var changedApps = 0;
+        for (var i = 0; i < change.AllowedApps.Count; i++)
+        {
+            var app = change.AllowedApps[i];
+            var at = apps.FindIndex(a => Same(a.Exe, app.Exe) && Same(a.Path, app.Path));
+            IReadOnlyList<IReadOnlyList<string>> lists;
+            bool writable;
+            string path;
+            if (at < 0)
+            {
+                lists = NewLists([], app.AllowedArgs);
+                (writable, path) = (app.AllowUserWritable, app.Path);
+                apps.Add(app with { AllowedArgs = lists });
+                Add("Allow app {0} at {1}" + (app.Sha256 is null ? "" : $" (SHA-256 pinned {app.Sha256})"), app.Exe, app.Path);
+            }
+            else
+            {
+                // The existing entry takes what the change adds and loses nothing; it keeps its own spelling.
+                var old = apps[at];
+                if (old.AllowUserWritable && writableOff.Contains(i))
+                    throw Refused($"a policy change cannot turn allowUserWritable off for {old.Path}");
+                lists = NewLists(old.AllowedArgs, app.AllowedArgs);
+                (writable, path) = (old.AllowUserWritable || app.AllowUserWritable, old.Path);
+                var parts = new List<string>();
+                if (app.Sha256 is not null && app.Sha256 != old.Sha256)
+                    parts.Add(old.Sha256 is null ? $"SHA-256 pinned {app.Sha256}" : $"SHA-256 pin changed from {old.Sha256} to {app.Sha256}");
+                if (lists.Count > 0) parts.Add("allowed arguments added");
+                if (writable && !old.AllowUserWritable) parts.Add("user-writable path allowed");
+                if (parts.Count == 0) continue;
+                apps[at] = old with { Sha256 = app.Sha256 ?? old.Sha256, AllowedArgs = [.. old.AllowedArgs, .. lists], AllowUserWritable = writable };
+                Add($"Update app {{0}} at {{1}} ({string.Join("; ", parts)})", old.Exe, old.Path);
+            }
+            changedApps++;
+            if (writable) lines.Add($"WARNING: {Literal(path)} can be changed by the runner's own user");
+            foreach (var list in lists)
+                Add("  with arguments: " + (list.Count == 0 ? "(none)" : string.Join(' ', list.Select((_, n) => $"{{{n}}}"))), [.. list]);
         }
 
         var helpers = current.HelperProcesses.ToList();
@@ -103,15 +137,19 @@ public static class PolicyChange
         {
             if (helpers.Any(h => Same(h.Exe, helper.Exe) && Same(h.PathPattern, helper.PathPattern))) continue;
             helpers.Add(helper);
-            summary.Add($"Add helper process {helper.Exe} at {helper.PathPattern}");
+            Add("Add helper process {0} at {1}", helper.Exe, helper.PathPattern);
+            lines.Add(HelperWarning);
         }
+        var addedHelpers = helpers.Count - current.HelperProcesses.Count;
 
-        if (change.ClipboardRead && !current.ClipboardRead) summary.Add("Turn on clipboard read");
+        var clipboardOn = change.ClipboardRead && !current.ClipboardRead;
+        if (clipboardOn) lines.Add("Turn on clipboard read");
 
-        // The lines are what the administrator approves: a value must not be able to end a line, move the cursor or
-        // reorder the text, which could hide a line or fake one. Every value a change adds is in a line.
-        if (summary.Any(line => line.Any(Deceptive)))
-            throw new RunnerPolicy.InvalidPolicyException("the change: names, paths, ids and arguments must not contain control characters");
+        if (lines.Count > 0)
+        {
+            lines.Add($"This change: {changedApps} app(s) allowed or updated, {addedHelpers} helper process pattern(s), {addedWrites} write control(s), " +
+                      $"{addedKeys} gated key(s){(clipboardOn ? ", clipboard read turned on" : "")}.");
+        }
 
         var json = JsonSerializer.Serialize(new FileOut(
             apps.Select(a => new AppOut(a.Exe, a.Path, a.Sha256, a.AllowedArgs.Count > 0 ? a.AllowedArgs : null, a.AllowUserWritable ? true : null)).ToList(),
@@ -121,17 +159,34 @@ public static class PolicyChange
             helpers.Count > 0 ? helpers.Select(h => new HelperOut(h.Exe, h.PathPattern)).ToList() : null,
             current.ClipboardRead || change.ClipboardRead ? true : null), OutOptions) + Environment.NewLine;
         RunnerPolicy.Parse(json, "the changed policy");
-        return new PolicyChangeResult(json, summary);
+        return new PolicyChangeResult(json, lines);
     }
 
     /// <summary>
-    /// The top-level rules a policy file does not have: no maxFileBytes, no unknown key, clipboardRead only true.
-    /// Returns the positions of the allowedApps entries that write <c>allowUserWritable: false</c>, which the parsed
-    /// policy cannot tell from an entry that leaves it out.
+    /// A value as the summary shows it: a JSON string literal in plain ASCII. The double quote and the backslash are
+    /// escaped and every character outside 0x20 to 0x7E is written as <c>\uXXXX</c>, so a value cannot read as the
+    /// tool's own words, as another path or as two values, and cannot move the cursor.
     /// </summary>
-    private static HashSet<int> CheckKeys(string changeJson)
+    internal static string Literal(string value)
     {
-        var writableOff = new HashSet<int>();
+        var literal = new StringBuilder("\"", value.Length + 2);
+        foreach (var c in value)
+        {
+            if (c is '"' or '\\') literal.Append('\\').Append(c);
+            else if (c is >= ' ' and <= '~') literal.Append(c);
+            else literal.Append(CultureInfo.InvariantCulture, $"\\u{(int)c:X4}");
+        }
+        return literal.Append('"').ToString();
+    }
+
+    /// <summary>
+    /// The rules a change has beyond a policy file's: no maxFileBytes, no unknown key, clipboardRead only true, and no
+    /// short (8.3) name in a path, which would name an existing entry's file without being that entry. Returns the
+    /// positions of the allowedApps entries that write <c>allowUserWritable: false</c>, which the parsed policy cannot
+    /// tell from an entry that leaves it out.
+    /// </summary>
+    private static HashSet<int> CheckChange(string changeJson)
+    {
         JsonDocument document;
         try
         {
@@ -139,34 +194,57 @@ public static class PolicyChange
         }
         catch (JsonException e)
         {
-            throw new RunnerPolicy.InvalidPolicyException($"the change: {e.Message}");
+            throw Refused($"the change: {e.Message}");
         }
         using (document)
         {
-            if (document.RootElement.ValueKind != JsonValueKind.Object)
-                throw new RunnerPolicy.InvalidPolicyException("the change: must be a JSON object");
+            var writableOff = new HashSet<int>();
+            if (document.RootElement.ValueKind != JsonValueKind.Object) throw Refused("the change: must be a JSON object");
             foreach (var property in document.RootElement.EnumerateObject())
             {
-                if (property.NameEquals("maxFileBytes"))
-                    throw new RunnerPolicy.InvalidPolicyException("the change: maxFileBytes cannot be changed by a change (edit the policy file)");
-                if (!ChangeKeys.Contains(property.Name))
-                    throw new RunnerPolicy.InvalidPolicyException($"the change: unknown key \"{property.Name}\"");
+                if (property.NameEquals("maxFileBytes")) throw Refused("the change: maxFileBytes cannot be changed by a change (edit the policy file)");
+                if (!ChangeKeys.Contains(property.Name)) throw Refused($"the change: unknown key \"{property.Name}\"");
                 if (property.NameEquals("clipboardRead") && property.Value.ValueKind != JsonValueKind.True)
-                    throw new RunnerPolicy.InvalidPolicyException("the change: clipboardRead may only be true (a change only adds)");
-                if (property.NameEquals("allowedApps") && property.Value.ValueKind == JsonValueKind.Array)
+                    throw Refused("the change: clipboardRead may only be true (a change only adds)");
+                if (property.Value.ValueKind != JsonValueKind.Array) continue;
+                var entries = property.Value.EnumerateArray().Where(entry => entry.ValueKind == JsonValueKind.Object).ToList();
+                if (property.NameEquals("allowedApps"))
                 {
-                    writableOff = property.Value.EnumerateArray().Select((app, at) => (app, at))
-                        .Where(x => x.app.ValueKind == JsonValueKind.Object && x.app.TryGetProperty("allowUserWritable", out var value) && value.ValueKind == JsonValueKind.False)
-                        .Select(x => x.at).ToHashSet();
+                    foreach (var app in entries) CheckFullPath(app, "path");
+                    writableOff = Enumerable.Range(0, entries.Count)
+                        .Where(at => entries[at].TryGetProperty("allowUserWritable", out var value) && value.ValueKind == JsonValueKind.False)
+                        .ToHashSet();
+                }
+                if (property.NameEquals("helperProcesses"))
+                {
+                    foreach (var helper in entries) CheckFullPath(helper, "pathPattern");
                 }
             }
+            return writableOff;
         }
-        return writableOff;
+    }
+
+    private static void CheckFullPath(JsonElement entry, string key)
+    {
+        if (entry.TryGetProperty(key, out var value) && value.ValueKind == JsonValueKind.String && Regex.IsMatch(value.GetString()!, "~[0-9]"))
+            throw Refused($"write the full path, not a short (8.3) name: {Literal(value.GetString()!)}");
+    }
+
+    /// <summary>A change must be small enough to read before the prompt: few entries, short argument lists, short values.</summary>
+    private static void CheckSize(RunnerPolicy change)
+    {
+        var lists = change.AllowedApps.SelectMany(a => a.AllowedArgs).ToList();
+        var entries = change.AllowedApps.Count + lists.Count + change.WriteControls.Count + change.GatedKeys.Count + change.HelperProcesses.Count;
+        if (entries > MaxEntries) throw Refused($"a change may hold at most {MaxEntries} entries; this one holds {entries}");
+        if (lists.Any(list => list.Count > MaxArguments)) throw Refused($"an allowed argument list may hold at most {MaxArguments} arguments");
+        var values = change.AllowedApps.SelectMany(a => new[] { a.Exe, a.Path })
+            .Concat(lists.SelectMany(list => list))
+            .Concat(change.WriteControls.SelectMany(w => new[] { w.Exe, w.AutomationId }))
+            .Concat(change.HelperProcesses.SelectMany(h => new[] { h.Exe, h.PathPattern }));
+        if (values.Any(value => value.Length > MaxValueLength)) throw Refused($"a value in the change is longer than {MaxValueLength} characters");
     }
 
     private static bool Same(string a, string b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
-
-    private static string Warning(string path) => $"WARNING: {path} can be changed by the runner's own user";
 
     /// <summary>The argument lists the entry does not have yet, each once (a list is the same when its strings are
     /// equal in order).</summary>
@@ -179,12 +257,4 @@ public static class PolicyChange
         }
         return added;
     }
-
-    /// <summary>One argument list an app may be started with: the arguments as written, in double quotes when one is
-    /// empty or contains a space.</summary>
-    private static string ArgumentsLine(IReadOnlyList<string> list) =>
-        "  with arguments: " + (list.Count == 0 ? "(none)" : string.Join(' ', list.Select(a => a.Length == 0 || a.Any(char.IsWhiteSpace) ? $"\"{a}\"" : a)));
-
-    private static bool Deceptive(char c) =>
-        char.IsControl(c) || char.GetUnicodeCategory(c) is UnicodeCategory.Format or UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator;
 }
