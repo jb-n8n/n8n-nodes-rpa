@@ -3,11 +3,13 @@
 // check itself and gives Playwright a plain ws://127.0.0.1:<port> address. The order is the same as in the desktop
 // runner client (desktop/client.ts): TLS handshake, fingerprint check, and only then the client's bytes (the upgrade
 // request that carries the token). A wrong certificate ends the connection before a single application byte is sent.
-// The tunnel checks the one connection it forwards and nothing else: a connection the client opens on its own (after a
-// redirect, say) does not pass through it.
+// The tunnel checks the one connection it forwards and nothing else. If the pinned server answers the WebSocket upgrade
+// with a redirect to another host, Playwright follows it on a connection of its own, outside the tunnel and without the
+// Authorization header, and that connection is not checked against the fingerprint. A redirect back to the tunnel's own
+// address is closed by the tunnel (it takes one connection), so the connect fails.
 
 import { createServer, isIP, type Socket } from 'node:net';
-import { connect as tlsConnect } from 'node:tls';
+import { connect as tlsConnect, type TLSSocket } from 'node:tls';
 import { fingerprintOf, normalizeFingerprint } from '../desktop/client.js';
 import { BROWSER_FINGERPRINT_INVALID, BROWSER_FINGERPRINT_MISMATCH, BROWSER_FINGERPRINT_NEEDS_WSS } from '../messages.js';
 
@@ -19,9 +21,13 @@ const MAX_HELD_BYTES = 64 * 1024;
 export interface PinnedTunnel {
   /** The address to connect to instead of the wss:// URL: ws://127.0.0.1:<port>, with the same path and query. */
   wsUrl: string;
-  /** BROWSER_FINGERPRINT_MISMATCH once the server presented a certificate other than the pinned one; else undefined. */
+  /**
+   * Why the tunnel did not forward, when the reason is not a server that cannot be reached: BROWSER_FINGERPRINT_MISMATCH
+   * once the server presented a certificate other than the pinned one, or the reason the TLS connection could not be
+   * started. Else undefined.
+   */
   failure(): string | undefined;
-  /** Stops listening and ends the open connection. Never throws; a second call does nothing. */
+  /** Stops listening, which frees the port, and ends the open connection. Never throws; a second call does nothing. */
   close(): Promise<void>;
 }
 
@@ -36,7 +42,9 @@ export function pinnedFingerprint(value: string): string {
 
 /**
  * Listens on a free loopback port and forwards the first connection to the wss:// server, once the server's certificate
- * matched the fingerprint. It takes that one connection and stops listening: any later connect to the port is refused.
+ * matched the fingerprint. It forwards that one connection only: every later connection is accepted and closed at once,
+ * with nothing read from it and nothing sent to the server. The tunnel keeps the port bound until close(), so the
+ * address stays this process's while the client may still connect to it.
  * Throws BROWSER_FINGERPRINT_INVALID for a malformed fingerprint and BROWSER_FINGERPRINT_NEEDS_WSS for a URL that is
  * not wss://. A server that cannot be reached, that does not finish the TLS handshake within `handshakeTimeoutMs`, or
  * that presents another certificate, closes the connection to the tunnel; `failure()` tells the last case apart.
@@ -58,50 +66,72 @@ export async function openPinnedTunnel(
 
   let taken = false;
   const server = createServer((client) => {
-    // One connection per tunnel: Playwright connects once. A connection accepted alongside the first one is ended, and
-    // a later connect to the port is refused.
+    // One connection per tunnel: Playwright connects once. Every later connection is closed here, unread. The listener
+    // stays bound until close(): a port given up now could be bound by another local process, and a client that
+    // connects after that would send its upgrade request, with the token, to that process.
     if (taken) {
       client.destroy();
       return;
     }
     taken = true;
-    server.close();
-    // The server's certificate is self-signed: chain and name checks are replaced by the fingerprint pin below.
-    const upstream = tlsConnect({
-      host, port, ...(isIP(host) ? {} : { servername: host }), rejectUnauthorized: false, ALPNProtocols: ['http/1.1'], minVersion: 'TLSv1.2',
-    });
     track(client);
+    client.on('error', () => client.destroy());
+    let upstream: TLSSocket;
+    try {
+      // The server's certificate is self-signed: chain and name checks are replaced by the fingerprint pin below.
+      upstream = tlsConnect({
+        host, port, ...(isIP(host) ? {} : { servername: host }), rejectUnauthorized: false, ALPNProtocols: ['http/1.1'], minVersion: 'TLSv1.2',
+      });
+    } catch (err) {
+      failure = `could not connect to the browser server: ${(err instanceof Error ? err.message : String(err)).split('\n')[0].slice(0, 200)}`;
+      client.destroy();
+      return;
+    }
     track(upstream);
+    // The client's bytes are read and held here until the pin matched. Reading them is what shows the client leaving
+    // while the handshake runs.
+    let held: Buffer[] = [];
+    let heldBytes = 0;
+    let dropped = false;
     const drop = () => {
+      dropped = true;
+      held = [];
       clearTimeout(timer);
       client.destroy();
       upstream.destroy();
     };
     const timer = setTimeout(drop, opts.handshakeTimeoutMs ?? HANDSHAKE_TIMEOUT_MS);
-    // The client's bytes are read and held here until the pin matched. Reading them is what shows the client leaving
-    // while the handshake runs.
-    const held: Buffer[] = [];
-    let heldBytes = 0;
     const hold = (chunk: Buffer) => {
+      if (heldBytes + chunk.length > MAX_HELD_BYTES) {
+        drop();
+        return;
+      }
       held.push(chunk);
       heldBytes += chunk.length;
-      if (heldBytes > MAX_HELD_BYTES) drop();
     };
     client.on('data', hold);
-    client.on('error', drop);
     client.on('close', drop);
     upstream.on('error', drop);
     upstream.on('close', drop);
     upstream.once('secureConnect', () => {
+      if (dropped) return;
       clearTimeout(timer);
-      const raw = upstream.getPeerCertificate(true)?.raw;
-      if (!raw || fingerprintOf(raw) !== pinned) {
+      // A certificate that cannot be read is one that did not match.
+      let presented: string | undefined;
+      try {
+        const raw = upstream.getPeerCertificate(true)?.raw;
+        presented = raw ? fingerprintOf(raw) : undefined;
+      } catch {
+        presented = undefined;
+      }
+      if (presented !== pinned) {
         failure = BROWSER_FINGERPRINT_MISMATCH;
         drop();
         return;
       }
       client.off('data', hold);
       for (const chunk of held) upstream.write(chunk);
+      held = [];
       client.pipe(upstream);
       upstream.pipe(client);
     });

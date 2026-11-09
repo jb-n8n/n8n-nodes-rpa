@@ -1,6 +1,7 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { syncBuiltinESMExports } from 'node:module';
 import { connect as netConnect, createServer as createNetServer, type Server as NetServer, type Socket } from 'node:net';
-import { createServer as createTlsServer, type Server as TlsServer } from 'node:tls';
+import tls, { createServer as createTlsServer, type Server as TlsServer } from 'node:tls';
 import { openPinnedTunnel, type PinnedTunnel } from '../src/browser/pinned-tunnel.js';
 import { BROWSER_FINGERPRINT_INVALID, BROWSER_FINGERPRINT_MISMATCH, BROWSER_FINGERPRINT_NEEDS_WSS } from '../src/messages.js';
 import { selfSignedCert } from './fake-runner-cert.js';
@@ -23,7 +24,7 @@ let opened = 0;
 let settled = 0;
 let stalledServer: NetServer;
 let stalledPort = 0;
-const stalled = { opened: 0, closed: 0 };
+const stalled = { opened: 0, closed: 0, received: Buffer.alloc(0) };
 beforeAll(async () => {
   server = createTlsServer({ key: served.key, cert: served.cert }, (socket) => {
     socket.on('error', () => undefined);
@@ -49,7 +50,7 @@ beforeAll(async () => {
     stalled.opened += 1;
     socket.on('error', () => undefined);
     socket.once('close', () => { stalled.closed += 1; });
-    socket.resume();
+    socket.on('data', (chunk: Buffer) => { stalled.received = Buffer.concat([stalled.received, chunk]); });
   });
   await new Promise<void>((r) => stalledServer.listen(0, '127.0.0.1', r));
   stalledPort = (stalledServer.address() as { port: number }).port;
@@ -76,6 +77,7 @@ afterEach(async () => {
   await expect.poll(() => settled === opened && stalled.closed === stalled.opened).toBe(true);
   received = Buffer.alloc(0);
   opened = settled = stalled.opened = stalled.closed = 0;
+  stalled.received = Buffer.alloc(0);
 });
 
 const UPGRADE = 'GET /some/path?q=1 HTTP/1.1\r\nHost: tunnel\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n'
@@ -103,6 +105,13 @@ function rawUpgrade(wsUrl: string): { socket: Socket; answer: Promise<string>; c
 }
 
 const portOf = (tunnel: PinnedTunnel) => Number(new URL(tunnel.wsUrl).port);
+
+/** The error code of a second listener on the loopback port, or 'listening' when the address was free. */
+const listenOn = (p: number) => new Promise<string>((resolve) => {
+  const second = createNetServer();
+  second.once('error', (e: NodeJS.ErrnoException) => resolve(e.code ?? 'error'));
+  second.listen(p, '127.0.0.1', () => second.close(() => resolve('listening')));
+});
 
 describe('the pinned tunnel to a wss:// browser server', () => {
   it('forwards bytes both ways when the certificate matches', async () => {
@@ -148,16 +157,88 @@ describe('the pinned tunnel to a wss:// browser server', () => {
     expect(opened).toBe(0);
   });
 
-  it('the tunnel takes one connection, and a second local connect is refused', async () => {
+  it('the tunnel takes one connection; a second local connect is closed with nothing forwarded', async () => {
     const tunnel = await open(served.fingerprint);
     const up = rawUpgrade(tunnel.wsUrl);
     expect(await up.answer).toMatch(/^HTTP\/1\.1 101 /);
-    expect(await connectRefused(portOf(tunnel))).toBe(true);
-    // The first connection lives on.
+    const second = rawUpgrade(tunnel.wsUrl);
+    await second.closed;
+    expect(await second.answer).toBe('');
+    // The first connection lives on, and it is the only one the server saw.
     up.socket.write('more');
     await expect.poll(() => received.toString('latin1')).toBe(`${UPGRADE}more`);
     expect(opened).toBe(1);
+    expect(tunnel.failure()).toBeUndefined();
     up.socket.destroy();
+  });
+
+  it('a second connect is closed while the first is still in its handshake', async () => {
+    const tunnel = await openStalled(60_000);
+    const up = rawUpgrade(tunnel.wsUrl);
+    await expect.poll(() => stalled.opened).toBe(1);
+    const second = rawUpgrade(tunnel.wsUrl);
+    await second.closed;
+    expect(await second.answer).toBe('');
+    expect(stalled.opened).toBe(1);
+    expect(stalled.closed).toBe(0);
+    up.socket.destroy();
+  });
+
+  it('the tunnel keeps its port: no other listener can bind it until close()', async () => {
+    const tunnel = await open(served.fingerprint);
+    expect(await listenOn(portOf(tunnel))).toBe('EADDRINUSE');
+    const up = rawUpgrade(tunnel.wsUrl);
+    expect(await up.answer).toMatch(/^HTTP\/1\.1 101 /);
+    // Still bound after the one connection it forwards, and after that connection has ended.
+    expect(await listenOn(portOf(tunnel))).toBe('EADDRINUSE');
+    up.socket.destroy();
+    await up.closed;
+    expect(await listenOn(portOf(tunnel))).toBe('EADDRINUSE');
+    await tunnel.close();
+    expect(await listenOn(portOf(tunnel))).toBe('listening');
+  });
+
+  it('a client that sends more than 64 KiB before the handshake finishes is dropped', async () => {
+    // A timeout far beyond this test: only the cap can close the connections in time.
+    const tunnel = await openStalled(60_000);
+    const up = rawUpgrade(tunnel.wsUrl);
+    await expect.poll(() => stalled.opened).toBe(1);
+    up.socket.write(Buffer.alloc(64 * 1024, 'client-bytes-'));
+    await up.closed;
+    await expect.poll(() => stalled.closed, { timeout: bound(2000) }).toBe(1);
+    // The server received the start of a TLS handshake and none of the client's bytes.
+    expect(stalled.received.length).toBeGreaterThan(0);
+    expect(stalled.received.includes('client-bytes-')).toBe(false);
+    expect(stalled.received.includes('GET /some/path')).toBe(false);
+    expect(tunnel.failure()).toBeUndefined();
+  });
+
+  it('64 KiB sent right behind the upgrade request arrives whole', async () => {
+    // Exactly the cap: not dropped, and in order, whether the bytes reach the tunnel before the handshake finished or after.
+    const tunnel = await open(served.fingerprint);
+    const body = Buffer.alloc(64 * 1024 - Buffer.byteLength(UPGRADE), 'b');
+    const up = rawUpgrade(tunnel.wsUrl);
+    up.socket.write(body);
+    expect(await up.answer).toMatch(/^HTTP\/1\.1 101 /);
+    await expect.poll(() => received.length).toBe(64 * 1024);
+    expect(received.toString('latin1')).toBe(UPGRADE + body.toString('latin1'));
+    up.socket.destroy();
+  });
+
+  it('a TLS connection that cannot be started closes the client and is reported', async () => {
+    const connect = vi.spyOn(tls, 'connect').mockImplementation(() => { throw new Error('no TLS today\nmore detail'); });
+    syncBuiltinESMExports();
+    try {
+      const tunnel = await open(served.fingerprint);
+      const up = rawUpgrade(tunnel.wsUrl);
+      await up.closed;
+      expect(await up.answer).toBe('');
+      expect(tunnel.failure()).toBe('could not connect to the browser server: no TLS today');
+      expect(opened).toBe(0);
+    } finally {
+      connect.mockRestore();
+      syncBuiltinESMExports();
+    }
   });
 
   it('a server that never finishes the handshake is dropped after the timeout', async () => {
@@ -189,6 +270,7 @@ describe('the pinned tunnel to a wss:// browser server', () => {
     const tunnel = await open(served.fingerprint);
     const up = rawUpgrade(tunnel.wsUrl);
     expect(await up.answer).toMatch(/^HTTP\/1\.1 101 /);
+    expect(await connectRefused(portOf(tunnel))).toBe(false);
     await tunnel.close();
     await up.closed;
     expect(await connectRefused(portOf(tunnel))).toBe(true);

@@ -315,7 +315,7 @@ describe('a wss:// browser server pinned by its certificate fingerprint', () => 
     expect(await refused(urls[0])).toBe(true);
   });
 
-  it('a matching fingerprint connects through a loopback tunnel, which takes no other connection and ends with the session', async () => {
+  it('a matching fingerprint connects through a loopback tunnel that closes with the session', async () => {
     const urls: string[] = [];
     const sessions = gate.stats().sessionsTotal;
     const connections = opened;
@@ -326,12 +326,54 @@ describe('a wss:// browser server pinned by its certificate fingerprint', () => 
       expect(await s.page.evaluate(() => 1 + 1)).toBe(2);
       // The token went through the tunnel to the gate, which checks it before it admits a session.
       expect(gate.stats().sessionsTotal).toBe(sessions + 1);
-      // The tunnel took the session's connection and stopped listening.
-      expect(await refused(urls[0])).toBe(true);
+      // The tunnel still holds its port, and a second connect to it reaches nothing: the server saw one connection.
+      expect(await refused(urls[0])).toBe(false);
+      expect(await s.page.evaluate(() => 2 + 2)).toBe(4);
       expect(opened).toBe(connections + 1);
       expect(settled).toBe(connections);
     } finally { await s.close(); }
+    await expect.poll(() => refused(urls[0])).toBe(true);
     await expect.poll(() => settled).toBe(connections + 1);
+  });
+
+  it('a redirect from the pinned server opens no second connection through the tunnel', async () => {
+    // A pinned server that answers the upgrade with a redirect, and records each connection's request.
+    const requests: string[] = [];
+    let location = '';
+    const redirecting = createTlsServer({ key: served.key, cert: served.cert }, (socket) => {
+      const index = requests.push('') - 1;
+      socket.on('error', () => undefined);
+      socket.on('data', (chunk: Buffer) => {
+        const answered = requests[index].includes('\r\n\r\n');
+        requests[index] += chunk.toString('latin1');
+        if (answered || !requests[index].includes('\r\n\r\n')) return;
+        const host = /^host: (.+)$/im.exec(requests[index])?.[1].trim() ?? '';
+        socket.end(`HTTP/1.1 302 Found\r\nLocation: ${location.replace('{host}', host)}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
+      });
+    });
+    redirecting.on('tlsClientError', () => undefined);
+    await new Promise<void>((r) => redirecting.listen(0, '127.0.0.1', r));
+    const wsUrl = `wss://127.0.0.1:${(redirecting.address() as { port: number }).port}/`;
+    try {
+      // A relative Location, which Playwright does not take as a URL, and one that names the address the request came
+      // through (the tunnel's own): Playwright connects there again, and the tunnel closes that second connection.
+      for (const to of ['/elsewhere', 'ws://{host}/elsewhere']) {
+        location = to;
+        requests.length = 0;
+        const urls: string[] = [];
+        const t0 = Date.now();
+        const err = await openSession({ endpoint: endpoint(wsUrl, { fingerprint: served.fingerprint }), policy, masker, connectServer: recording(urls) })
+          .catch((e: Error) => e);
+        expect(err).toBeInstanceOf(BrowserUnavailableError);
+        expect((err as Error).message).toBe(browserUnreachable(wsUrl));
+        expect(Date.now() - t0).toBeLessThan(bound(2000));
+        // The one request the server saw is the first, which the pin admitted. No second connection carried the token.
+        expect(requests).toHaveLength(1);
+        expect(requests[0]).toContain(`Host: ${new URL(urls[0]).host}`);
+        expect(requests[0]).toContain(`Authorization: Bearer ${TOKEN}`);
+        expect(await refused(urls[0])).toBe(true);
+      }
+    } finally { await new Promise((r) => redirecting.close(r)); }
   });
 
   it('a pinned server that is not reachable fails as unreachable at its wss:// address', async () => {
