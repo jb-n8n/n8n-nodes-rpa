@@ -161,8 +161,8 @@ describe('browserConfig (RPA Browser credential)', () => {
       expect('fingerprint' in endpoint, JSON.stringify(empty)).toBe(false);
     }
   });
-  it('a fingerprint value that is not text reaches the endpoint as text, never as no fingerprint', () => {
-    // Such a value can only come from an expression or the API. The engine refuses it (BROWSER_FINGERPRINT_INVALID).
+  it('a fingerprint value that is not text is passed on as text, never read as no fingerprint', () => {
+    // Such a value can only come from an expression or the API. The engine checks the text like a typed value.
     const passed = (value: unknown) => browserConfig({ mode: 'playwright', wsUrl: 'wss://browser.example.net/', fingerprint: value }).fingerprint;
     expect(passed(42)).toBe('42');
     expect(passed(0)).toBe('0');

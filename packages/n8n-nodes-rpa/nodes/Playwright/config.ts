@@ -191,7 +191,7 @@ const MAX_SLOW_MO = 2000;
 /**
  * The Certificate Fingerprint field as text, '' for no fingerprint. Only a missing value or a blank string means no
  * fingerprint; a pasted value is trimmed. A value that is not text (it can only come from an expression or the API) is
- * passed on as text, which the engine refuses: it is never read as no fingerprint.
+ * never read as no fingerprint: it is passed on as text, and the engine checks that text like a typed value.
  */
 function fingerprintText(value: unknown): string {
   if (value === undefined || value === null) return '';

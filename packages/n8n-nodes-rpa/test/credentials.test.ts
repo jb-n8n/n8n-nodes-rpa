@@ -180,7 +180,7 @@ describe('v2 credential tests', () => {
     expect(await browserTestResult({ mode: 'playwright', wsUrl: 'wss://browser.example.net/', fingerprint: 'AA:BB' }, engine))
       .toEqual({ status: 'Error', message: 'The certificate fingerprint must be 64 hexadecimal characters (SHA-256), with or without colons.' });
   });
-  it('Browser: a fingerprint value that is not text is refused by the engine, not read as no fingerprint', async () => {
+  it('Browser: a number, a boolean, an object and an empty array as the fingerprint are refused by the engine, not read as no fingerprint', async () => {
     const wsUrl = `wss://127.0.0.1:${await closedPort()}/`;
     for (const fingerprint of [42, false, {}, []]) {
       expect(await browserTestResult({ mode: 'playwright', wsUrl, fingerprint }, engine), JSON.stringify(fingerprint))
