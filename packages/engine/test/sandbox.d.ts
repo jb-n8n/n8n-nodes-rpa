@@ -33,6 +33,14 @@ declare module 'n8n-rpa-gate' {
     active: number; capacity: number; draining: boolean; sessionsTotal: number;
     refused: { capacity: number; draining: number; unauthorized: number; forbidden: number; bad_request: number };
   }
-  export function createGate(opts: { token: string; upstreamHost?: string; upstreamPort: number; upstreamPath: string; maxSessions?: number }):
-    import('node:http').Server & { stats(): GateStats; drain(timeoutMs: number): Promise<'idle' | 'timeout'> };
+  /** With `tls` the server is an https.Server (clients connect with wss); `tlsRequestDeadlineMs` is for tests. */
+  export function createGate(opts: {
+    token: string; upstreamHost?: string; upstreamPort: number; upstreamPath: string; maxSessions?: number;
+    tls?: { key: string; cert: string }; tlsRequestDeadlineMs?: number;
+  }): import('node:http').Server & { stats(): GateStats; drain(timeoutMs: number): Promise<'idle' | 'timeout'> };
+}
+declare module 'n8n-rpa-gate/selfsigned' {
+  /** A fresh P-256 key and its self-signed certificate (both PEM), with the certificate's SHA-256 fingerprint as uppercase hex pairs joined by colons. */
+  export function selfSignedCert(opts?: { commonName?: string; years?: number }): { key: string; cert: string; fingerprint: string };
+  export function fingerprintOfPem(certPem: string): string;
 }

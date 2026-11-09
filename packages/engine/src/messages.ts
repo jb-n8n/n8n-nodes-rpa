@@ -60,7 +60,7 @@ export const ENDPOINT_NOT_SECURE =
 // A wss:// browser server with a self-signed certificate, trusted by the Certificate Fingerprint in the credential.
 export const BROWSER_FINGERPRINT_INVALID = 'The certificate fingerprint must be 64 hexadecimal characters (SHA-256), with or without colons.';
 export const BROWSER_FINGERPRINT_NEEDS_WSS = 'A certificate fingerprint needs a wss:// Endpoint URL in Browser Server mode.';
-/** The server presented another certificate. Nothing was sent to it. */
+/** The server presented another certificate. No request and no token was sent to it; the TLS handshake, with the host name, was. */
 export const BROWSER_FINGERPRINT_MISMATCH = "The browser server's certificate does not match the Certificate Fingerprint in the RPA Browser credential.";
 /**
  * A wss:// or https:// browser server presented a certificate that n8n's Node.js process does not trust, and no

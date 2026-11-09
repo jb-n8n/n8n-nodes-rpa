@@ -337,6 +337,23 @@ describe('a wss:// browser server pinned by its certificate fingerprint', () => 
     await expect.poll(() => settled).toBe(connections + 1);
   });
 
+  it('a browser that had already disconnected when the connect returned leaves no tunnel open', async () => {
+    const urls: string[] = [];
+    const err = await openSession({
+      endpoint: endpoint(url, { fingerprint: served.fingerprint }), policy, masker,
+      // The connection ends before the session can listen for its end: the disconnect event has fired by then.
+      connectServer: async (wsUrl, options) => {
+        urls.push(wsUrl);
+        const browser = await chromium.connect(wsUrl, options);
+        await browser.close();
+        return browser;
+      },
+    }).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(urls).toHaveLength(1);
+    await expect.poll(() => refused(urls[0])).toBe(true);
+  });
+
   it('a redirect from the pinned server opens no second connection through the tunnel', async () => {
     // A pinned server that answers the upgrade with a redirect, and records each connection's request.
     const requests: string[] = [];

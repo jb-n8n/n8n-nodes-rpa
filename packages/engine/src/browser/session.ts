@@ -455,6 +455,8 @@ async function connectPinned(wssUrl: string, fingerprint: string, connectTo: (ws
   try {
     const browser = await connectTo(tunnel.wsUrl);
     browser.on('disconnected', () => { void tunnel.close(); });
+    // A disconnect that fired before the listener was attached is never reported to it.
+    if (!browser.isConnected()) await tunnel.close();
     return browser;
   } catch (err) {
     await tunnel.close();
