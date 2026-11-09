@@ -9,6 +9,8 @@
     <RootNamespace>Rpa.Runner.PolicyTool</RootNamespace>
     <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- The tool runs elevated: a DOTNET_STARTUP_HOOKS variable must not load code into it. -->
+    <StartupHookSupport>false</StartupHookSupport>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Rpa.Runner.Core\Rpa.Runner.Core.csproj" />

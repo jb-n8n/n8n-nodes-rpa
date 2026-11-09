@@ -14,7 +14,11 @@ public interface IPolicyFiles
     /// <summary>The file's size in bytes, or null when there is no such file.</summary>
     long? Length(string path);
 
-    /// <summary>Replaces the policy file's text. An existing file is kept beside it under the name
+    /// <summary>What the runner's own start check finds wrong with the policy file and its folder (someone other than
+    /// an administrator owns them or can change them); empty when it would pass.</summary>
+    IReadOnlyList<string> Problems(string path);
+
+    /// <summary>Replaces the policy file's text. An existing file is kept under the name
     /// <see cref="PolicyCommand.BackupPath"/> gives.</summary>
     void WriteWithBackup(string path, string json, DateTimeOffset now);
 
@@ -39,21 +43,30 @@ public static class PolicyCommand
           apply         Add what a change file lists to the policy
           allow-app     Add an application to the policy's allowedApps
           --pin-hash    Also pin the application file's SHA-256
-          --yes         Do not ask before writing
-          --policy      The policy file (default %ProgramData%\RPA Runner\policy.json)
+          --yes         Do not ask before writing (only from an administrator console)
+          --policy      The policy file (default %ProgramData%\RPA Runner\policy.json; only from an
+                        administrator console)
         """;
 
-    private sealed record Arguments(string Command, string? Target, string PolicyPath, bool Yes, bool PinHash);
+    private sealed record Arguments(string Command, string? Target, string? Policy, bool Yes, bool PinHash)
+    {
+        public string PolicyPath => Policy ?? Path.Combine(RunnerOptions.DefaultDataDir(), "policy.json");
+    }
+
+    /// <summary>The folder for backups, <c>policy-backups</c> beside the policy file. It is the tool's own, for
+    /// administrators only: the policy's folder may let the runner's user create files.</summary>
+    public static string BackupFolder(string policyPath) =>
+        Path.Combine(Path.GetDirectoryName(Path.GetFullPath(policyPath)) ?? "", "policy-backups");
 
     /// <summary>
-    /// <c>policy.json.&lt;yyyyMMdd-HHmmss&gt;.bak</c> beside the policy file. A backup never takes the place of an
-    /// earlier one: when that name exists it is <c>...-2.bak</c>, then <c>...-3.bak</c>, and so on.
+    /// <c>policy.json.&lt;yyyyMMdd-HHmmss&gt;.bak</c> in the backup folder, or with <c>-2</c>, <c>-3</c> and so on
+    /// before <c>.bak</c>: the first of these names that is not taken (by a file or by a folder).
     /// </summary>
-    public static string BackupPath(string policyPath, DateTimeOffset now, Func<string, bool> exists)
+    public static string BackupPath(string policyPath, DateTimeOffset now, Func<string, bool> taken)
     {
-        var stem = $"{policyPath}.{now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture)}";
+        var stem = Path.Combine(BackupFolder(policyPath), $"{Path.GetFileName(policyPath)}.{now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture)}");
         var backup = $"{stem}.bak";
-        for (var n = 2; exists(backup); n++) backup = $"{stem}-{n}.bak";
+        for (var n = 2; taken(backup); n++) backup = $"{stem}-{n}.bak";
         return backup;
     }
 
@@ -78,7 +91,13 @@ public static class PolicyCommand
         return visible.ToString();
     }
 
-    public static int Run(string[] args, TextReader input, TextWriter output, IPolicyFiles files, Action restartRunner)
+    /// <summary>
+    /// Runs one command. <paramref name="startedFromExistingConsole"/> is false when the tool owns its console: it was
+    /// started through the Windows administrator prompt by a program that is not elevated, and that program chose the
+    /// arguments, while the administrator saw only the tool's name. Then <c>--yes</c> is ignored and <c>--policy</c>
+    /// is refused, so the change to the runner's own policy is still shown and asked about.
+    /// </summary>
+    public static int Run(string[] args, TextReader input, TextWriter output, IPolicyFiles files, Action restartRunner, bool startedFromExistingConsole)
     {
         if (args is ["--help"] or ["-h"] or ["/?"])
         {
@@ -89,6 +108,15 @@ public static class PolicyCommand
         {
             PrintUsage(output);
             return 2;
+        }
+        if (!startedFromExistingConsole)
+        {
+            if (arguments.Policy is not null) return Fail(output, "--policy needs an administrator console");
+            if (arguments.Yes)
+            {
+                Print(output, "--yes is ignored: start RpaPolicy from an administrator console to use it");
+                arguments = arguments with { Yes = false };
+            }
         }
         try
         {
@@ -129,7 +157,7 @@ public static class PolicyCommand
             }
         }
         if (target is null && command != "show") return null;
-        return new Arguments(command, target, policy ?? Path.Combine(RunnerOptions.DefaultDataDir(), "policy.json"), yes, pinHash);
+        return new Arguments(command, target, policy, yes, pinHash);
     }
 
     private static int Fail(TextWriter output, string message)
@@ -140,7 +168,7 @@ public static class PolicyCommand
 
     private static int Show(string policyPath, TextWriter output, IPolicyFiles files)
     {
-        if (files.Read(policyPath) is not { } text) return Fail(output, $"Policy file not found: {policyPath}");
+        if (ExistingPolicy(policyPath, files) is not { } text) return Fail(output, $"Policy file not found: {policyPath}");
         Print(output, $"Policy file: {policyPath}");
         // The file's own line breaks stay; anything else that is not plain text inside a line is shown as an escape.
         foreach (var line in text.TrimEnd('\r', '\n').Split('\n')) Print(output, line.TrimEnd('\r'));
@@ -148,9 +176,25 @@ public static class PolicyCommand
         return 0;
     }
 
-    /// <summary>The change file's text. The size is checked before the file is read.</summary>
+    /// <summary>
+    /// The policy file's text, or null when there is none. A file that is there is used only when the runner's own
+    /// start check passes it: a user who is not an administrator may be able to create the file where none exists, and
+    /// the tool would otherwise merge that file and write it back as an administrator's.
+    /// </summary>
+    private static string? ExistingPolicy(string path, IPolicyFiles files)
+    {
+        if (files.Length(path) is null) return null;
+        var problems = files.Problems(path);
+        if (problems.Count > 0)
+            throw new RunnerPolicy.InvalidPolicyException($"the existing policy file cannot be trusted: {string.Join("; ", problems)}; an administrator must check and replace it");
+        return files.Read(path);
+    }
+
+    /// <summary>The change file's text, from a local drive only. The size is checked before the file is read.</summary>
     private static string ChangeFile(string path, IPolicyFiles files)
     {
+        if (RunnerPolicy.IsUncOrDevice(path) || RunnerPolicy.IsUncOrDevice(Path.GetFullPath(path)))
+            throw new RunnerPolicy.InvalidPolicyException("the change file must be on a local drive");
         if (files.Length(path) is not { } length) throw new FileNotFoundException($"Change file not found: {path}");
         if (length > MaxChangeFileBytes) throw new RunnerPolicy.InvalidPolicyException("the change file is larger than 256 KiB");
         return files.Read(path) ?? throw new FileNotFoundException($"Change file not found: {path}");
@@ -167,7 +211,7 @@ public static class PolicyCommand
 
     private static int Change(string change, Arguments arguments, TextReader input, TextWriter output, IPolicyFiles files, Action restartRunner)
     {
-        var current = files.Read(arguments.PolicyPath);
+        var current = ExistingPolicy(arguments.PolicyPath, files);
         if (current is null)
         {
             Print(output, $"Creating a new policy at {arguments.PolicyPath}.");
@@ -192,6 +236,12 @@ public static class PolicyCommand
             if (input.ReadLine()?.Trim().ToLowerInvariant() is not ("y" or "yes")) return 3;
         }
         files.WriteWithBackup(arguments.PolicyPath, result.Json, DateTimeOffset.Now);
+        var problems = files.Problems(arguments.PolicyPath);
+        if (problems.Count > 0)
+        {
+            return Fail(output, $"The policy file was written, but the runner will not start with it: {string.Join("; ", problems)}. " +
+                                "The policy file and its folder must be changeable by administrators only.");
+        }
         restartRunner();
         Print(output, "Policy updated. The runner restarts within 10 seconds and uses the new policy.");
         return 0;

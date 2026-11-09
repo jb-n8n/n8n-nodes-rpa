@@ -34,6 +34,20 @@ public class PolicyCommandTests
         public List<string> Reads { get; } = [];
         public List<string> BytesRead { get; } = [];
 
+        /// <summary>What the runner's start check says about a file; nothing unless a test puts it here.</summary>
+        public Dictionary<string, string[]> Untrusted { get; } = [];
+
+        /// <summary>What the start check says about a file once the tool has written it.</summary>
+        public string[] UntrustedAfterWrite { get; set; } = [];
+
+        public List<string> Checked { get; } = [];
+
+        public IReadOnlyList<string> Problems(string path)
+        {
+            Checked.Add(path);
+            return Untrusted.GetValueOrDefault(path, []);
+        }
+
         public string? Read(string path)
         {
             Reads.Add(path);
@@ -48,6 +62,7 @@ public class PolicyCommandTests
             Writes.Add((path, json, now));
             if (Text.TryGetValue(path, out var old)) Text[PolicyCommand.BackupPath(path, now, Text.ContainsKey)] = old;
             Text[path] = json;
+            if (UntrustedAfterWrite.Length > 0) Untrusted[path] = UntrustedAfterWrite;
         }
 
         public byte[] ReadAllBytes(string path)
@@ -63,6 +78,10 @@ public class PolicyCommandTests
         public int Restarts { get; private set; }
         public string Output { get; private set; } = "";
 
+        /// <summary>False: the tool owns its console (started through the administrator prompt by a program that is
+        /// not elevated).</summary>
+        public bool ExistingConsole { get; set; } = true;
+
         public Tool()
         {
             Files.Text[PolicyPath] = Starter;
@@ -72,7 +91,7 @@ public class PolicyCommandTests
         public int Run(string typed, params string[] args)
         {
             var output = new StringWriter { NewLine = "\n" };
-            var code = PolicyCommand.Run(args, new StringReader(typed), output, Files, () => Restarts++);
+            var code = PolicyCommand.Run(args, new StringReader(typed), output, Files, () => Restarts++, ExistingConsole);
             Output = output.ToString();
             return code;
         }
@@ -261,6 +280,101 @@ public class PolicyCommandTests
     }
 
     [Fact]
+    public void An_existing_policy_file_the_runner_s_start_check_refuses_is_not_used()
+    {
+        // A user who is not an administrator may have planted it; merging it would give it an administrator's write.
+        string[][] commands = [["apply", ChangePath, "--yes"], ["allow-app", ErpPath, "--yes"], ["show"]];
+        foreach (var command in commands)
+        {
+            var tool = new Tool();
+            tool.Files.Untrusted[PolicyPath] = [@"PC\bot owns the policy file", @"BUILTIN\Users can change or replace the policy file's folder"];
+            Assert.Equal(1, tool.Run("y\n", [.. command, "--policy", PolicyPath]));
+            Assert.Equal(
+                @"the existing policy file cannot be trusted: PC\bot owns the policy file; BUILTIN\Users can change or replace the policy file's folder; " +
+                "an administrator must check and replace it\n",
+                tool.Output);
+            Assert.Empty(tool.Files.Writes);
+            Assert.Equal(0, tool.Restarts);
+        }
+    }
+
+    [Fact]
+    public void A_policy_the_start_check_refuses_after_the_write_is_reported_and_the_runner_is_left_running()
+    {
+        var tool = new Tool();
+        tool.Files.UntrustedAfterWrite = [@"PC\bot can change or replace the policy file"];
+        Assert.Equal(1, tool.Run("", "apply", ChangePath, "--yes", "--policy", PolicyPath));
+        Assert.Equal(
+            $"{Changing()}\n{AllowErp}\n{OneApp}\n" +
+            @"The policy file was written, but the runner will not start with it: PC\bot can change or replace the policy file. " +
+            "The policy file and its folder must be changeable by administrators only.\n",
+            tool.Output);
+        Assert.Single(tool.Files.Writes);
+        Assert.Equal(0, tool.Restarts);
+
+        // A new policy is checked after the write too, and only then.
+        tool = new Tool();
+        tool.Files.Text.Remove(PolicyPath);
+        Assert.Equal(0, tool.Run("", "apply", ChangePath, "--yes", "--policy", PolicyPath));
+        Assert.Equal([PolicyPath], tool.Files.Checked);
+        Assert.Equal(1, tool.Restarts);
+    }
+
+    [Fact]
+    public void Yes_is_ignored_when_the_tool_owns_its_console()
+    {
+        // Whoever starts the tool chooses its arguments; the administrator who then approves the Windows prompt sees
+        // only the program's name. So the change is still shown and asked about.
+        var policy = Path.Combine(RunnerOptions.DefaultDataDir(), "policy.json");
+        var tool = new Tool { ExistingConsole = false };
+        tool.Files.Text[policy] = Starter;
+        string[][] commands = [["apply", ChangePath, "--yes"], ["allow-app", ErpPath, "--yes"]];
+        foreach (var command in commands)
+        {
+            Assert.Equal(3, tool.Run("", command));
+            Assert.StartsWith(
+                "--yes is ignored: start RpaPolicy from an administrator console to use it\n" +
+                $"Changing the policy at {policy} (0 app(s), 0 helper process pattern(s) today).\n{AllowErp}\n{OneApp}\n{Prompt}",
+                tool.Output);
+            Assert.Empty(tool.Files.Writes);
+        }
+
+        Assert.Equal(0, tool.Run("y\n", "apply", ChangePath, "--yes"));
+        Assert.Contains($"{Prompt}{Updated}\n", tool.Output);
+        Assert.Equal(policy, Assert.Single(tool.Files.Writes).Path);
+    }
+
+    [Fact]
+    public void Policy_option_is_refused_when_the_tool_owns_its_console()
+    {
+        string[][] commands = [["apply", ChangePath, "--policy", PolicyPath], ["allow-app", ErpPath, "--policy", PolicyPath, "--yes"], ["show", "--policy", PolicyPath]];
+        foreach (var command in commands)
+        {
+            var tool = new Tool { ExistingConsole = false };
+            Assert.Equal(1, tool.Run("y\n", command));
+            Assert.StartsWith("--policy needs an administrator console\n", tool.Output);
+            Assert.DoesNotContain("ErpDemo", tool.Output);
+            Assert.Empty(tool.Files.Reads);
+            Assert.Empty(tool.Files.Writes);
+        }
+    }
+
+    [Theory]
+    [InlineData(@"\\server\share\change.json")]
+    [InlineData("//server/share/change.json")]
+    [InlineData(@"\\?\C:\changes\change.json")]
+    [InlineData(@"\\.\pipe\change")]
+    public void A_change_file_that_is_not_on_a_local_drive_is_refused(string path)
+    {
+        var tool = new Tool();
+        tool.Files.Text[path] = Change;
+        Assert.Equal(1, tool.Run("y\n", "apply", path, "--policy", PolicyPath));
+        Assert.Equal("the change file must be on a local drive\n", tool.Output);
+        Assert.Empty(tool.Files.Reads);
+        Assert.Empty(tool.Files.Writes);
+    }
+
+    [Fact]
     public void Show_prints_the_policy_file()
     {
         var tool = new Tool();
@@ -345,29 +459,30 @@ public class PolicyCommandTests
     }
 
     [Fact]
-    public void The_backup_sits_beside_the_policy_with_the_time_in_its_name()
+    public void The_backup_goes_to_the_policy_backups_folder_beside_the_policy_with_the_time_in_its_name()
     {
         var now = new DateTimeOffset(2026, 11, 9, 14, 5, 9, TimeSpan.FromHours(1));
-        var backup = PolicyCommand.BackupPath(PolicyPath, now, _ => false);
-        Assert.Equal(PolicyPath + ".20261109-140509.bak", backup);
-        Assert.Equal("policy.json.20261109-140509.bak", Path.GetFileName(backup));
+        var folder = Path.Combine(Root, "RPA Runner", "policy-backups");
+        Assert.Equal(folder, PolicyCommand.BackupFolder(PolicyPath));
+        Assert.Equal(Path.Combine(folder, "policy.json.20261109-140509.bak"), PolicyCommand.BackupPath(PolicyPath, now, _ => false));
     }
 
     [Fact]
-    public void Writes_at_the_same_time_never_share_a_backup()
+    public void A_backup_takes_a_name_that_no_file_or_folder_has()
     {
         var now = new DateTimeOffset(2026, 11, 9, 14, 5, 9, TimeSpan.FromHours(1));
-        var files = new FakeFiles();
-        files.Text[PolicyPath] = "first";
-        files.WriteWithBackup(PolicyPath, "second", now);
-        files.WriteWithBackup(PolicyPath, "third", now);
-        files.WriteWithBackup(PolicyPath, "fourth", now);
-        files.WriteWithBackup(PolicyPath, "fifth", now.AddSeconds(1));
-        Assert.Equal("fifth", files.Text[PolicyPath]);
-        Assert.Equal("first", files.Text[PolicyPath + ".20261109-140509.bak"]);
-        Assert.Equal("second", files.Text[PolicyPath + ".20261109-140509-2.bak"]);
-        Assert.Equal("third", files.Text[PolicyPath + ".20261109-140509-3.bak"]);
-        Assert.Equal("fourth", files.Text[PolicyPath + ".20261109-140510.bak"]);
-        Assert.Equal(5, files.Text.Count);
+        var stem = Path.Combine(Root, "RPA Runner", "policy-backups", "policy.json.20261109-140509");
+        // The names that exist, whether as a file (an earlier backup) or as a folder (planted to block the name).
+        var taken = new HashSet<string>();
+        foreach (var expected in new[] { ".bak", "-2.bak", "-3.bak", "-4.bak" })
+        {
+            var backup = PolicyCommand.BackupPath(PolicyPath, now, taken.Contains);
+            Assert.Equal(stem + expected, backup);
+            taken.Add(backup);
+        }
+        // A gap is not reused past: the first free name wins, and another second starts again.
+        taken.Remove(stem + "-2.bak");
+        Assert.Equal(stem + "-2.bak", PolicyCommand.BackupPath(PolicyPath, now, taken.Contains));
+        Assert.EndsWith("policy.json.20261109-140510.bak", PolicyCommand.BackupPath(PolicyPath, now.AddSeconds(1), taken.Contains));
     }
 }

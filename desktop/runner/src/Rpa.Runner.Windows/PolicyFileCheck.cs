@@ -34,6 +34,24 @@ public static class PolicyFileCheck
         return problems;
     }
 
+    /// <summary>
+    /// The folder test of <see cref="Problems"/> for another folder that administrators alone must be able to change
+    /// (the policy tool's backup folder). <paramref name="what"/> names the folder in the problems.
+    /// </summary>
+    public static IReadOnlyList<string> FolderProblems(string folder, string what)
+    {
+        var problems = new List<string>();
+        try
+        {
+            Check(new DirectoryInfo(folder).GetAccessControl(), FolderRights, what, Trusted(), problems);
+        }
+        catch (Exception e) when (e is UnauthorizedAccessException or IOException or PrivilegeNotHeldException)
+        {
+            problems.Add($"cannot read the permissions of {what} ({e.GetType().Name})");
+        }
+        return problems;
+    }
+
     private static void Check(FileSystemSecurity acl, FileSystemRights rights, string what, HashSet<SecurityIdentifier> trusted, List<string> problems)
     {
         if (acl.GetOwner(typeof(SecurityIdentifier)) is SecurityIdentifier owner && !trusted.Contains(owner))
