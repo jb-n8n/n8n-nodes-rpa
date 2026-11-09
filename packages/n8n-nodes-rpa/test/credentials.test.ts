@@ -115,6 +115,7 @@ describe('v2 credential types', () => {
       name: 'fingerprint',
       type: 'string',
       default: '',
+      noDataExpression: true,
       description:
         "Only for a browser server with its own certificate, such as the one the Windows installer sets up: paste the fingerprint it shows. Leave empty when n8n already trusts the server's certificate.",
       displayOptions: { show: { mode: ['playwright'] } },
@@ -178,6 +179,13 @@ describe('v2 credential tests', () => {
       .toEqual({ status: 'Error', message: 'A certificate fingerprint needs a wss:// Endpoint URL in Browser Server mode.' });
     expect(await browserTestResult({ mode: 'playwright', wsUrl: 'wss://browser.example.net/', fingerprint: 'AA:BB' }, engine))
       .toEqual({ status: 'Error', message: 'The certificate fingerprint must be 64 hexadecimal characters (SHA-256), with or without colons.' });
+  });
+  it('Browser: a fingerprint value that is not text is refused by the engine, not read as no fingerprint', async () => {
+    const wsUrl = `wss://127.0.0.1:${await closedPort()}/`;
+    for (const fingerprint of [42, false, {}, []]) {
+      expect(await browserTestResult({ mode: 'playwright', wsUrl, fingerprint }, engine), JSON.stringify(fingerprint))
+        .toEqual({ status: 'Error', message: 'The certificate fingerprint must be 64 hexadecimal characters (SHA-256), with or without colons.' });
+    }
   });
   it('Browser: a connection reports the major.minor browser server version the node needs', async () => {
     const stub = {

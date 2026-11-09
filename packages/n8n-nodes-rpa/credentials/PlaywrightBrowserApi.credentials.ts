@@ -75,6 +75,7 @@ export class PlaywrightBrowserApi implements ICredentialType {
       name: 'fingerprint',
       type: 'string',
       default: '',
+      noDataExpression: true,
       description:
         "Only for a browser server with its own certificate, such as the one the Windows installer sets up: paste the fingerprint it shows. Leave empty when n8n already trusts the server's certificate.",
       displayOptions: { show: { mode: ['playwright'] } },

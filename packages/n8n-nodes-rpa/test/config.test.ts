@@ -156,10 +156,21 @@ describe('browserConfig (RPA Browser credential)', () => {
     expect(browserConfig({ wsUrl: 'ws://browser:3000/', fingerprint: 'not a fingerprint' }).fingerprint).toBe('not a fingerprint');
   });
   it('an empty fingerprint is left out', () => {
-    for (const empty of ['', '   ', ' \r\n\t', undefined, null, 42]) {
+    for (const empty of ['', '   ', ' \r\n\t', undefined, null]) {
       const endpoint = browserConfig({ mode: 'playwright', wsUrl: 'wss://browser.example.net/', fingerprint: empty });
       expect('fingerprint' in endpoint, JSON.stringify(empty)).toBe(false);
     }
+  });
+  it('a fingerprint value that is not text reaches the endpoint as text, never as no fingerprint', () => {
+    // Such a value can only come from an expression or the API. The engine refuses it (BROWSER_FINGERPRINT_INVALID).
+    const passed = (value: unknown) => browserConfig({ mode: 'playwright', wsUrl: 'wss://browser.example.net/', fingerprint: value }).fingerprint;
+    expect(passed(42)).toBe('42');
+    expect(passed(0)).toBe('0');
+    expect(passed(false)).toBe('false');
+    expect(passed({ sha256: FINGERPRINT })).toBe('[object Object]');
+    // An empty array's text is empty, which would read as no fingerprint: its type name is passed instead.
+    expect(passed([])).toBe('(object)');
+    expect(passed([' '])).toBe('(object)');
   });
   it('the fingerprint is ignored in CDP and Local modes', () => {
     expect(browserConfig({ mode: 'cdp', wsUrl: 'wss://cdp.example.net/', fingerprint: FINGERPRINT })).toEqual({ mode: 'cdp', wsUrl: 'wss://cdp.example.net/' });
