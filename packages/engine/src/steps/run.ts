@@ -6,6 +6,7 @@ import type { InterruptHandle } from './interrupts.js';
 import { HANDLERS, type AnyVerb } from './handlers/index.js';
 import { desktopVerbOf, verbOf } from './parse.js';
 import { renderLocators } from './render-locators.js';
+import { registerSecretFills } from '../secrets/secret-fills.js';
 import { PolicyError } from './errors.js';
 import { shownMessage } from './urls.js';
 import { BLOCKED_STOP } from '../messages.js';
@@ -119,6 +120,8 @@ export async function runSteps(
   } = {},
 ): Promise<StepsResult> {
   const surface = surfaceOf(ctx);
+  // Every variable a secret fill types is masked from the first step on, not only once its own step runs.
+  if (!opts.nested) registerSecretFills(steps, ctx.vars, ctx.masker);
   // Step hooks take a Playwright page: they belong to browser runs only.
   const hooks = surface.kind === 'browser' ? ctx.stepHooks : undefined;
   // startAt 1: the lane already ran step 0 (the start page) and logged it.

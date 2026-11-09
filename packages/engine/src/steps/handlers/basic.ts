@@ -1,7 +1,7 @@
 import type { BrowserContext, Locator as PwLocator, Request } from 'playwright-core';
 import { formPostsElsewhere, notHttp, offListSite, PASSWORD_FILL_REFUSED, PASSWORD_FILL_REFUSED_STEPS, secretFillValue, UNSIGNED_SECRET_FILL } from '../../messages.js';
-import type { Masker } from '../../secrets/mask.js';
 import { renderVars, SECRET_FILL_VALUE } from '../../secrets/render.js';
+import { secretFillValues } from '../../secrets/secret-fills.js';
 import type { RunState, Step } from '../../types.js';
 import { PolicyError } from '../errors.js';
 import { formTarget as formTargetInPage, type FormTarget } from '../form-target.js';
@@ -189,12 +189,10 @@ const click: Handler = async (ctx, step, state, timeout) => {
   return candidate;
 };
 
-/** Rendered values of fill.secret steps, per run masker: the masker holds them, so renderVars would refuse a second use. */
-const typedSecrets = new WeakMap<Masker, Set<string>>();
-
 /**
  * The value of a fill with `secret`: only for signed steps, exactly one {{var.name}} template, never a Site Login
- * credential (renderVars refuses it), and added to the run's masker before anything is typed.
+ * credential (renderVars refuses it), and added to the run's masker before anything is typed (runSteps already added it
+ * at run start: registerSecretFills).
  */
 function renderSecretFill(ctx: StepContext, template: string): string {
   if (!ctx.signed) {
@@ -203,8 +201,7 @@ function renderSecretFill(ctx: StepContext, template: string): string {
   }
   const m = SECRET_FILL_VALUE.exec(template);
   if (!m) throw new Error(secretFillValue('fill.value'));
-  const known = typedSecrets.get(ctx.masker) ?? new Set<string>();
-  typedSecrets.set(ctx.masker, known);
+  const known = secretFillValues(ctx.masker);
   const raw = Object.hasOwn(ctx.vars, m[1]) ? ctx.vars[m[1]] : undefined;
   const value = typeof raw === 'string' && known.has(raw) ? raw : renderVars(template, ctx.vars, ctx.masker);
   ctx.masker.add([value]);

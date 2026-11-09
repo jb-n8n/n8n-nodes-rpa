@@ -95,6 +95,33 @@ describe('fill.secret: running', () => {
       expect(JSON.stringify(r.state.log)).not.toContain(EXPORT_PW);
     } finally { await s.close(); }
   });
+  it('masks the value from the run start: an earlier step\'s error and log show [secret], and an earlier template use is refused', async () => {
+    const steps: Step[] = [
+      { intent: 'Find the link', optional: true, timeoutMs: 300, click: { css: `a[title="${EXPORT_PW}"]` } },
+      { intent: 'Find the link by input', optional: true, timeoutMs: 300, click: { text: 'Open {{var.pw}}' } },
+      { intent: 'Type the name', fill: { field: { label: 'Name' }, value: '{{var.pw}}' } },
+      secretFill('{{var.pw}}'),
+    ];
+    const { s, masker, r } = await direct(steps, { pw: EXPORT_PW });
+    try {
+      expect(masker.containsSecret(EXPORT_PW)).toBe(true);
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.failure.index).toBe(2);
+      expect(r.failure.message).toBe(INPUT_CONTAINS_SECRET);
+      expect(r.state.log[0].note).toContain('[secret]');
+      expect(r.state.log[1].note).toBe(INPUT_CONTAINS_SECRET);
+      expect(JSON.stringify(r)).not.toContain(EXPORT_PW);
+      expect(await s.page.inputValue('input[name=name]')).toBe('');
+    } finally { await s.close(); }
+  });
+  it('a secret fill after the run-start masking still types the value, also as a second use', async () => {
+    const { s, r } = await direct([secretFill('{{var.pw}}', { field: { label: 'Name' } }), secretFill('{{var.pw}}')], { pw: EXPORT_PW });
+    try {
+      expect(r.ok).toBe(true);
+      expect(await s.page.inputValue('input[name=password]')).toBe(EXPORT_PW);
+    } finally { await s.close(); }
+  });
   it('the same variable can be typed by a second secret fill', async () => {
     const { s, r } = await direct([secretFill('{{var.pw}}'), secretFill('{{var.pw}}', { field: { label: 'Name' } })], { pw: EXPORT_PW });
     try {
