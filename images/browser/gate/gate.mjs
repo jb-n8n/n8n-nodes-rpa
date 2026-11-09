@@ -153,7 +153,7 @@ function metricsText(s) {
  * - onSessions(cb): cb(active) on every change of the open-session count.
  * GET and HEAD /healthz answer the same status (HEAD without a body). upstreamConnectTimeoutMs is for tests.
  * With tls ({ key, cert }, both PEM) the session server is an https.Server: clients connect with wss, and a plain-text
- * request to its port never gets an answer. It closes a connection that has not finished the TLS handshake after
+ * request to its port gets no HTTP answer. It closes a connection that has not finished the TLS handshake after
  * TLS_HANDSHAKE_TIMEOUT_MS, one that it has not accepted as a session TLS_REQUEST_DEADLINE_MS after the handshake (open
  * sessions are left alone), and holds at most TLS_MAX_CONNECTIONS connections. The metrics server stays plain HTTP.
  * tlsHandshakeTimeoutMs and tlsRequestDeadlineMs are for tests.

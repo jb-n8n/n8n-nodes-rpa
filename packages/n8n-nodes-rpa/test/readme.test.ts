@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
+  BROWSER_CERT_NOT_TRUSTED, BROWSER_FINGERPRINT_INVALID, BROWSER_FINGERPRINT_MISMATCH, BROWSER_FINGERPRINT_NEEDS_WSS,
   IMPORT_EMPTY, IMPORT_NEEDS_SITE_LOGIN, IMPORT_NOT_ADOPTABLE, IMPORT_PROOF_FAILED, IMPORT_REFUSES_WRITES, IMPORT_UNSUPPORTED_TARGET,
 } from 'n8n-rpa-engine';
 import { GUIDANCE } from '../nodes/Playwright/errors.js';
@@ -128,6 +129,19 @@ describe('README', () => {
       'images/browser/gate', 'ws://browser:3000/', 'playwright-core', 'Playwright protocol', 'show-trace', TOKEN_REFUSED]) {
       expect(s, text).toContain(text);
     }
+  });
+
+  it("documents the gate's TLS, token file and address settings, and which certificates n8n trusts without a fingerprint", () => {
+    const s = section('## Where the browser runs');
+    for (const text of ['`BROWSER_GATE_TOKEN_FILE`', '`BROWSER_GATE_TLS_KEY_FILE`', '`BROWSER_GATE_TLS_CERT_FILE`', '`BROWSER_GATE_HOST`', '`BROWSER_GATE_METRICS_HOST`',
+      'gets no HTTP answer', 'closed 10 s after its handshake', 'at most 256 connections', 'no limit per address', 'a new connection for each check',
+      'neither fits TLS mode as shipped', "n8n's Node.js process trusts", '`NODE_EXTRA_CA_CERTS`', "not one from the operating system's certificate store",
+      `\`${BROWSER_CERT_NOT_TRUSTED}\``]) {
+      expect(s, text).toContain(text);
+    }
+    // True with a listen address set too: the sentence names its condition.
+    expect(s).not.toContain('Both ports listen on IPv4 and IPv6');
+    expect(s).not.toContain("n8n's system trusts");
   });
 
   it('prints the browser service from the real docker-compose.yml', () => {
@@ -272,6 +286,14 @@ describe('README', () => {
     expect(Object.keys(GUIDANCE)).toHaveLength(13);
     for (const m of GOLDEN_MESSAGES) expect(s, m).toContain(m);
     for (const text of ['configError: true', 'details', 'output 2', '`llmTokens`']) expect(s, text).toContain(text);
+  });
+
+  it('the message table quotes the certificate messages of the RPA Browser credential as the engine says them', () => {
+    const s = section('## Error codes');
+    // The engine's own constants, so a reworded message fails here until the README quotes the new text.
+    const messages = [BROWSER_CERT_NOT_TRUSTED, BROWSER_FINGERPRINT_MISMATCH, BROWSER_FINGERPRINT_INVALID, BROWSER_FINGERPRINT_NEEDS_WSS];
+    expect(messages.every((m) => typeof m === 'string' && m.length > 20)).toBe(true);
+    for (const m of messages) expect(s, m).toContain(`\`browser_unavailable\`: \`${m}\``);
   });
 
   it('maps toema/n8n-playwright verbs to operations and says why there is no JavaScript step', () => {
