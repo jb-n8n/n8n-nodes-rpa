@@ -538,7 +538,10 @@ test('the main module: protection on without ECS_AGENT_URI logs once and the gat
   assert.doesNotMatch(bad.out() + bad.err(), /secret-agent-host|ftp:/);
 });
 
-test('the main module: protection follows the sessions, EMF lines go to stdout, and SIGTERM clears and exits', async (t) => {
+/** For the tests that send SIGTERM to the main module: on Windows a signalled process ends at once, with no handler run. */
+const NO_SIGTERM = { skip: process.platform === 'win32' ? 'Windows has no SIGTERM: the process ends without the drain' : false };
+
+test('the main module: protection follows the sessions, EMF lines go to stdout, and SIGTERM clears and exits', NO_SIGTERM, async (t) => {
   const upPort = await fakeUpstream(t);
   const agent = await fakeAgent(t);
   const g = await spawnGate(t, {
@@ -567,7 +570,7 @@ test('the main module: protection follows the sessions, EMF lines go to stdout, 
   assert.ok(!(g.out() + g.err()).includes(TOKEN));
 });
 
-test('the main module: a silent agent does not hold the exit', async (t) => {
+test('the main module: a silent agent does not hold the exit', NO_SIGTERM, async (t) => {
   const upPort = await fakeUpstream(t);
   const agent = await fakeAgent(t);
   agent.reply = () => 'hang';

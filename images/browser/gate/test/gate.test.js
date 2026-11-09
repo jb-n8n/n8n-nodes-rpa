@@ -508,6 +508,9 @@ async function spawnGate(t, env) {
   return { child, exited, port: Number(/listening on \S*:(\d+)/.exec(log)[1]), log: () => log };
 }
 
+/** For the tests that send SIGTERM to the main module: on Windows a signalled process ends at once, with no handler run. */
+const NO_SIGTERM = { skip: process.platform === 'win32' ? 'Windows has no SIGTERM: the process ends without the drain' : false };
+
 test('the main module validates the session limit, drain time and metrics port', () => {
   const cases = [
     [{ BROWSER_GATE_MAX_SESSIONS: '0' }, /BROWSER_GATE_MAX_SESSIONS must be a whole number from 1 to 64/],
@@ -531,7 +534,7 @@ test('the main module validates the session limit, drain time and metrics port',
   }
 });
 
-test('on SIGTERM the main module drains: healthz 503, new sessions refused, exit 0 when the last session closes', async (t) => {
+test('on SIGTERM the main module drains: healthz 503, new sessions refused, exit 0 when the last session closes', NO_SIGTERM, async (t) => {
   const up = await fakeUpstream();
   t.after(() => close(up.server));
   const metricsPort = await freePort();
@@ -554,7 +557,7 @@ test('on SIGTERM the main module drains: healthz 503, new sessions refused, exit
   assert.doesNotMatch(g.log(), new RegExp(`${TOKEN}|${SECRET}`));
 });
 
-test('the main module exits 0 when the drain time passes, and at once on a second SIGTERM', async (t) => {
+test('the main module exits 0 when the drain time passes, and at once on a second SIGTERM', NO_SIGTERM, async (t) => {
   const up = await fakeUpstream();
   t.after(() => close(up.server));
   const timed = await spawnGate(t, { BROWSER_UPSTREAM_PORT: String(up.port), BROWSER_GATE_DRAIN_SECONDS: '1' });
@@ -1039,7 +1042,8 @@ test('with tls a connection that sends nothing is closed after the handshake tim
   assert.equal(closed, false, 'the plain gate has not closed the silent connection');
 });
 
-// ---- The request deadline after the TLS handshake: a peer without the token cannot sit on the connection cap. ----
+// ---- The request deadline: with TLS, a connection that has not been accepted as a session is closed one deadline after its
+// handshake. A peer can still reconnect; there is no per-address limit. ----
 
 /** A TLS connection to the gate that has finished the handshake; `closed` resolves with the milliseconds until the gate closed it. */
 async function tlsClient(t, port, cert) {
@@ -1101,13 +1105,95 @@ test('an authorised session stays open past the request deadline', async (t) => 
   assert.equal(chunk.toString(), 'still here');
 });
 
-test('without tls the request timeouts are the ones Node sets', async (t) => {
+/** Resolves with how long the gate kept its next TLS connection: the milliseconds from the end of the handshake to the close, on the gate's side. */
+function nextConnectionLifetime(server) {
+  return new Promise((resolve) => {
+    server.once('secureConnection', (socket) => {
+      const started = Date.now();
+      socket.once('close', () => resolve(Date.now() - started));
+    });
+  });
+}
+
+/** A lifetime, or Infinity when the gate still holds the connection after ms. */
+const within = (lifetime, ms) => Promise.race([lifetime, sleep(ms).then(() => Infinity)]);
+
+test('a TLS connection that sends requests and never reads the answers is closed one deadline after its handshake', async (t) => {
+  const { key, cert } = selfSignedCert();
+  const g = await ownGate(t, { tls: { key, cert }, tlsRequestDeadlineMs: 300 });
+  const lifetime = nextConnectionLifetime(g.gate.server);
+  const socket = tlsConnect({ host: '127.0.0.1', port: g.port, ca: cert, checkServerIdentity: () => undefined });
+  t.after(() => socket.destroy());
+  socket.on('error', () => {});
+  await once(socket, 'secureConnect');
+  // No 'data' listener and no resume(): the answers are never read. Whole requests go out, a few per turn of the event
+  // loop, for as long as the gate takes them; once its answers stop leaving it stops reading, and the connection sits
+  // between two requests with nothing moving. Each request is 64 bytes, so a TLS record (16384 bytes) always ends on a
+  // request boundary and the gate is never left holding half a request, which Node's header timeout would end on its own.
+  const one = `GET / HTTP/1.1\r\nHost: ${'x'.repeat(38)}\r\n\r\n`;
+  assert.equal(one.length, 64);
+  const few = one.repeat(8);
+  const send = () => {
+    if (socket.destroyed) return;
+    if (socket.write(few)) setImmediate(send);
+    else socket.once('drain', send);
+  };
+  send();
+  // No lower bound: some Node versions end a connection that pipelines this hard on their own, sooner.
+  const took = await within(lifetime, 4000);
+  assert.ok(took < 2000, `the gate held the connection for ${took} ms`);
+  assert.equal(g.gate.stats().sessionsTotal, 0);
+});
+
+test('a TLS connection that sends one request per deadline is closed one deadline after its handshake', async (t) => {
+  const { key, cert } = selfSignedCert();
+  const g = await ownGate(t, { tls: { key, cert }, tlsRequestDeadlineMs: 300 });
+  const lifetime = nextConnectionLifetime(g.gate.server);
+  const client = await tlsClient(t, g.port, cert);
+  // A whole request, answered and read, more often than once per deadline: the connection is never idle for a deadline.
+  let answers = '';
+  client.socket.on('data', (c) => { answers += c; });
+  const request = () => { if (!client.socket.destroyed) client.socket.write('GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n'); };
+  request();
+  const timer = setInterval(request, 120);
+  t.after(() => clearInterval(timer));
+  const took = await within(lifetime, 4000);
+  assert.ok(took >= 280 && took < 2000, `the gate held the connection for ${took} ms`);
+  assert.match(answers, /^HTTP\/1\.1 200 OK/, 'the requests were answered until then');
+});
+
+test('an authorised session opened after a kept-alive /healthz on the same connection stays open past the request deadline', async (t) => {
+  const { key, cert } = selfSignedCert();
+  const g = await ownGate(t, { tls: { key, cert }, tlsRequestDeadlineMs: 500 });
+  const client = await tlsClient(t, g.port, cert);
+  let received = '';
+  client.socket.on('data', (c) => { received += c.toString('latin1'); });
+  let closed = false;
+  client.socket.on('close', () => { closed = true; });
+  client.socket.write('GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n');
+  // The whole answer: the body and the chunk that ends it.
+  await until(() => received.includes('ok\n') && received.endsWith('0\r\n\r\n'), 'the healthz answer');
+  client.socket.write(AUTHORISED_UPGRADE);
+  await until(() => received.includes('HTTP/1.1 101'), 'the 101');
+  // Three deadlines with nothing sent in either direction.
+  await sleep(1500);
+  assert.equal(closed, false, 'the session is still open');
+  assert.equal(g.gate.stats().active, 1);
+  received = '';
+  client.socket.write('still here');
+  await until(() => received === 'still here', 'the echo');
+});
+
+test('the request deadline changes no HTTP timeout, with or without tls', async (t) => {
+  const { key, cert } = selfSignedCert();
+  const withTls = await ownGate(t, { tls: { key, cert } });
   const plain = await ownGate(t, { tlsRequestDeadlineMs: 300 });
   const stock = createServer();
-  for (const name of ['headersTimeout', 'requestTimeout', 'keepAliveTimeout']) {
-    assert.equal(plain.gate.server[name], stock[name], name);
+  for (const name of ['headersTimeout', 'requestTimeout', 'keepAliveTimeout', 'timeout']) {
+    assert.equal(withTls.gate.server[name], stock[name], `tls ${name}`);
+    assert.equal(plain.gate.server[name], stock[name], `plain ${name}`);
   }
-  // A plain connection that sends nothing outlives the deadline a TLS gate would apply.
+  // Without tls there is no deadline: a connection that sends nothing outlives the one passed in.
   const idle = connect({ host: '127.0.0.1', port: plain.port });
   t.after(() => idle.destroy());
   let closed = false;

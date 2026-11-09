@@ -113,15 +113,12 @@ const KEEPALIVE_MS = 30_000;
 export const TLS_HANDSHAKE_TIMEOUT_MS = 10_000;
 export const TLS_MAX_CONNECTIONS = 256;
 /**
- * With TLS only. After the handshake, how long a connection may take to send a whole request (for a session: the
- * upgrade's headers), and how long it may stay idle after an answered request, before it is closed. Without it a peer
- * that has no token could finish TLS_MAX_CONNECTIONS handshakes, send nothing and hold every connection for Node's own
- * header timeout (a minute or more). An open session is not an HTTP connection any more and is not affected. A peer that
- * keeps opening connections or keeps sending whole requests is not stopped by this; it only loses the ones it lets idle.
+ * With TLS only. A connection that the gate has not accepted as a session this long after its TLS handshake is closed,
+ * whatever it has sent or been answered: nothing, half a request, /healthz requests, refused upgrades. The clock is not
+ * restarted by a request. Once an upgrade is accepted the connection is a session and has no such limit.
+ * What this does not do: a peer can connect again at once, and the gate has no limit per address and no rate limit.
  */
 export const TLS_REQUEST_DEADLINE_MS = 10_000;
-/** Node closes overdue connections when it checks them, on an interval; this is the longest interval the gate uses. */
-const TLS_DEADLINE_CHECK_MS = 1000;
 const sessionsOpen = (n) => `${n} ${n === 1 ? 'session' : 'sessions'} open`;
 
 /** The Prometheus text exposition (format 0.0.4) of the gate's counts. Only numbers and fixed names: nothing a client sent. */
@@ -157,7 +154,7 @@ function metricsText(s) {
  * GET and HEAD /healthz answer the same status (HEAD without a body). upstreamConnectTimeoutMs is for tests.
  * With tls ({ key, cert }, both PEM) the session server is an https.Server: clients connect with wss, and a plain-text
  * request to its port never gets an answer. It closes a connection that has not finished the TLS handshake after
- * TLS_HANDSHAKE_TIMEOUT_MS, one that has not sent a whole request TLS_REQUEST_DEADLINE_MS after the handshake (open
+ * TLS_HANDSHAKE_TIMEOUT_MS, one that it has not accepted as a session TLS_REQUEST_DEADLINE_MS after the handshake (open
  * sessions are left alone), and holds at most TLS_MAX_CONNECTIONS connections. The metrics server stays plain HTTP.
  * tlsHandshakeTimeoutMs and tlsRequestDeadlineMs are for tests.
  */
@@ -217,19 +214,22 @@ export function createGate({
     res.writeHead(404, { 'content-type': 'text/plain' });
     res.end('not found\n');
   };
-  // With TLS the request deadline is Node's own header and request timeouts, set short: the clock of a connection
-  // starts when its handshake ends, and Node closes the overdue ones each time it checks (connectionsCheckingInterval).
-  // After 101 the socket is the session's, no longer the HTTP server's, so none of these apply to it.
   const server = tls
-    ? createTlsServer({
-      key: tls.key, cert: tls.cert, handshakeTimeout: tlsHandshakeTimeoutMs,
-      headersTimeout: tlsRequestDeadlineMs, requestTimeout: tlsRequestDeadlineMs,
-      connectionsCheckingInterval: Math.min(TLS_DEADLINE_CHECK_MS, tlsRequestDeadlineMs),
-    }, onRequest)
+    ? createTlsServer({ key: tls.key, cert: tls.cert, handshakeTimeout: tlsHandshakeTimeoutMs }, onRequest)
     : createServer(onRequest);
+  // With TLS, each connection has one timer from the end of its handshake, kept here until the gate accepts an upgrade
+  // on it (below) or it closes. It does not depend on the HTTP state: Node's own header, request and keep-alive
+  // timeouts stay at their defaults and do not cover a connection that sends whole requests and never reads the
+  // answers, or one that sends a request now and then.
+  const requestDeadlines = new WeakMap();
   if (tls) {
     server.maxConnections = TLS_MAX_CONNECTIONS;
-    server.keepAliveTimeout = tlsRequestDeadlineMs;
+    server.on('secureConnection', (socket) => {
+      const timer = setTimeout(() => socket.destroy(), tlsRequestDeadlineMs);
+      timer.unref();
+      requestDeadlines.set(socket, timer);
+      socket.once('close', () => clearTimeout(timer));
+    });
   }
   server.on('upgrade', (req, socket, head) => {
     socket.on('error', () => socket.destroy());
@@ -244,6 +244,8 @@ export function createGate({
     if (draining) { refused.draining += 1; return unavailable(socket, 'draining'); }
     if (active >= maxSessions) { refused.capacity += 1; return unavailable(socket, 'busy'); }
 
+    // Accepted: from here the connection is a session, so the TLS request deadline no longer applies (no timer without TLS).
+    clearTimeout(requestDeadlines.get(socket));
     // The session holds its slot until both the client socket and the upstream socket have closed, and frees it once.
     active += 1;
     sessionsTotal += 1;
