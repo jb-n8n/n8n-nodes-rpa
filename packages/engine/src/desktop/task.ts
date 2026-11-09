@@ -134,14 +134,17 @@ function codeOf(err: unknown, message: string): ErrorCode {
 }
 
 /**
- * Messages, log notes and read outputs leave the run masked: secrets, and the value of every variable the run typed into
- * a field and every clipboard text it read, when long enough to mask (DesktopSurface.typed). The runner never puts typed
- * values into its messages; this holds even if one did, and a read of a field holding such a value shows [secret] in its
- * place. Intents are the signed steps' own text and stay as written. `except`: one value left unmasked (a clipboard
- * read's own output).
+ * Messages, log notes and read outputs leave the run masked: secrets, the value of every variable the run typed into a
+ * field (DesktopSurface.typed) and every clipboard text it read (DesktopSurface.clipboard), when long enough to mask. The
+ * runner never puts typed values into its messages; this holds even if one did, and a read of a field holding such a
+ * value shows [secret] in its place. Intents are the signed steps' own text and stay as written. `except`: one clipboard
+ * text left unmasked (a clipboard read's own output); a typed variable value equal to it stays masked.
  */
 function outputMasker(base: (string | undefined)[], surface?: DesktopSurface, except?: string): Masker {
-  return createMasker([...base, ...(surface?.typed ?? []).filter((t) => t.length >= MIN_MASKED_TYPED && t !== except)]);
+  const long = (t: string) => t.length >= MIN_MASKED_TYPED;
+  return createMasker([
+    ...base, ...(surface?.typed ?? []).filter(long), ...(surface?.clipboard ?? []).filter((t) => long(t) && t !== except),
+  ]);
 }
 
 /** Log notes and read outputs masked for secrets and typed variable values. */

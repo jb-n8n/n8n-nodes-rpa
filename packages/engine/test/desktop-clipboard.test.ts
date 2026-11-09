@@ -122,6 +122,14 @@ describe('desktop clipboard reads on the fake runner', () => {
     expect(r.outputs.map((o) => [o.as, o.text])).toEqual([['code', '[secret] 445 120']]);
   });
 
+  it('a clipboard text equal to a typed variable value stays masked in its own read output', async () => {
+    runner = await FakeRunner.start({ app: 'authenticator', policy: AUTH_POLICY });
+    runner.copyText = AUTH_USER;
+    const r = succeeded(await run(CODE_STEPS));
+    expect(r.outputs.map((o) => [o.as, o.text])).toEqual([['code', '[secret]']]);
+    expect(JSON.stringify(r)).not.toContain(AUTH_USER);
+  });
+
   it('is policy_violation when the runner policy does not set clipboardRead, and the code never leaves the runner', async () => {
     const r = failed(await run(CODE_STEPS, { policy: { ...AUTH_POLICY, clipboardRead: false } }));
     expect({ code: r.code, message: r.message }).toEqual({
