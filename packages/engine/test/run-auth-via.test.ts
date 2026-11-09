@@ -206,7 +206,8 @@ describe('signIn with pages between the password and the code (totp.via)', () =>
     const r = await runSteps(ctx, [signInStep({ via: [SEND_CODE], source: 'workflow' }, { timeoutMs: 2000 }), LANDED]);
     if (r.ok) throw new Error('expected failure');
     expect(r.failure.message).toBe(signInCodeFieldMissing(2, 0, 1));
-    expect(Date.now() - t0).toBeGreaterThanOrEqual(2000);
+    // It waited the step timeout (a small margin below it: real-clock timers and Date.now() round differently).
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(2000 - 100);
     expect(Date.now() - t0).toBeLessThan(bound(15_000));
     expect(provider).not.toHaveBeenCalled();
     expect(paths(posts)).toEqual(['/idp/login', '/idp/password']);
