@@ -422,9 +422,12 @@ async function connect(
  * to a loopback tunnel (browser/pinned-tunnel.ts) that sends its bytes (the upgrade request with the token) on only
  * after the server's certificate matched the fingerprint. The tunnel closes with the connection to the browser, or at
  * once when the connect fails; a certificate that did not match fails with the tunnel's message.
+ *
+ * What this does not cover: if the pinned server answers the WebSocket upgrade with a redirect, Playwright follows it
+ * outside the tunnel, without the Authorization header. The session that follows is not checked against the fingerprint.
  */
 async function connectPinned(wssUrl: string, fingerprint: string, connectTo: (wsUrl: string) => Promise<Browser>): Promise<Browser> {
-  const tunnel = await openPinnedTunnel(wssUrl, fingerprint);
+  const tunnel = await openPinnedTunnel(wssUrl, fingerprint, { handshakeTimeoutMs: CONNECT_TIMEOUT_MS });
   try {
     const browser = await connectTo(tunnel.wsUrl);
     browser.on('disconnected', () => { void tunnel.close(); });

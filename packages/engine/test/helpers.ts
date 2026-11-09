@@ -1,3 +1,4 @@
+import { connect as netConnect } from 'node:net';
 import { SANDBOX } from 'n8n-rpa-sandbox/testing.js';
 import type { TrustInput } from '../src/lane/trust.js';
 import { signScript } from '../src/sign.js';
@@ -7,6 +8,13 @@ export const TEST_KEY = 'test-signing-key';
 export const APPROVER = 'tester@example.com';
 export const SECRETS: PortalSecrets = { username: 'summit-ops', password: 'demo-password', totpSecret: 'JBSWY3DPEHPK3PXP' };
 export const LOCAL: BrowserEndpoint = { mode: 'local', headless: true };
+
+/** Whether a TCP connect to a loopback port is refused: nothing listens there. */
+export const connectRefused = (port: number) => new Promise<boolean>((resolve) => {
+  const socket = netConnect(port, '127.0.0.1');
+  socket.once('connect', () => { socket.destroy(); resolve(false); });
+  socket.once('error', (e: NodeJS.ErrnoException) => resolve(e.code === 'ECONNREFUSED'));
+});
 
 /**
  * A lane or task input for signed steps: the script, signed with TEST_KEY by APPROVER under a trust envelope that

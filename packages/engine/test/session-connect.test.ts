@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createServer as createHttpServer, type Server as HttpServer } from 'node:http';
-import { connect as netConnect } from 'node:net';
+import { connect as netConnect, createServer as createNetServer } from 'node:net';
 import { createServer as createTlsServer, type Server as TlsServer } from 'node:tls';
 import { chromium, type Browser, type BrowserServer } from 'playwright-core';
 import { createGate, MIN_TOKEN_LENGTH } from 'n8n-rpa-gate';
@@ -14,7 +14,7 @@ import { createMasker } from '../src/secrets/mask.js';
 import type { BrowserEndpoint } from '../src/types.js';
 import { fakeModel } from './fake-model.js';
 import { selfSignedCert } from './fake-runner-cert.js';
-import { baselineScript, policyFor, SECRETS, signedLaneInput } from './helpers.js';
+import { baselineScript, connectRefused, policyFor, SECRETS, signedLaneInput } from './helpers.js';
 import { bound } from './timing.js';
 
 /**
@@ -242,29 +242,30 @@ describe('a wss:// browser server pinned by its certificate fingerprint', () => 
   let tls: TlsServer;
   let url = '';
   let received = 0;
+  /** Connections the TLS listener accepted, and those whose server side has ended: closed, or failed during the handshake. */
+  let opened = 0;
+  let settled = 0;
   beforeAll(async () => {
     const started = await startGate();
     gate = started.gate;
     tls = createTlsServer({ key: served.key, cert: served.cert }, (socket) => {
       const upstream = netConnect(started.port, '127.0.0.1');
       socket.on('data', (chunk: Buffer) => { received += chunk.length; });
+      socket.once('close', () => { settled += 1; });
       socket.on('error', () => upstream.destroy());
       upstream.on('error', () => socket.destroy());
       socket.pipe(upstream).pipe(socket);
     });
-    // A client that leaves during the handshake (a refused certificate) is not this server's concern.
-    tls.on('tlsClientError', () => undefined);
+    tls.on('connection', () => { opened += 1; });
+    // A client that leaves during the handshake (a refused certificate) never reaches the handler above.
+    tls.on('tlsClientError', () => { settled += 1; });
     await new Promise<void>((r) => tls.listen(0, '127.0.0.1', r));
     url = `wss://127.0.0.1:${(tls.address() as { port: number }).port}/`;
   });
   afterAll(async () => { await new Promise((r) => tls.close(r)); await closeGate(gate); });
 
-  /** Whether a TCP connect to the loopback port of `wsUrl` is refused. */
-  const refused = (wsUrl: string) => new Promise<boolean>((resolve) => {
-    const s = netConnect(Number(new URL(wsUrl).port), '127.0.0.1');
-    s.once('connect', () => { s.destroy(); resolve(false); });
-    s.once('error', (e: NodeJS.ErrnoException) => resolve(e.code === 'ECONNREFUSED'));
-  });
+  /** Whether a TCP connect to the loopback port of `wsUrl` (the tunnel's address) is refused. */
+  const refused = (wsUrl: string) => connectRefused(Number(new URL(wsUrl).port));
   /** The connect seam: records the URL the session hands to chromium.connect, then connects for real. */
   const recording = (urls: string[]): ConnectServer => (wsUrl, options) => {
     urls.push(wsUrl);
@@ -297,6 +298,7 @@ describe('a wss:// browser server pinned by its certificate fingerprint', () => 
   it('a wrong fingerprint fails as browser unavailable with the mismatch message', async () => {
     received = 0;
     const sessions = gate.stats().sessionsTotal;
+    const connections = opened;
     const urls: string[] = [];
     const t0 = Date.now();
     const err = await openSession({ endpoint: endpoint(url, { fingerprint: other.fingerprint }), policy, masker, connectServer: recording(urls) })
@@ -304,6 +306,8 @@ describe('a wss:// browser server pinned by its certificate fingerprint', () => 
     expect(err).toBeInstanceOf(BrowserUnavailableError);
     expect((err as Error).message).toBe(BROWSER_FINGERPRINT_MISMATCH);
     expect(Date.now() - t0).toBeLessThan(bound(2000));
+    // Read once the server's side of the connection has ended: bytes sent before the check would have arrived by then.
+    await expect.poll(() => opened === connections + 1 && settled === opened).toBe(true);
     // Neither the upgrade request nor the token left this process, and the tunnel is gone.
     expect(received).toBe(0);
     expect(gate.stats().sessionsTotal).toBe(sessions);
@@ -311,9 +315,10 @@ describe('a wss:// browser server pinned by its certificate fingerprint', () => 
     expect(await refused(urls[0])).toBe(true);
   });
 
-  it('a matching fingerprint connects through a loopback tunnel that closes with the session', async () => {
+  it('a matching fingerprint connects through a loopback tunnel, which takes no other connection and ends with the session', async () => {
     const urls: string[] = [];
     const sessions = gate.stats().sessionsTotal;
+    const connections = opened;
     const s = await openSession({ endpoint: endpoint(url, { fingerprint: served.fingerprint.toLowerCase() }), policy, masker, connectServer: recording(urls) });
     try {
       expect(urls).toHaveLength(1);
@@ -321,9 +326,32 @@ describe('a wss:// browser server pinned by its certificate fingerprint', () => 
       expect(await s.page.evaluate(() => 1 + 1)).toBe(2);
       // The token went through the tunnel to the gate, which checks it before it admits a session.
       expect(gate.stats().sessionsTotal).toBe(sessions + 1);
-      expect(await refused(urls[0])).toBe(false);
+      // The tunnel took the session's connection and stopped listening.
+      expect(await refused(urls[0])).toBe(true);
+      expect(opened).toBe(connections + 1);
+      expect(settled).toBe(connections);
     } finally { await s.close(); }
-    await expect.poll(() => refused(urls[0])).toBe(true);
+    await expect.poll(() => settled).toBe(connections + 1);
+  });
+
+  it('a pinned server that is not reachable fails as unreachable at its wss:// address', async () => {
+    // A loopback port nothing listens on.
+    const idle = createNetServer();
+    await new Promise<void>((r) => idle.listen(0, '127.0.0.1', r));
+    const closedPort = (idle.address() as { port: number }).port;
+    await new Promise((r) => idle.close(r));
+    const urls: string[] = [];
+    const err = await openSession({
+      endpoint: endpoint(`wss://127.0.0.1:${closedPort}/pw?session=abc`, { fingerprint: served.fingerprint }), policy, masker, connectServer: recording(urls),
+    }).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(BrowserUnavailableError);
+    expect((err as Error).message).toBe(browserUnreachable(`wss://127.0.0.1:${closedPort}/pw`));
+    // Playwright connected to the tunnel, and its loopback address is not what the user is shown.
+    expect(urls).toHaveLength(1);
+    expect(new URL(urls[0]).port).not.toBe(String(closedPort));
+    expect((err as Error).message).not.toContain(new URL(urls[0]).host);
+    expect((err as Error).message).not.toContain('abc');
+    expect(await refused(urls[0])).toBe(true);
   });
 
   it('no fingerprint leaves wss:// connecting as before', async () => {

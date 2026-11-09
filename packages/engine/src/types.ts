@@ -334,6 +334,8 @@ export interface BrowserEndpoint {
    * Browser Server mode with a wss:// URL only: the SHA-256 fingerprint of the server's certificate (64 hexadecimal
    * characters, colons optional). When set, the certificate is trusted by this fingerprint instead of by its chain and
    * name (a self-signed certificate), and nothing is sent to a server that presents another one.
+   * Not covered: if the pinned server answers the WebSocket upgrade with a redirect, Playwright follows it on a
+   * connection of its own, without the Authorization header, and that session is not checked against the fingerprint.
    */
   fingerprint?: string;
 }
