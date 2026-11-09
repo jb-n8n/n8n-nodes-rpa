@@ -289,11 +289,12 @@ public class PolicyCommandTests
 
         // The show output keeps the file's own lines and escapes what is inside them; so do a path and a parse error.
         var odd = Path.Combine(Root, "RPA\u0007 Runner", "policy.json");
-        tool.Files.Text[odd] = "{\n\t\"gatedKeys\": [\"F1\u001b[2J\"]\r\n}\u2028";
+        // The file holds a tab, a line separator inside a string and (as JSON's own escape) a cursor command.
+        tool.Files.Text[odd] = "{\n\t\"gatedKeys\": [\"F1\\u001b[2J\u2028\"]\r\n}\n";
         Assert.Equal(1, tool.Run("", "show", "--policy", odd));
         var shown = odd.Replace("\u0007", "\\u0007");
         Assert.Equal(
-            $"Policy file: {shown}\n{{\n\\u0009\"gatedKeys\": [\"F1\\u001B[2J\"]\n}}\\u2028\n{shown}: gatedKeys has an invalid key chord \"F1\\u001B[2J\"\n",
+            $"Policy file: {shown}\n{{\n\\u0009\"gatedKeys\": [\"F1\\u001b[2J\\u2028\"]\n}}\n{shown}: gatedKeys has an invalid key chord \"F1\\u001B[2J\\u2028\"\n",
             tool.Output);
 
         Assert.Equal(1, tool.Run("", "show", "--policy", odd + "\u200b"));
