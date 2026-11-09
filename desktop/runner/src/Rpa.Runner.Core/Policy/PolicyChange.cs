@@ -57,8 +57,10 @@ public static class PolicyChange
             var at = apps.FindIndex(a => Same(a.Exe, app.Exe) && Same(a.Path, app.Path));
             if (at < 0)
             {
-                apps.Add(app);
+                var lists = NewLists([], app.AllowedArgs);
+                apps.Add(app with { AllowedArgs = lists });
                 summary.Add($"Allow app {app.Exe} at {app.Path}{(app.Sha256 is null ? "" : " (SHA-256 pinned)")}");
+                summary.AddRange(lists.Select(ArgumentsLine));
                 if (app.AllowUserWritable) summary.Add(Warning(app.Path));
                 continue;
             }
@@ -67,19 +69,16 @@ public static class PolicyChange
             var old = apps[at];
             if (old.AllowUserWritable && writableOff.Contains(i))
                 throw new RunnerPolicy.InvalidPolicyException($"a policy change cannot turn allowUserWritable off for {old.Path}");
-            var args = old.AllowedArgs.ToList();
-            foreach (var list in app.AllowedArgs)
-            {
-                if (!args.Any(l => l.SequenceEqual(list, StringComparer.Ordinal))) args.Add(list);
-            }
+            var added = NewLists(old.AllowedArgs, app.AllowedArgs);
             var turnedOn = app.AllowUserWritable && !old.AllowUserWritable;
             var parts = new List<string>();
             if (app.Sha256 is not null && app.Sha256 != old.Sha256) parts.Add(old.Sha256 is null ? "SHA-256 pinned" : "SHA-256 pin changed");
-            if (args.Count > old.AllowedArgs.Count) parts.Add("allowed arguments added");
+            if (added.Count > 0) parts.Add("allowed arguments added");
             if (turnedOn) parts.Add("user-writable path allowed");
             if (parts.Count == 0) continue;
-            apps[at] = old with { Sha256 = app.Sha256 ?? old.Sha256, AllowedArgs = args, AllowUserWritable = old.AllowUserWritable || turnedOn };
+            apps[at] = old with { Sha256 = app.Sha256 ?? old.Sha256, AllowedArgs = [.. old.AllowedArgs, .. added], AllowUserWritable = old.AllowUserWritable || turnedOn };
             summary.Add($"Update app {old.Exe} at {old.Path} ({string.Join("; ", parts)})");
+            summary.AddRange(added.Select(ArgumentsLine));
             if (turnedOn) summary.Add(Warning(old.Path));
         }
 
@@ -110,9 +109,9 @@ public static class PolicyChange
         if (change.ClipboardRead && !current.ClipboardRead) summary.Add("Turn on clipboard read");
 
         // The lines are what the administrator approves: a value must not be able to end a line, move the cursor or
-        // reorder the text, which could hide a line or fake one.
+        // reorder the text, which could hide a line or fake one. Every value a change adds is in a line.
         if (summary.Any(line => line.Any(Deceptive)))
-            throw new RunnerPolicy.InvalidPolicyException("the change: names, paths and ids must not contain control characters");
+            throw new RunnerPolicy.InvalidPolicyException("the change: names, paths, ids and arguments must not contain control characters");
 
         var json = JsonSerializer.Serialize(new FileOut(
             apps.Select(a => new AppOut(a.Exe, a.Path, a.Sha256, a.AllowedArgs.Count > 0 ? a.AllowedArgs : null, a.AllowUserWritable ? true : null)).ToList(),
@@ -168,6 +167,23 @@ public static class PolicyChange
     private static bool Same(string a, string b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
 
     private static string Warning(string path) => $"WARNING: {path} can be changed by the runner's own user";
+
+    /// <summary>The argument lists the entry does not have yet, each once (a list is the same when its strings are
+    /// equal in order).</summary>
+    private static List<IReadOnlyList<string>> NewLists(IReadOnlyList<IReadOnlyList<string>> existing, IReadOnlyList<IReadOnlyList<string>> lists)
+    {
+        var added = new List<IReadOnlyList<string>>();
+        foreach (var list in lists)
+        {
+            if (!existing.Concat(added).Any(l => l.SequenceEqual(list, StringComparer.Ordinal))) added.Add(list);
+        }
+        return added;
+    }
+
+    /// <summary>One argument list an app may be started with: the arguments as written, in double quotes when one is
+    /// empty or contains a space.</summary>
+    private static string ArgumentsLine(IReadOnlyList<string> list) =>
+        "  with arguments: " + (list.Count == 0 ? "(none)" : string.Join(' ', list.Select(a => a.Length == 0 || a.Any(char.IsWhiteSpace) ? $"\"{a}\"" : a)));
 
     private static bool Deceptive(char c) =>
         char.IsControl(c) || char.GetUnicodeCategory(c) is UnicodeCategory.Format or UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator;

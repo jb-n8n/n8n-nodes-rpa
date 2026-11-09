@@ -97,7 +97,7 @@ public class PolicyChangeTests
     public void A_change_without_sha256_keeps_an_existing_pin()
     {
         var (summary, app) = Merge(Policy($"\"sha256\": \"{ShaA}\""), """  "allowedArgs": [["--ui", "v2"]]""");
-        Assert.Equal([$"Update app ErpDemo.exe at {ErpPath} (allowed arguments added)"], summary);
+        Assert.Equal([$"Update app ErpDemo.exe at {ErpPath} (allowed arguments added)", "  with arguments: --ui v2"], summary);
         Assert.Equal(ShaA, app.Sha256);
 
         (summary, app) = Merge(Policy($"\"sha256\": \"{ShaA}\""), "");
@@ -125,7 +125,12 @@ public class PolicyChangeTests
     {
         var current = Policy("""  "allowedArgs": [["--ui", "v1"], ["--ui", "v2"]]""");
         var (summary, app) = Merge(current, """  "allowedArgs": [["--ui", "v2"], ["v2", "--ui"], ["--ui"], ["--ui"], ["--UI", "v1"]]""");
-        Assert.Equal([$"Update app ErpDemo.exe at {ErpPath} (allowed arguments added)"], summary);
+        Assert.Equal(
+            [
+                $"Update app ErpDemo.exe at {ErpPath} (allowed arguments added)",
+                "  with arguments: v2 --ui", "  with arguments: --ui", "  with arguments: --UI v1",
+            ],
+            summary);
         Assert.Equal(["--ui v1", "--ui v2", "v2 --ui", "--ui", "--UI v1"], app.AllowedArgs.Select(list => string.Join(' ', list)));
 
         (summary, app) = Merge(current, """  "allowedArgs": [["--ui", "v2"], ["--ui", "v1"]]""");
@@ -172,13 +177,14 @@ public class PolicyChangeTests
         Assert.Equal(
             [
                 $"Update app ErpDemo.exe at {ErpPath} (SHA-256 pin changed; allowed arguments added; user-writable path allowed)",
+                "  with arguments: --ui v2",
                 $"WARNING: {ErpPath} can be changed by the runner's own user",
             ],
             summary);
         Assert.Equal((ShaB, 2, true), (app.Sha256, app.AllowedArgs.Count, app.AllowUserWritable));
 
         (summary, _) = Merge(Policy(), $"\"sha256\": \"{ShaB}\", \"allowedArgs\": [[\"--ui\", \"v2\"]]");
-        Assert.Equal([$"Update app ErpDemo.exe at {ErpPath} (SHA-256 pinned; allowed arguments added)"], summary);
+        Assert.Equal([$"Update app ErpDemo.exe at {ErpPath} (SHA-256 pinned; allowed arguments added)", "  with arguments: --ui v2"], summary);
     }
 
     [Fact]
@@ -189,8 +195,56 @@ public class PolicyChangeTests
                               { "exe": "ErpDemo.exe", "path": {{J(ErpPath)}}, "allowedArgs": [["--ui", "v2"]] }] }
             """;
         var result = PolicyChange.Apply("", change);
-        Assert.Equal([$"Allow app ErpDemo.exe at {ErpPath}", $"Update app ErpDemo.exe at {ErpPath} (allowed arguments added)"], result.Summary);
+        Assert.Equal(
+            [
+                $"Allow app ErpDemo.exe at {ErpPath}", "  with arguments: --ui v1",
+                $"Update app ErpDemo.exe at {ErpPath} (allowed arguments added)", "  with arguments: --ui v2",
+            ],
+            result.Summary);
         Assert.Equal(2, Assert.Single(RunnerPolicy.Parse(result.Json).AllowedApps).AllowedArgs.Count);
+    }
+
+    [Fact]
+    public void Shows_the_argument_lists_of_an_allowed_app()
+    {
+        var result = PolicyChange.Apply("", AppChange(ErpPath, """, "allowedArgs": [["--ui", "v1"], ["--ui", "v2"]], "allowUserWritable": true"""));
+        Assert.Equal(
+            [
+                $"Allow app ErpDemo.exe at {ErpPath}",
+                "  with arguments: --ui v1",
+                "  with arguments: --ui v2",
+                $"WARNING: {ErpPath} can be changed by the runner's own user",
+            ],
+            result.Summary);
+    }
+
+    [Fact]
+    public void Quotes_arguments_with_a_space_and_empty_ones_and_says_none_for_an_empty_list()
+    {
+        var result = PolicyChange.Apply("", AppChange(ErpPath, """, "allowedArgs": [["--open", "My File.csv", ""], [], ["--open", "My File.csv", ""]]"""));
+        Assert.Equal(
+            [$"Allow app ErpDemo.exe at {ErpPath}", "  with arguments: --open \"My File.csv\" \"\"", "  with arguments: (none)"],
+            result.Summary);
+        Assert.Equal(2, Assert.Single(RunnerPolicy.Parse(result.Json).AllowedApps).AllowedArgs.Count);
+    }
+
+    [Fact]
+    public void An_update_that_adds_one_list_prints_only_the_added_list()
+    {
+        var current = Policy("""  "allowedArgs": [["--ui", "v1"]]""");
+        var (summary, app) = Merge(current, """  "allowedArgs": [["--ui", "v1"], ["--ui", "v2"]]""");
+        Assert.Equal([$"Update app ErpDemo.exe at {ErpPath} (allowed arguments added)", "  with arguments: --ui v2"], summary);
+        Assert.Equal(["--ui v1", "--ui v2"], app.AllowedArgs.Select(list => string.Join(' ', list)));
+    }
+
+    [Fact]
+    public void Refuses_an_argument_with_a_control_character()
+    {
+        foreach (var arg in new[] { "v1\nAllow app Harmless.exe", "v1\u001b[1A\u001b[2K", "v1\u202e", "v1\t--evil" })
+        {
+            Refused("", AppChange(ErpPath, $", \"allowedArgs\": [[\"--ui\", {J(arg)}]]"), "control characters");
+            Refused(Policy(), AppChange(ErpPath, $", \"allowedArgs\": [[\"--ui\", {J(arg)}]]"), "control characters");
+        }
     }
 
     [Fact]
@@ -245,7 +299,7 @@ public class PolicyChangeTests
               "helperProcesses": [{ "exe": "msedgewebview2.exe", "pathPattern": {{J(HelperPattern)}} }], "clipboardRead": true }
             """;
         var first = PolicyChange.Apply("", change);
-        Assert.Equal(5, first.Summary.Count);
+        Assert.Equal(6, first.Summary.Count);
         var second = PolicyChange.Apply(first.Json, change);
         Assert.Empty(second.Summary);
         Assert.Equal(first.Json, second.Json);

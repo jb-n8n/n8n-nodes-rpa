@@ -141,11 +141,15 @@ The lines the tool prints before it asks:
 |---|---|
 | `Allow app <exe> at <path>` | A new `allowedApps` entry. ` (SHA-256 pinned)` follows when it sets `sha256`. |
 | `Update app <exe> at <path> (<what changes>)` | The existing entry for this exe and path changes. In the parentheses, joined by `; `: `SHA-256 pinned` (it had no pin), `SHA-256 pin changed`, `allowed arguments added`, `user-writable path allowed`. |
+| `  with arguments: <arg> <arg> ...` | Under an `Allow app` or `Update app` line, one line for each `allowedArgs` list it adds. An argument that is empty or contains a space is in double quotes; an empty list is `  with arguments: (none)`. |
 | `WARNING: <path> can be changed by the runner's own user` | The app above is new with `allowUserWritable: true`, or the update turns it on. |
 | `Add write control <exe> / <automationId>` | A new `writeControls` entry. |
 | `Add gated key <chord>` | A new `gatedKeys` entry. |
 | `Add helper process <exe> at <pathPattern>` | A new `helperProcesses` entry. |
 | `Turn on clipboard read` | `clipboardRead` becomes `true`. |
+
+These lines are all an administrator sees before saying yes, so a change is refused when a name, path, id or argument
+in it contains a control character (a line break or a cursor command could hide a line or fake one).
 
 `Nothing to change.` means the policy already has everything; the file is not written. Otherwise the tool writes the
 new policy (the file keeps its permissions), keeps the old one beside it as `policy.json.<yyyyMMdd-HHmmss>.bak`
@@ -154,6 +158,12 @@ new policy (the file keeps its permissions), keeps the old one beside it as `pol
 within 10 seconds; start a runner you started by hand again yourself. The tool writes the whole file in one layout
 (two-space indent, the key order of the example), so comments in a hand-edited policy are not kept; the backup still
 has them.
+
+The new text goes first into a temporary file beside the policy (`policy.json.<32 hex digits>.tmp`, for administrators
+and SYSTEM only), which then takes the policy file's place, so the policy is never half written. After that the tool
+runs the runner's own start check on the policy file. When the check finds a problem (someone other than an
+administrator owns the file, or can change or replace it), the tool says so, exits 1 and leaves the runner running:
+fix the permissions before the runner's next start.
 
 Exit codes: 0 applied or nothing to change, 1 refused or invalid, 2 wrong arguments (the usage is printed), 3 declined
 at the prompt.
