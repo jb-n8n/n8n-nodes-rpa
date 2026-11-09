@@ -14,7 +14,8 @@
 // Where no container network or load balancer stands in front of it, the gate can serve TLS itself from a key and a
 // certificate file, read its token from a file instead of the environment, and listen on one address only
 // (BROWSER_GATE_TLS_KEY_FILE and BROWSER_GATE_TLS_CERT_FILE, BROWSER_GATE_TOKEN_FILE, BROWSER_GATE_HOST; all unset by
-// default). The metrics port stays plain HTTP.
+// default). The metrics port stays plain HTTP and needs no token: with TLS on it listens on 127.0.0.1 unless
+// BROWSER_GATE_METRICS_HOST names another address.
 import { createServer } from 'node:http';
 import { createServer as createTlsServer } from 'node:https';
 import { connect } from 'node:net';
@@ -104,6 +105,13 @@ const HEALTH_CONNECT_MS = 1000;
 export const UPSTREAM_CONNECT_TIMEOUT_MS = 10_000;
 /** TCP keepalive on session sockets, so a peer that vanished without a FIN (a dead NAT entry, a lost host) is noticed. */
 const KEEPALIVE_MS = 30_000;
+/**
+ * With TLS only. How long a connection may take to finish the TLS handshake before it is closed (Node's default is 120 s),
+ * and how many connections the session port holds at once; further ones are dropped. Both limit what a client that
+ * connects and sends nothing can hold open.
+ */
+export const TLS_HANDSHAKE_TIMEOUT_MS = 10_000;
+export const TLS_MAX_CONNECTIONS = 256;
 const sessionsOpen = (n) => `${n} ${n === 1 ? 'session' : 'sessions'} open`;
 
 /** The Prometheus text exposition (format 0.0.4) of the gate's counts. Only numbers and fixed names: nothing a client sent. */
@@ -138,18 +146,21 @@ function metricsText(s) {
  * - onSessions(cb): cb(active) on every change of the open-session count.
  * GET and HEAD /healthz answer the same status (HEAD without a body). upstreamConnectTimeoutMs is for tests.
  * With tls ({ key, cert }, both PEM) the session server is an https.Server: clients connect with wss, and a plain-text
- * request to its port never gets an answer. The metrics server stays plain HTTP.
+ * request to its port never gets an answer. It closes a connection that has not finished the TLS handshake after
+ * TLS_HANDSHAKE_TIMEOUT_MS and holds at most TLS_MAX_CONNECTIONS connections. The metrics server stays plain HTTP.
+ * tlsHandshakeTimeoutMs is for tests.
  */
 export function createGate({
   token, upstreamHost = '127.0.0.1', upstreamPort, upstreamPath, maxSessions = 4, metricsPort,
-  upstreamConnectTimeoutMs = UPSTREAM_CONNECT_TIMEOUT_MS, tls,
+  upstreamConnectTimeoutMs = UPSTREAM_CONNECT_TIMEOUT_MS, tls, tlsHandshakeTimeoutMs = TLS_HANDSHAKE_TIMEOUT_MS,
 }) {
   if (typeof token !== 'string' || token.length < MIN_TOKEN_LENGTH) {
     throw new Error(`BROWSER_GATE_TOKEN must be at least ${MIN_TOKEN_LENGTH} characters`);
   }
   if (typeof upstreamPath !== 'string' || !UPSTREAM_PATH.test(upstreamPath)) throw new Error(UPSTREAM_PATH_RULE);
   if (!validSessions(maxSessions)) throw new Error(`maxSessions ${MAX_SESSIONS_RULE}`);
-  if (tls !== undefined && (typeof tls?.key !== 'string' || typeof tls?.cert !== 'string')) {
+  const pemText = (v) => typeof v === 'string' && v !== '';
+  if (tls !== undefined && (!pemText(tls?.key) || !pemText(tls?.cert))) {
     throw new Error('tls must be { key, cert }, both PEM text');
   }
 
@@ -194,7 +205,10 @@ export function createGate({
     res.writeHead(404, { 'content-type': 'text/plain' });
     res.end('not found\n');
   };
-  const server = tls ? createTlsServer({ key: tls.key, cert: tls.cert }, onRequest) : createServer(onRequest);
+  const server = tls
+    ? createTlsServer({ key: tls.key, cert: tls.cert, handshakeTimeout: tlsHandshakeTimeoutMs }, onRequest)
+    : createServer(onRequest);
+  if (tls) server.maxConnections = TLS_MAX_CONNECTIONS;
   server.on('upgrade', (req, socket, head) => {
     socket.on('error', () => socket.destroy());
     const refuseFor = (reason, status) => { refused[reason] += 1; refuse(socket, status); };
@@ -316,6 +330,12 @@ if (isMain) {
     process.exit(1);
   }
   const token = tokenFromFile ? fileEnv('BROWSER_GATE_TOKEN_FILE').trim() : process.env.BROWSER_GATE_TOKEN ?? '';
+  // A file saved as UTF-16 (what Windows PowerShell 5.1 writes with > or Out-File) or with a space inside the token
+  // would start a gate that answers every client 401: a Bearer token has no spaces, and the bytes would not match.
+  if (tokenFromFile && !/^[\x21-\x7e]*$/.test(token)) {
+    console.error('browser-gate: BROWSER_GATE_TOKEN_FILE must hold ASCII or UTF-8 text without spaces');
+    process.exit(1);
+  }
   if (token.length < MIN_TOKEN_LENGTH) {
     console.error(tokenFromFile
       ? `browser-gate: BROWSER_GATE_TOKEN_FILE must hold a token of at least ${MIN_TOKEN_LENGTH} characters`
@@ -379,18 +399,22 @@ if (isMain) {
   };
   gate.server.on('error', listenFailed('sessions'));
   // No host: Node listens on :: dual-stack (IPv4 and IPv6), or on 0.0.0.0 where IPv6 is off. BROWSER_GATE_HOST names the
-  // one address to listen on instead, for sessions and for metrics.
+  // one address the session port listens on instead.
   const host = (process.env.BROWSER_GATE_HOST ?? '').trim();
-  const listen = (server, onPort, listening) => (host === '' ? server.listen(onPort, listening) : server.listen(onPort, host, listening));
+  // The metrics port is plain HTTP and needs no token, so it has an address of its own: BROWSER_GATE_METRICS_HOST.
+  // Unset with TLS on (no container network in front of the gate), it is 127.0.0.1; unset with TLS off, it listens
+  // without a host as it always has, and BROWSER_GATE_HOST does not move it.
+  const metricsHost = (process.env.BROWSER_GATE_METRICS_HOST ?? '').trim() || (tls ? '127.0.0.1' : '');
+  const listen = (server, onPort, onHost, listening) => (onHost === '' ? server.listen(onPort, listening) : server.listen(onPort, onHost, listening));
   /** Where a server listens, for the log: ":3000", "127.0.0.1:3000" or "[::1]:3000". */
-  const at = (server) => `${host.includes(':') ? `[${host}]` : host}:${server.address().port}`;
-  listen(gate.server, port, () => {
-    console.log(`browser-gate: listening on ${at(gate.server)}${tls ? ' with TLS' : ''} (max sessions ${maxSessions}), forwarding authorised upgrades to the run-server on 127.0.0.1:${upstreamPort}`);
+  const at = (server, onHost) => `${onHost.includes(':') ? `[${onHost}]` : onHost}:${server.address().port}`;
+  listen(gate.server, port, host, () => {
+    console.log(`browser-gate: listening on ${at(gate.server, host)}${tls ? ' with TLS' : ''} (max sessions ${maxSessions}), forwarding authorised upgrades to the run-server on 127.0.0.1:${upstreamPort}`);
   });
   if (gate.metricsServer) {
     gate.metricsServer.on('error', listenFailed('metrics'));
-    listen(gate.metricsServer, metricsPort, () => {
-      console.log(`browser-gate: metrics on ${at(gate.metricsServer)}/metrics`);
+    listen(gate.metricsServer, metricsPort, metricsHost, () => {
+      console.log(`browser-gate: metrics on ${at(gate.metricsServer, metricsHost)}/metrics`);
     });
   }
   // ECS_AGENT_URI is set by the ECS agent itself, so without it the gate is not on ECS: say so once and carry on.

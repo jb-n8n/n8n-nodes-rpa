@@ -10,7 +10,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { networkInterfaces, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { ALLOWED_LAUNCH_OPTIONS, createGate, MIN_TOKEN_LENGTH, MIN_UPSTREAM_PATH_SECRET } from '../gate.mjs';
+import { ALLOWED_LAUNCH_OPTIONS, createGate, MIN_TOKEN_LENGTH, MIN_UPSTREAM_PATH_SECRET, TLS_HANDSHAKE_TIMEOUT_MS, TLS_MAX_CONNECTIONS } from '../gate.mjs';
 import { selfSignedCert } from '../selfsigned.mjs';
 
 const TOKEN = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
@@ -753,8 +753,8 @@ test('with tls an authorised wss upgrade is forwarded and a plain ws upgrade to 
   assert.doesNotMatch(plain, /HTTP\/1\.1 101/);
   assert.equal(up.seen.connections, 1, 'a plain-text upgrade never reaches the run-server');
   assert.equal(g.stats().sessionsTotal, 1);
-  // Half a pair would make a TLS server with nothing to serve.
-  for (const tls of [{ key }, { cert }, {}, 'on']) {
+  // Half a pair, or an empty one, would make a TLS server with nothing to serve.
+  for (const tls of [{ key }, { cert }, {}, 'on', { key: '', cert }, { key, cert: '' }, { key: '', cert: '' }]) {
     assert.throws(() => createGate({ token: TOKEN, upstreamPort: 1, upstreamPath: UPSTREAM_PATH, tls }), /tls must be \{ key, cert \}/);
   }
 });
@@ -814,6 +814,26 @@ test('a token file that cannot be read or holds a short token exits 1 without sh
   assert.doesNotMatch(short.stderr + short.stdout, /short-token-content/);
 });
 
+test('a token file in UTF-16 or with a space inside the token exits 1 with the fix, without showing its content', (t) => {
+  const dir = tempDir(t);
+  const expected = /^browser-gate: BROWSER_GATE_TOKEN_FILE must hold ASCII or UTF-8 text without spaces$/m;
+  // What Windows PowerShell 5.1 writes with > or Out-File: UTF-16LE with a byte order mark.
+  const utf16 = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(`${TOKEN}\r\n`, 'utf16le')]);
+  const cases = [
+    ['UTF-16LE', fileIn(dir, 'token-utf16', utf16)],
+    ['a short UTF-16LE token', fileIn(dir, 'token-utf16-short', Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('abc\r\n', 'utf16le')]))],
+    ['an inner space', fileIn(dir, 'token-space', `${TOKEN.slice(0, 32)} ${TOKEN.slice(32)}\n`)],
+    ['an inner line end', fileIn(dir, 'token-lines', `${TOKEN.slice(0, 32)}\n${TOKEN.slice(32)}\n`)],
+    ['a character outside ASCII', fileIn(dir, 'token-accent', `${TOKEN}\u00e9\n`)],
+  ];
+  for (const [what, tokenFile] of cases) {
+    const run = startUp({ BROWSER_GATE_TOKEN: undefined, BROWSER_GATE_TOKEN_FILE: tokenFile });
+    assert.equal(run.status, 1, what);
+    assert.match(run.stderr, expected, what);
+    assert.doesNotMatch(run.stderr + run.stdout, new RegExp(`${TOKEN.slice(0, 16)}|listening`), what);
+  }
+});
+
 test('only one of the two TLS files exits 1', (t) => {
   const { key, cert } = selfSignedCert();
   const dir = tempDir(t);
@@ -860,21 +880,149 @@ function reachable(host, port) {
   });
 }
 
+/** Every address of this machine but 127.0.0.1: the addresses of its network interfaces and, where there is one, the IPv6 loopback. */
+async function otherLocalAddresses() {
+  const others = Object.values(networkInterfaces()).flat().filter((a) => a.family === 'IPv4' && !a.internal).map((a) => a.address);
+  if (await hasIpv6Loopback()) others.push('::1');
+  return others;
+}
+
+/** A plain GET over TLS; resolves with the status and body. */
+function getTls(port, cert, path) {
+  return new Promise((resolve, reject) => {
+    httpsRequest({ host: '127.0.0.1', port, path, ca: cert, checkServerIdentity: () => undefined, agent: false }, (res) => {
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => { body += c; });
+      res.on('end', () => resolve({ status: res.statusCode, body }));
+    }).on('error', reject).end();
+  });
+}
+
+/** The key and certificate of a fresh self-signed pair as files, and the certificate text. */
+function tlsFiles(t) {
+  const { key, cert } = selfSignedCert();
+  const dir = tempDir(t);
+  return { cert, env: { BROWSER_GATE_TLS_KEY_FILE: fileIn(dir, 'gate.key', key), BROWSER_GATE_TLS_CERT_FILE: fileIn(dir, 'gate.crt', cert) } };
+}
+
 test('BROWSER_GATE_HOST=127.0.0.1 listens on loopback only', async (t) => {
+  const up = await fakeUpstream();
+  t.after(() => close(up.server));
+  const g = await spawnGate(t, { BROWSER_GATE_HOST: '127.0.0.1', BROWSER_UPSTREAM_PORT: String(up.port) });
+  assert.match(g.log(), new RegExp(`browser-gate: listening on 127\\.0\\.0\\.1:${g.port} \\(max sessions 4\\)`));
+  assert.equal((await requestTo({ port: g.port, path: '/healthz' })).status, 200);
+  const others = await otherLocalAddresses();
+  if (others.length === 0) return t.skip('this machine has no address but 127.0.0.1');
+  for (const host of others) assert.equal(await reachable(host, g.port), false, `sessions on ${host}`);
+});
+
+test('BROWSER_GATE_HOST=::1 listens on the IPv6 loopback and the start line shows [::1]:port', async (t) => {
+  if (!(await hasIpv6Loopback())) return t.skip('no IPv6 loopback on this machine');
+  const up = await fakeUpstream();
+  t.after(() => close(up.server));
+  const g = await spawnGate(t, { BROWSER_GATE_HOST: '::1', BROWSER_UPSTREAM_PORT: String(up.port) });
+  assert.match(g.log(), new RegExp(`browser-gate: listening on \\[::1\\]:${g.port} \\(max sessions 4\\)`));
+  assert.equal((await requestTo({ host: '::1', port: g.port, path: '/healthz' })).status, 200);
+  assert.equal(await reachable('127.0.0.1', g.port), false, 'not on 127.0.0.1');
+});
+
+test('healthz answers over TLS', async (t) => {
+  const { key, cert } = selfSignedCert();
+  const serving = await ownGate(t, { tls: { key, cert } });
+  const ok = await getTls(serving.port, cert, '/healthz');
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body, 'ok\n');
+  assert.equal((await getTls(serving.port, cert, '/')).status, 404);
+  serving.gate.drain(1000);
+  const draining = await getTls(serving.port, cert, '/healthz');
+  assert.equal(draining.status, 503);
+  assert.equal(draining.body, 'draining\n');
+});
+
+// ---- Metrics are plain HTTP without a token: where the gate serves TLS itself, they stay on 127.0.0.1 unless told otherwise. ----
+
+test('without TLS the metrics port listens as before, whatever BROWSER_GATE_HOST says', async (t) => {
+  if (!(await hasIpv6Loopback())) return t.skip('no IPv6 loopback on this machine');
   const up = await fakeUpstream();
   t.after(() => close(up.server));
   const metricsPort = await freePort();
   const g = await spawnGate(t, { BROWSER_GATE_HOST: '127.0.0.1', BROWSER_UPSTREAM_PORT: String(up.port), BROWSER_GATE_METRICS_PORT: String(metricsPort) });
-  await until(() => g.log().includes(`metrics on 127.0.0.1:${metricsPort}/metrics`), 'the metrics line');
-  assert.match(g.log(), new RegExp(`browser-gate: listening on 127\\.0\\.0\\.1:${g.port} \\(max sessions 4\\)`));
-  assert.equal((await requestTo({ port: g.port, path: '/healthz' })).status, 200);
-  assert.equal((await requestTo({ port: metricsPort, path: '/metrics' })).status, 200);
-  // Every other address of this machine: the IPv6 loopback and the addresses of its network interfaces.
-  const others = Object.values(networkInterfaces()).flat().filter((a) => a.family === 'IPv4' && !a.internal).map((a) => a.address);
-  if (await hasIpv6Loopback()) others.push('::1');
-  if (others.length === 0) return t.skip('this machine has no address but 127.0.0.1');
-  for (const host of others) {
-    assert.equal(await reachable(host, g.port), false, `sessions on ${host}`);
-    assert.equal(await reachable(host, metricsPort), false, `metrics on ${host}`);
+  await until(() => g.log().includes(`browser-gate: metrics on :${metricsPort}/metrics`), 'the metrics line');
+  for (const host of ['127.0.0.1', '::1']) {
+    assert.equal((await requestTo({ host, port: metricsPort, path: '/metrics' })).status, 200, `metrics on ${host}`);
   }
+});
+
+test('with TLS and no BROWSER_GATE_METRICS_HOST, metrics answer on 127.0.0.1 only', async (t) => {
+  const up = await fakeUpstream();
+  t.after(() => close(up.server));
+  const metricsPort = await freePort();
+  const { env } = tlsFiles(t);
+  // An empty BROWSER_GATE_METRICS_HOST counts as unset.
+  const g = await spawnGate(t, { ...env, BROWSER_GATE_METRICS_HOST: '', BROWSER_UPSTREAM_PORT: String(up.port), BROWSER_GATE_METRICS_PORT: String(metricsPort) });
+  await until(() => g.log().includes(`browser-gate: metrics on 127.0.0.1:${metricsPort}/metrics`), 'the metrics line');
+  const m = await requestTo({ port: metricsPort, path: '/metrics' });
+  assert.equal(m.status, 200);
+  assert.match(m.body, /^rpa_browser_sessions_capacity 4$/m);
+  const others = await otherLocalAddresses();
+  if (others.length === 0) return t.skip('this machine has no address but 127.0.0.1');
+  for (const host of others) assert.equal(await reachable(host, metricsPort), false, `metrics on ${host}`);
+});
+
+test('BROWSER_GATE_METRICS_HOST names the address of the metrics port, with or without TLS', async (t) => {
+  const up = await fakeUpstream();
+  t.after(() => close(up.server));
+  const others = await otherLocalAddresses();
+  // Without TLS: metrics on 127.0.0.1 only, while sessions keep the dual-stack listen.
+  const plainPort = await freePort();
+  const plain = await spawnGate(t, { BROWSER_GATE_METRICS_HOST: '127.0.0.1', BROWSER_UPSTREAM_PORT: String(up.port), BROWSER_GATE_METRICS_PORT: String(plainPort) });
+  await until(() => plain.log().includes(`browser-gate: metrics on 127.0.0.1:${plainPort}/metrics`), 'the metrics line');
+  assert.match(plain.log(), /browser-gate: listening on :\d+ \(max sessions 4\)/);
+  assert.equal((await requestTo({ port: plainPort, path: '/metrics' })).status, 200);
+  for (const host of others) assert.equal(await reachable(host, plainPort), false, `metrics on ${host}`);
+  if (others.includes('::1')) assert.equal((await requestTo({ host: '::1', port: plain.port, path: '/healthz' })).status, 200, 'sessions still on ::1');
+
+  // With TLS: the named address instead of 127.0.0.1.
+  if (!others.includes('::1')) return t.skip('no IPv6 loopback on this machine for the TLS half');
+  const tlsPort = await freePort();
+  const { env } = tlsFiles(t);
+  const withTls = await spawnGate(t, { ...env, BROWSER_GATE_METRICS_HOST: '::1', BROWSER_UPSTREAM_PORT: String(up.port), BROWSER_GATE_METRICS_PORT: String(tlsPort) });
+  await until(() => withTls.log().includes(`browser-gate: metrics on [::1]:${tlsPort}/metrics`), 'the metrics line');
+  assert.equal((await requestTo({ host: '::1', port: tlsPort, path: '/metrics' })).status, 200);
+  assert.equal(await reachable('127.0.0.1', tlsPort), false, 'not on 127.0.0.1');
+});
+
+// ---- TLS limits: a connection that never finishes the handshake, and the number of connections. ----
+
+test('with tls a connection that sends nothing is closed after the handshake timeout, and connections are capped', async (t) => {
+  assert.equal(TLS_HANDSHAKE_TIMEOUT_MS, 10_000);
+  assert.equal(TLS_MAX_CONNECTIONS, 256);
+  const { key, cert } = selfSignedCert();
+  const quick = await ownGate(t, { tls: { key, cert }, tlsHandshakeTimeoutMs: 200 });
+  assert.equal(quick.gate.server.maxConnections, 256);
+  const started = Date.now();
+  const silent = connect({ host: '127.0.0.1', port: quick.port });
+  silent.on('error', () => {});
+  silent.resume();
+  await once(silent, 'close');
+  const took = Date.now() - started;
+  assert.ok(took >= 150 && took < 3000, `closed after ${took} ms`);
+  // The gate still serves after it.
+  const ok = await upgradeTls(quick.port, cert, AUTH);
+  assert.equal(ok.status, 101);
+  ok.socket.destroy();
+
+  // Without tls nothing changes: no connection cap, and a silent connection is not closed that soon.
+  const plain = await ownGate(t);
+  assert.equal(plain.gate.server.maxConnections, undefined);
+  const idle = connect({ host: '127.0.0.1', port: plain.port });
+  t.after(() => idle.destroy());
+  let closed = false;
+  idle.on('close', () => { closed = true; });
+  idle.on('error', () => {});
+  idle.resume();
+  await once(idle, 'connect');
+  await sleep(400);
+  assert.equal(closed, false, 'the plain gate has not closed the silent connection');
 });

@@ -4,6 +4,10 @@
 import { X509Certificate, createHash, generateKeyPairSync, randomBytes, sign } from 'node:crypto';
 
 const DAY_MS = 86_400_000;
+/** The longest common name X.520 allows. */
+const MAX_COMMON_NAME = 64;
+/** The last year a certificate date can hold (four digits). */
+const MAX_YEAR = 9999;
 
 /** One DER element: tag, length (up to 65535 bytes), content. */
 function tlv(tag, content) {
@@ -42,8 +46,16 @@ export function fingerprintOfPem(certPem) {
  * A fresh key and its self-signed certificate for `commonName`, valid from yesterday for `years` years.
  * Returns { key: PEM pkcs8 P-256 private key, cert: PEM certificate, fingerprint }. The key is a secret: write it to a
  * file only its owner can read, and never print it.
+ * Throws on a common name that is not a string of 1 to 64 characters, and on years that are not a whole number of 1 or
+ * more or that end after the year 9999: either would make a certificate that is expired or that a client cannot read.
  */
 export function selfSignedCert({ commonName = 'rpa-browser', years = 10 } = {}) {
+  if (typeof commonName !== 'string' || commonName.length < 1 || commonName.length > MAX_COMMON_NAME) {
+    throw new Error(`commonName must be a string of 1 to ${MAX_COMMON_NAME} characters`);
+  }
+  if (!Number.isInteger(years) || years < 1 || new Date().getUTCFullYear() + years > MAX_YEAR) {
+    throw new Error(`years must be a whole number, 1 or more, with the validity ending by the year ${MAX_YEAR}`);
+  }
   const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
   const ecdsaSha256 = seq(oid('1.2.840.10045.4.3.2'));
   const serial = randomBytes(8);

@@ -77,3 +77,30 @@ test('two calls give different keys', () => {
   assert.notEqual(a.cert, b.cert);
   assert.notEqual(a.fingerprint, b.fingerprint);
 });
+
+// ---- Parameters: a wrong one throws instead of making a certificate that is expired or cannot be read. ----
+
+const YEARS_RULE = /years must be a whole number, 1 or more, with the validity ending by the year 9999/;
+for (const [what, years] of [['a string', '10'], ['0', 0], ['a negative number', -1], ['a fraction', 1.5], ['a number that passes the year 9999', 8000], ['null', null]]) {
+  test(`years as ${what} is refused`, () => {
+    assert.throws(() => selfSignedCert({ years }), YEARS_RULE);
+  });
+}
+
+test('the validity may end in the year 9999 itself', () => {
+  const years = 9999 - new Date().getUTCFullYear();
+  assert.match(new X509Certificate(selfSignedCert({ years }).cert).validTo, / 9999 GMT$/);
+  assert.throws(() => selfSignedCert({ years: years + 1 }), YEARS_RULE);
+});
+
+const COMMON_NAME_RULE = /commonName must be a string of 1 to 64 characters/;
+for (const [what, commonName] of [['an empty string', ''], ['65 characters', 'a'.repeat(65)], ['a number', 42], ['null', null]]) {
+  test(`a common name that is ${what} is refused`, () => {
+    assert.throws(() => selfSignedCert({ commonName }), COMMON_NAME_RULE);
+  });
+}
+
+test('a common name of 64 characters is accepted', () => {
+  const commonName = 'a'.repeat(64);
+  assert.equal(new X509Certificate(selfSignedCert({ commonName }).cert).subject, `CN=${commonName}`);
+});
