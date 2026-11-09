@@ -485,7 +485,8 @@ export async function openSession(opts: {
     });
   } catch (err) {
     if (err instanceof NoFreeSessionError) throw new NoFreeSessionError(scrub(err.message));
-    // The pinned tunnel refused the server's certificate: its own message stands.
+    // The pinned tunnel's own message stands: the server presented another certificate, or the tunnel could not
+    // connect to the browser server.
     if (err instanceof BrowserUnavailableError) throw new BrowserUnavailableError(scrub(err.message));
     throw new BrowserUnavailableError(scrub(connectError(err, endpoint)));
   }

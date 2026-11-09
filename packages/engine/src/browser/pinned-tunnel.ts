@@ -43,8 +43,7 @@ export function pinnedFingerprint(value: string): string {
 /**
  * Listens on a free loopback port and forwards the first connection to the wss:// server, once the server's certificate
  * matched the fingerprint. It forwards that one connection only: every later connection is accepted and closed at once,
- * with nothing read from it and nothing sent to the server. The tunnel keeps the port bound until close(), so the
- * address stays this process's while the client may still connect to it.
+ * with nothing read from it and nothing sent to the server. The tunnel keeps the port bound until close().
  * Throws BROWSER_FINGERPRINT_INVALID for a malformed fingerprint and BROWSER_FINGERPRINT_NEEDS_WSS for a URL that is
  * not wss://. A server that cannot be reached, that does not finish the TLS handshake within `handshakeTimeoutMs`, or
  * that presents another certificate, closes the connection to the tunnel; `failure()` tells the last case apart.
