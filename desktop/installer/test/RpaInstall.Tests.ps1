@@ -264,10 +264,10 @@ Describe 'Show-RpaConnection.ps1' {
     # A made-up install: <root>/install (install.json, scripts/) and <root>/data/RPA Runner (the log, the certificate,
     # the tokens). The runner port is listening, the browser port is not. Every key, certificate and token is made here.
     $script:Root = Join-Path ([IO.Path]::GetTempPath()) ('rpa-show-' + [guid]::NewGuid().ToString('N'))
-    $installDir = Join-Path $script:Root 'install'
-    $scriptsDir = Join-Path $installDir 'scripts'
-    $dataDir = Join-Path (Join-Path $script:Root 'data') 'RPA Runner'
-    $script:LogDir = Join-Path $dataDir 'logs'
+    $script:MadeUpInstall = Join-Path $script:Root 'install'
+    $scriptsDir = Join-Path $script:MadeUpInstall 'scripts'
+    $script:MadeUpData = Join-Path (Join-Path $script:Root 'data') 'RPA Runner'
+    $script:LogDir = Join-Path $script:MadeUpData 'logs'
     New-Item -ItemType Directory -Force -Path $scriptsDir, $script:LogDir | Out-Null
     Copy-Item -LiteralPath (Join-Path (Join-Path $script:InstallerDir 'scripts') 'Show-RpaConnection.ps1') -Destination $scriptsDir
     $script:ShowScript = Join-Path $scriptsDir 'Show-RpaConnection.ps1'
@@ -280,29 +280,42 @@ Describe 'Show-RpaConnection.ps1' {
     $script:BrowserPort = $closed.LocalEndpoint.Port
     $closed.Stop()
     $install = [ordered]@{ version = '0.0.0'; user = 'rpa-runner'; runnerPort = $script:RunnerPort; browserPort = $script:BrowserPort; browser = $true; autoSignIn = $false }
-    Set-Content -LiteralPath (Join-Path $installDir 'install.json') -Value ($install | ConvertTo-Json) -Encoding UTF8
+    $script:InstallJson = $install | ConvertTo-Json
+    Set-Content -LiteralPath (Join-Path $script:MadeUpInstall 'install.json') -Value $script:InstallJson -Encoding UTF8
 
-    $bytes = New-Object byte[] 32
-    $random = [Security.Cryptography.RandomNumberGenerator]::Create()
-    try { $random.GetBytes($bytes) } finally { $random.Dispose() }
-    $script:RunnerFingerprint = ($bytes | ForEach-Object { $_.ToString('X2') }) -join ':'
-    Set-Content -LiteralPath (Join-Path $script:LogDir 'runner.out.log') -Value "RPA runner listening on wss://0.0.0.0:$($script:RunnerPort)/rpa/v1, fingerprint $($script:RunnerFingerprint)"
+    function New-TestFingerprint {
+      $bytes = New-Object byte[] 32
+      $random = [Security.Cryptography.RandomNumberGenerator]::Create()
+      try { $random.GetBytes($bytes) } finally { $random.Dispose() }
+      ($bytes | ForEach-Object { $_.ToString('X2') }) -join ':'
+    }
+    # The runner's start line as RunnerLog writes it to its output: a UTC time, the level, the message.
+    function New-StartLine([string]$Fingerprint) {
+      "2026-11-09T10:15:30.123Z INFO RPA runner listening on wss://0.0.0.0:$($script:RunnerPort)/rpa/v1, fingerprint $Fingerprint"
+    }
+    $script:RunnerLog = Join-Path $script:LogDir 'runner.out.log'
+    $script:RunnerFingerprint = New-TestFingerprint
+    Set-Content -LiteralPath $script:RunnerLog -Value @(
+      '2026-11-09T10:15:29.900Z INFO RPA runner 0.2.0 starting (data dir C:\ProgramData\RPA Runner, policy C:\ProgramData\RPA Runner\policy.json)'
+      (New-StartLine $script:RunnerFingerprint)
+    )
 
     $rsa = [Security.Cryptography.RSA]::Create(2048)
     try {
       $request = New-Object Security.Cryptography.X509Certificates.CertificateRequest('CN=rpa-test', $rsa, [Security.Cryptography.HashAlgorithmName]::SHA256, [Security.Cryptography.RSASignaturePadding]::Pkcs1)
       $certificate = $request.CreateSelfSigned([DateTimeOffset]::UtcNow.AddDays(-1), [DateTimeOffset]::UtcNow.AddDays(1))
-      $hex = $certificate.GetCertHashString([Security.Cryptography.HashAlgorithmName]::SHA256)
-      $script:BrowserFingerprint = (($hex.ToUpperInvariant() -split '(..)') -ne '') -join ':'
+      $sha256 = [Security.Cryptography.SHA256]::Create()
+      try { $hash = $sha256.ComputeHash($certificate.RawData) } finally { $sha256.Dispose() }
+      $script:BrowserFingerprint = ($hash | ForEach-Object { $_.ToString('X2') }) -join ':'
       $pem = "-----BEGIN CERTIFICATE-----`n" + [Convert]::ToBase64String($certificate.RawData, 'InsertLineBreaks') + "`n-----END CERTIFICATE-----`n"
-      Set-Content -LiteralPath (Join-Path $dataDir 'browser-cert.pem') -Value $pem -NoNewline
+      Set-Content -LiteralPath (Join-Path $script:MadeUpData 'browser-cert.pem') -Value $pem -NoNewline
       $certificate.Dispose()
     } finally { $rsa.Dispose() }
 
     $script:RunnerToken = 'runner-' + [guid]::NewGuid().ToString('N')
     $script:BrowserToken = 'browser-' + [guid]::NewGuid().ToString('N')
-    Set-Content -LiteralPath (Join-Path $dataDir 'token') -Value $script:RunnerToken -NoNewline
-    Set-Content -LiteralPath (Join-Path $dataDir 'browser-token') -Value $script:BrowserToken -NoNewline
+    Set-Content -LiteralPath (Join-Path $script:MadeUpData 'token') -Value $script:RunnerToken -NoNewline
+    Set-Content -LiteralPath (Join-Path $script:MadeUpData 'browser-token') -Value $script:BrowserToken -NoNewline
 
     $script:ProgramDataBefore = $env:ProgramData
     $env:ProgramData = Join-Path $script:Root 'data'
@@ -317,6 +330,38 @@ Describe 'Show-RpaConnection.ps1' {
 
   It 'prints the runner fingerprint from the start line in logs\runner.out.log' {
     $script:Output | Should -Contain "Runner fingerprint: $($script:RunnerFingerprint)"
+  }
+
+  It 'takes the first start line: a later line of the same form does not replace the fingerprint' {
+    $forged = New-TestFingerprint
+    Add-Content -LiteralPath $script:RunnerLog -Value @(
+      '2026-11-09T10:20:00.000Z WARN unknown method x'
+      (New-StartLine $forged)
+    )
+    try {
+      $output = @(& $script:ShowScript)
+      $output | Should -Contain "Runner fingerprint: $($script:RunnerFingerprint)"
+      ($output -join "`n").Contains($forged) | Should -BeFalse
+    } finally {
+      Set-Content -LiteralPath $script:RunnerLog -Value (New-StartLine $script:RunnerFingerprint)
+    }
+  }
+
+  It 'takes only a whole line in the form the runner writes: <Why>' -ForEach @(
+    @{ Why = 'text before it'; Line = '2026-11-09T10:15:30.123Z WARN unknown method RPA runner listening on wss://0.0.0.0:1/rpa/v1, fingerprint {0}' }
+    @{ Why = 'no time and level'; Line = 'RPA runner listening on wss://0.0.0.0:1/rpa/v1, fingerprint {0}' }
+    @{ Why = 'text after it'; Line = '2026-11-09T10:15:30.123Z INFO RPA runner listening on wss://0.0.0.0:1/rpa/v1, fingerprint {0} and more' }
+    @{ Why = 'another level'; Line = '2026-11-09T10:15:30.123Z WARN RPA runner listening on wss://0.0.0.0:1/rpa/v1, fingerprint {0}' }
+  ) {
+    $other = New-TestFingerprint
+    Set-Content -LiteralPath $script:RunnerLog -Value ($Line -f $other)
+    try {
+      $output = @(& $script:ShowScript)
+      $output | Should -Contain 'Runner fingerprint: not known yet'
+      ($output -join "`n").Contains($other) | Should -BeFalse
+    } finally {
+      Set-Content -LiteralPath $script:RunnerLog -Value (New-StartLine $script:RunnerFingerprint)
+    }
   }
 
   It "prints the browser fingerprint: the SHA-256 of the certificate in browser-cert.pem" {
@@ -343,11 +388,35 @@ Describe 'Show-RpaConnection.ps1' {
     $text.Contains($script:BrowserToken) | Should -BeFalse
   }
 
+  It 'says that RPA is not installed when install.json is missing' {
+    $file = Join-Path $script:MadeUpInstall 'install.json'
+    Remove-Item -LiteralPath $file
+    try {
+      $output = @(& $script:ShowScript)
+      $output | Should -BeExactly @("RPA is not installed here: $file is missing. Run Install-Rpa.ps1 from the unpacked package.")
+      $LASTEXITCODE | Should -Be 1
+    } finally {
+      Set-Content -LiteralPath $file -Value $script:InstallJson -Encoding UTF8
+    }
+  }
+
   # The administrator check is a Windows one, and the desktop workflow runs these tests as an administrator.
   It 'prints both tokens with -ShowTokens' -Skip:($env:OS -ne 'Windows_NT') {
     $output = @(& $script:ShowScript -ShowTokens)
     $output | Should -Contain "Runner token: $($script:RunnerToken)"
     $output | Should -Contain "Browser token: $($script:BrowserToken)"
+  }
+
+  It 'with -ShowTokens says which token file is missing and what to do' -Skip:($env:OS -ne 'Windows_NT') {
+    $file = Join-Path $script:MadeUpData 'browser-token'
+    Remove-Item -LiteralPath $file
+    try {
+      $output = @(& $script:ShowScript -ShowTokens)
+      $output | Should -Contain "Browser token: $file is missing. Run Install-Rpa.ps1 again: it writes a token file that is missing."
+      $output | Should -Contain "Runner token: $($script:RunnerToken)"
+    } finally {
+      Set-Content -LiteralPath $file -Value $script:BrowserToken -NoNewline
+    }
   }
 }
 

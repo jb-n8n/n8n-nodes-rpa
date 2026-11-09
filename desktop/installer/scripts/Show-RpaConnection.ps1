@@ -5,13 +5,19 @@
 #   powershell -ExecutionPolicy Bypass -File "C:\Program Files\RPA Runner\scripts\Show-RpaConnection.ps1" [-ShowTokens]
 #
 # The tokens are shown only with -ShowTokens, which needs an administrator PowerShell. The runner's fingerprint comes
-# from its start line in logs\runner.out.log; the browser's is the SHA-256 of its certificate (browser-cert.pem).
+# from its start line in logs\runner.out.log; the browser's is the SHA-256 of its certificate (browser-cert.pem). The
+# bot user can write both files, so the fingerprints are what this machine's bot user reports.
 param([switch]$ShowTokens)
 $ErrorActionPreference = 'Stop'
 $installDir = Split-Path -Parent $PSScriptRoot
 $dataDir = Join-Path $env:ProgramData 'RPA Runner'
 $logDir = Join-Path $dataDir 'logs'
-$install = Get-Content -Raw -LiteralPath (Join-Path $installDir 'install.json') -Encoding UTF8 | ConvertFrom-Json
+$installFile = Join-Path $installDir 'install.json'
+if (-not (Test-Path -LiteralPath $installFile)) {
+  Write-Output ('RPA is not installed here: {0} is missing. Run Install-Rpa.ps1 from the unpacked package.' -f $installFile)
+  exit 1
+}
+$install = Get-Content -Raw -LiteralPath $installFile -Encoding UTF8 | ConvertFrom-Json
 
 if ($ShowTokens) {
   $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -21,13 +27,14 @@ if ($ShowTokens) {
   }
 }
 
-# The fingerprint in the runner's latest start line, or nothing.
+# The fingerprint in the runner's start line, or nothing. The start line is the first line of that exact form in the
+# log of the current run: the runner writes it before it answers anyone, and a later line of the same form is not the
+# start line (a caller can make the runner log text that the caller chose).
 function Get-RunnerFingerprint([string]$log) {
-  $found = $null
   foreach ($line in @(Get-Content -LiteralPath $log -ErrorAction SilentlyContinue)) {
-    if ($line -match 'RPA runner listening on \S+, fingerprint ((?:[0-9A-F]{2}:){31}[0-9A-F]{2})') { $found = $Matches[1] }
+    if ($line -cmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z INFO RPA runner listening on wss://[0-9A-Fa-f.:]+:\d{1,5}/rpa/v1, fingerprint ((?:[0-9A-F]{2}:){31}[0-9A-F]{2})$') { return $Matches[1] }
   }
-  $found
+  $null
 }
 
 # The SHA-256 of the certificate's DER bytes as uppercase hex pairs joined by colons, or nothing.
@@ -38,6 +45,16 @@ function Get-CertificateFingerprint([string]$pemFile) {
   $sha256 = [Security.Cryptography.SHA256]::Create()
   try { $hash = $sha256.ComputeHash($der) } finally { $sha256.Dispose() }
   ($hash | ForEach-Object { $_.ToString('X2') }) -join ':'
+}
+
+# A token line: the token, or what is wrong with its file and what to do about it.
+function Get-TokenLine([string]$name, [string]$file) {
+  if (-not (Test-Path -LiteralPath $file)) {
+    return ('{0} token: {1} is missing. Run Install-Rpa.ps1 again: it writes a token file that is missing.' -f $name, $file)
+  }
+  try { $token = ([IO.File]::ReadAllText($file)).Trim() }
+  catch { return ('{0} token: {1} cannot be read: {2}' -f $name, $file, $_.Exception.GetBaseException().Message) }
+  '{0} token: {1}' -f $name, $token
 }
 
 $addresses = @([Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces() |
@@ -67,5 +84,5 @@ foreach ($service in $services) {
   if ($service.Fingerprint) { Write-Output ('{0} fingerprint: {1}' -f $service.Name, $service.Fingerprint) }
   else { Write-Output ('{0} fingerprint: not known yet' -f $service.Name) }
   if ($listening -notcontains $service.Port) { Write-Output ('{0}: not listening: see {1}' -f $service.Name, $service.Log) }
-  if ($ShowTokens) { Write-Output ('{0} token: {1}' -f $service.Name, ([IO.File]::ReadAllText($service.Token)).Trim()) }
+  if ($ShowTokens) { Write-Output (Get-TokenLine $service.Name $service.Token) }
 }
