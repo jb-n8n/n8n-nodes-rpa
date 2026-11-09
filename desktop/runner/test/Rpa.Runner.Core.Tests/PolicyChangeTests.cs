@@ -488,6 +488,30 @@ public class PolicyChangeTests
     [InlineData("{ \"allowedApps\": [")]
     public void Refuses_a_change_that_is_not_JSON(string change) => RefusedWith("", change, "the change: ");
 
+    [Theory]
+    [InlineData("allowedApps")]
+    [InlineData("writeControls")]
+    [InlineData("helperProcesses")]
+    public void Refuses_an_entry_that_is_not_an_object(string key)
+    {
+        foreach (var entry in new[] { "null", "5", "\"x\"", "[]" })
+        {
+            Refused("", $$"""{ "{{key}}": [{{entry}}] }""", $"an entry in {key} must be an object");
+            Refused($$"""{ "{{key}}": [{{entry}}] }""", AppChange(ErpPath), $"the current policy: an entry in {key} must be an object");
+        }
+    }
+
+    [Fact]
+    public void Refuses_an_argument_that_is_not_text()
+    {
+        foreach (var argument in new[] { "null", "5", "true", "[]", "{}" })
+        {
+            Refused("", AppChange(ErpPath, $", \"allowedArgs\": [[\"--ui\", {argument}]]"), "an allowed argument must be text");
+            Refused(Policy(), AppChange(ErpPath, $", \"allowedArgs\": [[\"--ui\", \"v1\"], [{argument}]]"), "an allowed argument must be text");
+            Refused(AppChange(ErpPath, $", \"allowedArgs\": [[{argument}]]"), AppChange(ErpPath), "the current policy: an allowed argument must be text");
+        }
+    }
+
     [Fact]
     public void Refuses_to_change_a_policy_the_runner_would_refuse() =>
         RefusedWith("""{ "allowedApp": [] }""", AppChange(ErpPath), "the current policy: ");

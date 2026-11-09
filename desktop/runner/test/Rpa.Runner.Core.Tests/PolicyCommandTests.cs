@@ -8,6 +8,10 @@ public class PolicyCommandTests
 {
     private const string Updated = "Policy updated. The runner restarts within 10 seconds and uses the new policy.";
     private const string Prompt = "Apply these changes? [y/N] ";
+    private const string Closing = "Press Enter to close.";
+
+    // The usage as printed: line by line, whatever line ends the source file was checked out with.
+    private static readonly string UsageText = PolicyCommand.Usage.ReplaceLineEndings("\n") + "\n";
 
     private static readonly string Root = OperatingSystem.IsWindows() ? @"C:\Program Files" : "/opt";
     private static readonly string ErpPath = Path.Combine(Root, "ERP Demo", "ErpDemo.exe");
@@ -42,6 +46,9 @@ public class PolicyCommandTests
 
         public List<string> Checked { get; } = [];
 
+        /// <summary>When set, writing the policy fails with it.</summary>
+        public Exception? WriteFailure { get; set; }
+
         public IReadOnlyList<string> Problems(string path)
         {
             Checked.Add(path);
@@ -54,11 +61,16 @@ public class PolicyCommandTests
             return Text.GetValueOrDefault(path);
         }
 
-        public long? Length(string path) => Text.TryGetValue(path, out var text) ? Encoding.UTF8.GetByteCount(text) : null;
+        /// <summary>A size to report in place of the text's own (a file that grows after its size was read).</summary>
+        public Dictionary<string, long> Sizes { get; } = [];
+
+        public long? Length(string path) =>
+            Sizes.TryGetValue(path, out var size) ? size : Text.TryGetValue(path, out var text) ? Encoding.UTF8.GetByteCount(text) : null;
 
         /// <summary>As RpaPolicy.exe does: the old text goes to the name PolicyCommand.BackupPath gives.</summary>
         public void WriteWithBackup(string path, string json, DateTimeOffset now)
         {
+            if (WriteFailure is not null) throw WriteFailure;
             Writes.Add((path, json, now));
             if (Text.TryGetValue(path, out var old)) Text[PolicyCommand.BackupPath(path, now, Text.ContainsKey)] = old;
             Text[path] = json;
@@ -82,6 +94,12 @@ public class PolicyCommandTests
         /// not elevated).</summary>
         public bool ExistingConsole { get; set; } = true;
 
+        /// <summary>When set, ending the runner fails with it.</summary>
+        public Exception? RestartFailure { get; set; }
+
+        /// <summary>What was typed and not read.</summary>
+        public string Unread { get; private set; } = "";
+
         public Tool()
         {
             Files.Text[PolicyPath] = Starter;
@@ -91,8 +109,10 @@ public class PolicyCommandTests
         public int Run(string typed, params string[] args)
         {
             var output = new StringWriter { NewLine = "\n" };
-            var code = PolicyCommand.Run(args, new StringReader(typed), output, Files, () => Restarts++, ExistingConsole);
+            var input = new StringReader(typed);
+            var code = PolicyCommand.Run(args, input, output, Files, () => { Restarts++; if (RestartFailure is not null) throw RestartFailure; }, ExistingConsole);
             Output = output.ToString();
+            Unread = input.ReadToEnd();
             return code;
         }
     }
@@ -255,6 +275,11 @@ public class PolicyCommandTests
         Assert.Equal(1, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
         Assert.Equal("the change file is larger than 256 KiB\n", tool.Output);
         Assert.DoesNotContain(ChangePath, tool.Files.Reads);
+
+        // A file that grew between the size check and the read is refused as well.
+        tool.Files.Sizes[ChangePath] = 100;
+        Assert.Equal(1, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Equal("the change file is larger than 256 KiB\n", tool.Output);
         Assert.Empty(tool.Files.Writes);
     }
 
@@ -329,19 +354,101 @@ public class PolicyCommandTests
         var tool = new Tool { ExistingConsole = false };
         tool.Files.Text[policy] = Starter;
         string[][] commands = [["apply", ChangePath, "--yes"], ["allow-app", ErpPath, "--yes"]];
+        var shown = "--yes is ignored: start RpaPolicy from an administrator console to use it\n" +
+                    $"Changing the policy at {policy} (0 app(s), 0 helper process pattern(s) today).\n{AllowErp}\n{OneApp}\n{Prompt}";
         foreach (var command in commands)
         {
             Assert.Equal(3, tool.Run("", command));
-            Assert.StartsWith(
-                "--yes is ignored: start RpaPolicy from an administrator console to use it\n" +
-                $"Changing the policy at {policy} (0 app(s), 0 helper process pattern(s) today).\n{AllowErp}\n{OneApp}\n{Prompt}",
-                tool.Output);
+            Assert.Equal($"{shown}{Closing}\n", tool.Output);
             Assert.Empty(tool.Files.Writes);
         }
 
-        Assert.Equal(0, tool.Run("y\n", "apply", ChangePath, "--yes"));
-        Assert.Contains($"{Prompt}{Updated}\n", tool.Output);
+        Assert.Equal(0, tool.Run("y\n\n", "apply", ChangePath, "--yes"));
+        Assert.Equal($"{shown}{Updated}\n{Closing}\n", tool.Output);
         Assert.Equal(policy, Assert.Single(tool.Files.Writes).Path);
+    }
+
+    [Fact]
+    public void A_tool_that_owns_its_console_waits_for_Enter_before_every_exit()
+    {
+        // Its window closes when it exits, so without the wait nothing it printed could be read.
+        var policy = Path.Combine(RunnerOptions.DefaultDataDir(), "policy.json");
+        var cases = new (int Code, string Typed, string[] Args)[]
+        {
+            (2, "\nrest", []),
+            (0, "\nrest", ["--help"]),
+            (1, "\nrest", ["show", "--policy", PolicyPath]),
+            (1, "\nrest", ["show"]),
+            (1, "\nrest", ["apply", Path.Combine(Root, "changes", "missing.json")]),
+            (3, "n\n\nrest", ["apply", ChangePath]),
+            (0, "y\n\nrest", ["apply", ChangePath]),
+            (0, "\nrest", ["apply", ChangePath]),
+        };
+        var tool = new Tool { ExistingConsole = false };
+        foreach (var (code, typed, args) in cases)
+        {
+            Assert.Equal(code, tool.Run(typed, args));
+            Assert.EndsWith($"\n{Closing}\n", "\n" + tool.Output.Replace(Prompt, Prompt + "\n"));
+            Assert.Equal("rest", tool.Unread);
+        }
+        Assert.Equal(policy, Assert.Single(tool.Files.Writes).Path);
+
+        // From a console that was already there, nothing is added and nothing more is read.
+        tool = new Tool();
+        Assert.Equal(2, tool.Run("\nrest"));
+        Assert.DoesNotContain(Closing, tool.Output);
+        Assert.Equal("\nrest", tool.Unread);
+    }
+
+    [Fact]
+    public void A_failed_write_is_reported_and_the_runner_is_not_restarted()
+    {
+        Exception[] failures = [new IOException("the backup folder cannot be trusted: PC\\bot owns the backup folder"), new UnauthorizedAccessException("Access to the path is denied."), new InvalidOperationException("unexpected")];
+        foreach (var failure in failures)
+        {
+            var tool = new Tool();
+            tool.Files.WriteFailure = failure;
+            Assert.Equal(1, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+            Assert.Equal(
+                $"{Changing()}\n{AllowErp}\n{OneApp}\n{Prompt}Writing the policy failed: {failure.Message.TrimEnd('.')}. The runner keeps running with the policy it has.\n",
+                tool.Output);
+            Assert.Equal(Starter, tool.Files.Text[PolicyPath]);
+            Assert.Equal(0, tool.Restarts);
+        }
+    }
+
+    [Fact]
+    public void A_runner_that_cannot_be_restarted_is_reported_after_the_policy_is_written()
+    {
+        var tool = new Tool { RestartFailure = new System.ComponentModel.Win32Exception(5, "Access is denied.") };
+        Assert.Equal(0, tool.Run("", "apply", ChangePath, "--yes", "--policy", PolicyPath));
+        Assert.Equal(
+            $"{Changing()}\n{AllowErp}\n{OneApp}\nPolicy updated, but the runner could not be restarted: Access is denied. Restart it by hand.\n",
+            tool.Output);
+        Assert.Single(tool.Files.Writes);
+    }
+
+    [Fact]
+    public void An_unexpected_failure_prints_its_message_and_exits_1()
+    {
+        // A path with a null character makes the framework throw an ArgumentException; any exception ends like this.
+        var tool = new Tool { ExistingConsole = false };
+        Assert.Equal(1, tool.Run("\n", "allow-app", ErpPath + "\0"));
+        Assert.DoesNotContain("   at ", tool.Output);
+        Assert.DoesNotContain("Exception", tool.Output);
+        Assert.EndsWith($"\n{Closing}\n", tool.Output);
+        Assert.Equal(2, tool.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length);
+    }
+
+    [Fact]
+    public void Null_entries_in_the_policy_file_are_refused_with_a_message()
+    {
+        var tool = new Tool();
+        tool.Files.Text[PolicyPath] = """{ "allowedApps": [null] }""";
+        Assert.Equal(1, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Equal("the current policy: an entry in allowedApps must be an object\n", tool.Output);
+        Assert.Equal(1, tool.Run("", "show", "--policy", PolicyPath));
+        Assert.Equal($"Policy file: {PolicyPath}\n{{ \"allowedApps\": [null] }}\n{PolicyPath}: an entry in allowedApps must be an object\n", tool.Output);
     }
 
     [Fact]
@@ -351,9 +458,8 @@ public class PolicyCommandTests
         foreach (var command in commands)
         {
             var tool = new Tool { ExistingConsole = false };
-            Assert.Equal(1, tool.Run("y\n", command));
-            Assert.StartsWith("--policy needs an administrator console\n", tool.Output);
-            Assert.DoesNotContain("ErpDemo", tool.Output);
+            Assert.Equal(1, tool.Run("\n", command));
+            Assert.Equal($"--policy needs an administrator console\n{Closing}\n", tool.Output);
             Assert.Empty(tool.Files.Reads);
             Assert.Empty(tool.Files.Writes);
         }
@@ -428,7 +534,7 @@ public class PolicyCommandTests
     {
         var tool = new Tool();
         Assert.Equal(2, tool.Run(""));
-        Assert.Equal(PolicyCommand.Usage + "\n", tool.Output);
+        Assert.Equal(UsageText, tool.Output);
         foreach (var line in new[] { "RpaPolicy show [--policy <path>]", "RpaPolicy apply <change.json> [--yes] [--policy <path>]", "RpaPolicy allow-app <path-to-exe> [--pin-hash] [--yes] [--policy <path>]" })
             Assert.Contains(line, PolicyCommand.Usage);
     }
@@ -445,7 +551,7 @@ public class PolicyCommandTests
         {
             var tool = new Tool();
             Assert.Equal(2, tool.Run("y\n", args));
-            Assert.Equal(PolicyCommand.Usage + "\n", tool.Output);
+            Assert.Equal(UsageText, tool.Output);
             Assert.Empty(tool.Files.Writes);
         }
     }
@@ -455,7 +561,7 @@ public class PolicyCommandTests
     {
         var tool = new Tool();
         Assert.Equal(0, tool.Run("", "--help"));
-        Assert.Equal(PolicyCommand.Usage + "\n", tool.Output);
+        Assert.Equal(UsageText, tool.Output);
     }
 
     [Fact]

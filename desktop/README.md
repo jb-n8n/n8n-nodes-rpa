@@ -102,12 +102,24 @@ that person's access. Two limits to keep in mind:
 ## Changing the policy
 
 `RpaPolicy.exe` changes the policy file for you. It prints what a change does in plain lines, asks, and writes the
-file. Windows shows its administrator prompt when the tool starts, because only administrators may change the policy.
+file. It needs administrator rights, because only administrators may change the policy. There are two ways to start
+it, and they look different:
+
+- **From an administrator console** (a Command Prompt or PowerShell window opened with "Run as administrator"). The
+  tool prints into that window and returns to its prompt. Use this way for `--yes` and `--policy`.
+- **From anywhere else** (a normal console, a shortcut, another program). Windows shows its administrator prompt, and
+  the tool then opens a console window of its own. In that window `--yes` is ignored (the tool prints
+  `--yes is ignored: start RpaPolicy from an administrator console to use it` and asks anyway) and `--policy` is
+  refused (`--policy needs an administrator console`), because whoever started the tool chose its arguments while the
+  administrator prompt showed only the program's name. Before the window closes the tool prints
+  `Press Enter to close.` and waits, so its output can be read.
 
 ```powershell
 .\RpaPolicy.exe show
 .\RpaPolicy.exe allow-app "C:\Program Files\ERP Demo\ErpDemo.exe" --pin-hash
-# Allow app ErpDemo.exe at C:\Program Files\ERP Demo\ErpDemo.exe (SHA-256 pinned)
+# Changing the policy at C:\ProgramData\RPA Runner\policy.json (0 app(s), 0 helper process pattern(s) today).
+# Allow app "ErpDemo.exe" at "C:\\Program Files\\ERP Demo\\ErpDemo.exe" (SHA-256 pinned 3A7F...)
+# This change: 1 app(s) allowed or updated, 0 helper process pattern(s), 0 write control(s), 0 gated key(s).
 # Apply these changes? [y/N] y
 # Policy updated. The runner restarts within 10 seconds and uses the new policy.
 .\RpaPolicy.exe apply change.json
@@ -115,57 +127,105 @@ file. Windows shows its administrator prompt when the tool starts, because only 
 
 - `show` prints the policy file, and says why when the runner would refuse it.
 - `allow-app <path-to-exe>` adds the application to `allowedApps` with its file name and full path. `--pin-hash` also
-  pins the file's SHA-256, so the runner starts only this exact file (run the command again after the app is updated).
-  An app the policy already has keeps its allowed argument lists, and its pin unless `--pin-hash` gives a new one.
+  pins the file's SHA-256, so the runner starts only a file with that hash (run the command again after the app is
+  updated). An app the policy already has keeps its allowed argument lists, and its pin unless `--pin-hash` gives a
+  new one.
 - `apply <change.json>` adds what a change file lists. A change file is a JSON object with any of `allowedApps`,
-  `writeControls`, `gatedKeys`, `helperProcesses` and `clipboardRead`, written as in the policy file.
+  `writeControls`, `gatedKeys`, `helperProcesses` and `clipboardRead`, written as in the policy file. It must be on a
+  local drive (`the change file must be on a local drive` otherwise).
 - Every command takes `--policy <path>` (default `%ProgramData%\RPA Runner\policy.json`). `apply` and `allow-app` take
-  `--yes`, which writes without asking.
+  `--yes`, which writes without asking. Both options work only from an administrator console.
+
+### What a change may do
 
 A change only adds. Entries the policy already has are skipped, `clipboardRead` may only be `true`, and `maxFileBytes`
 or an unknown key is refused: to remove an entry or change the file size limit, edit the policy file by hand. A change
 whose result the runner would refuse is refused, and nothing is written.
 
 An `allowedApps` entry with the same `exe` and `path` as an existing one (in any letter case) is merged into the
-existing entry and never takes its place:
+existing entry and does not take its place:
 
-- `sha256` sets the pin or changes it. An entry without `sha256` keeps the existing pin; a change cannot remove one.
+- `sha256` sets the pin or changes it. An entry without `sha256` keeps the existing pin; a change does not remove one.
 - `allowedArgs` lists are added to the existing lists (a list is the same when its strings are equal, in order); a
-  change cannot remove one.
+  change does not remove one.
 - `allowUserWritable: true` turns it on. Left out, it stays as it is. `false` for an entry where it is on is refused
   (`a policy change cannot turn allowUserWritable off for <path>`).
 
-The lines the tool prints before it asks:
+A change file may be written by a user who is not an administrator (a recorder, for example), and the lines the tool
+prints are all the administrator sees before saying yes. So a change has to be small enough to read:
+
+| Refused | Message |
+|---|---|
+| A change file larger than 256 KiB (checked before it is read) | `the change file is larger than 256 KiB` |
+| More than 40 entries in `allowedApps`, `writeControls`, `gatedKeys` and `helperProcesses` together, each allowed argument list counting as one | `a change may hold at most 40 entries; this one holds <n>` |
+| An argument list with more than 20 arguments | `an allowed argument list may hold at most 20 arguments` |
+| A name, path, id or argument longer than 260 characters | `a value in the change is longer than 260 characters` |
+| A short (8.3) name such as `C:\PROGRA~1\...` in an app `path` or a helper `pathPattern` (any `~` followed by a digit): it would name an existing entry's file without being that entry | `write the full path, not a short (8.3) name: <the path>` |
+| An entry that is not an object, or an argument that is not text | `an entry in <key> must be an object`, `an allowed argument must be text` |
+
+### What the tool prints
+
+The first line names the policy file: `Creating a new policy at <path>.` or
+`Changing the policy at <path> (<n> app(s), <m> helper process pattern(s) today).` Then one line for each thing the
+change does. Lines that only tighten the policy come first, lines that widen what may run come after them, and a count
+line is last, directly above the prompt:
 
 | Line | Meaning |
 |---|---|
-| `Allow app <exe> at <path>` | A new `allowedApps` entry. ` (SHA-256 pinned)` follows when it sets `sha256`. |
-| `Update app <exe> at <path> (<what changes>)` | The existing entry for this exe and path changes. In the parentheses, joined by `; `: `SHA-256 pinned` (it had no pin), `SHA-256 pin changed`, `allowed arguments added`, `user-writable path allowed`. |
-| `  with arguments: <arg> <arg> ...` | Under an `Allow app` or `Update app` line, one line for each `allowedArgs` list it adds. An argument that is empty or contains a space is in double quotes; an empty list is `  with arguments: (none)`. |
-| `WARNING: <path> can be changed by the runner's own user` | The app above is new with `allowUserWritable: true`, or the update turns it on. |
-| `Add write control <exe> / <automationId>` | A new `writeControls` entry. |
-| `Add gated key <chord>` | A new `gatedKeys` entry. |
-| `Add helper process <exe> at <pathPattern>` | A new `helperProcesses` entry. |
+| `Add write control "<exe>" / "<automationId>"` | A new `writeControls` entry. |
+| `Add gated key "<chord>"` | A new `gatedKeys` entry. |
+| `Allow app "<exe>" at "<path>"` | A new `allowedApps` entry. ` (SHA-256 pinned <64 hex digits>)` follows when it sets `sha256`. |
+| `Update app "<exe>" at "<path>" (<what changes>)` | The existing entry for this exe and path changes. In the parentheses, joined by `; `: `SHA-256 pinned <hash>` (it had no pin), `SHA-256 pin changed from <hash> to <hash>`, `allowed arguments added`, `user-writable path allowed`. |
+| `  with arguments: "<arg>" "<arg>" ...` | Under an `Allow app` or `Update app` line, one line for each `allowedArgs` list it adds; `  with arguments: (none)` for an empty list. |
+| `Add helper process "<exe>" at "<pathPattern>"` | A new `helperProcesses` entry. |
 | `Turn on clipboard read` | `clipboardRead` becomes `true`. |
+| `This change: <a> app(s) allowed or updated, <h> helper process pattern(s), <w> write control(s), <k> gated key(s).` | The count of the lines above (`, clipboard read turned on` before the full stop when it is). Compare it with what you read: if lines scrolled out of view, the counts still show them. |
 
-These lines are all an administrator sees before saying yes, so a change is refused when a name, path, id or argument
-in it contains a control character (a line break or a cursor command could hide a line or fake one).
+Warnings come directly under the line they belong to (under an app line, before its `with arguments` lines):
 
-`Nothing to change.` means the policy already has everything; the file is not written. Otherwise the tool writes the
-new policy (the file keeps its permissions), keeps the old one beside it as `policy.json.<yyyyMMdd-HHmmss>.bak`
-(`-2.bak`, `-3.bak` and so on when that name is taken: a backup never overwrites an earlier one), and ends the running
-`RpaRunner.exe`, which reads the policy only at start. The runner's start script starts it again
-within 10 seconds; start a runner you started by hand again yourself. The tool writes the whole file in one layout
-(two-space indent, the key order of the example), so comments in a hand-edited policy are not kept; the backup still
-has them.
+| Warning | When |
+|---|---|
+| `WARNING: this line holds characters outside plain ASCII, shown as \u escapes` | A value in the line has a character other than a printable ASCII one. |
+| `WARNING: "<path>" can be changed by the runner's own user` | The app is, or becomes, `allowUserWritable`. It is printed on every line for such an app. |
+| `WARNING: any program at this path counts as part of the app that started it` | Under every `Add helper process` line. |
 
-The new text goes first into a temporary file beside the policy (`policy.json.<32 hex digits>.tmp`, for administrators
-and SYSTEM only), which then takes the policy file's place, so the policy is never half written. After that the tool
-runs the runner's own start check on the policy file. When the check finds a problem (someone other than an
-administrator owns the file, or can change or replace it), the tool says so, exits 1 and leaves the runner running:
-fix the permissions before the runner's next start.
+Every value from the change is printed as a JSON string literal: in double quotes, with `"` and `\` escaped (so a
+Windows path shows doubled backslashes) and every character outside printable ASCII written as `\uXXXX`. A no-break
+space in `C:\Program Files`, an invisible character or a file named `x.exe (SHA-256 pinned)` shows for what it is, and
+the quotes show where each value starts and ends. Everything else the tool prints (messages, the `show` output, paths)
+has control and format characters written as `\uXXXX` too.
 
-Exit codes: 0 applied or nothing to change, 1 refused or invalid, 2 wrong arguments (the usage is printed), 3 declined
+These measures make a misleading change harder to write; they do not replace reading the lines. Read each of them and
+the count line, and answer `n` when anything is unclear. Limits that remain: a change within the limits above can
+still print more lines than a window shows at once, and the tool cannot tell whether a path that looks right is the
+program you mean.
+
+### What the tool writes, and what it trusts
+
+- **The existing policy file.** Before the tool reads an existing policy file (for `show`, `apply` and `allow-app`) it
+  runs the runner's own start check on it. When someone other than an administrator owns the file or could change or
+  replace it, the tool stops: `the existing policy file cannot be trusted: <problem>; an administrator must check and
+  replace it`. Such a file may have been put there by a user who is not an administrator.
+- **Writing.** The tool writes the new policy to a temporary file beside the policy
+  (`policy.json.<32 hex digits>.tmp`, created for Administrators and SYSTEM only) and swaps it in in one step. If the
+  swap fails the tool says so (`Writing the policy failed: ...`), exits 1, and the runner keeps running with the
+  policy it has.
+- **Backups.** The old policy goes to `policy-backups\` beside the policy, as `policy.json.<yyyyMMdd-HHmmss>.bak`.
+  When that name is taken (by a file or a folder), the tool takes `-2.bak`, then `-3.bak`, and so on. The tool creates
+  the folder for Administrators and SYSTEM only. A folder that is already there is used only when it is a real folder
+  (not a link) that passes the test the runner's start check uses for the policy's folder; otherwise:
+  `the backup folder cannot be trusted: <problem>`.
+- **After writing.** The tool runs the runner's start check on the new policy file. When it finds a problem the tool
+  says so, exits 1 and leaves the runner running: fix the permissions before the runner's next start.
+- **The runner.** The tool then ends the running `RpaRunner.exe`, which reads the policy only at start. The runner's
+  start script starts it again within 10 seconds; start a runner you started by hand again yourself. When the runner
+  cannot be ended the tool prints `Policy updated, but the runner could not be restarted: ... Restart it by hand.`
+- **Layout.** The tool writes the whole file in one layout (two-space indent, the key order of the example), so
+  comments in a hand-edited policy are not kept; the backup still has them.
+
+`Nothing to change.` means the policy already has everything; the file is not written and the runner is not restarted.
+
+Exit codes: 0 applied or nothing to change, 1 refused or failed, 2 wrong arguments (the usage is printed), 3 declined
 at the prompt.
 
 ## ERP Demo

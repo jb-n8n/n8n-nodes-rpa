@@ -71,11 +71,15 @@ public static class PolicyCommand
     }
 
     /// <summary>
-    /// Writes one line. Everything the tool prints goes through here: control and format characters, which could move
-    /// the cursor, break the line or reorder the text, are written as <c>\uXXXX</c> (tested by rune, so a character
-    /// outside the basic plane is two escapes).
+    /// Writes one line (or, for the prompt, its start). Everything the tool prints goes through here: control and
+    /// format characters, which could move the cursor, break the line or reorder the text, are written as
+    /// <c>\uXXXX</c> (tested by rune, so a character outside the basic plane is two escapes).
     /// </summary>
-    public static void Print(TextWriter output, string line) => output.WriteLine(Visible(line));
+    public static void Print(TextWriter output, string line, bool endLine = true)
+    {
+        if (endLine) output.WriteLine(Visible(line));
+        else output.Write(Visible(line));
+    }
 
     private static string Visible(string text)
     {
@@ -99,6 +103,27 @@ public static class PolicyCommand
     /// </summary>
     public static int Run(string[] args, TextReader input, TextWriter output, IPolicyFiles files, Action restartRunner, bool startedFromExistingConsole)
     {
+        int code;
+        try
+        {
+            code = Command(args, input, output, files, restartRunner, startedFromExistingConsole);
+        }
+        catch (Exception e)
+        {
+            // Refusals and anything unforeseen end the same way: the message, no stack trace, exit 1.
+            code = Fail(output, e.Message);
+        }
+        if (!startedFromExistingConsole)
+        {
+            // The tool's own window closes when it exits; without this nothing it printed could be read.
+            Print(output, "Press Enter to close.");
+            input.ReadLine();
+        }
+        return code;
+    }
+
+    private static int Command(string[] args, TextReader input, TextWriter output, IPolicyFiles files, Action restartRunner, bool startedFromExistingConsole)
+    {
         if (args is ["--help"] or ["-h"] or ["/?"])
         {
             PrintUsage(output);
@@ -118,19 +143,12 @@ public static class PolicyCommand
                 arguments = arguments with { Yes = false };
             }
         }
-        try
+        return arguments.Command switch
         {
-            return arguments.Command switch
-            {
-                "show" => Show(arguments.PolicyPath, output, files),
-                "apply" => Change(ChangeFile(arguments.Target!, files), arguments, input, output, files, restartRunner),
-                _ => Change(AllowApp(arguments, files), arguments, input, output, files, restartRunner),
-            };
-        }
-        catch (Exception e) when (e is RunnerPolicy.InvalidPolicyException or IOException or UnauthorizedAccessException)
-        {
-            return Fail(output, e.Message);
-        }
+            "show" => Show(arguments.PolicyPath, output, files),
+            "apply" => Change(ChangeFile(arguments.Target!, files), arguments, input, output, files, restartRunner),
+            _ => Change(AllowApp(arguments, files), arguments, input, output, files, restartRunner),
+        };
     }
 
     private static void PrintUsage(TextWriter output)
@@ -172,7 +190,7 @@ public static class PolicyCommand
         Print(output, $"Policy file: {policyPath}");
         // The file's own line breaks stay; anything else that is not plain text inside a line is shown as an escape.
         foreach (var line in text.TrimEnd('\r', '\n').Split('\n')) Print(output, line.TrimEnd('\r'));
-        RunnerPolicy.Parse(text, policyPath);
+        PolicyChange.Parse(text, policyPath);
         return 0;
     }
 
@@ -197,7 +215,10 @@ public static class PolicyCommand
             throw new RunnerPolicy.InvalidPolicyException("the change file must be on a local drive");
         if (files.Length(path) is not { } length) throw new FileNotFoundException($"Change file not found: {path}");
         if (length > MaxChangeFileBytes) throw new RunnerPolicy.InvalidPolicyException("the change file is larger than 256 KiB");
-        return files.Read(path) ?? throw new FileNotFoundException($"Change file not found: {path}");
+        var text = files.Read(path) ?? throw new FileNotFoundException($"Change file not found: {path}");
+        // The file may have grown since its size was read; text never has more characters than the file has bytes.
+        if (text.Length > MaxChangeFileBytes) throw new RunnerPolicy.InvalidPolicyException("the change file is larger than 256 KiB");
+        return text;
     }
 
     /// <summary>The change that allows one application: its file name, its full path and, when asked, its hash.</summary>
@@ -218,7 +239,7 @@ public static class PolicyCommand
         }
         else
         {
-            var today = RunnerPolicy.Parse(current, "the current policy");
+            var today = PolicyChange.Parse(current, "the current policy");
             Print(output, $"Changing the policy at {arguments.PolicyPath} ({today.AllowedApps.Count} app(s), {today.HelperProcesses.Count} helper process pattern(s) today).");
         }
 
@@ -231,18 +252,33 @@ public static class PolicyCommand
         foreach (var line in result.Summary) Print(output, line);
         if (!arguments.Yes)
         {
-            output.Write("Apply these changes? [y/N] ");
+            Print(output, "Apply these changes? [y/N] ", endLine: false);
             output.Flush();
             if (input.ReadLine()?.Trim().ToLowerInvariant() is not ("y" or "yes")) return 3;
         }
-        files.WriteWithBackup(arguments.PolicyPath, result.Json, DateTimeOffset.Now);
+        try
+        {
+            files.WriteWithBackup(arguments.PolicyPath, result.Json, DateTimeOffset.Now);
+        }
+        catch (Exception e)
+        {
+            return Fail(output, $"Writing the policy failed: {e.Message.TrimEnd('.')}. The runner keeps running with the policy it has.");
+        }
         var problems = files.Problems(arguments.PolicyPath);
         if (problems.Count > 0)
         {
             return Fail(output, $"The policy file was written, but the runner will not start with it: {string.Join("; ", problems)}. " +
                                 "The policy file and its folder must be changeable by administrators only.");
         }
-        restartRunner();
+        try
+        {
+            restartRunner();
+        }
+        catch (Exception e)
+        {
+            Print(output, $"Policy updated, but the runner could not be restarted: {e.Message.TrimEnd('.')}. Restart it by hand.");
+            return 0;
+        }
         Print(output, "Policy updated. The runner restarts within 10 seconds and uses the new policy.");
         return 0;
     }

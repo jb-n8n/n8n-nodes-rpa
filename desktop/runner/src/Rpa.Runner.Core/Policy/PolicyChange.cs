@@ -62,7 +62,7 @@ public static class PolicyChange
     /// </summary>
     public static PolicyChangeResult Apply(string currentJson, string changeJson)
     {
-        var current = string.IsNullOrWhiteSpace(currentJson) ? new RunnerPolicy() : RunnerPolicy.Parse(currentJson, "the current policy");
+        var current = string.IsNullOrWhiteSpace(currentJson) ? new RunnerPolicy() : Parse(currentJson, "the current policy");
         var writableOff = CheckChange(changeJson);
         var change = RunnerPolicy.Parse(changeJson, "the change");
         CheckSize(change);
@@ -164,8 +164,9 @@ public static class PolicyChange
 
     /// <summary>
     /// A value as the summary shows it: a JSON string literal in plain ASCII. The double quote and the backslash are
-    /// escaped and every character outside 0x20 to 0x7E is written as <c>\uXXXX</c>, so a value cannot read as the
-    /// tool's own words, as another path or as two values, and cannot move the cursor.
+    /// escaped and every character outside 0x20 to 0x7E is written as <c>\uXXXX</c>. The quotes mark where a value
+    /// starts and ends (it does not read as the tool's own words or as two values), and a look-alike or invisible
+    /// character shows as its code.
     /// </summary>
     internal static string Literal(string value)
     {
@@ -179,6 +180,46 @@ public static class PolicyChange
         return literal.Append('"').ToString();
     }
 
+    private static readonly JsonDocumentOptions DocumentOptions = new() { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true };
+
+    /// <summary>
+    /// <see cref="RunnerPolicy.Parse"/> for a policy file the tool reads, after refusing the null entries and
+    /// arguments that parser fails on without a message.
+    /// </summary>
+    internal static RunnerPolicy Parse(string json, string source)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(json, DocumentOptions);
+            CheckEntries(document.RootElement, $"{source}: ");
+        }
+        catch (JsonException)
+        {
+            // Not JSON: the parser below says why.
+        }
+        return RunnerPolicy.Parse(json, source);
+    }
+
+    /// <summary>Every entry of the lists of objects is an object, and every allowed argument is text.</summary>
+    private static void CheckEntries(JsonElement root, string source)
+    {
+        if (root.ValueKind != JsonValueKind.Object) return;
+        foreach (var property in root.EnumerateObject())
+        {
+            if (property.Name is not ("allowedApps" or "writeControls" or "helperProcesses") || property.Value.ValueKind != JsonValueKind.Array) continue;
+            foreach (var entry in property.Value.EnumerateArray())
+            {
+                if (entry.ValueKind != JsonValueKind.Object) throw Refused($"{source}an entry in {property.Name} must be an object");
+                var arguments = entry.EnumerateObject()
+                    .Where(p => p.NameEquals("allowedArgs") && p.Value.ValueKind == JsonValueKind.Array)
+                    .SelectMany(p => p.Value.EnumerateArray())
+                    .Where(list => list.ValueKind == JsonValueKind.Array)
+                    .SelectMany(list => list.EnumerateArray());
+                if (arguments.Any(argument => argument.ValueKind != JsonValueKind.String)) throw Refused($"{source}an allowed argument must be text");
+            }
+        }
+    }
+
     /// <summary>
     /// The rules a change has beyond a policy file's: no maxFileBytes, no unknown key, clipboardRead only true, and no
     /// short (8.3) name in a path, which would name an existing entry's file without being that entry. Returns the
@@ -190,7 +231,7 @@ public static class PolicyChange
         JsonDocument document;
         try
         {
-            document = JsonDocument.Parse(changeJson, new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
+            document = JsonDocument.Parse(changeJson, DocumentOptions);
         }
         catch (JsonException e)
         {
@@ -200,6 +241,7 @@ public static class PolicyChange
         {
             var writableOff = new HashSet<int>();
             if (document.RootElement.ValueKind != JsonValueKind.Object) throw Refused("the change: must be a JSON object");
+            CheckEntries(document.RootElement, "");
             foreach (var property in document.RootElement.EnumerateObject())
             {
                 if (property.NameEquals("maxFileBytes")) throw Refused("the change: maxFileBytes cannot be changed by a change (edit the policy file)");
@@ -207,7 +249,7 @@ public static class PolicyChange
                 if (property.NameEquals("clipboardRead") && property.Value.ValueKind != JsonValueKind.True)
                     throw Refused("the change: clipboardRead may only be true (a change only adds)");
                 if (property.Value.ValueKind != JsonValueKind.Array) continue;
-                var entries = property.Value.EnumerateArray().Where(entry => entry.ValueKind == JsonValueKind.Object).ToList();
+                var entries = property.Value.EnumerateArray().ToList();
                 if (property.NameEquals("allowedApps"))
                 {
                     foreach (var app in entries) CheckFullPath(app, "path");

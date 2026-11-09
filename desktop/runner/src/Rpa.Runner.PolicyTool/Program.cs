@@ -9,7 +9,23 @@ using Rpa.Runner.Windows;
 
 // RPA policy tool: shows a change to the runner's policy file in plain lines, asks, and applies it. Everything it
 // decides is in PolicyCommand; this file gives it the real files, the console question and the runner's restart.
-return PolicyCommand.Run(args, Console.In, Console.Out, new PolicyFiles(), PolicyFiles.RestartRunner, PolicyFiles.StartedFromExistingConsole());
+var existingConsole = false;
+try
+{
+    existingConsole = PolicyFiles.StartedFromExistingConsole();
+    return PolicyCommand.Run(args, Console.In, Console.Out, new PolicyFiles(), PolicyFiles.RestartRunner, existingConsole);
+}
+catch (Exception e)
+{
+    // The last resort (PolicyCommand.Run handles its own failures): the message, no stack trace.
+    PolicyCommand.Print(Console.Out, e.Message);
+    if (!existingConsole)
+    {
+        PolicyCommand.Print(Console.Out, "Press Enter to close.");
+        Console.In.ReadLine();
+    }
+    return 1;
+}
 
 internal sealed class PolicyFiles : IPolicyFiles
 {
@@ -24,8 +40,8 @@ internal sealed class PolicyFiles : IPolicyFiles
     /// <summary>
     /// Writes a temporary file beside the policy, then swaps it in with File.Replace in one step; the old file goes to
     /// the backup folder. The runner's own user may be able to create files in the policy's folder, so the temporary
-    /// file has a random name, is refused when the name exists (never followed or reused), and belongs to
-    /// administrators only from before its first byte.
+    /// file has a random name, is created only when nothing has that name (an existing file or link is an error), and
+    /// belongs to administrators only from before its first byte.
     /// </summary>
     public void WriteWithBackup(string path, string json, DateTimeOffset now)
     {
