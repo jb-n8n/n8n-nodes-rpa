@@ -197,7 +197,12 @@ export function browserConfig(data: CredentialData): BrowserEndpoint {
   if (mode !== 'playwright' && mode !== 'cdp') throw new ConfigError('Mode must be Browser Server, Chrome DevTools Protocol (CDP) or Local Browser');
   const wsUrl = text(data, 'wsUrl') || DEFAULT_ENDPOINT_URL;
   const token = typeof data.token === 'string' && data.token ? data.token : undefined;
-  return { mode, wsUrl, ...(token ? { token } : {}), ...(data.privateNetwork === true ? { privateNetwork: true } : {}), ...slow };
+  // Certificate Fingerprint (SHA-256): Browser Server mode only, where the field shows. A pasted value is trimmed, and
+  // an empty one means no fingerprint. The engine checks its format and that the Endpoint URL is wss://.
+  const fingerprint = mode === 'playwright' ? text(data, 'fingerprint') : '';
+  return {
+    mode, wsUrl, ...(token ? { token } : {}), ...(fingerprint ? { fingerprint } : {}), ...(data.privateNetwork === true ? { privateNetwork: true } : {}), ...slow,
+  };
 }
 
 /** The RPA Desktop Runner credential as the engine's RunnerEndpoint. The engine checks the URL and fingerprint formats. */

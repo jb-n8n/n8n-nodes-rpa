@@ -88,7 +88,7 @@ describe('v2 credential types', () => {
   it('RPA Browser: fields, defaults and a start command per mode', () => {
     const props = new PlaywrightBrowserApi().properties;
     const byName = Object.fromEntries(props.map((p) => [p.name, p]));
-    expect(props.filter((p) => p.type !== 'notice').map((p) => p.name)).toEqual(['mode', 'wsUrl', 'token', 'privateNetwork', 'headless', 'slowMo']);
+    expect(props.filter((p) => p.type !== 'notice').map((p) => p.name)).toEqual(['mode', 'wsUrl', 'token', 'fingerprint', 'privateNetwork', 'headless', 'slowMo']);
     expect(byName.mode.default).toBe('playwright');
     expect(((byName.mode.options ?? []) as OptionLike[]).map((o) => [o.value, o.name])).toEqual([
       ['playwright', 'Browser Server'], ['cdp', 'Chrome DevTools Protocol (CDP)'], ['local', 'Local Browser (Development Only)'],
@@ -105,6 +105,20 @@ describe('v2 credential types', () => {
     expect(notice('playwright')).toContain('BROWSER_TOKEN');
     expect(notice('local')).toContain('npx playwright install chromium');
     expect(notice('cdp').length).toBeGreaterThan(20);
+  });
+  it('RPA Browser: Certificate Fingerprint (SHA-256) comes after Token and shows in Browser Server mode only', () => {
+    const props = new PlaywrightBrowserApi().properties;
+    const at = props.findIndex((p) => p.name === 'fingerprint');
+    expect(props[at - 1]?.name).toBe('token');
+    expect(props[at]).toEqual({
+      displayName: 'Certificate Fingerprint (SHA-256)',
+      name: 'fingerprint',
+      type: 'string',
+      default: '',
+      description:
+        "Only for a browser server with its own certificate, such as the one the Windows installer sets up: paste the fingerprint it shows. Leave empty when n8n already trusts the server's certificate.",
+      displayOptions: { show: { mode: ['playwright'] } },
+    });
   });
   it('RPA Site Login: the login page, the secrets and the six allowlist fields, in order', () => {
     const props = new PlaywrightSiteLoginApi().properties.filter((p) => p.type !== 'notice');
@@ -157,6 +171,13 @@ describe('v2 credential tests', () => {
   });
   it('Browser: a local browser without Chromium fails with the golden message', async () => {
     expect(await browserTestResult({ mode: 'local' }, engine)).toEqual({ status: 'Error', message: 'Chromium not found. Run: npx playwright install chromium' });
+  });
+  it('Browser: the fingerprint reaches the engine, which refuses one beside a ws:// address and a malformed one before it connects', async () => {
+    const fingerprint = Array.from({ length: 32 }, () => 'AA').join(':');
+    expect(await browserTestResult({ mode: 'playwright', wsUrl: 'ws://127.0.0.1:3000/', fingerprint }, engine))
+      .toEqual({ status: 'Error', message: 'A certificate fingerprint needs a wss:// Endpoint URL in Browser Server mode.' });
+    expect(await browserTestResult({ mode: 'playwright', wsUrl: 'wss://browser.example.net/', fingerprint: 'AA:BB' }, engine))
+      .toEqual({ status: 'Error', message: 'The certificate fingerprint must be 64 hexadecimal characters (SHA-256), with or without colons.' });
   });
   it('Browser: a connection reports the major.minor browser server version the node needs', async () => {
     const stub = {
