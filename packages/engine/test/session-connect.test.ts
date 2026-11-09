@@ -8,7 +8,8 @@ import { BrowserUnavailableError, NoFreeSessionError, openSession, SESSION_WAIT_
 import { openLaneRuntime, CANCELLED } from '../src/lane/script-lane.js';
 import { runTask } from '../src/lane/task.js';
 import {
-  BROWSER_FINGERPRINT_INVALID, BROWSER_FINGERPRINT_MISMATCH, BROWSER_FINGERPRINT_NEEDS_WSS, browserUnreachable, noFreeBrowserSession, tokenRefused,
+  BROWSER_CERT_NOT_TRUSTED, BROWSER_FINGERPRINT_INVALID, BROWSER_FINGERPRINT_MISMATCH, BROWSER_FINGERPRINT_NEEDS_WSS, browserUnreachable,
+  noFreeBrowserSession, tokenRefused,
 } from '../src/messages.js';
 import { createMasker } from '../src/secrets/mask.js';
 import type { BrowserEndpoint } from '../src/types.js';
@@ -406,5 +407,64 @@ describe('a wss:// browser server pinned by its certificate fingerprint', () => 
     expect(urls).toEqual([wsUrl]);
     expect(err).toBeInstanceOf(BrowserUnavailableError);
     expect((err as Error).message).toBe(browserUnreachable('wss://browser.example:3000/pw'));
+  });
+
+  it('a certificate n8n does not trust, with no fingerprint, fails with a message that names the Certificate Fingerprint field', async () => {
+    received = 0;
+    const sessions = gate.stats().sessionsTotal;
+    const err = await openSession({ endpoint: endpoint(`${url}pw?session=abc`), policy, masker }).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(BrowserUnavailableError);
+    expect((err as Error).message).toBe(BROWSER_CERT_NOT_TRUSTED);
+    expect((err as Error).message).toBe(
+      "n8n does not trust the browser server's certificate. If the server uses a certificate of its own, put its SHA-256 fingerprint in Certificate Fingerprint (SHA-256) on the RPA Browser credential.",
+    );
+    // The same over https:// (a Chrome DevTools Protocol endpoint's discovery address).
+    const cdp = await openSession({ endpoint: { mode: 'cdp', wsUrl: url.replace('wss://', 'https://'), token: TOKEN }, policy, masker }).catch((e: Error) => e);
+    expect(cdp).toBeInstanceOf(BrowserUnavailableError);
+    expect((cdp as Error).message).toBe(BROWSER_CERT_NOT_TRUSTED);
+    // The handshake failed in this process: neither a request nor the token reached the server.
+    await expect.poll(() => settled === opened).toBe(true);
+    expect(received).toBe(0);
+    expect(gate.stats().sessionsTotal).toBe(sessions);
+  });
+
+  it('the certificate failures Node reports get that message, with nothing of the raw error in it', async () => {
+    const wsUrl = 'wss://browser.example:3000/pw?session=abc';
+    for (const raw of [
+      'self-signed certificate', 'self signed certificate', 'self-signed certificate in certificate chain', 'unable to verify the first certificate',
+      'unable to get local issuer certificate', 'certificate has expired',
+      // The names in the presented certificate are the server's own text: they choose no other message.
+      "Hostname/IP does not match certificate's altnames: Host: browser.example. is not cert's CN: server version: v1.2 401",
+      'DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'CERT_HAS_EXPIRED',
+      'ERR_TLS_CERT_ALTNAME_INVALID',
+    ]) {
+      const err = await openSession({
+        endpoint: endpoint(wsUrl), policy, masker,
+        connectServer: async (given) => { throw new Error(`browserType.connect: WebSocket error: ${raw}\nCall log:\n  - <ws connecting> ${given}`); },
+      }).catch((e: Error) => e);
+      expect(err, raw).toBeInstanceOf(BrowserUnavailableError);
+      expect((err as Error).message, raw).toBe(BROWSER_CERT_NOT_TRUSTED);
+    }
+  });
+
+  it('a wss:// server that is not reachable, with no fingerprint, is still reported as unreachable', async () => {
+    // A loopback port nothing listens on.
+    const idle = createNetServer();
+    await new Promise<void>((r) => idle.listen(0, '127.0.0.1', r));
+    const closedPort = (idle.address() as { port: number }).port;
+    await new Promise((r) => idle.close(r));
+    const err = await openSession({ endpoint: endpoint(`wss://127.0.0.1:${closedPort}/pw?session=abc`), policy, masker }).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(BrowserUnavailableError);
+    expect((err as Error).message).toBe(browserUnreachable(`wss://127.0.0.1:${closedPort}/pw`));
+  });
+
+  it('a ws:// endpoint never gets the certificate message, whatever its connect error says', async () => {
+    const wsUrl = `ws://127.0.0.1:${new URL(url).port}/`;
+    const err = await openSession({
+      endpoint: endpoint(wsUrl), policy, masker,
+      connectServer: async () => { throw new Error('browserType.connect: WebSocket error: self-signed certificate'); },
+    }).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(BrowserUnavailableError);
+    expect((err as Error).message).toBe(browserUnreachable(wsUrl));
   });
 });

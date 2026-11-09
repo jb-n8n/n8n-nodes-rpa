@@ -6,7 +6,8 @@ import {
   chromium, type Browser, type BrowserContext, type BrowserContextOptions, type CDPSession, type Page, type Request, type Response as PwResponse,
 } from 'playwright-core';
 import {
-  BLOCKED_REQUEST, BROWSER_FINGERPRINT_NEEDS_WSS, browserUnreachable, browserVersionMismatch, CHROMIUM_MISSING, ENDPOINT_NOT_SECURE,
+  BLOCKED_REQUEST, BROWSER_CERT_NOT_TRUSTED, BROWSER_FINGERPRINT_NEEDS_WSS, browserUnreachable, browserVersionMismatch, CHROMIUM_MISSING,
+  ENDPOINT_NOT_SECURE,
   noFreeBrowserSession, notHttp, offListSite, privateAddress, tokenRefused,
 } from '../messages.js';
 import { destructiveNavigation } from '../policy/destructive.js';
@@ -329,9 +330,30 @@ function shownEndpoint(wsUrl?: string): string {
   }
 }
 
+/**
+ * Node's certificate verification failures, by text and by code, as the first line of a connect error names them:
+ * a self-signed certificate, an issuer n8n's Node.js process does not know, an expired certificate, another host name.
+ */
+const CERT_NOT_TRUSTED = new RegExp([
+  'self[- ]signed certificate', 'unable to verify', 'unable to get (?:local )?issuer certificate', 'certificate has expired',
+  "Hostname/IP does not match certificate's altnames",
+  'DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'UNABLE_TO_GET_ISSUER_CERT(?:_LOCALLY)?',
+  'CERT_HAS_EXPIRED', 'ERR_TLS_CERT_ALTNAME_INVALID',
+].join('|'), 'i');
+
+/** Whether the endpoint is reached over TLS (wss:// or https://). */
+function overTls(wsUrl?: string): boolean {
+  const protocol = URL.canParse(wsUrl ?? '') ? new URL(wsUrl ?? '').protocol : '';
+  return protocol === 'wss:' || protocol === 'https:';
+}
+
 function connectError(err: unknown, e: BrowserEndpoint): string {
   const raw = err instanceof Error ? err.message : String(err);
   if (e.mode === 'local') return raw.includes("Executable doesn't exist") ? CHROMIUM_MISSING : `could not connect to the browser: ${raw.split('\n')[0]}`;
+  // The TLS handshake failed on the certificate, so no request was sent and the server answered none. Checked first:
+  // the error quotes the names in the presented certificate, and they must not choose one of the messages below. On
+  // the first line only: later lines can hold a response body. The message is fixed text with nothing of the raw error.
+  if (overTls(e.wsUrl) && CERT_NOT_TRUSTED.test(raw.split('\n')[0])) return BROWSER_CERT_NOT_TRUSTED;
   // playwright run-server answers a version mismatch with 428 and a box containing "server version: v1.62".
   const version = /server version: v?(\d+\.\d+(?:\.\d+)?)/i.exec(raw);
   if (version) return browserVersionMismatch(version[1], PLAYWRIGHT_VERSION);

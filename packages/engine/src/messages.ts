@@ -62,6 +62,12 @@ export const BROWSER_FINGERPRINT_INVALID = 'The certificate fingerprint must be 
 export const BROWSER_FINGERPRINT_NEEDS_WSS = 'A certificate fingerprint needs a wss:// Endpoint URL in Browser Server mode.';
 /** The server presented another certificate. Nothing was sent to it. */
 export const BROWSER_FINGERPRINT_MISMATCH = "The browser server's certificate does not match the Certificate Fingerprint in the RPA Browser credential.";
+/**
+ * A wss:// or https:// browser server presented a certificate that n8n's Node.js process does not trust, and no
+ * fingerprint is set. The TLS handshake failed: no request and no token was sent.
+ */
+export const BROWSER_CERT_NOT_TRUSTED =
+  "n8n does not trust the browser server's certificate. If the server uses a certificate of its own, put its SHA-256 fingerprint in Certificate Fingerprint (SHA-256) on the RPA Browser credential.";
 export const notHttp = (protocol: string) => `URL must start with http:// or https:// (got "${protocol}").`;
 export const privateAddress = (host: string) =>
   `Blocked: ${host} resolves to a private network address. Turn on Options → Allow Private Network if this site is on your own network.`;
