@@ -178,8 +178,8 @@ export function readRunStepsParams(ctx: NodeContext, i: number): RunStepsParams 
   };
 }
 
-/** A one-time code as the engine takes it: 6 to 10 characters of digits and spaces (the engine's WORKFLOW_CODE). */
-export const ONE_TIME_CODE = /^[0-9 ]{6,10}$/;
+/** A one-time code as the engine takes it once its spaces are removed: 6 to 10 digits (the engine's WORKFLOW_CODE). */
+export const ONE_TIME_CODE = /^[0-9]{6,10}$/;
 const NOT_ONE_ITEM = (n: number) => `it returned ${n} items; it must return exactly one item with a code field`;
 const NO_CODE_FIELD = 'its item has no code field of 6 to 10 digits';
 
@@ -205,7 +205,7 @@ export function codeProviderFor(ctx: Pick<NodeContext, 'executeWorkflow'>, workf
     if (items.length !== 1) throw new Error(NOT_ONE_ITEM(items.length));
     const code: unknown = items[0].json?.code;
     const text = typeof code === 'number' && Number.isSafeInteger(code) && code >= 0 ? String(code) : code;
-    if (typeof text !== 'string' || !ONE_TIME_CODE.test(text)) throw new Error(NO_CODE_FIELD);
+    if (typeof text !== 'string' || !ONE_TIME_CODE.test(text.replace(/ /g, ''))) throw new Error(NO_CODE_FIELD);
     return text;
   };
 }

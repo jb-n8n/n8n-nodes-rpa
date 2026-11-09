@@ -138,8 +138,11 @@ export async function submitTotp(ctx: StepContext, spec: CodeSpec, timeout: numb
   await settle(ctx.page);
 }
 
-/** What a code provider must return: 6 to 10 characters of digits and spaces (the spaces are removed before typing). */
-export const WORKFLOW_CODE = /^[0-9 ]{6,10}$/;
+/**
+ * What a code provider must return once its spaces are removed: 6 to 10 digits. Spaces only, or fewer than 6 digits
+ * with spaces around them, are refused.
+ */
+export const WORKFLOW_CODE = /^[0-9]{6,10}$/;
 /** Prefix of every failure of a code from the workflow: classified auth_blocked (a second factor the run could not answer). */
 const CODE_FAILURE = `${DETECTED_PREFIX}mfa_code: `;
 /** How long a submitted code may take to leave the code page before it counts as rejected. */
@@ -176,8 +179,9 @@ async function codeFromWorkflow(ctx: StepContext, request: CodeRequest): Promise
   clearTimeout(timer);
   if (onClose) ctx.page.off('close', onClose);
   if ('error' in outcome) throw new Error(outcome.error);
-  if (typeof outcome.value !== 'string' || !WORKFLOW_CODE.test(outcome.value)) throw new Error(CODE_FAILURE + CODE_WORKFLOW_NOT_A_CODE);
-  return outcome.value.replace(/ /g, '');
+  const code = typeof outcome.value === 'string' ? outcome.value.replace(/ /g, '') : undefined;
+  if (code === undefined || !WORKFLOW_CODE.test(code)) throw new Error(CODE_FAILURE + CODE_WORKFLOW_NOT_A_CODE);
+  return code;
 }
 
 /**

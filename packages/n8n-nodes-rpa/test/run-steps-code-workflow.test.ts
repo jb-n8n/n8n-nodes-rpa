@@ -130,7 +130,7 @@ describe('codeProviderFor', () => {
   });
 
   it('requires a code field of 6 to 10 digits, and never repeats the value it got', async () => {
-    for (const code of [undefined, '', 'abc123', '12345', '12345678901', { v: CODE }, `${CODE}x`]) {
+    for (const code of [undefined, '', 'abc123', '12345', '12345678901', { v: CODE }, `${CODE}x`, '      ', '12 34 5', '1 2 3 4 5']) {
       const err = await ask(returning([{ json: { code } as never }])).catch((e: Error) => e);
       expect(err).toBeInstanceOf(Error);
       expect((err as Error).message).toBe('its item has no code field of 6 to 10 digits');

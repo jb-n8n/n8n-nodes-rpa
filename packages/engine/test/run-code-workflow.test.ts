@@ -135,7 +135,8 @@ describe('signIn with a code from the workflow', () => {
   });
 
   it('a value that is not 6 to 10 digits is refused and never typed', async () => {
-    for (const bad of ['abc123', '12345', '12345678901', '', '12-34-56']) {
+    // Spaces are removed before the check: spaces only, or fewer than 6 digits with spaces, are refused.
+    for (const bad of ['abc123', '12345', '12345678901', '', '12-34-56', '      ', '12 34 5', '1 2 3 4 5']) {
       portal.reset();
       portal.setState({ mfa: 'totp' });
       const ctx = await atLogin({ codeProvider: async () => bad });
