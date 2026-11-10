@@ -74,7 +74,7 @@ jobs:
 
   windows:
     runs-on: windows-latest
-    timeout-minutes: 75
+    timeout-minutes: 45
     permissions:
       contents: read
     outputs:
@@ -375,8 +375,8 @@ jobs:
 
       # The logon tasks do not start on this machine: nobody signs in as rpa-ci-bot. The two start scripts are
       # started by hand, as the account of this job (an administrator, which the access rules let read the tokens),
-      # in this job's desktop session. One step for the programs and their clients: Windows ends a step's child
-      # processes when the step ends.
+      # in this job's desktop session. The programs go on running after this step: the upgrade and the uninstall
+      # below find them running and stop them, as on a machine in use.
       - name: Start the installed runner and browser and drive them (protocol scenario, browser smoke)
         timeout-minutes: 15
         shell: powershell
@@ -435,8 +435,9 @@ jobs:
           Assert ($smoke.HasExited -and $smoke.ExitCode -eq 0) 'the browser smoke test passes'
           Assert ($chrome.Count -gt 0 -and @($chrome | Where-Object { $_.CommandLine -match '--no-sandbox' }).Count -eq 0) 'the browser ran from the install, without --no-sandbox'
 
-      # Running the installer again upgrades: the programs are replaced; the tokens, the policy and the certificates
-      # stay, and an upgrade without firewall parameters keeps who may connect.
+      # Running the installer again upgrades: the running programs are stopped (-Force: the runner is running) and
+      # replaced; the tokens, the policy and the certificates stay, and an upgrade without firewall parameters keeps
+      # who may connect.
       - name: Upgrade (the installer run again)
         timeout-minutes: 10
         shell: powershell
