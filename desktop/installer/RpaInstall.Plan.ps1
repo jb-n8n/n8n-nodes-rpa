@@ -64,6 +64,16 @@ function Get-RpaPathRefusal([string]$Path, $State, [bool]$CheckOwner) {
   $null
 }
 
+# The refusal for the first link or junction, or file with a second name (a hard link), that the walk of the data
+# directory found (-Entries is what Get-RpaDataEntries returns), or nothing. It is made on every run: the installer
+# sets access rules that pass on to what is inside the data directory and logs\, and through a second name they would
+# reach another file.
+function Get-RpaDataLinkRefusal($Entries) {
+  if (-not $Entries -or -not $Entries.Link) { return $null }
+  if ($Entries.Link.IsLink) { return ('{0} is a link or junction. Remove it and run the installer again.' -f $Entries.Link.Path) }
+  '{0} has more than one name (a hard link). Check what it is, remove it, and run the installer again.' -f $Entries.Link.Path
+}
+
 # The refusals for what else is in a data directory that an install takes over (one that an uninstall kept, or that
 # someone made by hand). -Entries is what Get-RpaDataEntries returns; -OwnSid is the account the run installs for when
 # that account was there before the run, else nothing. A link and a file with a second name are refused, the first of
@@ -74,10 +84,8 @@ function Get-RpaPathRefusal([string]$Path, $State, [bool]$CheckOwner) {
 function Get-RpaDataEntryRefusals([string]$DataDir, $Entries, [string]$OwnSid) {
   $refusals = @()
   if (-not $Entries) { return $refusals }
-  if ($Entries.Link) {
-    if ($Entries.Link.IsLink) { $refusals += '{0} is a link or junction. Remove it and run the installer again.' -f $Entries.Link.Path }
-    else { $refusals += '{0} has more than one name (a hard link). Check what it is, remove it, and run the installer again.' -f $Entries.Link.Path }
-  }
+  $link = Get-RpaDataLinkRefusal $Entries
+  if ($link) { $refusals += $link }
   if ($Entries.Unreadable) {
     $refusals += '{0} exists and is owned by {1}. Check what is in it, remove it, and run the installer again.' -f $Entries.Unreadable.Path, $Entries.Unreadable.Owner
   }
@@ -227,13 +235,17 @@ function Get-RpaInstallPlan {
       $backupsRefusal = Get-RpaPathRefusal $Facts.PolicyBackupsDir $Facts.PolicyBackupsState $true
       if ($backupsRefusal) { $refusals.Add($backupsRefusal) }
       # The bot user keeps its own files in the data directory (logs, the certificates, exports), so an upgrade for
-      # the same user does not judge them. Whenever the user of the install is new to the data directory (a first
-      # install, a user this run creates, an upgrade for another user), everything in it is judged: only what
-      # Administrators, SYSTEM or that user own is taken over, and a user this run creates owns nothing yet.
+      # the same user does not judge who owns them; a link, or a file with a second name, is refused on every run.
+      # Whenever the user of the install is new to the data directory (a first install, a user this run creates, an
+      # upgrade for another user), everything in it is judged: only what Administrators, SYSTEM or that user own is
+      # taken over, and a user this run creates owns nothing yet.
       if (-not $upgrade -or $createUser -or $userChanged) {
         $ownSid = $null
         if ($Facts.UserExists) { $ownSid = [string]$Facts.UserSid }
         foreach ($refusal in @(Get-RpaDataEntryRefusals $Facts.DataDir $Facts.DataDirEntries $ownSid)) { $refusals.Add($refusal) }
+      } else {
+        $linkRefusal = Get-RpaDataLinkRefusal $Facts.DataDirEntries
+        if ($linkRefusal) { $refusals.Add($linkRefusal) }
       }
     }
     # A task folder a standard user made first stays that user's, also after the tasks in it are registered again.

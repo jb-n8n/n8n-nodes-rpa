@@ -928,19 +928,30 @@ function New-RpaProtectedFolder([string]$Path, [string]$Rules) {
   [void][IO.Directory]::CreateDirectory($Path, $security)
 }
 
+# Looks again at everything in the data directory, directly before access rules are set that pass on to what is in
+# it: the bot user can put a link, or a second name for another file, into it and into logs\ at any time, also after
+# the plan looked. Refuses the first one with the plan's text, and so for policy.json and the two tokens.
+function Assert-RpaDataUnlinked([hashtable]$Layout) {
+  $refusal = Get-RpaDataLinkRefusal (Get-RpaDataEntries $Layout.DataDir)
+  if ($refusal) { throw $refusal }
+  foreach ($name in $script:DataFiles.Keys) { Assert-RpaPathUsable (Join-Path $Layout.DataDir $name) $true }
+}
+
 # %ProgramData%\RPA Runner, logs\ and policy-backups\. One that is missing is created with its owner and rules. One
 # that is there is used only when it is no link and, for the data directory and policy-backups\, Administrators or
 # SYSTEM own it; the rules of the data directory and of logs\ are then replaced, and policy-backups\ is left to the
-# policy tool. With -Judge (the user of the install is new to the data directory) everything that was in it already
-# is looked at again, once only administrators and the bot user can put anything into it; -OwnSid is that user when
-# it was there before this run. policy.json and the tokens get their rules again on every run, which also gives
-# another -User its read access.
+# policy tool. Directly before each of these two is given its rules, everything in the data directory is looked at
+# again for a link and a file with a second name, on every run. With -Judge (the user of the install is new to the
+# data directory) everything that was in it already is also judged by owner, once only administrators and the bot
+# user can put anything into it; -OwnSid is that user when it was there before this run. policy.json and the tokens
+# get their rules again on every run, which also gives another -User its read access.
 function Protect-RpaDataDirectory([hashtable]$Layout, [string]$Sid, [bool]$Judge, [string]$OwnSid) {
   foreach ($folder in @(@{ Path = $Layout.DataDir; Kind = 'directory'; CheckOwner = $true }, @{ Path = $Layout.LogDir; Kind = 'logs'; CheckOwner = $false })) {
     $rules = Get-RpaAccessRules $folder.Kind $Sid
     New-RpaProtectedFolder $folder.Path $rules
     # Also after creating it: CreateDirectory does not say when someone else made the folder a moment earlier.
     Assert-RpaPathUsable $folder.Path $folder.CheckOwner
+    Assert-RpaDataUnlinked $Layout
     Set-RpaAccessRules $folder.Path $rules $Layout.InstallDir
     if ($Judge -and $folder.Kind -eq 'directory') {
       $refusals = @(Get-RpaDataEntryRefusals $Layout.DataDir (Get-RpaDataEntries $Layout.DataDir) $OwnSid)

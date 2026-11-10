@@ -566,14 +566,27 @@ Describe 'Get-RpaInstallPlan' {
       $plan.Refusals | Should -BeExactly @('2 entries in C:\ProgramData\RPA Runner belong to other accounts (the first: C:\ProgramData\RPA Runner\policy-backups\policy-1.json, owned by BOT-PC\rpa-runner). Remove the data directory with Uninstall-Rpa.ps1 -RemoveData, or remove those entries, and run the installer again.')
     }
 
-    It 'on an upgrade for the same user, does not judge what is in the data directory' {
+    It 'on an upgrade for the same user, does not judge who owns what is in the data directory' {
       $entries = New-DataEntries @{
-        Link   = @{ Path = 'C:\ProgramData\RPA Runner\exports\x'; IsLink = $true; Links = 1 }
         Owners = @((New-OwnerEntry $script:BotSid 'BOT-PC\rpa-runner' 12 'exports' 1), (New-OwnerEntry 'S-1-5-21-1-2-3-1002' 'BOT-PC\mallory' 2 'browser-key.pem' 7))
       }
       $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-InstalledFacts @{ DataDirEntries = $entries })
       $plan.Refusals.Count | Should -Be 0
       $plan.Questions.Count | Should -Be 0
+    }
+
+    # The installer sets the rules of the data directory and of logs\ on every run, and they pass on to what is inside:
+    # through a second name, to another file.
+    It 'on an upgrade for the same user, refuses <Why> anywhere in the data directory' -ForEach @(
+      @{ Why = 'a file with a second name'; Link = @{ Path = 'C:\ProgramData\RPA Runner\logs\planted.log'; IsLink = $false; Links = 2 }
+        Text = 'C:\ProgramData\RPA Runner\logs\planted.log has more than one name (a hard link). Check what it is, remove it, and run the installer again.' }
+      @{ Why = 'a link or junction'; Link = @{ Path = 'C:\ProgramData\RPA Runner\exports\x'; IsLink = $true; Links = 1 }
+        Text = 'C:\ProgramData\RPA Runner\exports\x is a link or junction. Remove it and run the installer again.' }
+    ) {
+      $entries = New-DataEntries @{ Link = $Link; Owners = @(New-OwnerEntry $script:BotSid 'BOT-PC\rpa-runner' 12 'logs\runner.out.log' 1) }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-InstalledFacts @{ DataDirEntries = $entries })
+      $plan.Refusals | Should -BeExactly @($Text)
+      $plan.Steps.Count | Should -Be 0
     }
 
     It 'on an upgrade for another user, what the user before left there belongs to another account' {
@@ -957,6 +970,29 @@ Describe 'Remove-RpaOldTokens' {
         { Remove-RpaOldTokens @{ DataDir = $Root } } | Should -Throw -ExpectedMessage "$token has more than one name (a hard link). Check what it is, remove it, and run the installer again."
         $token | Should -Exist
       }
+    } finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+  }
+}
+
+Describe 'Protect-RpaDataDirectory' {
+  # A data directory, logs\ and policy-backups\ in a temporary folder, and a file outside it that the bot user may only
+  # read; the rules name the Users group in place of a bot user.
+  It 'on a run that does not judge the data directory, refuses a second name in logs\ and leaves the other file as it was' -Skip:($env:OS -ne 'Windows_NT') {
+    $root = Join-Path ([IO.Path]::GetTempPath()) ('rpa-protect-' + [guid]::NewGuid().ToString('N'))
+    $layout = @{ InstallDir = Join-Path $root 'install'; DataDir = Join-Path $root 'data'; LogDir = Join-Path (Join-Path $root 'data') 'logs'; BackupsDir = Join-Path (Join-Path $root 'data') 'policy-backups' }
+    New-Item -ItemType Directory -Path $layout.InstallDir, $layout.LogDir, (Join-Path $root 'elsewhere') | Out-Null
+    try {
+      $other = Join-Path (Join-Path $root 'elsewhere') 'other.txt'
+      Set-Content -LiteralPath $other -Value 'not the installer''s' -NoNewline
+      & icacls.exe $other /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' '*S-1-5-32-545:R' | Out-Null
+      $before = (Get-Acl -LiteralPath $other).Sddl
+      $planted = Join-Path $layout.LogDir 'planted.log'
+      New-Item -ItemType HardLink -Path $planted -Target $other | Out-Null
+      InModuleScope RpaInstall -Parameters @{ Layout = $layout; Planted = $planted } {
+        param($Layout, $Planted)
+        { Protect-RpaDataDirectory $Layout 'S-1-5-32-545' $false '' } | Should -Throw -ExpectedMessage "$Planted has more than one name (a hard link). Check what it is, remove it, and run the installer again."
+      }
+      (Get-Acl -LiteralPath $other).Sddl | Should -BeExactly $before
     } finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
   }
 }
