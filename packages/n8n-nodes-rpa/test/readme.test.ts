@@ -319,9 +319,9 @@ describe('README', () => {
       'Redis Cluster', 'fails closed', 'at most one more login']) expect(s, text).toContain(text);
   });
 
-  it('counts four credentials (Browser, Site Login, Step Signing, Redis)', () => {
-    expect(readme).not.toMatch(/three credentials/);
-    expect(readme.match(/four credentials/g)).toHaveLength(2);
+  it('counts five credentials (Browser, Site Login, Step Signing, Redis, Desktop Runner)', () => {
+    expect(readme).not.toMatch(/(three|four) credentials/);
+    expect(readme.match(/five credentials/g)).toHaveLength(2);
   });
 
   it('tells operators who can roll the feed back, and that a copied feed needs its own approval workflow', () => {

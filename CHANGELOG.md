@@ -1,8 +1,68 @@
 # Changelog
 
-All notable changes to `n8n-nodes-rpa` and the `rpa-browser` image. Versions follow
+All notable changes to `n8n-nodes-rpa`, the `rpa-browser` image and the Windows package. Versions follow
 [Semantic Versioning](https://semver.org/); until 1.0, a minor version may change behavior. The node is released with
-`v<version>` tags, the image with `browser-v<version>` tags.
+`v<version>` tags, the image with `browser-v<version>` tags, the Windows package with `desktop-v<version>` tags.
+
+## 0.2.0 (2026-11-10)
+
+The node `n8n-nodes-rpa` 0.2.0 and the first Windows package, `rpa-windows-x64.zip` (GitHub Release
+`desktop-v0.2.0`, with its SHA-256 and a build attestation). [`docs/install/windows.md`](https://github.com/jb-n8n/n8n-nodes-rpa/blob/main/docs/install/windows.md) is
+the install guide, with a sample flow; [`docs/install/licensing.md`](https://github.com/jb-n8n/n8n-nodes-rpa/blob/main/docs/install/licensing.md) is a note on what
+Microsoft's terms say about unattended automation on Windows (not legal advice).
+
+### Desktop steps
+
+- **Desktop step sets** (`"surface": "desktop"`): Run Steps drives a Windows app through the RPA desktop runner, with
+  the **RPA Desktop Runner** credential (runner URL, token, certificate fingerprint). UI Automation locators; the verbs
+  `click`, `fill`, `select`, `check`, `waitFor`, `read`, `key` and `expectFile` (a file the app saved, returned like a
+  download). Steps are signed and approved like browser steps; Sign Steps' **Write Steps** marks the steps that save,
+  post or submit. 0.1.0 refuses desktop steps.
+- **Import Steps** turns the desktop activities of a UiPath project into desktop step sets for approval, and the
+  generated workflow runs each one on the RPA Desktop Runner credential.
+- **The desktop runner** (`RpaRunner.exe`): a WebSocket server with TLS and a token, in the signed-in session of the
+  bot user. A local policy on the Windows machine, which only administrators can change, lists the apps it may start
+  and the controls and keys that count as writes. **The policy tool** (`RpaPolicy.exe`) shows a change to that policy
+  in plain lines and applies it after an administrator says yes.
+
+### Sign-in codes, locator variables, secret fill and clipboard reads (#54)
+
+- **One-time code from a workflow**: a sign-in's `totp` can say `"source": "workflow"`; Run Steps runs the workflow
+  named in **Options → One-Time Code Workflow** and types the code it returns (for a code from an email or an
+  authenticator app). `totp.via` clicks through a factor choice or "Send me the code" page before the code field, and
+  `totp.check` ticks boxes such as "Trust this browser" before the code is submitted.
+- **Variables in locators**: `{{var.name}}` in the name of a role locator, in a visible text locator and in a desktop
+  condition's `name`, rendered each run; refused in every locator of a step that writes or signs in. A `select` may
+  take a list of values.
+- **`fill.secret`**: signed steps can type a per-run secret from a variable into a password field; the value is
+  masked from the start of the run.
+- **Clipboard reads** for desktop steps (`read { clipboard: true, as }`), for apps whose value is only available
+  through a Copy button. The runner returns only the run's own fresh copy, and only when its policy sets
+  `clipboardRead`. Its policy can also list helper processes (`helperProcesses`), so that a web view app's elements
+  resolve.
+
+### A browser server with its own certificate
+
+- **Certificate Fingerprint (SHA-256)** on the RPA Browser credential: in Browser Server mode with a `wss://` address,
+  the node connects only to a server whose certificate has that SHA-256 fingerprint, and checks it before it sends the
+  token. For a browser server with a self-signed certificate, such as the one the Windows package installs.
+- **The gate** (`images/browser/gate`) can serve TLS, read its token from a file and listen on a chosen address.
+
+### The Windows package
+
+- `Install-Rpa.ps1` installs the runner, the policy tool, a browser host (Node.js, the gate with TLS, the browser
+  server and Chromium) and the ERP Demo on Windows 10 1809 or later, Windows 11 or Windows Server 2019 or later. Both
+  programs run in the bot user's session, started by scheduled tasks at that user's sign-in. The installer creates a
+  standard local bot user or uses one you name, writes both tokens, limits the firewall rules to the addresses you
+  give, and checks who can change the package and the data directory before it uses them. `-AutoSignIn` sets up
+  automatic sign-in only when asked for, and lists what it changes first.
+- `Show-RpaConnection.ps1` prints what the n8n credentials need: the URLs and fingerprints, and the tokens with
+  `-ShowTokens`. `Uninstall-Rpa.ps1` removes the install and puts back what `-AutoSignIn` changed; `-RemoveData` removes
+  the data directory too.
+- The browser host opens the browser with a window on the bot user's desktop for every client that does not ask
+  otherwise, so runs from n8n get a browser with a window. Save as PDF needs a headless browser and fails on it.
+- The package is built, installed and driven end to end on Windows in CI, and released from the `Desktop release`
+  workflow after a reviewer approves it. It is not code-signed.
 
 ## 0.1.0 (2026-10-26)
 

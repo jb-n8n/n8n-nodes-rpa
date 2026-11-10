@@ -1,0 +1,124 @@
+{
+  "surface": "desktop",
+  "name": "erp-demo",
+  "version": 1,
+  "app": { "exe": "ErpDemo.exe" },
+  "steps": [
+    {
+      "intent": "Wait for the window ERP Demo - Sign in",
+      "waitFor": { "target": { "uia": { "window": { "exe": "erpdemo.exe", "title": "ERP Demo - Sign in" }, "path": [{ "controlType": "Edit", "automationId": "txtUser", "name": "User name" }] } } }
+    },
+    {
+      "intent": "Type into User name",
+      "fill": {
+        "field": {
+          "uia": { "window": { "exe": "erpdemo.exe", "title": "ERP Demo - Sign in" }, "path": [{ "controlType": "Edit", "automationId": "txtUser", "name": "User name" }] },
+          "fallbacks": [{ "uia": { "window": { "exe": "erpdemo.exe", "title": "ERP Demo - Sign in" }, "path": [{ "controlType": "Edit", "automationId": "txtUser" }] } }]
+        },
+        "value": "{{var.username}}"
+      }
+    },
+    {
+      "intent": "Type into Password",
+      "fill": {
+        "field": {
+          "uia": { "window": { "exe": "erpdemo.exe", "title": "ERP Demo - Sign in" }, "path": [{ "controlType": "Edit", "automationId": "txtPassword", "name": "Password" }] },
+          "fallbacks": [{ "uia": { "window": { "exe": "erpdemo.exe", "title": "ERP Demo - Sign in" }, "path": [{ "controlType": "Edit", "automationId": "txtPassword" }] } }]
+        },
+        "value": "{{var.password}}"
+      }
+    },
+    {
+      "intent": "Press Enter in Password",
+      "key": {
+        "key": "Enter",
+        "target": {
+          "uia": { "window": { "exe": "erpdemo.exe", "title": "ERP Demo - Sign in" }, "path": [{ "controlType": "Edit", "automationId": "txtPassword", "name": "Password" }] },
+          "fallbacks": [{ "uia": { "window": { "exe": "erpdemo.exe", "title": "ERP Demo - Sign in" }, "path": [{ "controlType": "Edit", "automationId": "txtPassword" }] } }]
+        }
+      }
+    },
+    {
+      "intent": "Wait for the window ERP Demo - Line items",
+      "waitFor": { "target": { "uia": { "window": { "exe": "erpdemo.exe", "title": "ERP Demo - Line items" }, "path": [{ "controlType": "ComboBox", "automationId": "cmbCompany", "name": "Company code" }] } } }
+    },
+    {
+      "intent": "Choose {{var.in_CompanyCode}} in Company code",
+      "select": {
+        "field": {
+          "uia": { "window": { "exe": "erpdemo.exe", "title": "ERP Demo - Line items" }, "path": [{ "controlType": "ComboBox", "automationId": "cmbCompany", "name": "Company code" }] },
+          "fallbacks": [{ "uia": { "window": { "exe": "erpdemo.exe", "title": "ERP Demo - Line items" }, "path": [{ "controlType": "ComboBox", "automationId": "cmbCompany" }] } }]
+        },
+        "option": "{{var.in_CompanyCode}}"
+      }
+    },
+    {
+      "intent": "Type into Date from",
+      "fill": {
+        "field": {
+          "uia": { "window": { "exe": "erpdemo.exe", "title": "ERP Demo - Line items" }, "path": [{ "controlType": "Edit", "automationId": "txtDateFrom", "name": "Date from" }] },
+          "fallbacks": [{ "uia": { "window": { "exe": "erpdemo.exe", "title": "ERP Demo - Line items" }, "path": [{ "controlType": "Edit", "automationId": "txtDateFrom" }] } }]
+        },
+        "value": "{{var.in_DateFrom}}"
+      }
+    },
+    {
+      "intent": "Type into Date to",
+      "fill": {
+        "field": {
+          "uia": { "window": { "exe": "erpdemo.exe", "title": "ERP Demo - Line items" }, "path": [{ "controlType": "Edit", "automationId": "txtDateTo", "name": "Date to" }] },
+          "fallbacks": [{ "uia": { "window": { "exe": "erpdemo.exe", "title": "ERP Demo - Line items" }, "path": [{ "controlType": "Edit", "automationId": "txtDateTo" }] } }]
+        },
+        "value": "{{var.in_DateTo}}"
+      }
+    },
+    {
+      "intent": "Click Search",
+      "click": {
+        "uia": { "window": { "exe": "erpdemo.exe", "title": "ERP Demo - Line items" }, "path": [{ "controlType": "Button", "automationId": "btnSearch", "name": "Search" }] },
+        "fallbacks": [{ "uia": { "window": { "exe": "erpdemo.exe", "title": "ERP Demo - Line items" }, "path": [{ "controlType": "Button", "automationId": "btnSearch" }] } }]
+      }
+    },
+    {
+      "intent": "Read Result count as out_ResultCount",
+      "read": { "target": { "uia": { "window": { "exe": "erpdemo.exe", "title": "ERP Demo - Line items" }, "path": [{ "controlType": "Text", "automationId": "lblResultCount" }] } }, "as": "out_ResultCount" }
+    },
+    {
+      "intent": "Read First document as out_FirstDocument",
+      "read": { "target": { "uia": { "window": { "exe": "erpdemo.exe", "title": "ERP Demo - Line items" }, "path": [{ "automationId": "gridResults" }, { "controlType": "DataItem", "name": "Document Row 0" }] } }, "as": "out_FirstDocument" }
+    },
+    {
+      "intent": "Click File",
+      "click": { "uia": { "window": { "exe": "erpdemo.exe", "title": "ERP Demo - Line items" }, "path": [{ "controlType": "MenuItem", "name": "File" }] } }
+    },
+    {
+      "intent": "Click Export...",
+      "click": { "uia": { "window": { "exe": "erpdemo.exe" }, "path": [{ "controlType": "MenuItem", "name": "Export..." }] } }
+    },
+    {
+      "intent": "Wait for the window Export line items",
+      "waitFor": { "target": { "uia": { "window": { "exe": "erpdemo.exe", "title": "Export line items", "className": "#32770" }, "path": [{ "controlType": "Edit", "automationId": "1001", "name": "File name:", "className": "Edit" }] } } }
+    },
+    {
+      "intent": "Type into File name:",
+      "fill": {
+        "field": {
+          "uia": { "window": { "exe": "erpdemo.exe", "title": "Export line items", "className": "#32770" }, "path": [{ "controlType": "Edit", "automationId": "1001", "name": "File name:", "className": "Edit" }] },
+          "fallbacks": [{ "uia": { "window": { "exe": "erpdemo.exe", "title": "Export line items", "className": "#32770" }, "path": [{ "controlType": "Edit", "automationId": "1001" }] } }]
+        },
+        "value": "{{$exportDir}}\\line-items.csv"
+      }
+    },
+    {
+      "intent": "Click Save",
+      "click": {
+        "uia": { "window": { "exe": "erpdemo.exe", "title": "Export line items", "className": "#32770" }, "path": [{ "controlType": "Button", "automationId": "1", "name": "Save", "className": "Button" }] },
+        "fallbacks": [{ "uia": { "window": { "exe": "erpdemo.exe", "title": "Export line items", "className": "#32770" }, "path": [{ "controlType": "Button", "automationId": "1" }] } }]
+      }
+    },
+    {
+      "intent": "Return the exported file line-items.csv",
+      "expectFile": { "pattern": "^line-items\\.csv$" }
+    }
+  ]
+}
