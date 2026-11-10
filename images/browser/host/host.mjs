@@ -21,7 +21,11 @@
 // - browser-token: the bearer token, at least 32 characters of ASCII text without spaces. Read at start, never printed.
 // - browser-key.pem and browser-cert.pem: the gate's key and self-signed certificate. Created together at the first
 //   start (the key with mode 0600 where the platform has file modes) and reused after that, so the fingerprint stays
-//   the same. With only one of the two present the host does not start.
+//   the same. With only one of the two present the host does not start. Each is written under a temporary name
+//   (browser-key.pem.<16 hex>.tmp) and renamed; a start removes temporary files an earlier start left. After creating
+//   them the host reads both back and serves what is on disk.
+// - One host per data directory. Two that start at once on a directory without a certificate each create one; the host
+//   then serves the pair it finds on disk, or does not start when the two files are not a pair.
 //
 // browser-temp, the temp folder of the browser server and its browsers (TEMP, TMP and TMPDIR of that process only):
 // - Playwright keeps a session's trace, downloads and browser profile there, and a trace holds what was typed into
@@ -43,11 +47,14 @@
 // Order and stopping:
 // - The browser server starts first; the gate listens only once the browser server has printed its address.
 // - The browser server exits: the gate closes at once and the host exits 1, so whatever started it starts it again.
+//   When it exits while the host is still starting, the start fails and no start line is printed.
 // - Ctrl+C (SIGINT), SIGTERM, SIGHUP or Ctrl+Break: the gate closes (open sessions end); the browser server is asked
 //   to exit by ending its stdin, which lets Playwright end its browsers and remove its temp folders; if it has not
 //   exited after a short wait its process tree is ended (taskkill /T /F on Windows; SIGTERM, then SIGKILL elsewhere);
 //   browser-temp is emptied; exit 0. On Windows a process is usually ended without a signal; then no code of the host
 //   runs, and the browser server ends by itself because its stdin, a pipe from the host, ends (run-server.mjs).
+//   A stop asked for while the host is starting is acted on once the start has finished; if the start fails instead,
+//   the host exits 0 without an error line.
 //
 // Environment of the main block: RPA_BROWSER_DATA_DIR (default %ProgramData%\RPA Runner on Windows; no default
 // elsewhere), RPA_BROWSER_PORT (3000), RPA_BROWSER_BIND (0.0.0.0, an IP address), RPA_BROWSER_MAX_SESSIONS (1).
@@ -75,10 +82,14 @@ const LOCAL_FOLDER = 'RPA Runner';
 const TEMP_VARIABLES = ['TEMP', 'TMP', 'TMPDIR'];
 const TOKEN_RULE = `${TOKEN_FILE} must hold at least ${MIN_TOKEN_LENGTH} characters of ASCII text without spaces`;
 const NEW_CERTIFICATE_HINT = 'delete both to create a new certificate (the fingerprint changes)';
+/** The names under which the key and the certificate are written before they are renamed. */
+const TEMPORARY_FILE = /^browser-(?:key|cert)\.pem\.[0-9a-f]{16}\.tmp$/;
 const LAUNCHER_FILE = fileURLToPath(new URL('./run-server.mjs', import.meta.url));
+/** Where run-server.mjs loads Playwright from. */
+const NODE_MODULES = fileURLToPath(new URL('../node_modules', import.meta.url));
 /** How long the browser server may take to print its address. */
 const START_TIMEOUT_MS = 30_000;
-/** How long the check of the browser server's plain HTTP answer may take. */
+/** How long the check of the browser server's plain HTTP answer may take (never longer than the start may take). */
 const PLAIN_CHECK_MS = 5000;
 /**
  * The unit of the waits when the browser server is ended. It gets 5 of them to exit after its stdin ended; then, where
@@ -92,6 +103,7 @@ const TERM_ATTEMPTS = 5;
 const EMPTY_ATTEMPTS = 20;
 /** Exit codes with which run-server.mjs says why it did not start the browser server, and the host's line for each. */
 const LAUNCHER_EXITS = new Map([
+  [66, `Playwright is not installed, or not completely, in ${NODE_MODULES}`],
   [69, 'the browser server cannot limit module loading to the install with this Node; Node 22.15 or later is needed'],
 ]);
 /** The line the run-server prints once it listens; the path follows the port. */
@@ -117,26 +129,48 @@ function readToken(dataDir) {
   return token;
 }
 
-/** Creates a file that does not exist yet and writes it to the disk before returning. */
+/** Removes a file if it is there; a failure is not reported (this is only used to clean up). */
+function removeQuietly(path) {
+  try {
+    rmSync(path, { force: true });
+  } catch {
+    // Nothing more can be done about it here.
+  }
+}
+
+/** Creates a file that does not exist yet and writes it to the disk before returning; if that fails, the file is removed. */
 function writeNewFile(path, text, mode) {
   const fd = openSync(path, 'wx', mode);
   try {
-    writeSync(fd, text);
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
+    try {
+      writeSync(fd, text);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+  } catch (err) {
+    removeQuietly(path);
+    throw err;
   }
 }
 
 /**
  * The gate's key and certificate from the data directory: { key, cert, fingerprint }. With neither file there, both are
  * created: written under temporary names first, then renamed, so a host that is ended in between leaves no half-written
- * file under a final name; if anything fails, what was written is removed. With one file there, or a pair that is not a
- * key and its certificate, it throws.
+ * file under a final name; if anything fails, what was written is removed. Temporary files of an earlier start that was
+ * ended in between are removed first. What is returned is always read from the two files, after creating them as well:
+ * with one file there, or a pair that is not a key and its certificate, it throws.
  */
 function certificate(dataDir) {
   const keyPath = join(dataDir, KEY_FILE);
   const certPath = join(dataDir, CERT_FILE);
+  let names = [];
+  try {
+    names = readdirSync(dataDir);
+  } catch {
+    // The data directory cannot be listed: the reads and writes below say why.
+  }
+  for (const name of names) if (TEMPORARY_FILE.test(name)) removeQuietly(join(dataDir, name));
   const hasKey = existsSync(keyPath);
   if (hasKey !== existsSync(certPath)) {
     const [missing, present] = hasKey ? [CERT_FILE, KEY_FILE] : [KEY_FILE, CERT_FILE];
@@ -155,10 +189,9 @@ function certificate(dataDir) {
       written[0] = keyPath;
       renameSync(certPath + temporary, certPath);
     } catch (err) {
-      for (const path of written) rmSync(path, { force: true });
+      for (const path of written) removeQuietly(path);
       throw new Error(`cannot create ${KEY_FILE} and ${CERT_FILE}: ${err.code ?? 'error'}`);
     }
-    return created;
   }
   try {
     const key = readFileSync(keyPath, 'utf8');
@@ -242,6 +275,8 @@ function removeContent(folder) {
 async function emptied(folder, waitMs) {
   for (let attempt = 1; ; attempt += 1) {
     try {
+      // A folder that is gone holds nothing.
+      if (lstatSync(folder, { throwIfNoEntry: false }) === undefined) return undefined;
       removeContent(folder);
       return undefined;
     } catch (err) {
@@ -310,9 +345,9 @@ function announcedPort(child, path, ended, timeoutMs) {
 }
 
 /** Whether the browser server's answer to a plain GET /json on loopback holds its path. No answer holds nothing. */
-function tellsItsPath(port, path) {
+function tellsItsPath(port, path, timeoutMs) {
   return new Promise((resolve) => {
-    const req = request({ host: '127.0.0.1', port, path: '/json', agent: false, timeout: PLAIN_CHECK_MS }, (res) => {
+    const req = request({ host: '127.0.0.1', port, path: '/json', agent: false, timeout: timeoutMs }, (res) => {
       let body = '';
       res.setEncoding('utf8');
       res.on('data', (chunk) => {
@@ -426,43 +461,49 @@ export async function startHost({
     if (code !== undefined) warn(`${browserTemp} could not be emptied (${code}); the next start empties it`);
   };
 
-  let upstream;
-  try {
-    const stoppedEarly = () => LAUNCHER_EXITS.get(exitCode) ?? `the browser server stopped before it was listening (${ended})`;
-    upstream = await announcedPort(child, path, gone.then(stoppedEarly), startTimeoutMs);
-    if (await tellsItsPath(upstream, path)) throw new Error('the browser server answers a plain request with its path; not starting');
-  } catch (err) {
-    await endBrowserServer();
-    throw err;
-  }
-
-  const gate = createGate({ token, upstreamPort: upstream, upstreamPath: path, maxSessions, metricsPort: 0, tls: { key, cert } });
-  // Every connection is kept until it closes, so closing the gate can end them all: an accepted session is no longer
-  // among the connections the server itself closes.
+  // Every connection of the gate is kept until it closes, so closing the gate can end them all: an accepted session is
+  // no longer among the connections the server itself closes.
+  let gate;
   const sockets = new Set();
-  gate.server.on('connection', (socket) => {
-    sockets.add(socket);
-    socket.once('close', () => sockets.delete(socket));
-  });
-  try {
-    await new Promise((resolve, reject) => {
-      gate.server.once('error', reject);
-      gate.server.listen(port, bind, () => {
-        gate.server.off('error', reject);
-        resolve();
-      });
-    });
-  } catch (err) {
-    await endBrowserServer();
-    throw new Error(`cannot listen on port ${port}: ${err.code ?? err.message}`);
-  }
-  const listeningPort = gate.server.address().port;
-  log(`RPA browser listening on wss://${bind.includes(':') ? `[${bind}]` : bind}:${listeningPort}, fingerprint ${fingerprint}`);
-
   const closeGate = () => new Promise((resolve) => {
     gate.server.close(() => resolve());
     for (const socket of sockets) socket.destroy();
   });
+  /** The browser server may exit at any moment of the start; the gate must not come up, or be announced, without it. */
+  const failIfStopped = () => {
+    if (ended !== undefined) throw new Error(`the browser server stopped during the start (${ended})`);
+  };
+  let listeningPort;
+  try {
+    const stoppedEarly = () => LAUNCHER_EXITS.get(exitCode) ?? `the browser server stopped before it was listening (${ended})`;
+    const upstream = await announcedPort(child, path, gone.then(stoppedEarly), startTimeoutMs);
+    if (await tellsItsPath(upstream, path, Math.min(PLAIN_CHECK_MS, startTimeoutMs))) throw new Error('the browser server answers a plain request with its path; not starting');
+    failIfStopped();
+    gate = createGate({ token, upstreamPort: upstream, upstreamPath: path, maxSessions, metricsPort: 0, tls: { key, cert } });
+    gate.server.on('connection', (socket) => {
+      sockets.add(socket);
+      socket.once('close', () => sockets.delete(socket));
+    });
+    try {
+      await new Promise((resolve, reject) => {
+        gate.server.once('error', reject);
+        gate.server.listen(port, bind, () => {
+          gate.server.off('error', reject);
+          resolve();
+        });
+      });
+    } catch (err) {
+      throw new Error(`cannot listen on port ${port}: ${err.code ?? err.message}`);
+    }
+    listeningPort = gate.server.address().port;
+    failIfStopped();
+  } catch (err) {
+    if (gate?.server.listening) await closeGate();
+    await endBrowserServer();
+    throw err;
+  }
+  log(`RPA browser listening on wss://${bind.includes(':') ? `[${bind}]` : bind}:${listeningPort}, fingerprint ${fingerprint}`);
+
   let finish;
   const exited = new Promise((resolve) => { finish = resolve; });
   let stopping;
@@ -514,7 +555,7 @@ if (isMainModule()) {
   const bind = (process.env.RPA_BROWSER_BIND ?? '').trim() || '0.0.0.0';
   if (isIP(bind) === 0) fail('RPA_BROWSER_BIND must be an IP address');
 
-  // A signal during the start is kept and acted on once the host is up. Windows delivers Ctrl+C as SIGINT and
+  // A signal during the start is kept and acted on once the start has finished. Windows delivers Ctrl+C as SIGINT and
   // Ctrl+Break as SIGBREAK; it has no SIGTERM, and a process ended by another one gets no signal at all.
   let host;
   let stopAsked = false;
@@ -527,6 +568,9 @@ if (isMainModule()) {
   try {
     host = await startHost({ dataDir, port, bind, maxSessions });
   } catch (err) {
+    // A stop was asked for and the start did not finish (Ctrl+C reaches the browser server as well): nothing is
+    // running, which is what was asked for.
+    if (stopAsked) process.exit(0);
     fail(err.message);
   }
   if (stopAsked) host.stop();

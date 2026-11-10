@@ -1,5 +1,7 @@
 // The launcher of the browser server (Playwright's run-server) under the browser host (host.mjs). No dependencies of
-// its own; it loads Playwright's CLI from ../node_modules/playwright/cli.js.
+// its own; it loads Playwright's CLI from ../node_modules/playwright/cli.js. Exit codes of its own: 2 when it is started
+// without the path and port, 66 when Playwright is not installed there (or not completely), 69 when this Node cannot
+// limit module loading to the install; any other code is Playwright's.
 //
 // Why a launcher: Playwright's CLI takes the server's path only as an argument (--path), and a process's command line
 // can be read by other users of the machine. Whoever knows the server's port and path can drive the browser without the
@@ -35,13 +37,15 @@
 //   stdin at all it exits at once.
 import childProcess from 'node:child_process';
 import { timingSafeEqual } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import http from 'node:http';
 import Module, { createRequire } from 'node:module';
 import { dirname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-/** Exit code: this Node cannot limit module loading to the install. The host turns it into a line of its own. */
-const EXIT_CANNOT_LIMIT_MODULES = 69;
+/** Exit codes for which the host has a line of its own. Nothing of Node or Playwright uses them. */
+const EXIT_NO_PLAYWRIGHT = 66; // Playwright is not installed, or not completely, where this file loads it from
+const EXIT_CANNOT_LIMIT_MODULES = 69; // this Node cannot limit module loading to the install
 
 const path = process.env.RPA_RUN_SERVER_PATH ?? '';
 const port = process.env.RPA_RUN_SERVER_PORT ?? '';
@@ -114,5 +118,16 @@ http.Server.prototype.emit = function emitOnlyUpgradesForThePath(event, ...args)
 };
 
 const cli = fileURLToPath(new URL('../node_modules/playwright/cli.js', import.meta.url));
+const notInstalled = () => {
+  console.error(`run-server: Playwright is not installed, or not completely, in ${dirname(dirname(cli))}`);
+  process.exit(EXIT_NO_PLAYWRIGHT);
+};
+if (!existsSync(cli)) notInstalled();
 process.argv.splice(1, Infinity, cli, 'run-server', '--port', port, '--host', '127.0.0.1', '--path', path);
-createRequire(import.meta.url)(cli);
+try {
+  createRequire(import.meta.url)(cli);
+} catch (err) {
+  // A module the CLI needs is missing, or is not inside the install. Any other failure is Playwright's own.
+  if (err?.code === 'MODULE_NOT_FOUND') notInstalled();
+  throw err;
+}

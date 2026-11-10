@@ -6,10 +6,11 @@ import assert from 'node:assert/strict';
 import { EventEmitter, once } from 'node:events';
 import { createServer, request } from 'node:http';
 import { request as httpsRequest } from 'node:https';
-import { connect, createServer as createTcpServer } from 'node:net';
+import { Server, connect, createServer as createTcpServer } from 'node:net';
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import fs, { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -25,6 +26,30 @@ const TOKEN_RULE = 'browser-token must hold at least 32 characters of ASCII text
 const WINDOWS = process.platform === 'win32';
 const HOST_DIR = fileURLToPath(new URL('..', import.meta.url));
 const GATE_DIR = fileURLToPath(new URL('../../gate', import.meta.url));
+
+/**
+ * Registers a cleanup for the end of a test. The cleanups of a test run last in, first out, one after the other: a host
+ * is stopped before the data directory it was started on is removed.
+ */
+const cleanups = new WeakMap();
+function later(t, cleanup) {
+  if (!cleanups.has(t)) {
+    const stack = [];
+    cleanups.set(t, stack);
+    t.after(async () => {
+      const failures = [];
+      for (const each of stack.reverse()) {
+        try {
+          await each();
+        } catch (err) {
+          failures.push(err);
+        }
+      }
+      if (failures.length > 0) throw failures[0];
+    });
+  }
+  cleanups.get(t).push(cleanup);
+}
 
 /** Polls until fn() is truthy, or fails after the deadline. */
 async function until(fn, what, ms = 10_000) {
@@ -43,12 +68,12 @@ async function until(fn, what, ms = 10_000) {
 const LOCAL_APP_DATA = process.env.LOCALAPPDATA;
 function dataDir(t, token = TOKEN) {
   const dir = mkdtempSync(join(tmpdir(), 'rpa-host-'));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  later(t, () => rmSync(dir, { recursive: true, force: true }));
   if (token !== null) writeFileSync(join(dir, 'browser-token'), token, { mode: 0o600 });
   if (WINDOWS) {
     const local = mkdtempSync(join(tmpdir(), 'rpa-host-local-'));
     process.env.LOCALAPPDATA = local;
-    t.after(() => {
+    later(t, () => {
       process.env.LOCALAPPDATA = LOCAL_APP_DATA;
       rmSync(local, { recursive: true, force: true, maxRetries: 5 });
     });
@@ -64,11 +89,12 @@ const DATA_FILES = WINDOWS ? ['browser-cert.pem', 'browser-key.pem', 'browser-to
  * A stand-in for the browser server behind the injectable runServer. Each call starts a local server that answers
  * upgrades on the given path with 101 and echoes bytes, and prints the line Playwright's run-server prints once it
  * listens. `announce: false` holds that line back until announce() is called; `revealPath: true` answers GET /json with
- * the path, as Playwright 1.63 does when nothing filters it. It exits when its stdin ends unless `exitsOnStdinEnd` is
+ * the path, as Playwright 1.63 does when nothing filters it; `onPlain` makes it do something else with a plain
+ * request: 'silent' never answers, 'reset' closes the connection, 'exit' ends the process. It exits when its stdin ends unless `exitsOnStdinEnd` is
  * false, and on a SIGTERM once it has ignored `ignoredTerms` of them; `events` holds what the host did to end it, in
  * order.
  */
-function fakeBrowserServer({ announce = true, revealPath = false, exitsOnStdinEnd = true, ignoredTerms = 0 } = {}) {
+function fakeBrowserServer({ announce = true, revealPath = false, onPlain, exitsOnStdinEnd = true, ignoredTerms = 0 } = {}) {
   const calls = [];
   const runServer = ({ port, path, env }) => {
     const child = new EventEmitter();
@@ -78,7 +104,10 @@ function fakeBrowserServer({ announce = true, revealPath = false, exitsOnStdinEn
     const sockets = new Set();
     const server = createServer((req, res) => {
       if (revealPath && req.url === '/json') return res.end(JSON.stringify({ wsEndpointPath: path }));
-      res.end('Running');
+      if (onPlain === 'silent') return undefined;
+      if (onPlain === 'reset') return req.socket.destroy();
+      if (onPlain === 'exit') return call.exit(1);
+      return res.end('Running');
     });
     server.on('connection', (s) => { sockets.add(s); s.once('close', () => sockets.delete(s)); });
     server.on('upgrade', (req, socket, head) => {
@@ -125,7 +154,7 @@ async function ownHost(t, options = {}) {
   const lines = [];
   const dir = options.dataDir ?? dataDir(t);
   const host = await startHost({ dataDir: dir, port: 0, bind: '127.0.0.1', runServer: fake.runServer, log: (line) => lines.push(line), ...options.start });
-  t.after(() => host.stop());
+  later(t, () => host.stop());
   return { host, fake, call: fake.calls.at(-1), lines, dir, cert: readFileSync(join(dir, 'browser-cert.pem'), 'utf8') };
 }
 
@@ -226,7 +255,7 @@ test('an IPv6 bind address is shown in brackets', async (t) => {
     if (/EADDRNOTAVAIL|EAFNOSUPPORT/.test(err.message)) return t.skip('this machine has no IPv6 loopback');
     throw err;
   }
-  t.after(() => host.stop());
+  later(t, () => host.stop());
   assert.match(lines[0], new RegExp(`^RPA browser listening on wss://\\[::1\\]:${host.port}, fingerprint ${FINGERPRINT}$`));
 });
 
@@ -235,13 +264,14 @@ test('the certificate is created once and reused', async (t) => {
   const first = await ownHost(t, { dataDir: dir });
   const files = () => ['browser-cert.pem', 'browser-key.pem'].map((name) => readFileSync(join(dir, name), 'utf8'));
   const created = files();
-  assert.match(created[0], /^-----BEGIN CERTIFICATE-----/);
-  assert.match(created[1], /^-----BEGIN PRIVATE KEY-----/);
+  // Compared without assert.match or deepEqual: a failure of those would print the private key.
+  assert.ok(created[0].startsWith('-----BEGIN CERTIFICATE-----'), 'the certificate file holds a certificate');
+  assert.ok(created[1].startsWith('-----BEGIN PRIVATE KEY-----'), 'the key file holds a private key');
   assert.deepEqual(readdirSync(dir).sort(), DATA_FILES, 'no temporary file is left');
   await first.host.stop();
   const second = await ownHost(t, { dataDir: dir });
   assert.equal(second.host.fingerprint, first.host.fingerprint);
-  assert.deepEqual(files(), created);
+  assert.ok(files().every((text, index) => text === created[index]), 'neither file was changed by the second start');
   const { status, socket, fingerprint } = await upgradeTls(second.host.port, created[0], AUTH);
   assert.equal(status, 101);
   assert.equal(fingerprint, second.host.fingerprint, 'the fingerprint in the start line is the one of the certificate served');
@@ -297,6 +327,114 @@ test('a data directory that cannot be written leaves no certificate file behind'
   assert.equal(fake.calls.length, 0, 'no browser server is started');
 });
 
+/**
+ * Runs fn with functions of node:fs replaced, for the host as well: its imports of node:fs follow the replacement.
+ * `replacements` maps a name to a function that gets the original and returns the stand-in.
+ */
+async function withFs(replacements, fn) {
+  const originals = {};
+  for (const [name, make] of Object.entries(replacements)) {
+    originals[name] = fs[name];
+    fs[name] = make(originals[name]);
+  }
+  syncBuiltinESMExports();
+  try {
+    return await fn();
+  } finally {
+    Object.assign(fs, originals);
+    syncBuiltinESMExports();
+  }
+}
+const TEMPORARY_KEY = /^browser-key\.pem\.[0-9a-f]{16}\.tmp$/;
+const TEMPORARY_CERT = /^browser-cert\.pem\.[0-9a-f]{16}\.tmp$/;
+
+test('the key and the certificate get their names by a rename of a file that is complete', async (t) => {
+  const dir = dataDir(t);
+  const renames = [];
+  const { host } = await withFs({
+    renameSync: (renameSync) => (from, to) => {
+      const text = readFileSync(from, 'utf8');
+      renames.push({ from: from.slice(dir.length + 1), to: to.slice(dir.length + 1), complete: /^-----BEGIN [A-Z ]+-----\n[\s\S]+\n-----END [A-Z ]+-----\n$/.test(text), existed: existsSync(to) });
+      return renameSync(from, to);
+    },
+  }, () => ownHost(t, { dataDir: dir }));
+  assert.equal(renames.length, 2);
+  assert.match(renames[0].from, TEMPORARY_KEY);
+  assert.match(renames[1].from, TEMPORARY_CERT);
+  assert.deepEqual(renames.map(({ to, complete, existed }) => ({ to, complete, existed })), [
+    { to: 'browser-key.pem', complete: true, existed: false },
+    { to: 'browser-cert.pem', complete: true, existed: false },
+  ]);
+  assert.match(host.fingerprint, new RegExp(`^${FINGERPRINT}$`));
+});
+
+test('a certificate creation that fails part of the way leaves no file behind', async (t) => {
+  const fake = fakeBrowserServer();
+  const failure = () => Object.assign(new Error('input/output error'), { code: 'EIO' });
+  /** A start in a new data directory with one fs function failing at its nth call for a certificate file. */
+  const startWith = async (name, nth) => {
+    const dir = dataDir(t);
+    let calls = 0;
+    const failing = (original) => (...args) => {
+      // writeSync is given a file descriptor; the host writes nothing else between the two files.
+      calls += 1;
+      if (calls === nth) throw failure();
+      return original(...args);
+    };
+    await withFs({ [name]: failing }, () => assert.rejects(
+      startHost({ dataDir: dir, port: 0, bind: '127.0.0.1', runServer: fake.runServer, log: () => {} }),
+      { message: 'cannot create browser-key.pem and browser-cert.pem: EIO' },
+    ));
+    assert.deepEqual(readdirSync(dir), ['browser-token'], `${name}, call ${nth}: nothing is left`);
+  };
+  await startWith('writeSync', 1); // the key's temporary file was opened, the write failed
+  await startWith('writeSync', 2); // the key's temporary file is complete, the certificate's is not
+  await startWith('renameSync', 1); // both temporary files are complete
+  await startWith('renameSync', 2); // the key has its name, the certificate has not
+  assert.equal(fake.calls.length, 0, 'no browser server is started');
+});
+
+test('temporary files a host left when it was ended while creating the certificate are removed at the next start', async (t) => {
+  const leftovers = ['browser-key.pem.0123456789abcdef.tmp', 'browser-cert.pem.fedcba9876543210.tmp'];
+  const others = ['browser-key.pem.bak', 'browser-key.pem.tmp', 'browser-cert.pem.0123.tmp', 'notes.0123456789abcdef.tmp'];
+  const withFiles = () => {
+    const dir = dataDir(t);
+    for (const name of [...leftovers, ...others]) writeFileSync(join(dir, name), 'x');
+    return dir;
+  };
+  // With no certificate yet, and with one from an earlier start.
+  const first = withFiles();
+  await ownHost(t, { dataDir: first });
+  assert.deepEqual(readdirSync(first).sort(), [...DATA_FILES, ...others].sort());
+  for (const name of leftovers) writeFileSync(join(first, name), 'x');
+  await ownHost(t, { dataDir: first });
+  assert.deepEqual(readdirSync(first).sort(), [...DATA_FILES, ...others].sort());
+});
+
+test('the host serves the key and certificate that are on disk after it created its own', async (t) => {
+  // Two hosts that start at once on one data directory (not a supported setup) each create a pair; the files end up as
+  // one of them wrote them. Here the other host's writes arrive right after this host's second rename.
+  const other = selfSignedCert();
+  const overwrite = (files) => (renameSync) => (from, to) => {
+    renameSync(from, to);
+    if (to.endsWith('browser-cert.pem')) for (const [name, text] of Object.entries(files)) writeFileSync(join(dirname(to), name), text);
+  };
+  const dir = dataDir(t);
+  const { host, cert } = await withFs({ renameSync: overwrite({ 'browser-key.pem': other.key, 'browser-cert.pem': other.cert }) }, () => ownHost(t, { dataDir: dir }));
+  assert.equal(host.fingerprint, other.fingerprint, 'the start line names the certificate on disk');
+  const { status, socket, fingerprint } = await upgradeTls(host.port, cert, AUTH);
+  assert.equal(status, 101);
+  assert.equal(fingerprint, other.fingerprint, 'and that is the certificate served');
+  socket.destroy();
+
+  // A key from one host and a certificate from the other: not a pair, so nothing is served.
+  const fake = fakeBrowserServer();
+  const mixed = dataDir(t);
+  const error = await withFs({ renameSync: overwrite({ 'browser-cert.pem': other.cert }) }, () => startHost({ dataDir: mixed, port: 0, bind: '127.0.0.1', runServer: fake.runServer, log: () => {} }).then(() => undefined, (err) => err));
+  assert.match(error?.message ?? '', /^browser-key\.pem and browser-cert\.pem do not hold a usable key and its certificate \(\w+\); restore them, or delete both to create a new certificate \(the fingerprint changes\)$/);
+  assert.equal(fake.calls.length, 0, 'no browser server is started');
+});
+
 test('a missing or short token file refuses to start', async (t) => {
   const fake = fakeBrowserServer();
   const refused = async (token, what) => {
@@ -317,7 +455,7 @@ test('a missing or short token file refuses to start', async (t) => {
 });
 
 test('the token file is trimmed: spaces, line ends and a byte order mark around the token are dropped', async (t) => {
-  const { host, cert } = await ownHost(t, { dataDir: dataDir(t, `﻿  ${TOKEN}\r\n`) });
+  const { host, cert } = await ownHost(t, { dataDir: dataDir(t, `\uFEFF  ${TOKEN}\r\n`) });
   const { status, socket } = await upgradeTls(host.port, cert, AUTH);
   assert.equal(status, 101);
   socket.destroy();
@@ -364,9 +502,9 @@ test('the run-server never sees the token', async (t) => {
   // The host does not keep the token in its environment, but a start script might: such variables are not passed on.
   process.env.RPA_TEST_TOKEN_COPY = TOKEN;
   process.env.RPA_TEST_HEADER_COPY = `Bearer ${TOKEN}`;
-  t.after(() => { delete process.env.RPA_TEST_TOKEN_COPY; delete process.env.RPA_TEST_HEADER_COPY; });
+  later(t, () => { delete process.env.RPA_TEST_TOKEN_COPY; delete process.env.RPA_TEST_HEADER_COPY; });
   process.env.RPA_TEST_KEPT = 'kept';
-  t.after(() => { delete process.env.RPA_TEST_KEPT; });
+  later(t, () => { delete process.env.RPA_TEST_KEPT; });
   const { call } = await ownHost(t);
   const values = Object.values(call.env);
   assert.ok(values.length > 0);
@@ -405,7 +543,7 @@ test('the gate listens only once the browser server has announced its address', 
   assert.equal(started, false);
   fake.calls[0].announce();
   const host = await starting;
-  t.after(() => host.stop());
+  later(t, () => host.stop());
   assert.equal(await accepts(port), true);
 });
 
@@ -439,6 +577,82 @@ test('a browser server that tells its path to a plain request fails the start', 
   assert.ok(!error.message.includes(fake.calls[0].path.slice(1)));
   assert.equal(fake.calls[0].exited, true, 'the browser server is ended');
   assert.equal(await accepts(port), false, 'the gate never listened');
+});
+
+test('a browser server that could not be started fails the start; another error of a started one does not', async (t) => {
+  // What spawn() does when the program cannot be run: no process id, an error event and never an exit.
+  const neverStarted = () => {
+    const child = new EventEmitter();
+    child.stdout = new PassThrough();
+    child.kill = () => assert.fail('a process that never started is not signalled');
+    setImmediate(() => child.emit('error', Object.assign(new Error('spawn failed'), { code: 'ENOENT' })));
+    return child;
+  };
+  await assert.rejects(
+    startHost({ dataDir: dataDir(t), port: 0, bind: '127.0.0.1', runServer: neverStarted, log: () => {} }),
+    { message: 'the browser server stopped before it was listening (it could not be started: ENOENT)' },
+  );
+  // An error event of a process that is running (a signal that could not be sent, for one) does not end the start.
+  const fake = fakeBrowserServer({ announce: false });
+  const runServer = (options) => {
+    const child = fake.runServer(options);
+    child.pid = 4_000_000;
+    child.kill = (signal) => child.emit('test-kill', signal);
+    setImmediate(() => {
+      child.emit('error', Object.assign(new Error('kill failed'), { code: 'EPERM' }));
+      fake.calls[0].announce();
+    });
+    return child;
+  };
+  const lines = [];
+  // The fake has a process id here, so it is ended through its stdin on every platform.
+  const host = await startHost({ dataDir: dataDir(t), port: 0, bind: '127.0.0.1', runServer, log: (line) => lines.push(line) });
+  assert.equal(lines.length, 1);
+  await host.stop();
+});
+
+test('a browser server that does not answer a plain request, or closes the connection, tells nothing: the host starts', async (t) => {
+  const silent = await ownHost(t, { fake: fakeBrowserServer({ onPlain: 'silent' }), start: { startTimeoutMs: 300 } });
+  assert.equal(silent.lines.length, 1, 'started once the wait for the answer ended');
+  const reset = await ownHost(t, { fake: fakeBrowserServer({ onPlain: 'reset' }) });
+  assert.equal(reset.lines.length, 1);
+  for (const { host, cert } of [silent, reset]) {
+    const { status, socket } = await upgradeTls(host.port, cert, AUTH);
+    assert.equal(status, 101);
+    socket.destroy();
+  }
+});
+
+test('a browser server that stops after it announced its address fails the start, with no start line', async (t) => {
+  // During the check of its plain answer: before the gate listens.
+  const early = fakeBrowserServer({ onPlain: 'exit' });
+  const lines = [];
+  const port = await freePort();
+  await assert.rejects(
+    startHost({ dataDir: dataDir(t), port, bind: '127.0.0.1', runServer: early.runServer, log: (line) => lines.push(line) }),
+    { message: 'the browser server stopped during the start (exit code 1)' },
+  );
+  assert.equal(await accepts(port), false, 'the gate never listened');
+
+  // While the gate starts to listen: the test ends the browser server from inside the gate's listen call.
+  const late = fakeBrowserServer();
+  const latePort = await freePort();
+  const { listen } = Server.prototype;
+  Server.prototype.listen = function listenAndEndTheBrowserServer(...args) {
+    const result = listen.apply(this, args);
+    if (args[0] === latePort) late.calls[0].exit(3);
+    return result;
+  };
+  try {
+    await assert.rejects(
+      startHost({ dataDir: dataDir(t), port: latePort, bind: '127.0.0.1', runServer: late.runServer, log: (line) => lines.push(line) }),
+      { message: 'the browser server stopped during the start (exit code 3)' },
+    );
+  } finally {
+    Server.prototype.listen = listen;
+  }
+  assert.equal(await accepts(latePort), false, 'the gate is closed again');
+  assert.deepEqual(lines, [], 'no start line was printed');
 });
 
 test('the run-server exiting stops the host with code 1', async (t) => {
@@ -499,7 +713,7 @@ test('stop() ends a browser server that does not exit by itself: its stdin first
 /** The folder a link in a test points at, with a file that must survive; removed after the test. */
 function folderWithCanary(t) {
   const folder = mkdtempSync(join(tmpdir(), 'rpa-host-target-'));
-  t.after(() => rmSync(folder, { recursive: true, force: true }));
+  later(t, () => rmSync(folder, { recursive: true, force: true }));
   writeFileSync(join(folder, 'canary'), 'still here');
   return { folder, intact: () => existsSync(join(folder, 'canary')) && readFileSync(join(folder, 'canary'), 'utf8') === 'still here' };
 }
@@ -670,7 +884,7 @@ test('browser-temp that cannot be emptied refuses the start; after a stop the ho
 test('a port in use fails with a line naming the port', async (t) => {
   const taken = createTcpServer();
   await new Promise((resolve) => taken.listen(0, '127.0.0.1', resolve));
-  t.after(() => new Promise((resolve) => taken.close(resolve)));
+  later(t, () => new Promise((resolve) => taken.close(resolve)));
   const { port } = taken.address();
   const fake = fakeBrowserServer();
   await assert.rejects(
@@ -721,7 +935,7 @@ test('stop() ends the whole process tree of the browser server', { skip: !WINDOW
   };
   const host = await startHost({ dataDir: dataDir(t), port: 0, bind: '127.0.0.1', runServer, log: () => {} });
   const grandchild = Number(/grandchild (\d+)/.exec(output)[1]);
-  t.after(() => { for (const pid of [child.pid, grandchild]) if (alive(pid)) process.kill(pid); });
+  later(t, () => { for (const pid of [child.pid, grandchild]) if (alive(pid)) process.kill(pid); });
   assert.ok(alive(child.pid) && alive(grandchild));
   await host.stop();
   assert.equal(await host.exited, 0);
@@ -790,17 +1004,18 @@ process.on('exit', (code) => writeFileSync(join(__dirname, 'exit-handlers-ran.js
 /**
  * A copy of host/ and gate/ laid out as installed, with the stand-in for Playwright's CLI; removed after the test. The
  * install root sits two folders deep in a folder of its own (`base`), so a test can put things above the install.
+ * `cli` is the text of Playwright's cli.js (the stand-in by default); null leaves the file out.
  */
-function installedCopy(t, { probe } = {}) {
+function installedCopy(t, { probe, cli = FAKE_CLI } = {}) {
   const base = mkdtempSync(join(tmpdir(), 'rpa-host-files-'));
-  t.after(() => rmSync(base, { recursive: true, force: true, maxRetries: 5 }));
+  later(t, () => rmSync(base, { recursive: true, force: true, maxRetries: 5 }));
   const root = join(base, 'outer', 'install');
   const cliDir = join(root, 'node_modules', 'playwright');
   for (const dir of [join(root, 'host'), join(root, 'gate'), cliDir]) mkdirSync(dir, { recursive: true });
   for (const name of ['host.mjs', 'run-server.mjs']) copyFileSync(join(HOST_DIR, name), join(root, 'host', name));
   for (const name of ['gate.mjs', 'ecs.mjs', 'selfsigned.mjs']) copyFileSync(join(GATE_DIR, name), join(root, 'gate', name));
   writeFileSync(join(cliDir, 'package.json'), '{}');
-  writeFileSync(join(cliDir, 'cli.js'), FAKE_CLI);
+  if (cli !== null) writeFileSync(join(cliDir, 'cli.js'), cli);
   if (probe) writeFileSync(join(cliDir, 'probe.json'), JSON.stringify(probe));
   const started = () => JSON.parse(readFileSync(join(cliDir, 'started.json'), 'utf8'));
   const upgrades = () => (existsSync(join(cliDir, 'upgrades.log')) ? readFileSync(join(cliDir, 'upgrades.log'), 'utf8').trim().split('\n') : []);
@@ -822,9 +1037,9 @@ test('started the default way, the path is given to the browser server but is no
   const installed = await import(pathToFileURL(files.hostFile).href);
   const dir = dataDir(t);
   const host = await installed.startHost({ dataDir: dir, port: 0, bind: '127.0.0.1', log: () => {} });
-  t.after(() => host.stop());
+  later(t, () => host.stop());
   const started = files.started();
-  t.after(() => { if (alive(started.pid)) process.kill(started.pid); });
+  later(t, () => { if (alive(started.pid)) process.kill(started.pid); });
   const path = started.args[started.args.indexOf('--path') + 1];
   assert.match(path, SECRET_PATH);
   assert.deepEqual(started.args, ['run-server', '--port', '0', '--host', '127.0.0.1', '--path', path]);
@@ -863,11 +1078,11 @@ test('an upgrade that is not for the path of the browser server is closed before
   const installed = await import(pathToFileURL(files.hostFile).href);
   const dir = dataDir(t);
   const host = await installed.startHost({ dataDir: dir, port: 0, bind: '127.0.0.1', log: () => {} });
-  t.after(() => host.stop());
+  later(t, () => host.stop());
   let exited = false;
   host.exited.then(() => { exited = true; });
   const started = files.started();
-  t.after(() => { if (alive(started.pid)) process.kill(started.pid); });
+  later(t, () => { if (alive(started.pid)) process.kill(started.pid); });
   const path = started.args[started.args.indexOf('--path') + 1];
 
   const others = ['*@', '*', '/', '/other', `${path}x`, `${path}/more`, `${path.slice(0, -1)}`, `/${path}`, `${path.toUpperCase()}`, `http://127.0.0.1:${started.port}${path}`, 'http://[', '/%'];
@@ -909,14 +1124,14 @@ test('a module planted outside the install is not loaded by the browser server; 
   plantModule(join(files.root, 'node_modules'), 'inside-for-import', files.base, { esm: true });
   const nodePath = process.env.NODE_PATH;
   process.env.NODE_PATH = join(files.base, 'elsewhere');
-  t.after(() => {
+  later(t, () => {
     if (nodePath === undefined) delete process.env.NODE_PATH;
     else process.env.NODE_PATH = nodePath;
   });
 
   const installed = await import(pathToFileURL(files.hostFile).href);
   const host = await installed.startHost({ dataDir: dataDir(t), port: 0, bind: '127.0.0.1', log: () => {} });
-  t.after(() => host.stop());
+  later(t, () => host.stop());
   const started = files.started();
   assert.deepEqual(started.loads, {
     bufferutil: 'MODULE_NOT_FOUND',
@@ -939,9 +1154,31 @@ test('on Windows the browser server starts its browsers without --no-sandbox; el
   const files = installedCopy(t, { probe: { spawn: ['--first', '--no-sandbox', '--no-sandbox-and-more', '--last'] } });
   const installed = await import(pathToFileURL(files.hostFile).href);
   const host = await installed.startHost({ dataDir: dataDir(t), port: 0, bind: '127.0.0.1', log: () => {} });
-  t.after(() => host.stop());
+  later(t, () => host.stop());
   const kept = WINDOWS ? ['--first', '--no-sandbox-and-more', '--last'] : ['--first', '--no-sandbox', '--no-sandbox-and-more', '--last'];
   assert.deepEqual(files.started().spawned, kept);
+});
+
+test('without Playwright where the host looks for it, the launcher exits 66 and the host names the folder', async (t) => {
+  const run = (files) => spawnSync(process.execPath, [files.launcherFile], {
+    env: { ...process.env, RPA_RUN_SERVER_PATH: `/${'a'.repeat(32)}`, RPA_RUN_SERVER_PORT: '0' }, encoding: 'utf8', input: '', timeout: 20_000,
+  });
+  const line = (files) => `Playwright is not installed, or not completely, in ${join(realpathSync(files.root), 'node_modules')}`;
+  // No cli.js; a cli.js that asks for a package that is not in the install (Playwright's asks for playwright-core).
+  const absent = installedCopy(t, { cli: null });
+  const incomplete = installedCopy(t, { cli: "require('a-package-that-is-not-installed/lib/program');\n" });
+  for (const files of [absent, incomplete]) {
+    const result = run(files);
+    assert.equal(result.status, 66);
+    assert.equal(result.stderr, `run-server: ${line(files)}\n`);
+    const installed = await import(pathToFileURL(files.hostFile).href);
+    await assert.rejects(installed.startHost({ dataDir: dataDir(t), port: 0, bind: '127.0.0.1', log: () => {} }), { message: line(files) });
+  }
+  // Any other failure of Playwright's start keeps its own exit code, and nothing it printed is shown.
+  const broken = installedCopy(t, { cli: "console.error('printed by the browser server'); throw new Error('broken');\n" });
+  assert.equal(run(broken).status, 1);
+  const installed = await import(pathToFileURL(broken.hostFile).href);
+  await assert.rejects(installed.startHost({ dataDir: dataDir(t), port: 0, bind: '127.0.0.1', log: () => {} }), { message: 'the browser server stopped before it was listening (exit code 1)' });
 });
 
 test('the launcher does not start without the path and port the host gives it', (t) => {
@@ -956,8 +1193,8 @@ test('the launcher does not start without the path and port the host gives it', 
 });
 
 /** The host's main block in an installed copy, with its output collected; ended after the test. */
-async function spawnHost(t, env = {}) {
-  const files = installedCopy(t);
+async function spawnHost(t, env = {}, copy = {}) {
+  const files = installedCopy(t, copy);
   const dir = dataDir(t);
   const port = await freePort();
   const child = spawn(process.execPath, [files.hostFile], {
@@ -968,12 +1205,18 @@ async function spawnHost(t, env = {}) {
   child.stdout.on('data', (c) => { output.stdout += c; });
   child.stderr.on('data', (c) => { output.stderr += c; });
   const exited = new Promise((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })));
-  t.after(async () => {
+  later(t, async () => {
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
     await exited;
   });
-  return { child, dir, port, output, exited, started: files.started };
+  return { child, dir, port, output, exited, started: files.started, files };
 }
+
+/** A stand-in for Playwright's CLI that never listens; it notes its process id in started.json. */
+const SILENT_CLI = `
+require('node:fs').writeFileSync(require('node:path').join(__dirname, 'started.json'), JSON.stringify({ pid: process.pid }));
+setInterval(() => {}, 1000);
+`;
 
 test('the main block starts from RPA_BROWSER_DATA_DIR and RPA_BROWSER_PORT and prints the start line', async (t) => {
   const h = await spawnHost(t, { RPA_BROWSER_MAX_SESSIONS: '2' });
@@ -1005,12 +1248,34 @@ test('the main block exits 0 on SIGINT and ends the browser server', { skip: WIN
   assert.equal(h.output.stderr, '');
 });
 
+test('a start that fails after a stop was asked for ends with exit 0 and no error line; without the stop, exit 1 and the line', async (t) => {
+  const whileStarting = async () => {
+    const h = await spawnHost(t, {}, { cli: SILENT_CLI });
+    await until(() => existsSync(join(h.files.root, 'node_modules', 'playwright', 'started.json')) || h.child.exitCode !== null, 'the browser server to be started');
+    return h;
+  };
+  const failed = await whileStarting();
+  process.kill(failed.started().pid);
+  assert.equal((await failed.exited).code, 1);
+  assert.match(failed.output.stderr, /^RPA browser: the browser server stopped before it was listening \((signal SIGTERM|exit code 1)\)\n$/);
+
+  if (WINDOWS) return; // Windows cannot send Ctrl+C to one child process.
+  const stopped = await whileStarting();
+  stopped.child.kill('SIGINT');
+  // The host keeps starting; give the signal time to arrive before the start fails.
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  process.kill(stopped.started().pid);
+  assert.deepEqual(await stopped.exited, { code: 0, signal: null });
+  assert.equal(stopped.output.stderr, '');
+  assert.equal(stopped.output.stdout, '');
+});
+
 test('when the host is ended without a chance to stop, the browser server ends by itself', async (t) => {
   // What the start script does on Windows, and what SIGKILL does elsewhere: no handler of the host runs.
   const h = await spawnHost(t);
   await until(() => h.output.stdout.includes('\n') || h.child.exitCode !== null, 'the start line');
   const { pid } = h.started();
-  t.after(() => { if (alive(pid)) process.kill(pid); });
+  later(t, () => { if (alive(pid)) process.kill(pid); });
   assert.ok(alive(pid));
   h.child.kill('SIGKILL');
   await h.exited;
