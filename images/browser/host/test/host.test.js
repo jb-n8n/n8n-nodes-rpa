@@ -9,7 +9,7 @@ import { request as httpsRequest } from 'node:https';
 import { Server, connect, createServer as createTcpServer } from 'node:net';
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import fs, { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import fs, { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -829,6 +829,50 @@ test('browser-temp, or a folder above it, that is a link or a file refuses to st
     linkToFolder(target.folder, dirname(browserTempOf(above)));
     await refused(above, dirname(browserTempOf(above)));
     assert.deepEqual(readdirSync(target.folder), ['canary'], 'nothing was created behind the link');
+  }
+  assert.equal(fake.calls.length, 0, 'no browser server is started');
+});
+
+/**
+ * A junction whose target is written as a volume GUID path (\\?\Volume{...}\...). Node 22's lstat reports such a
+ * junction as a folder, not as a link; only the listing of the folder it is in tells. Returns false where it cannot be
+ * made.
+ */
+function volumeJunction(target, path) {
+  const drive = /^[A-Za-z]:\\/.exec(target)?.[0];
+  if (!drive) return false;
+  const volume = /\\\\\?\\Volume\{[0-9a-fA-F-]+\}\\/.exec(spawnSync('mountvol.exe', [drive, '/L'], { encoding: 'utf8' }).stdout ?? '')?.[0];
+  if (!volume) return false;
+  return spawnSync('cmd.exe', ['/d', '/c', 'mklink', '/J', path, volume + target.slice(drive.length)], { encoding: 'utf8' }).status === 0;
+}
+
+test('a junction that lstat takes for a folder is removed as a link, and refused as browser-temp', { skip: !WINDOWS && 'a Windows junction with a volume GUID path as its target' }, async (t) => {
+  const dir = dataDir(t);
+  const temp = browserTempOf(dir);
+  const target = folderWithCanary(t);
+  mkdirSync(join(temp, 'deeper'), { recursive: true });
+  if (!volumeJunction(target.folder, join(temp, 'link'))) return t.skip('this machine does not let the test make such a junction');
+  assert.ok(volumeJunction(target.folder, join(temp, 'deeper', 'link')));
+  assert.ok(lstatSync(join(temp, 'link')).isDirectory(), 'lstat reports the junction as a folder');
+  assert.deepEqual(readdirSync(join(temp, 'link')), ['canary'], 'and it leads to its target');
+  const { host } = await ownHost(t, { dataDir: dir });
+  assert.deepEqual(readdirSync(temp), [], 'emptied at the start');
+  assert.ok(target.intact(), 'the folder the junctions pointed at is untouched');
+  await host.stop();
+
+  // As browser-temp itself, and as the folder above it: the host would empty what the junction leads to.
+  const fake = fakeBrowserServer();
+  for (const place of [(d) => browserTempOf(d), (d) => dirname(browserTempOf(d))]) {
+    const refusedDir = dataDir(t);
+    const junction = place(refusedDir);
+    mkdirSync(dirname(junction), { recursive: true });
+    assert.ok(volumeJunction(target.folder, junction));
+    await assert.rejects(
+      startHost({ dataDir: refusedDir, port: 0, bind: '127.0.0.1', runServer: fake.runServer, log: () => {} }),
+      { message: `${junction} must be a folder of its own, not a link or a file` },
+    );
+    assert.ok(target.intact(), 'the folder the junction points at is untouched');
+    assert.deepEqual(readdirSync(target.folder), ['canary'], 'and nothing was put into it');
   }
   assert.equal(fake.calls.length, 0, 'no browser server is started');
 });

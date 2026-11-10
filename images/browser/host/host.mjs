@@ -66,7 +66,7 @@ import {
 } from 'node:fs';
 import { request } from 'node:http';
 import { isIP } from 'node:net';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { createSecureContext } from 'node:tls';
 import { fileURLToPath } from 'node:url';
 import { MAX_SESSIONS_LIMIT, MIN_TOKEN_LENGTH, createGate } from '../gate/gate.mjs';
@@ -221,10 +221,24 @@ function browserTempPlace(dataDir) {
 }
 
 /**
+ * Whether a path is a folder itself and not a link to one. lstat does not follow a link and reports a junction as a
+ * link, with one exception on Windows: a junction whose target is written as a volume GUID path it reports as a folder
+ * (Node 22). The listing of the folder above reports every reparse point as a link there. So on Windows both must say
+ * "folder".
+ */
+function isOwnFolder(path) {
+  if (!lstatSync(path).isDirectory()) return false;
+  if (process.platform !== 'win32') return true;
+  // Windows takes the names of files without regard to case.
+  const name = basename(path).toLowerCase();
+  const entry = readdirSync(dirname(path), { withFileTypes: true }).find((each) => each.name.toLowerCase() === name);
+  return entry !== undefined && entry.isDirectory();
+}
+
+/**
  * The temp folder of the browser server, created when it is missing, with the folders above it. Throws when a name on
- * the way is taken by a link or a file (lstat does not follow a link and reports a junction as a link): the host would
- * empty, and the browsers would write to, whatever the link points at. Throws as well where there are file modes and
- * the folder is open to group or others.
+ * the way is taken by a link or a file: the host would empty, and the browsers would write to, whatever the link points
+ * at. Throws as well where there are file modes and the folder is open to group or others.
  */
 function browserTempFolder(dataDir) {
   const { base, parts } = browserTempPlace(dataDir);
@@ -233,9 +247,10 @@ function browserTempFolder(dataDir) {
     folder = join(folder, part);
     let found;
     try {
-      found = lstatSync(folder);
+      found = lstatSync(folder, { throwIfNoEntry: false });
+      if (found !== undefined && !isOwnFolder(folder)) found = null;
     } catch (err) {
-      if (err.code !== 'ENOENT') throw new Error(`cannot use ${folder}: ${err.code ?? 'error'}`);
+      throw new Error(`cannot use ${folder}: ${err.code ?? 'error'}`);
     }
     if (found === undefined) {
       try {
@@ -243,7 +258,7 @@ function browserTempFolder(dataDir) {
       } catch (err) {
         throw new Error(`cannot create ${folder}: ${err.code ?? 'error'}`);
       }
-    } else if (!found.isDirectory()) {
+    } else if (found === null) {
       throw new Error(`${folder} must be a folder of its own, not a link or a file`);
     } else if (process.platform !== 'win32' && part === TEMP_DIR && (found.mode & 0o077) !== 0) {
       throw new Error(`${folder} must be for its owner only (mode 700); change its mode or remove it`);
@@ -253,10 +268,27 @@ function browserTempFolder(dataDir) {
 }
 
 /**
- * Removes everything in a folder without following a link. The folder itself is checked with lstat directly before it
- * is listed: it may have become a link since it was last looked at. An entry is entered only when the listing and lstat
- * both report a folder (lstat reports a junction as a link, and on Windows the listing reports every reparse point as
- * one); anything else is removed as it is, so a link goes and what it points at stays.
+ * Removes an entry that is not a folder of its own: a file, or a link, which goes while what it points at stays. unlink
+ * does not take a directory, and for Windows a junction is one; Node's unlink takes only those it can read as a link.
+ * rmdir removes such a junction itself and never what is behind it (on a folder with content it fails).
+ */
+function removeEntry(path) {
+  try {
+    unlinkSync(path);
+  } catch (err) {
+    if (err.code !== 'EPERM' && err.code !== 'EISDIR') throw err;
+    try {
+      rmdirSync(path);
+    } catch {
+      throw err;
+    }
+  }
+}
+
+/**
+ * Removes everything in a folder without following a link. The folder is checked with lstat directly before it is
+ * listed: it may have become a link since it was last looked at. An entry is entered only when the listing and lstat
+ * both report a folder (see isOwnFolder); anything else is removed as it is.
  */
 function removeContent(folder) {
   if (!lstatSync(folder).isDirectory()) throw Object.assign(new Error(`${folder} is not a folder`), { code: 'ENOTDIR' });
@@ -266,7 +298,7 @@ function removeContent(folder) {
       removeContent(path);
       rmdirSync(path);
     } else {
-      unlinkSync(path);
+      removeEntry(path);
     }
   }
 }
@@ -277,6 +309,8 @@ async function emptied(folder, waitMs) {
     try {
       // A folder that is gone holds nothing.
       if (lstatSync(folder, { throwIfNoEntry: false }) === undefined) return undefined;
+      // It was a folder of its own at the start; it is looked at again each time, long after.
+      if (!isOwnFolder(folder)) return 'ENOTDIR';
       removeContent(folder);
       return undefined;
     } catch (err) {
