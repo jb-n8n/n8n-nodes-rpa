@@ -9,9 +9,9 @@ import { request as httpsRequest } from 'node:https';
 import { connect, createServer as createTcpServer } from 'node:net';
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { startHost } from '../host.mjs';
@@ -374,6 +374,13 @@ test('a browser server that stops or stays silent before it listens fails the st
   stopsEarly.calls[0].exit(3);
   await assert.rejects(starting, { message: 'the browser server stopped before it was listening (exit code 3)' });
 
+  // An exit code with which the launcher says why: the host has a line of its own for it.
+  const cannotLimit = fakeBrowserServer({ announce: false });
+  const refused = startHost({ dataDir: dataDir(t), port: 0, bind: '127.0.0.1', runServer: cannotLimit.runServer, log: () => {} });
+  await until(() => cannotLimit.calls[0]?.listeningPort, 'the browser server to listen');
+  cannotLimit.calls[0].exit(69);
+  await assert.rejects(refused, { message: 'the browser server cannot limit module loading to the install with this Node; Node 22.15 or later is needed' });
+
   const silent = fakeBrowserServer({ announce: false });
   await assert.rejects(
     startHost({ dataDir: dataDir(t), port: 0, bind: '127.0.0.1', runServer: silent.runServer, log: () => {}, startTimeoutMs: 200 }),
@@ -487,44 +494,73 @@ test('stop() ends the whole process tree of the browser server', { skip: !WINDOW
 /**
  * What Playwright's cli.js does for `run-server`, as far as the host can tell: listens on --host and --port, prints its
  * address, answers upgrades on --path, tells the path to GET /json and "Running" to every other plain request. It also
- * notes what it was started with in started.json beside itself.
+ * notes what it was started with in started.json beside itself. A probe.json beside it asks for more before it listens:
+ * `requires` and `imports` are module names it tries to load (the outcome of each goes into started.json, and so do the
+ * folders require() searches for a name).
  */
 const FAKE_CLI = `
 const http = require('node:http');
-const { writeFileSync } = require('node:fs');
+const { existsSync, readFileSync, writeFileSync } = require('node:fs');
 const { join } = require('node:path');
 const args = process.argv.slice(2);
 const option = (name) => args[args.indexOf(name) + 1];
 if (args[0] !== 'run-server') process.exit(64);
 const path = option('--path');
-const server = http.createServer((req, res) => {
-  if (req.url === '/json') return res.end(JSON.stringify({ wsEndpointPath: path }));
-  res.end('Running');
-});
-server.on('upgrade', (req, socket) => {
-  if (new URL('http://localhost' + req.url).pathname !== path) return socket.end('HTTP/1.1 400 Bad Request\\r\\n\\r\\n');
-  socket.write('HTTP/1.1 101 Switching Protocols\\r\\nUpgrade: websocket\\r\\nConnection: Upgrade\\r\\n\\r\\n');
-  socket.pipe(socket);
-});
-server.listen(Number(option('--port')), option('--host'), () => {
-  const variablesWithThePath = Object.keys(process.env).filter((name) => process.env[name].includes(path.slice(1)));
-  writeFileSync(join(__dirname, 'started.json'), JSON.stringify({ pid: process.pid, args, port: server.address().port, variablesWithThePath }));
-  console.log('Listening on ws://' + option('--host') + ':' + server.address().port + path);
-});
+const probe = existsSync(join(__dirname, 'probe.json')) ? JSON.parse(readFileSync(join(__dirname, 'probe.json'), 'utf8')) : {};
+(async () => {
+  const loads = {};
+  for (const name of probe.requires ?? []) {
+    try { require(name); loads[name] = 'loaded'; } catch (err) { loads[name] = String(err.code); }
+  }
+  for (const name of probe.imports ?? []) {
+    try { await import(name); loads['import ' + name] = 'loaded'; } catch (err) { loads['import ' + name] = String(err.code); }
+  }
+  const server = http.createServer((req, res) => {
+    if (req.url === '/json') return res.end(JSON.stringify({ wsEndpointPath: path }));
+    res.end('Running');
+  });
+  server.on('upgrade', (req, socket) => {
+    if (new URL('http://localhost' + req.url).pathname !== path) return socket.end('HTTP/1.1 400 Bad Request\\r\\n\\r\\n');
+    socket.write('HTTP/1.1 101 Switching Protocols\\r\\nUpgrade: websocket\\r\\nConnection: Upgrade\\r\\n\\r\\n');
+    socket.pipe(socket);
+  });
+  server.listen(Number(option('--port')), option('--host'), () => {
+    const variablesWithThePath = Object.keys(process.env).filter((name) => process.env[name].includes(path.slice(1)));
+    const variable = (name) => process.env[name] ?? null;
+    const environment = { WS_NO_BUFFER_UTIL: variable('WS_NO_BUFFER_UTIL'), WS_NO_UTF_8_VALIDATE: variable('WS_NO_UTF_8_VALIDATE'), NODE_PATH: variable('NODE_PATH') };
+    const searched = require.resolve.paths('a-module-that-is-not-installed');
+    writeFileSync(join(__dirname, 'started.json'), JSON.stringify({ pid: process.pid, args, port: server.address().port, variablesWithThePath, loads, searched, environment }));
+    console.log('Listening on ws://' + option('--host') + ':' + server.address().port + path);
+  });
+})();
 `;
 
-/** A copy of host/ and gate/ laid out as installed, with the stand-in for Playwright's CLI; removed after the test. */
-function installedCopy(t) {
-  const root = mkdtempSync(join(tmpdir(), 'rpa-host-files-'));
-  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }));
+/**
+ * A copy of host/ and gate/ laid out as installed, with the stand-in for Playwright's CLI; removed after the test. The
+ * install root sits two folders deep in a folder of its own (`base`), so a test can put things above the install.
+ */
+function installedCopy(t, { probe } = {}) {
+  const base = mkdtempSync(join(tmpdir(), 'rpa-host-files-'));
+  t.after(() => rmSync(base, { recursive: true, force: true, maxRetries: 5 }));
+  const root = join(base, 'outer', 'install');
   const cliDir = join(root, 'node_modules', 'playwright');
   for (const dir of [join(root, 'host'), join(root, 'gate'), cliDir]) mkdirSync(dir, { recursive: true });
   for (const name of ['host.mjs', 'run-server.mjs']) copyFileSync(join(HOST_DIR, name), join(root, 'host', name));
   for (const name of ['gate.mjs', 'ecs.mjs', 'selfsigned.mjs']) copyFileSync(join(GATE_DIR, name), join(root, 'gate', name));
   writeFileSync(join(cliDir, 'package.json'), '{}');
   writeFileSync(join(cliDir, 'cli.js'), FAKE_CLI);
+  if (probe) writeFileSync(join(cliDir, 'probe.json'), JSON.stringify(probe));
   const started = () => JSON.parse(readFileSync(join(cliDir, 'started.json'), 'utf8'));
-  return { hostFile: join(root, 'host', 'host.mjs'), launcherFile: join(root, 'host', 'run-server.mjs'), started };
+  return { base, root, hostFile: join(root, 'host', 'host.mjs'), launcherFile: join(root, 'host', 'run-server.mjs'), started };
+}
+
+/** Puts a module `name` into `folder` (a node_modules folder, or one NODE_PATH names). Loading it leaves `ran-<name>` in `base`. */
+function plantModule(folder, name, base, { esm = false } = {}) {
+  const dir = join(folder, name);
+  mkdirSync(dir, { recursive: true });
+  const marker = JSON.stringify(join(base, `ran-${name}`));
+  writeFileSync(join(dir, 'package.json'), JSON.stringify(esm ? { name, type: 'module', exports: './index.js' } : { name, main: 'index.js' }));
+  writeFileSync(join(dir, 'index.js'), esm ? `import { writeFileSync } from 'node:fs';\nwriteFileSync(${marker}, '');\n` : `require('node:fs').writeFileSync(${marker}, '');\n`);
 }
 
 test('started the default way, the path is given to the browser server but is not on its command line or in its environment', async (t) => {
@@ -562,6 +598,44 @@ test('started the default way, the path is given to the browser server but is no
 
   await host.stop();
   await until(() => !alive(started.pid), 'the browser server to end');
+});
+
+test('a module planted outside the install is not loaded by the browser server; a module inside the install is', async (t) => {
+  // Playwright's bundled ws asks for bufferutil and utf-8-validate, which are not installed. Node would look for them in
+  // the node_modules of every folder above the install, up to the root of the drive, where any user may create one.
+  const files = installedCopy(t, {
+    probe: { requires: ['bufferutil', 'utf-8-validate', 'named-by-node-path', 'inside-the-install'], imports: ['planted-for-import', 'inside-for-import'] },
+  });
+  plantModule(join(dirname(files.root), 'node_modules'), 'bufferutil', files.base);
+  plantModule(join(files.base, 'node_modules'), 'utf-8-validate', files.base);
+  plantModule(join(files.base, 'node_modules'), 'planted-for-import', files.base, { esm: true });
+  plantModule(join(files.base, 'elsewhere'), 'named-by-node-path', files.base);
+  plantModule(join(files.root, 'node_modules'), 'inside-the-install', files.base);
+  plantModule(join(files.root, 'node_modules'), 'inside-for-import', files.base, { esm: true });
+  const nodePath = process.env.NODE_PATH;
+  process.env.NODE_PATH = join(files.base, 'elsewhere');
+  t.after(() => {
+    if (nodePath === undefined) delete process.env.NODE_PATH;
+    else process.env.NODE_PATH = nodePath;
+  });
+
+  const installed = await import(pathToFileURL(files.hostFile).href);
+  const host = await installed.startHost({ dataDir: dataDir(t), port: 0, bind: '127.0.0.1', log: () => {} });
+  t.after(() => host.stop());
+  const started = files.started();
+  assert.deepEqual(started.loads, {
+    bufferutil: 'MODULE_NOT_FOUND',
+    'utf-8-validate': 'MODULE_NOT_FOUND',
+    'named-by-node-path': 'MODULE_NOT_FOUND',
+    'inside-the-install': 'loaded',
+    'import planted-for-import': 'ERR_MODULE_NOT_FOUND',
+    'import inside-for-import': 'loaded',
+  });
+  const ran = readdirSync(files.base).filter((name) => name.startsWith('ran-')).sort();
+  assert.deepEqual(ran, ['ran-inside-for-import', 'ran-inside-the-install'], 'only the modules inside the install ran');
+  const root = realpathSync(files.root);
+  assert.deepEqual(started.searched, [join(root, 'node_modules', 'playwright', 'node_modules'), join(root, 'node_modules')], 'require() searches inside the install only');
+  assert.deepEqual(started.environment, { WS_NO_BUFFER_UTIL: '1', WS_NO_UTF_8_VALIDATE: '1', NODE_PATH: null });
 });
 
 test('the launcher does not start without the path and port the host gives it', (t) => {

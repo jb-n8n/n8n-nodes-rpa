@@ -10,6 +10,8 @@
 //   learn the port and then drops; its stderr goes nowhere.
 // - The browser server must not tell its path to a plain HTTP request (Playwright 1.63 does on GET /json unless
 //   run-server.mjs is in front). The host asks at each start and does not start the gate if the answer holds the path.
+// - The browser server loads modules only from the install (the folder that holds host/, gate/ and node_modules/), not
+//   from folders above it or from NODE_PATH, where another user of the machine could put one (run-server.mjs).
 // - The browser server is started without the token: variables of the host's environment that hold it are not passed
 //   on, so neither the browser server nor the browsers it launches hold the token.
 // - The gate always serves TLS. n8n connects with wss and a bearer token and checks the certificate by its SHA-256
@@ -55,6 +57,10 @@ const PLAIN_CHECK_MS = 5000;
 const TERM_ATTEMPTS = 5;
 /** How long to wait for the exit after a kill that cannot be ignored. */
 const EXIT_WAIT_MS = 5000;
+/** Exit codes with which run-server.mjs says why it did not start the browser server, and the host's line for each. */
+const LAUNCHER_EXITS = new Map([
+  [69, 'the browser server cannot limit module loading to the install with this Node; Node 22.15 or later is needed'],
+]);
 /** The line the run-server prints once it listens; the path follows the port. */
 const LISTENING = /^Listening on ws:\/\/127\.0\.0\.1:(\d+)(\/\S*)$/;
 /** Lines of the browser server's output longer than this are dropped unread. */
@@ -158,14 +164,14 @@ function settledWithin(promise, ms) {
 /**
  * The port in the address line the browser server prints on stdout. Other lines are dropped, and so is everything the
  * server prints later (the pipe is still read, so the server never blocks on it). Nothing read here is logged: the
- * address holds the path. Rejects when the server ends first (`ended` resolves with how) or the time passes.
+ * address holds the path. Rejects when the server ends first (`ended` resolves with the message) or the time passes.
  */
 function announcedPort(child, path, ended, timeoutMs) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`the browser server did not report its address within ${timeoutMs / 1000} s`)), timeoutMs);
-    ended.then((how) => {
+    ended.then((message) => {
       clearTimeout(timer);
-      reject(new Error(`the browser server stopped before it was listening (${how})`));
+      reject(new Error(message));
     });
     let pending = '';
     let found = false;
@@ -265,9 +271,11 @@ export async function startHost({
   const env = Object.fromEntries(Object.entries(process.env).filter(([, value]) => !value.includes(token)));
   const child = runServer({ port: upstreamPort, path, env });
   let ended;
+  let exitCode;
   const gone = new Promise((resolve) => {
     child.once('exit', (code, signal) => {
       ended ??= code === null ? `signal ${signal}` : `exit code ${code}`;
+      exitCode = code;
       resolve();
     });
     // A process that could not be started has no id and never exits; any other error leaves it running.
@@ -281,7 +289,8 @@ export async function startHost({
 
   let upstream;
   try {
-    upstream = await announcedPort(child, path, gone.then(() => ended), startTimeoutMs);
+    const stoppedEarly = () => LAUNCHER_EXITS.get(exitCode) ?? `the browser server stopped before it was listening (${ended})`;
+    upstream = await announcedPort(child, path, gone.then(stoppedEarly), startTimeoutMs);
     if (await tellsItsPath(upstream, path)) throw new Error('the browser server answers a plain request with its path; not starting');
   } catch (err) {
     await endBrowserServer();
