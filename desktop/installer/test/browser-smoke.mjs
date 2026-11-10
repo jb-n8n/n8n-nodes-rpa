@@ -35,14 +35,32 @@ const installDir = option('--install', join(process.env.ProgramFiles ?? 'C:\\Pro
 const dataDir = option('--data', join(process.env.ProgramData ?? 'C:\\ProgramData', 'RPA Runner'));
 const fingerprint = option('--fingerprint', '');
 const holdMs = Number(option('--hold-ms', '0'));
-const port = Number(option('--port', JSON.parse(readFileSync(join(installDir, 'install.json'), 'utf8').replace(/^\uFEFF/, '')).browserPort));
-const token = readFileSync(join(dataDir, 'browser-token'), 'utf8').trim();
 
-const say = (text) => console.log(String(text).replaceAll(token, '<token>'));
+let token = '';
+const say = (text) => console.log(token ? String(text).replaceAll(token, '<token>') : String(text));
 const fail = (text) => {
   say(`FAIL: ${text}`);
   process.exit(1);
 };
+/** The content of a file of the install, or a FAIL line that names the file and the reason. */
+const readInstallFile = (path) => {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch (err) {
+    return fail(`cannot read ${path} (${err.code ?? err.message})`);
+  }
+};
+let port = Number(option('--port', ''));
+if (!args.includes('--port')) {
+  try {
+    port = Number(JSON.parse(readInstallFile(join(installDir, 'install.json')).replace(/^\uFEFF/, '')).browserPort);
+  } catch (err) {
+    fail(`${join(installDir, 'install.json')} is not JSON (${err.message.split('\n')[0]})`);
+  }
+}
+token = readInstallFile(join(dataDir, 'browser-token')).trim();
+if (!token) fail(`${join(dataDir, 'browser-token')} is empty`);
+
 if (!/^(?:[0-9A-F]{2}:){31}[0-9A-F]{2}$/.test(fingerprint)) fail('--fingerprint must be 32 upper-case hex pairs joined by colons');
 if (!Number.isInteger(port) || port < 1 || port > 65_535) fail('--port must be a port number');
 if (!Number.isFinite(holdMs) || holdMs < 0) fail('--hold-ms must be a number of milliseconds');
