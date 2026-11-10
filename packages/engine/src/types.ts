@@ -330,6 +330,17 @@ export interface BrowserEndpoint {
    * draining, in milliseconds. Absent: SESSION_WAIT_MS (60 s). 0: fail at the first refusal. The run budget caps it.
    */
   sessionWaitMs?: number;
+  /**
+   * Browser Server mode with a wss:// URL only: the SHA-256 fingerprint of the server's certificate (64 hexadecimal
+   * characters, colons optional). When set, the certificate is trusted by this fingerprint instead of by its chain and
+   * name (a self-signed certificate), and no request and no token is sent to a server that presents another one. The
+   * TLS handshake is sent to it, with the URL's host name when the URL has a name.
+   * Not covered: if the pinned server answers the WebSocket upgrade with a redirect to another host, Playwright
+   * follows it on a connection of its own, without the Authorization header, and that connection is not checked
+   * against the fingerprint. A redirect back to the loopback address the engine connects through is closed there, so
+   * the connect fails.
+   */
+  fingerprint?: string;
 }
 
 // Desktop step sets (`surface: "desktop"`): they drive a Windows app through the desktop runner (desktop/), never a browser.

@@ -125,6 +125,8 @@ describe('v2 credential names', () => {
 });
 
 describe('browserConfig (RPA Browser credential)', () => {
+  /** A SHA-256 fingerprint as the engine prints one: 32 uppercase hex pairs joined by colons. */
+  const FINGERPRINT = Array.from({ length: 32 }, () => 'AA').join(':');
   it('defaults to the reference browser server of the compose stack', () => {
     expect(browserConfig({})).toEqual({ mode: 'playwright', wsUrl: 'ws://browser:3000/' });
     expect(browserConfig({ mode: '', wsUrl: '   ' })).toEqual({ mode: 'playwright', wsUrl: 'ws://browser:3000/' });
@@ -143,6 +145,36 @@ describe('browserConfig (RPA Browser credential)', () => {
     expect(browserConfig({ mode: 'cdp', wsUrl: 'http://cdp:9223', slowMo: 9999 })).toMatchObject({ slowMo: 2000 });
     expect(browserConfig({ mode: 'local', slowMo: 250.7 })).toEqual({ mode: 'local', headless: true, slowMo: 250 });
     for (const off of [0, -5, '300', undefined, Number.NaN]) expect(browserConfig({ slowMo: off as never })).not.toHaveProperty('slowMo');
+  });
+  it('the fingerprint reaches the endpoint in Browser Server mode', () => {
+    const endpoint = browserConfig({ mode: 'playwright', wsUrl: 'wss://browser.example.net/', token: 't0k', fingerprint: FINGERPRINT });
+    expect(endpoint.fingerprint).toBe(FINGERPRINT);
+    expect(endpoint).toEqual({ mode: 'playwright', wsUrl: 'wss://browser.example.net/', token: 't0k', fingerprint: FINGERPRINT });
+    // A pasted value often ends with a space or a line break.
+    expect(browserConfig({ wsUrl: 'wss://browser.example.net/', fingerprint: `  ${FINGERPRINT} \r\n` }).fingerprint).toBe(FINGERPRINT);
+    // The engine checks the format (BROWSER_FINGERPRINT_INVALID) and the wss:// rule (BROWSER_FINGERPRINT_NEEDS_WSS).
+    expect(browserConfig({ wsUrl: 'ws://browser:3000/', fingerprint: 'not a fingerprint' }).fingerprint).toBe('not a fingerprint');
+  });
+  it('an empty fingerprint is left out', () => {
+    for (const empty of ['', '   ', ' \r\n\t', undefined, null]) {
+      const endpoint = browserConfig({ mode: 'playwright', wsUrl: 'wss://browser.example.net/', fingerprint: empty });
+      expect('fingerprint' in endpoint, JSON.stringify(empty)).toBe(false);
+    }
+  });
+  it('a fingerprint value that is not text is passed on as text, never read as no fingerprint', () => {
+    // Such a value can only come from an expression or the API. The engine checks the text like a typed value.
+    const passed = (value: unknown) => browserConfig({ mode: 'playwright', wsUrl: 'wss://browser.example.net/', fingerprint: value }).fingerprint;
+    expect(passed(42)).toBe('42');
+    expect(passed(0)).toBe('0');
+    expect(passed(false)).toBe('false');
+    expect(passed({ sha256: FINGERPRINT })).toBe('[object Object]');
+    // An empty array's text is empty, which would read as no fingerprint: its type name is passed instead.
+    expect(passed([])).toBe('(object)');
+    expect(passed([' '])).toBe('(object)');
+  });
+  it('the fingerprint is ignored in CDP and Local modes', () => {
+    expect(browserConfig({ mode: 'cdp', wsUrl: 'wss://cdp.example.net/', fingerprint: FINGERPRINT })).toEqual({ mode: 'cdp', wsUrl: 'wss://cdp.example.net/' });
+    expect(browserConfig({ mode: 'local', fingerprint: FINGERPRINT })).toEqual({ mode: 'local', headless: true });
   });
   it('refuses an unknown mode', () => {
     expect(() => browserConfig({ mode: 'ftp' })).toThrow(ConfigError);

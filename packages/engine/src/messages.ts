@@ -57,6 +57,23 @@ export const noFreeBrowserSession = (url: string, seconds: number) =>
   `The browser service at ${url} had no free browser session for ${seconds} s. Add browser capacity (more replicas or sessions per replica) or start fewer RPA runs at once.`;
 export const ENDPOINT_NOT_SECURE =
   'Plain ws:// is allowed only on localhost, or on a private-network host with Private Network Endpoint on and a token. Use wss:// for remote endpoints.';
+// A wss:// browser server with a self-signed certificate, trusted by the Certificate Fingerprint in the credential.
+export const BROWSER_FINGERPRINT_INVALID = 'The certificate fingerprint must be 64 hexadecimal characters (SHA-256), with or without colons.';
+export const BROWSER_FINGERPRINT_NEEDS_WSS = 'A certificate fingerprint needs a wss:// Endpoint URL in Browser Server mode.';
+/** The server presented another certificate. No request and no token was sent to it; the TLS handshake, with the host name, was. */
+export const BROWSER_FINGERPRINT_MISMATCH = "The browser server's certificate does not match the Certificate Fingerprint in the RPA Browser credential.";
+/**
+ * A connection over wss:// or https:// met a certificate that n8n's Node.js process does not trust (self-signed, an
+ * unknown issuer, expired, or another host name), and no fingerprint is set. When the handshake that failed was the
+ * one with the configured address itself, no request and no token was sent. The failure can also come after the
+ * configured server received the request and the token: it redirected the connection to a host whose certificate is
+ * not trusted, or, in CDP mode, its discovery answer named such a host.
+ */
+export const BROWSER_CERT_NOT_TRUSTED =
+  "n8n does not trust the browser server's certificate. If the server uses a certificate of its own, put its SHA-256 fingerprint in Certificate Fingerprint (SHA-256) on the RPA Browser credential.";
+/** The same in Chrome DevTools Protocol mode, where the credential has no Certificate Fingerprint field. */
+export const BROWSER_CERT_NOT_TRUSTED_CDP =
+  "n8n does not trust the browser server's certificate. Use a certificate that n8n's Node.js process trusts, for example one from an authority listed in NODE_EXTRA_CA_CERTS.";
 export const notHttp = (protocol: string) => `URL must start with http:// or https:// (got "${protocol}").`;
 export const privateAddress = (host: string) =>
   `Blocked: ${host} resolves to a private network address. Turn on Options → Allow Private Network if this site is on your own network.`;

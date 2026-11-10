@@ -71,6 +71,16 @@ export class PlaywrightBrowserApi implements ICredentialType {
       displayOptions: { show: { mode: ['playwright', 'cdp'] } },
     },
     {
+      displayName: 'Certificate Fingerprint (SHA-256)',
+      name: 'fingerprint',
+      type: 'string',
+      default: '',
+      noDataExpression: true,
+      description:
+        "Only for a browser server with its own certificate, such as the one the Windows installer sets up: paste the fingerprint it shows. Leave empty when n8n already trusts the server's certificate.",
+      displayOptions: { show: { mode: ['playwright'] } },
+    },
+    {
       displayName: 'Private Network Endpoint',
       name: 'privateNetwork',
       type: 'boolean',

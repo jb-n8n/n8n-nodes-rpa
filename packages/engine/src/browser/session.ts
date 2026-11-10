@@ -6,8 +6,9 @@ import {
   chromium, type Browser, type BrowserContext, type BrowserContextOptions, type CDPSession, type Page, type Request, type Response as PwResponse,
 } from 'playwright-core';
 import {
-  BLOCKED_REQUEST, browserUnreachable, browserVersionMismatch, CHROMIUM_MISSING, ENDPOINT_NOT_SECURE, noFreeBrowserSession, notHttp, offListSite,
-  privateAddress, tokenRefused,
+  BLOCKED_REQUEST, BROWSER_CERT_NOT_TRUSTED, BROWSER_CERT_NOT_TRUSTED_CDP, BROWSER_FINGERPRINT_NEEDS_WSS, browserUnreachable, browserVersionMismatch,
+  CHROMIUM_MISSING, ENDPOINT_NOT_SECURE,
+  noFreeBrowserSession, notHttp, offListSite, privateAddress, tokenRefused,
 } from '../messages.js';
 import { destructiveNavigation } from '../policy/destructive.js';
 import type { Masker } from '../secrets/mask.js';
@@ -18,6 +19,7 @@ import { matchingReadPost, readPostLabel, readPostsProblem } from '../policy/rea
 import type { BrowserEndpoint, PortalPolicy, RequestRecord, Violation } from '../types.js';
 import { createAddressGuard, defaultResolveHost, hostnameOf, isPrivateAddress, type AddressGuard, type ResolveHost } from './address.js';
 import { HARDEN_SCRIPT } from './harden.js';
+import { openPinnedTunnel, pinnedFingerprint } from './pinned-tunnel.js';
 import { startRedirectGuard, type HopVerdict, type RedirectGuard } from './redirects.js';
 import { createWindow, FILL_AND_SUBMIT, submitTargetRule, type RequestFrame, type WriteWindow } from './window.js';
 import type { AllowedSubmit } from '../policy/submits.js';
@@ -235,7 +237,23 @@ const UNRESOLVED_CODES = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ENODATA']);
 
 type Seams = { resolveHost: ResolveHost; isPrivate: (ip: string) => boolean };
 
+/**
+ * A certificate fingerprint is checked on a TLS handshake the engine does itself (browser/pinned-tunnel.ts), which
+ * exists for a Browser Server reached over wss:// only. Anywhere else the pin would be ignored without a word, so the
+ * endpoint is refused.
+ */
+function assertPinnable(e: BrowserEndpoint): void {
+  const wss = e.mode === 'playwright' && URL.canParse(e.wsUrl ?? '') && new URL(e.wsUrl ?? '').protocol === 'wss:';
+  if (!wss) throw new BrowserUnavailableError(BROWSER_FINGERPRINT_NEEDS_WSS);
+  try {
+    pinnedFingerprint(e.fingerprint ?? '');
+  } catch (err) {
+    throw new BrowserUnavailableError((err as Error).message);
+  }
+}
+
 async function assertEndpoint(e: BrowserEndpoint, seams: Seams): Promise<void> {
+  if (e.fingerprint) assertPinnable(e);
   if (e.mode === 'local') return;
   if (!e.wsUrl) throw new BrowserUnavailableError(`a ${e.mode} endpoint needs a URL`);
   let u: URL;
@@ -312,9 +330,33 @@ function shownEndpoint(wsUrl?: string): string {
   }
 }
 
+/**
+ * Node's certificate verification failures, by text and by code, as the first line of a connect error names them:
+ * a self-signed certificate, an issuer n8n's Node.js process does not know, an expired certificate, another host name.
+ */
+const CERT_NOT_TRUSTED = new RegExp([
+  'self[- ]signed certificate', 'unable to verify', 'unable to get (?:local )?issuer certificate', 'certificate has expired',
+  "Hostname/IP does not match certificate's altnames",
+  'DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'UNABLE_TO_GET_ISSUER_CERT(?:_LOCALLY)?',
+  'CERT_HAS_EXPIRED', 'ERR_TLS_CERT_ALTNAME_INVALID',
+].join('|'), 'i');
+
+/** Whether the endpoint is reached over TLS (wss:// or https://). */
+function overTls(wsUrl?: string): boolean {
+  const protocol = URL.canParse(wsUrl ?? '') ? new URL(wsUrl ?? '').protocol : '';
+  return protocol === 'wss:' || protocol === 'https:';
+}
+
 function connectError(err: unknown, e: BrowserEndpoint): string {
   const raw = err instanceof Error ? err.message : String(err);
   if (e.mode === 'local') return raw.includes("Executable doesn't exist") ? CHROMIUM_MISSING : `could not connect to the browser: ${raw.split('\n')[0]}`;
+  // A TLS handshake failed on the certificate. When it was the handshake with the configured address itself, no request
+  // and no token was sent. It can also be a later one: the configured server, which did get the request and the token,
+  // redirected to a host whose certificate is not trusted, or, in CDP mode, its discovery answer named such a host.
+  // Checked first: the error quotes the names in the presented certificate, and they must not choose one of the
+  // messages below. On the first line only: later lines can hold a response body. Both messages are fixed text with
+  // nothing of the raw error; the CDP one names no Certificate Fingerprint field, which that mode does not have.
+  if (overTls(e.wsUrl) && CERT_NOT_TRUSTED.test(raw.split('\n')[0])) return e.mode === 'cdp' ? BROWSER_CERT_NOT_TRUSTED_CDP : BROWSER_CERT_NOT_TRUSTED;
   // playwright run-server answers a version mismatch with 428 and a box containing "server version: v1.62".
   const version = /server version: v?(\d+\.\d+(?:\.\d+)?)/i.exec(raw);
   if (version) return browserVersionMismatch(version[1], PLAYWRIGHT_VERSION);
@@ -344,6 +386,9 @@ const sleepUnlessAborted = (ms: number, signal?: AbortSignal) => new Promise<voi
   signal?.addEventListener('abort', done, { once: true });
 });
 
+/** Test seam: what connects to a Browser Server endpoint, in place of chromium.connect. */
+export type ConnectServer = (wsUrl: string, options: { headers?: Record<string, string>; timeout: number; slowMo?: number }) => Promise<Browser>;
+
 /** Test seams for the session wait: the clock, the sleep and the jitter source. */
 export interface SessionWaitSeams {
   now?: () => number;
@@ -358,7 +403,7 @@ export interface SessionWaitSeams {
  */
 async function connectWaiting(
   e: BrowserEndpoint, policy: PortalPolicy, pins: Map<string, string>,
-  opts: { signal?: AbortSignal; deadlineMs?: number; seams?: SessionWaitSeams },
+  opts: { signal?: AbortSignal; deadlineMs?: number; seams?: SessionWaitSeams; connectServer?: ConnectServer },
 ): Promise<Browser> {
   const now = opts.seams?.now ?? Date.now;
   const sleep = opts.seams?.sleep ?? sleepUnlessAborted;
@@ -369,7 +414,7 @@ async function connectWaiting(
   const noSession = () => new NoFreeSessionError(noFreeBrowserSession(shownEndpoint(e.wsUrl), Math.round((now() - started) / 1000)));
   for (let attempt = 0; ; attempt++) {
     try {
-      return await connect(e, policy, pins);
+      return await connect(e, policy, pins, opts.connectServer);
     } catch (err) {
       if (e.mode !== 'playwright' || !gateHasNoSession(err)) throw err;
       const left = end - now();
@@ -381,13 +426,47 @@ async function connectWaiting(
   }
 }
 
-async function connect(e: BrowserEndpoint, policy: PortalPolicy, pins: Map<string, string>): Promise<Browser> {
+async function connect(
+  e: BrowserEndpoint, policy: PortalPolicy, pins: Map<string, string>,
+  connectServer: ConnectServer = (wsUrl, options) => chromium.connect(wsUrl, options),
+): Promise<Browser> {
   const headers = e.token ? { Authorization: `Bearer ${e.token}` } : undefined;
   // Slow Motion is applied by this client (Playwright delays its own commands): no browser server option is involved.
   const slowMo = e.slowMo && e.slowMo > 0 ? { slowMo: e.slowMo } : {};
   if (e.mode === 'local') return chromium.launch({ headless: e.headless ?? true, args: localLaunchArgs(policy, pins), ...slowMo });
-  if (e.mode === 'playwright') return chromium.connect(e.wsUrl as string, { headers, timeout: CONNECT_TIMEOUT_MS, ...slowMo });
-  return chromium.connectOverCDP(e.wsUrl as string, { headers, timeout: CONNECT_TIMEOUT_MS, ...slowMo });
+  const options = { headers, timeout: CONNECT_TIMEOUT_MS, ...slowMo };
+  if (e.mode === 'playwright') {
+    const wsUrl = e.wsUrl as string;
+    return e.fingerprint ? connectPinned(wsUrl, e.fingerprint, (url) => connectServer(url, options)) : connectServer(wsUrl, options);
+  }
+  return chromium.connectOverCDP(e.wsUrl as string, options);
+}
+
+/**
+ * Connects to a wss:// Browser Server whose certificate is pinned. Playwright cannot pin a certificate, so it connects
+ * to a loopback tunnel (browser/pinned-tunnel.ts) that sends its bytes (the upgrade request with the token) on only
+ * after the server's certificate matched the fingerprint. The tunnel closes with the connection to the browser, or at
+ * once when the connect fails; a certificate that did not match fails with the tunnel's message.
+ *
+ * What this does not cover: if the pinned server answers the WebSocket upgrade with a redirect to another host,
+ * Playwright follows it on a connection of its own, outside the tunnel and without the Authorization header, and that
+ * connection is not checked against the fingerprint. A redirect back to the tunnel's own address is closed by the
+ * tunnel (it takes one connection), so the connect fails.
+ */
+async function connectPinned(wssUrl: string, fingerprint: string, connectTo: (wsUrl: string) => Promise<Browser>): Promise<Browser> {
+  const tunnel = await openPinnedTunnel(wssUrl, fingerprint, { handshakeTimeoutMs: CONNECT_TIMEOUT_MS });
+  try {
+    const browser = await connectTo(tunnel.wsUrl);
+    browser.on('disconnected', () => { void tunnel.close(); });
+    // A disconnect that fired before the listener was attached is never reported to it.
+    if (!browser.isConnected()) await tunnel.close();
+    return browser;
+  } catch (err) {
+    await tunnel.close();
+    const failure = tunnel.failure();
+    if (failure) throw new BrowserUnavailableError(failure);
+    throw err;
+  }
 }
 
 export async function openSession(opts: {
@@ -400,6 +479,7 @@ export async function openSession(opts: {
    * to test that defence in depth.
    */
   resolveHost?: ResolveHost; isPrivate?: (ip: string) => boolean; sessionWait?: SessionWaitSeams; redirectGuard?: boolean;
+  connectServer?: ConnectServer;
 }): Promise<Session> {
   const { endpoint, policy, masker } = opts;
   // Defence in depth: the node refuses these entries already; a policy built some other way must not widen the reads.
@@ -427,9 +507,14 @@ export async function openSession(opts: {
   const pins = endpoint.mode === 'local' ? await pinHosts(policy, guard) : new Map<string, string>();
   let browser: Browser;
   try {
-    browser = await connectWaiting(endpoint, policy, pins, { signal: opts.signal, deadlineMs: opts.deadlineMs, seams: opts.sessionWait });
+    browser = await connectWaiting(endpoint, policy, pins, {
+      signal: opts.signal, deadlineMs: opts.deadlineMs, seams: opts.sessionWait, connectServer: opts.connectServer,
+    });
   } catch (err) {
     if (err instanceof NoFreeSessionError) throw new NoFreeSessionError(scrub(err.message));
+    // The pinned tunnel's own message stands: the server presented another certificate, or the tunnel could not
+    // connect to the browser server.
+    if (err instanceof BrowserUnavailableError) throw new BrowserUnavailableError(scrub(err.message));
     throw new BrowserUnavailableError(scrub(connectError(err, endpoint)));
   }
   try {

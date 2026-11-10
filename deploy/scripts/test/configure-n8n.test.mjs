@@ -23,7 +23,7 @@ const SCHEMA = {
   properties: {
     notice: { type: 'notice' }, mode: { type: 'string', enum: ['playwright', 'cdp', 'local'] }, playwrightNotice: { type: 'notice' },
     cdpNotice: { type: 'notice' }, localNotice: { type: 'notice' }, wsUrl: { type: 'string' }, token: { type: 'string' },
-    privateNetwork: { type: 'boolean' }, headless: { type: 'boolean' }, slowMo: { type: 'number' },
+    fingerprint: { type: 'string' }, privateNetwork: { type: 'boolean' }, headless: { type: 'boolean' }, slowMo: { type: 'number' },
   },
   required: [],
 };

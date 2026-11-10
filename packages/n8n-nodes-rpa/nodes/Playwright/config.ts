@@ -188,6 +188,18 @@ export function siteLoginConfig(data: CredentialData): SiteLogin {
 /** Upper bound for the RPA Browser credential's Slow Motion (ms). */
 const MAX_SLOW_MO = 2000;
 
+/**
+ * The Certificate Fingerprint field as text, '' for no fingerprint. Only a missing value or a blank string means no
+ * fingerprint; a pasted value is trimmed. A value that is not text (it can only come from an expression or the API) is
+ * never read as no fingerprint: it is passed on as text, and the engine checks that text like a typed value.
+ */
+function fingerprintText(value: unknown): string {
+  if (value === undefined || value === null) return '';
+  if (typeof value === 'string') return value.trim();
+  // An empty array's text is empty, which would read as no fingerprint: its type name is passed instead.
+  return String(value).trim() || `(${typeof value})`;
+}
+
 /** RPA Browser credential (playwrightBrowserApi) → endpoint. Empty fields fall back to the reference compose stack. */
 export function browserConfig(data: CredentialData): BrowserEndpoint {
   const mode = text(data, 'mode') || 'playwright';
@@ -197,7 +209,12 @@ export function browserConfig(data: CredentialData): BrowserEndpoint {
   if (mode !== 'playwright' && mode !== 'cdp') throw new ConfigError('Mode must be Browser Server, Chrome DevTools Protocol (CDP) or Local Browser');
   const wsUrl = text(data, 'wsUrl') || DEFAULT_ENDPOINT_URL;
   const token = typeof data.token === 'string' && data.token ? data.token : undefined;
-  return { mode, wsUrl, ...(token ? { token } : {}), ...(data.privateNetwork === true ? { privateNetwork: true } : {}), ...slow };
+  // Certificate Fingerprint (SHA-256): Browser Server mode only, where the field shows. The engine checks its format and
+  // that the Endpoint URL is wss://.
+  const fingerprint = mode === 'playwright' ? fingerprintText(data.fingerprint) : '';
+  return {
+    mode, wsUrl, ...(token ? { token } : {}), ...(fingerprint ? { fingerprint } : {}), ...(data.privateNetwork === true ? { privateNetwork: true } : {}), ...slow,
+  };
 }
 
 /** The RPA Desktop Runner credential as the engine's RunnerEndpoint. The engine checks the URL and fingerprint formats. */
