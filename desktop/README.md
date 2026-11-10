@@ -85,19 +85,30 @@ Key chords that reach the Windows shell rather than the app (anything with Win, 
 Alt+Tab, Alt+Esc) are never sent. `type` goes only into editable text fields, as Unicode keystrokes (no shortcuts or
 mnemonics), and stops if the keyboard focus moves.
 
-**This is weaker than the browser's guarantee.** The browser policy is enforced on the network: every request and
-redirect is checked against an allow-list. A desktop app talks to its own back end, which the runner cannot filter.
-The runner limits which apps and windows a run touches, which controls and keys count as writes, and where files come
-from; what an allowed app does with an allowed click is up to the app. On a person's own desktop the runner acts with
-that person's access. Two limits to keep in mind:
+**This is weaker than the browser's network policy.** The browser policy is enforced on the network: every request
+and redirect is checked against an allow-list. A desktop app talks to its own back end, which the runner cannot
+filter. The runner limits which apps and windows a run touches, which controls and keys count as writes, and where
+files come from; what an allowed app does with an allowed click is up to the app. On a person's own desktop the runner
+acts with that person's access. Three limits to keep in mind:
 
 - `write: true` and `mode: "repair"` are chosen by the caller. They keep honest mistakes and AI repair away from
-  writes; against a compromised n8n, what still holds is the allowed apps and windows, the shell-chord block, export
-  confinement and password redaction.
+  writes. Against a caller that holds the runner token and nothing else (a compromised n8n without the browser
+  token), the runner still applies the allowed apps and windows, the shell-chord block, export confinement and
+  password redaction.
 - An allowed app's own file dialogs carry shell powers: through them a caller can copy files the runner's user can
   read into the export directory, or start programs from a context menu (those programs are not the run's, so the
-  runner will not act on them). `file.retrieve` itself never returns files from elsewhere. A dedicated Windows user
-  with AppLocker is the real control.
+  runner will not act on them). `file.retrieve` itself reads only from the run's export directory. A dedicated
+  Windows user with AppLocker narrows what that user can start.
+- The RPA browser runs as the same Windows user as the runner when it is installed beside it, which the installer
+  does unless it is given `-NoBrowser`. With the browser installed, whoever holds the browser token and can reach the
+  browser's port acts as the bot user through the browser: it can read the files the bot user can read (the runner's
+  token among them), and it can create files with a name and content of its choice where the bot user can write,
+  which is a way to run programs as the bot user. The runner's policy does not limit that, so the policy is a limit
+  for the runner token only; on a machine where the policy must hold against n8n itself, install with `-NoBrowser`
+  and run the browser on another machine. On Windows Server 2022 a plain Playwright client with the browser token
+  read a file of the bot user through a `file://` page, and, after a CDP session set the download folder of its
+  browser context (`Browser.setDownloadBehavior`), saved a download with the name and content it chose into a folder
+  of the bot user's profile; the file belonged to the bot user. A file only administrators could read was refused.
 
 ## Changing the policy
 

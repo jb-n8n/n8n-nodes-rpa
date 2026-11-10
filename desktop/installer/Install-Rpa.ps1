@@ -25,7 +25,13 @@
 #   -IncludePublicNetwork  With -AllowFromAnyAddress: the rules apply on Public networks too.
 #   -NoFirewall    Leave Windows Firewall alone. One of -AllowFrom, -AllowFromAnyAddress and -NoFirewall is needed on
 #                  a first install; an upgrade without any of them keeps what the install was made with.
-#   -NoBrowser     Install the runner only.
+#   -NoBrowser     Install the runner only. With the browser installed, whoever holds the browser token and can reach
+#                  the browser's port acts as the bot user through the browser: it can read the files the bot user can
+#                  read (the runner's token among them), and it can create files with a name and content of its
+#                  choice where the bot user can write, which is a way to run programs as the bot user. The runner's
+#                  policy does not limit that, so the policy is a limit for the runner token only; on a machine where
+#                  the policy must hold against n8n itself, install with -NoBrowser and run the browser on another
+#                  machine.
 #   -AutoSignIn    Have Windows sign the bot user in by itself at every start and keep the desktop unlocked. The
 #                  password is stored on this machine, and several settings change for the whole machine; the installer
 #                  lists them and asks for YES first, unless -Force is given. Uninstall-Rpa.ps1 puts them back.
