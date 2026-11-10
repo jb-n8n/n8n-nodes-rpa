@@ -233,3 +233,5 @@ catch {
 
 Write-Host ''
 foreach ($line in Get-RpaUninstallSummary $result) { Write-Host $line }
+# The exit code of a run that finished, whatever the last Windows tool it ran left in $LASTEXITCODE.
+exit 0

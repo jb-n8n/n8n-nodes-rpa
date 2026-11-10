@@ -349,3 +349,5 @@ Write-Host ('Sign in as {0}, then run Show-RpaConnection.ps1:' -f $User)
 # Windows PowerShell by its full path, so that the line does not depend on what is found along PATH where it is typed.
 Write-Host ('  {0} -ExecutionPolicy Bypass -File "{1}"' -f (Join-Path $PSHOME 'powershell.exe'), (Join-Path (Join-Path $layout.InstallDir 'scripts') 'Show-RpaConnection.ps1'))
 if (-not $upgrade) { Write-Host ('If {0} is already signed in, sign out and sign in again.' -f $User) }
+# The exit code of a run that finished, whatever the last Windows tool it ran left in $LASTEXITCODE.
+exit 0

@@ -2497,6 +2497,14 @@ Describe 'The installer scripts' {
     $blocks[1] | Should -BeExactly $blocks[0]
   }
 
+  # Without it the exit code of a run that finished would be the one the last Windows tool left (robocopy's 1 means
+  # it copied files).
+  It '<Name> ends with exit 0 after its closing lines' -ForEach @(@{ Name = 'Install-Rpa.ps1' }, @{ Name = 'Uninstall-Rpa.ps1' }) {
+    $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $script:InstallerDir $Name), [ref]$null, [ref]$null)
+    $last = $ast.EndBlock.Statements[$ast.EndBlock.Statements.Count - 1]
+    $last.Extent.Text | Should -BeExactly 'exit 0'
+  }
+
   # An upgrade keeps the policy file; only a run that wrote it may call it new.
   It 'Install-Rpa.ps1 says that the policy allows no app only when this run wrote it' {
     $source = Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir 'Install-Rpa.ps1')
