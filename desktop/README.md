@@ -234,10 +234,16 @@ spaces where that can be avoided inside the value: put the rows together without
 line.
 
 Where this holds: for the summary lines, and for every refusal and failure message. There, in a window at least 77
-columns wide, a row that starts at the left edge is the start of one of the tool's own lines (a `with arguments` line
-starts after two spaces), and text from a value, from a file or from a path you gave is on a row that starts with
-eight spaces unless it follows the tool's own words on a line's first row. Where it does not hold in that form:
+columns wide, every row after a line's first starts with eight spaces, and a row that starts at the left edge is the
+start of one of the tool's lines (a `with arguments` line starts after two spaces). So text from a change file or
+from the policy file is not at the start of a row: it follows the tool's own words, or it is on a row that starts
+with eight spaces. Where it does not hold in that form:
 
+- Some messages start with a path, not with the tool's words. `<path> is not a regular file on a local drive`
+  starts with the path as it was given on the command line, which whoever started the tool chose; read such a line
+  to its end. `<path> exists and is not a folder; ...`, `<path> is a folder, not a policy file; ...` and the line
+  with which `show` says why the runner would refuse the file (`<path>: ...`) start with the backup folder's or the
+  policy file's own path.
 - `show` prints your policy file. Each line of the file starts a row with whatever the file holds, and only the rest
   of a long line is on rows that start with eight spaces (a line of the file that itself starts with eight spaces
   looks the same).
