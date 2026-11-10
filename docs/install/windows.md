@@ -22,8 +22,9 @@ a run should work.
 
 **Who trusts whom.** Treat this machine as part of your n8n: whoever can use the RPA credentials in n8n can act on
 this machine as the bot user, as with the robot machine of other RPA tools. The runner's policy and the write
-declarations in steps are there to keep mistakes and automatic repair away from things you did not intend; they are
-not a barrier against the n8n that holds the tokens (section 3, [Who can reach the ports](#who-can-reach-the-ports)).
+declarations in steps are there to keep mistakes and automatic repair away from things you did not intend; with the
+browser installed (the default), they are not a barrier against the n8n that holds the tokens (section 3,
+[Who can reach the ports](#who-can-reach-the-ports)).
 So give the bot user only the access its work needs, and limit who can reach the two ports.
 
 The package was tested on Windows Server 2022. Windows 10, Windows 11 and Windows Server 2019 or 2025 meet the
