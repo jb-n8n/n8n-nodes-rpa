@@ -203,10 +203,11 @@ public static class PolicyChange
 
     /// <summary>
     /// A name or value as a refusal repeats it: as a literal (<see cref="Literal"/>), and only its first
-    /// <see cref="MaxEchoLength"/> characters, followed by <c>…</c>, when it is longer.
+    /// <see cref="MaxEchoLength"/> characters, followed by three dots, when it is longer. The dots are plain ASCII:
+    /// a console whose code page has no ellipsis character prints that character as a single dot.
     /// </summary>
     internal static string Echo(string value) =>
-        value.Length <= MaxEchoLength ? Literal(value) : Literal(value[..MaxEchoLength]) + "…";
+        value.Length <= MaxEchoLength ? Literal(value) : Literal(value[..MaxEchoLength]) + "...";
 
     /// <summary>
     /// The summary as it is printed, row by row: every line but the last in rows of at most <see cref="RowLength"/>

@@ -10,8 +10,8 @@ public sealed class PolicyWriteException(string message) : IOException(message);
 /// step fails. The new text goes into a temporary file beside the policy and is put in place in one step. An existing
 /// policy is first copied to the backup folder, and is replaced only while it still holds what the tool read at its
 /// start. The tool does not delete a backup copy it has made. After a swap that failed it looks at what is under the
-/// policy's name before it removes anything: the temporary file is removed only when a policy file is there, and
-/// when none is, the old policy is moved back from its backup copy first.
+/// policy's name before it removes anything: the temporary file is removed only when the policy file is there with
+/// its old bytes, or after the old policy has been moved back from its backup copy because none was there.
 /// </summary>
 public static class PolicyWrite
 {
@@ -120,8 +120,10 @@ public static class PolicyWrite
     /// What the tool does and says after a swap that failed, decided by looking. Windows documents failures of the
     /// replace after which the replaced file no longer exists and the replacement still has its own name.
     /// <list type="bullet">
-    /// <item>A policy file is there: the temporary file is removed. The message says the runner keeps its policy
-    /// only when the file still holds the old bytes; otherwise it says where the copy of the old policy is.</item>
+    /// <item>A policy file is there and still holds the old bytes: the temporary file is removed, and the message
+    /// says the runner keeps its policy.</item>
+    /// <item>A policy file is there but holds something else or cannot be read: nothing is removed, and the message
+    /// says where the copy of the old policy and the temporary file are.</item>
     /// <item>No policy file is there: the old policy is moved back from its backup copy (a move that fails when
     /// something has the name by now) and takes the permissions of its folder; then the temporary file is removed.
     /// When the move fails, both files stay and the message says where they are.</item>
@@ -140,10 +142,13 @@ public static class PolicyWrite
             {
                 unchanged = false;
             }
-            var rest = unchanged
-                ? Untouched
-                : $"The policy file at {path} is still there, but the tool could not confirm that it is unchanged; look at it. A copy of the old policy is at {backup}.";
-            return Failed(swap, rest + Remove(files, temporary));
+            if (unchanged) return Failed(swap, Untouched + Remove(files, temporary));
+            // There, but holding something else or not readable (a file that is being deleted keeps its name and
+            // cannot be opened): the tool cannot tell what it is, so it removes nothing.
+            var notApplied = files.Kind(temporary) == PathKind.File ? $" The changed policy, which was not applied, is at {temporary}." : "";
+            return Failed(swap,
+                $"The policy file at {path} is still there, but the tool could not confirm that it is unchanged; look at it. " +
+                $"A copy of the old policy is at {backup}.{notApplied}");
         }
 
         var back = $"After the failed swap there was no policy file at {path}; the tool put the old policy back there from its backup copy, ";

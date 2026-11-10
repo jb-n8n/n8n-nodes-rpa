@@ -204,8 +204,8 @@ for it:
 | A key the policy file does not have, at the top or inside an entry | `the change: unknown key "<key>"`, `the change: unknown key "<key>" in <list>` |
 
 A refusal that repeats a name or a value from a file (a key, a path, a key chord, an exe name) prints it like a value
-in the summary: in double quotes with `\uXXXX` escapes, and only its first 60 characters, followed by `…` when it is
-longer. The same checks and the same form apply to the policy file itself (`show`, and the policy a change is merged
+in the summary: in double quotes with `\uXXXX` escapes, and only its first 60 characters, followed by `...` when it
+is longer. The same checks and the same form apply to the policy file itself (`show`, and the policy a change is merged
 into), with the file's path or `the current policy` in place of `the change`.
 
 ### What the tool prints
@@ -306,9 +306,12 @@ path that looks right is the program you mean.
   the tool looks at what is under the policy's name before it removes anything:
   - The policy file is there and holds the old policy: the tool removes the temporary file and prints the message
     above.
-  - The policy file is there, but holds something else or cannot be read: the tool removes the temporary file and
-    prints `... The policy file at <path> is still there, but the tool could not confirm that it is unchanged; look
-    at it. A copy of the old policy is at <backup>.`
+  - The policy file is there, but holds something else or cannot be read (a file that another program is deleting
+    keeps its name for a while and cannot be opened): the tool removes nothing and prints
+    `... The policy file at <path> is still there, but the tool could not confirm that it is unchanged; look at it.
+    A copy of the old policy is at <backup>. The changed policy, which was not applied, is at <temporary file>.`
+    Look at the policy file; when it is gone or wrong, copy the backup to its path as described below, and delete
+    the temporary file.
   - There is no policy file (Windows documents a failed replace that leaves none): the tool moves the old policy
     back from its backup copy, which fails when something has the name by then, gives it the permissions its folder
     gives, runs the runner's start check on it, and only then removes the temporary file:

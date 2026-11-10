@@ -1183,13 +1183,14 @@ public class PolicyCommandTests
     }
 
     [Fact]
-    public void A_failed_swap_that_left_a_policy_file_the_tool_cannot_confirm_keeps_the_backup_and_says_where_it_is()
+    public void A_failed_swap_that_left_a_policy_file_the_tool_cannot_confirm_removes_nothing_and_says_where_the_copies_are()
     {
-        // The file is there but holds something else, or cannot be read.
+        // The file is there but holds something else, or cannot be read (on Windows a file that is being deleted
+        // still has its name and cannot be opened). The tool cannot tell what it is, so both copies stay.
         Action<FakeFiles>[] leaves =
         [
             files => files.Text[PolicyPath] = OtherPolicy,
-            files => files.Failures["read"] = new IOException("The process cannot access the file because it is being used by another process."),
+            files => files.Failures["read"] = new UnauthorizedAccessException("Access to the path is denied."),
         ];
         foreach (var leave in leaves)
         {
@@ -1199,13 +1200,27 @@ public class PolicyCommandTests
             Assert.Equal(
                 $"{Changing()}\n{AllowErp}\n{OneApp}\n{Prompt}" +
                 R($"{SwapFailed}. The policy file at {PolicyPath} is still there, but the tool could not confirm that it is unchanged; look at it. " +
-                  $"A copy of the old policy is at {backup}.") + "\n",
+                  $"A copy of the old policy is at {backup}. The changed policy, which was not applied, is at {Temporary}.") + "\n",
                 tool.Output);
             Assert.DoesNotContain("keeps running", tool.Output);
             Assert.Equal(Starter, tool.Files.Text[backup]);
-            Assert.DoesNotContain(Temporary, tool.Files.Text.Keys);
+            Assert.Equal(ErpPath, Assert.Single(RunnerPolicy.Parse(tool.Files.Text[Temporary]).AllowedApps).Path);
+            Assert.DoesNotContain(tool.Files.Steps, step => step.StartsWith("delete", StringComparison.Ordinal));
             Assert.Equal(0, tool.Restarts);
         }
+
+        // The temporary file is named only while it is there (a swap that reported a failure after it had moved it).
+        var moved = FailedSwap(files =>
+        {
+            files.Text[PolicyPath] = files.Text[Temporary];
+            files.Text.Remove(Temporary);
+        });
+        Assert.Equal(1, moved.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.EndsWith(
+            R($"{SwapFailed}. The policy file at {PolicyPath} is still there, but the tool could not confirm that it is unchanged; look at it. " +
+              $"A copy of the old policy is at {Backups(moved)}.") + "\n",
+            moved.Output);
+        Assert.Equal(0, moved.Restarts);
     }
 
     [Fact]
@@ -1549,12 +1564,12 @@ public class PolicyCommandTests
         var tool = new Tool();
         tool.Files.Text[ChangePath] = $$"""{ "{{new string('k', 200_000)}}": 1 }""";
         Assert.Equal(1, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
-        Assert.Equal($"{Changing()}\nthe change: unknown key \"{new string('k', 51)}\n        {new string('k', 9)}\"…\n", tool.Output);
+        Assert.Equal($"{Changing()}\nthe change: unknown key \"{new string('k', 51)}\n        {new string('k', 9)}\"...\n", tool.Output);
 
         // Words of the tool's in a key land on a row that starts with eight spaces.
         tool.Files.Text[ChangePath] = $$"""{ "{{new string('k', 51)}}Policy updated.": 1 }""";
         Assert.Equal(1, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
-        Assert.Equal($"{Changing()}\nthe change: unknown key \"{new string('k', 51)}\n        Policy up\"…\n", tool.Output);
+        Assert.Equal($"{Changing()}\nthe change: unknown key \"{new string('k', 51)}\n        Policy up\"...\n", tool.Output);
 
         // A path the caller gave is printed whole, in rows.
         var missing = Path.Combine(Root, new string('m', 150), "Policy updated.json");

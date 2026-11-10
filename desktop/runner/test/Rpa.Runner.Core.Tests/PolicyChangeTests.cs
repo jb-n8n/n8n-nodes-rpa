@@ -683,38 +683,40 @@ public class PolicyChangeTests
     [Fact]
     public void A_refusal_repeats_a_name_or_a_value_as_a_literal_cut_to_60_characters()
     {
+        // The mark of a cut is three plain dots: a console with a code page that has no ellipsis prints that
+        // character as a single dot, which reads as the end of the sentence.
         var k60 = new string('k', 60);
         Refused("", $$"""{ "{{k60}}": 1 }""", $"the change: unknown key \"{k60}\"");
-        Refused("", $$"""{ "{{k60}}k": 1 }""", $"the change: unknown key \"{k60}\"…");
-        Refused("", $$"""{ "{{new string('k', 200_000)}}": 1 }""", $"the change: unknown key \"{k60}\"…");
+        Refused("", $$"""{ "{{k60}}k": 1 }""", $"the change: unknown key \"{k60}\"...");
+        Refused("", $$"""{ "{{new string('k', 200_000)}}": 1 }""", $"the change: unknown key \"{k60}\"...");
         Refused("", """{ "café \"x\" 😀": 1 }""", "the change: unknown key \"caf\\u00E9 \\\"x\\\" \\uD83D\\uDE00\"");
 
         // A key the entries of a list do not have.
-        Refused("", AppChange(ErpPath, $", \"{k60}k\": 1"), $"the change: unknown key \"{k60}\"… in allowedApps");
+        Refused("", AppChange(ErpPath, $", \"{k60}k\": 1"), $"the change: unknown key \"{k60}\"... in allowedApps");
         Refused("", """{ "writeControls": [{ "exe": "ErpDemo.exe", "automationId": "btnPost", "id": 1 }] }""", "the change: unknown key \"id\" in writeControls");
         Refused("", $$"""{ "helperProcesses": [{ "exe": "msedgewebview2.exe", "pathPattern": {{J(HelperPattern)}}, "path": 1 }] }""", "the change: unknown key \"path\" in helperProcesses");
 
         // A key chord the runner cannot read.
-        Refused("", $$"""{ "gatedKeys": ["Ctrl+{{new string('q', 70)}}"] }""", $"the change: gatedKeys has an invalid key chord \"Ctrl+{new string('q', 55)}\"…");
+        Refused("", $$"""{ "gatedKeys": ["Ctrl+{{new string('q', 70)}}"] }""", $"the change: gatedKeys has an invalid key chord \"Ctrl+{new string('q', 55)}\"...");
         Refused("", """{ "gatedKeys": ["Ctrl+Nope\u001b"] }""", "the change: gatedKeys has an invalid key chord \"Ctrl+Nope\\u001B\"");
 
         // An entry without its path, which the parser names by its exe.
         var longExe = new string('e', 70) + ".exe";
-        Refused("", $$"""{ "allowedApps": [{ "exe": "{{longExe}}" }] }""", $"the change: allowedApps[].path is required (the absolute path of \"{new string('e', 60)}\"…)");
+        Refused("", $$"""{ "allowedApps": [{ "exe": "{{longExe}}" }] }""", $"the change: allowedApps[].path is required (the absolute path of \"{new string('e', 60)}\"...)");
         Refused("", """{ "allowedApps": [{ "exe": "ErpDemo.exe", "path": null }] }""", "the change: allowedApps[].path is required (the absolute path of \"ErpDemo.exe\")");
         Refused("", $$"""{ "helperProcesses": [{ "exe": "{{longExe}}" }] }""",
-            $"the change: helperProcesses[].pathPattern is required (the absolute path of \"{new string('e', 60)}\"…, one folder written as *)");
+            $"the change: helperProcesses[].pathPattern is required (the absolute path of \"{new string('e', 60)}\"..., one folder written as *)");
 
         // A path the tool itself refuses.
         var shortPath = Path.Combine(Root, "ERPDEM~1", new string('d', 300), "ErpDemo.exe");
-        Refused("", AppChange(shortPath), $"write the full path, not a short (8.3) name: {L(shortPath[..60])}…");
+        Refused("", AppChange(shortPath), $"write the full path, not a short (8.3) name: {L(shortPath[..60])}...");
         var writable = Path.Combine(Root, new string('w', 80), "ErpDemo.exe");
         Refused(PolicyChange.Apply("", AppChange(writable, ", \"allowUserWritable\": true")).Json, AppChange(writable, ", \"allowUserWritable\": false"),
-            $"a policy change cannot turn allowUserWritable off for {L(writable[..60])}…");
+            $"a policy change cannot turn allowUserWritable off for {L(writable[..60])}...");
 
         // The same in the policy file the change is merged into.
-        Refused($$"""{ "{{k60}}k": 1 }""", AppChange(ErpPath), $"the current policy: unknown key \"{k60}\"…");
-        Refused($$"""{ "allowedApps": [{ "exe": "ErpDemo.exe", "path": {{J(ErpPath)}}, "{{k60}}k": 1 }] }""", AppChange(ErpPath), $"the current policy: unknown key \"{k60}\"… in allowedApps");
+        Refused($$"""{ "{{k60}}k": 1 }""", AppChange(ErpPath), $"the current policy: unknown key \"{k60}\"...");
+        Refused($$"""{ "allowedApps": [{ "exe": "ErpDemo.exe", "path": {{J(ErpPath)}}, "{{k60}}k": 1 }] }""", AppChange(ErpPath), $"the current policy: unknown key \"{k60}\"... in allowedApps");
         Refused("""{ "gatedKeys": ["Ctrl+Nope"] }""", AppChange(ErpPath), "the current policy: gatedKeys has an invalid key chord \"Ctrl+Nope\"");
         Refused("""{ "allowedApps": [{ "exe": "ErpDemo.exe" }] }""", AppChange(ErpPath), "the current policy: allowedApps[].path is required (the absolute path of \"ErpDemo.exe\")");
     }
