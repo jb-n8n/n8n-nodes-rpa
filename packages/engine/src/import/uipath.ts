@@ -13,7 +13,7 @@ import type { Candidate, DesktopDraft, Draft, FlowNode, ImportEvent, ImportItem,
 import { buildDesktopDraft, type DesktopEvent, type DesktopSequence } from './uipath-desktop.js';
 import { readDesktopSelector, type DesktopSelectorRead } from './uipath-desktop-selector.js';
 import { readSelector } from './uipath-selector.js';
-import type { UiaTarget, WindowSel } from '../types.js';
+import type { ClickModifier, UiaTarget, WindowSel } from '../types.js';
 import { parseXml, type XmlNode } from './xml.js';
 import { canonicalChord } from '../steps/desktop-vocabulary.js';
 
@@ -964,7 +964,8 @@ class Walker {
     const isSelect = name === 'NSelectItem' || name === 'SelectItem';
     const isCheck = name === 'NCheck' || name === 'Check';
     const isHotkey = name === 'SendHotkey';
-    if (!isClick && !isType && !isSelect && !isCheck && !isHotkey) {
+    const isHover = name === 'NHover' || name === 'Hover';
+    if (!isClick && !isType && !isSelect && !isCheck && !isHotkey && !isHover) {
       const inner = this.body(el).length;
       return this.untranslated(el, ctx, `this activity has no step equivalent in this release${inner ? `: the ${inner === 1 ? '1 activity' : `${inner} activities`} inside ${inner === 1 ? 'was' : 'were'} not imported` : ''}`);
     }
@@ -976,20 +977,23 @@ class Walker {
 
     const target = this.target(el, ctx);
     if (target.desktop) return this.desktopActivity(el, ctx);
+    const held = isClick ? clickModifiers(this.lit(el, 'MouseButton', ctx), this.lit(el, 'KeyModifiers', ctx)) : {};
+    if ('error' in held) return this.untranslated(el, ctx, held.error);
     const what = (e: ImportEvent) => describeEvent(e);
     for (const issue of target.issues) if (target.candidates.length) this.add(at, 'converted', label || displayName, issue);
     const secure = isType && (name === 'TypeSecureText' || el.attrs.SecureText !== undefined || el.children.some((c) => isProperty(c) && propertyName(c) === 'SecureText'));
-    const shape = isClick ? ({ kind: 'click' } as const) : isCheck ? ({ kind: 'check' } as const) : ({ kind: isSelect ? 'select' : 'fill' } as const);
+    const shape = isClick ? ({ kind: 'click' } as const) : isHover ? ({ kind: 'hover' } as const) : isCheck ? ({ kind: 'check' } as const) : ({ kind: isSelect ? 'select' : 'fill' } as const);
     if (!target.candidates.length) {
       // The value is never read for the report: only the step's kind and label.
-      const e = shape.kind === 'click' ? { at, kind: 'click' as const, target: [], label }
+      const e = shape.kind === 'click' || shape.kind === 'hover' ? { at, kind: shape.kind, target: [], label }
         : shape.kind === 'check' ? { at, kind: 'check' as const, target: [], label, checked: true }
           : { at, kind: shape.kind, target: [], label, value: '', hints: [] };
       this.add(at, 'dropped', what(e), `${name}: ${target.problem ?? 'no usable target'}`);
       return [];
     }
 
-    if (isClick) return [this.event({ at, kind: 'click', target: target.candidates, label }, ctx)];
+    if (isClick) return [this.event({ at, kind: 'click', target: target.candidates, label, ...held }, ctx)];
+    if (isHover) return [this.event({ at, kind: 'hover', target: target.candidates, label }, ctx)];
     if (isCheck) {
       const action = (this.lit(el, 'Action', ctx) ?? 'Check').toLowerCase();
       if (action === 'toggle') this.add(at, 'converted', label || displayName, 'Toggle became Check: change the step to unchecked if the box should be cleared');
@@ -1466,6 +1470,28 @@ function savePathFile(expr: string, csharp: boolean): string | undefined {
   if (lit === undefined) return undefined;
   const file = lit.split(/[\\/]/).pop() ?? '';
   return file.trim() && !file.includes('{') ? file : undefined;
+}
+
+/** The order a click step lists its modifiers in. */
+const CLICK_MODIFIER_ORDER: readonly ClickModifier[] = ['Ctrl', 'Shift', 'Alt'];
+
+/**
+ * A browser click's MouseButton and KeyModifiers (`BTN_LEFT`, `"Ctrl, Shift"`) as the click step's `modifiers`, in the
+ * order Ctrl, Shift, Alt. Another button, or a key other than Ctrl, Shift and Alt, has no step: the error says why.
+ */
+function clickModifiers(button = '', keys = ''): { modifiers?: ClickModifier[] } | { error: string } {
+  const b = button.toLowerCase();
+  if (b && !/left/.test(b)) return { error: `a ${b.replace(/^btn_/, '').slice(0, 20)}-button click is not a step: browser steps click with the left button` };
+  const held = new Set<ClickModifier>();
+  for (const m of keys.split(/[\s,+|]+/).map((x) => x.toLowerCase()).filter(Boolean)) {
+    if (m === 'none') continue;
+    if (m === 'ctrl' || m === 'control') held.add('Ctrl');
+    else if (m === 'shift') held.add('Shift');
+    else if (m === 'alt') held.add('Alt');
+    else return { error: `a click with ${m.slice(0, 20)} held down is not a step: a browser click may hold Ctrl, Shift and Alt` };
+  }
+  const modifiers = CLICK_MODIFIER_ORDER.filter((m) => held.has(m));
+  return modifiers.length ? { modifiers } : {};
 }
 
 /**

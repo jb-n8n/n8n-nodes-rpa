@@ -696,3 +696,67 @@ describe('UiPath: identity-first sign-in with a code from a TOTP activity and "S
     expect(other.report.items).toContainEqual(expect.objectContaining({ kind: 'untranslated', what: 'Hot path' }));
   });
 });
+
+describe('UiPath: hover and clicks with keys held', () => {
+  const run = (body: string) => importSource('uipath', xaml(card(body)), { name: 'keys', hasSiteLogin: false });
+  const steps = (r: ImportResult) => r.drafts.flatMap((d) => d.script.steps);
+  const untranslated = (r: ImportResult) => r.report.items.filter((i) => i.kind === 'untranslated').map((i) => [i.what, i.reason]);
+
+  it('a UiPath click with Ctrl held imports as a click with modifiers', () => {
+    const r = run([
+      click('Beta', "<webctrl tag='BUTTON' aaname='Beta' />", ' KeyModifiers="Ctrl"'),
+      click('Gamma', "<webctrl tag='BUTTON' aaname='Gamma' />", ' MouseButton="BTN_LEFT" KeyModifiers="Shift, Ctrl"'),
+      click('Delta', "<webctrl tag='BUTTON' aaname='Delta' />", ' KeyModifiers="Alt"'),
+      click('Search', "<webctrl tag='BUTTON' aaname='Search' />", ' MouseButton="BTN_LEFT" KeyModifiers="None"'),
+    ].join(''));
+    expect(errors(r)).toEqual([]);
+    expect(untranslated(r)).toEqual([]);
+    expect(steps(r).slice(1)).toEqual([
+      { intent: 'Click Beta', click: { role: 'button', exact: true, name: 'Beta' }, modifiers: ['Ctrl'] },
+      { intent: 'Click Gamma', click: { role: 'button', exact: true, name: 'Gamma' }, modifiers: ['Ctrl', 'Shift'] },
+      { intent: 'Click Delta', click: { role: 'button', exact: true, name: 'Delta' }, modifiers: ['Alt'] },
+      { intent: 'Click Search', click: { role: 'button', exact: true, name: 'Search' } },
+    ]);
+    // With an Expected File a click with keys held stays a click, even named like an export: the download step holds no keys.
+    const dl = importSource('uipath', xaml(card([
+      click('Export', "<webctrl tag='BUTTON' aaname='Export' />", ' KeyModifiers="Ctrl"'),
+      click('Search', "<webctrl tag='BUTTON' aaname='Search' />"),
+    ].join(''))), { name: 'keys', hasSiteLogin: false, download: { mime: ['text/csv'], check: ERP_CHECK } });
+    expect(dl.drafts[0].script.steps.slice(1)).toMatchObject([{ click: { name: 'Export' }, modifiers: ['Ctrl'] }, { download: { trigger: { name: 'Search' } } }]);
+  });
+
+  it('a UiPath right-click is reported as untranslated, not imported as a click', () => {
+    const r = run([
+      click('Row', "<webctrl tag='BUTTON' aaname='Row' />", ' MouseButton="BTN_RIGHT"'),
+      click('Wheel', "<webctrl tag='BUTTON' aaname='Wheel' />", ' MouseButton="BTN_MIDDLE" KeyModifiers="Ctrl"'),
+      click('Start', "<webctrl tag='BUTTON' aaname='Start' />", ' KeyModifiers="Ctrl, Win"'),
+      click('Search', "<webctrl tag='BUTTON' aaname='Search' />"),
+    ].join(''));
+    expect(errors(r)).toEqual([]);
+    // Each one is a gap in the flow, as any other untranslated browser activity is; only the plain click is a step.
+    expect(steps(r).filter((s) => !('goto' in s)).map((s) => s.intent)).toEqual(['Click Search']);
+    expect(untranslated(r)).toEqual([
+      ["Click 'Row'", 'NClick: a right-button click is not a step: browser steps click with the left button'],
+      ["Click 'Wheel'", 'NClick: a middle-button click is not a step: browser steps click with the left button'],
+      ["Click 'Start'", 'NClick: a click with win held down is not a step: a browser click may hold Ctrl, Shift and Alt'],
+    ]);
+  });
+
+  it('a UiPath hover imports as hover', () => {
+    const r = run([
+      `<uix:NHover DisplayName="Hover 'Reports'"><uix:NHover.Target>${target("<webctrl tag='A' aaname='Reports' />")}</uix:NHover.Target></uix:NHover>`,
+      click('Sales', "<webctrl tag='A' aaname='Sales' />"),
+      `<ui:Hover DisplayName="Hover 'A  Tools'"><ui:Hover.Target><ui:Target Selector="&lt;webctrl tag='A' aaname='Tools' /&gt;" /></ui:Hover.Target></ui:Hover>`,
+      `<uix:NHover DisplayName="Hover 'Nowhere'"><uix:NHover.Target><uix:TargetAnchorable /></uix:NHover.Target></uix:NHover>`,
+    ].join(''));
+    expect(errors(r)).toEqual([]);
+    expect(untranslated(r)).toEqual([]);
+    expect(steps(r).slice(1)).toEqual([
+      { intent: 'Hover over Reports', hover: { role: 'link', exact: true, name: 'Reports' } },
+      { intent: 'Click Sales', click: { role: 'link', exact: true, name: 'Sales' } },
+      { intent: 'Hover over Tools', hover: { role: 'link', exact: true, name: 'Tools' } },
+    ]);
+    // A hover without a usable target is dropped, as a click without one is.
+    expect(r.report.items).toContainEqual(expect.objectContaining({ kind: 'dropped', what: 'Hover over Nowhere', reason: expect.stringContaining('NHover: ') }));
+  });
+});

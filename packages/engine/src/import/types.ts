@@ -1,7 +1,7 @@
 // The neutral shapes every importer shares: a parser turns its source into events, stripSecrets removes every
 // typed secret and folds the sign-in into one event, and buildDraft turns the events into a step document and a report.
 import type { DownloadTemplate } from '../steps/file-check.js';
-import type { DesktopScript, Locator, PortalSecrets, Script } from '../types.js';
+import type { ClickModifier, DesktopScript, Locator, PortalSecrets, Script } from '../types.js';
 
 export type ImportSource = 'chrome' | 'playwright' | 'uipath';
 /** One way to find an element, as the source recorded it. A target lists them best first: the first is the primary locator. */
@@ -9,7 +9,9 @@ export type Candidate = Locator;
 /** `at` says where in the source the event came from (a step number, a line, an activity), for the report. */
 export type ImportEvent =
   | { at: string; kind: 'goto'; url: string }
-  | { at: string; kind: 'click'; target: Candidate[]; label: string; download?: true; popup?: true }
+  /** `modifiers`: keys the source held down during the click (UiPath KeyModifiers). */
+  | { at: string; kind: 'click'; target: Candidate[]; label: string; download?: true; popup?: true; modifiers?: ClickModifier[] }
+  | { at: string; kind: 'hover'; target: Candidate[]; label: string }
   /** `secure`: the source marked the typed text secret (UiPath SecureText). `hints`: selector, name, id, aria and type text the source saw, for credential detection only; never copied into steps. */
   | { at: string; kind: 'fill' | 'select'; target: Candidate[]; label: string; value: string; secure?: true; hints: string[] }
   | { at: string; kind: 'check'; target: Candidate[]; label: string; checked: boolean }

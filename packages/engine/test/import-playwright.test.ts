@@ -376,11 +376,12 @@ describe('Playwright code', () => {
       '  });',
       "  await page.getByText('Done').click();", // 24
     ].join('\n')));
-    expect(events.map((e) => e.at)).toEqual(['line 4', 'line 24']);
+    // Line 7's hover is a step now (Playwright hover imports as hover).
+    expect(events.map((e) => e.at)).toEqual(['line 4', 'line 7', 'line 24']);
     const at = (line: number) => items.find((i) => i.at === `line ${line}`);
     expect(at(5)).toMatchObject({ kind: 'untranslated', what: 'Click the element', reason: expect.stringContaining('.first()') });
     expect(at(6)).toMatchObject({ kind: 'untranslated', reason: expect.stringContaining('.filter()') });
-    expect(at(7)).toMatchObject({ kind: 'untranslated', what: 'Hover the element', reason: expect.stringContaining('hover') });
+    expect(at(7)).toBeUndefined();
     expect(at(8)).toMatchObject({ kind: 'untranslated', reason: expect.stringContaining('JavaScript') });
     expect(at(9)).toMatchObject({ kind: 'untranslated' });
     expect(at(10)).toMatchObject({ kind: 'untranslated' });
@@ -406,6 +407,23 @@ describe('Playwright code', () => {
       expect(() => { r = importSource('playwright', junk, PLAIN); }).not.toThrow();
       expect(r?.drafts).toEqual([]);
     }
+  });
+
+  it('Playwright hover imports as hover', () => {
+    const r = importSource('playwright', test([
+      "  await page.goto('https://portal.example.com/');", // 4
+      "  await page.getByRole('menuitem', { name: 'Reports' }).hover();", // 5
+      "  await page.getByRole('link', { name: 'Sales' }).click();", // 6
+      "  await page.hover('#help');", // 7
+      "  await page.getByText('Tools').hover({ position: { x: 4, y: 4 } });", // 8
+    ].join('\n')), PLAIN);
+    expect(stepsOf(r).slice(1)).toEqual([
+      { intent: 'Hover over Reports', hover: { role: 'menuitem', name: 'Reports' } },
+      { intent: 'Click Sales', click: { role: 'link', name: 'Sales' } },
+      { intent: 'Hover over the element', hover: { css: '#help' } },
+    ]);
+    // A hover with options is reported, as a click with options is.
+    expect(r.report.items).toEqual([expect.objectContaining({ at: 'line 8', kind: 'untranslated', what: 'Hover Tools', reason: expect.stringContaining('hover options') })]);
   });
 
   it('unterminated literals end the parse with a report item', () => {

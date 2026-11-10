@@ -74,6 +74,7 @@ export function describeEvent(e: ImportEvent): string {
   switch (e.kind) {
     case 'goto': return `Open ${shown(placeOf(e.url))}`;
     case 'click': return `Click ${named('the element')}`;
+    case 'hover': return `Hover over ${named('the element')}`;
     case 'fill': return `Type into ${named('the field')}`;
     case 'select': return `Choose ${shown(cleanLabel(e.value) || 'an option')} in ${named('the list')}`;
     case 'check': return `${e.checked ? 'Check' : 'Uncheck'} ${named('the box')}`;
@@ -263,7 +264,8 @@ function downloadIndex(events: ImportEvent[]): number {
   let last = -1;
   let confirms = false;
   events.forEach((e, i) => {
-    if (!isClick(e) || e.popup) return;
+    // A click with keys held stays a click: the download step's own click holds none.
+    if (!isClick(e) || e.popup || e.modifiers) return;
     last = i;
     const names = [e.label, ...e.target.map((c) => locatorName(c) ?? '')];
     confirms = names.some((t) => CONFIRM_NAME.test(t));
@@ -373,6 +375,7 @@ export function buildDraft(events: ImportEvent[], opts: ImportOptions, report: I
         const loc = pickLocator(e.target);
         if (!loc) { noLocator(e); break; }
         const label = shown(nameOf(e.label, e.target) || 'the element');
+        const held = e.modifiers ? { modifiers: [...e.modifiers] } : {};
         if (i === dl && opts.download) {
           const { mime, maxBytes, check } = opts.download;
           push({ intent: `Download with ${label}`, download: { trigger: loc, ...(mime !== undefined ? { mime: [...mime] } : {}), ...(maxBytes !== undefined ? { maxBytes } : {}), check: structuredClone(check) } });
@@ -391,11 +394,17 @@ export function buildDraft(events: ImportEvent[], opts: ImportOptions, report: I
           // identity provider does not ask.
           const primary = structuredClone(loc);
           delete primary.fallbacks;
-          push({ intent: describeEvent(e), when: { visible: primary }, click: loc });
+          push({ intent: describeEvent(e), when: { visible: primary }, click: loc, ...held });
           add(e.at, 'converted', describeEvent(e), 'it answers "Stay signed in?" right after the sign-in: it runs only when the button shows, as part of the sign-in');
           break;
         }
-        push(e.popup ? { intent: `Open ${label} in a new tab`, popup: { trigger: loc } } : { intent: describeEvent(e), click: loc });
+        push(e.popup ? { intent: `Open ${label} in a new tab`, popup: { trigger: loc } } : { intent: describeEvent(e), click: loc, ...held });
+        break;
+      }
+      case 'hover': {
+        const target = pickLocator(e.target);
+        if (!target) { noLocator(e); break; }
+        push({ intent: describeEvent(e), hover: target });
         break;
       }
       case 'fill':

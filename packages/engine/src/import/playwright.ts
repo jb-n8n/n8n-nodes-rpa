@@ -43,7 +43,6 @@ const R = {
   options: (m: string) => `${m} options are not imported: the steps click, type or choose with defaults`,
   javascript: 'the steps do not run page JavaScript: add a waitFor on what the page shows when it is ready',
   handler: 'event handlers (dialogs, requests, routes) are not imported',
-  hover: 'a hover is not a step: a menu that opens on hover needs a click on the menu',
   key: 'only Enter is imported: add a step for what this key does',
   wait: 'each step waits for its element itself, so a fixed or load wait is not needed',
   close: 'the run closes the browser itself when the steps end',
@@ -819,7 +818,7 @@ export function readPlaywrightCode(data: unknown, report: ImportReport): string 
  * Playwright code (codegen's JavaScript or TypeScript) as import events, with what has no step equivalent added to
  * `report`:
  * - `page.goto(url)` gives goto; `<page><locator chain>.<action>(…)` gives click (dblclick converted), fill, select,
- *   check, enter (`press('Enter')`) or waitFor; the older `page.click(selector)` shapes too.
+ *   check, enter (`press('Enter')`), hover or waitFor; the older `page.click(selector)` shapes too.
  * - `const p = page.waitForEvent('download' | 'popup')` marks the next click as a download or popup; `const p1 = await
  *   p` binds a popup's page, whose statements are followed from then on (the first page's are reported). The older
  *   `Promise.all([page.waitForEvent(…), …click()])` shape works the same way.
@@ -924,7 +923,10 @@ export function playwrightEvents(code: string, report: ImportReport): ImportEven
         events.push({ at, kind: 'waitFor', target: targetOf(b), label: b.label });
         return;
       }
-      case 'hover': return item(at, 'untranslated', what, R.hover);
+      case 'hover':
+        if (args.length) return item(at, 'untranslated', what, R.options(name));
+        events.push({ at, kind: 'hover', target: targetOf(b), label: b.label });
+        return;
       case 'setInputFiles': return item(at, 'untranslated', what, R.upload);
       default: return item(at, 'untranslated', what, R.method(name));
     }
