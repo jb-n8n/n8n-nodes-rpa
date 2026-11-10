@@ -52,9 +52,10 @@ $ProgressPreference = 'SilentlyContinue'
 
 $NodeVersion = '22.23.4'
 $NodeSha256 = 'cbc74b5e0982c9dbb41525fd8fb5dcd32fbee237863f7829072f4639a1ce5f20'
-# The SHA-256 of browser\ms-playwright.sha256 for the builds Playwright 1.63.0 installs on Windows x64. It changes
-# together with the Playwright version in images\browser\server\package.json.
-$BrowsersSha256 = ''
+# The SHA-256 of browser\ms-playwright.sha256 for the builds Playwright 1.63.0 installs on Windows x64 (609 files), as
+# a build on a hosted CI machine and one on another Windows machine printed it on 2026-11-10. It changes together
+# with the Playwright version in images\browser\server\package.json.
+$BrowsersSha256 = '1b178abcd915d6ffa5b465a26ffafcf937544a7c862f5a69061ab68ae7cff240'
 $PackageName = 'rpa-windows-x64'
 
 # What Node's HTTPS client and Playwright 1.63.0's browser installer read about where and how to download: another
