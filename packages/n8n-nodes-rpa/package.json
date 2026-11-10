@@ -1,6 +1,6 @@
 {
   "name": "n8n-nodes-rpa",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Robotic process automation for n8n: screenshots, page text, PDFs, tables, forms and downloads, plus signed step lists that repair themselves with AI. Self-hosted only.",
   "license": "MIT",
   "homepage": "https://github.com/jb-n8n/n8n-nodes-rpa#readme",

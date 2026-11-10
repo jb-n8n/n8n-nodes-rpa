@@ -8,7 +8,7 @@
     <!-- Lets the Windows-only projects compile on Linux and macOS (they only run on Windows). -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <InvariantGlobalization>false</InvariantGlobalization>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <Authors>n8n RPA contributors</Authors>
     <Copyright>Copyright (c) 2026 Jay Byoun</Copyright>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

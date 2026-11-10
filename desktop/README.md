@@ -1,7 +1,9 @@
 # RPA desktop runner and ERP Demo
 
-> **Status:** work in progress. The runner speaks the desktop protocol and drives Windows apps through UI Automation;
-> the engine and the node do not use it yet.
+The runner speaks the desktop protocol and drives Windows apps through UI Automation; Run Steps sends it desktop
+steps (README, [Desktop runs](../README.md#desktop-runs)). To install the runner, the policy tool and the RPA browser
+on a Windows machine, follow the [Windows install guide](../docs/install/windows.md), which uses the package this
+folder builds (`installer/`, released as `rpa-windows-x64.zip`).
 
 | Path | What it is |
 |---|---|
@@ -12,6 +14,7 @@
 | `runner/test/Rpa.Runner.Core.Tests` | Unit tests of the core with a fake desktop (run anywhere). |
 | `runner/test/Rpa.Runner.Scenario` | The protocol test client CI runs against the real runner and the ERP Demo on Windows. |
 | `erp-demo` | ERP Demo: a small "legacy ERP" WinForms app with a v1 and a v2 UI. |
+| `installer` | The Windows package: `Install-Rpa.ps1`, `Uninstall-Rpa.ps1` and their module, the start scripts and `Show-RpaConnection.ps1` (`scripts/`), the script that stages the zip (`build/Stage.ps1`) and the Pester tests. |
 
 ## Running the runner
 

@@ -24,7 +24,7 @@ Out of scope:
 - Vulnerabilities in n8n, Playwright, Chromium or Mailpit themselves. Report those to their maintainers; tell us if this project makes one easier to exploit.
 - Anything that needs control of the n8n instance, its database or the workflow editor beyond what the safety model below says a workflow editor can do.
 
-## What the safety model guarantees
+## What the safety model is designed to do
 
 The full rules are in the README, [Safety model](README.md#safety-model). In short, a report is a vulnerability when one of these does not hold:
 

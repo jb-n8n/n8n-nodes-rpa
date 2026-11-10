@@ -2,7 +2,7 @@
 
 Robotic process automation (RPA) for n8n. Take a screenshot of a page, read its text, save it as a PDF, extract a table or a list, fill in and submit a form, or download a file: fill in a URL and one or two fields, no code. For sites behind a login there is **Run Steps**, a signed list of browser steps that repairs itself with an AI chat model when the site changes, with a person approving every fix.
 
-> **Status:** early release (0.1). Self-hosted n8n only. A personal open-source project (MIT), not an official n8n product. See [Project status](#project-status).
+> **Status:** early release (0.2). Self-hosted n8n only. A personal open-source project (MIT), not an official n8n product. See [Project status](#project-status).
 
 **Install** in a self-hosted n8n: **Settings → Community nodes → Install**, package `n8n-nodes-rpa`. The same tarball is attached to each [GitHub Release](https://github.com/jb-n8n/n8n-nodes-rpa/releases) for a manual install ([Operator guidance](#operator-guidance)). The node drives a browser it does not run itself, so you also need a browser server: the compose stack in this repository has one, the `rpa-browser` image is published as `ghcr.io/jb-n8n/rpa-browser`, and [Where the browser runs](#where-the-browser-runs) lists the alternatives. To try everything on your machine first, follow [Hello world in 10 minutes](#hello-world-in-10-minutes).
 
@@ -16,8 +16,8 @@ The repository is a pnpm monorepo:
 | `sandbox/portal` | A mock site: public fixture pages (`/public/...`), a site behind a login with TOTP that changes on every "release", and attack pages. The Hello world template and the tests use it. |
 | `images/browser` | The `rpa-browser` image: the browser server, the token gate in front of it (`images/browser/gate`) and the supervisor that runs both. The compose stack runs it. |
 | `deploy/` | The browser service at scale: a Helm chart, Terraform modules and examples, and a script that configures n8n. |
-| `desktop/` | Work in progress: the Windows desktop runner (C#, UI Automation) and ERP Demo, a sample WinForms app to drive. See [desktop/README.md](desktop/README.md). |
-| `docs/` | Runbooks for the browser service at scale, the SAP look-alike onboarding runbook and the security review. See [Documentation](#documentation). |
+| `desktop/` | The Windows desktop runner (C#, UI Automation), its policy tool, the Windows installer package and ERP Demo, a sample WinForms app to drive. See [desktop/README.md](desktop/README.md), and [docs/install/windows.md](docs/install/windows.md) to install it. |
+| `docs/` | The Windows install guide, runbooks for the browser service at scale, the SAP look-alike onboarding runbook and the security review. See [Documentation](#documentation). |
 
 **Contents**
 
@@ -553,7 +553,7 @@ Columns and rows are read from CSV, plain text (including tab-delimited) and XLS
 
 ### Desktop runs
 
-Run Steps can also drive a Windows desktop app through a desktop runner. Such steps say `"surface": "desktop"` and name the app instead of a start URL (`"app": { "exe": "ErpDemo.exe" }`). Run Steps picks the lane from that field, which the signature covers: desktop steps need an **RPA Desktop Runner** credential, browser steps an **RPA Browser** credential, and a mismatch is a configuration error that names the credential needed. Desktop steps need a node release after 0.1.0; 0.1.0 refuses them as a shape error (`script has unknown key "surface"`) before anything starts.
+Run Steps can also drive a Windows desktop app through a desktop runner. Such steps say `"surface": "desktop"` and name the app instead of a start URL (`"app": { "exe": "ErpDemo.exe" }`). Run Steps picks the lane from that field, which the signature covers: desktop steps need an **RPA Desktop Runner** credential, browser steps an **RPA Browser** credential, and a mismatch is a configuration error that names the credential needed. Desktop steps need node release 0.2.0 or later; 0.1.0 refuses them as a shape error (`script has unknown key "surface"`) before anything starts. To install the desktop runner and the browser on a Windows machine, follow [the Windows install guide](docs/install/windows.md).
 
 - **The credential**: the runner's `wss://` URL (port 8765 when none is given; plain `ws://` is refused), its token, and the SHA-256 fingerprint of its certificate, which the runner prints when it starts. The node checks the certificate against the fingerprint before it sends the token or anything else. **Test connection** reports `Connected to the desktop runner (session interactive)`.
 - **The steps**: locators are UI Automation paths, `{ "uia": { "window": { "title": "Save As" }, "path": [{ "controlType": "Button", "automationId": "1" }] } }`, with `fallbacks` as for browser locators. The verbs are `click`, `fill`, `select` (`option`), `check`, `waitFor`, `read` (`{ target, as }`, returned in Data under `values`; or `{ "clipboard": true, "as": "code" }` with no target, which returns the clipboard's text for an app whose value is only available through a Copy button, such as a desktop authenticator app: click its Copy button first. The runner refuses it unless its policy sets `clipboardRead` and the run's window is in front, and returns only the run's own copy: the app the run launched (or its web view helper) must own the clipboard, the clipboard must have changed since the run's most recent action, and that action must have finished at most 10 seconds earlier, so put the clipboard read right after the Copy click with no step that acts on the app in between (a `read` with a target acts too). Text another application or a person copied, such as a password, is never returned. It refuses more than 1000 characters; the value is returned in `values` and masked everywhere else, in the log, messages and errors, as the values typed from variables are (values of 4 characters or more), and the reviewer sees each clipboard read in the safety flags), `key` (`{ "key": "Enter" }`, optionally with a `target`; one spelling per chord: `Ctrl`, `Alt`, `Shift` in that order, then the key, letters uppercase, as in `Ctrl+S`; chords the Windows shell takes, any `Win` chord, `Ctrl+Escape`, `Ctrl+Shift+Escape`, `Alt+Tab` and `Alt+Escape`, are refused when the steps are read, as the runner never sends them) and `expectFile` (`{ pattern, check? }`: the file the app saved into the run's export directory, returned as the step's file like a download). The runner's policy decides how large that file may be: its `maxFileBytes` (20 MiB by default, also on the test bed) is the effective limit, it is never more than 36 MiB (37748736 bytes), and a larger file fails the step as `policy_violation`; a step's `maxBytes` may lower the limit but not ask for more than 37748736. `{{$exportDir}}` in a `fill` value types the run's export directory, for a Save As dialog; it is accepted nowhere else, and no other `{{$...}}` name is accepted anywhere in desktop steps. Browser verbs, browser locators, `expect.url` and `expect.heading` are refused in desktop steps, and `uia` in browser steps.
@@ -727,7 +727,7 @@ Differences to expect: URLs are allowlisted (other sites are blocked, so add wha
 - **Installing in your own n8n**: from **Settings → Community nodes → Install**, package `n8n-nodes-rpa` (n8n must allow unverified community packages; this one cannot be verified because it depends on `playwright-core`). Or add it to an image like `docker/n8n.Dockerfile`, which installs the package next to n8n so it is there before n8n starts (from the source, or from a release tarball with `--build-arg RPA_PACKAGE=release --build-context rpa-release=<directory holding the tarball>`). Loading needs `N8N_COMMUNITY_PACKAGES_ENABLED=true`. `docker-compose.yml` sets `N8N_UNVERIFIED_PACKAGES_ENABLED=false`: in n8n 2.41 that only stops people installing unverified packages from **Settings → Community nodes**, and packages already in `~/.n8n/nodes` still load. n8n 3 changes the default and makes the switch gate loading as well, so check it before upgrading.
 - **Installing from the GitHub Release**: each release also carries the npm tarball, `n8n-nodes-rpa-<version>.tgz`, with a build attestation and its SHA-256. For an n8n that cannot reach the Community nodes install, or to install exactly the file you checked: download and check it, install it into n8n's nodes folder (`~/.n8n/nodes`, or `$N8N_USER_FOLDER/.n8n/nodes`) as the user n8n runs as, and restart n8n, which loads every `n8n-nodes-*` package in that folder's `node_modules` at start:
   ```sh
-  v=0.1.0
+  v=0.2.0
   gh release download "v$v" --repo jb-n8n/n8n-nodes-rpa --pattern "n8n-nodes-rpa-$v.tgz*"
   gh attestation verify "n8n-nodes-rpa-$v.tgz" --repo jb-n8n/n8n-nodes-rpa
   sha256sum -c "n8n-nodes-rpa-$v.tgz.sha256"   # macOS: shasum -a 256 -c
@@ -809,6 +809,7 @@ Focused test runs: `pnpm --filter n8n-rpa-engine exec vitest run <file>`, `pnpm 
 ├── docker-compose.yml             n8n, browser, sandbox, mailpit (browser and mail networks)
 ├── docker-compose.dev.yml         publishes the gate on 127.0.0.1:3000
 └── docs/
+    ├── install/                   the Windows install guide, the licensing note and the sample flow
     ├── deploy/                    runbooks: the browser service on Kubernetes and on Amazon ECS
     ├── onboarding/                the SAP look-alike onboarding runbook
     └── security-review.md         the October 2026 security review: findings, fixes, residual risk
@@ -818,6 +819,7 @@ Focused test runs: `pnpm --filter n8n-rpa-engine exec vitest run <file>`, `pnpm 
 
 | Document | What it is |
 |---|---|
+| [`docs/install/windows.md`](docs/install/windows.md), [`docs/install/licensing.md`](docs/install/licensing.md) | Installing the desktop runner and the browser on a Windows machine, with a sample flow; and what Microsoft's terms say about unattended automation on Windows |
 | [`docs/deploy/kubernetes.md`](docs/deploy/kubernetes.md), [`docs/deploy/aws-ecs.md`](docs/deploy/aws-ecs.md) | Runbooks for the browser service at scale: Kubernetes and EKS, and Amazon ECS |
 | [`docs/onboarding/sap-lookalike.md`](docs/onboarding/sap-lookalike.md) | Onboarding runbook against the sandbox's realistic SAP look-alike |
 | [`docs/security-review.md`](docs/security-review.md) | The October 2026 security review: findings, fixes and residual risk |

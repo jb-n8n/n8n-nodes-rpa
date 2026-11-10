@@ -1,0 +1,9 @@
+{
+  "allowedApps": [
+    { "exe": "ErpDemo.exe", "path": "C:\\Program Files\\RPA Runner\\erp-demo\\v1\\ErpDemo.exe" }
+  ],
+  "writeControls": [
+    { "exe": "ErpDemo.exe", "automationId": "btnPost" }
+  ],
+  "gatedKeys": ["Ctrl+S", "F11"]
+}
