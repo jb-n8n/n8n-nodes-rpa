@@ -173,6 +173,7 @@ export const FIRST_RUN_NEEDS_NAME = 'A first run needs a name: set Options → N
 export const REPAIR_ALREADY_RAN = 'AI repair already ran in this execution';
 /** Appended to a script-lane drift when a two-page sign-in typed the username but no password was submitted. */
 export const REPAIR_SIGN_IN_HALF_DONE = 'AI repair cannot finish a sign-in whose username was already typed: fix the signIn step by hand';
+export const REPAIR_PASSWORD_CHANGE_HALF_DONE = 'AI repair cannot finish a password change whose fields were already typed: fix the signIn step by hand';
 export const NO_STEPS_NO_REPAIR = 'there are no steps yet and AI repair is off';
 export const COMPILE_TOUCHES_SUBMIT = 'the repair would drop or change a form submission step';
 export const COMPILE_EMITS_SUBMIT = 'repaired steps never contain a submit step';

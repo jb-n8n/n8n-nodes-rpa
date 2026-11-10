@@ -12,7 +12,7 @@ import { downloadTemplateIssues, parseScript } from '../steps/parse.js';
 import { shownMessage } from '../steps/urls.js';
 import { newRunState, type StepContext } from '../steps/run.js';
 import {
-  CODE_WORKFLOW_NOT_SET, expectedFileInvalid, FIRST_RUN_NEEDS_NAME, FIRST_RUN_NEEDS_TARGET, NO_STEPS_NO_REPAIR, REPAIR_ALREADY_RAN, REPAIR_DOWNLOAD_NEEDS_CHECK, REPAIR_SIGN_IN_HALF_DONE, REPAIR_NEEDS_ID_AND_EXTRACT, REPAIR_NO_CAPTURES,
+  CODE_WORKFLOW_NOT_SET, expectedFileInvalid, FIRST_RUN_NEEDS_NAME, FIRST_RUN_NEEDS_TARGET, NO_STEPS_NO_REPAIR, REPAIR_ALREADY_RAN, REPAIR_DOWNLOAD_NEEDS_CHECK, REPAIR_PASSWORD_CHANGE_HALF_DONE, REPAIR_SIGN_IN_HALF_DONE, REPAIR_NEEDS_ID_AND_EXTRACT, REPAIR_NO_CAPTURES,
   REPAIR_ONE_DOWNLOAD, REPAIR_REFUSED_WRITES,
 } from '../messages.js';
 import type { SaveTrace } from '../trace/trace.js';
@@ -264,6 +264,11 @@ export async function runTask(input: TaskInput): Promise<TaskResult> {
     // password, a failed attempt toward a lockout), so no repair: the drift stands, and the kept session closes with its
     // failure trace as a plain drift would.
     return finishLane(input, runtime, { ...r, lane: 'script', message: `${r.message} (${REPAIR_SIGN_IN_HALF_DONE})` });
+  }
+  if (run.state.passwordChangeStarted && !run.state.passwordChanged) {
+    // The change form was typed into but the change did not go through: a click by the agent there could submit it and
+    // set a new password the run never reports. No repair, as for a half-done sign-in.
+    return finishLane(input, runtime, { ...r, lane: 'script', message: `${r.message} (${REPAIR_PASSWORD_CHANGE_HALF_DONE})` });
   }
   const kind = repairKind(input.script, input.output, repair);
   // The repair path takes the template from the steps only: the Expected File belongs to a first run.

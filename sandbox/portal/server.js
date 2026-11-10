@@ -399,6 +399,7 @@ async function portalRoute(req, res, rest, url) {
     return send(res, 200, authPage('Change your password', `<h3>Change your password</h3>${err}
       <p>Your password has expired. Choose a new one of at least ${NEW_PASSWORD_MIN} characters, with a digit.</p>
       <p class="error" id="too-short" hidden>The new password is too short.</p>
+      <p><button id="generate" type="button" disabled>Suggest a password</button></p>
       <form id="change-form" method="post" action="/${BRAND}/change-password">
         ${st.changeWithoutCurrent ? '' : '<label for="current-password">Current password</label><input id="current-password" name="current" type="password" autocomplete="current-password">'}
         <label for="new-password">New password</label><input id="new-password" name="new" type="password" autocomplete="new-password">

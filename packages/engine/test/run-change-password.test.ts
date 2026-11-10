@@ -4,7 +4,9 @@ import { startPortal } from 'n8n-rpa-sandbox/testing.js';
 import { openSession } from '../src/browser/session.js';
 import { runScriptLane, screenshotMasks, type ScriptLaneInput } from '../src/lane/script-lane.js';
 import { checkTrust } from '../src/lane/trust.js';
-import { UNSIGNED_CHANGE_PASSWORD } from '../src/messages.js';
+import { runTask } from '../src/lane/task.js';
+import { fakeModel } from './fake-model.js';
+import { REPAIR_PASSWORD_CHANGE_HALF_DONE, UNSIGNED_CHANGE_PASSWORD } from '../src/messages.js';
 import { describeStep } from '../src/proposal/describe.js';
 import { createMasker } from '../src/secrets/mask.js';
 import { runSteps, type StepContext } from '../src/steps/run.js';
@@ -206,6 +208,26 @@ describe('signIn.changePassword', () => {
       expect(checkTrust(unsigned, { required: false, allowUnsignedWrites: true, allowUnsignedSignIn }, { policy: policy(), firstRun: false }))
         .toEqual({ ok: false, code: 'script_untrusted', message: UNSIGNED_CHANGE_PASSWORD });
     }
+  });
+
+  it('a password change that stopped after its fields were typed is not handed to AI repair', async () => {
+    portal.setState({ forcePasswordChange: true });
+    // The change form's button never becomes clickable (a disabled button): the click times out after the fields were typed.
+    const signIn = SIGN_IN as Extract<Step, { signIn: unknown }>;
+    const stuck = { ...signIn, signIn: { ...signIn.signIn, changePassword: { ...signIn.signIn.changePassword!, submit: { role: 'button', name: 'Suggest a password' } } } };
+    const read: Step = { intent: 'Read the notices', extract: { scope: { css: 'main' }, idPattern: 'N26-\\d{4}' } };
+    const model = fakeModel([() => null]);
+    const r = await runTask(signedLaneInput({ ...script(), steps: [stuck, SIGNED_IN, read] }, {
+      policy: policy(), secrets: SECRETS, vars: { newPassword: NEW_PW }, output: { idPattern: 'N26-\\d{4}' }, endpoint: LOCAL, defaultStepTimeoutMs: 3000,
+      repair: { model, goal: 'Read the notices.' },
+    }));
+    expect(r).toMatchObject({ ok: false, code: 'drift_detected', lane: 'script' });
+    if (r.ok) return;
+    expect(r.message).toContain(`(${REPAIR_PASSWORD_CHANGE_HALF_DONE})`);
+    expect(REPAIR_PASSWORD_CHANGE_HALF_DONE).toBe('AI repair cannot finish a password change whose fields were already typed: fix the signIn step by hand');
+    expect(r).not.toHaveProperty('passwordChanged');
+    expect(model.invocations).toHaveLength(0);
+    expect(portal.state()).toMatchObject({ password: null, forcePasswordChange: true });
   });
 
   it('the next run signs in with the new password', async () => {

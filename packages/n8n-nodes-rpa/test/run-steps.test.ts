@@ -961,6 +961,20 @@ describe('a forced password change (signIn.changePassword)', () => {
     expect((err as NodeOperationError).context).toMatchObject({ code: 'locked_out', passwordChanged: true });
     expect(strict.calls).toHaveLength(1);
   });
+  it('a run that changed the password does not open the login breaker when a later step fails as a login failure', async () => {
+    for (const code of ['login_failed', 'account_locked'] as const) {
+      const engine = fakeEngine(() => taskFail(code, 'Check sign-in worked: detected:login_failed', { passwordChanged: true }));
+      const h = ctx({ continueOnFail: true });
+      const [data] = await executeRunSteps(h, engine);
+      expect(details(data[0]), code).toMatchObject({ code, passwordChanged: true });
+      expect(h.staticData[BREAKER_KEY], code).toBeUndefined();
+      // A fresh execution (same static data, new per-execution context) signs in.
+      const later = fakeEngine(() => scriptOk());
+      const [next] = await executeRunSteps(ctx({ staticData: h.staticData, continueOnFail: true }), later);
+      expect(errorOf(next[0]), code).toBeUndefined();
+      expect(later.calls, code).toHaveLength(1);
+    }
+  });
   it('password_change_failed does not open the login breaker: the next items still sign in', async () => {
     const engine = fakeEngine(() => taskFail('password_change_failed', CHANGE_FAILED));
     const h = ctx({ items: many(3), continueOnFail: true });

@@ -77,7 +77,8 @@ function changedInExecution(ctx: NodeContext): Record<string, true> {
 
 /**
  * One engine run behind the login breaker and the run lock. Order: a password changed earlier in this execution
- * (locked_out with SITE_LOGIN_PASSWORD_CHANGED, no login, the breaker untouched) → breaker (locked_out; a breaker tripped earlier in
+ * (locked_out with SITE_LOGIN_PASSWORD_CHANGED, no login, the breaker untouched; a run that changed the password never
+ * trips the breaker) → breaker (locked_out; a breaker tripped earlier in
  * this execution stays open whatever the reset key) → lock (busy) → breaker again (another worker may have tripped it
  * between the first check and the lock) → engine.runTask(input()) → trip the breaker on login_failed / account_locked
  * (the result's code, or an agent run's proof replay failureCode) → release the lock. The trip comes before the
@@ -144,8 +145,11 @@ async function guardedCall<T>(ctx: NodeContext, opts: GuardedOptions<T>): Promis
     const after = await lockedOut();
     if (after) return after;
     const result = await opts.call();
-    if (opts.passwordChanged?.(result)) changedInExecution(ctx)[guard.key] = true;
-    const login = opts.loginFailure(result);
+    // A run that changed the password signed in with the stored one: a later login failure in it says nothing about the
+    // credential, so it does not open the breaker (the in-execution block stops later items).
+    const changedNow = opts.passwordChanged?.(result) === true;
+    if (changedNow) changedInExecution(ctx)[guard.key] = true;
+    const login = changedNow ? undefined : opts.loginFailure(result);
     if (!login) return { kind: 'ran', result, tripped: false };
     trippedInExecution(ctx)[guard.key] = await tripBreaker(guard.store, staticData, guard.key, { code: login.code, resetKey: guard.resetKey, message: login.message });
     return { kind: 'ran', result, tripped: true };

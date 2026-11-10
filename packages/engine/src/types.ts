@@ -331,6 +331,8 @@ export interface RunState {
   submitted: boolean;
   /** True once signIn.changePassword submitted the change form and the change page went away. */
   passwordChanged?: boolean;
+  /** True once signIn.changePassword started typing into the change form (set before the first keystroke). */
+  passwordChangeStarted?: boolean;
   /**
    * Set when the top-level download step `index` clicked its trigger (no `via`) but no download came: the click still
    * happened (it may have opened a format dialog). A repair that resumes from that step replays the click (compile

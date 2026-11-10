@@ -621,6 +621,8 @@ async function changePassword(ctx: StepContext, spec: ChangePasswordSpec, secret
   const name = SECRET_FILL_VALUE.exec(spec.value)?.[1];
   if (name === undefined) throw new Error('signIn: changePassword.value must be exactly one {{var.name}} template');
   const value = renderSecretValue(name, spec.value, ctx.vars, ctx.masker);
+  // From here a failure leaves a half-done change on the page: AI repair must not take it over (runTask).
+  state.passwordChangeStarted = true;
   // Each field is checked again right before it is typed into, as signIn does: the page may have moved since.
   if (current) {
     await assertFieldOnLoginPage(ctx, current, 'current password');
