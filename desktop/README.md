@@ -400,7 +400,8 @@ The maintainers release the Windows package, `rpa-windows-x64.zip`, from the `De
 1. It checks that the environment `desktop-release` exists and has required reviewers, that the tag names that
    version, that the tagged commit is on `main`, and that `CHANGELOG.md` has a section `## <version>`, which becomes
    the release notes. The node's release of the same version number uses the same section. If any check fails,
-   nothing is built.
+   nothing is built. The notes are uploaded as an artifact, and their SHA-256 and the artifact's id are kept for
+   step 4.
 2. It runs the `desktop` workflow, which builds the package, tests it, installs it on `windows-latest` and drives it.
 3. It checks the package it built. It downloads the package by the artifact id the `desktop` workflow reports, not by
    the artifact's name, so an artifact of the same name uploaded by another job of the run is not taken; the download
@@ -409,8 +410,9 @@ The maintainers release the Windows package, `rpa-windows-x64.zip`, from the `De
    in the artifact), checks that `rpa-windows-x64.zip.sha256` holds that same hash, and that the `VERSION` file in the
    zip is the tag's version.
 4. It waits until a required reviewer of the `desktop-release` environment approves the release (see "Before the
-   first release" for what that approval covers). Then it downloads
-   and checks the package again in the same way, checks that the tag still names the commit it built, records a
+   first release" for what that approval covers). Then it downloads and checks the package again in the same way,
+   downloads the notes by the id from step 1 (not by name) and compares them with the SHA-256 from step 1, checks
+   that the tag still names the commit it built, records a
    build attestation of the zip and creates the GitHub Release `desktop-v<version>` with `rpa-windows-x64.zip` and
    `rpa-windows-x64.zip.sha256`. It stops if a release for that tag exists already, a draft included; it does not
    replace one. The release is not marked as the repository's latest release, which stays the node's.
