@@ -2330,6 +2330,19 @@ Describe 'Show-RpaConnection.ps1' {
     @($script:Output | Where-Object { $_ -like 'Runner: not listening*' }).Count | Should -Be 0
   }
 
+  # The runner writes its failures through RunnerLog to its output, so they are in runner.out.log.
+  It 'names runner.out.log for a runner that is not listening' {
+    $file = Join-Path $script:MadeUpInstall 'install.json'
+    $closed = $script:InstallJson -replace ('"runnerPort":\s*{0}' -f $script:RunnerPort), ('"runnerPort": {0}' -f $script:BrowserPort)
+    Set-Content -LiteralPath $file -Value $closed -Encoding UTF8
+    try {
+      $output = @(& $script:ShowScript)
+      $output | Should -Contain "Runner: not listening: see $(Join-Path $script:LogDir 'runner.out.log')"
+    } finally {
+      Set-Content -LiteralPath $file -Value $script:InstallJson -Encoding UTF8
+    }
+  }
+
   It 'prints no token without -ShowTokens' {
     $text = $script:Output -join "`n"
     $text.Contains($script:RunnerToken) | Should -BeFalse

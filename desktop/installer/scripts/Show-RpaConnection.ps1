@@ -72,7 +72,8 @@ $addresses = @([Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterface
 $listening = @([Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() | ForEach-Object { $_.Port })
 
 $services = @(@{
-    Name = 'Runner'; Port = [int]$install.runnerPort; Path = '/rpa/v1'; Log = Join-Path $logDir 'runner.err.log'
+    # The runner writes its failures to its output (runner.out.log), and to logs\runner-<date>.log.
+    Name = 'Runner'; Port = [int]$install.runnerPort; Path = '/rpa/v1'; Log = Join-Path $logDir 'runner.out.log'
     Fingerprint = Get-RunnerFingerprint (Join-Path $logDir 'runner.out.log'); Token = Join-Path $dataDir 'token'
   })
 if ($install.browser) {
