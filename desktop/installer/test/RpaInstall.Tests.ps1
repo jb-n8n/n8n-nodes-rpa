@@ -825,30 +825,51 @@ Describe 'Invoke-RpaInstallPlan' {
 
 Describe 'Get-RpaUninstallPlan' {
   BeforeAll {
-    # What Get-RpaUninstallFacts says on a machine where rpa-runner is the bot user and is not signed in.
+    # What Get-RpaUninstallFacts says on a machine where rpa-runner is the bot user and no process of it is running.
+    # Accounts are the recorded bot user, the accounts on the data directory's access rules and the owners of
+    # everything in it; RunningSids are the owners of the processes that are running.
     function New-UninstallFacts([hashtable]$Change = @{}) {
-      $facts = @{ DataDir = $script:DataDir; DataDirState = New-PathState 'ours'; SignedIn = @(); AutoSignInUser = $null }
+      $facts = @{
+        DataDir = $script:DataDir; DataDirState = New-PathState 'ours'
+        Accounts = @(@{ Sid = $script:BotSid; Name = 'rpa-runner' }); RunningSids = @('S-1-5-18', 'S-1-5-21-1-2-3-500'); AutoSignInSid = $null
+      }
       foreach ($key in $Change.Keys) { $facts[$key] = $Change[$key] }
       $facts
     }
   }
 
-  It 'refuses -RemoveData while the bot user is signed in' {
-    $plan = Get-RpaUninstallPlan -Parameters @{ RemoveData = $true } -Facts (New-UninstallFacts @{ SignedIn = @('rpa-runner') })
+  It 'refuses -RemoveData while a process of the bot user is running' {
+    $plan = Get-RpaUninstallPlan -Parameters @{ RemoveData = $true } -Facts (New-UninstallFacts @{ RunningSids = @('S-1-5-18', $script:BotSid) })
     $plan.Refusals | Should -BeExactly @('rpa-runner is signed in. Sign rpa-runner out, then run Uninstall-Rpa.ps1 -RemoveData again.')
   }
 
   It 'without -RemoveData works as before while the bot user is signed in' {
-    $plan = Get-RpaUninstallPlan -Parameters @{ RemoveData = $false } -Facts (New-UninstallFacts @{ SignedIn = @('rpa-runner') })
+    $plan = Get-RpaUninstallPlan -Parameters @{ RemoveData = $false } -Facts (New-UninstallFacts @{ RunningSids = @($script:BotSid) })
     $plan.Refusals.Count | Should -Be 0
   }
 
-  It 'takes -RemoveData when the bot user is not signed in' {
+  It 'takes -RemoveData when no process of the bot user is running' {
     (Get-RpaUninstallPlan -Parameters @{ RemoveData = $true } -Facts (New-UninstallFacts)).Refusals.Count | Should -Be 0
   }
 
+  # An account is the bot user by its SID: another account that has the same name now is not it.
+  It 'matches accounts by SID, not by name' {
+    $facts = New-UninstallFacts @{ Accounts = @(@{ Sid = $script:BotSid; Name = 'rpa-runner' }); RunningSids = @('S-1-5-21-9-9-9-1001') }
+    (Get-RpaUninstallPlan -Parameters @{ RemoveData = $true } -Facts $facts).Refusals.Count | Should -Be 0
+  }
+
+  It 'refuses -RemoveData while a process of any account that owns something in the data directory is running' {
+    $accounts = @(@{ Sid = $script:BotSid; Name = 'rpa-runner' }, @{ Sid = 'S-1-5-21-1-2-3-1002'; Name = 'mallory' }, @{ Sid = 'S-1-5-21-1-2-3-1003'; Name = 'bot2' })
+    $facts = New-UninstallFacts @{ Accounts = $accounts; RunningSids = @('S-1-5-21-1-2-3-1002', 'S-1-5-21-1-2-3-1003', 'S-1-5-18') }
+    $plan = Get-RpaUninstallPlan -Parameters @{ RemoveData = $true } -Facts $facts
+    $plan.Refusals | Should -BeExactly @(
+      'mallory is signed in. Sign mallory out, then run Uninstall-Rpa.ps1 -RemoveData again.'
+      'bot2 is signed in. Sign bot2 out, then run Uninstall-Rpa.ps1 -RemoveData again.'
+    )
+  }
+
   It 'says how to get there when Windows signs the bot user in again by itself' {
-    $facts = New-UninstallFacts @{ SignedIn = @('rpa-runner'); AutoSignInUser = 'rpa-runner' }
+    $facts = New-UninstallFacts @{ RunningSids = @($script:BotSid); AutoSignInSid = $script:BotSid }
     $plan = Get-RpaUninstallPlan -Parameters @{ RemoveData = $true } -Facts $facts
     $plan.Refusals | Should -BeExactly @(
       'rpa-runner is signed in. Sign rpa-runner out, then run Uninstall-Rpa.ps1 -RemoveData again.'
@@ -860,6 +881,101 @@ Describe 'Get-RpaUninstallPlan' {
     $plan = Get-RpaUninstallPlan -Parameters @{ RemoveData = $true } -Facts (New-UninstallFacts @{ DataDirState = New-PathState 'link' })
     $plan.Refusals | Should -BeExactly @('C:\ProgramData\RPA Runner is a link or junction. Remove it and run this again.')
     (Get-RpaUninstallPlan -Parameters @{ RemoveData = $false } -Facts (New-UninstallFacts @{ DataDirState = New-PathState 'link' })).Refusals.Count | Should -Be 0
+  }
+}
+
+Describe 'Invoke-RpaUninstall' {
+  It 'runs no plan that has a refusal' {
+    { Invoke-RpaUninstall -Plan @{ Refusals = @('no') } -RemoveData } | Should -Throw -ExpectedMessage 'The plan has refusals; nothing was changed.'
+  }
+
+  # The plan saw who was signed in before the programs were stopped; the look directly before the data directory goes
+  # is the last refusal, and it comes before anything is removed.
+  It 'with -RemoveData looks again before it removes anything, and removes nothing when the bot user has signed in' {
+    Mock -ModuleName RpaInstall Get-RpaLayout { @{ InstallDir = 'C:\Program Files\RPA Runner'; InstallFile = (Join-Path $TestDrive 'none.json'); DataDir = 'C:\ProgramData\RPA Runner' } }
+    Mock -ModuleName RpaInstall Stop-RpaServices { }
+    Mock -ModuleName RpaInstall Resume-RpaServices { }
+    Mock -ModuleName RpaInstall Remove-RpaTree { }
+    Mock -ModuleName RpaInstall Unregister-RpaTask { }
+    Mock -ModuleName RpaInstall Remove-RpaProgramFiles { }
+    Mock -ModuleName RpaInstall Get-RpaUninstallFacts {
+      @{ DataDir = 'C:\ProgramData\RPA Runner'; DataDirState = @{ Exists = $true; IsLink = $false }; Accounts = @(@{ Sid = 'S-1-5-21-1-2-3-1001'; Name = 'rpa-runner' }); RunningSids = @('S-1-5-21-1-2-3-1001'); AutoSignInSid = $null }
+    }
+    $failure = $null
+    try { Invoke-RpaUninstall -Plan @{ Refusals = @() } -RemoveData 6>$null } catch { $failure = $_.Exception }
+    $failure.Message | Should -BeExactly 'rpa-runner is signed in. Sign rpa-runner out, then run Uninstall-Rpa.ps1 -RemoveData again.'
+    $failure.Data['Refused'] | Should -BeTrue
+    Should -Invoke -ModuleName RpaInstall Stop-RpaServices -Times 1 -Exactly
+    Should -Invoke -ModuleName RpaInstall Resume-RpaServices -Times 1 -Exactly
+    Should -Invoke -ModuleName RpaInstall Remove-RpaTree -Times 0 -Exactly
+    Should -Invoke -ModuleName RpaInstall Unregister-RpaTask -Times 0 -Exactly
+    Should -Invoke -ModuleName RpaInstall Remove-RpaProgramFiles -Times 0 -Exactly
+  }
+}
+
+Describe 'What the uninstaller reports' {
+  BeforeAll {
+    function New-UninstallResult([hashtable]$Change = @{}) {
+      $result = @{
+        User = 'rpa-runner'; AutoSignIn = $true; SignInKept = $false; SignInFailed = $false; HadChanges = $true; NotRestored = @()
+        LeftoversFile = $null; LeftoversProblem = $null; DataRemoved = $false; DataKept = $true
+        Layout = @{ InstallDir = 'C:\Program Files\RPA Runner'; DataDir = $script:DataDir; LeftoversFile = 'C:\Program Files\RPA Runner\uninstall-leftovers.json' }
+      }
+      foreach ($key in $Change.Keys) { $result[$key] = $Change[$key] }
+      $result
+    }
+    function Get-Summary([hashtable]$Result) { @(InModuleScope RpaInstall -Parameters @{ Result = $Result } { Get-RpaUninstallSummary $Result }) }
+  }
+
+  It 'says that the settings are back when all of them were put back' {
+    $lines = Get-Summary (New-UninstallResult)
+    $lines[0] | Should -BeExactly 'RPA is removed.'
+    $lines | Should -Contain '  Automatic sign-in of rpa-runner is off and the stored password is removed.'
+    $lines | Should -Contain '  The settings -AutoSignIn changed are back to what they were before.'
+  }
+
+  # Automatic sign-in names another user by now: the sign-in values and the stored password were not touched.
+  It 'says only what was put back when it left automatic sign-in as it is' {
+    $lines = Get-Summary (New-UninstallResult @{ SignInKept = $true })
+    $lines | Should -Contain '  Automatic sign-in now names another user, so it and the stored password were left as they are.'
+    $lines | Should -Contain '  The other settings -AutoSignIn changed are back to what they were before.'
+    $lines | Should -Not -Contain '  The settings -AutoSignIn changed are back to what they were before.'
+    ($lines -join "`n") | Should -Not -Match 'is off and the stored password is removed'
+  }
+
+  It 'does not say that automatic sign-in is off when one of its settings could not be put back' {
+    $failed = 'the password stored for automatic sign-in (it is still stored): Access is denied.'
+    $lines = Get-Summary (New-UninstallResult @{ SignInFailed = $true; NotRestored = @($failed); LeftoversFile = 'C:\Program Files\RPA Runner\uninstall-leftovers.json' })
+    ($lines -join "`n") | Should -Not -Match 'is off and the stored password is removed'
+    ($lines -join "`n") | Should -Not -Match 'are back to what they were before'
+    $lines | Should -Contain '  Automatic sign-in of rpa-runner could not be turned off completely: see the list below.'
+    $lines | Should -Contain "    $failed"
+  }
+
+  It 'lists what could not be put back and says where the list is kept, whether or not the data directory was removed' {
+    $failed = 'registry HKLM\SOFTWARE\Example A (it was REG_SZ ""): Access is denied.'
+    foreach ($removed in $false, $true) {
+      $lines = Get-Summary (New-UninstallResult @{ NotRestored = @($failed); LeftoversFile = 'C:\Program Files\RPA Runner\uninstall-leftovers.json'; DataRemoved = $removed; DataKept = (-not $removed) })
+      $lines | Should -Contain '  Of the settings -AutoSignIn changed, these could not be put back:'
+      $lines | Should -Contain "    $failed"
+      $lines | Should -Contain '  This list, with what each setting was before, is kept in C:\Program Files\RPA Runner\uninstall-leftovers.json,'
+      ($lines -join "`n") | Should -Not -Match 'not kept'
+    }
+  }
+
+  It 'says so when the list could not be kept' {
+    $lines = Get-Summary (New-UninstallResult @{ NotRestored = @('x: y'); LeftoversProblem = 'the reason' })
+    $lines | Should -Contain '  This list could not be kept in C:\Program Files\RPA Runner\uninstall-leftovers.json: the reason'
+  }
+
+  It 'says what a later install does with a data directory that is kept, and names what was removed' {
+    $lines = Get-Summary (New-UninstallResult @{ AutoSignIn = $false; HadChanges = $false })
+    $lines | Should -Contain '  Kept:      C:\ProgramData\RPA Runner (remove it with -RemoveData)'
+    ($lines -join ' ') | Should -Match 'A later install for rpa-runner takes it over when everything in it belongs to Administrators,\s+SYSTEM or rpa-runner'
+    $lines | Should -Contain '  Kept:      the Windows user rpa-runner'
+    $lines = Get-Summary (New-UninstallResult @{ AutoSignIn = $false; HadChanges = $false; DataRemoved = $true; DataKept = $false })
+    $lines | Should -Contain '  Removed:   C:\ProgramData\RPA Runner'
+    ($lines -join "`n") | Should -Not -Match 'A later install'
   }
 }
 
@@ -917,20 +1033,111 @@ Describe 'What the uninstaller could not put back' {
   }
 
   It 'writes the list where only administrators can read or change it, and adds to one that is there' -Skip:($env:OS -ne 'Windows_NT') {
-    $dataDir = Join-Path $TestDrive 'RPA Runner'
-    New-Item -ItemType Directory -Path $dataDir | Out-Null
-    & (Join-Path ([Environment]::SystemDirectory) 'icacls.exe') $dataDir /setowner '*S-1-5-32-544' | Out-Null
-    $file = InModuleScope RpaInstall -Parameters @{ Dir = $dataDir; Failed = @(New-TestFailure 'A' '') } { Save-RpaLeftovers @{ DataDir = $Dir } $Failed 'rpa-runner' }
-    $file | Should -BeExactly (Join-Path $dataDir 'uninstall-leftovers.json')
+    $dir = Join-Path $TestDrive 'RPA Runner'
+    New-Item -ItemType Directory -Path $dir | Out-Null
+    $layout = @{ InstallDir = $dir; LeftoversFile = (Join-Path $dir 'uninstall-leftovers.json') }
+    $file = InModuleScope RpaInstall -Parameters @{ Layout = $layout; Failed = @(New-TestFailure 'A' '') } { Save-RpaLeftovers $Layout $Failed 'rpa-runner' }
+    $file | Should -BeExactly $layout.LeftoversFile
     $acl = Get-Acl -LiteralPath $file
     $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value | Should -BeExactly 'S-1-5-32-544'
     $acl.AreAccessRulesProtected | Should -BeTrue
     @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) | ForEach-Object { $_.IdentityReference.Value } | Sort-Object) | Should -BeExactly @('S-1-5-18', 'S-1-5-32-544')
 
-    $null = InModuleScope RpaInstall -Parameters @{ Dir = $dataDir; Failed = @(New-TestFailure 'B' 'b') } { Save-RpaLeftovers @{ DataDir = $Dir } $Failed 'rpa-runner' }
-    $read = Get-Content -Raw -LiteralPath $file -Encoding UTF8 | ConvertFrom-Json
-    @($read.notPutBack | ForEach-Object { $_.name }) | Should -BeExactly @('A', 'B')
-    $read.notPutBack[0].value | Should -BeExactly ''
+    $null = InModuleScope RpaInstall -Parameters @{ Layout = $layout; Failed = @(New-TestFailure 'B' 'b') } { Save-RpaLeftovers $Layout $Failed 'rpa-runner' }
+    $read = InModuleScope RpaInstall -Parameters @{ File = $file } { Read-RpaLeftovers $File }
+    $read.State | Should -BeExactly 'trusted'
+    @($read.List.notPutBack | ForEach-Object { $_.name }) | Should -BeExactly @('A', 'B')
+    $read.List.notPutBack[0].value | Should -BeExactly ''
+  }
+
+  It 'does not use <Why> in the place of the list, and says so' -Skip:($env:OS -ne 'Windows_NT') -ForEach @(
+    @{ Why = 'a folder'; Make = { param($file) New-Item -ItemType Directory -Path $file | Out-Null } }
+    @{ Why = 'a file with a second name'; Make = { param($file) Set-Content -LiteralPath "$file.other" -Value '{}'; & (Join-Path ([Environment]::SystemDirectory) 'cmd.exe') /d /c ('mklink /H "{0}" "{1}"' -f $file, "$file.other") | Out-Null } }
+    @{ Why = 'a file of another owner'; Make = { param($file) Set-Content -LiteralPath $file -Value '{}'; & (Join-Path ([Environment]::SystemDirectory) 'icacls.exe') $file /setowner '*S-1-5-32-545' | Out-Null } }
+    @{ Why = 'a file that is not a list'; Make = { param($file) Set-Content -LiteralPath $file -Value 'not json {' } }
+  ) {
+    $dir = Join-Path $TestDrive ('slot-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $dir | Out-Null
+    $layout = @{ InstallDir = $dir; LeftoversFile = (Join-Path $dir 'uninstall-leftovers.json') }
+    & $Make $layout.LeftoversFile
+    (InModuleScope RpaInstall -Parameters @{ File = $layout.LeftoversFile } { Read-RpaLeftovers $File }).State | Should -BeExactly 'untrusted'
+    { InModuleScope RpaInstall -Parameters @{ Layout = $layout; Failed = @(New-TestFailure 'A' '') } { Save-RpaLeftovers $Layout $Failed 'rpa-runner' } } |
+      Should -Throw -ExpectedMessage '*uninstall-leftovers.json is there already and is not a list that Administrators or SYSTEM own; it was left as it is*'
+  }
+
+  # A record of a user's own registry, when that user's profile is gone: there is nothing to put it back into.
+  It 'skips a setting in the registry of a user whose profile is no longer on the machine, with a line that says so' {
+    Mock -ModuleName RpaInstall Test-RpaUserRegistry { $false }
+    Mock -ModuleName RpaInstall Restore-RpaSignInChange { }
+    $gone = New-Object psobject -Property ([ordered]@{ kind = 'registry'; key = 'HKU\S-1-5-21-1-2-3-1001\Control Panel\Desktop'; name = 'ScreenSaveActive'; existed = $true; type = 'REG_SZ'; value = '1' })
+    $machine = New-Object psobject -Property ([ordered]@{ kind = 'registry'; key = 'HKLM\SOFTWARE\Example'; name = 'A'; existed = $false })
+    $output = @(InModuleScope RpaInstall -Parameters @{ Changes = @($machine, $gone) } { Restore-RpaSignInChanges $Changes $false } 6>&1)
+    @($output | Where-Object { $_ -is [hashtable] }).Count | Should -Be 0
+    ($output | ForEach-Object { "$_" }) | Should -BeExactly @('    skipped: registry HKU\S-1-5-21-1-2-3-1001\Control Panel\Desktop ScreenSaveActive (it was REG_SZ "1"): the profile of that user is no longer on this machine')
+    Should -Invoke -ModuleName RpaInstall Restore-RpaSignInChange -Times 1 -Exactly
+  }
+
+  It 'prints each setting it could not put back when that happens' {
+    Mock -ModuleName RpaInstall Restore-RpaSignInChange { throw 'Access is denied.' }
+    $machine = New-Object psobject -Property ([ordered]@{ kind = 'registry'; key = 'HKLM\SOFTWARE\Example'; name = 'A'; existed = $false })
+    $output = @(InModuleScope RpaInstall -Parameters @{ Changes = @($machine) } { Restore-RpaSignInChanges $Changes $false } 6>&1)
+    $failed = @($output | Where-Object { $_ -is [hashtable] })
+    $failed.Count | Should -Be 1
+    $failed[0].Text | Should -BeExactly 'registry HKLM\SOFTWARE\Example A (it did not exist): Access is denied.'
+    (@($output | Where-Object { $_ -isnot [hashtable] }) | ForEach-Object { "$_" }) | Should -BeExactly @('    could not put back: registry HKLM\SOFTWARE\Example A (it did not exist): Access is denied.')
+  }
+}
+
+Describe 'A list an earlier uninstall left' {
+  BeforeAll {
+    $script:LeftoversFile = 'C:\Program Files\RPA Runner\uninstall-leftovers.json'
+    $script:Leftovers = @'
+{ "note": "x", "notPutBack": [
+  { "kind": "registry", "key": "HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\Personalization", "name": "NoLockScreen", "existed": false, "reason": "r", "user": "rpa-runner", "at": "2026-11-09 10:00:00 UTC" },
+  { "kind": "other", "reason": "The registry of the user could not be closed.", "user": "rpa-runner", "at": "2026-11-09 10:00:00 UTC" },
+  { "kind": "registry", "key": "HKLM\\SOFTWARE\\Example", "name": "A", "existed": true, "type": "REG_SZ", "value": "", "reason": "r", "user": "rpa-runner", "at": "2026-11-09 10:00:00 UTC" }
+] }
+'@ | ConvertFrom-Json
+    function New-TestRecord2($Previous, $Leftovers) {
+      $parameters = New-TestParameters
+      InModuleScope RpaInstall -Parameters @{ Previous = $Previous; Leftovers = $Leftovers; Parameters = $parameters } {
+        New-RpaInstallRecord -Version '0.2.0' -Account (Get-RpaAccount -User 'rpa-runner' -ComputerName 'BOT-PC') -Parameters $Parameters -Plan @{ Steps = @(); AllowFrom = @('10.0.0.5'); PublicNetwork = $true } -Previous $Previous -Leftovers $Leftovers
+      }
+    }
+  }
+
+  # Otherwise the install would record the changed setting as what was there before, and no uninstall would put it back.
+  It 'gives install.json its first records: what each setting was before the earlier install' {
+    $record = New-TestRecord2 $null $script:Leftovers
+    @($record.signInChanges).Count | Should -Be 2
+    $first = $record.signInChanges[0]
+    $first.name | Should -BeExactly 'NoLockScreen'
+    $first.existed | Should -BeFalse
+    @($first.PSObject.Properties.Name) | Should -BeExactly @('kind', 'key', 'name', 'existed')
+    $record.signInChanges[1].value | Should -BeExactly ''
+    $record.autoSignIn | Should -BeFalse
+  }
+
+  It 'adds nothing for a setting install.json records already' {
+    $previous = '{ "user": "rpa-runner", "autoSignIn": false, "allowFrom": "any", "signInChanges": [ { "kind": "registry", "key": "HKLM\\SOFTWARE\\Example", "name": "A", "existed": true, "type": "REG_SZ", "value": "older" } ] }' | ConvertFrom-Json
+    $record = New-TestRecord2 $previous $script:Leftovers
+    @($record.signInChanges | ForEach-Object { $_.name }) | Should -BeExactly @('A', 'NoLockScreen')
+    $record.signInChanges[0].value | Should -BeExactly 'older'
+  }
+
+  It 'without a list, records what install.json had' {
+    @((New-TestRecord2 $null $null).signInChanges).Count | Should -Be 0
+  }
+
+  It 'warns when the list cannot be trusted, and says what that means' {
+    $facts = New-TestFacts @{ Leftovers = @{ File = $script:LeftoversFile; State = 'untrusted' } }
+    $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ UserPassword = New-TestPassword }) -Facts $facts
+    $plan.Refusals.Count | Should -Be 0
+    $plan.Warnings | Should -BeExactly @('C:\Program Files\RPA Runner\uninstall-leftovers.json is not a list that Administrators or SYSTEM own, so the installer does not read it. An earlier uninstall keeps there what it could not put back; without it, a setting that is still changed is recorded as it is now, and a later uninstall leaves it that way. Check the file and remove it.')
+    foreach ($state in 'missing', 'trusted') {
+      $facts = New-TestFacts @{ Leftovers = @{ File = $script:LeftoversFile; State = $state } }
+      (Get-RpaInstallPlan -Parameters (New-TestParameters @{ UserPassword = New-TestPassword }) -Facts $facts).Warnings.Count | Should -Be 0
+    }
   }
 }
 
@@ -1079,8 +1286,9 @@ Describe 'Registry values in install.json' {
     for ($i = 0; $i -lt @($Data).Count; $i++) { @($back)[$i] | Should -BeExactly @($Data)[$i] }
   }
 
-  It 'refuses a kind of value it does not record' {
-    { InModuleScope RpaInstall { ConvertFrom-RpaRegistryData 'Unknown' $null } } | Should -Throw -ExpectedMessage '*does not record*'
+  It 'refuses a kind of value it does not record, and names the value' {
+    { InModuleScope RpaInstall { ConvertFrom-RpaRegistryData 'Unknown' $null 'HKLM\SOFTWARE\Example' 'A' } } |
+      Should -Throw -ExpectedMessage 'HKLM\SOFTWARE\Example A is a registry value of the kind Unknown, which the installer does not record.'
     { InModuleScope RpaInstall { ConvertTo-RpaRegistryData 'REG_LINK' 'x' } } | Should -Throw -ExpectedMessage '*not a registry type the installer writes*'
   }
 

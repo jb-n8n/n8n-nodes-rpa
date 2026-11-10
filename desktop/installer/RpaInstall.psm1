@@ -268,6 +268,9 @@ function Get-RpaInstallPlan {
     if ($Facts.UserPasswordProblem) {
       $warnings.Add(('The password given for {0} could not be checked: {1}' -f $user, $Facts.UserPasswordProblem))
     }
+    if ($Facts.Leftovers -and $Facts.Leftovers.State -eq 'untrusted') {
+      $warnings.Add(('{0} is not a list that Administrators or SYSTEM own, so the installer does not read it. An earlier uninstall keeps there what it could not put back; without it, a setting that is still changed is recorded as it is now, and a later uninstall leaves it that way. Check the file and remove it.' -f $Facts.Leftovers.File))
+    }
   }
 
   if ($refusals.Count -eq 0) {
@@ -304,9 +307,10 @@ function Get-RpaInstallPlan {
 }
 
 # Decides whether an uninstall may run. -Parameters holds Uninstall-Rpa.ps1's parameters (RemoveData); -Facts is what
-# Get-RpaUninstallFacts returns. Only -RemoveData can be refused: the data directory is deleted by path, so nobody
-# who can write into it may still be signed in (a process of that user could swap a folder for a junction while the
-# tree is being removed), and a data directory that is itself a link is not removed.
+# Get-RpaUninstallFacts returns. Only -RemoveData can be refused: the data directory is deleted by path, so no
+# process may be running of an account that can write into it or owns something in it (such a process could swap a
+# folder for a junction while the tree is being removed), and a data directory that is itself a link is not removed.
+# Accounts are matched by their SID: an account that only has the name of the bot user is not the bot user.
 function Get-RpaUninstallPlan {
   param(
     [Parameter(Mandatory = $true)][hashtable]$Parameters,
@@ -317,10 +321,11 @@ function Get-RpaUninstallPlan {
     if ($Facts.DataDirState -and $Facts.DataDirState.IsLink) {
       $refusals.Add(('{0} is a link or junction. Remove it and run this again.' -f $Facts.DataDir))
     }
-    foreach ($user in @($Facts.SignedIn)) {
-      $refusals.Add(('{0} is signed in. Sign {0} out, then run Uninstall-Rpa.ps1 -RemoveData again.' -f $user))
-      if ($Facts.AutoSignInUser -and $Facts.AutoSignInUser -eq $user) {
-        $refusals.Add(('Automatic sign-in is on for {0}, and Windows signs it in again after a sign-out. Run Uninstall-Rpa.ps1 without -RemoveData first, which turns that off; then sign {0} out and run Uninstall-Rpa.ps1 -RemoveData from the unpacked package.' -f $user))
+    foreach ($account in @($Facts.Accounts)) {
+      if (-not $account -or @($Facts.RunningSids) -notcontains $account.Sid) { continue }
+      $refusals.Add(('{0} is signed in. Sign {0} out, then run Uninstall-Rpa.ps1 -RemoveData again.' -f $account.Name))
+      if ($Facts.AutoSignInSid -and $Facts.AutoSignInSid -eq $account.Sid) {
+        $refusals.Add(('Automatic sign-in is on for {0}, and Windows signs it in again after a sign-out. Run Uninstall-Rpa.ps1 without -RemoveData first, which turns that off; then sign {0} out and run Uninstall-Rpa.ps1 -RemoveData from the unpacked package.' -f $account.Name))
       }
     }
   }
@@ -377,11 +382,14 @@ function Get-RpaLayout {
   $installDir = Join-Path $env:ProgramFiles 'RPA Runner'
   $dataDir = Join-Path $env:ProgramData 'RPA Runner'
   @{
-    InstallDir  = $installDir
-    InstallFile = Join-Path $installDir 'install.json'
-    DataDir     = $dataDir
-    LogDir      = Join-Path $dataDir 'logs'
-    BackupsDir  = Join-Path $dataDir 'policy-backups'
+    InstallDir    = $installDir
+    InstallFile   = Join-Path $installDir 'install.json'
+    # What an uninstall could not put back. Under Program Files, where only administrators can create anything, and
+    # not in the data directory, which -RemoveData removes.
+    LeftoversFile = Join-Path $installDir 'uninstall-leftovers.json'
+    DataDir       = $dataDir
+    LogDir        = Join-Path $dataDir 'logs'
+    BackupsDir    = Join-Path $dataDir 'policy-backups'
   }
 }
 
@@ -401,10 +409,10 @@ function Get-RpaAccountName([Security.Principal.SecurityIdentifier]$Sid) {
 }
 
 # What is at a path, without following it: whether anything is there, whether it is a link or junction (a reparse
-# point), how many names it has (a file with more than one is hard linked), and who owns it. An owner that cannot be
-# read is not trusted.
+# point) or a folder, how many names it has (a file with more than one is hard linked), and who owns it. An owner
+# that cannot be read is not trusted.
 function Get-RpaPathState([string]$Path) {
-  $state = @{ Exists = $false; IsLink = $false; Links = 0; OwnerTrusted = $false; Owner = '' }
+  $state = @{ Exists = $false; IsLink = $false; IsFolder = $false; Links = 0; OwnerTrusted = $false; Owner = '' }
   try { $attributes = [IO.File]::GetAttributes($Path) }
   catch {
     $cause = $_.Exception.GetBaseException()
@@ -413,8 +421,9 @@ function Get-RpaPathState([string]$Path) {
   }
   $state.Exists = $true
   $state.IsLink = [bool]($attributes -band [IO.FileAttributes]::ReparsePoint)
+  $state.IsFolder = [bool]($attributes -band [IO.FileAttributes]::Directory)
   $state.Links = 1
-  if (-not ($attributes -band [IO.FileAttributes]::Directory)) {
+  if (-not $state.IsFolder) {
     Add-RpaNativeTypes
     $state.Links = [RpaFiles]::LinkCount($Path)
   }
@@ -538,6 +547,7 @@ function Get-RpaMachineFacts {
     DataFiles                  = @{}
     TaskFolderOwner            = $null
     PublicNetwork              = $false
+    Leftovers                  = $null
   }
   # The plan refuses on these before it reads the rest, and an older Windows lacks the commands used below.
   if (-not $facts.IsAdmin -or -not $facts.Is64Bit -or $facts.OsBuild -lt $script:MinimumBuild) { return $facts }
@@ -617,6 +627,7 @@ function Get-RpaMachineFacts {
   if ($facts.DataDirState.Exists -and -not $facts.DataDirState.IsLink -and $facts.DataDirState.OwnerTrusted) {
     $facts.DataDirEntries = Get-RpaDataEntries $layout.DataDir
   }
+  $facts.Leftovers = @{ File = $layout.LeftoversFile; State = (Read-RpaLeftovers $layout.LeftoversFile).State }
   $facts.TaskFolderOwner = Get-RpaTaskFolderOwner
   $facts.PublicNetwork = [bool](Get-NetConnectionProfile -ErrorAction SilentlyContinue | Where-Object { $_.NetworkCategory -eq 'Public' })
   $facts
@@ -654,8 +665,9 @@ $script:RegistryKinds = @{
   REG_MULTI_SZ = 'MultiString'; REG_BINARY = 'Binary'; REG_NONE = 'None'
 }
 
-# What the registry returned for a value, as the type and data install.json keeps. -Kind is the .NET kind's name.
-function ConvertFrom-RpaRegistryData([string]$Kind, $Data) {
+# What the registry returned for a value, as the type and data install.json keeps. -Kind is the .NET kind's name;
+# -Key and -Name say which value it is when its kind is one the installer does not record.
+function ConvertFrom-RpaRegistryData([string]$Kind, $Data, [string]$Key, [string]$Name) {
   switch ($Kind) {
     'String' { return @{ type = 'REG_SZ'; value = [string]$Data } }
     'ExpandString' { return @{ type = 'REG_EXPAND_SZ'; value = [string]$Data } }
@@ -665,7 +677,7 @@ function ConvertFrom-RpaRegistryData([string]$Kind, $Data) {
     'Binary' { return @{ type = 'REG_BINARY'; value = -join (@($Data) | ForEach-Object { ([byte]$_).ToString('X2') }) } }
     'None' { return @{ type = 'REG_NONE'; value = -join (@($Data) | ForEach-Object { ([byte]$_).ToString('X2') }) } }
   }
-  throw ('a registry value of the kind {0}, which the installer does not record' -f $Kind)
+  throw ('{0} {1} is a registry value of the kind {2}, which the installer does not record.' -f $Key, $Name, $Kind)
 }
 
 # The object .NET takes for a recorded type and data. Lists and bytes come back wrapped, so that PowerShell hands the
@@ -1104,7 +1116,7 @@ function Get-RpaChangeText($Change) {
   ('{0} {1} {2}' -f $Change.kind, $Change.key, $Change.name).Trim()
 }
 
-# The list Uninstall-Rpa.ps1 leaves behind when it could not put a setting back: what an earlier list held
+# The list Uninstall-Rpa.ps1 leaves behind (uninstall-leftovers.json) when it could not put a setting back: what an earlier list held
 # (-Existing, or nothing) and, for each failure, the record install.json had for the setting (what it was before the
 # install), why it was not put back, for which bot user and when. A setting that is listed already keeps its first
 # entry, which holds the older "before".
@@ -1133,9 +1145,10 @@ function Add-RpaLeftovers($Existing, [object[]]$Failed, [string]$User, [string]$
 # one (it is written before the sign-in steps run). allowFrom is what the firewall rules let in (a list of addresses
 # and ranges, or the word any) and publicNetwork whether they also apply on Public networks; a run that makes no rule
 # keeps what an earlier run recorded, and records the word none when no run has made a rule (-NoFirewall).
-# signInChanges are the records of what -AutoSignIn changed.
+# signInChanges are the records of what -AutoSignIn changed; -Leftovers is the list an earlier uninstall left of what
+# it could not put back, or nothing.
 function New-RpaInstallRecord {
-  param([string]$Version, [hashtable]$Account, [hashtable]$Parameters, [hashtable]$Plan, $Previous)
+  param([string]$Version, [hashtable]$Account, [hashtable]$Parameters, [hashtable]$Plan, $Previous, $Leftovers)
   $allowFrom = 'none'
   $publicNetwork = $false
   if ($Previous -and $Previous.allowFrom) {
@@ -1149,6 +1162,21 @@ function New-RpaInstallRecord {
   }
   $changes = @()
   if ($Previous -and $Previous.signInChanges) { $changes = @($Previous.signInChanges) }
+  # What an earlier uninstall could not put back is still changed on this machine. Its records, which say what each
+  # setting was before the earlier install, come before anything this install records, so that a sign-in step does
+  # not record the changed setting as the one to go back to.
+  $known = @($changes | ForEach-Object { Get-RpaChangeId $_ })
+  if ($Leftovers) {
+    foreach ($entry in @($Leftovers.notPutBack)) {
+      if (-not $entry -or -not $entry.kind -or $entry.kind -eq 'other') { continue }
+      $id = Get-RpaChangeId $entry
+      if ($known -contains $id) { continue }
+      $record = [ordered]@{}
+      foreach ($property in $entry.PSObject.Properties) { if (@('reason', 'user', 'at') -notcontains $property.Name) { $record[$property.Name] = $property.Value } }
+      $changes += New-Object psobject -Property $record
+      $known += $id
+    }
+  }
   [ordered]@{
     version       = $Version
     user          = $Account.Display
@@ -1196,7 +1224,7 @@ function Get-RpaRegistryRecord([string]$Key, [string]$Name) {
   try {
     if (@($open.GetValueNames()) -notcontains $Name) { return $record }
     $data = $open.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
-    $recorded = ConvertFrom-RpaRegistryData ([string]$open.GetValueKind($Name)) $data
+    $recorded = ConvertFrom-RpaRegistryData ([string]$open.GetValueKind($Name)) $data $Key $Name
     $record.existed = $true
     $record.type = $recorded.type
     $record.value = $recorded.value
@@ -1218,18 +1246,30 @@ function Remove-RpaSignInValue([hashtable]$Run, [string]$Key, [string]$Name) {
   Remove-RpaRegistryValue $Key $Name
 }
 
+# The file a user's registry is kept in (NTUSER.DAT in the user's profile), or nothing when Windows lists no profile
+# for the user or the file is not there.
+function Get-RpaUserHiveFile([string]$Sid) {
+  $profileKey = 'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\{0}' -f $Sid
+  $profileDir = (Get-ItemProperty -LiteralPath $profileKey -ErrorAction SilentlyContinue).ProfileImagePath
+  if (-not $profileDir) { return $null }
+  $hive = Join-Path $profileDir 'NTUSER.DAT'
+  if (-not (Get-RpaPathState $hive).Exists) { return $null }
+  $hive
+}
+
+# Whether the registry of a user can be reached: it is loaded (the user is signed in), or its file is there.
+function Test-RpaUserRegistry([string]$Sid) {
+  (Test-Path -LiteralPath ('Registry::HKEY_USERS\{0}' -f $Sid)) -or [bool](Get-RpaUserHiveFile $Sid)
+}
+
 # Makes the registry of a user reachable under HKU\<SID>: it is there while the user is signed in; otherwise it is
 # loaded from the user's own profile until Dismount-RpaUserHive. Never from the default profile, which every later
 # user of the machine would inherit. Returns whether it loaded the file.
 function Mount-RpaUserHive([string]$Sid) {
   if (Test-Path -LiteralPath ('Registry::HKEY_USERS\{0}' -f $Sid)) { return $false }
-  $profileKey = 'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\{0}' -f $Sid
-  $profileDir = (Get-ItemProperty -LiteralPath $profileKey -ErrorAction SilentlyContinue).ProfileImagePath
-  if (-not $profileDir) { throw 'The user has no profile on this machine.' }
-  $hive = Join-Path $profileDir 'NTUSER.DAT'
-  $state = Get-RpaPathState $hive
-  if (-not $state.Exists) { throw ('{0} is missing.' -f $hive) }
-  if ($state.IsLink) { throw ('{0} is a link.' -f $hive) }
+  $hive = Get-RpaUserHiveFile $Sid
+  if (-not $hive) { throw 'The user has no profile on this machine.' }
+  if ((Get-RpaPathState $hive).IsLink) { throw ('{0} is a link.' -f $hive) }
   Invoke-RpaNative reg.exe @('load', $script:HiveMount, $hive)
   $script:MountedSid = $Sid
   $true
@@ -1352,10 +1392,11 @@ function Restore-RpaSignInChange($Change) {
 }
 
 # Puts recorded changes back, the last one first. The values of a user go into that user's registry, loaded from its
-# profile when the user is not signed in. With -KeepWinlogon the automatic sign-in values and the stored password are
-# left alone (someone has pointed automatic sign-in at another account since). Returns what could not be put back:
-# for each, the record (Change; nothing when a user's registry could not be closed again) and a line that names it
-# with the reason (Text).
+# profile when the user is not signed in; when that profile is no longer on the machine (the user was removed), the
+# setting went with it, and the record is skipped with a line that says so. With -KeepWinlogon the automatic sign-in
+# values and the stored password are left alone (someone has pointed automatic sign-in at another account since).
+# Each change that cannot be put back is printed when that happens. Returns those: for each, the record (Change;
+# nothing when a user's registry could not be closed again) and a line that names it with the reason (Text).
 function Restore-RpaSignInChanges([object[]]$Changes, [bool]$KeepWinlogon) {
   $failed = @()
   $ordered = @($Changes)
@@ -1364,13 +1405,25 @@ function Restore-RpaSignInChanges([object[]]$Changes, [bool]$KeepWinlogon) {
     $key = [string]$change.key
     if ($KeepWinlogon -and ($change.kind -eq 'secret' -or $key -eq $script:Winlogon)) { continue }
     $mounted = $false
+    $failure = $null
     try {
-      if ($change.kind -eq 'registry' -and $key -match '^HKU\\(S-[0-9-]+)\\') { $mounted = Mount-RpaUserHive $Matches[1] }
+      if ($change.kind -eq 'registry' -and $key -match '^HKU\\(S-[0-9-]+)\\') {
+        $sid = $Matches[1]
+        if (-not (Test-RpaUserRegistry $sid)) {
+          Write-Host ('    skipped: {0}: the profile of that user is no longer on this machine' -f (Get-RpaChangeText $change))
+          continue
+        }
+        $mounted = Mount-RpaUserHive $sid
+      }
       Restore-RpaSignInChange $change
     } catch {
-      $failed += @{ Change = $change; Text = ('{0}: {1}' -f (Get-RpaChangeText $change), $_.Exception.GetBaseException().Message) }
+      $failure = @{ Change = $change; Text = ('{0}: {1}' -f (Get-RpaChangeText $change), $_.Exception.GetBaseException().Message) }
     } finally {
-      try { Dismount-RpaUserHive $mounted } catch { $failed += @{ Change = $null; Text = $_.Exception.Message } }
+      try { Dismount-RpaUserHive $mounted } catch { $failed += @{ Change = $null; Text = $_.Exception.Message }; Write-Host ('    could not put back: {0}' -f $_.Exception.Message) }
+    }
+    if ($failure) {
+      $failed += $failure
+      Write-Host ('    could not put back: {0}' -f $failure.Text)
     }
   }
   $failed
@@ -1396,7 +1449,6 @@ function Undo-RpaFailedRun([hashtable]$Run) {
   if (@($Run.NewChanges).Count -gt 0) {
     Write-Host '  undo: put back the sign-in settings this run changed'
     $failed = @(Restore-RpaSignInChanges $Run.NewChanges $false)
-    foreach ($entry in $failed) { Write-Host ('    could not put back: {0}' -f $entry.Text) }
   }
   $result = @{ NotPutBack = @($failed | ForEach-Object { $_.Text }); UserKept = $null }
   $newIds = @($Run.NewChanges | ForEach-Object { Get-RpaChangeId $_ })
@@ -1473,6 +1525,7 @@ function Invoke-RpaInstallPlan {
     NewChanges       = @()
     CreatedUser      = $false
     WroteInstallFile = $false
+    LeftoversRead    = $false
   }
   # The user's security identifier goes into permissions by number, so no name can be misread. A user that the plan
   # does not create must exist now (an upgrade keeps the user of the first install).
@@ -1505,7 +1558,10 @@ function Invoke-RpaInstallPlan {
         'remove the browser task' { Unregister-RpaTask $script:BrowserTask }
         'write install.json' {
           $version = ([string](Get-Content -LiteralPath (Join-Path $layout.InstallDir 'VERSION') -TotalCount 1)).Trim()
-          $run.Install = New-RpaInstallRecord -Version $version -Account $account -Parameters $Parameters -Plan $Plan -Previous $previous
+          # What an earlier uninstall could not put back becomes the first records, when its list can be trusted.
+          $leftovers = Read-RpaLeftovers $layout.LeftoversFile
+          $run.LeftoversRead = $leftovers.State -eq 'trusted'
+          $run.Install = New-RpaInstallRecord -Version $version -Account $account -Parameters $Parameters -Plan $Plan -Previous $previous -Leftovers $leftovers.List
           Save-RpaInstallFile $run
           $run.WroteInstallFile = $true
         }
@@ -1522,33 +1578,50 @@ function Invoke-RpaInstallPlan {
       throw $failure
     }
   }
+  # install.json holds the records of the list by now, and the install has finished: the list has done its work. (A
+  # failed first install loses its install.json again, so the list stays until an install finishes.)
+  if ($run.LeftoversRead) { Remove-Item -LiteralPath $layout.LeftoversFile -Force -ErrorAction SilentlyContinue }
 }
 
-# The users that can write into the data directory and are signed in. They are the bot user install.json names and
-# whoever the data directory's access rules name besides SYSTEM and Administrators (install.json is gone after an
-# uninstall that kept the data). Signed in means that a process of the user is running, which is so while the user
-# has a session, connected or not.
-function Get-RpaSignedInUsers([hashtable]$Layout, $Install) {
-  $users = @{}
+# The accounts whose running process stands in the way of removing the data directory, as SID and name: the bot user
+# install.json names, whoever the data directory's access rules name besides SYSTEM and Administrators (install.json
+# is gone after an uninstall that kept the data), and whoever owns anything in the data directory.
+function Get-RpaDataAccounts([hashtable]$Layout, $Install) {
+  $accounts = [ordered]@{}
   if ($Install -and $Install.user) {
     $account = Get-RpaAccount -User ([string]$Install.user) -ComputerName $env:COMPUTERNAME
-    $users[$account.Qualified] = $account.Display
+    # A recorded user that is no longer there has no SID to look for; what it owns is found below.
+    try { $accounts[(Get-RpaSid $account)] = $account.Display } catch { }
   }
   $state = Get-RpaPathState $Layout.DataDir
   if ($state.Exists -and -not $state.IsLink) {
+    $sids = @()
     $security = [IO.Directory]::GetAccessControl($Layout.DataDir, 'Access')
     foreach ($rule in $security.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
-      $sid = $rule.IdentityReference
-      if ($rule.AccessControlType -ne 'Allow' -or $script:TrustedOwners -contains $sid.Value -or $sid.Value -eq 'S-1-3-0') { continue }
-      try { $name = $sid.Translate([Security.Principal.NTAccount]).Value } catch { continue }
-      $account = Get-RpaAccount -User $name -ComputerName $env:COMPUTERNAME
-      $users[$account.Qualified] = $account.Display
+      if ($rule.AccessControlType -eq 'Allow') { $sids += $rule.IdentityReference.Value }
+    }
+    $sids += @((Get-RpaDataEntries $Layout.DataDir).Accounts.Keys)
+    foreach ($sid in $sids) {
+      # S-1-3-0 is "whoever creates it", not an account.
+      if ($accounts.Contains($sid) -or $script:TrustedOwners -contains $sid -or $sid -eq 'S-1-3-0') { continue }
+      $name = Get-RpaAccountName (New-Object Security.Principal.SecurityIdentifier $sid)
+      $accounts[$sid] = (Get-RpaAccount -User $name -ComputerName $env:COMPUTERNAME).Display
     }
   }
-  if ($users.Count -eq 0) { return @() }
-  $running = @{}
-  foreach ($process in Get-Process -IncludeUserName) { if ($process.UserName) { $running[$process.UserName] = $true } }
-  @($users.Keys | Where-Object { $running.ContainsKey($_) } | ForEach-Object { $users[$_] } | Sort-Object)
+  @($accounts.Keys | ForEach-Object { @{ Sid = $_; Name = $accounts[$_] } })
+}
+
+# The SIDs of the accounts that own a running process. A process whose owner Windows does not give (the idle
+# process, one that ends meanwhile) is left out.
+function Get-RpaProcessOwners {
+  $sids = @{}
+  foreach ($process in Get-CimInstance -ClassName Win32_Process) {
+    try {
+      $owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -ErrorAction Stop
+      if ($owner.Sid) { $sids[[string]$owner.Sid] = $true }
+    } catch { }
+  }
+  @($sids.Keys)
 }
 
 # The facts Get-RpaUninstallPlan judges. Changes nothing.
@@ -1557,63 +1630,116 @@ function Get-RpaUninstallFacts {
   $layout = Get-RpaLayout
   $install = Read-RpaInstallFile $layout.InstallFile
   $facts = @{
-    DataDir        = $layout.DataDir
-    DataDirState   = Get-RpaPathState $layout.DataDir
-    SignedIn       = @(Get-RpaSignedInUsers $layout $install)
-    AutoSignInUser = $null
+    DataDir       = $layout.DataDir
+    DataDirState  = Get-RpaPathState $layout.DataDir
+    Accounts      = @(Get-RpaDataAccounts $layout $install)
+    RunningSids   = @()
+    AutoSignInSid = $null
   }
-  if ($install -and $install.autoSignIn -eq $true) { $facts.AutoSignInUser = [string]$install.user }
+  if ($facts.Accounts.Count -gt 0) { $facts.RunningSids = @(Get-RpaProcessOwners) }
+  if ($install -and $install.autoSignIn -eq $true) {
+    try { $facts.AutoSignInSid = Get-RpaSid (Get-RpaAccount -User ([string]$install.user) -ComputerName $env:COMPUTERNAME) } catch { }
+  }
   $facts
 }
 
-# Writes what the uninstaller could not put back to uninstall-leftovers.json in the data directory, which stays after
-# an uninstall without -RemoveData, as a file only SYSTEM and Administrators can read or change. The bot user can
-# create files in the data directory, so whatever has that name already is removed by name and never written
-# through; a list an earlier uninstall left is read only when it is a plain file that Administrators or SYSTEM own.
-# Returns the path.
-function Save-RpaLeftovers([hashtable]$Layout, [object[]]$Failed, [string]$User) {
-  $file = Join-Path $Layout.DataDir 'uninstall-leftovers.json'
-  New-RpaProtectedFolder $Layout.DataDir (Get-RpaAccessRules 'backups' '')
-  $folder = Get-RpaPathState $Layout.DataDir
-  if ($folder.IsLink -or -not $folder.OwnerTrusted) { throw ('{0} is a link or belongs to {1}' -f $Layout.DataDir, $folder.Owner) }
-  $existing = $null
-  $state = Get-RpaPathState $file
-  if ($state.Exists) {
-    if (-not $state.IsLink -and $state.Links -eq 1 -and $state.OwnerTrusted) {
-      try { $existing = Get-Content -Raw -LiteralPath $file -Encoding UTF8 | ConvertFrom-Json } catch { $existing = $null }
-    }
-    [IO.File]::Delete($file)
+# The list an uninstall left of what it could not put back, read from its file under Program Files. State is missing,
+# trusted (a file with one name that Administrators or SYSTEM own, holding a list) or untrusted (anything else in its
+# place: a folder, a link, a file of another owner or with a second name, a file that is not a list). Only a trusted
+# list is read (List).
+function Read-RpaLeftovers([string]$File) {
+  $state = Get-RpaPathState $File
+  if (-not $state.Exists) { return @{ State = 'missing'; List = $null } }
+  if (-not $state.IsLink -and -not $state.IsFolder -and $state.Links -eq 1 -and $state.OwnerTrusted) {
+    try {
+      $list = Get-Content -Raw -LiteralPath $File -Encoding UTF8 | ConvertFrom-Json
+      if ($list -and $null -ne $list.PSObject.Properties['notPutBack']) { return @{ State = 'trusted'; List = $list } }
+    } catch { }
   }
-  $list = Add-RpaLeftovers $existing $Failed $User ([DateTime]::UtcNow.ToString("yyyy-MM-dd HH:mm:ss 'UTC'", [Globalization.CultureInfo]::InvariantCulture))
+  @{ State = 'untrusted'; List = $null }
+}
+
+# Writes what the uninstaller could not put back to uninstall-leftovers.json in the install directory, as a file only
+# SYSTEM and Administrators can read or change. Under Program Files only administrators can create anything, and the
+# file stays when the program files, and with -RemoveData the data directory, are removed; the next install reads it.
+# A list an earlier uninstall left there is added to. Anything else in its place is left as it is, and the list is
+# not written. Returns the path.
+function Save-RpaLeftovers([hashtable]$Layout, [object[]]$Failed, [string]$User) {
+  $file = $Layout.LeftoversFile
+  [void][IO.Directory]::CreateDirectory($Layout.InstallDir)
+  $earlier = Read-RpaLeftovers $file
+  if ($earlier.State -eq 'untrusted') { throw ('{0} is there already and is not a list that Administrators or SYSTEM own; it was left as it is' -f $file) }
+  $list = Add-RpaLeftovers $earlier.List $Failed $User ([DateTime]::UtcNow.ToString("yyyy-MM-dd HH:mm:ss 'UTC'", [Globalization.CultureInfo]::InvariantCulture))
+  if ($earlier.State -eq 'trusted') { Remove-Item -LiteralPath $file -Force }
   New-RpaProtectedFile -Path $file -Text (ConvertTo-Json -InputObject $list -Depth 6) -AdministratorsOnly
   $file
 }
 
+# Switches the two tasks on again and starts them, after a stop that is not followed by an upgrade or a removal.
+function Resume-RpaServices {
+  foreach ($name in $script:RunnerTask, $script:BrowserTask) {
+    Get-ScheduledTask -TaskPath $script:TaskPath -TaskName $name -ErrorAction SilentlyContinue | Enable-ScheduledTask | Out-Null
+  }
+  Start-RpaTasks
+}
+
+# Removes the install directory. A list of what an uninstall could not put back stays, alone in the directory, for
+# the next install to read.
+function Remove-RpaProgramFiles([hashtable]$Layout) {
+  # A folder that is someone's current directory cannot be removed, and the uninstaller may be run from inside it.
+  if ((Get-Location).ProviderPath.StartsWith($Layout.InstallDir, [StringComparison]::OrdinalIgnoreCase)) { Set-Location -LiteralPath $env:SystemRoot }
+  if ([Environment]::CurrentDirectory.StartsWith($Layout.InstallDir, [StringComparison]::OrdinalIgnoreCase)) { [Environment]::CurrentDirectory = $env:SystemRoot }
+  if (-not (Get-RpaPathState $Layout.LeftoversFile).Exists) {
+    Remove-RpaTree $Layout.InstallDir
+    return
+  }
+  foreach ($item in Get-ChildItem -LiteralPath $Layout.InstallDir -Force) {
+    if ($item.PSIsContainer) { Remove-RpaTree $item.FullName }
+    elseif ($item.FullName -ne $Layout.LeftoversFile) { Remove-Item -LiteralPath $item.FullName -Force }
+  }
+}
+
 # What Uninstall-Rpa.ps1 does: removes the tasks, the firewall rules and the install directory, and puts back what
 # -AutoSignIn changed, from the records in install.json. The data directory goes only with -RemoveData; the Windows
-# user is never removed. What could not be put back is listed in the data directory, unless that is removed too.
-# Returns what the uninstaller reports.
+# user is never removed. -Plan is what Get-RpaUninstallPlan returned.
+# Every refusal comes before anything is removed. With -RemoveData the data directory goes first, directly after a
+# second look at who has a process running (the plan looked before the programs were stopped); when that look
+# refuses, the tasks are switched on and started again, and the error that is thrown has Refused in its Data.
+# Each setting that cannot be put back is printed when that happens and listed at once in uninstall-leftovers.json
+# in the install directory, which then stays with that one file. Returns what the uninstaller reports.
 function Invoke-RpaUninstall {
-  param([switch]$RemoveData)
+  param(
+    [Parameter(Mandatory = $true)][hashtable]$Plan,
+    [switch]$RemoveData
+  )
   $ErrorActionPreference = 'Stop'
   $ProgressPreference = 'SilentlyContinue'
+  if (@($Plan.Refusals).Count -gt 0) { throw 'The plan has refusals; nothing was changed.' }
   $layout = Get-RpaLayout
   $install = Read-RpaInstallFile $layout.InstallFile
   $result = @{
-    User = $null; AutoSignIn = $false; SignInKept = $false; HadChanges = $false; NotRestored = @()
-    LeftoversFile = $null; LeftoversProblem = $null; DataRemoved = $false; Layout = $layout
+    User = $null; AutoSignIn = $false; SignInKept = $false; SignInFailed = $false; HadChanges = $false; NotRestored = @()
+    LeftoversFile = $null; LeftoversProblem = $null; DataRemoved = $false; DataKept = $false; Layout = $layout
   }
   if ($install) {
     $result.User = [string]$install.user
     $result.AutoSignIn = $install.autoSignIn -eq $true
   }
-  # Refused before anything is removed: rd would delete the link, and the data would stay where it points.
-  if ($RemoveData -and (Get-RpaPathState $layout.DataDir).IsLink) {
-    throw ('{0} is a link or junction. Remove it and run this again.' -f $layout.DataDir)
-  }
 
   Write-Host '  stop running services'
   Stop-RpaServices $layout.InstallDir
+  if ($RemoveData) {
+    $late = Get-RpaUninstallPlan -Parameters @{ RemoveData = $true } -Facts (Get-RpaUninstallFacts)
+    if ($late.Refusals.Count -gt 0) {
+      Resume-RpaServices
+      $refused = New-Object InvalidOperationException ($late.Refusals -join "`n")
+      $refused.Data['Refused'] = $true
+      throw $refused
+    }
+    Write-Host '  remove the data directory'
+    $result.DataRemoved = (Get-RpaPathState $layout.DataDir).Exists
+    Remove-RpaTree $layout.DataDir
+  }
   Write-Host '  remove the tasks'
   Unregister-RpaTask $script:RunnerTask
   Unregister-RpaTask $script:BrowserTask
@@ -1634,27 +1760,63 @@ function Invoke-RpaUninstall {
     $result.SignInKept = $result.AutoSignIn -and ($current -ne $account.Name)
     $failed = @(Restore-RpaSignInChanges @($install.signInChanges) $result.SignInKept)
     $result.NotRestored = @($failed | ForEach-Object { $_.Text })
-    # install.json goes with the program files, so the record of what was not put back moves to the data directory
-    # first. With -RemoveData that goes too, and the list is only printed.
-    if ($failed.Count -gt 0 -and -not $RemoveData) {
-      try { $result.LeftoversFile = Save-RpaLeftovers $layout $failed $result.User }
-      catch { $result.LeftoversProblem = $_.Exception.GetBaseException().Message }
+    $result.SignInFailed = [bool]($failed | Where-Object { $_.Change -and ($_.Change.kind -eq 'secret' -or [string]$_.Change.key -eq $script:Winlogon) })
+    # install.json goes with the program files, so the record of what was not put back is written now, before
+    # anything else can stop the run.
+    if ($failed.Count -gt 0) {
+      try {
+        $result.LeftoversFile = Save-RpaLeftovers $layout $failed $result.User
+        Write-Host ('    listed in {0}' -f $result.LeftoversFile)
+      } catch {
+        $result.LeftoversProblem = $_.Exception.GetBaseException().Message
+        Write-Host ('    this list could not be kept in {0}: {1}' -f $layout.LeftoversFile, $result.LeftoversProblem)
+      }
     }
   }
   Write-Host '  remove the program files'
-  # A folder that is someone's current directory cannot be removed, and the uninstaller may be run from inside it.
-  if ((Get-Location).ProviderPath.StartsWith($layout.InstallDir, [StringComparison]::OrdinalIgnoreCase)) { Set-Location -LiteralPath $env:SystemRoot }
-  if ([Environment]::CurrentDirectory.StartsWith($layout.InstallDir, [StringComparison]::OrdinalIgnoreCase)) { [Environment]::CurrentDirectory = $env:SystemRoot }
-  Remove-RpaTree $layout.InstallDir
-  if ($RemoveData) {
-    Write-Host '  remove the data directory'
-    # Looked at again: the plan saw who was signed in before the steps above ran.
-    $signedIn = @(Get-RpaSignedInUsers $layout $install)
-    if ($signedIn.Count -gt 0) { throw ('{0} is signed in. Sign {0} out, then run Uninstall-Rpa.ps1 -RemoveData again.' -f $signedIn[0]) }
-    $result.DataRemoved = (Get-RpaPathState $layout.DataDir).Exists
-    Remove-RpaTree $layout.DataDir
-  }
+  Remove-RpaProgramFiles $layout
+  $result.DataKept = (Get-RpaPathState $layout.DataDir).Exists
   $result
 }
 
-Export-ModuleMember -Function Get-RpaInstallPlan, Get-RpaUninstallPlan, New-RpaSecret, Get-RpaAccount, Get-RpaLayout, Test-RpaAdministrator, Get-RpaMachineFacts, Get-RpaUninstallFacts, Invoke-RpaInstallPlan, Invoke-RpaUninstall
+# What Uninstall-Rpa.ps1 prints at its end, from what Invoke-RpaUninstall returned: only what was done.
+function Get-RpaUninstallSummary([hashtable]$Result) {
+  $lines = @('RPA is removed.')
+  $failed = @($Result.NotRestored)
+  if ($Result.AutoSignIn) {
+    if ($Result.SignInKept) { $lines += '  Automatic sign-in now names another user, so it and the stored password were left as they are.' }
+    elseif ($Result.SignInFailed) { $lines += '  Automatic sign-in of {0} could not be turned off completely: see the list below.' -f $Result.User }
+    else { $lines += '  Automatic sign-in of {0} is off and the stored password is removed.' -f $Result.User }
+  }
+  if ($Result.HadChanges) {
+    if ($failed.Count -eq 0) {
+      if ($Result.SignInKept) { $lines += '  The other settings -AutoSignIn changed are back to what they were before.' }
+      else { $lines += '  The settings -AutoSignIn changed are back to what they were before.' }
+    } else {
+      $lines += '  Of the settings -AutoSignIn changed, these could not be put back:'
+      foreach ($line in $failed) { $lines += '    {0}' -f $line }
+      if ($Result.LeftoversFile) {
+        $lines += '  This list, with what each setting was before, is kept in {0},' -f $Result.LeftoversFile
+        $lines += '  a file only administrators can read or change. The next install reads it, so that a later uninstall'
+        $lines += '  tries these settings again.'
+      } else { $lines += '  This list could not be kept in {0}: {1}' -f $Result.Layout.LeftoversFile, $Result.LeftoversProblem }
+    }
+  }
+  if ($Result.DataRemoved) { $lines += '  Removed:   {0}' -f $Result.Layout.DataDir }
+  elseif ($Result.DataKept) {
+    $lines += '  Kept:      {0} (remove it with -RemoveData)' -f $Result.Layout.DataDir
+    if ($Result.User) {
+      $lines += '             A later install for {0} takes it over when everything in it belongs to Administrators,' -f $Result.User
+      $lines += '             SYSTEM or {0}, and keeps the policy, the tokens and the certificates. An install for another' -f $Result.User
+      $lines += '             user refuses what {0} left there, and so does one for a user of that name that was' -f $Result.User
+      $lines += '             removed and created again.'
+    } else {
+      $lines += '             A later install takes it over when everything in it belongs to Administrators, SYSTEM or the'
+      $lines += '             user it installs for, and that user was there before.'
+    }
+  }
+  if ($Result.User) { $lines += '  Kept:      the Windows user {0}' -f $Result.User }
+  $lines
+}
+
+Export-ModuleMember -Function Get-RpaInstallPlan, Get-RpaUninstallPlan, New-RpaSecret, Get-RpaAccount, Get-RpaLayout, Test-RpaAdministrator, Get-RpaMachineFacts, Get-RpaUninstallFacts, Invoke-RpaInstallPlan, Invoke-RpaUninstall, Get-RpaUninstallSummary

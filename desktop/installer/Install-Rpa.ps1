@@ -50,6 +50,10 @@
 # -UserPassword; give one to store a changed password). Without a user of its own making, -AutoSignIn needs
 # -UserPassword: a password the installer generated is stored for Windows and known to nobody. The installer prints
 # no secret.
+# When an earlier uninstall could not put a setting of -AutoSignIn back, it left a list in
+# C:\Program Files\RPA Runner\uninstall-leftovers.json. The installer reads that list (when it is a file of
+# Administrators or SYSTEM), records each setting with what it was before the earlier install, and removes the list
+# when the install has finished; the next uninstall then tries those settings again.
 # Exit codes: 0 installed, 1 refused or failed, 3 declined at the question.
 [CmdletBinding()]
 param(

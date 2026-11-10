@@ -6,8 +6,10 @@
 # It ends both programs and removes the scheduled tasks, the firewall rules and C:\Program Files\RPA Runner. When the
 # installer turned automatic sign-in on, it puts every setting -AutoSignIn changed back to what install.json recorded
 # and removes the stored password; when automatic sign-in names another user by now, it leaves the sign-in values and
-# the stored password alone. A setting it cannot put back is printed and listed, with what it was before, in
-# uninstall-leftovers.json in the data directory, a file only administrators can read or change.
+# the stored password alone. A setting it cannot put back is printed when that happens and listed, with what it was
+# before, in C:\Program Files\RPA Runner\uninstall-leftovers.json, a file only administrators can read or change;
+# the install directory then stays, with that one file in it, also with -RemoveData. The next install reads the list
+# and records those settings again, so that a later uninstall tries them again.
 #
 # It keeps the data directory, C:\ProgramData\RPA Runner (the policy, the tokens, the certificates, logs), unless
 # -RemoveData is given. A later install for the same bot user takes the kept directory over when everything in it
@@ -15,9 +17,10 @@
 # install for another user refuses what the first user left there (logs, certificates, exports), and so does an
 # install for a user of the same name that was removed and created again.
 #
-# -RemoveData is refused while the bot user is signed in: sign it out first (where automatic sign-in is on, run
-# without -RemoveData first, then sign the bot user out and run Uninstall-Rpa.ps1 -RemoveData from the unpacked
-# package). The uninstaller never removes a Windows user.
+# -RemoveData is refused while a process is running of the bot user or of any account that owns something in the
+# data directory: sign that user out first (where automatic sign-in is on, run without -RemoveData first, then sign
+# the bot user out and run Uninstall-Rpa.ps1 -RemoveData from the unpacked package). Every refusal comes before
+# anything is removed. The uninstaller never removes a Windows user.
 #
 # Run from an unpacked package instead of the install directory, it first checks who can change that package, as
 # Install-Rpa.ps1 does.
@@ -203,42 +206,18 @@ if ($plan.Refusals.Count -gt 0) {
 }
 
 Write-Host 'Removing RPA:'
-try { $result = Invoke-RpaUninstall -RemoveData:$RemoveData }
+try { $result = Invoke-RpaUninstall -Plan $plan -RemoveData:$RemoveData }
 catch {
   Write-Host $_.Exception.Message
-  Write-Host 'The removal did not finish. Fix the cause and run Uninstall-Rpa.ps1 again.'
+  # The last look at who is signed in, directly before the data directory would have gone.
+  if ($_.Exception.Data['Refused']) { Write-Host 'Nothing was removed. The programs were stopped, and their tasks were started again.' }
+  else {
+    $installed = Join-Path (Get-RpaLayout).InstallDir 'Uninstall-Rpa.ps1'
+    Write-Host 'The removal did not finish. Fix the cause and run Uninstall-Rpa.ps1 again'
+    Write-Host ('(from the unpacked package when {0} is gone by now).' -f $installed)
+  }
   exit 1
 }
 
 Write-Host ''
-Write-Host 'RPA is removed.'
-if ($result.AutoSignIn) {
-  if ($result.SignInKept) { Write-Host '  Automatic sign-in now names another user, so it and the stored password were left as they are.' }
-  else { Write-Host ('  Automatic sign-in of {0} is off and the stored password is removed.' -f $result.User) }
-}
-if ($result.HadChanges) {
-  if (@($result.NotRestored).Count -eq 0) { Write-Host '  The settings -AutoSignIn changed are back to what they were before.' }
-  else {
-    Write-Host '  Of the settings -AutoSignIn changed, these could not be put back:'
-    foreach ($line in $result.NotRestored) { Write-Host ('    {0}' -f $line) }
-    if ($result.LeftoversFile) {
-      Write-Host ('  This list, with what each setting was before, is kept in {0},' -f $result.LeftoversFile)
-      Write-Host '  a file only administrators can read or change.'
-    } elseif ($RemoveData) { Write-Host '  This list is not kept: -RemoveData removed the data directory.' }
-    else { Write-Host ('  This list could not be kept in {0}: {1}' -f $result.Layout.DataDir, $result.LeftoversProblem) }
-  }
-}
-if ($result.DataRemoved) { Write-Host ('  Removed:   {0}' -f $result.Layout.DataDir) }
-elseif (Test-Path -LiteralPath $result.Layout.DataDir) {
-  Write-Host ('  Kept:      {0} (remove it with -RemoveData)' -f $result.Layout.DataDir)
-  if ($result.User) {
-    Write-Host ('             A later install for {0} takes it over when everything in it belongs to Administrators,' -f $result.User)
-    Write-Host ('             SYSTEM or {0}, and keeps the policy, the tokens and the certificates. An install for another' -f $result.User)
-    Write-Host ('             user refuses what {0} left there, and so does one for a user of that name that was' -f $result.User)
-    Write-Host '             removed and created again.'
-  } else {
-    Write-Host '             A later install takes it over when everything in it belongs to Administrators, SYSTEM or the'
-    Write-Host '             user it installs for, and that user was there before.'
-  }
-}
-if ($result.User) { Write-Host ('  Kept:      the Windows user {0}' -f $result.User) }
+foreach ($line in Get-RpaUninstallSummary $result) { Write-Host $line }
