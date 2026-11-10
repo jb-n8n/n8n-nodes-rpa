@@ -1,35 +1,38 @@
 # Publishes the Windows package (rpa-windows-x64.zip and its SHA-256) as the GitHub Release desktop-v<version> when a
-# desktop-v<version> tag is pushed. The package is the one the desktop workflow builds, installs and drives: this
-# workflow calls desktop.yml and publishes the artifact it uploads. The package is not code-signed; the release carries
-# the zip's SHA-256 and a build attestation (`gh attestation verify rpa-windows-x64.zip --repo jb-n8n/n8n-nodes-rpa`).
-# Four jobs, so third-party code never runs with publish rights (the shape of publish.yml):
+# desktop-v<version> tag is pushed and a reviewer of the desktop-release environment approves it. The package is the
+# one the desktop workflow builds, installs and drives: this workflow calls desktop.yml and publishes the artifact it
+# uploads. The package is not code-signed; the release carries the zip's SHA-256 and a build attestation, which shows
+# which workflow, ref and commit of this repository attested the file (not that the commit was reviewed, nor that the
+# zip is what the source code would build elsewhere):
+#   gh attestation verify rpa-windows-x64.zip --repo jb-n8n/n8n-nodes-rpa \
+#     --signer-workflow jb-n8n/n8n-nodes-rpa/.github/workflows/desktop-release.yml \
+#     --source-ref refs/tags/desktop-v<version>
+# Five jobs, so third-party code never runs with publish rights (the shape of publish.yml):
+# - environment-check (actions: read only, no checkout): the desktop-release environment exists and has required
+#   reviewers. Without them a pushed tag would publish with nobody approving, so nothing is built until they are set.
 # - check (contents: read only, no environment, no secrets): the ref is the tag desktop-v<version>, where <version> is
 #   the <Version> of desktop/Directory.Build.props, on a commit that is on main. It cuts the version's section out of
 #   CHANGELOG.md for the release notes and uploads them; a missing section fails here, before anything is built.
-# - desktop (needs check; contents: read): the reusable desktop workflow, which builds, tests, stages, installs and
-#   drives the package and uploads it as the artifact its output names.
+# - desktop (needs environment-check and check; contents: read): the reusable desktop workflow, which builds, tests,
+#   stages, installs and drives the package and uploads it as the artifact its output names.
 # - verify (needs check and desktop; no permissions, no environment): downloads the package and checks it: exactly
 #   the two files, the zip's SHA-256 equal to the .sha256 file beside it, the version in the zip equal to the tag's.
-# - release (needs all three; environment release; contents/id-token/attestations write): no checkout, no repository
-#   code, nothing run from the artifact. It downloads the package and the notes, checks them again, attests the zip
-#   and creates the release desktop-v<version>, neither a draft nor a prerelease, and not marked latest (the
-#   repository's latest release stays the npm package's). A release that already exists for the tag fails the job.
-# Dry run: run this workflow by hand on main (workflow_dispatch, dry_run true, the default). The check uses the version
-# of desktop/Directory.Build.props in place of a tag, and everything up to and including verify runs; release is
-# skipped, so nothing is attested or published. A dispatch with dry_run false is a release, and its check accepts only
-# a desktop-v<version> tag as the ref.
-# Uses no repository secrets; the release job uses the automatic token. Actions are pinned by full commit SHA.
+# - release (needs all four; only for a pushed desktop-v tag; environment desktop-release, so it waits for a reviewer;
+#   contents/id-token/attestations write): no checkout, no repository code, nothing run from the artifact. It downloads
+#   the package and the notes, checks them again, checks that the tag still names this run's commit and has no release
+#   (a draft included), attests the zip and creates the release desktop-v<version>, neither a draft nor a prerelease,
+#   and not marked latest (the repository's latest release stays the npm package's).
+# Dry run: a manual run (Run workflow, on main) never publishes. Its check uses the version of
+# desktop/Directory.Build.props in place of a tag; the environment check, the build and verify run as for a tag, and
+# release is skipped, so nothing is attested or published.
+# Uses no repository secrets; the environment-check and release jobs use the automatic token. Actions are pinned by
+# full commit SHA.
 name: Desktop release
 
 on:
   push:
     tags: ['desktop-v*']
   workflow_dispatch:
-    inputs:
-      dry_run:
-        description: Check, build and verify the package from desktop/Directory.Build.props, then stop before attesting and releasing
-        type: boolean
-        default: true
 
 permissions: {}
 
@@ -37,10 +40,34 @@ permissions: {}
 # one waiting run per group: a third tag pushed while one release runs and another waits replaces the waiting one
 # (shown as cancelled; re-run it). Dry runs wait in their own group, so they never replace a waiting release.
 concurrency:
-  group: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && 'desktop-release-dry-run' || 'desktop-release' }}
+  group: ${{ github.event_name == 'push' && 'desktop-release' || 'desktop-release-dry-run' }}
   cancel-in-progress: false
 
 jobs:
+  # The environment's required reviewers are the approval of each release. GitHub creates an environment that a job
+  # names and that does not exist yet, with no protection, and would then run the release job without asking anyone;
+  # an environment without required reviewers would do the same. Reading it needs actions: read (the API's "Get an
+  # environment"), which this job alone gets; it runs no repository code.
+  environment-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    steps:
+      - name: The desktop-release environment has required reviewers
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          settings="$(gh api "repos/$GITHUB_REPOSITORY/environments/desktop-release")" || {
+            echo "::error::the environment desktop-release does not exist or cannot be read; create it with required reviewers and the deployment tag rule desktop-v* (desktop/README.md, Before the first release)"
+            exit 1
+          }
+          reviewers="$(jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length' <<<"$settings")"
+          test "$reviewers" -ge 1 || { echo "::error::the environment desktop-release has no required reviewers, so a release would not wait for approval; add them"; exit 1; }
+          jq -e '.deployment_branch_policy.custom_branch_policies == true' <<<"$settings" >/dev/null || echo "::warning::the environment desktop-release has no deployment tag rule; add desktop-v*"
+          echo "desktop-release: required reviewers set"
+
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -58,13 +85,13 @@ jobs:
         id: tag
         env:
           REF: ${{ github.ref }}
-          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+          EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
           mapfile -t versions < <(grep -oE '<Version>[0-9]+\.[0-9]+\.[0-9]+</Version>' desktop/Directory.Build.props || true)
           test "${#versions[@]}" -eq 1 || { echo "::error::desktop/Directory.Build.props must hold exactly one <Version>major.minor.patch</Version>"; exit 1; }
           version="${versions[0]//[^0-9.]/}"
-          if [ "$DRY_RUN" = true ]; then
+          if [ "$EVENT" != push ]; then
             echo "Dry run: the version is ${version} (desktop/Directory.Build.props), the ref ${REF} is not checked as a tag"
           else
             [[ "$REF" =~ ^refs/tags/desktop-v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::the Windows package is released only from a desktop-v<major>.<minor>.<patch> tag, not from ${REF}"; exit 1; }
@@ -73,7 +100,9 @@ jobs:
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "::error::commit $GITHUB_SHA is not on main; tag a reviewed commit on main"; exit 1; }
           echo "version=${version}" >> "$GITHUB_OUTPUT"
       # The release notes are the CHANGELOG.md section "## <version> (<date>)", up to the next "## " heading, cut as
-      # publish.yml cuts them. They are cut here because the release job has no checkout.
+      # publish.yml cuts them. They are cut here because the release job has no checkout. CHANGELOG.md has one section
+      # per version: the node's release of the same number (publish.yml, tag v<version>) uses the same section, so
+      # write it for both, the node and the Windows package.
       - name: Release notes from CHANGELOG.md
         env:
           VERSION: ${{ steps.tag.outputs.version }}
@@ -93,11 +122,9 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # No secrets are passed: desktop.yml uses none. Its own concurrency group is desktop-<ref> with cancel-in-progress,
-  # so of a dry run from main and a desktop run for a push to main, the later cancels the earlier: dry-run when
-  # nothing is merging.
+  # No secrets are passed: desktop.yml uses none.
   desktop:
-    needs: check
+    needs: [environment-check, check]
     permissions:
       contents: read
     uses: ./.github/workflows/desktop.yml
@@ -118,6 +145,7 @@ jobs:
           path: ${{ runner.temp }}/package
       # Only reads the files: the zip's hash, and its VERSION file through unzip -p (the pattern takes either path
       # separator, as the zip is written by .NET on Windows). Nothing from the artifact runs.
+      # Keep identical to the package checks of the release job's step "Check the tag, the package and the notes".
       - name: Check the package
         working-directory: ${{ runner.temp }}/package
         env:
@@ -140,15 +168,16 @@ jobs:
           echo "rpa-windows-x64.zip ${VERSION}, SHA-256 ${actual}"
 
   release:
-    needs: [check, desktop, verify]
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+    needs: [environment-check, check, desktop, verify]
+    # Only a pushed tag publishes: a manual run is a dry run, whatever ref it is started on.
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/desktop-v') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # The environment publish.yml's github-release job uses. Before the first desktop release, add `desktop-v*` to its
-    # deployment tag policy in the repository settings (publish.yml asks for `v*` only); the policy refuses this job
-    # until then. That policy and the environment's reviewers, not the checks in this file, are what stop a release
+    # Set on this environment in the repository settings before the first release: required reviewers (each release
+    # waits for one of them to approve it) and a deployment tag rule `desktop-v*`. The environment-check job refuses to
+    # build while it has no required reviewers. That approval, not the checks in this file, is what stops a release
     # from a tag nobody approved: whoever can push a tag also chooses the workflow file the tag's commit holds.
-    environment: release
+    environment: desktop-release
     permissions:
       contents: write # create the release and upload its assets with GITHUB_TOKEN
       id-token: write # the OIDC token Sigstore signs the attestation with
@@ -163,6 +192,7 @@ jobs:
           name: desktop-release-notes
           path: ${{ runner.temp }}/notes
       # The same checks as the verify job, on the same artifact: this job must not rely on another job's checks alone.
+      # Keep the package checks identical to the verify job's step "Check the package".
       - name: Check the tag, the package and the notes
         id: check
         working-directory: ${{ runner.temp }}/release
@@ -187,18 +217,23 @@ jobs:
           test "$actual" = "$expected" || { echo "::error::rpa-windows-x64.zip has the SHA-256 $actual, the .sha256 file says $expected"; exit 1; }
           packaged="$(unzip -p rpa-windows-x64.zip 'rpa-windows-x64[/\\]VERSION' | tr -d '\r\n')" || { echo "::error::rpa-windows-x64.zip holds no rpa-windows-x64/VERSION"; exit 1; }
           test "$packaged" = "$version" || { echo "::error::the package's VERSION is '${packaged}', not ${version}"; exit 1; }
-          grep -q '[^[:space:]]' "$RUNNER_TEMP/notes/release-notes.md"
+          grep -q '[^[:space:]]' "$RUNNER_TEMP/notes/release-notes.md" || { echo "::error::the release notes are empty"; exit 1; }
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "sha256=${actual}" >> "$GITHUB_OUTPUT"
-      # Fails before anything is attested when gh finds a release for the tag, so an existing release is not replaced.
-      # gh release create below also fails when a published release has the tag.
-      - name: No release exists for the tag
+      # Before anything is attested. The tag may have been moved while the job waited for approval or before a re-run:
+      # it must still name the commit this run built. A release for the tag, published or draft (a failed run can leave
+      # a draft), is never replaced; an API error fails the step rather than reading as "no release".
+      - name: The tag names this run's commit and has no release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: desktop-v${{ steps.check.outputs.version }}
         run: |
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json tagName >/dev/null 2>&1; then
-            echo "::error::a release ${TAG} exists already; it is not replaced (delete it by hand to release again)"
+          set -euo pipefail
+          tagged="$(gh api "repos/$GITHUB_REPOSITORY/commits/refs/tags/$TAG" --jq .sha)" || { echo "::error::could not read the commit of tag ${TAG}"; exit 1; }
+          test "$tagged" = "$GITHUB_SHA" || { echo "::error::tag ${TAG} now names ${tagged}, not ${GITHUB_SHA}, the commit this run built; start a new run for the tag"; exit 1; }
+          existing="$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[] | select(.tag_name == env.TAG) | "\(.html_url) (draft: \(.draft))"')" || { echo "::error::could not list the releases"; exit 1; }
+          if [ -n "$existing" ]; then
+            echo "::error::a release for ${TAG} exists already and is not replaced (delete it by hand to release again): ${existing//$'\n'/, }"
             exit 1
           fi
       # Storage records need an organization-owned repository and artifact-metadata: write; this posture grants neither.
@@ -226,7 +261,8 @@ jobs:
             echo "${tick}rpa-windows-x64.zip${tick} holds the RPA runner, the policy tool, the browser host, the ERP Demo app and the installer for Windows x64. It is not code-signed: it comes with its SHA-256 and a build attestation. Check both before you unpack it:"
             echo
             echo "${fence}sh"
-            echo "gh attestation verify rpa-windows-x64.zip --repo ${GITHUB_REPOSITORY}"
+            echo "gh attestation verify rpa-windows-x64.zip --repo ${GITHUB_REPOSITORY} \\"
+            echo "  --signer-workflow ${GITHUB_REPOSITORY}/.github/workflows/desktop-release.yml --source-ref refs/tags/${tag}"
             echo "sha256sum -c rpa-windows-x64.zip.sha256   # ${SHA256}"
             echo "${fence}"
             echo
@@ -235,6 +271,8 @@ jobs:
             echo "${fence}powershell"
             echo "(Get-FileHash rpa-windows-x64.zip -Algorithm SHA256).Hash -eq '${SHA256}'"
             echo "${fence}"
+            echo
+            echo "The attestation shows which workflow of this repository attested the zip, from which tag and commit. It does not show that the commit was reviewed, or that the zip is what the source code would build elsewhere."
             echo
             echo "Details: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${tag}/desktop/README.md#releasing-the-windows-package"
           } > "$RUNNER_TEMP/notes/notes.md"
