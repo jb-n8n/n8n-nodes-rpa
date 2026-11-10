@@ -1073,6 +1073,31 @@ Describe 'Invoke-RpaUninstall' {
     Should -Invoke -ModuleName RpaInstall Remove-RpaProgramFiles -Times 0 -Exactly
     Should -Invoke -ModuleName RpaInstall Remove-RpaBrowserTemp -Times 0 -Exactly
   }
+
+  # The data directory's access rules name the bot user when install.json is gone, so the browser's temp folder is
+  # looked for before the data directory goes.
+  It 'removes the browser temp folder of the bot user on <Case>, before anything else is removed' -ForEach @(
+    @{ Case = 'a plain uninstall'; RemoveData = $false; Order = 'browser-temp;' }
+    @{ Case = 'an uninstall with -RemoveData'; RemoveData = $true; Order = 'browser-temp;C:\ProgramData\RPA Runner;' }
+  ) {
+    $env:RPA_TEST_ORDER = ''
+    Mock -ModuleName RpaInstall Get-RpaLayout { @{ InstallDir = 'C:\Program Files\RPA Runner'; InstallFile = (Join-Path $TestDrive 'none.json'); DataDir = 'C:\ProgramData\RPA Runner' } }
+    Mock -ModuleName RpaInstall Stop-RpaServices { }
+    Mock -ModuleName RpaInstall Get-RpaUninstallFacts {
+      @{ DataDir = 'C:\ProgramData\RPA Runner'; DataDirState = @{ Exists = $true; IsLink = $false }; Accounts = @(@{ Sid = 'S-1-5-21-1-2-3-1001'; Name = 'rpa-runner'; Bot = $true }); RunningSids = @('S-1-5-18'); UnknownProcesses = @(); AutoSignInSid = $null }
+    }
+    Mock -ModuleName RpaInstall Remove-RpaBrowserTemp { $env:RPA_TEST_ORDER += 'browser-temp;' }
+    Mock -ModuleName RpaInstall Remove-RpaTree { $env:RPA_TEST_ORDER += $Path + ';' }
+    # The steps after these remove the tasks and the firewall rules; the test ends at the first of them.
+    Mock -ModuleName RpaInstall Unregister-RpaTask { throw 'the end of this test' }
+    try {
+      { Invoke-RpaUninstall -Plan @{ Refusals = @() } -RemoveData:$RemoveData 6>$null } | Should -Throw -ExpectedMessage 'the end of this test'
+      $env:RPA_TEST_ORDER | Should -BeExactly $Order
+      Should -Invoke -ModuleName RpaInstall Remove-RpaBrowserTemp -Times 1 -Exactly -ParameterFilter {
+        @($Accounts).Count -eq 1 -and $Accounts[0].Sid -eq 'S-1-5-21-1-2-3-1001' -and (@($RunningSids) -join ',') -eq 'S-1-5-18' -and @($UnknownProcesses).Count -eq 0
+      }
+    } finally { $env:RPA_TEST_ORDER = $null }
+  }
 }
 
 # The browser host keeps the browser server's temp folder in the bot user's local application data
