@@ -364,7 +364,7 @@ jobs:
       # ci-policy-change.json is for this hosted machine only. No bot user signs in here, so the runner runs as this
       # job's account, an administrator, who can change the installed demo apps: hence allowUserWritable for both.
       # On a real machine the change leaves allowUserWritable out: the runner runs as the bot user, a standard user,
-      # who cannot change what is under Program Files.
+      # and the access rules of Program Files give standard users read and run there, not write.
       - name: Change the policy with the installed RpaPolicy.exe
         timeout-minutes: 5
         shell: powershell

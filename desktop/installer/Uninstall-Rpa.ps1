@@ -26,9 +26,11 @@
 # for that user), which can hold what was typed into pages. The uninstaller removes it only when no process of that
 # user is running, and none whose user cannot be read. Otherwise it leaves the folder and says where it is: sign the
 # bot user out and run Uninstall-Rpa.ps1 -RemoveData from the unpacked package, which removes it (while the data
-# directory is there, the uninstaller still knows who the bot user was), or remove the folder. Directly before the
-# removal it looks at the profile folder, AppData, Local and RPA Runner once more; when one of them is a link or a
-# junction or is no folder, it removes nothing there and says so.
+# directory is there, the uninstaller still knows who the bot user was), or remove the folder. It also leaves the
+# folder, and says why, when one of the profile folder, AppData, Local and RPA Runner is a link or a junction or no
+# folder, is owned by or may be changed by an account other than that user, Administrators and SYSTEM, or is held
+# open by another process. It holds these four folders open while it removes the tree, and removes a link or
+# junction inside the tree as the link itself, without entering it.
 #
 # Run from an unpacked package instead of the install directory, it first checks who can change that package, as
 # Install-Rpa.ps1 does.
