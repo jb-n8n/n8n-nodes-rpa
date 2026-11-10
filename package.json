@@ -13,6 +13,7 @@
   "pnpm": {
     "overrides": {
       "axios": "^1.20.0",
+      "minimatch": "^11.0.1",
       "zod": "^4.6.6"
     }
   }
