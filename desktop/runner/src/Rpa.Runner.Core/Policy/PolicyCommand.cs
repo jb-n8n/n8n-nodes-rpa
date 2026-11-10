@@ -172,6 +172,16 @@ public static class PolicyCommand
         else output.Write(Visible(line));
     }
 
+    /// <summary>
+    /// Writes one line in rows (<see cref="PolicyChange.Rows"/>): everything the tool prints that may repeat text
+    /// from a file or from its arguments (a refusal, a failure, a line of the policy file), so that a console does
+    /// not break the line and put its rest at the left edge.
+    /// </summary>
+    public static void PrintRows(TextWriter output, string line)
+    {
+        foreach (var row in PolicyChange.Rows(Visible(line))) output.WriteLine(row);
+    }
+
     private static string Visible(string text)
     {
         var visible = new StringBuilder(text.Length);
@@ -271,7 +281,7 @@ public static class PolicyCommand
 
     private static int Fail(TextWriter output, string message)
     {
-        Print(output, message);
+        PrintRows(output, message);
         return 1;
     }
 
@@ -279,8 +289,9 @@ public static class PolicyCommand
     {
         if (ExistingPolicy(policyPath, files) is not { } text) return Fail(output, $"Policy file not found: {policyPath}");
         Print(output, $"Policy file: {policyPath}");
-        // The file's own line breaks stay; anything else that is not plain text inside a line is shown as an escape.
-        foreach (var line in text.TrimEnd('\r', '\n').Split('\n')) Print(output, line.TrimEnd('\r'));
+        // The file's own line breaks stay; anything else that is not plain text inside a line is shown as an escape,
+        // and a long line is printed in rows.
+        foreach (var line in text.TrimEnd('\r', '\n').Split('\n')) PrintRows(output, line.TrimEnd('\r'));
         PolicyChange.Parse(text, policyPath);
         return 0;
     }
@@ -413,7 +424,7 @@ public static class PolicyCommand
         }
         catch (Exception e)
         {
-            Print(output, $"Policy updated, but the runner could not be restarted: {e.Message.TrimEnd('.')}. Restart it by hand.");
+            PrintRows(output, $"Policy updated, but the runner could not be restarted: {e.Message.TrimEnd('.')}. Restart it by hand.");
             return 0;
         }
         Print(output, "Policy updated. The runner restarts within 10 seconds and uses the new policy.");

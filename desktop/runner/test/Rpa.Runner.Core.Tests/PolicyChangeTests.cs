@@ -177,7 +177,7 @@ public class PolicyChangeTests
         Assert.True(app.AllowUserWritable);
 
         Refused(writable, AppChange(ErpPath, """, "allowUserWritable": false, "allowedArgs": [["--ui", "v1"]]"""),
-            $"a policy change cannot turn allowUserWritable off for {ErpPath}");
+            $"a policy change cannot turn allowUserWritable off for {L(ErpPath)}");
 
         (summary, app) = Merge(Policy(), """  "allowUserWritable": false""");
         Assert.Empty(summary);
@@ -495,7 +495,7 @@ public class PolicyChangeTests
     }
 
     [Fact]
-    public void Text_from_a_value_never_starts_a_row()
+    public void Words_of_the_tool_s_inside_a_value_are_printed_on_rows_that_start_with_eight_spaces()
     {
         // Each id is cut so that a console 76 or 80 columns wide would have put the words at the left edge.
         var change = $$"""
@@ -582,6 +582,170 @@ public class PolicyChangeTests
         Assert.All(starts, start => Assert.Single(rows, row => row.StartsWith(start, StringComparison.Ordinal)));
         Assert.Equal($"  with arguments: \"{new string('a', 57)}", rows.Single(row => row.StartsWith("  with", StringComparison.Ordinal)));
         Assert.Contains($"        {new string('a', 23)}\" \"b\"", rows);
+    }
+
+    [Fact]
+    public void The_words_a_line_starts_with_stay_on_its_first_row_up_to_the_opening_quote()
+    {
+        // Values that start with more spaces than a row holds: the break cannot avoid the spaces. It stays inside the
+        // value, after the opening quote, and does not move back into the tool's own words.
+        var spaces = new string(' ', 70);
+        var name = spaces + "h.exe";
+        var change = $$"""
+            { "writeControls": [{ "exe": {{J(spaces + "x")}}, "automationId": "btnPost" }],
+              "allowedApps": [{ "exe": {{J(name)}}, "path": {{J(Path.Combine(Root, name))}}, "allowedArgs": [[{{J(spaces + "x")}}]] }],
+              "helperProcesses": [{ "exe": {{J(name)}}, "pathPattern": {{J(Path.Combine(Root, "*", name))}} }] }
+            """;
+        var result = PolicyChange.Apply("", change);
+        var rows = PolicyChange.Printed(result.Summary);
+        Assert.Contains("Add write control \"" + new string(' ', 57), rows);
+        Assert.Contains("Allow app \"" + new string(' ', 65), rows);
+        Assert.Contains("  with arguments: \"" + new string(' ', 57), rows);
+        Assert.Contains("Add helper process \"" + new string(' ', 56), rows);
+        // Every row is the start of a line or begins with eight spaces.
+        Assert.Equal(result.Summary.Count, rows.Count(row => !row.StartsWith("        ", StringComparison.Ordinal)));
+        Assert.All(rows.Take(rows.Count - 1), row => Assert.InRange(row.Length, 1, 76));
+    }
+
+    /// <summary>The rows of one line, and the places in the line where a row ends.</summary>
+    private static (IReadOnlyList<string> Rows, List<int> Breaks) Broken(string line)
+    {
+        IReadOnlyList<string> rows = PolicyChange.Rows(line).ToList();
+        Assert.All(rows, row => Assert.InRange(row.Length, 1, 76));
+        Assert.All(rows.Skip(1), row => Assert.StartsWith("        ", row));
+        Assert.Equal(line, rows[0] + string.Concat(rows.Skip(1).Select(row => row[8..])));
+        var breaks = new List<int>();
+        var at = 0;
+        foreach (var row in rows.Take(rows.Count - 1))
+        {
+            at += row.Length - (breaks.Count == 0 ? 0 : 8);
+            breaks.Add(at);
+        }
+        return (rows, breaks);
+    }
+
+    [Fact]
+    public void The_tool_s_own_words_are_broken_only_after_a_space()
+    {
+        // The words after a value, for every length of path that moves them along the row.
+        var after = 0;
+        for (var length = 1; length <= 70; length++)
+        {
+            var line = Writable(Path.Combine(Root, new string('d', length), "ErpDemo.exe"));
+            var (_, breaks) = Broken(line);
+            var closing = line.LastIndexOf('"');
+            foreach (var at in breaks.Where(at => at > closing + 1))
+            {
+                Assert.Equal(' ', line[at - 1]);
+                after++;
+            }
+        }
+        Assert.InRange(after, 20, int.MaxValue);
+
+        // A line that was printed with "user" cut in two before this rule.
+        Assert.Equal(
+            [$"WARNING: \"{new string('p', 26)}\" can be changed by the runner's own ", "        user"],
+            PolicyChange.Rows($"WARNING: \"{new string('p', 26)}\" can be changed by the runner's own user"));
+
+        // A warning that is the tool's own words from start to end.
+        Assert.Equal([HelperWarning], PolicyChange.Rows(HelperWarning));
+        Assert.Equal(
+            ["Update app \"ErpDemo.exe\" at \"x\" (allowed arguments added; user-writable ", "        path allowed)"],
+            PolicyChange.Rows("Update app \"ErpDemo.exe\" at \"x\" (allowed arguments added; user-writable path allowed)"));
+    }
+
+    [Fact]
+    public void A_hash_is_printed_whole_on_one_row()
+    {
+        for (var length = 1; length <= 70; length++)
+        {
+            var path = Path.Combine(Root, new string('d', length), "ErpDemo.exe");
+            var pinned = PolicyChange.Apply("", AppChange(path, $", \"sha256\": \"{ShaA}\""));
+            var rows = PolicyChange.Printed(pinned.Summary);
+            Assert.Single(rows, row => row.Contains(ShaA));
+            Assert.Equal(pinned.Summary.Count, rows.Count(row => !row.StartsWith("        ", StringComparison.Ordinal)));
+
+            rows = PolicyChange.Printed(PolicyChange.Apply(pinned.Json, AppChange(path, $", \"sha256\": \"{ShaB}\", \"allowedArgs\": [[\"--ui\"]]")).Summary);
+            Assert.Single(rows, row => row.Contains(ShaA));
+            Assert.Single(rows, row => row.Contains(ShaB));
+            Assert.All(rows.Take(rows.Count - 1), row => Assert.InRange(row.Length, 1, 76));
+        }
+
+        // A hash that does not fit in what is left of a row starts the next row.
+        Assert.Equal(
+            [$"Allow app \"ErpDemo.exe\" at \"{new string('p', 30)}\" (SHA-256 pinned ", $"        {ShaA})"],
+            PolicyChange.Rows($"Allow app \"ErpDemo.exe\" at \"{new string('p', 30)}\" (SHA-256 pinned {ShaA})"));
+        Assert.Equal(
+            [$"Update app \"ErpDemo.exe\" at \"{new string('p', 30)}\" (SHA-256 pin ", "        changed from ", $"        {ShaA} to ", $"        {ShaB}; ", "        allowed arguments added)"],
+            PolicyChange.Rows($"Update app \"ErpDemo.exe\" at \"{new string('p', 30)}\" (SHA-256 pin changed from {ShaA} to {ShaB}; allowed arguments added)"));
+    }
+
+    [Fact]
+    public void A_refusal_repeats_a_name_or_a_value_as_a_literal_cut_to_60_characters()
+    {
+        var k60 = new string('k', 60);
+        Refused("", $$"""{ "{{k60}}": 1 }""", $"the change: unknown key \"{k60}\"");
+        Refused("", $$"""{ "{{k60}}k": 1 }""", $"the change: unknown key \"{k60}\"…");
+        Refused("", $$"""{ "{{new string('k', 200_000)}}": 1 }""", $"the change: unknown key \"{k60}\"…");
+        Refused("", """{ "café \"x\" 😀": 1 }""", "the change: unknown key \"caf\\u00E9 \\\"x\\\" \\uD83D\\uDE00\"");
+
+        // A key the entries of a list do not have.
+        Refused("", AppChange(ErpPath, $", \"{k60}k\": 1"), $"the change: unknown key \"{k60}\"… in allowedApps");
+        Refused("", """{ "writeControls": [{ "exe": "ErpDemo.exe", "automationId": "btnPost", "id": 1 }] }""", "the change: unknown key \"id\" in writeControls");
+        Refused("", $$"""{ "helperProcesses": [{ "exe": "msedgewebview2.exe", "pathPattern": {{J(HelperPattern)}}, "path": 1 }] }""", "the change: unknown key \"path\" in helperProcesses");
+
+        // A key chord the runner cannot read.
+        Refused("", $$"""{ "gatedKeys": ["Ctrl+{{new string('q', 70)}}"] }""", $"the change: gatedKeys has an invalid key chord \"Ctrl+{new string('q', 55)}\"…");
+        Refused("", """{ "gatedKeys": ["Ctrl+Nope\u001b"] }""", "the change: gatedKeys has an invalid key chord \"Ctrl+Nope\\u001B\"");
+
+        // An entry without its path, which the parser names by its exe.
+        var longExe = new string('e', 70) + ".exe";
+        Refused("", $$"""{ "allowedApps": [{ "exe": "{{longExe}}" }] }""", $"the change: allowedApps[].path is required (the absolute path of \"{new string('e', 60)}\"…)");
+        Refused("", """{ "allowedApps": [{ "exe": "ErpDemo.exe", "path": null }] }""", "the change: allowedApps[].path is required (the absolute path of \"ErpDemo.exe\")");
+        Refused("", $$"""{ "helperProcesses": [{ "exe": "{{longExe}}" }] }""",
+            $"the change: helperProcesses[].pathPattern is required (the absolute path of \"{new string('e', 60)}\"…, one folder written as *)");
+
+        // A path the tool itself refuses.
+        var shortPath = Path.Combine(Root, "ERPDEM~1", new string('d', 300), "ErpDemo.exe");
+        Refused("", AppChange(shortPath), $"write the full path, not a short (8.3) name: {L(shortPath[..60])}…");
+        var writable = Path.Combine(Root, new string('w', 80), "ErpDemo.exe");
+        Refused(PolicyChange.Apply("", AppChange(writable, ", \"allowUserWritable\": true")).Json, AppChange(writable, ", \"allowUserWritable\": false"),
+            $"a policy change cannot turn allowUserWritable off for {L(writable[..60])}…");
+
+        // The same in the policy file the change is merged into.
+        Refused($$"""{ "{{k60}}k": 1 }""", AppChange(ErpPath), $"the current policy: unknown key \"{k60}\"…");
+        Refused($$"""{ "allowedApps": [{ "exe": "ErpDemo.exe", "path": {{J(ErpPath)}}, "{{k60}}k": 1 }] }""", AppChange(ErpPath), $"the current policy: unknown key \"{k60}\"… in allowedApps");
+        Refused("""{ "gatedKeys": ["Ctrl+Nope"] }""", AppChange(ErpPath), "the current policy: gatedKeys has an invalid key chord \"Ctrl+Nope\"");
+        Refused("""{ "allowedApps": [{ "exe": "ErpDemo.exe" }] }""", AppChange(ErpPath), "the current policy: allowedApps[].path is required (the absolute path of \"ErpDemo.exe\")");
+    }
+
+    [Fact]
+    public void The_tool_knows_every_key_the_runner_s_parser_reads()
+    {
+        // The tool refuses an unknown key itself (the parser's message would repeat the key as it is). Its lists
+        // must hold every key of the parser's shapes, or it would refuse a policy the runner takes.
+        static IEnumerable<string> Keys(string shape) => typeof(RunnerPolicy).GetNestedType(shape, System.Reflection.BindingFlags.NonPublic)!
+            .GetProperties().Select(property => System.Text.Json.JsonNamingPolicy.CamelCase.ConvertName(property.Name));
+
+        Assert.Equal(6, Keys("FileShape").Count());
+        foreach (var key in Keys("FileShape")) PolicyChange.Parse($$"""{ "{{key}}": null }""", "policy");
+        (string List, string Shape)[] lists = [("allowedApps", "AppShape"), ("writeControls", "WriteShape"), ("helperProcesses", "HelperShape")];
+        foreach (var (list, shape) in lists)
+        {
+            Assert.NotEmpty(Keys(shape));
+            foreach (var key in Keys(shape))
+            {
+                var e = Assert.Throws<RunnerPolicy.InvalidPolicyException>(() => PolicyChange.Parse($$"""{ "{{list}}": [{ "{{key}}": null }] }""", "policy"));
+                Assert.DoesNotContain("unknown key", e.Message);
+            }
+        }
+        // The example policy passes whole.
+        var example = $$"""
+            { "allowedApps": [{ "exe": "ErpDemo.exe", "path": {{J(ErpPath)}}, "sha256": "{{ShaA}}", "allowedArgs": [["--ui", "v1"]], "allowUserWritable": true }],
+              "writeControls": [{ "exe": "ErpDemo.exe", "automationId": "btnPost" }], "gatedKeys": ["Ctrl+S", "F11"], "maxFileBytes": 20971520,
+              "helperProcesses": [{ "exe": "msedgewebview2.exe", "pathPattern": {{J(HelperPattern)}} }], "clipboardRead": true }
+            """;
+        Assert.Equal(2, PolicyChange.Parse(example, "policy").GatedKeys.Count);
     }
 
     [Fact]

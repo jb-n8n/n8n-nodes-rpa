@@ -21,7 +21,7 @@ try
 catch (Exception e)
 {
     // The last resort (PolicyCommand.Run handles its own failures): the message, no stack trace.
-    PolicyCommand.Print(Console.Out, e.Message);
+    PolicyCommand.PrintRows(Console.Out, e.Message);
     if (console.ClosesWithTheTool)
     {
         PolicyCommand.Print(Console.Out, "Press Enter to close.");

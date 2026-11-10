@@ -22,8 +22,8 @@ public class PolicyCommandTests
     /// <summary>A plain ASCII value as the summary shows it: a JSON string literal.</summary>
     private static string L(string value) => "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
 
-    /// <summary>Summary lines as the tool prints them: a line longer than 76 characters in rows (PolicyChangeTests
-    /// has the rows spelled out).</summary>
+    /// <summary>Summary lines, refusals and failures as the tool prints them: a line longer than 76 characters in
+    /// rows (PolicyChangeTests has the rows spelled out).</summary>
     private static string R(params string[] lines) => string.Join("\n", lines.SelectMany(PolicyChange.Rows));
 
     private static readonly string Starter = """{ "allowedApps": [], "maxFileBytes": 20971520 }""";
@@ -340,7 +340,7 @@ public class PolicyCommandTests
 
         var missing = Path.Combine(Root, "Missing", "Missing.exe");
         Assert.Equal(1, tool.Run("", "allow-app", missing, "--pin-hash", "--yes", "--policy", PolicyPath));
-        Assert.Equal($"Application file not found: {missing}\n", tool.Output);
+        Assert.Equal($"{R($"Application file not found: {missing}")}\n", tool.Output);
         Assert.Single(tool.Files.Writes);
     }
 
@@ -376,7 +376,7 @@ public class PolicyCommandTests
             var tool = new Tool();
             tool.Files.Bytes[target] = [1, 2, 3];
             Assert.Equal(1, tool.Run("y\n", ["allow-app", target, "--policy", PolicyPath, .. options]));
-            Assert.Equal($"{refusal}\n", tool.Output);
+            Assert.Equal($"{R(refusal)}\n", tool.Output);
             Assert.Empty(tool.Files.Opened);
             Assert.Empty(tool.Files.Looked);
             Assert.Empty(tool.Files.Writes);
@@ -392,7 +392,7 @@ public class PolicyCommandTests
             var tool = new Tool();
             tool.Files.Bytes[target] = [1, 2, 3];
             Assert.Equal(1, tool.Run("y\n", ["allow-app", target, "--policy", PolicyPath, .. options]));
-            Assert.Equal($"write the full path, not a short (8.3) name: {L(target)}\n", tool.Output);
+            Assert.Equal($"{R($"write the full path, not a short (8.3) name: {L(target)}")}\n", tool.Output);
             Assert.Empty(tool.Files.Opened);
             Assert.Empty(tool.Files.Looked);
             Assert.Empty(tool.Files.Writes);
@@ -405,7 +405,7 @@ public class PolicyCommandTests
         var tool = new Tool();
         var missing = Path.Combine(Root, "changes", "missing.json");
         Assert.Equal(1, tool.Run("y\n", "apply", missing, "--policy", PolicyPath));
-        Assert.Equal($"Change file not found: {missing}\n", tool.Output);
+        Assert.Equal($"{R($"Change file not found: {missing}")}\n", tool.Output);
         Assert.Empty(tool.Files.Writes);
     }
 
@@ -475,7 +475,7 @@ public class PolicyCommandTests
             tool.Files.Bytes[ErpPath] = [1, 2, 3];
             tool.Files.Found[command[1]] = (diskFile, folder, link, localFixedDrive);
             Assert.Equal(1, tool.Run("y\n", [.. command, "--yes", "--policy", PolicyPath]));
-            Assert.Equal($"{command[1]} is not a regular file on a local drive\n", tool.Output);
+            Assert.Equal($"{R($"{command[1]} is not a regular file on a local drive")}\n", tool.Output);
             var (path, stream) = Assert.Single(tool.Files.Opened);
             Assert.Equal(command[1], path);
             Assert.Equal(0, stream.BytesRead);
@@ -491,11 +491,11 @@ public class PolicyCommandTests
         var tool = new Tool();
         tool.Files.Found[odd] = (false, false, false, false);
         Assert.Equal(1, tool.Run("y\n", "allow-app", odd, "--pin-hash", "--policy", PolicyPath));
-        Assert.Equal($"{odd.Replace("\u0007", "\\u0007")} is not a regular file on a local drive\n", tool.Output);
+        Assert.Equal($"{R($"{odd.Replace("\u0007", "\\u0007")} is not a regular file on a local drive")}\n", tool.Output);
 
         tool.Files.Found[odd] = (true, false, true, true);
         Assert.Equal(1, tool.Run("y\n", "apply", odd, "--policy", PolicyPath));
-        Assert.Equal($"{odd.Replace("\u0007", "\\u0007")} is not a regular file on a local drive\n", tool.Output);
+        Assert.Equal($"{R($"{odd.Replace("\u0007", "\\u0007")} is not a regular file on a local drive")}\n", tool.Output);
     }
 
     [Fact]
@@ -524,7 +524,7 @@ public class PolicyCommandTests
                 else
                 {
                     Assert.Equal(1, code);
-                    Assert.Equal($"{Changing()}\n{refusal}\n", tool.Output);
+                    Assert.Equal($"{Changing()}\n{R(refusal)}\n", tool.Output);
                     refused.Add((nextToLast, last));
                 }
             }
@@ -546,7 +546,7 @@ public class PolicyCommandTests
             tool = new Tool();
             tool.Files.Text[ChangePath] = Controls(a, b + 1);
             Assert.Equal(1, tool.Run("y\n", ["apply", ChangePath, "--policy", PolicyPath, .. options]));
-            Assert.Equal($"{Changing()}\n{refusal}\n", tool.Output);
+            Assert.Equal($"{Changing()}\n{R(refusal)}\n", tool.Output);
             Assert.Empty(tool.Files.Writes);
             Assert.Equal(0, tool.Restarts);
         }
@@ -578,7 +578,7 @@ public class PolicyCommandTests
         tool.Files.Text[ChangePath] = $$"""{ "allowedApps": [{ "exe": "ErpDemo.exe", "path": {{J(ErpPath)}}, "allowUserWritable": true, "allowedArgs": [{{lists}}] }] }""";
         Assert.InRange(Encoding.UTF8.GetByteCount(tool.Files.Text[ChangePath]), 2400, 3000);
         Assert.Equal(1, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
-        Assert.Equal($"{Changing()}\nthe summary of this change would be longer than 8000 characters; split it into smaller changes\n", tool.Output);
+        Assert.Equal($"{Changing()}\n{R("the summary of this change would be longer than 8000 characters; split it into smaller changes")}\n", tool.Output);
         Assert.Empty(tool.Files.Writes);
 
         // With one list of four such arguments the same app is shown, warning and all.
@@ -593,7 +593,7 @@ public class PolicyCommandTests
         var tool = new Tool();
         tool.Files.Text[ChangePath] = """{ "maxFileBytes": 1 }""";
         Assert.Equal(1, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
-        Assert.Equal($"{Changing()}\nthe change: maxFileBytes cannot be changed by a change (edit the policy file)\n", tool.Output);
+        Assert.Equal($"{Changing()}\n{R("the change: maxFileBytes cannot be changed by a change (edit the policy file)")}\n", tool.Output);
         Assert.Empty(tool.Files.Writes);
         Assert.Equal(0, tool.Restarts);
     }
@@ -619,8 +619,8 @@ public class PolicyCommandTests
             tool.Files.Untrusted[PolicyPath] = [@"PC\bot owns the policy file", @"BUILTIN\Users can change or replace the policy file's folder"];
             Assert.Equal(1, tool.Run("y\n", [.. command, "--policy", PolicyPath]));
             Assert.Equal(
-                @"the existing policy file cannot be trusted: PC\bot owns the policy file; BUILTIN\Users can change or replace the policy file's folder; " +
-                "an administrator must check and replace it\n",
+                R(@"the existing policy file cannot be trusted: PC\bot owns the policy file; BUILTIN\Users can change or replace the policy file's folder; " +
+                  "an administrator must check and replace it") + "\n",
                 tool.Output);
             Assert.Empty(tool.Files.Writes);
             Assert.Equal(0, tool.Restarts);
@@ -635,8 +635,8 @@ public class PolicyCommandTests
         Assert.Equal(1, tool.Run("", "apply", ChangePath, "--yes", "--policy", PolicyPath));
         Assert.Equal(
             $"{Changing()}\n{AllowErp}\n{OneApp}\n" +
-            @"The policy file was written, but the runner will not start with it: PC\bot can change or replace the policy file. " +
-            "The policy file and its folder must be changeable by administrators only.\n",
+            R(@"The policy file was written, but the runner will not start with it: PC\bot can change or replace the policy file. " +
+              "The policy file and its folder must be changeable by administrators only.") + "\n",
             tool.Output);
         Assert.Single(tool.Files.Writes);
         Assert.Equal(0, tool.Restarts);
@@ -764,7 +764,7 @@ public class PolicyCommandTests
             tool.Files.WriteFailure = failure;
             Assert.Equal(1, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
             Assert.Equal(
-                $"{Changing()}\n{AllowErp}\n{OneApp}\n{Prompt}Writing the policy failed: {failure.Message.TrimEnd('.')}. The runner keeps running with the policy it has.\n",
+                $"{Changing()}\n{AllowErp}\n{OneApp}\n{Prompt}{R($"Writing the policy failed: {failure.Message.TrimEnd('.')}. The runner keeps running with the policy it has.")}\n",
                 tool.Output);
             Assert.Equal(Starter, tool.Files.Text[PolicyPath]);
             Assert.Equal(0, tool.Restarts);
@@ -785,8 +785,8 @@ public class PolicyCommandTests
             tool.Files.BackupProblems[folder] = [@"PC\bot owns the backup folder", @"PC\bot can create files or folders in the backup folder"];
             Assert.Equal(1, tool.Run("y\n", [.. command, "--policy", PolicyPath]));
             Assert.Equal(
-                @"the backup folder cannot be trusted: PC\bot owns the backup folder; PC\bot can create files or folders in the backup folder; " +
-                "an administrator must check and remove it\n",
+                R(@"the backup folder cannot be trusted: PC\bot owns the backup folder; PC\bot can create files or folders in the backup folder; " +
+                  "an administrator must check and remove it") + "\n",
                 tool.Output);
             Assert.Equal("y\n", tool.Unread);
             Assert.Empty(tool.Files.Writes);
@@ -807,7 +807,7 @@ public class PolicyCommandTests
         var tool = new Tool();
         tool.Files.Text[folder] = "planted";
         Assert.Equal(1, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
-        Assert.Equal($"{folder} exists and is not a folder; an administrator must check and remove it\n", tool.Output);
+        Assert.Equal($"{R($"{folder} exists and is not a folder; an administrator must check and remove it")}\n", tool.Output);
         Assert.Equal("y\n", tool.Unread);
         Assert.Empty(tool.Files.Writes);
     }
@@ -822,7 +822,7 @@ public class PolicyCommandTests
             tool.Files.Text.Remove(PolicyPath);
             tool.Files.Folders.Add(PolicyPath);
             Assert.Equal(1, tool.Run("y\n", [.. command, "--policy", PolicyPath]));
-            Assert.Equal($"{PolicyPath} is a folder, not a policy file; an administrator must check and remove it\n", tool.Output);
+            Assert.Equal($"{R($"{PolicyPath} is a folder, not a policy file; an administrator must check and remove it")}\n", tool.Output);
             Assert.Equal("y\n", tool.Unread);
             Assert.Empty(tool.Files.Writes);
         }
@@ -843,7 +843,7 @@ public class PolicyCommandTests
 
         tool.Files.Text[ChangePath] = """{ "gatedKeys": ["Ctrl+S"] }""";
         Assert.Equal(1, tool.Run("", "apply", ChangePath, "--yes", "--policy", PolicyPath));
-        Assert.Equal(@"the backup folder cannot be trusted: PC\bot owns the backup folder; an administrator must check and remove it" + "\n", tool.Output);
+        Assert.Equal(R(@"the backup folder cannot be trusted: PC\bot owns the backup folder; an administrator must check and remove it") + "\n", tool.Output);
         Assert.Single(tool.Files.Writes);
     }
 
@@ -855,7 +855,7 @@ public class PolicyCommandTests
         var tool = new Tool();
         tool.Files.WriteFailure = new RunnerPolicy.InvalidPolicyException(refusal);
         Assert.Equal(1, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
-        Assert.Equal($"{Changing()}\n{AllowErp}\n{OneApp}\n{Prompt}{refusal}\n", tool.Output);
+        Assert.Equal($"{Changing()}\n{AllowErp}\n{OneApp}\n{Prompt}{R(refusal)}\n", tool.Output);
         Assert.Equal(Starter, tool.Files.Text[PolicyPath]);
         Assert.Equal(0, tool.Restarts);
     }
@@ -876,7 +876,7 @@ public class PolicyCommandTests
             };
             Assert.Equal(1, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
             Assert.Equal(
-                $"Creating a new policy at {PolicyPath}.\n{AllowErp}\n{OneApp}\n{Prompt}a policy file appeared while the change was being applied; nothing was written\n",
+                $"Creating a new policy at {PolicyPath}.\n{AllowErp}\n{OneApp}\n{Prompt}{R("a policy file appeared while the change was being applied; nothing was written")}\n",
                 tool.Output);
             Assert.Empty(tool.Files.Writes);
             Assert.Equal(asFolder ? null : "planted", tool.Files.Text.GetValueOrDefault(PolicyPath));
@@ -897,7 +897,7 @@ public class PolicyCommandTests
         var tool = new Tool { RestartFailure = new System.ComponentModel.Win32Exception(5, "Access is denied.") };
         Assert.Equal(0, tool.Run("", "apply", ChangePath, "--yes", "--policy", PolicyPath));
         Assert.Equal(
-            $"{Changing()}\n{AllowErp}\n{OneApp}\nPolicy updated, but the runner could not be restarted: Access is denied. Restart it by hand.\n",
+            $"{Changing()}\n{AllowErp}\n{OneApp}\n{R("Policy updated, but the runner could not be restarted: Access is denied. Restart it by hand.")}\n",
             tool.Output);
         Assert.Single(tool.Files.Writes);
     }
@@ -922,7 +922,7 @@ public class PolicyCommandTests
         Assert.Equal(1, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
         Assert.Equal("the current policy: an entry in allowedApps must be an object\n", tool.Output);
         Assert.Equal(1, tool.Run("", "show", "--policy", PolicyPath));
-        Assert.Equal($"Policy file: {PolicyPath}\n{{ \"allowedApps\": [null] }}\n{PolicyPath}: an entry in allowedApps must be an object\n", tool.Output);
+        Assert.Equal($"Policy file: {PolicyPath}\n{{ \"allowedApps\": [null] }}\n{R($"{PolicyPath}: an entry in allowedApps must be an object")}\n", tool.Output);
     }
 
     [Theory]
@@ -965,23 +965,23 @@ public class PolicyCommandTests
 
         tool.Files.Text[PolicyPath] = "{\r\n  \"allowedApp\": []\r\n}\r\n";
         Assert.Equal(1, tool.Run("", "show", "--policy", PolicyPath));
-        Assert.StartsWith($"Policy file: {PolicyPath}\n{{\n  \"allowedApp\": []\n}}\n{PolicyPath}: ", tool.Output);
+        Assert.Equal($"Policy file: {PolicyPath}\n{{\n  \"allowedApp\": []\n}}\n{R($"{PolicyPath}: unknown key \"allowedApp\"")}\n", tool.Output);
 
         tool.Files.Text.Remove(PolicyPath);
         Assert.Equal(1, tool.Run("", "show", "--policy", PolicyPath));
-        Assert.Equal($"Policy file not found: {PolicyPath}\n", tool.Output);
+        Assert.Equal($"{R($"Policy file not found: {PolicyPath}")}\n", tool.Output);
         Assert.Empty(tool.Files.Writes);
     }
 
     [Fact]
     public void Everything_printed_shows_control_and_format_characters_as_escapes()
     {
-        // A refusal that echoes part of the change: a cursor command, a line break and a language tag (a format
-        // character outside the basic plane, so two escapes). The emoji is neither, and stays.
+        // A refusal that repeats part of the change, as a literal: a cursor command, a line break, a language tag and
+        // an emoji (outside the basic plane, so two escapes each).
         var tool = new Tool();
         tool.Files.Text[ChangePath] = """{ "bad\u001b[1A\nkey\udb40\udc01\ud83d\ude00\u202e": 1 }""";
         Assert.Equal(1, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
-        Assert.Equal($"{Changing()}\nthe change: unknown key \"bad\\u001B[1A\\u000Akey\\uDB40\\uDC01\U0001F600\\u202E\"\n", tool.Output);
+        Assert.Equal($"{Changing()}\n{R("the change: unknown key \"bad\\u001B[1A\\u000Akey\\uDB40\\uDC01\\uD83D\\uDE00\\u202E\"")}\n", tool.Output);
 
         // The show output keeps the file's own lines and escapes what is inside them; so do a path and a parse error.
         var odd = Path.Combine(Root, "RPA\u0007 Runner", "policy.json");
@@ -990,11 +990,73 @@ public class PolicyCommandTests
         Assert.Equal(1, tool.Run("", "show", "--policy", odd));
         var shown = odd.Replace("\u0007", "\\u0007");
         Assert.Equal(
-            $"Policy file: {shown}\n{{\n\\u0009\"gatedKeys\": [\"F1\\u001b[2J\\u2028\"]\n}}\n{shown}: gatedKeys has an invalid key chord \"F1\\u001B[2J\\u2028\"\n",
+            $"Policy file: {shown}\n{{\n\\u0009\"gatedKeys\": [\"F1\\u001b[2J\\u2028\"]\n}}\n{R($"{shown}: gatedKeys has an invalid key chord \"F1\\u001B[2J\\u2028\"")}\n",
             tool.Output);
 
         Assert.Equal(1, tool.Run("", "show", "--policy", odd + "\u200b"));
-        Assert.Equal($"Policy file not found: {shown}\\u200B\n", tool.Output);
+        Assert.Equal($"{R($"Policy file not found: {shown}\\u200B")}\n", tool.Output);
+    }
+
+    /// <summary>Rows as the tool breaks them: at most 76 characters, every row after the first after eight spaces.
+    /// Returns the rows put together again.</summary>
+    private static string Joined(IEnumerable<string> rows)
+    {
+        var list = rows.ToList();
+        Assert.All(list, row => Assert.InRange(row.Length, 0, 76));
+        Assert.All(list.Skip(1), row => Assert.StartsWith("        ", row));
+        return list[0] + string.Concat(list.Skip(1).Select(row => row[8..]));
+    }
+
+    [Fact]
+    public void A_refusal_is_printed_in_rows_like_the_summary()
+    {
+        // A key of 200,000 characters: its first 60, in two rows.
+        var tool = new Tool();
+        tool.Files.Text[ChangePath] = $$"""{ "{{new string('k', 200_000)}}": 1 }""";
+        Assert.Equal(1, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Equal($"{Changing()}\nthe change: unknown key \"{new string('k', 51)}\n        {new string('k', 9)}\"…\n", tool.Output);
+
+        // Words of the tool's in a key land on a row that starts with eight spaces.
+        tool.Files.Text[ChangePath] = $$"""{ "{{new string('k', 51)}}Policy updated.": 1 }""";
+        Assert.Equal(1, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Equal($"{Changing()}\nthe change: unknown key \"{new string('k', 51)}\n        Policy up\"…\n", tool.Output);
+
+        // A path the caller gave is printed whole, in rows.
+        var missing = Path.Combine(Root, new string('m', 150), "Policy updated.json");
+        Assert.Equal(1, tool.Run("y\n", "apply", missing, "--policy", PolicyPath));
+        var rows = tool.Output.TrimEnd('\n').Split('\n');
+        Assert.Equal(3, rows.Length);
+        Assert.Equal($"Change file not found: {missing}", Joined(rows));
+        Assert.Equal(1, tool.Run("y\n", "allow-app", missing, "--pin-hash", "--policy", PolicyPath));
+        Assert.Equal($"Application file not found: {missing}", Joined(tool.Output.TrimEnd('\n').Split('\n')));
+
+        // The tool's own long sentences break after a space.
+        tool.Files.Untrusted[PolicyPath] = [@"PC\bot owns the policy file", @"BUILTIN\Users can change or replace the policy file's folder"];
+        Assert.Equal(1, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Equal(
+            "the existing policy file cannot be trusted: PC\\bot owns the policy file; \n" +
+            "        BUILTIN\\Users can change or replace the policy file's folder; an \n" +
+            "        administrator must check and replace it\n",
+            tool.Output);
+    }
+
+    [Fact]
+    public void Show_prints_a_long_line_of_the_policy_file_in_rows()
+    {
+        var path = Path.Combine(Root, new string('d', 120), "ErpDemo.exe");
+        var comment = "  // " + new string('x', 71) + "Policy updated. The runner restarts within 10 seconds and uses the new policy.";
+        var app = $$"""  "allowedApps": [{ "exe": "ErpDemo.exe", "path": {{J(path)}} }]""";
+        var tool = new Tool();
+        tool.Files.Text[PolicyPath] = $"{{\n{comment}\n\n{app}\n}}\n";
+        Assert.Equal(0, tool.Run("", "show", "--policy", PolicyPath));
+        var rows = tool.Output.TrimEnd('\n').Split('\n');
+        Assert.Equal($"Policy file: {PolicyPath}", rows[0]);
+        Assert.Equal("{", rows[1]);
+        Assert.Equal([comment[..76], "        Policy updated. The runner restarts within 10 seconds and uses the ", "        new policy."], rows[2..5]);
+        Assert.Equal("", rows[5]);
+        Assert.Equal(app, Joined(rows[6..^1]));
+        Assert.InRange(rows.Length - 7, 3, 4);
+        Assert.Equal("}", rows[^1]);
     }
 
     [Fact]

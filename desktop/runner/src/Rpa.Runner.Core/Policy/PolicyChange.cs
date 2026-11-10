@@ -4,6 +4,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using Rpa.Runner.Core.Protocol;
 
 namespace Rpa.Runner.Core.Policy;
 
@@ -32,8 +33,11 @@ public static class PolicyChange
     public const int MaxArguments = 20;
     public const int MaxValueLength = 260;
 
-    /// <summary>The longest row of a summary line; a longer line continues on the next row.</summary>
+    /// <summary>The longest row of a line the tool breaks itself; a longer line continues on the next row.</summary>
     public const int RowLength = 76;
+
+    /// <summary>The most of a name or value that a refusal repeats.</summary>
+    public const int MaxEchoLength = 60;
 
     private const string RowIndent = "        ";
 
@@ -41,7 +45,15 @@ public static class PolicyChange
     private const string SpacesWarning = "WARNING: a value in this line has leading, trailing or repeated spaces";
     private const string HelperWarning = "WARNING: any program at this path counts as part of the app that started it";
 
-    private static readonly string[] ChangeKeys = ["allowedApps", "writeControls", "gatedKeys", "helperProcesses", "clipboardRead"];
+    // The keys of a policy file and of the entries in its lists, as RunnerPolicy reads them.
+    private static readonly string[] PolicyKeys = ["allowedApps", "writeControls", "gatedKeys", "maxFileBytes", "helperProcesses", "clipboardRead"];
+
+    private static readonly Dictionary<string, string[]> EntryKeys = new()
+    {
+        ["allowedApps"] = ["exe", "path", "sha256", "allowedArgs", "allowUserWritable"],
+        ["writeControls"] = ["exe", "automationId"],
+        ["helperProcesses"] = ["exe", "pathPattern"],
+    };
 
     // Keys in the order of policy.example.json; an entry's unset options are left out.
     private sealed record FileOut(List<AppOut> AllowedApps, List<RunnerPolicy.WriteControl> WriteControls, List<string> GatedKeys,
@@ -123,7 +135,7 @@ public static class PolicyChange
                 // The existing entry takes what the change adds and loses nothing; it keeps its own spelling.
                 var old = apps[at];
                 if (old.AllowUserWritable && writableOff.Contains(i))
-                    throw Refused($"a policy change cannot turn allowUserWritable off for {old.Path}");
+                    throw Refused($"a policy change cannot turn allowUserWritable off for {Echo(old.Path)}");
                 lists = NewLists(old.AllowedArgs, app.AllowedArgs);
                 (writable, path) = (old.AllowUserWritable || app.AllowUserWritable, old.Path);
                 var parts = new List<string>();
@@ -190,6 +202,13 @@ public static class PolicyChange
     }
 
     /// <summary>
+    /// A name or value as a refusal repeats it: as a literal (<see cref="Literal"/>), and only its first
+    /// <see cref="MaxEchoLength"/> characters, followed by <c>…</c>, when it is longer.
+    /// </summary>
+    internal static string Echo(string value) =>
+        value.Length <= MaxEchoLength ? Literal(value) : Literal(value[..MaxEchoLength]) + "…";
+
+    /// <summary>
     /// The summary as it is printed, row by row: every line but the last in rows of at most <see cref="RowLength"/>
     /// characters (<see cref="Rows"/>). The last line, the count, holds nothing from the change and stays whole.
     /// </summary>
@@ -197,34 +216,106 @@ public static class PolicyChange
         summary.Count == 0 ? [] : [.. summary.Take(summary.Count - 1).SelectMany(Rows), summary[^1]];
 
     /// <summary>
-    /// One summary line as the rows it is printed in. The tool breaks a long line itself, so that a console does not
-    /// do it and put the rest of a value at the left edge, where it could look like a line of the tool's. A row holds
-    /// at most <see cref="RowLength"/> characters, and every row after the first starts with eight spaces: a row that
-    /// starts at the left edge (or after the two spaces of <c>with arguments</c>) is the start of a line.
+    /// One line as the rows it is printed in. The tool breaks a long line itself, so that a console does not do it
+    /// and put the rest of a value at the left edge, where it could look like a line of the tool's. A row holds at
+    /// most <see cref="RowLength"/> characters, and every row after the first starts with eight spaces.
     /// <para>
-    /// A break falls between characters of the printed text, with an escape (<c>\uXXXX</c>, <c>\"</c>, <c>\\</c>)
-    /// kept whole, and not next to a space when that can be avoided (a space at the end of a row could not be seen):
-    /// the rows put together without the eight spaces are the line.
+    /// The tool's own words are broken only after a space, so a word, a hash and the words a line starts with (up to
+    /// the opening quote of its first value) each stay on one row. Inside a value (between its quotes) a break
+    /// falls between characters of the printed text, with an escape (<c>\uXXXX</c>, <c>\"</c>, <c>\\</c>) kept
+    /// whole, and not next to one of the value's spaces when that can be avoided inside the value (a space at the
+    /// end of a row could not be seen). The rows put together without the eight spaces are the line.
     /// </para>
     /// </summary>
-    internal static IEnumerable<string> Rows(string line)
+    internal static IReadOnlyList<string> Rows(string line)
+    {
+        var pieces = Pieces(line);
+        var rows = new List<string>();
+        var indent = "";
+        for (var start = 0; start < pieces.Count; indent = RowIndent)
+        {
+            var room = RowLength - indent.Length;
+            var end = start;
+            for (; end < pieces.Count && pieces[end].Text.Length <= room; end++) room -= pieces[end].Text.Length;
+            var head = "";
+            if (end < pieces.Count && pieces[end].Text.Length > RowLength - RowIndent.Length)
+            {
+                // A piece longer than any later row (a path without a space, for one): as much of it as fits here,
+                // and not all of it but the spaces it ends with.
+                var text = pieces[end].Text;
+                var units = Units(text);
+                var fit = 0;
+                for (; fit < units.Count && head.Length + units[fit].Length <= room; fit++) head += units[fit];
+                if (fit > 1 && string.IsNullOrWhiteSpace(text[head.Length..])) head = head[..^units[fit - 1].Length];
+                pieces[end] = pieces[end] with { Text = text[head.Length..] };
+            }
+            else if (end < pieces.Count)
+            {
+                end = Break(pieces, start, end);
+            }
+            rows.Add(indent + string.Concat(pieces.GetRange(start, end - start).Select(piece => piece.Text)) + head);
+            start = end;
+        }
+        return rows.Count > 0 ? rows : [""];
+    }
+
+    /// <summary>
+    /// A stretch of a printed line that stays on one row. <paramref name="Opening"/> is the position of the opening
+    /// quote of the value the piece belongs to (-1 for the tool's own text), and <paramref name="Inside"/> says the
+    /// piece is one printed character of that value, between its quotes.
+    /// </summary>
+    private readonly record struct Piece(string Text, int Opening, bool Inside)
+    {
+        public bool ValueSpace => Inside && Text == " ";
+    }
+
+    /// <summary>
+    /// The line in pieces: each word of the tool's own text with the spaces after it; and for each value its opening
+    /// quote, its printed characters one by one (an escape is one), and its closing quote with the spaces after it.
+    /// </summary>
+    private static List<Piece> Pieces(string line)
     {
         var units = Units(line);
-        var indent = "";
-        for (var start = 0; start < units.Count;)
+        var pieces = new List<Piece>();
+        for (var at = 0; at < units.Count;)
         {
-            var end = start;
-            for (var length = indent.Length; end < units.Count && length + units[end].Length <= RowLength; end++) length += units[end].Length;
-            if (end < units.Count)
+            var end = at;
+            var close = units[at] == "\"" ? units.IndexOf("\"", at + 1) : -1;
+            var opening = close < 0 ? -1 : pieces.Count;
+            if (close >= 0)
             {
-                var cut = end;
-                while (cut > start + 1 && (units[cut - 1] == " " || units[cut] == " ")) cut--;
-                if (units[cut - 1] != " " && units[cut] != " ") end = cut;
+                pieces.Add(new Piece("\"", opening, Inside: false));
+                for (at++; at < close; at++) pieces.Add(new Piece(units[at], opening, Inside: true));
+                end = close + 1;
             }
-            yield return indent + string.Concat(units.Skip(start).Take(end - start));
-            start = end;
-            indent = RowIndent;
+            else
+            {
+                // A quote that no later quote closes is an ordinary character.
+                while (end < units.Count && units[end] != " " && (units[end] != "\"" || end == at)) end++;
+            }
+            while (end < units.Count && units[end] == " ") end++;
+            pieces.Add(new Piece(string.Concat(units.GetRange(at, end - at)), opening, Inside: false));
+            at = end;
         }
+        return pieces;
+    }
+
+    /// <summary>
+    /// Where the row that starts at <paramref name="start"/> ends when the piece at <paramref name="end"/> no longer
+    /// fits: before that piece, or, when that is next to a space of a value, at the nearest earlier place inside the
+    /// same value that is not (at the earliest directly after the value's opening quote). When the value has no such
+    /// place on this row, the row stays full and the break is among the spaces.
+    /// </summary>
+    private static int Break(List<Piece> pieces, int start, int end)
+    {
+        bool NextToSpace(int at) => pieces[at - 1].ValueSpace || pieces[at].ValueSpace;
+        if (!NextToSpace(end)) return end;
+        var opening = pieces[end - 1].ValueSpace ? pieces[end - 1].Opening : pieces[end].Opening;
+        for (var at = end - 1; at > Math.Max(start, opening); at--)
+        {
+            if (!NextToSpace(at)) return at;
+        }
+        return end;
     }
 
     /// <summary>The printed text in pieces that stay on one row: single characters, and each escape as one piece.</summary>
@@ -234,7 +325,7 @@ public static class PolicyChange
         for (var at = 0; at < line.Length; at += units[^1].Length)
         {
             var length = line[at] != '\\' ? 1
-                : at + 5 < line.Length && line[at + 1] == 'u' && line.AsSpan(at + 2, 4).IndexOfAnyExcept("0123456789ABCDEF") < 0 ? 6
+                : at + 5 < line.Length && line[at + 1] == 'u' && line.AsSpan(at + 2, 4).IndexOfAnyExcept("0123456789ABCDEFabcdef") < 0 ? 6
                 : Math.Min(2, line.Length - at);
             units.Add(line.Substring(at, length));
         }
@@ -244,48 +335,76 @@ public static class PolicyChange
     private static readonly JsonDocumentOptions DocumentOptions = new() { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true };
 
     /// <summary>
-    /// <see cref="RunnerPolicy.Parse"/> for a policy file the tool reads, after refusing the null entries and
-    /// arguments that parser fails on without a message.
+    /// <see cref="RunnerPolicy.Parse"/> for a policy file the tool reads, after the tool's own look at the text
+    /// (<see cref="CheckEntries"/>).
     /// </summary>
     internal static RunnerPolicy Parse(string json, string source)
     {
+        JsonDocument document;
         try
         {
-            using var document = JsonDocument.Parse(json, DocumentOptions);
-            CheckEntries(document.RootElement, $"{source}: ");
+            document = JsonDocument.Parse(json, DocumentOptions);
         }
-        catch (JsonException)
+        catch (JsonException e)
         {
-            // Not JSON: the parser below says why.
+            throw Refused($"{source}: {e.Message}");
         }
+        using (document) CheckEntries(document.RootElement, source, change: false);
         return RunnerPolicy.Parse(json, source);
     }
 
-    /// <summary>Every entry of the lists of objects is an object, and every allowed argument is text.</summary>
-    private static void CheckEntries(JsonElement root, string source)
+    /// <summary>
+    /// What the tool refuses in a policy text before the runner's parser reads it. The null entries and arguments
+    /// that parser fails on without a message; and everything for which that parser's message would repeat a name or
+    /// a value from the text as it is and at any length: an unknown key, a key chord it cannot read, and an entry
+    /// without its path. Here such a name or value is repeated through <see cref="Echo"/>.
+    /// </summary>
+    private static void CheckEntries(JsonElement root, string source, bool change)
     {
         if (root.ValueKind != JsonValueKind.Object) return;
+        // The two texts for a change that earlier rulings fixed carry no "the change: ".
+        var entrySource = change ? "" : $"{source}: ";
         foreach (var property in root.EnumerateObject())
         {
-            if (property.Name is not ("allowedApps" or "writeControls" or "helperProcesses") || property.Value.ValueKind != JsonValueKind.Array) continue;
+            if (!PolicyKeys.Contains(property.Name)) throw Refused($"{source}: unknown key {Echo(property.Name)}");
+            if (property.Value.ValueKind != JsonValueKind.Array) continue;
+            if (property.NameEquals("gatedKeys"))
+            {
+                foreach (var key in property.Value.EnumerateArray().Where(key => key.ValueKind == JsonValueKind.String).Select(key => key.GetString()!))
+                {
+                    try { KeyChord.Parse(key); }
+                    catch (RpcException) { throw Refused($"{source}: gatedKeys has an invalid key chord {Echo(key)}"); }
+                }
+            }
+            if (!EntryKeys.TryGetValue(property.Name, out var keys)) continue;
             foreach (var entry in property.Value.EnumerateArray())
             {
-                if (entry.ValueKind != JsonValueKind.Object) throw Refused($"{source}an entry in {property.Name} must be an object");
+                if (entry.ValueKind != JsonValueKind.Object) throw Refused($"{entrySource}an entry in {property.Name} must be an object");
+                if (entry.EnumerateObject().Select(p => p.Name).FirstOrDefault(name => !keys.Contains(name)) is { } unknown)
+                    throw Refused($"{source}: unknown key {Echo(unknown)} in {property.Name}");
                 var arguments = entry.EnumerateObject()
                     .Where(p => p.NameEquals("allowedArgs") && p.Value.ValueKind == JsonValueKind.Array)
                     .SelectMany(p => p.Value.EnumerateArray())
                     .Where(list => list.ValueKind == JsonValueKind.Array)
                     .SelectMany(list => list.EnumerateArray());
-                if (arguments.Any(argument => argument.ValueKind != JsonValueKind.String)) throw Refused($"{source}an allowed argument must be text");
+                if (arguments.Any(argument => argument.ValueKind != JsonValueKind.String)) throw Refused($"{entrySource}an allowed argument must be text");
+                // The parser's own sentences for an entry without its path, which name the entry by its exe.
+                if (!entry.TryGetProperty("exe", out var exe) || exe.ValueKind != JsonValueKind.String) continue;
+                if (property.NameEquals("allowedApps") && Missing(entry, "path"))
+                    throw Refused($"{source}: allowedApps[].path is required (the absolute path of {Echo(exe.GetString()!)})");
+                if (property.NameEquals("helperProcesses") && Missing(entry, "pathPattern"))
+                    throw Refused($"{source}: helperProcesses[].pathPattern is required (the absolute path of {Echo(exe.GetString()!)}, one folder written as *)");
             }
         }
     }
 
+    private static bool Missing(JsonElement entry, string key) => !entry.TryGetProperty(key, out var value) || value.ValueKind == JsonValueKind.Null;
+
     /// <summary>
-    /// The rules a change has beyond a policy file's: no maxFileBytes, no unknown key, clipboardRead only true, and no
-    /// short (8.3) name in a path, which would name an existing entry's file without being that entry. Returns the
-    /// positions of the allowedApps entries that write <c>allowUserWritable: false</c>, which the parsed policy cannot
-    /// tell from an entry that leaves it out.
+    /// The rules a change has beyond a policy file's: no maxFileBytes, clipboardRead only true, and no short (8.3)
+    /// name in a path, which would name an existing entry's file without being that entry. Returns the positions of
+    /// the allowedApps entries that write <c>allowUserWritable: false</c>, which the parsed policy cannot tell from
+    /// an entry that leaves it out.
     /// </summary>
     private static HashSet<int> CheckChange(string changeJson)
     {
@@ -302,11 +421,10 @@ public static class PolicyChange
         {
             var writableOff = new HashSet<int>();
             if (document.RootElement.ValueKind != JsonValueKind.Object) throw Refused("the change: must be a JSON object");
-            CheckEntries(document.RootElement, "");
+            CheckEntries(document.RootElement, "the change", change: true);
             foreach (var property in document.RootElement.EnumerateObject())
             {
                 if (property.NameEquals("maxFileBytes")) throw Refused("the change: maxFileBytes cannot be changed by a change (edit the policy file)");
-                if (!ChangeKeys.Contains(property.Name)) throw Refused($"the change: unknown key \"{property.Name}\"");
                 if (property.NameEquals("clipboardRead") && property.Value.ValueKind != JsonValueKind.True)
                     throw Refused("the change: clipboardRead may only be true (a change only adds)");
                 if (property.Value.ValueKind != JsonValueKind.Array) continue;
@@ -335,7 +453,7 @@ public static class PolicyChange
     /// <summary>Refuses a path that holds <c>~</c> followed by a digit, as a short (8.3) name does.</summary>
     internal static void RefuseShortName(string path)
     {
-        if (Regex.IsMatch(path, "~[0-9]")) throw Refused($"write the full path, not a short (8.3) name: {Literal(path)}");
+        if (Regex.IsMatch(path, "~[0-9]")) throw Refused($"write the full path, not a short (8.3) name: {Echo(path)}");
     }
 
     /// <summary>The limits on a change: its entries, the arguments in a list and the length of a value.</summary>
