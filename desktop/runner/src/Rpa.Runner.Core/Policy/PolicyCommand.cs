@@ -16,11 +16,8 @@ public enum PathKind
 /// <summary>The files the policy tool touches (the real file system in RpaPolicy.exe, a fake in the tests).</summary>
 public interface IPolicyFiles
 {
-    /// <summary>The file's text, or null when there is no such file.</summary>
-    string? Read(string path);
-
-    /// <summary>The file's size in bytes, or null when there is no such file.</summary>
-    long? Length(string path);
+    /// <summary>The file's bytes, or null when there is no such file.</summary>
+    byte[]? ReadBytes(string path);
 
     /// <summary>What is at the path. A link counts as what it is itself, not as what it points to.</summary>
     PathKind Kind(string path);
@@ -34,12 +31,32 @@ public interface IPolicyFiles
     IReadOnlyList<string> BackupFolderProblems(string folder);
 
     /// <summary>
-    /// Writes the policy file's text. <paramref name="existed"/> says whether a policy file was there when the tool
-    /// checked it at its start. When it was, it is replaced and its text is kept under the name
-    /// <see cref="PolicyCommand.BackupPath"/> gives. When it was not, the new file is written only if nothing has its
-    /// name by now; otherwise <see cref="PolicyAppearedException"/> is thrown and nothing is written.
+    /// Creates a temporary file beside the policy file, with a random name, for administrators only from before its
+    /// first byte, writes the content and returns the file's path. Nothing is left when this fails.
     /// </summary>
-    void WriteWithBackup(string path, string json, DateTimeOffset now, bool existed);
+    string CreateTemporary(string policyPath, byte[] content);
+
+    /// <summary>Creates the backup folder, for administrators only.</summary>
+    void CreateBackupFolder(string folder);
+
+    /// <summary>
+    /// Creates a backup as a new file with this content (it fails when something has the name), with the owner and
+    /// the access rules the backup folder gives. Nothing is left when this fails.
+    /// </summary>
+    void CreateBackup(string backupPath, byte[] content);
+
+    /// <summary>Puts the temporary file in the place of the policy file in one step; the policy file keeps its
+    /// permissions.</summary>
+    void Replace(string temporary, string policyPath);
+
+    /// <summary>Moves a file to a name that nothing has; it fails when something has the name.</summary>
+    void MoveNew(string from, string to);
+
+    /// <summary>Gives the file the permissions its folder gives to a file created in it.</summary>
+    void InheritPermissions(string path);
+
+    /// <summary>Deletes a file; no error when nothing has the name.</summary>
+    void Delete(string path);
 
     /// <summary>
     /// Opens a file whose path the caller chose (a change file, an application to hash), or returns null when nothing
@@ -154,7 +171,7 @@ public static class PolicyCommand
 
     /// <summary>
     /// Why the backup folder of this policy cannot be used, or null when it can. A folder that is not there yet is
-    /// fine: the tool creates it. RpaPolicy.exe asks again when it writes.
+    /// fine: the tool creates it. <see cref="PolicyWrite"/> asks again when it writes.
     /// </summary>
     public static string? BackupFolderRefusal(string policyPath, IPolicyFiles files)
     {
@@ -306,7 +323,8 @@ public static class PolicyCommand
 
     private static int Show(string policyPath, TextWriter output, IPolicyFiles files)
     {
-        if (ExistingPolicy(policyPath, files) is not { } text) return Fail(output, $"Policy file not found: {policyPath}");
+        if (ExistingPolicy(policyPath, files) is not { } bytes) return Fail(output, $"Policy file not found: {policyPath}");
+        var text = Text(bytes, bytes.Length);
         Print(output, $"Policy file: {policyPath}");
         // The file's own line breaks stay; anything else that is not plain text inside a line is shown as an escape,
         // and a long line is printed in rows.
@@ -316,19 +334,28 @@ public static class PolicyCommand
     }
 
     /// <summary>
-    /// The policy file's text, or null when there is none. A file that is there is used only when the runner's own
+    /// The policy file's bytes, or null when there is none. A file that is there is used only when the runner's own
     /// start check passes it: a user who is not an administrator may be able to create the file where none exists, and
     /// the tool would otherwise merge that file and write it back as an administrator's.
     /// </summary>
-    private static string? ExistingPolicy(string path, IPolicyFiles files)
+    private static byte[]? ExistingPolicy(string path, IPolicyFiles files)
     {
-        if (files.Kind(path) == PathKind.Folder)
+        var kind = files.Kind(path);
+        if (kind == PathKind.Folder)
             throw new RunnerPolicy.InvalidPolicyException($"{path} is a folder, not a policy file; an administrator must check and remove it");
-        if (files.Length(path) is null) return null;
+        if (kind == PathKind.None) return null;
         var problems = files.Problems(path);
         if (problems.Count > 0)
             throw new RunnerPolicy.InvalidPolicyException($"the existing policy file cannot be trusted: {string.Join("; ", problems)}; an administrator must check and replace it");
-        return files.Read(path);
+        return files.ReadBytes(path);
+    }
+
+    /// <summary>A file's text: UTF-8, unless its first bytes are the byte order mark of another encoding (as the
+    /// runner reads its policy file).</summary>
+    private static string Text(byte[] bytes, int count)
+    {
+        using var reader = new StreamReader(new MemoryStream(bytes, 0, count), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        return reader.ReadToEnd();
     }
 
     /// <summary>
@@ -387,8 +414,7 @@ public static class PolicyCommand
         var bytes = new byte[MaxChangeFileBytes + 1];
         var read = file.Content.ReadAtLeast(bytes, bytes.Length, throwOnEndOfStream: false);
         if (read > MaxChangeFileBytes) throw new RunnerPolicy.InvalidPolicyException("the change file is larger than 256 KiB");
-        using var reader = new StreamReader(new MemoryStream(bytes, 0, read), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-        return reader.ReadToEnd();
+        return Text(bytes, read);
     }
 
     /// <summary>
@@ -422,7 +448,8 @@ public static class PolicyCommand
 
     private static int Change(string change, Arguments arguments, TextReader input, TextWriter output, IPolicyFiles files, Action restartRunner)
     {
-        var current = ExistingPolicy(arguments.PolicyPath, files);
+        var before = ExistingPolicy(arguments.PolicyPath, files);
+        var current = before is null ? null : Text(before, before.Length);
         // Only an existing policy is backed up. A backup folder that cannot be used is said now, not after the
         // administrator has read the summary and answered.
         if (current is not null && BackupFolderRefusal(arguments.PolicyPath, files) is { } refusal) return Fail(output, refusal);
@@ -450,20 +477,9 @@ public static class PolicyCommand
             output.Flush();
             if (input.ReadLine()?.Trim().ToLowerInvariant() is not ("y" or "yes")) return 3;
         }
-        try
-        {
-            files.WriteWithBackup(arguments.PolicyPath, result.Json, DateTimeOffset.Now, existed: current is not null);
-        }
-        catch (Exception e) when (e is PolicyAppearedException or RunnerPolicy.InvalidPolicyException)
-        {
-            // Refused at the write, with nothing written: a policy file that was not there at the start check, or a
-            // backup folder that changed since then.
-            return Fail(output, e.Message);
-        }
-        catch (Exception e)
-        {
-            return Fail(output, $"Writing the policy failed: {e.Message.TrimEnd('.')}. The runner keeps running with the policy it has.");
-        }
+        // A write that fails or is refused ends here with its own message (Run prints it): PolicyWrite says what
+        // happened to the policy file, and the runner is not restarted.
+        PolicyWrite.Write(files, arguments.PolicyPath, result.Json, before, DateTimeOffset.Now);
         var problems = files.Problems(arguments.PolicyPath);
         if (problems.Count > 0)
         {

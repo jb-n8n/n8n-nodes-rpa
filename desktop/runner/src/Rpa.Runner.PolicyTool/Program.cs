@@ -4,7 +4,6 @@ using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Security.Principal;
-using System.Text;
 using Microsoft.Win32.SafeHandles;
 using Rpa.Runner.Core.Policy;
 using Rpa.Runner.Windows;
@@ -47,9 +46,17 @@ internal sealed class PolicyFiles : IPolicyFiles
 
     private static readonly SecurityIdentifier Administrators = new(WellKnownSidType.BuiltinAdministratorsSid, null);
 
-    public string? Read(string path) => File.Exists(path) ? File.ReadAllText(path) : null;
-
-    public long? Length(string path) => new FileInfo(path) is { Exists: true } file ? file.Length : null;
+    public byte[]? ReadBytes(string path)
+    {
+        try
+        {
+            return File.ReadAllBytes(path);
+        }
+        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return null;
+        }
+    }
 
     public PathKind Kind(string path) => Directory.Exists(path) ? PathKind.Folder : File.Exists(path) ? PathKind.File : PathKind.None;
 
@@ -129,85 +136,75 @@ internal sealed class PolicyFiles : IPolicyFiles
             : PolicyFileCheck.FolderProblems(folder, "the backup folder");
 
     /// <summary>
-    /// Writes a temporary file beside the policy and moves it into place in one step. The runner's own user may be
-    /// able to create files in the policy's folder, so the temporary file has a random name, is created only when
-    /// nothing has that name (an existing file or link is an error), and belongs to administrators only from before
-    /// its first byte. A policy that was there at the start check is first copied to the backup folder and then
-    /// replaced (File.Replace keeps its permissions). A new policy is moved in only when nothing has its name.
+    /// The runner's own user may be able to create files in the policy's folder, so the temporary file has a random
+    /// name, is created only when nothing has that name (an existing file or link is an error), and belongs to
+    /// administrators only from before its first byte.
     /// </summary>
-    public void WriteWithBackup(string path, string json, DateTimeOffset now, bool existed)
+    public string CreateTemporary(string policyPath, byte[] content)
     {
-        var temporary = new FileInfo($"{path}.{Convert.ToHexString(RandomNumberGenerator.GetBytes(16))}.tmp");
-        string? backup = null;
-        var created = false;
-        var written = false;
-        try
-        {
-            using (var stream = temporary.Create(FileMode.CreateNew, FileSystemRights.Write, FileShare.None, 4096, FileOptions.None, AdministratorsOnly(new FileSecurity(), InheritanceFlags.None)))
-            {
-                created = true;
-                stream.Write(Encoding.UTF8.GetBytes(json));
-                stream.Flush(flushToDisk: true);
-            }
-            if (existed)
-            {
-                backup = Backup(path, now);
-                File.Replace(temporary.FullName, path, null);
-            }
-            else
-            {
-                try
-                {
-                    File.Move(temporary.FullName, path, overwrite: false);
-                }
-                catch (Exception e) when (e is IOException or UnauthorizedAccessException && Kind(path) != PathKind.None)
-                {
-                    throw new PolicyAppearedException();
-                }
-                InheritFromFolder(path);
-            }
-            written = true;
-        }
-        finally
-        {
-            if (created) File.Delete(temporary.FullName); // still there only when the policy was not written
-            if (backup is not null && !written) File.Delete(backup);
-        }
+        var temporary = new FileInfo($"{policyPath}.{Convert.ToHexString(RandomNumberGenerator.GetBytes(16))}.tmp");
+        WriteNew(temporary, content);
+        return temporary.FullName;
     }
 
+    public void CreateBackupFolder(string folder) =>
+        new DirectoryInfo(folder).Create(AdministratorsOnly(new DirectorySecurity(), InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit));
+
     /// <summary>
-    /// Copies the policy into the backup folder under a free name and returns that name. The tool creates the folder
-    /// for administrators only; a folder that is already there is used only when PolicyCommand.BackupFolderRefusal
-    /// has nothing against it, asked again here because time has passed since the start. The copy is a new file,
-    /// created for administrators only like the temporary file; once written, its owner is Administrators and its
-    /// access rules are the ones it inherits from the backup folder. It does not carry the policy file's rule that
-    /// lets the runner's user read it.
+    /// The backup is a new file, created for administrators only like the temporary file; once written, its owner is
+    /// Administrators and its access rules are the ones it inherits from the backup folder. It does not carry the
+    /// policy file's rule that lets the runner's user read it.
     /// </summary>
-    private string Backup(string path, DateTimeOffset now)
+    public void CreateBackup(string backupPath, byte[] content)
     {
-        var folder = new DirectoryInfo(PolicyCommand.BackupFolder(path));
-        if (Kind(folder.FullName) == PathKind.None) folder.Create(AdministratorsOnly(new DirectorySecurity(), InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit));
-        if (PolicyCommand.BackupFolderRefusal(path, this) is { } refusal) throw new RunnerPolicy.InvalidPolicyException(refusal);
-        var backup = new FileInfo(PolicyCommand.BackupPath(path, now, name => Kind(name) != PathKind.None));
-        var created = false;
+        var backup = new FileInfo(backupPath);
+        WriteNew(backup, content);
         try
         {
-            using (var copy = backup.Create(FileMode.CreateNew, FileSystemRights.Write, FileShare.None, 4096, FileOptions.None, AdministratorsOnly(new FileSecurity(), InheritanceFlags.None)))
-            {
-                created = true;
-                using var policy = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-                policy.CopyTo(copy);
-                copy.Flush(flushToDisk: true);
-            }
             var inherited = new FileSecurity();
             inherited.SetOwner(Administrators);
             inherited.SetAccessRuleProtection(isProtected: false, preserveInheritance: false);
             backup.SetAccessControl(inherited);
-            return backup.FullName;
         }
         catch
         {
-            if (created) backup.Delete();
+            backup.Delete();
+            throw;
+        }
+    }
+
+    /// <summary>File.Replace keeps the replaced file's permissions.</summary>
+    public void Replace(string temporary, string policyPath) => File.Replace(temporary, policyPath, null);
+
+    public void MoveNew(string from, string to) => File.Move(from, to, overwrite: false);
+
+    /// <summary>The file's own rules stay and the folder's inheritable ones are added, as for a file created there
+    /// by hand; with a temporary file's rules alone, the runner's user could not read a new policy.</summary>
+    public void InheritPermissions(string path)
+    {
+        var file = new FileInfo(path);
+        var security = file.GetAccessControl();
+        security.SetAccessRuleProtection(isProtected: false, preserveInheritance: false);
+        file.SetAccessControl(security);
+    }
+
+    public void Delete(string path) => File.Delete(path);
+
+    /// <summary>A new file for administrators only, written through the handle that created it and flushed; deleted
+    /// again when the write fails.</summary>
+    private static void WriteNew(FileInfo file, byte[] content)
+    {
+        var created = false;
+        try
+        {
+            using var stream = file.Create(FileMode.CreateNew, FileSystemRights.Write, FileShare.None, 4096, FileOptions.None, AdministratorsOnly(new FileSecurity(), InheritanceFlags.None));
+            created = true;
+            stream.Write(content);
+            stream.Flush(flushToDisk: true);
+        }
+        catch
+        {
+            if (created) file.Delete();
             throw;
         }
     }
@@ -220,16 +217,6 @@ internal sealed class PolicyFiles : IPolicyFiles
         foreach (var sid in new[] { Administrators, new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null) })
             security.AddAccessRule(new FileSystemAccessRule(sid, FileSystemRights.FullControl, inherit, PropagationFlags.None, AccessControlType.Allow));
         return security;
-    }
-
-    /// <summary>A policy file that did not exist before takes its folder's permissions again, as one created there by
-    /// hand does; with the temporary file's own, the runner's user could not read it.</summary>
-    private static void InheritFromFolder(string path)
-    {
-        var file = new FileInfo(path);
-        var security = file.GetAccessControl();
-        security.SetAccessRuleProtection(isProtected: false, preserveInheritance: false);
-        file.SetAccessControl(security);
     }
 
     [DllImport("kernel32.dll", EntryPoint = "CreateFileW", CharSet = CharSet.Unicode, SetLastError = true)]

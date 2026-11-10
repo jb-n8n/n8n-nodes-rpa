@@ -39,7 +39,8 @@ public class PolicyCommandTests
         public Dictionary<string, string> Text { get; } = [];
         public Dictionary<string, byte[]> Bytes { get; } = [];
         public HashSet<string> Folders { get; } = [];
-        public List<(string Path, string Json, DateTimeOffset Now, bool Existed)> Writes { get; } = [];
+        /// <summary>Every time the policy file got new content: by the swap (it existed) or by the move of a new file.</summary>
+        public List<(string Path, string Json, bool Existed)> Writes { get; } = [];
         public List<string> Reads { get; } = [];
 
         /// <summary>Every open of a file whose path the caller chose (a change file, an application), with the
@@ -91,11 +92,21 @@ public class PolicyCommandTests
         /// <summary>What is wrong with a backup folder; nothing unless a test puts it here.</summary>
         public Dictionary<string, string[]> BackupProblems { get; } = [];
 
-        /// <summary>When set, writing the policy fails with it.</summary>
-        public Exception? WriteFailure { get; set; }
+        /// <summary>The steps of a write that fail, each with what it fails with: "temporary", "folder", "backup",
+        /// "replace", "move", "inherit", "delete", "read".</summary>
+        public Dictionary<string, Exception> Failures { get; } = [];
 
-        /// <summary>Runs when the tool starts to write (something that happens while the administrator reads).</summary>
-        public Action? BeforeWrite { get; set; }
+        /// <summary>Every step of a write that ran, in order, with the path it was given.</summary>
+        public List<string> Steps { get; } = [];
+
+        /// <summary>Runs after the backup copy was made (something that happens directly before the swap).</summary>
+        public Action? AfterBackup { get; set; }
+
+        private void Step(string step, string path)
+        {
+            Steps.Add($"{step} {path}");
+            if (Failures.TryGetValue(step, out var failure)) throw failure;
+        }
 
         public IReadOnlyList<string> Problems(string path)
         {
@@ -108,33 +119,82 @@ public class PolicyCommandTests
         public PathKind Kind(string path)
         {
             Looked.Add(path);
-            return Folders.Contains(path) ? PathKind.Folder : Text.ContainsKey(path) || Bytes.ContainsKey(path) ? PathKind.File : PathKind.None;
+            var kind = Folders.Contains(path) ? PathKind.Folder : Text.ContainsKey(path) || Bytes.ContainsKey(path) ? PathKind.File : PathKind.None;
+            if (AfterLook is { } after && Steps.Count > 0 && Steps[^1].StartsWith("replace", StringComparison.Ordinal))
+            {
+                AfterLook = null;
+                after();
+            }
+            return kind;
         }
 
-        public string? Read(string path)
+        public byte[]? ReadBytes(string path)
         {
             Reads.Add(path);
-            return Text.GetValueOrDefault(path);
+            if (Text.ContainsKey(path) && Failures.TryGetValue("read", out var failure)) throw failure;
+            return Bytes.TryGetValue(path, out var bytes) ? bytes : Text.TryGetValue(path, out var text) ? Encoding.UTF8.GetBytes(text) : null;
         }
 
         /// <summary>A size to report in place of the text's own (a file that grows after its size was read).</summary>
         public Dictionary<string, long> Sizes { get; } = [];
 
-        public long? Length(string path) => Text.TryGetValue(path, out var text) ? Encoding.UTF8.GetByteCount(text) : null;
-
-        /// <summary>
-        /// As RpaPolicy.exe does: an existing policy's text goes to the name PolicyCommand.BackupPath gives; a new
-        /// policy is written only when nothing has its name.
-        /// </summary>
-        public void WriteWithBackup(string path, string json, DateTimeOffset now, bool existed)
+        public string CreateTemporary(string policyPath, byte[] content)
         {
-            BeforeWrite?.Invoke();
-            if (WriteFailure is not null) throw WriteFailure;
-            if (!existed && Kind(path) != PathKind.None) throw new PolicyAppearedException();
-            Writes.Add((path, json, now, existed));
-            if (existed) Text[PolicyCommand.BackupPath(path, now, Text.ContainsKey)] = Text[path];
-            Text[path] = json;
-            if (UntrustedAfterWrite.Length > 0) Untrusted[path] = UntrustedAfterWrite;
+            var temporary = policyPath + ".0123456789ABCDEF0123456789ABCDEF.tmp";
+            Step("temporary", temporary);
+            Text[temporary] = Encoding.UTF8.GetString(content);
+            return temporary;
+        }
+
+        public void CreateBackupFolder(string folder)
+        {
+            Step("folder", folder);
+            Folders.Add(folder);
+        }
+
+        public void CreateBackup(string backupPath, byte[] content)
+        {
+            Step("backup", backupPath);
+            if (Kind(backupPath) != PathKind.None) throw new IOException("The file exists.");
+            Text[backupPath] = Encoding.UTF8.GetString(content);
+            AfterBackup?.Invoke();
+        }
+
+        /// <summary>Runs when the swap starts (the state a failing swap leaves behind is set here).</summary>
+        public Action? AfterSwapCheck { get; set; }
+
+        /// <summary>Runs once, after the tool has looked at what a failed swap left under the policy's name.</summary>
+        public Action? AfterLook { get; set; }
+
+        public void Replace(string temporary, string policyPath)
+        {
+            AfterSwapCheck?.Invoke();
+            Step("replace", policyPath);
+            Writes.Add((policyPath, Text[temporary], true));
+            Text[policyPath] = Text[temporary];
+            Text.Remove(temporary);
+            if (UntrustedAfterWrite.Length > 0) Untrusted[policyPath] = UntrustedAfterWrite;
+        }
+
+        public void MoveNew(string from, string to)
+        {
+            Step("move", to);
+            if (Folders.Contains(to) || Text.ContainsKey(to)) throw new IOException("Cannot create a file when that file already exists.");
+            Text[to] = Text[from];
+            Text.Remove(from);
+            if (from.EndsWith(".tmp", StringComparison.Ordinal))
+            {
+                Writes.Add((to, Text[to], false));
+                if (UntrustedAfterWrite.Length > 0) Untrusted[to] = UntrustedAfterWrite;
+            }
+        }
+
+        public void InheritPermissions(string path) => Step("inherit", path);
+
+        public void Delete(string path)
+        {
+            Step("delete", path);
+            Text.Remove(path);
         }
 
         public OpenedFile? Open(string path)
@@ -218,6 +278,19 @@ public class PolicyCommandTests
         /// <summary>What was typed and not read.</summary>
         public string Unread { get; private set; } = "";
 
+        /// <summary>Runs when the tool reads the answer to its prompt (something that happens while the
+        /// administrator reads the summary).</summary>
+        public Action? AtPrompt { get; set; }
+
+        private sealed class Typed(string typed, Func<Action?> atPrompt) : StringReader(typed)
+        {
+            public override string? ReadLine()
+            {
+                atPrompt()?.Invoke();
+                return base.ReadLine();
+            }
+        }
+
         public Tool()
         {
             Files.Text[PolicyPath] = Starter;
@@ -227,7 +300,7 @@ public class PolicyCommandTests
         public int Run(string typed, params string[] args)
         {
             var output = new StringWriter { NewLine = "\n" };
-            var input = new StringReader(typed);
+            var input = new Typed(typed, () => AtPrompt);
             var code = PolicyCommand.Run(args, input, output, Files, () => { Restarts++; if (RestartFailure is not null) throw RestartFailure; }, Console);
             Output = output.ToString();
             Unread = input.ReadToEnd();
@@ -244,9 +317,15 @@ public class PolicyCommandTests
         Assert.Equal($"{Changing()}\n{AllowErp}\n{OneApp}\n{Prompt}{Updated}\n", tool.Output);
         var write = Assert.Single(tool.Files.Writes);
         Assert.Equal(PolicyPath, write.Path);
-        Assert.InRange(write.Now, before, DateTimeOffset.Now);
         Assert.Equal(ErpPath, Assert.Single(RunnerPolicy.Parse(write.Json).AllowedApps).Path);
         Assert.Equal(1, tool.Restarts);
+
+        // The policy from before the change is in the backup folder, under the time of the write; nothing else is left.
+        var backup = Assert.Single(tool.Files.Text.Keys, name => name.StartsWith(PolicyCommand.BackupFolder(PolicyPath), StringComparison.Ordinal));
+        Assert.Contains(backup, new[] { before, DateTimeOffset.Now }.Select(time => PolicyCommand.BackupPath(PolicyPath, time, _ => false)));
+        Assert.Equal(Starter, tool.Files.Text[backup]);
+        Assert.Equal(write.Json, tool.Files.Text[PolicyPath]);
+        Assert.DoesNotContain(tool.Files.Text.Keys, name => name.EndsWith(".tmp", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -885,7 +964,7 @@ public class PolicyCommandTests
         foreach (var failure in failures)
         {
             var tool = new Tool();
-            tool.Files.WriteFailure = failure;
+            tool.Files.Failures["replace"] = failure;
             Assert.Equal(1, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
             Assert.Equal(
                 $"{Changing()}\n{AllowErp}\n{OneApp}\n{Prompt}{R($"Writing the policy failed: {failure.Message.TrimEnd('.')}. The runner keeps running with the policy it has.")}\n",
@@ -893,6 +972,244 @@ public class PolicyCommandTests
             Assert.Equal(Starter, tool.Files.Text[PolicyPath]);
             Assert.Equal(0, tool.Restarts);
         }
+    }
+
+    private static readonly string Temporary = PolicyPath + ".0123456789ABCDEF0123456789ABCDEF.tmp";
+    private static readonly IOException SwapFailure = new("Unable to move the replacement file to the file to be replaced. The file to be replaced has retained its original name.");
+    private const string SwapFailed = "Writing the policy failed: Unable to move the replacement file to the file to be replaced. The file to be replaced has retained its original name";
+    private const string OtherPolicy = """{ "allowedApps": [], "gatedKeys": ["Ctrl+S"] }""";
+
+    /// <summary>A tool whose swap fails, after <paramref name="leaves"/> has put the files in the state the failed swap leaves.</summary>
+    private static Tool FailedSwap(Action<FakeFiles>? leaves = null)
+    {
+        var tool = new Tool();
+        tool.Files.Failures["replace"] = SwapFailure;
+        // The state is set when the backup copy has been made and compared: directly before the swap fails.
+        tool.Files.AfterSwapCheck = () => leaves?.Invoke(tool.Files);
+        return tool;
+    }
+
+    private static string Backups(Tool tool) =>
+        Assert.Single(tool.Files.Text.Keys, name => name.StartsWith(PolicyCommand.BackupFolder(PolicyPath), StringComparison.Ordinal));
+
+    private static void AssertFailed(Tool tool, string message)
+    {
+        Assert.Equal(1, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Equal($"{Changing()}\n{AllowErp}\n{OneApp}\n{Prompt}{R(message)}\n", tool.Output);
+        Assert.Empty(tool.Files.Writes);
+        Assert.Equal(0, tool.Restarts);
+    }
+
+    [Fact]
+    public void A_failed_swap_that_left_the_policy_as_it_was_removes_the_temporary_file_and_keeps_the_backup()
+    {
+        var tool = FailedSwap();
+        AssertFailed(tool, $"{SwapFailed}. The runner keeps running with the policy it has.");
+        Assert.Equal(Starter, tool.Files.Text[PolicyPath]);
+        Assert.Equal(Starter, tool.Files.Text[Backups(tool)]);
+        Assert.DoesNotContain(Temporary, tool.Files.Text.Keys);
+    }
+
+    [Fact]
+    public void A_failed_swap_that_left_no_policy_file_gets_the_old_policy_back_from_the_backup_copy()
+    {
+        // Windows documents a failed replace after which the replaced file no longer exists. Nothing is deleted
+        // until the old policy is back in its place.
+        var tool = FailedSwap(files => files.Text.Remove(PolicyPath));
+        AssertFailed(tool,
+            $"{SwapFailed}. After the failed swap there was no policy file at {PolicyPath}; the tool put the old policy back there from its backup copy, " +
+            "with the permissions its folder gives.");
+        Assert.Equal(Starter, tool.Files.Text[PolicyPath]);
+        Assert.Equal(2, tool.Files.Text.Count);
+        Assert.Contains(ChangePath, tool.Files.Text.Keys);
+        // In this order: the move back (which fails when something has the name), its permissions, and only then the
+        // temporary file. The backup copy is moved, not deleted.
+        var folder = PolicyCommand.BackupFolder(PolicyPath);
+        Assert.Equal(7, tool.Files.Steps.Count);
+        Assert.Equal([$"temporary {Temporary}", $"folder {folder}"], tool.Files.Steps.Take(2));
+        Assert.StartsWith($"backup {Path.Combine(folder, "policy.json.")}", tool.Files.Steps[2]);
+        Assert.Equal([$"replace {PolicyPath}", $"move {PolicyPath}", $"inherit {PolicyPath}", $"delete {Temporary}"], tool.Files.Steps.Skip(3));
+
+        // The start check runs on the file that was put back, and what it finds is said.
+        tool = FailedSwap(files =>
+        {
+            files.Text.Remove(PolicyPath);
+            files.Untrusted[PolicyPath] = [@"PC\bot can change or replace the policy file"];
+        });
+        AssertFailed(tool,
+            $"{SwapFailed}. After the failed swap there was no policy file at {PolicyPath}; the tool put the old policy back there from its backup copy, " +
+            @"with the permissions its folder gives. The runner will not start with it: PC\bot can change or replace the policy file.");
+    }
+
+    [Fact]
+    public void A_failed_swap_that_left_no_policy_file_and_a_failed_restore_leave_both_copies_and_say_where_they_are()
+    {
+        // The name is taken again by the time the tool moves the old policy back (the runner's user may create files
+        // in the folder), or the move fails for another reason.
+        Action<Tool>[] restoreFails =
+        [
+            tool => tool.Files.Failures["move"] = new UnauthorizedAccessException("Access to the path is denied."),
+            tool => tool.Files.Failures["move"] = new IOException("The process cannot access the file because it is being used by another process."),
+        ];
+        foreach (var fail in restoreFails)
+        {
+            var tool = FailedSwap(files => files.Text.Remove(PolicyPath));
+            fail(tool);
+            var failure = tool.Files.Failures["move"].Message.TrimEnd('.');
+            Assert.Equal(1, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+            var backup = Backups(tool);
+            Assert.Equal(
+                $"{Changing()}\n{AllowErp}\n{OneApp}\n{Prompt}" +
+                R($"{SwapFailed}. After the failed swap there is no policy file at {PolicyPath}, and putting the old policy back failed: {failure}. " +
+                  $"The old policy is at {backup}. The changed policy, which was not applied, is at {Temporary}. " +
+                  $"An administrator must put the old policy back at {PolicyPath}: the runner reads it when it starts.") + "\n",
+                tool.Output);
+            Assert.DoesNotContain("keeps running", tool.Output);
+            Assert.Equal(Starter, tool.Files.Text[backup]);
+            Assert.Equal(ErpPath, Assert.Single(RunnerPolicy.Parse(tool.Files.Text[Temporary]).AllowedApps).Path);
+            Assert.DoesNotContain(PolicyPath, tool.Files.Text.Keys);
+            Assert.DoesNotContain(tool.Files.Steps, step => step.StartsWith("delete", StringComparison.Ordinal));
+            Assert.Equal(0, tool.Restarts);
+        }
+
+        // A file someone put under the name while the swap failed is not moved, replaced or merged.
+        var planted = FailedSwap(files => files.Text.Remove(PolicyPath));
+        planted.Files.AfterLook = () => planted.Files.Text[PolicyPath] = "planted";
+        Assert.Equal(1, planted.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Contains("putting the old policy back failed: Cannot create a file when that file already exists. ", planted.Output.Replace("\n        ", ""));
+        Assert.Equal("planted", planted.Files.Text[PolicyPath]);
+        Assert.Equal(Starter, planted.Files.Text[Backups(planted)]);
+        Assert.Contains(Temporary, planted.Files.Text.Keys);
+    }
+
+    [Fact]
+    public void A_restored_policy_that_cannot_be_given_its_folder_s_permissions_is_reported()
+    {
+        var tool = FailedSwap(files => files.Text.Remove(PolicyPath));
+        tool.Files.Failures["inherit"] = new UnauthorizedAccessException("Attempted to perform an unauthorized operation.");
+        AssertFailed(tool,
+            $"{SwapFailed}. After the failed swap there was no policy file at {PolicyPath}; the tool put the old policy back there from its backup copy, " +
+            "but could not give it the permissions of its folder: Attempted to perform an unauthorized operation. " +
+            "The runner's user may not be able to read it until an administrator sets them.");
+        Assert.Equal(Starter, tool.Files.Text[PolicyPath]);
+        Assert.DoesNotContain(Temporary, tool.Files.Text.Keys);
+    }
+
+    [Fact]
+    public void A_failed_swap_that_left_a_policy_file_the_tool_cannot_confirm_keeps_the_backup_and_says_where_it_is()
+    {
+        // The file is there but holds something else, or cannot be read.
+        Action<FakeFiles>[] leaves =
+        [
+            files => files.Text[PolicyPath] = OtherPolicy,
+            files => files.Failures["read"] = new IOException("The process cannot access the file because it is being used by another process."),
+        ];
+        foreach (var leave in leaves)
+        {
+            var tool = FailedSwap(leave);
+            Assert.Equal(1, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+            var backup = Backups(tool);
+            Assert.Equal(
+                $"{Changing()}\n{AllowErp}\n{OneApp}\n{Prompt}" +
+                R($"{SwapFailed}. The policy file at {PolicyPath} is still there, but the tool could not confirm that it is unchanged; look at it. " +
+                  $"A copy of the old policy is at {backup}.") + "\n",
+                tool.Output);
+            Assert.DoesNotContain("keeps running", tool.Output);
+            Assert.Equal(Starter, tool.Files.Text[backup]);
+            Assert.DoesNotContain(Temporary, tool.Files.Text.Keys);
+            Assert.Equal(0, tool.Restarts);
+        }
+    }
+
+    [Fact]
+    public void A_policy_file_that_changed_while_the_administrator_read_the_summary_is_not_replaced()
+    {
+        // Another administrator changed the policy, or removed it, after the tool read it: the change shown was made
+        // from the old text. Nothing is created, not even a backup.
+        Action<FakeFiles>[] changes = [files => files.Text[PolicyPath] = OtherPolicy, files => files.Text[PolicyPath] = Starter + " ", files => files.Text.Remove(PolicyPath)];
+        foreach (var change in changes)
+        {
+            var tool = new Tool();
+            tool.AtPrompt = () => change(tool.Files);
+            var expected = tool.Files.Text.Keys.Where(name => name != PolicyPath).ToList();
+            AssertFailed(tool, "the policy file changed while this change was being applied; nothing was written");
+            Assert.Empty(tool.Files.Steps);
+            Assert.Equal(expected, tool.Files.Text.Keys.Where(name => name != PolicyPath));
+        }
+
+        // With --yes the tool does not wait, and still compares.
+        var unchanged = new Tool();
+        Assert.Equal(0, unchanged.Run("", "apply", ChangePath, "--yes", "--policy", PolicyPath));
+        Assert.Single(unchanged.Files.Writes);
+    }
+
+    [Fact]
+    public void A_policy_file_that_changed_between_the_backup_copy_and_the_swap_is_not_replaced()
+    {
+        var tool = new Tool();
+        tool.Files.AfterBackup = () => tool.Files.Text[PolicyPath] = OtherPolicy;
+        AssertFailed(tool, "the policy file changed while this change was being applied; nothing was written");
+        Assert.Equal(OtherPolicy, tool.Files.Text[PolicyPath]);
+        // The comparison is the last thing before the swap, and the swap is not tried. The backup copy stays.
+        Assert.DoesNotContain(tool.Files.Steps, step => step.StartsWith("replace", StringComparison.Ordinal));
+        Assert.Equal(Starter, tool.Files.Text[Backups(tool)]);
+        Assert.DoesNotContain(Temporary, tool.Files.Text.Keys);
+    }
+
+    [Fact]
+    public void A_write_that_fails_before_the_swap_leaves_the_policy_as_it_was()
+    {
+        foreach (var step in new[] { "temporary", "folder", "backup" })
+        {
+            var tool = new Tool();
+            tool.Files.Failures[step] = new UnauthorizedAccessException("Access to the path is denied.");
+            AssertFailed(tool, "Writing the policy failed: Access to the path is denied. The runner keeps running with the policy it has.");
+            Assert.Equal([PolicyPath, ChangePath], tool.Files.Text.Keys);
+            Assert.DoesNotContain(tool.Files.Steps, s => s.StartsWith("replace", StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
+    public void A_temporary_file_that_cannot_be_removed_is_named()
+    {
+        var tool = FailedSwap();
+        tool.Files.Failures["delete"] = new UnauthorizedAccessException("Access to the path is denied.");
+        AssertFailed(tool, $"{SwapFailed}. The runner keeps running with the policy it has. The temporary file {Temporary} could not be removed: Access to the path is denied.");
+    }
+
+    [Fact]
+    public void A_new_policy_that_cannot_be_moved_into_place_or_given_its_permissions_is_reported()
+    {
+        // There is no policy file, so the tool does not say the runner keeps one.
+        var tool = new Tool();
+        tool.Files.Text.Remove(PolicyPath);
+        tool.Files.Failures["move"] = new UnauthorizedAccessException("Access to the path is denied.");
+        Assert.Equal(1, tool.Run("", "apply", ChangePath, "--yes", "--policy", PolicyPath));
+        Assert.Equal($"Creating a new policy at {PolicyPath}.\n{AllowErp}\n{OneApp}\n{R("Writing the policy failed: Access to the path is denied. No policy file was written.")}\n", tool.Output);
+        Assert.Equal([ChangePath], tool.Files.Text.Keys);
+        Assert.Equal(0, tool.Restarts);
+
+        foreach (var step in new[] { "temporary" })
+        {
+            tool = new Tool();
+            tool.Files.Text.Remove(PolicyPath);
+            tool.Files.Failures[step] = new IOException("There is not enough space on the disk.");
+            Assert.Equal(1, tool.Run("", "apply", ChangePath, "--yes", "--policy", PolicyPath));
+            Assert.EndsWith($"\n{R("Writing the policy failed: There is not enough space on the disk. No policy file was written.")}\n", tool.Output);
+            Assert.Equal([ChangePath], tool.Files.Text.Keys);
+        }
+
+        // The file is in place with the temporary file's permissions: said as it is, and the runner is not restarted.
+        tool = new Tool();
+        tool.Files.Text.Remove(PolicyPath);
+        tool.Files.Failures["inherit"] = new UnauthorizedAccessException("Attempted to perform an unauthorized operation.");
+        Assert.Equal(1, tool.Run("", "apply", ChangePath, "--yes", "--policy", PolicyPath));
+        Assert.EndsWith(
+            "\n" + R($"The policy file was written at {PolicyPath}, but it could not be given the permissions of its folder: Attempted to perform an unauthorized operation. " +
+                     "The runner's user may not be able to read it until an administrator sets them.") + "\n",
+            tool.Output);
+        Assert.Contains(PolicyPath, tool.Files.Text.Keys);
+        Assert.Equal(0, tool.Restarts);
     }
 
     [Fact]
@@ -974,13 +1291,19 @@ public class PolicyCommandTests
     [Fact]
     public void A_backup_folder_that_stops_being_trusted_while_the_administrator_reads_is_refused_in_the_same_words()
     {
-        // RpaPolicy.exe checks the folder again when it writes; its refusal is printed as it is.
+        // The folder is checked again when the tool writes; the refusal is printed as it is.
         const string refusal = @"the backup folder cannot be trusted: PC\bot owns the backup folder; an administrator must check and remove it";
+        var folder = PolicyCommand.BackupFolder(PolicyPath);
         var tool = new Tool();
-        tool.Files.WriteFailure = new RunnerPolicy.InvalidPolicyException(refusal);
+        tool.AtPrompt = () =>
+        {
+            tool.Files.Folders.Add(folder);
+            tool.Files.BackupProblems[folder] = [@"PC\bot owns the backup folder"];
+        };
         Assert.Equal(1, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
         Assert.Equal($"{Changing()}\n{AllowErp}\n{OneApp}\n{Prompt}{R(refusal)}\n", tool.Output);
         Assert.Equal(Starter, tool.Files.Text[PolicyPath]);
+        Assert.Equal([PolicyPath, ChangePath], tool.Files.Text.Keys);
         Assert.Equal(0, tool.Restarts);
     }
 
@@ -993,7 +1316,7 @@ public class PolicyCommandTests
         {
             var tool = new Tool();
             tool.Files.Text.Remove(PolicyPath);
-            tool.Files.BeforeWrite = () =>
+            tool.AtPrompt = () =>
             {
                 if (asFolder) tool.Files.Folders.Add(PolicyPath);
                 else tool.Files.Text[PolicyPath] = "planted";
