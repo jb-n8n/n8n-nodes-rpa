@@ -232,7 +232,7 @@ describe('README', () => {
   it('references every Run Steps verb and field', () => {
     const s = section('## Run Steps reference');
     for (const verb of ['goto', 'click', 'check', 'fill', 'select', 'clickAll', 'waitFor', 'paginate', 'extract', 'extractTable', 'screenshot', 'pdf', 'read',
-      'download', 'submit', 'signIn', 'popup', 'detect']) expect(s, verb).toContain(`\`${verb}\``);
+      'download', 'submit', 'signIn', 'popup', 'detect', 'press', 'hover']) expect(s, verb).toContain(`\`${verb}\``);
     for (const text of ['Require Signed Steps', 'Expected Version', 'Variables', '{{var.name}}', 'AI Repair', 'Allow Unsigned Writes']) expect(s, text).toContain(text);
   });
 

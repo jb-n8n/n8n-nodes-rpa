@@ -8,6 +8,8 @@ import { ENDPOINT_NOT_SECURE, nameMismatch, offListSite, privateAddress, UNSIGNE
 import type { Script, Step } from '../src/types.js';
 import { APPROVER, baselineScript, LOCAL, policyFor, reportScript, SECRETS, SIGN_IN_STEPS, signedLaneInput, TEST_KEY } from './helpers.js';
 import { verifyScript } from '../src/sign.js';
+import { parseScript } from '../src/steps/parse.js';
+import { describeStep } from '../src/proposal/describe.js';
 import { notReachedNetworkIdle, tooManyRows } from '../src/messages.js';
 import { publicPolicy } from './helpers.js';
 import { bound } from './timing.js';
@@ -591,5 +593,19 @@ describe('a step list signed before this change verifies and runs', () => {
       ['Read the notices', 'ok', undefined],
     ]);
     expect(sorted(r.rows.map((x) => x.id))).toEqual(sorted(SANDBOX.bulletins));
+  });
+  it('press, hover and click modifiers: the list parses to the same steps, and every step keeps its approval text', () => {
+    const doc = signedBefore('http://127.0.0.1:9999');
+    expect(parseScript(doc).steps).toEqual(doc.steps);
+    // describeStep with the code of 0.2.0: a click without modifiers reads as before.
+    expect(doc.steps.map(describeStep)).toEqual([
+      'Sign in (sign in with label "Dealer user ID", label "Password", submit role "button" name "Sign in", code in label "Authentication code", submit role "button" name "Verify")',
+      'Skip the survey (if css "#survey-later" shows, click css "#survey-later")',
+      'Check sign-in worked (detect "afterLogin": "logged_in" css "body[data-page=home]"; "mfa_sms" css "#sms-code"; "login_failed" css "#login-error")',
+      'Close a banner if one shows (if css "#no-such-banner" shows, click css "#no-such-banner button")',
+      'Open Service (click role "link" name "Service" exact within [role "navigation"])',
+      'Open Recalls & Stop-Sales (click role "link" name "Recalls & Stop-Sales")',
+      'Read the notices (extract rows from css "main", ID pattern N26-\\d{4})',
+    ]);
   });
 });

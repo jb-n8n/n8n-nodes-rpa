@@ -117,7 +117,8 @@ export type Step = StepBase &
   (
     | { goto: string; waitUntil?: WaitUntil }
     | { signIn: SignInSpec }
-    | { click: Locator }
+    /** `modifiers`: keys held during the click (Ctrl+click adds an item to a selection). */
+    | { click: Locator; modifiers?: ClickModifier[] }
     /**
      * `secret: true` is the only way fill may type into a password input: `value` must then be exactly one {{var.name}}
      * template, the rendered value is masked in everything the run shows, and only signed steps may use it.
@@ -146,12 +147,20 @@ export type Step = StepBase &
     | { pdf: { paper?: 'A4' | 'Letter'; background?: boolean } }
     | { read: { what: 'text' | 'html' | 'title' | 'url' } }
     | { extractTable: { table: Locator; idPattern?: string } }
+    /**
+     * One key chord (steps/browser-keys.ts: Enter, Tab, Escape, arrows and the like, never one that types a character),
+     * sent to `target` or, without one, to the element that has the focus. Refused on a password input.
+     */
+    | { press: { key: string; target?: Locator } }
+    | { hover: Locator }
   );
+/** A key held during a click. */
+export type ClickModifier = 'Ctrl' | 'Shift' | 'Alt';
 
 export const STEP_VERBS = [
   'goto', 'signIn', 'click', 'fill', 'select', 'check', 'clickAll', 'waitFor',
   'paginate', 'extract', 'submit', 'download', 'popup', 'detect',
-  'screenshot', 'pdf', 'read', 'extractTable',
+  'screenshot', 'pdf', 'read', 'extractTable', 'press', 'hover',
 ] as const;
 export type StepVerb = (typeof STEP_VERBS)[number];
 

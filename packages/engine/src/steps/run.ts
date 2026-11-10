@@ -228,3 +228,4 @@ import './handlers/data.js';
 import './handlers/auth.js';
 import './handlers/files.js';
 import './handlers/capture.js';
+import './handlers/input.js';

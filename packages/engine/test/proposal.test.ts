@@ -44,6 +44,11 @@ describe('step changes from the canonical steps, not intents', () => {
     expect(describeStep({ intent: 'Go on', when: { hidden: { css: '#busy' } }, click: { css: '#next' } })).toBe('Go on (if css "#busy" does not show, click css "#next")');
     expect(describeStep({ intent: 'Full', when: { var: 'mode', equals: 'full "all"' }, click: { css: '#all' } })).toBe('Full (if variable mode is "full \\"all\\"", click css "#all")');
     expect(describeStep({ intent: 'Short', when: { var: 'mode', notEquals: 'full' }, click: { css: '#short' } })).toBe('Short (if variable mode is not "full", click css "#short")');
+    expect(describeStep({ intent: 'Search', press: { key: 'Enter', target: { label: 'Search' } } })).toBe('Search (press Enter on label "Search")');
+    expect(describeStep({ intent: 'Back', press: { key: 'Shift+Tab' } })).toBe('Back (press Shift+Tab)');
+    expect(describeStep({ intent: 'Menu', hover: { role: 'button', name: 'Reports' } })).toBe('Menu (hover over role "button" name "Reports")');
+    expect(describeStep({ intent: 'Add', click: { text: 'Beta' }, modifiers: ['Ctrl'] })).toBe('Add (Ctrl+click text "Beta")');
+    expect(describeStep({ intent: 'Range', click: { text: 'Beta' }, modifiers: ['Shift', 'Alt'] })).toBe('Range (Shift+Alt+click text "Beta")');
     expect(describeInterrupt({ target: { css: '#cookie-overlay' }, click: { role: 'button', name: 'Accept all', fallbacks: [{ testId: 'ok' }] } }))
       .toBe('Pop-up handler: when css "#cookie-overlay" shows, click role "button" name "Accept all" or test id "ok"');
     // Names are JSON-quoted: page text cannot fake a separator or a second candidate.

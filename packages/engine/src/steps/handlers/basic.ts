@@ -101,16 +101,19 @@ export async function withWindow<T>(ctx: StepContext, win: WindowGate | undefine
   }
 }
 
+type ClickOptions = { timeout: number; modifiers?: ('Control' | 'Shift' | 'Alt')[] };
+
 /** The submit click with the write window open: check the target, open, click, wait for quiet, always close. */
-async function clickInWriteWindow(ctx: StepContext, locator: PwLocator, state: RunState, timeout: number): Promise<void> {
+async function clickInWriteWindow(ctx: StepContext, locator: PwLocator, state: RunState, options: ClickOptions): Promise<void> {
   const win = ctx.writeWindow;
+  const { timeout } = options;
   if (!win || !ctx.policy.writeWindow) throw new Error('the write window is not available in this session');
   // Playwright's actionability wait (visible, stable, enabled) happens outside the window: it covers only the real click.
   // The form target is read once the control is actionable, right before the window opens.
-  await locator.click({ trial: true, timeout });
+  await locator.click({ ...options, trial: true });
   await assertFormTarget(ctx, locator);
   try {
-    await withWindow(ctx, win, () => locator.click({ timeout }), timeout);
+    await withWindow(ctx, win, () => locator.click(options), timeout);
   } finally {
     if (win.posts.length > 0) state.submitted = true;
   }
@@ -124,7 +127,7 @@ async function clickInWriteWindow(ctx: StepContext, locator: PwLocator, state: R
  * closest button/[role=button]/[role=checkbox]/[role=radio], and then, if still not a control, by the control of its
  * enclosing label. So a locator on a label (`{ text: 'Password' }`, `label[for=pw]`) is checked against the input.
  */
-async function passwordControl(locator: PwLocator, clear: boolean): Promise<boolean> {
+export async function passwordControl(locator: PwLocator, clear: boolean): Promise<boolean> {
   return locator.evaluate((node, wipe) => {
     let el: Element | null = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
     if (!el) return false;
@@ -140,9 +143,10 @@ async function passwordControl(locator: PwLocator, clear: boolean): Promise<bool
   }, clear);
 }
 
-function refusePassword(ctx: StepContext): never {
+/** A step that would type into a password field fails, fatal: the run stops. `message` defaults to fill's refusal. */
+export function refusePassword(ctx: StepContext, message = ctx.policy.writeWindow ? PASSWORD_FILL_REFUSED : PASSWORD_FILL_REFUSED_STEPS): never {
   ctx.violations.push({ kind: 'signin', url: ctx.masker.mask(shownUrl(ctx.page.url())).slice(0, 300), fatal: true });
-  throw new PolicyError(ctx.policy.writeWindow ? PASSWORD_FILL_REFUSED : PASSWORD_FILL_REFUSED_STEPS);
+  throw new PolicyError(message);
 }
 
 /**
@@ -177,14 +181,17 @@ const goto: Handler = async (ctx, step, _state, timeout) => {
   if (res && res.status() >= 500) throw new Error(`HTTP ${res.status()} at ${shownUrl(url)}`);
 };
 
+const PLAYWRIGHT_MODIFIERS = { Ctrl: 'Control', Shift: 'Shift', Alt: 'Alt' } as const;
+
 const click: Handler = async (ctx, step, state, timeout) => {
   const s = step as S<'click'>;
   const { locator, candidate } = await resolveUnique(ctx.page, s.click, timeout);
+  const options: ClickOptions = { timeout, ...(s.modifiers ? { modifiers: s.modifiers.map((m) => PLAYWRIGHT_MODIFIERS[m]) } : {}) };
   if (ctx.writeStep) {
-    await clickInWriteWindow(ctx, locator, state, timeout);
+    await clickInWriteWindow(ctx, locator, state, options);
     return candidate;
   }
-  await locator.click({ timeout });
+  await locator.click(options);
   await settle(ctx.page);
   return candidate;
 };

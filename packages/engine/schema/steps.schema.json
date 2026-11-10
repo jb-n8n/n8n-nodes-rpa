@@ -213,7 +213,9 @@
         { "$ref": "#/definitions/verb-screenshot" },
         { "$ref": "#/definitions/verb-pdf" },
         { "$ref": "#/definitions/verb-read" },
-        { "$ref": "#/definitions/verb-extractTable" }
+        { "$ref": "#/definitions/verb-extractTable" },
+        { "$ref": "#/definitions/verb-press" },
+        { "$ref": "#/definitions/verb-hover" }
       ]
     },
     "nestedStep": {
@@ -275,7 +277,14 @@
       "required": ["click"],
       "properties": {
         "intent": true, "optional": true, "when": true, "expect": true, "checkpoint": true, "timeoutMs": true,
-        "click": { "$ref": "#/definitions/locator" }
+        "click": { "$ref": "#/definitions/locator" },
+        "modifiers": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["Ctrl", "Shift", "Alt"] },
+          "description": "Keys held during the click, such as [\"Ctrl\"] to add an item to a selection. A Ctrl+click or Shift+click on a link can open a tab the run does not follow."
+        }
       },
       "additionalProperties": false
     },
@@ -593,6 +602,37 @@
           },
           "additionalProperties": false
         }
+      },
+      "additionalProperties": false
+    },
+    "verb-press": {
+      "type": "object",
+      "required": ["press"],
+      "properties": {
+        "intent": true, "optional": true, "when": true, "expect": true, "checkpoint": true, "timeoutMs": true,
+        "press": {
+          "type": "object",
+          "description": "Presses one key chord on target, or with no target on the element that has the focus. Refused on a password field. Not a declared write: a key that would post a form is refused like a click on its button.",
+          "required": ["key"],
+          "properties": {
+            "key": {
+              "type": "string",
+              "pattern": "^((Ctrl\\+)?(Alt\\+)?(Shift\\+)?(Enter|Tab|Escape|Backspace|Delete|Up|Down|Left|Right|PageUp|PageDown|Home|End|F[1-9]|F1[0-2])|Ctrl\\+A)$",
+              "description": "Enter, Tab, Escape, Backspace, Delete, Up, Down, Left, Right, PageUp, PageDown, Home, End or F1 to F12, alone or after Ctrl, Alt and Shift in that order (Shift+Tab, Ctrl+Enter), or Ctrl+A. Never a key that types a character, and never {{var.name}}."
+            },
+            "target": { "$ref": "#/definitions/locator" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "verb-hover": {
+      "type": "object",
+      "required": ["hover"],
+      "properties": {
+        "intent": true, "optional": true, "when": true, "expect": true, "checkpoint": true, "timeoutMs": true,
+        "hover": { "$ref": "#/definitions/locator", "description": "Moves the mouse over one element, for a menu that opens on hover." }
       },
       "additionalProperties": false
     }

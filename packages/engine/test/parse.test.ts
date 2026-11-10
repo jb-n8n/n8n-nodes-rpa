@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { parseDesktopScript, parseScript, ScriptShapeError, verbOf } from '../src/steps/parse.js';
 import { baselineScript, reportScript } from './helpers.js';
 import { FIRST_STEP_GOTO, varInWriteLocator } from '../src/messages.js';
+import { browserKeyProblem } from '../src/steps/browser-keys.js';
 
 const URL0 = 'http://127.0.0.1:9999';
 const withStep = (step: unknown) => ({ ...baselineScript(URL0), steps: [step] });
@@ -29,7 +30,7 @@ describe('parseScript', () => {
     );
   });
   it('rejects unknown verbs, two verbs, missing intent and unknown keys', () => {
-    expect(issuesOf(withStep({ intent: 'x', hover: { css: 'a' } }))[0]).toMatch(/exactly one action/);
+    expect(issuesOf(withStep({ intent: 'x', drag: { css: 'a' } }))[0]).toMatch(/exactly one action/);
     expect(issuesOf(withStep({ intent: 'x', click: { css: 'a' }, goto: '/x' }))[0]).toMatch(/exactly one action/);
     expect(issuesOf(withStep({ click: { css: 'a' } }))[0]).toMatch(/intent/);
     expect(issuesOf(withStep({ intent: 'x', click: { css: 'a' }, eval: 'alert(1)' }))[0]).toMatch(/unknown key "eval"/);
@@ -375,5 +376,56 @@ describe('step conditions (when)', () => {
     expect(desk({ visible: uia })).toEqual([]);
     expect(desk({ hidden: uia })).toEqual(['steps[0].when has unknown key "hidden"', 'steps[0].when.visible must be a locator object']);
     expect(desk({ var: 'mode', equals: 'x' })).toEqual(['steps[0].when has unknown key "var"', 'steps[0].when has unknown key "equals"', 'steps[0].when.visible must be a locator object']);
+  });
+});
+
+describe('press, hover and modifier clicks', () => {
+  const at = (step: unknown) => issuesOf(withStep(step));
+  const KEY_PROBLEM = browserKeyProblem('a') as string;
+  it('press parses with and without a target, hover takes a locator, and click takes modifiers', () => {
+    for (const step of [
+      { intent: 'Search', press: { key: 'Enter', target: { label: 'Search' } } },
+      { intent: 'Next field', press: { key: 'Shift+Tab' } },
+      { intent: 'Select all', press: { key: 'Ctrl+A', target: { role: 'textbox', name: '{{var.field}}' } } },
+      { intent: 'Open the menu', hover: { role: 'button', name: 'Reports' } },
+      { intent: 'Open by name', hover: { text: '{{var.menu}}' } },
+      { intent: 'Pick another', click: { text: 'Beta' }, modifiers: ['Ctrl'] },
+      { intent: 'Pick a range', click: { text: 'Gamma' }, modifiers: ['Shift', 'Ctrl', 'Alt'] },
+    ]) expect(at(step), JSON.stringify(step)).toEqual([]);
+    expect(verbOf({ intent: 'x', press: { key: 'Tab' } })).toBe('press');
+    expect(verbOf({ intent: 'x', hover: { css: 'a' } })).toBe('hover');
+  });
+  it('refuses an unknown key, a key with a variable, a bad target and unknown keys in press', () => {
+    for (const key of ['a', 'Ctrl+V', 'Win+R', '', '{{var.key}}', 7, undefined]) {
+      expect(at({ intent: 'x', press: { key } }), String(key)).toEqual([`steps[0].press.key ${KEY_PROBLEM}`]);
+    }
+    expect(at({ intent: 'x', press: { key: 'Tab', target: 'Search' } })).toEqual(['steps[0].press.target must be a locator object']);
+    expect(at({ intent: 'x', press: { key: 'Tab', target: { label: '{{var.f}}' } } })).toEqual([expect.stringContaining('steps[0].press.target.label')]);
+    expect(at({ intent: 'x', press: { key: 'Tab', text: 'x' } })).toEqual(['steps[0].press has unknown key "text"']);
+    expect(at({ intent: 'x', press: 'Enter' })).toEqual(['steps[0].press must be an object']);
+    expect(at({ intent: 'x', hover: 'Reports' })).toEqual(['steps[0].hover must be a locator object']);
+  });
+  it('refuses empty, repeated or unknown modifiers, and modifiers beside another verb', () => {
+    const MODS = 'steps[0].modifiers must be a non-empty list of Ctrl, Shift and Alt, each at most once';
+    for (const modifiers of [[], ['Ctrl', 'Ctrl'], ['Control'], ['Meta'], ['ctrl'], 'Ctrl', [1], null]) {
+      expect(at({ intent: 'x', click: { css: '#a' }, modifiers }), JSON.stringify(modifiers)).toEqual([MODS]);
+    }
+    for (const step of [
+      { intent: 'x', hover: { css: '#a' }, modifiers: ['Ctrl'] },
+      { intent: 'x', press: { key: 'Enter' }, modifiers: ['Ctrl'] },
+      { intent: 'x', clickAll: { target: { css: '#a' }, max: 2 }, modifiers: ['Shift'] },
+      { intent: 'x', goto: `${URL0}/a`, modifiers: ['Ctrl'] },
+    ]) expect(at(step), Object.keys(step)[1]).toEqual(['steps[0] has unknown key "modifiers"']);
+    expect(at({ intent: 'x', click: { css: '#a' }, waitUntil: 'load', modifiers: ['Ctrl'] })).toEqual(['steps[0] has unknown key "waitUntil"']);
+  });
+  it('press is not a write: a variable condition and a variable in its target are allowed', () => {
+    expect(at({ intent: 'x', press: { key: 'Enter', target: { text: '{{var.f}}' } }, when: { var: 'mode', equals: 'full' } })).toEqual([]);
+  });
+  it('the new verbs are browser steps: a desktop step set refuses them', () => {
+    const desk = (step: unknown) => {
+      try { parseDesktopScript({ surface: 'desktop', name: 'd', version: 1, app: { exe: 'App.exe' }, steps: [step] }); return []; } catch (e) { return (e as ScriptShapeError).issues; }
+    };
+    expect(desk({ intent: 'x', press: { key: 'Enter' } })).toEqual([expect.stringContaining('press')]);
+    expect(desk({ intent: 'x', hover: { css: '#a' } })).toEqual([expect.stringContaining('hover')]);
   });
 });

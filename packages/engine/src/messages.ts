@@ -147,6 +147,7 @@ export const elementTooTall = (h: number): string => `limit: the element is ${h}
 // Writes.
 export const PASSWORD_FILL_REFUSED = 'Fill and Submit Form cannot fill password fields. For sites behind a login, use Run Steps with a Site Login.';
 export const PASSWORD_FILL_REFUSED_STEPS = 'fill cannot type into a password field: passwords are typed only by signIn with a Site Login';
+export const PRESS_PASSWORD_REFUSED = 'press cannot send a key to a password field: passwords are typed only by signIn with a Site Login';
 export const formPostsElsewhere = (host: string, hosts: string[]): string => `the form posts to ${host}, which is not allowed. This run only submits to ${hosts.join(', ')}.`;
 export const WINDOW_STEP_NOT_CLICK = 'the write window must be on a click step';
 /** A {{var.x}} in a locator of a step that writes or types secrets: a run variable must never steer a write. */

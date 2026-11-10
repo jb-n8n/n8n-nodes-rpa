@@ -5,6 +5,7 @@ import {
 } from '../messages.js';
 import { SECRET_FILL_VALUE } from '../secrets/render.js';
 import { secretFillVariables } from '../secrets/secret-fills.js';
+import { browserKeyProblem } from './browser-keys.js';
 import { DESKTOP_WRITE_VERBS, READ_NAME, stepChordProblem } from './desktop-vocabulary.js';
 
 export class ScriptShapeError extends Error {
@@ -21,6 +22,9 @@ const LOCATOR_KEYS = new Set([...LOCATOR_KINDS, 'name', 'exact', 'within', 'fram
 const METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
 const WAIT_UNTIL = ['load', 'domcontentloaded', 'networkidle'];
 const FIELD_ATTRIBUTES = ['text', 'href', 'src', 'title', 'alt', 'aria-label'];
+const CLICK_MODIFIERS = ['Ctrl', 'Shift', 'Alt'];
+/** The keys a step may hold beside its verb: goto's waitUntil and click's modifiers. On any other verb they are unknown keys. */
+const VERB_EXTRAS: Partial<Record<StepVerb, string[]>> = { goto: ['waitUntil'], click: ['modifiers'] };
 
 /** An absolute http(s) URL without a {{template}}, normalised as the browser will load it; undefined otherwise. */
 export function absoluteHttpUrl(v: unknown): string | undefined {
@@ -191,8 +195,7 @@ function checkSteps(steps: unknown, path: string, issues: string[], nested: bool
 function checkStep(s: unknown, path: string, issues: string[], nested: boolean) {
   if (!isObj(s)) { issues.push(`${path} must be an object`); return; }
   if (!isStr(s.intent) || s.intent.length > 200) issues.push(`${path}.intent must be a non-empty string of at most 200 characters`);
-  // waitUntil belongs to goto only; on any other verb it is reported as an unknown key.
-  const verbExtras = Object.hasOwn(s, 'goto') ? ['waitUntil'] : [];
+  const verbExtras = Object.entries(VERB_EXTRAS).flatMap(([verb, extras]) => (Object.hasOwn(s, verb) ? extras : []));
   const verbs = Object.keys(s).filter((k) => !BASE_KEYS.has(k) && !verbExtras.includes(k));
   const known = verbs.filter((k) => (STEP_VERBS as readonly string[]).includes(k));
   if (known.length !== 1 || verbs.length !== 1) {
@@ -224,7 +227,23 @@ function checkStep(s: unknown, path: string, issues: string[], nested: boolean) 
         issues.push(`${path}.waitUntil must be "load", "domcontentloaded" or "networkidle"`);
       }
       break;
-    case 'click':
+    case 'click': {
+      checkLocator(v, p, issues);
+      const mods = s.modifiers;
+      if (mods !== undefined && !(Array.isArray(mods) && mods.length > 0 && mods.every((m) => CLICK_MODIFIERS.includes(m as string)) && new Set(mods).size === mods.length)) {
+        issues.push(`${path}.modifiers must be a non-empty list of Ctrl, Shift and Alt, each at most once`);
+      }
+      break;
+    }
+    case 'press': {
+      if (!isObj(v)) { issues.push(`${p} must be an object`); break; }
+      checkKeys(v, ['key', 'target'], p, issues);
+      const problem = browserKeyProblem(typeof v.key === 'string' ? v.key : '');
+      if (problem) issues.push(`${p}.key ${problem}`);
+      if (v.target !== undefined) checkLocator(v.target, `${p}.target`, issues);
+      break;
+    }
+    case 'hover':
       checkLocator(v, p, issues);
       break;
     case 'signIn':
