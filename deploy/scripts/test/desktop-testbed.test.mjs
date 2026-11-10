@@ -1,11 +1,12 @@
 // desktop-testbed.sh against fake terraform, aws, curl and pbcopy on PATH: the state stays outside the repository, up
 // opens the test bed only to the given (or detected) CIDRs, stop/start/status/fingerprint/install call the right AWS
-// APIs, no URL query string reaches the output, and the Administrator password never does unless asked for.
+// APIs, no URL query string reaches the output, and the Administrator password never does unless asked for. One test
+// runs the module's install-package.ps1 itself, where PowerShell (pwsh) is installed, up to its refusal of a URL.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -15,6 +16,10 @@ const INSTANCE = 'i-0123456789abcdef0';
 const SECRET = 'AdminPw-ZYXWVUTSRQPONMLKJIHGFEDCBA-0123';
 const FINGERPRINT = Array.from({ length: 32 }, (_, i) => (i * 7 + 16).toString(16).toUpperCase().padStart(2, '0')).join(':');
 const BROWSER_FINGERPRINT = Array.from({ length: 32 }, (_, i) => (i * 5 + 32).toString(16).toUpperCase().padStart(2, '0')).join(':');
+const INSTALL_PACKAGE = fileURLToPath(new URL('../../terraform/modules/aws-ec2-desktop-runner/scripts/install-package.ps1', import.meta.url));
+// PowerShell 7, where there is one: RPA_PWSH, pwsh on PATH (GitHub's runners have it), or this project's tool cache.
+const PWSH = [process.env.RPA_PWSH, 'pwsh', join(homedir(), '.cache', 'rpa-tools', 'pwsh', 'pwsh')]
+  .filter(Boolean).find((p) => spawnSync(p, ['-NoProfile', '-NonInteractive', '-Command', 'exit 0']).status === 0);
 const SECRET_ARN = 'arn:aws:secretsmanager:us-west-2:123456789012:secret:rpa-desktop-testbed-admin-password-MnOpQr';
 
 // Each fake appends one line per call to calls.log: the tool, then its arguments, separated by \x1f.
@@ -190,6 +195,19 @@ test('status shows state, URL and SSM, and needs a brought-up test bed', () => {
     assert.match(r.stdout, /runner URL wss:\/\/203\.0\.113\.50:8765\/rpa\/v1/);
     assert.match(r.stdout, /browser URL wss:\/\/203\.0\.113\.50:3000$/m);
     assert.match(r.stdout, /SSM: Online/);
+    assert.match(r.stdout, /first boot: unknown/, 'no answer from the VM');
+    const send = t.calls().find((c) => c.includes('send-command'));
+    const params = JSON.parse(send[send.indexOf('--parameters') + 1]);
+    assert.match(params.commands[0], /^\$d = 'C:\\Program Files\\RPA Test Bed'; if \(Test-Path -LiteralPath \(\$d \+ '\\setup\.done'\)\) \{ 'done' \}/);
+    for (const [answer, shown] of [['done', /first boot: finished$/m], ['failed', /first boot: FAILED \(see C:\\Program Files\\RPA Test Bed\\setup\.log on the VM\)$/m], ['running\r', /first boot: still running$/m], ['not started', /first boot: not started yet$/m], ['done\x1b[2J', /first boot: unknown/]]) {
+      r = t.run(['status'], { FAKE_SSM_OUTPUT: answer });
+      assert.equal(r.code, 0, r.out);
+      assert.match(r.stdout, shown, answer);
+      assert.ok(!r.stdout.includes('\x1b'), 'nothing but the fixed words reaches the terminal');
+    }
+    r = t.run(['status'], { FAKE_SSM_STATUS: 'Failed', FAKE_SSM_OUTPUT: 'done' });
+    assert.equal(r.code, 0, 'a failed question does not fail status');
+    assert.match(r.stdout, /first boot: unknown/);
   } finally { t.done(); }
 });
 
@@ -261,9 +279,45 @@ test('install sends the package URL and hash over SSM and refuses a bad URL or a
       assert.ok(!r.out.includes('secret-part'), 'a refused URL is not echoed with its query string');
     }
     assert.ok(!t.calls().slice(sent).some((c) => c.includes('send-command')), 'nothing is sent for a refused URL or hash');
+    // What the messages show of a URL: nothing after ? or #, and no user name or password in front of the host.
+    r = t.run(['install', 'https://user:pw-part@example.com:8443/a/rpa-windows-x64.zip#frag-part?sig=secret-part', sha], { FAKE_SSM_OUTPUT: 'done' });
+    assert.equal(r.code, 0, r.out);
+    assert.match(r.stdout, /installing the package from https:\/\/example\.com:8443\/a\/rpa-windows-x64\.zip \(/);
+    for (const part of ['pw-part', 'frag-part', 'secret-part']) assert.ok(!r.out.includes(part), part);
     r = t.run(['install-runner', url, sha]);
     assert.equal(r.code, 2, 'install-runner is gone');
   } finally { t.done(); }
+});
+
+test('install-package.ps1 shows no query string and no password of a URL it cannot open', { skip: PWSH ? false : 'PowerShell (pwsh) is not installed' }, () => {
+  // The script as the VM runs it over SSM (an upgrade), from a folder of its own, where it also keeps its log. These
+  // URLs pass the character test and are no URLs: the script stops before it looks at the machine or downloads anything.
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'install-package-test-')));
+  try {
+    const script = join(dir, 'install-package.ps1');
+    copyFileSync(INSTALL_PACKAGE, script);
+    for (const [url, shown] of [
+      ['https://example.com:99999/a/rpa-windows-x64.zip?X-Amz-Signature=secret-part&x=1', 'https://example.com:99999/a/rpa-windows-x64.zip'],
+      ['https://[::1/rpa-windows-x64.zip?X-Amz-Signature=secret-part', 'https://[::1/rpa-windows-x64.zip'],
+      ['https://user:pw-part@example.com:99999/rpa-windows-x64.zip#frag-part?sig=secret-part', 'https://example.com:99999/rpa-windows-x64.zip'],
+    ]) {
+      rmSync(join(dir, 'install-package.log'), { force: true });
+      const r = spawnSync(PWSH, ['-NoProfile', '-NonInteractive', '-File', script, '-Url', url, '-Sha256', 'ab'.repeat(32)], { encoding: 'utf8', env: { PATH: process.env.PATH, HOME: dir, NO_COLOR: '1' } });
+      const log = readFileSync(join(dir, 'install-package.log'), 'utf8');
+      assert.notEqual(r.status, 0, url);
+      assert.ok(r.stdout.includes(`FAILED: The package URL is not a URL that can be opened: ${shown}\n`), r.stdout + r.stderr);
+      assert.ok(log.includes(`FAILED: The package URL is not a URL that can be opened: ${shown}`), log);
+      for (const part of ['secret-part', 'pw-part', 'frag-part', 'X-Amz-Signature']) {
+        assert.ok(!(r.stdout + r.stderr).includes(part), `${part} is not in the output: ${r.stdout}${r.stderr}`);
+        assert.ok(!log.includes(part), `${part} is not in the log: ${log}`);
+      }
+    }
+    // A URL outside the character test is refused with words only.
+    const r = spawnSync(PWSH, ['-NoProfile', '-NonInteractive', '-File', script, '-Url', "https://example.com/a'b.zip?sig=secret-part", '-Sha256', 'ab'.repeat(32)], { encoding: 'utf8', env: { PATH: process.env.PATH, HOME: dir, NO_COLOR: '1' } });
+    assert.notEqual(r.status, 0);
+    assert.ok(r.stdout.includes('FAILED: The package URL must be an https:// URL of plain URL characters, without spaces or quotes.\n'), r.stdout + r.stderr);
+    assert.ok(!(r.stdout + r.stderr + readFileSync(join(dir, 'install-package.log'), 'utf8')).includes('secret-part'));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('an unknown command prints the usage and exits 2', () => {

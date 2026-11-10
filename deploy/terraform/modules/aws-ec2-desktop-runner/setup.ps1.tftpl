@@ -5,10 +5,11 @@
 # and the scheduled tasks are the installer's work), applies runner_policy with the package's RpaPolicy.exe, and
 # restarts so that rpa-runner signs in on the console. Without package_url it installs nothing of the product.
 #
-# Every text value from Terraform arrives base64-encoded, so no input can break out of a string. The passwords are made
-# here and written to Secrets Manager before they are used; the two tokens are made by the installer and copied to
-# Secrets Manager after it. None is written to output or a log, and a password is text only on its way to Secrets
-# Manager: Windows gets it as a SecureString that is filled character by character, not by a command that takes text.
+# Every text value from Terraform arrives base64-encoded and is decoded into a variable; none is pasted into the
+# script as code. The passwords are made here and written to Secrets Manager before they are used; the two tokens are
+# made by the installer and copied to Secrets Manager after it. None is written to output or a log, and a password is
+# text only on its way to Secrets Manager: Windows gets it as a SecureString that is filled character by character,
+# not by a command that takes text.
 # What belongs to the test bed (this log, the done marker, install-package.ps1, the policy change file, the unpacked
 # package while it installs) is in C:\Program Files\RPA Test Bed, which only SYSTEM and Administrators can read or
 # change. Progress: setup.log there.
@@ -139,8 +140,11 @@ Log 'runner and browser tokens copied to Secrets Manager'
 # 7. runner_policy, on top of the installer's starter policy (no app allowed), through the package's policy tool. The
 #    change file is in the test bed's folder, which only administrators can change. The tool honours --yes only when
 #    every other process attached to its console is elevated, and otherwise asks "Apply these changes? [y/N]": nobody
-#    is there at a first boot, so the answer is also on its standard input. Its lines go to this log; a refusal fails
-#    the setup and leaves the starter policy.
+#    is there at a first boot, so the answer is also on its standard input. Its lines go to this log (a line
+#    "--yes is ignored" there says that the piped answer was read); a refusal fails the setup and leaves the starter
+#    policy.
+#    Keep the tool's output piped, as it is here: with its output on a console the tool first looks at the size of
+#    that console's buffer and can refuse to ask, and with its input on a console it waits for Enter before it exits.
 function Invoke-PolicyTool([string]$tool, [string]$change) {
   # What the tool writes to its error stream must not end the setup by itself; its exit code decides.
   $ErrorActionPreference = 'Continue'

@@ -367,10 +367,10 @@ run "the_package_reaches_the_vm" {
   assert {
     # No secret: passwords are made on the VM, the tokens by the installer; nothing of them goes to a log or to output.
     condition = (
-      strcontains(local.setup, "New-Secret 32") && !strcontains(local.setup, "ShowTokens") &&
+      strcontains(local.setup, "New-Secret 32") && strcontains(local.setup, "-notmatch 'rpa|runner|admin'") && !strcontains(local.setup, "ShowTokens") &&
       length(regexall("(Log|Say|Write-Output|Write-Host|Add-Content|Set-Content)[^\\n]*\\$(plain|value|secure|UserPassword)\\b", local.setup)) == 0
     )
-    error_message = "The user data holds no secret, and the setup writes no password or token to a log, a file or its output."
+    error_message = "The user data holds no secret, passwords avoid the account names (Windows refuses a password that holds one), and the setup writes no password or token to a log, a file or its output."
   }
   assert {
     condition     = local.user_data_size <= 12288
@@ -420,6 +420,20 @@ run "a_change_of_allowed_cidrs_does_not_change_the_user_data" {
   assert {
     condition     = toset(keys(aws_vpc_security_group_ingress_rule.allowed)) == toset(flatten([for p in ["runner", "browser", "rdp"] : [for c in var.allowed_cidrs : "${p} ${c}"]]))
     error_message = "The changed CIDRs are in the security group's rules."
+  }
+}
+
+run "the_install_script_and_the_installer_agree_on_the_success_line" {
+  command = plan
+
+  assert {
+    # install-package.ps1 reads the installer's output for this exact line, because the installer's exit code does not
+    # say that it finished when it runs inside another PowerShell.
+    condition = (
+      length(regexall("(?m)^Write-Host 'RPA is installed\\.'\r?$", file("${path.module}/../../../../desktop/installer/Install-Rpa.ps1"))) == 1 &&
+      strcontains(file("${path.module}/scripts/install-package.ps1"), "if ($text -ceq 'RPA is installed.') { $script:installed = $true }")
+    )
+    error_message = "desktop/installer/Install-Rpa.ps1 must print exactly 'RPA is installed.' once, as its own line, when it has finished: install-package.ps1 takes that line as success. Change both together."
   }
 }
 

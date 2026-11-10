@@ -44,7 +44,7 @@ With `package_url` set, it goes on:
 7. Applies `runner_policy` with the package's policy tool (see [The policy](#the-policy)).
 8. Writes `setup.done` and restarts the VM. `rpa-runner` signs in on the console and the two tasks start the runner and the browser.
 
-A step that fails ends the setup there: `setup.log` gets a line `setup FAILED at line <n>: <reason>`, with the lines of `install-package.ps1`, the installer and the policy tool above it, and the VM does not restart. Nothing runs the setup again; fix the input and replace the VM.
+A step that fails ends the setup there: `setup.log` gets a line `setup FAILED at line <n>: <reason>`, with the lines of `install-package.ps1`, the installer and the policy tool above it, and the VM does not restart. Nothing runs the setup again; fix the input and replace the VM. `desktop-testbed.sh status` says whether the first boot finished, failed or is still running.
 
 ### Who can reach the ports
 
@@ -72,11 +72,11 @@ The rules stop a connection to that address from a process of those users. They 
 3. Unpacks the zip after checking that every entry lands inside its one top folder, `rpa-windows-x64`.
 4. Runs `Install-Rpa.ps1` from there, inside the same PowerShell: the password is handed over as a `SecureString` and is not put on a command line. The installer itself reads who could change the unpacked package and refuses to run when that is anyone but administrators.
 5. Adds or updates the metadata rule for the bot user, `RPA-Runner-No-IMDS` (see [The instance metadata blocks](#the-instance-metadata-blocks)), whatever the installer reported, as long as its user is there.
-6. Removes the unpacked package.
+6. Removes the unpacked package, and says so in its log when it could not.
 
 Over SSM the script takes only the URL and the hash and runs the installer as an upgrade, with `-Force` and the user and ports the install was made with. The installer then replaces the programs and keeps the user, the data, the policy, the tokens and the firewall choice of the install; a run in progress fails. It does not make a first install: on a VM without the product it stops with a message.
 
-The script writes its own lines and the installer's to `install-package.log` beside it and to its output. Neither holds a URL's query string, where a pre-signed URL carries its signature.
+The script writes its own lines and the installer's to `install-package.log` beside it and to its output. It writes the URL there without its query string (where a pre-signed URL carries its signature) and without a user name or password in front of the host, also when it fails on a URL it cannot open.
 
 The zip must be somewhere the VM can fetch it over HTTPS without a login: a release asset, or a private S3 bucket and a pre-signed URL valid for an hour. `package_url` is stored in the user data and the state, so never use a URL with a long-lived credential in it.
 
@@ -132,7 +132,7 @@ The installer writes a starter policy that allows no app. `runner_policy` is wha
 "C:\Program Files\RPA Runner\runner\RpaPolicy.exe" apply "C:\Program Files\RPA Test Bed\policy-change.json" --yes
 ```
 
-The tool honours `--yes` only when every other process attached to its console is elevated; otherwise it prints the change and asks `Apply these changes? [y/N]`. Nobody is there to answer at a first boot, so the setup also puts `y` on the tool's standard input. What the tool prints, including the lines that describe the change, goes to `setup.log`. When the tool refuses the change or fails, the setup fails with `RpaPolicy.exe did not apply the policy change (exit code <n>)` and the starter policy stays.
+The tool honours `--yes` only when every other process attached to its console is elevated; otherwise it prints the change and asks `Apply these changes? [y/N]`. Nobody is there to answer at a first boot, so the setup also puts `y` on the tool's standard input. What the tool prints, including the lines that describe the change, goes to `setup.log`; a line `RpaPolicy: --yes is ignored: ...` there means the piped answer was read, and its absence that `--yes` was honoured. Which of the two a first boot takes has not been observed yet. The call works this way only while the tool's output and input stay piped: with its output on a console the tool first checks the size of that console's buffer and can refuse to ask, and with its input on a console it waits for Enter before it exits. When the tool refuses the change or fails, the setup fails with `RpaPolicy.exe did not apply the policy change (exit code <n>)` and the starter policy stays.
 
 The default change:
 
@@ -164,7 +164,7 @@ What `runner_policy` does not carry:
 - **`helperProcesses` and `clipboardRead`.** The tool accepts them in a change, but this module has no input for them. Apply such a change on the VM with `RpaPolicy.exe`.
 - **Removals.** A change only adds. `desktop/README.md` ("Changing the policy") describes the tool.
 
-The tool's limits for one change are checked at plan time: at most 40 entries (apps, their argument lists, write controls and gated keys together), at most 20 arguments in a list, and at most 260 characters in a name, path, id or argument.
+Some of the tool's limits for one change are also checked at plan time, so that a plan fails and not a first boot: at most 40 entries (apps, their argument lists, write controls and gated keys together), at most 20 arguments in a list, at most 260 characters in an app's or write control's name, path, id or argument, and no short (8.3) name in a path. Only the tool checks the rest, at first boot: the 8,000 characters its summary of the change may have, the 260 characters of a gated key, the form of a key chord, and whatever the runner itself would refuse in the resulting policy. A change that fails there fails the setup.
 
 ## Example
 
@@ -176,7 +176,7 @@ export AWS_REGION=us-west-2
 export TESTBED_PACKAGE_URL=https://.../rpa-windows-x64.zip   # with TESTBED_PACKAGE_SHA256; leave both out for a clean VM
 export TESTBED_PACKAGE_SHA256=<sha256>
 deploy/scripts/desktop-testbed.sh up                # allowed_cidrs = this machine's public IPv4 /32
-deploy/scripts/desktop-testbed.sh status            # state, runner and browser URLs, SSM
+deploy/scripts/desktop-testbed.sh status            # state, URLs, SSM, and whether the first boot finished
 deploy/scripts/desktop-testbed.sh fingerprint       # both fingerprints, for the credentials' fingerprint fields
 deploy/scripts/desktop-testbed.sh install https://.../rpa-windows-x64.zip <sha256>   # upgrade, no new VM
 deploy/scripts/desktop-testbed.sh rdp-password      # copies the Administrator password to the clipboard
@@ -229,7 +229,7 @@ While running, you pay for the instance, including the Windows licence, and its 
 - **The user data** holds the setup script, the secrets' ARNs, the two ports, `runner_policy`, `package_url` and `package_sha256`. Anyone who may call `ec2:DescribeInstanceAttribute` on the instance can read it, and so can any process on the VM that can reach the instance metadata service (SYSTEM; the two firewall rules block members of Users and the bot user). So `package_url` is not a place for a long-lived credential.
 - **The Windows PowerShell event log.** Windows PowerShell can record the text of scripts it runs in `Microsoft-Windows-PowerShell/Operational`, and the setup script's text includes `package_url`. The first boot sets that log's access to SYSTEM and Administrators (`wevtutil sl ... /ca:O:BAG:SYD:(A;;0xf0007;;;SY)(A;;0x7;;;BA)`), so any other reader the log had (the Event Log Readers group, for one) loses it. Who could read the log before that on this Windows was not checked on a machine, and neither was the command.
 - **The passwords and tokens on their way to Secrets Manager.** Each value is text inside the setup's PowerShell process while it is handed to the AWS Tools cmdlet that writes it, over HTTPS, with the instance role. If PowerShell module logging is turned on for the VM (Windows has it off unless someone turns it on), Windows records that cmdlet's parameters, the value among them, in the VM's event log. The setup writes no secret to its own log or output.
-- **`desktop-testbed.sh install`** sends one PowerShell command line over SSM Run Command: the path of `install-package.ps1`, the URL and the hash. SSM keeps that command, with the URL and its query string, in its command history; use a short-lived URL. The script accepts only `https://` URLs made of URL characters, without quotes, so the URL cannot end the quoted string it travels in.
+- **`desktop-testbed.sh install`** sends one PowerShell command line over SSM Run Command: the path of `install-package.ps1`, the URL and the hash. SSM keeps that command, with the URL and its query string, in its command history; use a short-lived URL. The URL travels inside single quotes; `desktop-testbed.sh` and the script on the VM refuse a URL that holds a quote, a space, a backtick or a character outside ASCII.
 - **RDP as Administrator** opens a session of its own and leaves `rpa-runner`'s console session alone. Don't RDP in as `rpa-runner`: disconnecting that session locks its desktop, and the runner then reports `desktop_unavailable` until the VM restarts.
 - **The instance role** can use SSM and write, never read, its four secrets. Two outbound firewall rules block the metadata address, where the role's credentials come from, for members of Users and for the bot user ([The instance metadata blocks](#the-instance-metadata-blocks)). SYSTEM reaches it, and an administrator can remove the rules, with two consequences:
   - `AmazonSSMManagedInstanceCore` also allows `ssm:GetParameter(s)` on every parameter, so an administrator on the VM could read the account's SecureString parameters in the region. Keep the test bed in an account without production parameters, or replace the managed policy with an inline one limited to `ssm:UpdateInstanceInformation`, `ssmmessages:*Channel` and `ec2messages:*`.
@@ -256,6 +256,8 @@ While running, you pay for the instance, including the Windows licence, and its 
 - the outputs
 - the input validations (0.0.0.0/0, ::/0, /1, /8, IPv6 /32, host bits, Arm types, a package URL without its hash and a hash without its URL, http:// URLs, quotes, short hashes, equal ports, a policy change over the policy tool's limits)
 
+One run also reads `desktop/installer/Install-Rpa.ps1`: `install-package.ps1` takes the installer's line `RPA is installed.` as its sign of success, and the test fails when the installer no longer prints exactly that line.
+
 These tests read the rendered script; they do not run it. The first-boot script and `install-package.ps1` run only on a real VM, and no first boot has been run with this version yet.
 
-`deploy/scripts/test/desktop-testbed.test.mjs` runs `desktop-testbed.sh` against fake `terraform`, `aws`, `curl` and `pbcopy` commands.
+`deploy/scripts/test/desktop-testbed.test.mjs` runs `desktop-testbed.sh` against fake `terraform`, `aws`, `curl` and `pbcopy` commands. Where PowerShell 7 (`pwsh`) is installed, it also runs `install-package.ps1` itself with URLs it cannot open and checks that neither its output nor its log holds their query string.

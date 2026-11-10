@@ -21,9 +21,10 @@
 # Install-Rpa.ps1 itself reads who could change the unpacked package and refuses when that is anyone but
 # administrators. The SHA-256 is what ties the download to the package you chose; the URL only says where it is.
 #
-# -UserPassword is a SecureString and reaches the installer inside this process, never on a command line. The log
-# (install-package.log beside this file) and the output hold this script's lines and the installer's, and never a URL's
-# query string, where a pre-signed URL carries its signature.
+# -UserPassword is a SecureString and reaches the installer inside this process, not on a command line. The log
+# (install-package.log beside this file) and the output hold this script's lines and the installer's. The URL is
+# written there without its query string (where a pre-signed URL carries its signature) and without a user name or
+# password in front of the host, also when the script fails.
 [CmdletBinding(DefaultParameterSetName = 'Upgrade')]
 param(
   [Parameter(Mandatory = $true)][string]$Url,
@@ -38,6 +39,9 @@ $ProgressPreference = 'SilentlyContinue'
 $logFile = Join-Path $PSScriptRoot 'install-package.log'
 $work = $null
 $script:installed = $false
+# The URL as it is written to the log and the output: the text before the first ? or #, without anything in front of
+# an @ in the host part. Made with text operations only: a conversion to a URL type that fails names the whole value.
+$shown = ($Url -split '[?#]', 2)[0] -replace '^https://[^/]*@', 'https://'
 
 function Say([string]$message) {
   Add-Content -LiteralPath $logFile -Value ('{0} {1}' -f (Get-Date -Format o), $message)
@@ -49,6 +53,7 @@ function Say([string]$message) {
 function Remove-Work([string]$path) {
   $ErrorActionPreference = 'Continue'
   & (Join-Path ([Environment]::SystemDirectory) 'cmd.exe') /d /c ('rd /s /q "\\?\{0}"' -f $path) 2>&1 | Out-Null
+  if (Test-Path -LiteralPath $path) { Say "could not remove $path; remove it by hand" }
 }
 
 # The outbound rule that blocks the instance metadata address for the bot user, by its SID, so that neither the two
@@ -79,6 +84,8 @@ try {
   # RFC 3986's characters without the single quote. \z, not $: $ also matches before a line break at the end.
   if ($Url -cnotmatch '^https://[A-Za-z0-9._~:/?#\[\]@!$&()*+,;=%-]+\z') { throw 'The package URL must be an https:// URL of plain URL characters, without spaces or quotes.' }
   if ($Sha256 -notmatch '^[0-9A-Fa-f]{64}\z') { throw 'The SHA-256 must be 64 hexadecimal characters.' }
+  $parsed = $null
+  if (-not [Uri]::TryCreate($Url, [UriKind]::Absolute, [ref]$parsed)) { throw "The package URL is not a URL that can be opened: $shown" }
   $first = $PSCmdlet.ParameterSetName -eq 'FirstInstall'
   $botUser = $User
   if (-not $first) {
@@ -91,7 +98,6 @@ try {
     if ($install.browser -ne $true) { $upgrade.NoBrowser = $true }
     $botUser = $upgrade.User
   }
-  $shown = ([Uri]$Url).GetLeftPart([UriPartial]::Path)
 
   # A new folder that only SYSTEM and Administrators can read or change, with those rules from its first moment.
   $folder = Join-Path (Join-Path $PSScriptRoot 'pkg') ([guid]::NewGuid().ToString('N').Substring(0, 12))
@@ -145,8 +151,11 @@ try {
   if (-not $script:installed) { throw "Install-Rpa.ps1 did not finish (exit code $code); its lines above say why." }
   Say 'done'
 } catch {
-  Say ('FAILED: {0}' -f $_.Exception.Message)
-  throw
+  # The message of a failure can name the URL as it was given; only its shown form goes to the log, the output and
+  # the caller.
+  $message = ([string]$_.Exception.Message).Replace($Url, $shown) -replace '(https?://[^\s?#]*)[?#]\S*', '$1'
+  Say "FAILED: $message"
+  throw $message
 } finally {
   if ($work) { Remove-Work $work }
 }

@@ -9,7 +9,8 @@
 #   up [apply args]          terraform init + apply (asks before changing anything; pass -auto-approve to skip that).
 #                            The first boot takes about 10 minutes; with a package it then installs it, the VM restarts
 #                            once and rpa-runner signs in.
-#   status                   instance state, public IP, runner and browser URLs and whether SSM sees the VM
+#   status                   instance state, public IP, runner and browser URLs, whether SSM sees the VM, and
+#                            whether the first boot finished, failed or is still running
 #   stop                     stops the VM (no instance charge while stopped) and waits until it has
 #   start                    starts it, waits until SSM sees it, prints the new URLs (the IP changes)
 #   fingerprint              the SHA-256 fingerprints of the runner's and the browser's certificates, one line each, as
@@ -26,7 +27,8 @@
 #                            inside this repository, so a test bed's state can't be committed.
 #   TESTBED_ALLOWED_CIDRS    (up) comma-separated CIDRs for the runner port, the browser port and RDP; default this
 #                            machine's public IPv4 as a /32 (https://checkip.amazonaws.com). Wider than /16 (IPv6 /48)
-#                            is refused here and by the module.
+#                            is refused here and by the module. A later up with other CIDRs changes the security
+#                            group's rules and leaves the VM as it is.
 #   TESTBED_PACKAGE_URL, TESTBED_PACKAGE_SHA256   (up) optional, both or neither: the RPA Windows package
 #                            (rpa-windows-x64.zip) to install on the first boot, and its SHA-256. The URL is kept in
 #                            the saved variables, the state and the VM's user data.
@@ -125,8 +127,8 @@ ssm_run() {
 
 # The package URL and its SHA-256 travel inside single quotes in a PowerShell command line (install) and into the VM's
 # user data (up). The URL may hold only RFC 3986's characters without the single quote: no space, quote or backtick,
-# and nothing outside ASCII (Windows PowerShell reads typographic quotes as quotes). Compared as bytes (LC_ALL=C), so
-# no locale widens a range. The module and the script on the VM make the same test.
+# and nothing outside ASCII (Windows PowerShell reads typographic quotes as quotes). Compared as bytes (LC_ALL=C): the
+# ranges are then ASCII ranges in every locale. The module and the script on the VM make the same test.
 valid_package_url() {
   local LC_ALL=C re='^https://[][A-Za-z0-9._~:/?#@!$&()*+,;=%-]+$'
   [[ "$1" =~ $re ]]
@@ -135,6 +137,12 @@ valid_package_url() {
 valid_sha256() {
   local LC_ALL=C re='^[0-9A-Fa-f]{64}$'
   [[ "$1" =~ $re ]]
+}
+
+# The package URL as this script's messages show it: the text before the first ? or # (a pre-signed URL carries its
+# signature in the query string), without a user name or password in front of the host.
+shown_url() {
+  printf '%s' "${1%%[?#]*}" | sed -E 's#^https://[^/]*@#https://#'
 }
 
 check_cidr() {
@@ -177,7 +185,7 @@ cmd_up() {
   } >"$VARS"
   chmod 600 "$VARS"
   say "region $region, open to: ${list//\"/}; state in $STATE"
-  if [ -n "$url" ]; then say "package: ${url%%\?*}"; else say "no package: nothing of the product is installed"; fi
+  if [ -n "$url" ]; then say "package: $(shown_url "$url")"; else say "no package: nothing of the product is installed"; fi
   tf_init
   tf apply -input=false -var-file="$VARS" "$@"
   say "applied. The first boot takes about 10 minutes (longer with a package, and it then ends with a restart); then: $0 status"
@@ -190,9 +198,13 @@ cmd_down() {
   tf destroy -input=false -var-file="$VARS" "$@"
 }
 
+# One word about the first boot, from the test bed's own folder on the VM: done (the done marker is there), failed (the
+# log holds a "setup FAILED" line), running, or "not started".
+FIRST_BOOT_PS="\$d = 'C:\\Program Files\\RPA Test Bed'; if (Test-Path -LiteralPath (\$d + '\\setup.done')) { 'done' } elseif (-not (Test-Path -LiteralPath (\$d + '\\setup.log'))) { 'not started' } elseif (Select-String -LiteralPath (\$d + '\\setup.log') -SimpleMatch -Pattern 'setup FAILED' -Quiet) { 'failed' } else { 'running' }"
+
 cmd_status() {
   load_outputs
-  local state ip ping
+  local state ip ping setup
   state="$(aws_r ec2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].State.Name' --output text)"
   say "instance $INSTANCE_ID ($REGION): $state"
   if [ "$state" = running ]; then
@@ -201,6 +213,17 @@ cmd_status() {
     [ "$ip" = None ] || say "public IP $ip, runner URL wss://$ip:$RUNNER_PORT/rpa/v1"
     [ "$ip" = None ] || [ -z "$BROWSER_PORT" ] || say "browser URL wss://$ip:$BROWSER_PORT"
     say "SSM: $ping"
+    # Whether the first boot finished, so that a VM whose setup failed or is still running shows as that.
+    if [ "$ping" = Online ]; then
+      setup="$(ssm_run 'RPA test bed first boot' "$FIRST_BOOT_PS" 2>/dev/null | tr -d '\r' | head -n 1)" || setup=""
+      case "$setup" in
+        done) say "first boot: finished" ;;
+        failed) say "first boot: FAILED (see C:\\Program Files\\RPA Test Bed\\setup.log on the VM)" ;;
+        running) say "first boot: still running" ;;
+        "not started") say "first boot: not started yet" ;;
+        *) say "first boot: unknown (the VM gave no answer)" ;;
+      esac
+    fi
   fi
 }
 
@@ -230,8 +253,9 @@ cmd_start() {
 }
 
 # Runs the package's Show-RpaConnection.ps1 on the VM, never with -ShowTokens, and prints only its fingerprint lines,
-# and of those only ones of the exact form: what else the VM sends back is not passed on to this terminal. The runner's
-# fingerprint comes from a log the bot user can write, so it is what that user reports.
+# and of those only ones of the exact form. When the command itself fails on the VM, ssm_run writes what the command
+# printed to stderr as it came. The runner's fingerprint comes from a log the bot user can write, so it is what that
+# user reports.
 cmd_fingerprint() {
   load_outputs
   local out lines
@@ -267,7 +291,7 @@ cmd_install() {
   local url="${1:-}" sha="${2:-}"
   valid_package_url "$url" || fail "install needs an https:// URL of plain URL characters, without spaces or quotes: install <url> <sha256>"
   valid_sha256 "$sha" || fail "install needs the package's SHA-256 (64 hexadecimal characters): install <url> <sha256>"
-  say "installing the package from ${url%%\?*} (SSM Run Command keeps the URL in its history)"
+  say "installing the package from $(shown_url "$url") (SSM Run Command keeps the URL in its history)"
   ssm_run 'RPA package install' "& 'C:\\Program Files\\RPA Test Bed\\install-package.ps1' -Url '$url' -Sha256 '$sha'"
 }
 
