@@ -1099,41 +1099,44 @@ function Get-RpaProfileFolder([string]$Sid) {
 # which holds browser-temp, the temp folder of the browser server. A host that was ended without a chance to stop
 # leaves a session's trace in it, with what was typed into pages, until its next start. -Accounts, -RunningSids and
 # -UnknownProcesses are what Get-RpaUninstallFacts returned; only an account marked Bot is looked at. The profile is
-# found by the account's SID, and the local application data is taken to be AppData\Local in it, where Windows
-# puts it. The folder is left as it is, with the reason:
-#   - while a process of that account is running, or one whose account cannot be read: the host may be using the
-#     folder, and the account could put a link in the place of a folder while the tree is removed;
-#   - when the profile folder, AppData, Local or RPA Runner is a link or junction, or is no folder: they belong to
-#     the bot user, and nothing is removed where a link points;
+# found by the account's SID in Windows' list of profiles (not by a name or a variable), and the local application
+# data is taken to be AppData\Local in it, where Windows puts it.
+# The folders belong to the bot user, which can put a link in the place of any of them, and the removal runs as an
+# administrator. So the folder is left as it is, with the reason:
+#   - while a process of that account is running, or one whose account cannot be read (the test -RemoveData uses:
+#     owners read from the processes' tokens, matched by SID). Only that account and administrators can write into
+#     its profile, so with none of its processes running nothing puts a link there while the tree is removed;
+#   - when, directly before the removal, the profile folder, AppData, Local or RPA Runner is a link or junction or is
+#     no folder: nothing is removed where a link points;
 #   - when it cannot be read or removed.
 # The tree is removed with Remove-RpaTree, which does not enter a link inside it. Returns, for each folder found,
-# Path, Name (the account), Removed and Why (a sentence for the person, when it was left).
+# Path, Name (the account), Removed and Why (sentences for the person, when it was left).
 function Remove-RpaBrowserTemp([object[]]$Accounts, [string[]]$RunningSids, [object[]]$UnknownProcesses) {
   $results = @()
   $unknown = @($UnknownProcesses | Where-Object { $_ })
+  $later = 'then run Uninstall-Rpa.ps1 -RemoveData from the unpacked package, which removes it, or remove the folder.'
   foreach ($account in @($Accounts | Where-Object { $_ -and $_.Bot })) {
     $userFolder = Get-RpaProfileFolder $account.Sid
     if (-not $userFolder) { continue }
     $folders = @($userFolder)
     foreach ($part in 'AppData', 'Local', 'RPA Runner') { $folders += Join-Path $folders[-1] $part }
     $result = @{ Path = $folders[-1]; Name = $account.Name; Removed = $false; Why = '' }
-    $missing = $false
     try {
-      foreach ($folder in $folders) {
-        $state = Get-RpaPathState $folder
-        if (-not $state.Exists) { $missing = $true; break }
-        if ($state.IsLink -or -not $state.IsFolder) {
-          $result.Why = '{0} is a link or junction, so nothing was removed there. Check it and remove the folder.' -f $folder
+      # Nothing there (the browser never ran as this user), or something in the place of a folder on the way.
+      if (-not (Get-RpaPathState $result.Path).Exists) { continue }
+      if (@($RunningSids) -contains $account.Sid) {
+        $result.Why = '{0} is signed in. Sign {0} out, {1}' -f $account.Name, $later
+      } elseif ($unknown.Count -gt 0) {
+        $result.Why = 'The owner of {0} cannot be read; it may be a process of {1}. End it, {2}' -f $unknown[0], $account.Name, $later
+      } else {
+        # The last look before the removal, at each folder itself and not at what a link in its place points to.
+        foreach ($folder in $folders) {
+          $state = Get-RpaPathState $folder
+          if ($state.Exists -and -not $state.IsLink -and $state.IsFolder) { continue }
+          $result.Why = '{0} is not a folder of its own (it is a link, a junction or a file), so nothing was removed there. Check it and remove the folder.' -f $folder
           break
         }
-      }
-      if ($missing) { continue }
-      if (-not $result.Why) {
-        if (@($RunningSids) -contains $account.Sid) {
-          $result.Why = '{0} is signed in. Sign {0} out, then run Uninstall-Rpa.ps1 again from the unpacked package, or remove the folder.' -f $account.Name
-        } elseif ($unknown.Count -gt 0) {
-          $result.Why = 'The owner of {0} cannot be read; it may be a process of {1}. End it, then run Uninstall-Rpa.ps1 again from the unpacked package, or remove the folder.' -f $unknown[0], $account.Name
-        } else {
+        if (-not $result.Why) {
           Remove-RpaTree $result.Path
           $result.Removed = $true
         }

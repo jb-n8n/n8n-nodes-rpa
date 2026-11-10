@@ -22,11 +22,13 @@
 # the bot user out and run Uninstall-Rpa.ps1 -RemoveData from the unpacked package). Every refusal comes before
 # anything is removed. The uninstaller never removes a Windows user.
 #
-# The browser keeps a temp folder in the bot user's profile (AppData\Local\RPA Runner), which can hold what was
-# typed into pages. The uninstaller removes it when that user has no process running, and otherwise says that it is
-# still there: sign the bot user out and run the uninstaller again from the unpacked package (while the data
-# directory is there, the uninstaller still knows who the bot user was), or remove the folder. It removes nothing
-# where one of those folders is a link.
+# The browser keeps a temp folder in the bot user's profile (AppData\Local\RPA Runner in the profile Windows records
+# for that user), which can hold what was typed into pages. The uninstaller removes it only when no process of that
+# user is running, and none whose user cannot be read. Otherwise it leaves the folder and says where it is: sign the
+# bot user out and run Uninstall-Rpa.ps1 -RemoveData from the unpacked package, which removes it (while the data
+# directory is there, the uninstaller still knows who the bot user was), or remove the folder. Directly before the
+# removal it looks at the profile folder, AppData, Local and RPA Runner once more; when one of them is a link or a
+# junction or is no folder, it removes nothing there and says so.
 #
 # Run from an unpacked package instead of the install directory, it first checks who can change that package, as
 # Install-Rpa.ps1 does.

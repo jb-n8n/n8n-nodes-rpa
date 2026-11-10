@@ -1119,23 +1119,40 @@ Describe 'What the browser left in the local application data of the bot user' {
     It 'leaves it while a process of the bot user is running, and says so' {
       $results = Invoke-RemoveBrowserTemp @($script:Bot) @('S-1-5-18', $script:BotSid)
       $results[0].Removed | Should -BeFalse
-      $results[0].Why | Should -BeExactly 'rpa-runner is signed in. Sign rpa-runner out, then run Uninstall-Rpa.ps1 again from the unpacked package, or remove the folder.'
+      $results[0].Why | Should -BeExactly 'rpa-runner is signed in. Sign rpa-runner out, then run Uninstall-Rpa.ps1 -RemoveData from the unpacked package, which removes it, or remove the folder.'
       Should -Invoke -ModuleName RpaInstall Remove-RpaTree -Times 0 -Exactly
     }
 
     It 'leaves it while a process is running whose owner cannot be read' {
       $results = Invoke-RemoveBrowserTemp @($script:Bot) @('S-1-5-18') @('powershell (process 5184)')
       $results[0].Removed | Should -BeFalse
-      $results[0].Why | Should -BeExactly 'The owner of powershell (process 5184) cannot be read; it may be a process of rpa-runner. End it, then run Uninstall-Rpa.ps1 again from the unpacked package, or remove the folder.'
+      $results[0].Why | Should -BeExactly 'The owner of powershell (process 5184) cannot be read; it may be a process of rpa-runner. End it, then run Uninstall-Rpa.ps1 -RemoveData from the unpacked package, which removes it, or remove the folder.'
       Should -Invoke -ModuleName RpaInstall Remove-RpaTree -Times 0 -Exactly
     }
 
     # The folders belong to the bot user, which can put a link in the place of any of them.
-    It 'removes nothing when folder <Index> on the way is a link or junction, and names it' -ForEach @(@{ Index = 0 }, @{ Index = 1 }, @{ Index = 2 }, @{ Index = 3 }) {
+    It 'looks at each folder on the way directly before the removal: removes nothing when folder <Index> is a link or junction, and names it' -ForEach @(@{ Index = 0 }, @{ Index = 1 }, @{ Index = 2 }, @{ Index = 3 }) {
       $env:RPA_TEST_LINK = $script:Folders[$Index]
       $results = Invoke-RemoveBrowserTemp @($script:Bot)
       $results[0].Removed | Should -BeFalse
-      $results[0].Why | Should -BeExactly ('{0} is a link or junction, so nothing was removed there. Check it and remove the folder.' -f $script:Folders[$Index])
+      $results[0].Why | Should -BeExactly ('{0} is not a folder of its own (it is a link, a junction or a file), so nothing was removed there. Check it and remove the folder.' -f $script:Folders[$Index])
+      Should -Invoke -ModuleName RpaInstall Remove-RpaTree -Times 0 -Exactly
+    }
+
+    It 'removes nothing when a folder on the way is a file' {
+      Mock -ModuleName RpaInstall Get-RpaPathState { @{ Exists = $true; IsLink = $false; IsFolder = ($Path -ne $env:RPA_TEST_LINK); Links = 1; OwnerTrusted = $false; Owner = 'BOT-PC\rpa-runner' } }
+      $env:RPA_TEST_LINK = $script:Folders[2]
+      $results = Invoke-RemoveBrowserTemp @($script:Bot)
+      $results[0].Removed | Should -BeFalse
+      $results[0].Why | Should -BeExactly ('{0} is not a folder of its own (it is a link, a junction or a file), so nothing was removed there. Check it and remove the folder.' -f $script:Folders[2])
+      Should -Invoke -ModuleName RpaInstall Remove-RpaTree -Times 0 -Exactly
+    }
+
+    # While the bot user has a process running, that process could change the folders after any look at them.
+    It 'does not judge the folders while a process of the bot user is running: it leaves the folder for that reason' {
+      $env:RPA_TEST_LINK = $script:Folders[2]
+      $results = Invoke-RemoveBrowserTemp @($script:Bot) @($script:BotSid)
+      $results[0].Why | Should -BeLike 'rpa-runner is signed in.*'
       Should -Invoke -ModuleName RpaInstall Remove-RpaTree -Times 0 -Exactly
     }
 
@@ -1185,7 +1202,7 @@ Describe 'What the browser left in the local application data of the bot user' {
       & $cmd /d /c ('mklink /J "{0}" "{1}"' -f $local, $elsewhere) | Out-Null
       $results = Invoke-RemoveBrowserTemp @($script:Bot)
       $results[0].Removed | Should -BeFalse
-      $results[0].Why | Should -BeExactly ('{0} is a link or junction, so nothing was removed there. Check it and remove the folder.' -f $local)
+      $results[0].Why | Should -BeExactly ('{0} is not a folder of its own (it is a link, a junction or a file), so nothing was removed there. Check it and remove the folder.' -f $local)
       Join-Path (Join-Path $elsewhere 'RPA Runner') 'canary.txt' | Should -Exist
     } finally {
       $env:RPA_TEST_PROFILE = $before
@@ -1290,7 +1307,7 @@ Describe 'What the uninstaller reports' {
   }
 
   It 'says why it left that folder, what it can hold and what to do' {
-    $why = 'rpa-runner is signed in. Sign rpa-runner out, then run Uninstall-Rpa.ps1 again from the unpacked package, or remove the folder.'
+    $why = 'rpa-runner is signed in. Sign rpa-runner out, then run Uninstall-Rpa.ps1 -RemoveData from the unpacked package, which removes it, or remove the folder.'
     $temp = @{ Path = 'C:\Users\rpa-runner\AppData\Local\RPA Runner'; Name = 'rpa-runner'; Removed = $false; Why = $why }
     $lines = Get-Summary (New-UninstallResult @{ AutoSignIn = $false; HadChanges = $false; BrowserTemp = @($temp) })
     $lines | Should -Contain "  Kept:      C:\Users\rpa-runner\AppData\Local\RPA Runner (the browser's temp folder of rpa-runner; it can hold"
