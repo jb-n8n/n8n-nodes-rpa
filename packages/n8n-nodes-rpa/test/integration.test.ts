@@ -28,18 +28,20 @@ const HEAL = () => [clickNamed('Field Actions'), use('extract'), done('found', '
 const ids = (item: INodeExecutionData) => (item.json.rows as { id: string }[]).map((r) => r.id).sort();
 const jsonOnly = (items: INodeExecutionData[]) => JSON.stringify(items.map((i) => i.json));
 
-async function sign(item: IDataObject, approved = true): Promise<IDataObject> {
+async function sign(item: IDataObject, approved = true, siteLoginId?: string): Promise<IDataObject> {
   const params = signStepsParams(approved);
-  const [records] = await executeSignSteps(nodeContext({ params, rawParameters: params, items: [{ json: item }], credentials: credentialsV2(portal) }), engine);
+  const [records] = await executeSignSteps(nodeContext({ params, rawParameters: params, items: [{ json: item }], credentials: credentialsV2(portal), siteLoginId }), engine);
   return records[0].json;
 }
 function run(record: IDataObject | undefined, o: {
   site?: Site | null; model?: unknown; staticData?: IDataObject; signal?: AbortSignal; password?: string; over?: Record<string, unknown>; options?: Record<string, unknown>;
+  siteLoginId?: string;
 } = {}) {
   const params = runStepsParams(record, o.over, o.options);
   const site = o.site === null ? undefined : (o.site ?? portal);
   return executeRunSteps(nodeContext({
     params, rawParameters: params, credentials: credentialsV2(site, { password: o.password }), model: o.model, staticData: o.staticData, signal: o.signal, continueOnFail: true,
+    siteLoginId: o.siteLoginId,
   }), engine);
 }
 
@@ -86,14 +88,54 @@ describe('Run Steps and Sign Steps against the sandbox (real engine)', () => {
     const record = await sign(repairedItem(v(1), null));
     const staticData: IDataObject = {};
     const [bad] = await run(record, { staticData, password: 'wrong-pass-123' });
-    expect(bad[0].json.details).toMatchObject({ code: 'login_failed', name: FEED_NAME });
+    // The steps also have a detect step with a login_failed check: signIn raises the one login_failed, and one breaker opens.
+    expect(bad[0].json.details).toMatchObject({ code: 'login_failed', name: FEED_NAME, stepIntent: 'Sign in' });
+    expect(Object.keys(staticData.playwrightLoginBreakers as IDataObject)).toEqual(['site-login:site-login-1']);
     expect(jsonOnly(bad)).not.toContain('wrong-pass-123');
     const logins = portal.state().logins;
+    expect(logins).toBe(1);
     const [locked] = await run(record, { staticData });
     expect(locked[0].json.error).toBe(`locked_out: A previous login for ${portal.host} failed, so no login was tried.`);
     expect(portal.state().logins).toBe(logins);
     const [reset] = await run(record, { staticData, options: { breakerResetKey: '2026-10-06' } });
     expect(reset[0].json).toMatchObject({ lane: 'script', version: 1 });
+  });
+
+  it('a hand-written sign-in with no detect step: a wrong password is login_failed and opens the breaker on that Site Login only', async () => {
+    // The steps a person writes by hand: sign in, open the page, read it. No detect step checks the sign-in.
+    const handWritten: Script = {
+      name: FEED_NAME, version: 1, startUrl: `${portal.url}/acme/login`,
+      steps: [
+        { intent: 'Sign in', signIn: { username: { label: 'Dealer user ID' }, password: { label: 'Password' }, submit: { role: 'button', name: 'Sign in' } } },
+        { intent: 'Open the notices', goto: `${portal.url}/acme/service/recalls-and-stop-sales` },
+        { intent: 'Read notices', extract: { scope: { css: 'main' }, idPattern: 'N26-\\d{4}', textMode: 'textContent' } },
+      ],
+    };
+    const record = await sign(repairedItem(handWritten, null));
+    const staticData: IDataObject = {};
+    const [bad] = await run(record, { staticData, password: 'wrong-pass-123' });
+    expect(bad[0].json.details).toMatchObject({ code: 'login_failed', name: FEED_NAME, stepIntent: 'Sign in' });
+    expect(jsonOnly(bad)).not.toContain('wrong-pass-123');
+    expect(portal.state().logins).toBe(1);
+    expect(Object.keys(staticData.playwrightLoginBreakers as IDataObject)).toEqual(['site-login:site-login-1']);
+    const [locked] = await run(record, { staticData });
+    expect(locked[0].json.error).toBe(`locked_out: A previous login for ${portal.host} failed, so no login was tried.`);
+    expect(portal.state().logins).toBe(1);
+    // Another Site Login is not affected by this breaker.
+    const other = await sign(repairedItem(handWritten, null), true, 'site-login-2');
+    const [elsewhere] = await run(other, { staticData, siteLoginId: 'site-login-2' });
+    expect(elsewhere[0].json).toMatchObject({ lane: 'script', version: 1 });
+    expect(portal.state().logins).toBe(2);
+    // A new Login Breaker Reset Key allows one more try: still the wrong password, so the breaker opens again.
+    const [again] = await run(record, { staticData, password: 'wrong-pass-123', options: { breakerResetKey: '2026-11-10' } });
+    expect(again[0].json.details).toMatchObject({ code: 'login_failed' });
+    expect(portal.state().logins).toBe(3);
+    const [lockedAgain] = await run(record, { staticData, options: { breakerResetKey: '2026-11-10' } });
+    expect(lockedAgain[0].json.details).toMatchObject({ code: 'locked_out' });
+    expect(portal.state().logins).toBe(3);
+    // Fixed credential and a new key: the run signs in and reads.
+    const [fixed] = await run(record, { staticData, options: { breakerResetKey: '2026-11-11' } });
+    expect(fixed[0].json).toMatchObject({ lane: 'script', version: 1 });
   });
 
   it('an edited record, a blank signature or a wrong Expected Version is script_untrusted before any login', async () => {

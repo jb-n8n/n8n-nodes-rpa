@@ -4,8 +4,10 @@ import { openSession, type Session } from '../src/browser/session.js';
 import { createMasker } from '../src/secrets/mask.js';
 import { installInterrupts } from '../src/steps/interrupts.js';
 import { runSteps, type StepContext } from '../src/steps/run.js';
-import type { PortalSecrets, Step } from '../src/types.js';
-import { baselineScript, LOCAL, policyFor, SECRETS, SIGN_IN_STEPS } from './helpers.js';
+import { runTask } from '../src/lane/task.js';
+import type { PortalSecrets, Script, Step } from '../src/types.js';
+import { fakeModel } from './fake-model.js';
+import { baselineScript, LOCAL, policyFor, SECRETS, SIGN_IN_STEPS, signedLaneInput } from './helpers.js';
 import { bound } from './timing.js';
 
 let portal: Awaited<ReturnType<typeof startPortal>>;
@@ -172,5 +174,121 @@ describe('signIn / detect / interrupts', () => {
       expect(r.failure.message).toBe('detected:login_failed');
       expect(Date.now() - t0).toBeLessThan(bound(2500));
     } finally { await session.close(); }
+  });
+});
+
+// A hand-written sign-in with no detect step after it: signIn itself tells a rejected password from a sign-in that
+// went through, by looking at its own password field once the submit has settled.
+const HAND_SIGN_IN: Step = {
+  intent: 'Sign in',
+  signIn: { username: { label: 'Dealer user ID' }, password: { label: 'Password' }, submit: { role: 'button', name: 'Sign in' } },
+};
+const WRONG = 'wrong-pass-123';
+
+describe('signIn reports a rejected password itself', () => {
+  it('a rejected password fails the signIn step as detected:login_failed, without the password in the result', async () => {
+    const ctx = await atLogin({ ...SECRETS, password: WRONG });
+    try {
+      const t0 = Date.now();
+      const r = await runSteps({ ...ctx, defaultTimeoutMs: bound(3000) }, [HAND_SIGN_IN]);
+      if (r.ok) throw new Error('expected failure');
+      expect(r.failure).toEqual({ index: 0, intent: 'Sign in', message: 'detected:login_failed' });
+      expect(r.state.submitClicked).toBe(true);
+      expect(portal.state().logins).toBe(1);
+      expect(Date.now() - t0).toBeLessThan(bound(2500));
+      expect(JSON.stringify(r)).not.toContain(WRONG);
+    } finally { await session.close(); }
+  });
+  it('with a detect step that checks login_failed after it, the signIn step raises the one login_failed', async () => {
+    const ctx = await atLogin({ ...SECRETS, password: WRONG });
+    try {
+      const r = await runSteps(ctx, SIGN_IN_STEPS);
+      if (r.ok) throw new Error('expected failure');
+      expect(r.failure).toEqual({ index: 0, intent: 'Sign in', message: 'detected:login_failed' });
+      expect(r.state.log.map((e) => e.status)).toEqual(['failed']);
+      expect(portal.state().logins).toBe(1);
+    } finally { await session.close(); }
+  });
+  it('a page that re-renders the password field with an error, without a navigation, is a rejected password', async () => {
+    const ctx = await atLogin({ ...SECRETS, password: WRONG });
+    try {
+      // A script-driven login form: the submit is handled in the page, which then renders a new form with an error.
+      await ctx.page.evaluate(() => {
+        const form = document.querySelector('form')!;
+        form.addEventListener('submit', (e) => {
+          e.preventDefault();
+          setTimeout(() => {
+            form.innerHTML = '<p id="login-error">Invalid username or password.</p>'
+              + '<label for="username">Dealer user ID</label><input id="username">'
+              + '<label for="password">Password</label><input id="password" type="password">'
+              + '<button id="sign-in" type="submit">Sign in</button>';
+          }, 300);
+        });
+      });
+      const r = await runSteps({ ...ctx, defaultTimeoutMs: bound(3000) }, [HAND_SIGN_IN]);
+      if (r.ok) throw new Error('expected failure');
+      expect(r.failure.message).toBe('detected:login_failed');
+    } finally { await session.close(); }
+  });
+  it('a correct password on a one-page sign-in passes at once', async () => {
+    const ctx = await atLogin();
+    try {
+      const t0 = Date.now();
+      const r = await runSteps({ ...ctx, defaultTimeoutMs: bound(3000) }, [HAND_SIGN_IN]);
+      expect(r.ok).toBe(true);
+      expect(ctx.page.url()).toBe(`${portal.url}/acme/home`);
+      expect(Date.now() - t0).toBeLessThan(bound(2000));
+    } finally { await session.close(); }
+  });
+  it('a slow sign-in that leaves the login page about 1.5 s after the submit is not a rejection', async () => {
+    portal.setState({ slowLogin: true });
+    const ctx = await atLogin();
+    try {
+      const r = await runSteps({ ...ctx, defaultTimeoutMs: bound(3000) }, [HAND_SIGN_IN]);
+      expect(r.ok).toBe(true);
+      expect(ctx.page.url()).toBe(`${portal.url}/acme/home`);
+    } finally { await session.close(); }
+  });
+  it('a site that asks for a code after the password (no code step declared) is not a rejection: the password field is gone', async () => {
+    portal.setState({ mfa: 'totp' });
+    const ctx = await atLogin();
+    try {
+      const r = await runSteps({ ...ctx, defaultTimeoutMs: bound(3000) }, [HAND_SIGN_IN]);
+      expect(r.ok).toBe(true);
+      expect(ctx.page.url()).toBe(`${portal.url}/acme/mfa`);
+    } finally { await session.close(); }
+  });
+  it('a submit that leaves the same password field on the page is not a rejection', async () => {
+    const ctx = await atLogin();
+    try {
+      // Nothing is posted and the page does not change: no evidence of a rejection, so the step passes after its wait.
+      await ctx.page.evaluate(() => { document.querySelector('form')!.addEventListener('submit', (e) => e.preventDefault()); });
+      const r = await runSteps({ ...ctx, defaultTimeoutMs: bound(2000) }, [HAND_SIGN_IN]);
+      expect(r.ok).toBe(true);
+      expect(portal.state().logins).toBe(0);
+    } finally { await session.close(); }
+  });
+  it('a rejected password ends the run as login_failed on the script lane, with no repair even with a model', async () => {
+    const model = fakeModel([]);
+    const script = {
+      name: 'hand-written', version: 1, startUrl: `${portal.url}/acme/login`,
+      steps: [
+        HAND_SIGN_IN,
+        { intent: 'Open the notices', goto: `${portal.url}/acme/service/recalls-and-stop-sales` },
+        { intent: 'Read notices', extract: { scope: { css: 'main' }, idPattern: 'N26-\\d{4}', textMode: 'textContent' } },
+      ],
+    } as Script;
+    const task = (password: string) => ({
+      ...signedLaneInput(script, { policy: policyFor(portal), secrets: { ...SECRETS, password }, output: { idPattern: 'N26-\\d{4}' }, endpoint: LOCAL, defaultStepTimeoutMs: 3000 }),
+      repair: { model, goal: 'Read the notices' },
+    });
+    // The same steps sign in and read with the right password.
+    expect(await runTask(task(SECRETS.password))).toMatchObject({ ok: true, lane: 'script' });
+    portal.reset();
+    const r = await runTask(task(WRONG));
+    expect(r).toMatchObject({ ok: false, code: 'login_failed', lane: 'script', failure: { index: 0, intent: 'Sign in' } });
+    expect(model.invocations).toHaveLength(0);
+    expect(portal.state().logins).toBe(1);
+    expect(JSON.stringify(r)).not.toContain(WRONG);
   });
 });

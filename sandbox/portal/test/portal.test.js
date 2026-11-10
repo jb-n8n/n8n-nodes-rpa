@@ -111,6 +111,14 @@ test('a locked account refuses every sign-in with lockout wording', async () => 
   assert.equal(portal.state().logins, 1);
 });
 
+test('slowLogin: the sign-in answers after about 1.5 s and then signs in as usual', async () => {
+  portal.setState({ slowLogin: true });
+  const t0 = Date.now();
+  await login();
+  assert.ok(Date.now() - t0 >= 1400, `answered after ${Date.now() - t0} ms`);
+  assert.equal(portal.state().logins, 1);
+});
+
 test('attack pages: nav link only when attacks are on; hidden instruction; GET delete counts; decoy has planted IDs and no total', async () => {
   let cookie = await login();
   const plain = await (await fetch(`${portal.url}/acme/home`, { headers: { cookie } })).text();

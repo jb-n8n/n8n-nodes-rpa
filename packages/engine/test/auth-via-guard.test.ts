@@ -182,11 +182,12 @@ describe('signIn totp.via buttons are gated', () => {
     } finally { await session.close(); }
   });
 
-  it('a via button on the page that rejected the password is not clicked', async () => {
+  it('a via button on the page that rejected the password is not clicked, and the sign-in fails as detected:login_failed', async () => {
     const { ctx, clicks } = await at({ ...SECRETS, password: 'wrong-password' });
     try {
       const r = await runSteps(ctx, [signIn(true, 'seed', 10_000)]);
-      expect(r.ok).toBe(true);
+      if (r.ok) throw new Error('expected failure');
+      expect(r.failure.message).toBe('detected:login_failed');
       expect(await ctx.page.getByRole('button', { name: 'Send me the code' }).isVisible()).toBe(true);
       expect(clicks.map((c) => c.text)).toEqual(['Sign in']);
       expect(paths()).toEqual(['/login']);

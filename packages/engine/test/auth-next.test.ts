@@ -297,6 +297,18 @@ describe('signIn with next', () => {
     } finally { await session.close(); }
   });
 
+  it('a password the site rejects on the password page is detected:login_failed', async () => {
+    const ctx = await at('/login', { ...SECRETS, password: 'wrong-pass-123' });
+    try {
+      const state = newRunState();
+      const r = await runSteps({ ...ctx, defaultTimeoutMs: bound(3000) }, [SIGN_IN], state);
+      if (r.ok) throw new Error('expected failure');
+      expect(r.failure.message).toBe('detected:login_failed');
+      expect(posts.map((p) => p.path)).toEqual(['/login', '/password']);
+      expect(state.submitClicked).toBe(true);
+    } finally { await session.close(); }
+  });
+
   it('parseScript and the schema accept next; templates in next are refused', () => {
     const doc = { startUrl: 'http://127.0.0.1:9999/login', steps: [WITH_CODE] };
     expect(parseScript(doc).steps[0]).toEqual(WITH_CODE);

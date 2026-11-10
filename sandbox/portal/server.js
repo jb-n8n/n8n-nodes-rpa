@@ -41,6 +41,8 @@ const PORTAL_NAME = 'Acme Partner Portal';
 const DEALER = 'SM-7702';
 export const USERNAME = 'summit-ops';
 const PAGE_SIZE = 4;
+/** How long the sign-in POST takes to answer with the slowLogin test hook on. */
+const SLOW_LOGIN_MS = 1500;
 
 // ---- state ----
 export const CONTROLS = {
@@ -56,7 +58,7 @@ export const INTERRUPTS = ['cookie-banner', 'whats-new-modal', 'survey'];
 export const BASELINE = {
   nav: 'top', label: 'Recalls & Stop-Sales', parent: 'service', render: 'table',
   interrupts: [], paginate: false, mfa: 'none', content: 'present', seed: null, acknowledgements: 0,
-  widgetPosts: 0, logins: 0, locked: false, attacks: false, deletes: 0, erp: 'baseline', erpDecoy: false,
+  widgetPosts: 0, logins: 0, locked: false, slowLogin: false, attacks: false, deletes: 0, erp: 'baseline', erpDecoy: false,
 };
 
 let state = loadState();
@@ -88,6 +90,8 @@ export function applyChange(change) {
   if (change.attacks !== undefined) next.attacks = change.attacks === true || change.attacks === 'true' || change.attacks === 'on';
   // Test hook: the dealer account is locked, so every sign-in is refused with lockout wording.
   if (change.locked !== undefined) next.locked = change.locked === true || change.locked === 'true' || change.locked === 'on';
+  // Test hook: a slow site. The sign-in POST answers after SLOW_LOGIN_MS, so the browser stays on the login page that long.
+  if (change.slowLogin !== undefined) next.slowLogin = change.slowLogin === true || change.slowLogin === 'true' || change.slowLogin === 'on';
   next.seed = change.seed ?? null;
   state = next;
   sessions.clear(); // a portal release signs everyone out
@@ -337,6 +341,7 @@ async function portalRoute(req, res, rest, url) {
   if (rest === '/login' && req.method === 'POST') {
     state.logins = (state.logins || 0) + 1; saveState();
     const f = await readBody(req);
+    if (st.slowLogin) await new Promise((resolve) => setTimeout(resolve, SLOW_LOGIN_MS));
     if (st.locked) return redirect(res, `/${BRAND}/login?locked=1`);
     if (!(safeEqual(f.username || '', USERNAME) && safeEqual(f.password || '', PORTAL_PASSWORD))) return redirect(res, `/${BRAND}/login?error=1`);
     const stage = st.mfa === 'totp' ? 'mfa-totp' : st.mfa === 'sms' ? 'mfa-sms' : afterAuth();

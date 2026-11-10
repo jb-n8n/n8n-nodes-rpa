@@ -215,12 +215,13 @@ describe('signIn with pages between the password and the code (totp.via)', () =>
     expect(await ctx.page.getByRole('heading', { name: 'Verify your identity' }).isVisible()).toBe(true);
   });
 
-  it('a rejected password with via set returns at once instead of waiting for the code field', async () => {
+  it('a rejected password with via set fails at once as detected:login_failed instead of waiting for the code field', async () => {
     process.env.IDP_FACTOR = 'choice';
     const { ctx, posts } = await atLogin({ secrets: { ...IDP_SECRETS, password: 'wrong-password' } });
     const t0 = Date.now();
     const r = await runSteps(ctx, [signInStep({ via: VIA }, { timeoutMs: 30_000 })]);
-    expect(r.ok).toBe(true);
+    if (r.ok) throw new Error('expected failure');
+    expect(r.failure.message).toBe('detected:login_failed');
     expect(Date.now() - t0).toBeLessThan(bound(15_000));
     expect(paths(posts)).toEqual(['/idp/login', '/idp/password']);
   });

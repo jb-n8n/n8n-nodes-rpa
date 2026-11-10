@@ -305,12 +305,61 @@ const signIn: Handler = async (ctx, step, state, timeout) => {
   }
 };
 
+/** A rejected password: classified login_failed, so the login breaker opens and no repair runs. Names no typed value. */
+const PASSWORD_REJECTED = `${DETECTED_PREFIX}login_failed`;
+/** How long signIn without a code step waits after the password submit for the site to leave the login page or answer. */
+const PASSWORD_ANSWER_WAIT_MS = 15_000;
+/** How long the password field must stay gone from a loaded login page before signIn stops watching for a rejection. */
+const PASSWORD_GONE_STABLE_MS = 1000;
+
+const documentLoaded = (ctx: StepContext): Promise<boolean> =>
+  ctx.page.evaluate(() => document.readyState !== 'loading').catch(() => false);
+
 /**
- * After the password is typed (both paths): click submit, then, when the step declares a code, wait for the code field
- * (or a rejected password) and type the code. Without totp.via the code page must follow at once on a login page (else
- * no code was asked); with via, the pages in between are clicked through first (throughVia). The code provider's
- * requestedAt is stamped right before the password submit, and again right before the first via click: no later than
- * the click that makes the site send the code, so a workflow that takes only mail sent after requestedAt finds it.
+ * After the password submit, a check to poll: true once the site sent the password page back. That is: on a declared
+ * login page, with the document loaded, the field we typed into is gone (a new document or a re-render) and `password`
+ * shows again, for a whole REJECTED_STABLE_MS. The same field still showing is no rejection (the submit may not have
+ * moved on yet), and neither is a page without the password field. Keeps its own state: one per submit.
+ */
+function passwordRejection(ctx: StepContext, password: DslLocator, typed: ElementHandle): () => Promise<boolean> {
+  let since: number | undefined;
+  return async () => {
+    const back = onLoginPage(ctx)
+      && !(await typed.evaluate((el) => el.isConnected).catch(() => false))
+      && (await documentLoaded(ctx))
+      && (await isVisibleNow(ctx.page, password));
+    if (!back) { since = undefined; return false; }
+    since ??= Date.now();
+    return Date.now() - since >= REJECTED_STABLE_MS;
+  };
+}
+
+/**
+ * signIn without a code step, after the password submit: waits up to min(timeout, PASSWORD_ANSWER_WAIT_MS) until the
+ * run left the declared login pages (not rejected), the password page came back (`rejected`: true), or the password
+ * field stayed gone from a loaded document for PASSWORD_GONE_STABLE_MS (not rejected: a code page or any other page).
+ * When the wait runs out with the same field still showing, nothing is decided: not rejected.
+ */
+async function passwordRejected(ctx: StepContext, password: DslLocator, rejected: () => Promise<boolean>, timeout: number): Promise<boolean> {
+  let goneSince: number | undefined;
+  const seen = await poll(async () => {
+    if (!onLoginPage(ctx)) return 'left';
+    if (await rejected()) return 'rejected';
+    if ((await isVisibleNow(ctx.page, password)) || !(await documentLoaded(ctx))) { goneSince = undefined; return undefined; }
+    goneSince ??= Date.now();
+    return Date.now() - goneSince >= PASSWORD_GONE_STABLE_MS ? 'gone' : undefined;
+  }, Math.min(timeout, PASSWORD_ANSWER_WAIT_MS));
+  return seen === 'rejected';
+}
+
+/**
+ * After the password is typed (both paths): click submit, then check the site's answer. Without a code step, a password
+ * page that comes back is a rejected password (passwordRejected: `detected:login_failed`). When the step declares a
+ * code, wait for the code field or a rejected password (the same check) and type the code. Without totp.via the code
+ * page must follow at once on a login page (else no code was asked); with via, the pages in between are clicked through
+ * first (throughVia). The code provider's requestedAt is stamped right before the password submit, and again right before
+ * the first via click: no later than the click that makes the site send the code, so a workflow that takes only mail
+ * sent after requestedAt finds it.
  */
 async function submitPassword(ctx: StepContext, s: Pick<SignInSpec, 'password' | 'submit' | 'totp'>, pass: Locator, state: RunState, timeout: number): Promise<void> {
   const submit = await resolveUnique(ctx.page, s.submit, timeout);
@@ -320,14 +369,16 @@ async function submitPassword(ctx: StepContext, s: Pick<SignInSpec, 'password' |
   await submit.locator.click({ timeout });
   state.submitClicked = true;
   await settle(ctx.page);
-  if (!s.totp) return;
+  const password = s.password;
+  const rejected = passwordRejection(ctx, password, typed);
+  if (!s.totp) {
+    if (await passwordRejected(ctx, password, rejected, timeout)) throw new Error(PASSWORD_REJECTED);
+    return;
+  }
   const totpSpec = s.totp;
   // The pages between the password and the code (via) need not be login pages: only the code page is checked, by the
   // code's own checks before anything is typed (throughVia gates each via button before its click).
   if (!totpSpec.via && !onLoginPage(ctx)) return;
-  const password = s.password;
-  // The field we typed into is gone and a password field is visible again: the page reloaded with a rejection.
-  const rejected = async () => !(await typed.evaluate((el) => el.isConnected).catch(() => false)) && (await isVisibleNow(ctx.page, password));
   const next = totpSpec.via
     ? await throughVia(ctx, { field: totpSpec.field, password, via: totpSpec.via }, rejected, request, timeout)
     : await poll(async () => {
@@ -335,6 +386,7 @@ async function submitPassword(ctx: StepContext, s: Pick<SignInSpec, 'password' |
       if (await rejected()) return 'rejected';
       return undefined;
     }, Math.min(timeout, 5000));
+  if (next === 'rejected') throw new Error(PASSWORD_REJECTED);
   if (next !== 'totp') return;
   if (totpSpec.source === 'workflow') await submitWorkflowCode(ctx, totpSpec, timeout, request);
   else await submitTotp(ctx, totpSpec, timeout);

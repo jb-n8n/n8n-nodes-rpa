@@ -64,6 +64,12 @@ Microsoft's terms say about unattended automation on Windows (not legal advice).
 - The package is built, installed and driven end to end on Windows in CI, and released from the `Desktop release`
   workflow after a reviewer approves it. It is not code-signed.
 
+### Fixes
+
+- **A rejected password is `login_failed`** without a `detect` step: when the site sends the password page back
+  after `signIn` submitted it, the step fails with `login_failed` and the login breaker opens. In 0.1.0 a hand-written
+  sign-in passed, and the run failed later as drift (with AI Repair on, the model then tried to repair it).
+
 ## 0.1.0 (2026-10-26)
 
 First public release: the node `n8n-nodes-rpa` 0.1.0 on npm (the same tarball is attached to the GitHub Release, with
