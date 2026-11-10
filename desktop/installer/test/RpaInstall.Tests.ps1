@@ -735,6 +735,7 @@ Describe 'The installer scripts' {
     $source = Get-Content -Raw -LiteralPath $path
     $refusal = $source.IndexOf("'{0} can be changed by {1}. Unpack the package in a folder only you or administrators can change, and run it from there.'")
     $refusal | Should -BeGreaterThan 0
+    $source.IndexOf("'{0} is a link or junction. Unpack the package again and run the installer from the new folder.'") | Should -BeGreaterThan 0
     $ast = [Management.Automation.Language.Parser]::ParseFile($path, [ref]$null, [ref]$null)
     $loads = @($ast.FindAll({ param($node) $node -is [Management.Automation.Language.CommandAst] -and ($node.GetCommandName() -eq 'Import-Module' -or $node.InvocationOperator -eq 'Dot') }, $true))
     $loads.Count | Should -Be 1
@@ -743,40 +744,70 @@ Describe 'The installer scripts' {
 
   Context 'on Windows' {
     BeforeAll {
-      # A copy of the installer in a folder of its own, whose access rules the test sets. The runs below can install
-      # nothing: both ports are the same, which the plan refuses before any step.
-      $script:Package = Join-Path ([IO.Path]::GetTempPath()) ('rpa-package-' + [guid]::NewGuid().ToString('N'))
+      # A copy of the installer in a folder of its own, under a folder whose access rules the tests set. The runs
+      # below can install nothing: both ports are the same, which the plan refuses before any step.
+      $script:Area = Join-Path ([IO.Path]::GetTempPath()) ('rpa-package-' + [guid]::NewGuid().ToString('N'))
+      $script:Package = Join-Path $script:Area 'package'
+      $script:Unpack = 'Unpack the package in a folder only you or administrators can change, and run it from there.'
       function Invoke-TestInstaller {
         $output = @(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $script:Package 'Install-Rpa.ps1') -RunnerPort 7 -BrowserPort 7 -AllowFromAnyAddress)
         @{ Output = $output; ExitCode = $LASTEXITCODE }
       }
       if ($env:OS -eq 'Windows_NT') {
-        New-Item -ItemType Directory -Path $script:Package | Out-Null
-        Copy-Item -LiteralPath (Join-Path $script:InstallerDir 'Install-Rpa.ps1'), (Join-Path $script:InstallerDir 'RpaInstall.psm1') -Destination $script:Package
+        New-Item -ItemType Directory -Path $script:Area | Out-Null
         $me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-        & icacls.exe $script:Package /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "*$($me):(OI)(CI)F" | Out-Null
+        & icacls.exe $script:Area /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "*$($me):(OI)(CI)F" | Out-Null
+        New-Item -ItemType Directory -Path $script:Package, (Join-Path $script:Package 'scripts'), (Join-Path $script:Area 'elsewhere') | Out-Null
+        Copy-Item -LiteralPath (Join-Path $script:InstallerDir 'Install-Rpa.ps1'), (Join-Path $script:InstallerDir 'RpaInstall.psm1') -Destination $script:Package
+        Copy-Item -LiteralPath (Join-Path (Join-Path $script:InstallerDir 'scripts') 'start-loop.ps1') -Destination (Join-Path $script:Package 'scripts')
+        $script:Users = (New-Object Security.Principal.SecurityIdentifier 'S-1-5-32-545').Translate([Security.Principal.NTAccount]).Value
       }
     }
 
     AfterAll {
-      if (Test-Path -LiteralPath $script:Package) { Remove-Item -LiteralPath $script:Package -Recurse -Force }
+      if (Test-Path -LiteralPath $script:Area) { & cmd.exe /d /c ('rd /s /q "{0}"' -f $script:Area) | Out-Null }
     }
 
-    It 'Install-Rpa.ps1 runs from a folder only administrators, SYSTEM and the person running it can change' -Skip:($env:OS -ne 'Windows_NT') {
+    It 'Install-Rpa.ps1 runs from a package only administrators, SYSTEM and the person running it can change' -Skip:($env:OS -ne 'Windows_NT') {
       $run = Invoke-TestInstaller
-      ($run.Output -join "`n") | Should -Not -Match 'can be changed by'
-      $run.Output | Should -Contain 'Nothing was changed.'
+      ($run.Output -join "`n") | Should -Not -Match 'can be changed by|is a link'
+      $run.Output | Should -Contain '-RunnerPort and -BrowserPort are both 7. Give each its own port.'
       $run.ExitCode | Should -Be 1
     }
 
-    It 'Install-Rpa.ps1 refuses to run from a folder that other users can change' -Skip:($env:OS -ne 'Windows_NT') {
+    It 'Install-Rpa.ps1 refuses a package with one file that other users can change' -Skip:($env:OS -ne 'Windows_NT') {
+      $file = Join-Path (Join-Path $script:Package 'scripts') 'start-loop.ps1'
+      & icacls.exe $file /grant '*S-1-5-32-545:M' | Out-Null
+      try {
+        $run = Invoke-TestInstaller
+        $run.Output | Should -BeExactly @("$file can be changed by $($script:Users). $($script:Unpack)", 'Nothing was changed.')
+        $run.ExitCode | Should -Be 1
+      } finally { & icacls.exe $file /remove '*S-1-5-32-545' | Out-Null }
+    }
+
+    It 'Install-Rpa.ps1 refuses a package with a junction in it' -Skip:($env:OS -ne 'Windows_NT') {
+      $junction = Join-Path $script:Package 'runner'
+      & cmd.exe /d /c ('mklink /J "{0}" "{1}"' -f $junction, (Join-Path $script:Area 'elsewhere')) | Out-Null
+      try {
+        $run = Invoke-TestInstaller
+        $run.Output | Should -BeExactly @("$junction is a link or junction. Unpack the package again and run the installer from the new folder.", 'Nothing was changed.')
+        $run.ExitCode | Should -Be 1
+      } finally { & cmd.exe /d /c ('rd "{0}"' -f $junction) | Out-Null }
+    }
+
+    It 'Install-Rpa.ps1 refuses a package in a folder where other users may delete what is in it' -Skip:($env:OS -ne 'Windows_NT') {
+      & icacls.exe $script:Area /grant '*S-1-5-32-545:(DC)' | Out-Null
+      try {
+        $run = Invoke-TestInstaller
+        $run.Output | Should -BeExactly @("$($script:Area) can be changed by $($script:Users). $($script:Unpack)", 'Nothing was changed.')
+        $run.ExitCode | Should -Be 1
+      } finally { & icacls.exe $script:Area /remove '*S-1-5-32-545' | Out-Null }
+    }
+
+    It 'Install-Rpa.ps1 refuses a package folder that other users can change' -Skip:($env:OS -ne 'Windows_NT') {
       & icacls.exe $script:Package /grant '*S-1-5-32-545:(OI)(CI)M' | Out-Null
-      $users = (New-Object Security.Principal.SecurityIdentifier 'S-1-5-32-545').Translate([Security.Principal.NTAccount]).Value
       $run = Invoke-TestInstaller
-      $run.Output | Should -BeExactly @(
-        "$($script:Package) can be changed by $users. Unpack the package in a folder only you or administrators can change, and run it from there."
-        'Nothing was changed.'
-      )
+      $run.Output | Should -BeExactly @("$($script:Package) can be changed by $($script:Users). $($script:Unpack)", 'Nothing was changed.')
       $run.ExitCode | Should -Be 1
     }
   }

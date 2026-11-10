@@ -26,6 +26,10 @@
 #                  lists them and asks for YES first, unless -Force is given. Uninstall-Rpa.ps1 puts them back.
 #   -Force         Do not ask, and upgrade even while the runner is running (a run in progress fails).
 #
+# Unpack the package where only you or administrators can change it, for example under your own profile or under
+# C:\Program Files: the installer reads the owner and access rules of the package's files and folders and of the
+# folders above it when it starts, and refuses when someone else could change them.
+#
 # Programs go to C:\Program Files\RPA Runner, data (policy.json, the tokens, the certificates, logs) to
 # C:\ProgramData\RPA Runner. Running the installer again upgrades: it replaces the programs and keeps the data and the
 # user; give it the same -User, ports and -NoBrowser as before. It keeps the firewall addresses of the earlier run when
@@ -59,31 +63,84 @@ if ($PSVersionTable.PSEdition -eq 'Core') {
   exit 1
 }
 
-# Before anything else is loaded from this folder: who may change it. The installer runs as an administrator and
-# copies its programs from here, so the folder must not be one that somebody else can write to. This reads the
-# folder's own owner and access rules (also those its files inherit), not every file in it. Returns the first name
-# that is not Administrators, SYSTEM, Windows' own installer account or the person running this, or nothing.
-function Get-PackageChanger([string]$Folder) {
-  $trusted = @('S-1-5-32-544', 'S-1-5-18', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464', 'S-1-3-0',
-    [Security.Principal.WindowsIdentity]::GetCurrent().User.Value)
-  # Create files or folders, delete, delete what is inside, change the rules, take ownership, and the generic forms
-  # of "write" and "all".
-  $write = 0x2 -bor 0x4 -bor 0x40 -bor 0x10000 -bor 0x40000 -bor 0x80000 -bor 0x40000000 -bor 0x10000000
-  $acl = Get-Acl -LiteralPath $Folder
-  $changers = @()
-  $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier])
-  if ($trusted -notcontains $owner.Value) { $changers += $owner }
-  foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
-    if ($rule.AccessControlType -eq 'Allow' -and ([int]$rule.FileSystemRights -band $write) -and $trusted -notcontains $rule.IdentityReference.Value) {
-      $changers += $rule.IdentityReference
+# Before anything else is loaded from this folder: who may change the package. The installer runs as an
+# administrator, loads its module from here and copies its programs from here. What is checked, as it is when the
+# installer starts: every file and folder of the package (its owner, its access rules, and that it is no link or
+# junction), and each folder above the package up to the drive, for a right to delete, rename or re-permission what is
+# below it. Accepted are Administrators, SYSTEM, Windows' own installer account and the person running this. This
+# script itself is already running when the check starts, so the check says nothing about it.
+$packageTrusted = @{}
+foreach ($sid in 'S-1-5-32-544', 'S-1-5-18', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464', 'S-1-3-0',
+  [Security.Principal.WindowsIdentity]::GetCurrent().User.Value) { $packageTrusted[$sid] = $true }
+
+# The first owner or holder of one of the rights in a security descriptor that is not accepted, as a name, or nothing.
+# An entry that only passes rights on to what is inside is not counted: each file and folder inside is read itself.
+function Find-PackageChanger($Security, [int]$Rights) {
+  $who = $null
+  $owner = $Security.GetOwner([Security.Principal.SecurityIdentifier])
+  if (-not $packageTrusted.ContainsKey($owner.Value)) { $who = $owner }
+  else {
+    foreach ($rule in $Security.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+      if ($rule.AccessControlType -ne 'Allow' -or ($rule.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly)) { continue }
+      if (([int]$rule.FileSystemRights -band $Rights) -and -not $packageTrusted.ContainsKey($rule.IdentityReference.Value)) { $who = $rule.IdentityReference; break }
     }
   }
-  if ($changers.Count -eq 0) { return $null }
-  try { $changers[0].Translate([Security.Principal.NTAccount]).Value } catch { $changers[0].Value }
+  if (-not $who) { return $null }
+  try { $who.Translate([Security.Principal.NTAccount]).Value } catch { $who.Value }
 }
-$changer = Get-PackageChanger $PSScriptRoot
-if ($changer) {
-  Write-Host ('{0} can be changed by {1}. Unpack the package in a folder only you or administrators can change, and run it from there.' -f $PSScriptRoot, $changer)
+
+# Why the package cannot be used, or nothing. Identical security descriptors are judged once, so a package of tens of
+# thousands of files costs one read per file. Folders are walked without entering a link, with paths of any length.
+function Get-PackageRefusal([string]$Folder) {
+  $changed = '{0} can be changed by {1}. Unpack the package in a folder only you or administrators can change, and run it from there.'
+  $link = '{0} is a link or junction. Unpack the package again and run the installer from the new folder.'
+  $sections = [Security.AccessControl.AccessControlSections]'Owner, Access'
+  # Create files or folders, delete, delete what is inside, change the rules, take ownership, and the generic forms
+  # of "write" and "all".
+  $change = 0x2 -bor 0x4 -bor 0x40 -bor 0x10000 -bor 0x40000 -bor 0x80000 -bor 0x40000000 -bor 0x10000000
+  # On a folder above the package: delete or rename it, delete or rename what is in it, change its rules, take it.
+  # (Creating new files or folders there, which Windows lets every user do at the top of a drive, replaces nothing.)
+  $replace = 0x40 -bor 0x10000 -bor 0x40000 -bor 0x80000 -bor 0x10000000
+  # \\?\ in front lets Windows take paths over 260 characters; not for a network path.
+  $long = '\\?\'
+  if ($Folder.StartsWith('\\')) { $long = '' }
+
+  $unreadable = 'someone whose access rules cannot be read'
+  if ([IO.File]::GetAttributes($Folder) -band [IO.FileAttributes]::ReparsePoint) { return ($link -f $Folder) }
+  $above = [IO.Path]::GetDirectoryName($Folder)
+  while ($above) {
+    if ([IO.File]::GetAttributes($above) -band [IO.FileAttributes]::ReparsePoint) { return ($link -f $above) }
+    try { $who = Find-PackageChanger ([IO.Directory]::GetAccessControl($above, $sections)) $replace } catch { $who = $unreadable }
+    if ($who) { return ($changed -f $above, $who) }
+    $above = [IO.Path]::GetDirectoryName($above)
+  }
+  try { $who = Find-PackageChanger ([IO.Directory]::GetAccessControl($Folder, $sections)) $change } catch { $who = $unreadable }
+  if ($who) { return ($changed -f $Folder, $who) }
+
+  $verdicts = @{}
+  $pending = New-Object Collections.Generic.Stack[string]
+  $pending.Push($Folder)
+  while ($pending.Count -gt 0) {
+    $directory = $pending.Pop()
+    foreach ($entry in (New-Object IO.DirectoryInfo ($long + $directory)).EnumerateFileSystemInfos()) {
+      $path = Join-Path $directory $entry.Name
+      if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) { return ($link -f $path) }
+      try {
+        if ($entry.Attributes -band [IO.FileAttributes]::Directory) {
+          $security = [IO.Directory]::GetAccessControl($long + $path, $sections)
+          $pending.Push($path)
+        } else { $security = [IO.File]::GetAccessControl($long + $path, $sections) }
+      } catch { return ($changed -f $path, $unreadable) }
+      $sddl = $security.GetSecurityDescriptorSddlForm($sections)
+      if (-not $verdicts.ContainsKey($sddl)) { $verdicts[$sddl] = Find-PackageChanger $security $change }
+      if ($verdicts[$sddl]) { return ($changed -f $path, $verdicts[$sddl]) }
+    }
+  }
+  $null
+}
+$refusal = Get-PackageRefusal $PSScriptRoot
+if ($refusal) {
+  Write-Host $refusal
   Write-Host 'Nothing was changed.'
   exit 1
 }
