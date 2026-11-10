@@ -18,7 +18,7 @@ In scope:
 - The engine (`packages/engine`) and the n8n node and credentials (`packages/n8n-nodes-rpa`), including the templates.
 - The `rpa-browser` image (`images/browser`): the token gate in front of the browser server, its supervisor and its Dockerfile.
 - The compose stack and images: `docker-compose.yml`, `docker-compose.dev.yml`, `docker/`.
-- The Windows package (`desktop/`): the desktop runner, the policy tool `RpaPolicy.exe` and the installer scripts, as released in `rpa-windows-x64.zip`.
+- The Windows package (`desktop/` and the browser host `images/browser/host`): the desktop runner, the policy tool `RpaPolicy.exe`, the installer scripts and the browser host, as released in `rpa-windows-x64.zip`.
 
 Out of scope:
 - The sandbox site (`sandbox/portal`). It is a deliberately weak mock site with attack pages for tests; its synthetic passwords, TOTP secrets and missing protections are intended.
