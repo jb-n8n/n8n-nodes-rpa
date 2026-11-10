@@ -105,25 +105,34 @@ function Get-RpaTaskOwner([string]$Name) {
 }
 
 # What is in the data directory, read without entering a link:
-#   Link      the first link or junction, or file with a second name (a hard link), or nothing
-#   Owners    for each owner other than Administrators and SYSTEM: its SID and name, how many entries it owns
-#             (Number), the first of them (First) and when the walk met it (Order)
-#   Backups   the same for what is inside policy-backups\, where only Administrators and SYSTEM may own anything
-#   Accounts  every owner other than Administrators and SYSTEM of anything in the tree, as SID = name
+#   Link        the first link or junction, or file with a second name (a hard link), or nothing
+#   Unreadable  the first folder that could not be listed, or file whose number of names could not be read, with its
+#               owner's name (Path, Owner), or nothing. The bot user can make a folder that administrators cannot
+#               list, and an entry can go away between the listing and the read. What is inside is then not known.
+#   Owners      for each owner other than Administrators and SYSTEM: its SID and name, how many entries it owns
+#               (Number), the first of them (First) and when the walk met it (Order)
+#   Backups     the same for what is inside policy-backups\, where only Administrators and SYSTEM may own anything
+#   Accounts    every owner other than Administrators and SYSTEM of anything in the tree, as SID = name
 # policy.json, the tokens and the folder policy-backups\ are judged under their own names by the plan and are not
 # counted in Owners; logs\ itself is taken over whoever owns it. An owner that cannot be read counts as an account
 # without a SID.
 function Get-RpaDataEntries([string]$DataDir) {
   Add-RpaNativeTypes
-  $result = @{ Link = $null; Owners = @(); Backups = @(); Accounts = @{} }
+  $unknown = 'someone whose name cannot be read'
+  $result = @{ Link = $null; Unreadable = $null; Owners = @(); Backups = @(); Accounts = @{} }
   $owners = [ordered]@{}
   $backups = [ordered]@{}
   $order = 0
   $pending = New-Object Collections.Generic.Stack[object]
-  $pending.Push(@{ Path = $DataDir; InBackups = $false })
+  $pending.Push(@{ Path = $DataDir; InBackups = $false; Owner = $unknown })
   while ($pending.Count -gt 0) {
     $directory = $pending.Pop()
-    foreach ($entry in (New-Object IO.DirectoryInfo ('\\?\' + $directory.Path)).EnumerateFileSystemInfos()) {
+    try { $entries = @((New-Object IO.DirectoryInfo ('\\?\' + $directory.Path)).EnumerateFileSystemInfos()) }
+    catch {
+      if (-not $result.Unreadable) { $result.Unreadable = @{ Path = $directory.Path; Owner = $directory.Owner } }
+      continue
+    }
+    foreach ($entry in $entries) {
       $order++
       $path = Join-Path $directory.Path $entry.Name
       $isLink = [bool]($entry.Attributes -band [IO.FileAttributes]::ReparsePoint)
@@ -132,7 +141,7 @@ function Get-RpaDataEntries([string]$DataDir) {
       # Judged under its own name by the plan.
       $named = $top -and ((@($script:DataFiles.Keys) + 'policy-backups' + 'logs') -contains $entry.Name)
       $sid = ''
-      $name = 'someone whose name cannot be read'
+      $name = $unknown
       $trusted = $false
       try {
         if ($isFolder) { $security = [IO.Directory]::GetAccessControl('\\?\' + $path, 'Owner') } else { $security = [IO.File]::GetAccessControl('\\?\' + $path, 'Owner') }
@@ -154,11 +163,13 @@ function Get-RpaDataEntries([string]$DataDir) {
           $list[$sid].Number++
         }
         if (-not $isFolder) {
-          $links = [RpaFiles]::LinkCount($path)
+          $links = 0
+          try { $links = [RpaFiles]::LinkCount($path) }
+          catch { if (-not $result.Unreadable) { $result.Unreadable = @{ Path = $path; Owner = $name } } }
           if ($links -gt 1 -and -not $result.Link) { $result.Link = @{ Path = $path; IsLink = $false; Links = $links } }
         }
       }
-      if ($isFolder) { $pending.Push(@{ Path = $path; InBackups = ($directory.InBackups -or ($top -and $entry.Name -eq 'policy-backups')) }) }
+      if ($isFolder) { $pending.Push(@{ Path = $path; InBackups = ($directory.InBackups -or ($top -and $entry.Name -eq 'policy-backups')); Owner = $name }) }
     }
   }
   $result.Owners = @($owners.Values)
@@ -966,22 +977,22 @@ function Invoke-RpaInstallPlan {
 
 # The accounts whose running process stands in the way of removing the data directory, as SID and name: the bot user
 # install.json names, whoever the data directory's access rules name besides SYSTEM and Administrators (install.json
-# is gone after an uninstall that kept the data), and whoever owns anything in the data directory.
-function Get-RpaDataAccounts([hashtable]$Layout, $Install) {
+# is gone after an uninstall that kept the data), and whoever owns anything in the data directory. -Entries is what
+# Get-RpaDataEntries returned for the data directory, or nothing when it is not there or is a link.
+function Get-RpaDataAccounts([hashtable]$Layout, $Install, $Entries) {
   $accounts = [ordered]@{}
   if ($Install -and $Install.user) {
     $account = Get-RpaAccount -User ([string]$Install.user) -ComputerName $env:COMPUTERNAME
     # A recorded user that is no longer there has no SID to look for; what it owns is found below.
     try { $accounts[(Get-RpaSid $account)] = $account.Display } catch { }
   }
-  $state = Get-RpaPathState $Layout.DataDir
-  if ($state.Exists -and -not $state.IsLink) {
+  if ($Entries) {
     $sids = @()
     $security = [IO.Directory]::GetAccessControl($Layout.DataDir, 'Access')
     foreach ($rule in $security.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
       if ($rule.AccessControlType -eq 'Allow') { $sids += $rule.IdentityReference.Value }
     }
-    $sids += @((Get-RpaDataEntries $Layout.DataDir).Accounts.Keys)
+    $sids += @($Entries.Accounts.Keys)
     foreach ($sid in $sids) {
       # S-1-3-0 is "whoever creates it", not an account.
       if ($accounts.Contains($sid) -or $script:TrustedOwners -contains $sid -or $sid -eq 'S-1-3-0') { continue }
@@ -1018,14 +1029,19 @@ function Get-RpaUninstallFacts {
   $ErrorActionPreference = 'Stop'
   $layout = Get-RpaLayout
   $install = Read-RpaInstallFile $layout.InstallFile
+  $state = Get-RpaPathState $layout.DataDir
+  $entries = $null
+  if ($state.Exists -and -not $state.IsLink) { $entries = Get-RpaDataEntries $layout.DataDir }
   $facts = @{
-    DataDir          = $layout.DataDir
-    DataDirState     = Get-RpaPathState $layout.DataDir
-    Accounts         = @(Get-RpaDataAccounts $layout $install)
-    RunningSids      = @()
-    UnknownProcesses = @()
-    AutoSignInSid    = $null
+    DataDir           = $layout.DataDir
+    DataDirState      = $state
+    DataDirUnreadable = $null
+    Accounts          = @(Get-RpaDataAccounts $layout $install $entries)
+    RunningSids       = @()
+    UnknownProcesses  = @()
+    AutoSignInSid     = $null
   }
+  if ($entries) { $facts.DataDirUnreadable = $entries.Unreadable }
   if ($facts.Accounts.Count -gt 0) {
     $owners = Get-RpaProcessOwners
     $facts.RunningSids = @($owners.Sids)

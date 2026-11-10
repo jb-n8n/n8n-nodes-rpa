@@ -76,7 +76,7 @@ BeforeAll {
   # policy-backups\).
   $script:BotSid = 'S-1-5-21-1-2-3-1001'
   function New-DataEntries([hashtable]$Change = @{}) {
-    $entries = @{ Link = $null; Owners = @(); Backups = @(); Accounts = @{} }
+    $entries = @{ Link = $null; Unreadable = $null; Owners = @(); Backups = @(); Accounts = @{} }
     foreach ($key in $Change.Keys) { $entries[$key] = $Change[$key] }
     $entries
   }
@@ -493,6 +493,23 @@ Describe 'Get-RpaInstallPlan' {
       $plan = Get-RpaInstallPlan -Parameters $script:Parameters -Facts $facts
       $plan.Refusals | Should -BeExactly @($Text)
       $plan.Steps.Count | Should -Be 0
+    }
+
+    # The bot user can make a folder that administrators cannot list; what is in it cannot be judged.
+    It 'on a first install, refuses a data directory that holds something the installer cannot read, and names it' {
+      $entries = New-DataEntries @{
+        Unreadable = @{ Path = 'C:\ProgramData\RPA Runner\exports\closed'; Owner = 'BOT-PC\rpa-runner' }
+        Owners     = @(New-OwnerEntry $script:BotSid 'BOT-PC\rpa-runner' 4 'exports' 1)
+      }
+      $facts = New-TestFacts @{ UserExists = $true; UserSid = $script:BotSid; DataDirState = New-PathState 'ours'; DataDirEntries = $entries }
+      $plan = Get-RpaInstallPlan -Parameters $script:Parameters -Facts $facts
+      $plan.Refusals | Should -BeExactly @('C:\ProgramData\RPA Runner\exports\closed exists and is owned by BOT-PC\rpa-runner. Check what is in it, remove it, and run the installer again.')
+      $plan.Steps.Count | Should -Be 0
+    }
+
+    It 'on an upgrade for the same user, does not mind something in the data directory that it cannot read' {
+      $entries = New-DataEntries @{ Unreadable = @{ Path = 'C:\ProgramData\RPA Runner\exports\closed'; Owner = 'BOT-PC\rpa-runner' } }
+      (Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-InstalledFacts @{ DataDirEntries = $entries })).Refusals.Count | Should -Be 0
     }
 
     # What an uninstall kept: the bot user's logs, certificates and exports are its own.
@@ -988,6 +1005,36 @@ Describe 'Get-RpaUninstallPlan' {
       'rpa-runner is signed in. Sign rpa-runner out, then run Uninstall-Rpa.ps1 -RemoveData again.'
       'Automatic sign-in is on for rpa-runner, and Windows signs it in again after a sign-out. Run Uninstall-Rpa.ps1 without -RemoveData first, which turns that off; then sign rpa-runner out and run Uninstall-Rpa.ps1 -RemoveData from the unpacked package.'
     )
+  }
+
+  # Who owns what is inside cannot be read, and the removal would stop there.
+  It 'refuses -RemoveData for a data directory that holds something the uninstaller cannot read, and names it' {
+    $facts = New-UninstallFacts @{ DataDirUnreadable = @{ Path = 'C:\ProgramData\RPA Runner\exports\closed'; Owner = 'BOT-PC\rpa-runner' } }
+    $plan = Get-RpaUninstallPlan -Parameters @{ RemoveData = $true } -Facts $facts
+    $plan.Refusals | Should -BeExactly @('C:\ProgramData\RPA Runner\exports\closed exists and is owned by BOT-PC\rpa-runner. Check what is in it, remove it, and run Uninstall-Rpa.ps1 -RemoveData again.')
+    (Get-RpaUninstallPlan -Parameters @{ RemoveData = $false } -Facts $facts).Refusals.Count | Should -Be 0
+  }
+
+  # The bot user can make such a folder: one that administrators cannot list. An entry that went away between the
+  # listing and the read is noted the same way.
+  It 'walks a data directory that holds a folder it cannot list without an error, and names the folder' -Skip:($env:OS -ne 'Windows_NT') {
+    $dir = Join-Path $TestDrive ('walk-' + [guid]::NewGuid().ToString('N'))
+    $closed = Join-Path (Join-Path $dir 'exports') 'closed'
+    New-Item -ItemType Directory -Path $closed, (Join-Path $dir 'logs') | Out-Null
+    Set-Content -LiteralPath (Join-Path $closed 'inside.txt') -Value 'x'
+    Set-Content -LiteralPath (Join-Path (Join-Path $dir 'exports') 'beside.txt') -Value 'x'
+    $icacls = Join-Path ([Environment]::SystemDirectory) 'icacls.exe'
+    # No access rule at all: nobody may list it, administrators and SYSTEM included.
+    & $icacls $closed /inheritance:r | Out-Null
+    try {
+      { [IO.Directory]::GetFileSystemEntries($closed) } | Should -Throw
+      $entries = InModuleScope RpaInstall -Parameters @{ Dir = $dir } { Get-RpaDataEntries $Dir }
+      $entries.Unreadable.Path | Should -BeExactly $closed
+      $entries.Unreadable.Owner | Should -Not -BeNullOrEmpty
+      $entries.Link | Should -BeNullOrEmpty
+      $refusals = @(InModuleScope RpaInstall -Parameters @{ Dir = $dir; Entries = $entries } { Get-RpaDataEntryRefusals $Dir $Entries '' })
+      $refusals | Should -Contain ('{0} exists and is owned by {1}. Check what is in it, remove it, and run the installer again.' -f $closed, $entries.Unreadable.Owner)
+    } finally { & $icacls $closed /reset | Out-Null }
   }
 
   It 'refuses -RemoveData for a data directory that is a link or junction' {

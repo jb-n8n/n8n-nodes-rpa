@@ -67,15 +67,19 @@ function Get-RpaPathRefusal([string]$Path, $State, [bool]$CheckOwner) {
 # The refusals for what else is in a data directory that an install takes over (one that an uninstall kept, or that
 # someone made by hand). -Entries is what Get-RpaDataEntries returns; -OwnSid is the account the run installs for when
 # that account was there before the run, else nothing. A link and a file with a second name are refused, the first of
-# them by name. Everything else must belong to Administrators, to SYSTEM or to that account (its logs, certificates
-# and exports), and in policy-backups\ to Administrators or SYSTEM only; what does not is refused once, with the
-# number of entries and the first of them.
+# them by name, and so is the first entry that could not be read (a folder that cannot be listed: what is in it is not
+# known). Everything else must belong to Administrators, to SYSTEM or to that account (its logs, certificates and
+# exports), and in policy-backups\ to Administrators or SYSTEM only; what does not is refused once, with the number
+# of entries and the first of them.
 function Get-RpaDataEntryRefusals([string]$DataDir, $Entries, [string]$OwnSid) {
   $refusals = @()
   if (-not $Entries) { return $refusals }
   if ($Entries.Link) {
     if ($Entries.Link.IsLink) { $refusals += '{0} is a link or junction. Remove it and run the installer again.' -f $Entries.Link.Path }
     else { $refusals += '{0} has more than one name (a hard link). Check what it is, remove it, and run the installer again.' -f $Entries.Link.Path }
+  }
+  if ($Entries.Unreadable) {
+    $refusals += '{0} exists and is owned by {1}. Check what is in it, remove it, and run the installer again.' -f $Entries.Unreadable.Path, $Entries.Unreadable.Owner
   }
   $others = @(@($Entries.Owners | Where-Object { $_ -and (-not $OwnSid -or $_.Sid -ne $OwnSid) }) + @($Entries.Backups | Where-Object { $_ }) | Sort-Object { $_.Order })
   if ($others.Count -gt 0) {
@@ -288,6 +292,8 @@ function Get-RpaInstallPlan {
 # Get-RpaUninstallFacts returns. Only -RemoveData can be refused: the data directory is deleted by path, so no
 # process may be running of an account that can write into it or owns something in it (such a process could swap a
 # folder for a junction while the tree is being removed), and a data directory that is itself a link is not removed.
+# Nor is one that holds something the uninstaller cannot read (a folder that cannot be listed): who owns what is
+# inside is not known, and the removal would stop there with part of the directory gone.
 # Accounts are matched by their SID: an account that only has the name of the bot user is not the bot user. A
 # process whose account Windows does not give is refused too.
 function Get-RpaUninstallPlan {
@@ -299,6 +305,9 @@ function Get-RpaUninstallPlan {
   if ($Parameters.RemoveData) {
     if ($Facts.DataDirState -and $Facts.DataDirState.IsLink) {
       $refusals.Add(('{0} is a link or junction. Remove it and run this again.' -f $Facts.DataDir))
+    }
+    if ($Facts.DataDirUnreadable) {
+      $refusals.Add(('{0} exists and is owned by {1}. Check what is in it, remove it, and run Uninstall-Rpa.ps1 -RemoveData again.' -f $Facts.DataDirUnreadable.Path, $Facts.DataDirUnreadable.Owner))
     }
     foreach ($account in @($Facts.Accounts)) {
       if (-not $account -or @($Facts.RunningSids) -notcontains $account.Sid) { continue }
