@@ -40,17 +40,19 @@ export function toErrorCode(c: FailureClass): ErrorCode {
  * Classifies a failed run. Order: fatal violation, start-page failure (404/410 = drift: the page moved; any other
  * 4xx/5xx or a network error = site_down, e.g. a WAF block or rate limit), detect outcomes, lockout text
  * (only before login is confirmed), runaway pagination or rejected downloads (incomplete), network errors;
- * anything else is drift (the page no longer matches the script).
+ * anything else is drift (the page no longer matches the script). A rejected sign-in (`detected:login_failed`) on a
+ * page with lockout text, before login is confirmed, is account_locked: the account needs unlocking, not a new password.
  */
 export function classifyFailure(f: FailureFacts): FailureClass {
   if (f.violations.some((v) => v.fatal)) return 'policy_violation';
   if (f.startStatus === 404 || f.startStatus === 410) return f.startStatusMode === 'report' ? 'not_found' : 'drift';
   if (f.startError || (f.startStatus ?? 0) >= 400) return 'site_down';
   const msg = f.failure?.message ?? '';
-  if (msg.startsWith(`${DETECTED_PREFIX}login_failed`)) return 'login_failed';
+  const lockedText = !f.loginConfirmed && !!f.pageText && LOCKED_TEXT.test(f.pageText);
+  if (msg.startsWith(`${DETECTED_PREFIX}login_failed`)) return lockedText ? 'account_locked' : 'login_failed';
   if (msg.startsWith(`${DETECTED_PREFIX}account_locked`)) return 'account_locked';
   if (msg.startsWith(`${DETECTED_PREFIX}mfa_`)) return 'auth_blocked';
-  if (!f.loginConfirmed && f.pageText && LOCKED_TEXT.test(f.pageText)) return 'account_locked';
+  if (lockedText) return 'account_locked';
   if (INCOMPLETE_PREFIXES.some((p) => msg.startsWith(p))) return 'incomplete';
   if (NETWORK.test(msg)) return 'site_down';
   return 'drift';

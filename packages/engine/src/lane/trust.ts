@@ -46,7 +46,10 @@ export function hasSignature(t: TrustInput): boolean {
   return typeof t.signature === 'string' && t.signature.trim() !== '';
 }
 
-/** Intents of the steps unsigned steps may not contain: signIn, submit and download with `via`, inside paginate too. */
+/**
+ * Intents of the steps unsigned steps may not contain, inside paginate too: signIn (never, see checkTrust), and submit
+ * and download with `via` (unless Allow Unsigned Writes is on).
+ */
 export function unsignedWrites(steps: Step[]): string[] {
   return flattenSteps(steps)
     .filter((s) => 'signIn' in s || 'submit' in s || ('download' in s && s.download.via !== undefined))

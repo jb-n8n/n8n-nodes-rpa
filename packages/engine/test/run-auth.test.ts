@@ -258,6 +258,34 @@ describe('signIn reports a rejected password itself', () => {
       expect(ctx.page.url()).toBe(`${portal.url}/acme/mfa`);
     } finally { await session.close(); }
   });
+  it('a good sign-in that redraws the password field with its value still in it, for over a second, is not a rejection', async () => {
+    const ctx = await atLogin();
+    try {
+      // A script-driven form: on submit it draws a new form that still holds the typed values (a pending state), and
+      // posts that form 1.5 s later. A rejected password comes back as an empty field; this one is not empty.
+      await ctx.page.evaluate(() => {
+        const form = document.querySelector('form')!;
+        form.addEventListener('submit', (e) => {
+          e.preventDefault();
+          const user = (form.querySelector('#username') as HTMLInputElement).value;
+          const pass = (form.querySelector('#password') as HTMLInputElement).value;
+          const next = document.createElement('form');
+          next.method = 'post';
+          next.action = form.action;
+          next.innerHTML = '<p>Signing you in...</p><label for="username">Dealer user ID</label><input id="username" name="username">'
+            + '<label for="password">Password</label><input id="password" name="password" type="password">';
+          form.replaceWith(next);
+          (next.querySelector('#username') as HTMLInputElement).value = user;
+          (next.querySelector('#password') as HTMLInputElement).value = pass;
+          setTimeout(() => next.submit(), 1500);
+        });
+      });
+      const r = await runSteps({ ...ctx, defaultTimeoutMs: bound(3000) }, [HAND_SIGN_IN]);
+      expect(r.ok).toBe(true);
+      expect(ctx.page.url()).toBe(`${portal.url}/acme/home`);
+      expect(portal.state().logins).toBe(1);
+    } finally { await session.close(); }
+  });
   it('a submit that leaves the same password field on the page is not a rejection', async () => {
     const ctx = await atLogin();
     try {

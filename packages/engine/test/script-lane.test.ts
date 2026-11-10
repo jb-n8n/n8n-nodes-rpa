@@ -83,6 +83,23 @@ describe('runScriptLane', () => {
     const { screenshot: _s, ...rest } = bad as { screenshot?: Buffer };
     expect(JSON.stringify(rest)).not.toContain('wrong-pass-123');
   });
+  it('a locked account is account_locked, with or without a detect step after the sign-in', async () => {
+    const handWritten: Script = {
+      name: 'hand-written', version: 1, startUrl: `${portal.url}/acme/login`,
+      steps: [
+        { intent: 'Sign in', signIn: { username: { label: 'Dealer user ID' }, password: { label: 'Password' }, submit: { role: 'button', name: 'Sign in' } } },
+        { intent: 'Open the notices', goto: `${portal.url}/acme/service/recalls-and-stop-sales` },
+        { intent: 'Read notices', extract: { scope: { css: 'main' }, idPattern: 'N26-\\d{4}', textMode: 'textContent' } },
+      ],
+    };
+    for (const script of [baselineScript(portal.url), handWritten]) {
+      portal.reset();
+      portal.setState({ locked: true });
+      const r = await runScriptLane(input(script));
+      expect(r, script.name).toMatchObject({ ok: false, code: 'account_locked', failure: { index: 0, intent: 'Sign in' } });
+      expect(portal.state().logins).toBe(1);
+    }
+  });
   it('a tampered script is untrusted and never opens a browser', async () => {
     const script = baselineScript(portal.url);
     const inp = input(script);

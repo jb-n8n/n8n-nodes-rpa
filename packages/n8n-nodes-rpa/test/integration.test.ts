@@ -138,6 +138,28 @@ describe('Run Steps and Sign Steps against the sandbox (real engine)', () => {
     expect(fixed[0].json).toMatchObject({ lane: 'script', version: 1 });
   });
 
+  it('a locked account is account_locked, and the breaker records that code, with or without a detect step after the sign-in', async () => {
+    const handWritten: Script = {
+      name: FEED_NAME, version: 1, startUrl: `${portal.url}/acme/login`,
+      steps: [
+        { intent: 'Sign in', signIn: { username: { label: 'Dealer user ID' }, password: { label: 'Password' }, submit: { role: 'button', name: 'Sign in' } } },
+        { intent: 'Open the notices', goto: `${portal.url}/acme/service/recalls-and-stop-sales` },
+        { intent: 'Read notices', extract: { scope: { css: 'main' }, idPattern: 'N26-\\d{4}', textMode: 'textContent' } },
+      ],
+    };
+    for (const script of [v(1), handWritten]) {
+      portal.reset();
+      resetGuardsForTests();
+      portal.setState({ locked: true });
+      const record = await sign(repairedItem(script, null));
+      const staticData: IDataObject = {};
+      const [locked] = await run(record, { staticData });
+      expect(locked[0].json.details).toMatchObject({ code: 'account_locked', stepIntent: 'Sign in' });
+      expect(staticData.playwrightLoginBreakers).toMatchObject({ 'site-login:site-login-1': { code: 'account_locked' } });
+      expect(portal.state().logins).toBe(1);
+    }
+  });
+
   it('unsigned steps that sign in are refused before any login, even with Require Signed Steps off and Allow Unsigned Writes on', async () => {
     const steps = {
       startUrl: `${portal.url}/acme/login`,

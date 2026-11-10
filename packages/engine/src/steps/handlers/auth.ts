@@ -311,15 +311,42 @@ const PASSWORD_REJECTED = `${DETECTED_PREFIX}login_failed`;
 const PASSWORD_ANSWER_WAIT_MS = 15_000;
 /** How long the password field must stay gone from a loaded login page before signIn stops watching for a rejection. */
 const PASSWORD_GONE_STABLE_MS = 1000;
+/**
+ * How long a sign-in page that came back must stay before the sign-in counts as rejected: the username page after
+ * `next` (submitUsername), or an empty password field after the password submit (passwordRejection).
+ */
+const REJECTED_STABLE_MS = 1000;
 
 const documentLoaded = (ctx: StepContext): Promise<boolean> =>
   ctx.page.evaluate(() => document.readyState !== 'loading').catch(() => false);
 
 /**
+ * Whether a visible field matching `loc` (its first 5 matches per candidate) holds no value: the password field a site
+ * sends back with a rejection. A field that still holds a value is a form redrawn while it is pending, not a rejection.
+ */
+async function emptyFieldShows(ctx: StepContext, loc: DslLocator): Promise<boolean> {
+  for (const c of candidatesOf(loc)) {
+    try {
+      const l = build(ctx.page, c);
+      const n = Math.min(await l.count(), 5);
+      for (let i = 0; i < n; i++) {
+        const e = l.nth(i);
+        if ((await e.isVisible()) && (await e.inputValue({ timeout: 1000 })) === '') return true;
+      }
+    } catch (err) {
+      if (ctx.page.isClosed()) throw err;
+      // Race, or not an input: not an empty field.
+    }
+  }
+  return false;
+}
+
+/**
  * After the password submit, a check to poll: true once the site sent the password page back. That is: on a declared
- * login page, with the document loaded, the field we typed into is gone (a new document or a re-render) and `password`
- * shows again, for a whole REJECTED_STABLE_MS. The same field still showing is no rejection (the submit may not have
- * moved on yet), and neither is a page without the password field. Keeps its own state: one per submit.
+ * login page, with the document loaded, the field we typed into is gone (a new document or a re-render) and an empty
+ * field matching `password` shows, for a whole REJECTED_STABLE_MS. The same field still showing is no rejection (the
+ * submit may not have moved on yet), and neither is a redrawn field that still holds a value or a page without the
+ * password field. Keeps its own state: one per submit.
  */
 function passwordRejection(ctx: StepContext, password: DslLocator, typed: ElementHandle): () => Promise<boolean> {
   let since: number | undefined;
@@ -327,7 +354,7 @@ function passwordRejection(ctx: StepContext, password: DslLocator, typed: Elemen
     const back = onLoginPage(ctx)
       && !(await typed.evaluate((el) => el.isConnected).catch(() => false))
       && (await documentLoaded(ctx))
-      && (await isVisibleNow(ctx.page, password));
+      && (await emptyFieldShows(ctx, password));
     if (!back) { since = undefined; return false; }
     since ??= Date.now();
     return Date.now() - since >= REJECTED_STABLE_MS;
@@ -430,9 +457,6 @@ async function throughVia(
     await settle(ctx.page);
   }
 }
-
-/** How long the re-rendered username page must stay without a password field before next counts as rejected. */
-const REJECTED_STABLE_MS = 1000;
 
 /**
  * A two-page (identity-first) sign-in: resolve the username field and next, type the username, click next
