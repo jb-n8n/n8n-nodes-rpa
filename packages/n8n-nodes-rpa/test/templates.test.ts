@@ -565,7 +565,7 @@ describe('template 3 approval email', () => {
   it('HTML-escapes every value from the run in the send-and-wait message, as the review email does', () => {
     expect(out).not.toMatch(/<img|<script|<b>|<i>/);
     expect(out).toContain('Steps v4&lt;i&gt; for feed&lt;b&gt;x&lt;/b&gt;');
-    expect(out).toContain('Evidence: 7 rows &lt;img src=x onerror=alert(1)&gt;');
+    expect(out).toContain('Evidence (as reported by the run): 7 rows &lt;img src=x onerror=alert(1)&gt;');
     expect(out).toContain('Safety flags: host: a.example&#39; &lt;script&gt;');
     expect(out).toContain('Hash: ab&quot;c');
     expect(out).toContain('Review digest: d&#39;e');
@@ -603,6 +603,11 @@ describe('template 3 review email', () => {
   it('shows the safety flags before any page- or model-derived text', () => {
     expect(out.indexOf('Safety flags')).toBeLessThan(out.indexOf('Evidence'));
     expect(out.indexOf('Safety flags')).toBeLessThan(out.indexOf('What changed'));
+  });
+
+  it('says the evidence and the change list are as reported by the run (Sign Steps recomputes only the safety flags)', () => {
+    expect(out).toContain('<b>Evidence (as reported by the run):</b> 7 rows');
+    expect(out).toContain('<b>What changed (as reported by the run):</b><br>step 2 now clicks');
   });
 });
 

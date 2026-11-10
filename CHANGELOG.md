@@ -98,6 +98,9 @@ Microsoft's terms say about unattended automation on Windows (not legal advice).
   `pass`, starts the `signIn` as an English one does. In 0.1.0 a Chrome recording or Playwright code kept the typed
   password as a literal in the draft. Passenger, passport, compass and bypass fields are no longer stripped as
   password fields.
+- **The approval emails say that the evidence and the change list are as reported by the run**: in **RPA: 3 Approve
+  steps**, the review email's Evidence and What changed and the approval email's Evidence. Sign Steps recomputes the
+  safety flags from the steps, not these. Import template 3 again for the new texts.
 
 ## 0.1.0 (2026-10-26)
 
