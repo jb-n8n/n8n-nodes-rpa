@@ -583,8 +583,14 @@ export async function submitPasswordPage(
   await submitPassword(ctx, spec, pass.locator, secrets, state, timeout);
 }
 
-/** A new password the site did not take: classified password_change_failed (the login breaker stays closed). Names no value. */
-const PASSWORD_CHANGE_FAILED = `${DETECTED_PREFIX}password_change_failed`;
+/**
+ * The two ends of a password change that did not go through, both classified password_change_failed (the login breaker
+ * stays closed). Neither names a value. The site sent its change page back: it did not take the new password.
+ */
+const PASSWORD_CHANGE_REFUSED = `${DETECTED_PREFIX}password_change_failed: the site sent its change-password page back, so it did not take the new password`;
+/** The change page still showed when the wait for the site's answer ran out: the new password may or may not be in force. */
+const passwordChangeUnconfirmed = (seconds: number) =>
+  `${DETECTED_PREFIX}password_change_failed: the site did not confirm the new password within ${seconds} s, so it may or may not be in force`;
 /** How long, once the sign-in is done, the step looks for changePassword.detect. */
 const CHANGE_PAGE_WAIT_MS = 2000;
 /** How long the site may take to answer the new password. */
@@ -594,57 +600,62 @@ const CHANGE_GONE_STABLE_MS = 1000;
 
 /**
  * signIn.changePassword, once the sign-in and its code are done (both sign-in paths end here). When `detect` shows on a
- * loaded document within CHANGE_PAGE_WAIT_MS: the page must be a declared login page, `current` and every `new` field
- * password inputs on one, and `submit` must post to one (else a fatal signin violation, before anything is typed). The
- * value is rendered as a secret fill's (the masker holds it before the first keystroke); then the Site Login password
- * goes into `current`, the value into each `new` field, and `submit` is clicked. Sets state.passwordChanged once
- * `detect` is gone (changeAccepted); throws `detected:password_change_failed` when the change page still shows.
+ * loaded document within CHANGE_PAGE_WAIT_MS: the page must be a declared login page, `current` (when given) and every
+ * `new` field password inputs on one, and `submit` must post to one (else a fatal signin violation, before anything is
+ * typed). The value is rendered as a secret fill's (the masker holds it before the first keystroke); then the Site Login
+ * password goes into `current`, the value into each `new` field, and `submit` is clicked. Sets state.passwordChanged
+ * once `detect` is gone (changeAnswer); throws `detected:password_change_failed: …` when the site sent the change page
+ * back, or when it still showed once the wait ran out (then the text says the new password may or may not be in force).
  */
 async function changePassword(ctx: StepContext, spec: ChangePasswordSpec, secrets: PortalSecrets, state: RunState, timeout: number): Promise<void> {
   const asked = await poll(async () => (await documentLoaded(ctx)) && (await isVisibleNow(ctx.page, spec.detect)), Math.min(timeout, CHANGE_PAGE_WAIT_MS));
   if (!asked) return;
   assertLoginPage(ctx);
-  const current = (await resolveUnique(ctx.page, spec.current, timeout)).locator;
+  const current = spec.current ? (await resolveUnique(ctx.page, spec.current, timeout)).locator : undefined;
   const fresh: Locator[] = [];
   for (const loc of spec.new) fresh.push((await resolveUnique(ctx.page, loc, timeout)).locator);
   const submit = (await resolveUnique(ctx.page, spec.submit, timeout)).locator;
-  await assertFieldOnLoginPage(ctx, current, 'current password');
+  if (current) await assertFieldOnLoginPage(ctx, current, 'current password');
   for (const field of fresh) await assertFieldOnLoginPage(ctx, field, 'new password');
   await assertButtonPostsToLoginPage(ctx, submit, 'submit');
   const name = SECRET_FILL_VALUE.exec(spec.value)?.[1];
   if (name === undefined) throw new Error('signIn: changePassword.value must be exactly one {{var.name}} template');
   const value = renderSecretValue(name, spec.value, ctx.vars, ctx.masker);
   // Each field is checked again right before it is typed into, as signIn does: the page may have moved since.
-  await assertFieldOnLoginPage(ctx, current, 'current password');
-  await current.fill(secrets.password, { timeout });
+  if (current) {
+    await assertFieldOnLoginPage(ctx, current, 'current password');
+    await current.fill(secrets.password, { timeout });
+  }
   for (const field of fresh) {
     await assertFieldOnLoginPage(ctx, field, 'new password');
     await field.fill(value, { timeout });
   }
-  const typed = await current.elementHandle({ timeout });
+  const typed = await fresh[0].elementHandle({ timeout });
   await submit.click({ timeout });
   await settle(ctx.page);
-  if (!(await changeAccepted(ctx, spec.detect, typed, timeout))) throw new Error(PASSWORD_CHANGE_FAILED);
+  const answer = await changeAnswer(ctx, spec.detect, typed, timeout);
+  if (answer === 'refused') throw new Error(PASSWORD_CHANGE_REFUSED);
+  if (answer === 'unconfirmed') throw new Error(passwordChangeUnconfirmed(Math.max(1, Math.round(Math.min(timeout, CHANGE_ANSWER_WAIT_MS) / 1000))));
   state.passwordChanged = true;
 }
 
 /**
- * After the change form's submit: true once `detect` stayed gone from a loaded document for CHANGE_GONE_STABLE_MS.
- * False when the change page came back (a new document, or a re-render without the field we typed into, showing
- * `detect`) or when `detect` still shows on the same page after min(timeout, CHANGE_ANSWER_WAIT_MS).
+ * After the change form's submit: 'accepted' once `detect` stayed gone from a loaded document for CHANGE_GONE_STABLE_MS;
+ * 'refused' when the change page came back (a new document, or a re-render without the field we typed into, showing
+ * `detect`); 'unconfirmed' when neither happened within min(timeout, CHANGE_ANSWER_WAIT_MS).
  */
-async function changeAccepted(ctx: StepContext, detect: DslLocator, typed: ElementHandle, timeout: number): Promise<boolean> {
+async function changeAnswer(ctx: StepContext, detect: DslLocator, typed: ElementHandle, timeout: number): Promise<'accepted' | 'refused' | 'unconfirmed'> {
   let goneSince: number | undefined;
   const seen = await poll(async () => {
     if (!(await documentLoaded(ctx))) { goneSince = undefined; return undefined; }
     if (await isVisibleNow(ctx.page, detect)) {
       goneSince = undefined;
-      return (await typed.evaluate((el) => el.isConnected).catch(() => false)) ? undefined : 'rejected';
+      return (await typed.evaluate((el) => el.isConnected).catch(() => false)) ? undefined : 'refused';
     }
     goneSince ??= Date.now();
     return Date.now() - goneSince >= CHANGE_GONE_STABLE_MS ? 'accepted' : undefined;
   }, Math.min(timeout, CHANGE_ANSWER_WAIT_MS));
-  return seen === 'accepted';
+  return seen ?? 'unconfirmed';
 }
 
 const detect: Handler = async (ctx, step, state, timeout) => {

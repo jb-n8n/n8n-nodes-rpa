@@ -321,9 +321,9 @@ describe('wording and guidance', () => {
       incomplete: 'Not every row the page states was read, a capture failed, a limit was hit, the run timed out, or it was cancelled.',
       script_untrusted: 'The steps are not signed by the Step Signing key, or the signature does not match their name, version, start site, Site Login, approver or the expected version. Nothing ran.',
       policy_violation: 'The steps or the page tried something not allowed: an unlisted or private site, a write, a password field, or a secret outside sign-in. The run stopped.',
-      locked_out: 'An earlier login failed and the breaker is open. Check the account, then change Options → Login Breaker Reset Key.',
+      locked_out: 'An earlier login failed and the breaker is open: check the account, then change Options → Login Breaker Reset Key. Or a run changed the Site Login\'s password earlier in this execution: store the new password where the Site Login reads it, then run again.',
       busy: 'Another run using this Site Login or desktop runner is in progress. This run was skipped.',
-      password_change_failed: 'The site did not take the new password: its change-password page still showed after the sign-in step submitted it. The login breaker stays closed. Check the site\'s password rules and the run variable that holds the new password.',
+      password_change_failed: 'The site did not confirm the new password: its change-password page came back, or still showed when the wait for its answer ran out (then the new password may or may not be in force). The login breaker stays closed. Keep the pending password, and check the site\'s password rules and the run variable that holds it.',
       runner_unavailable: 'The desktop runner could not be reached, refused the token or the certificate, its Windows session is locked or signed out, or the app is not installed where the runner\'s policy says. Check the RPA Desktop Runner credential and the runner machine.',
     });
   });

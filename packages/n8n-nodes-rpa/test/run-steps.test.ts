@@ -940,6 +940,27 @@ describe('a forced password change (signIn.changePassword)', () => {
     const [other] = await executeRunSteps(ctx({ continueOnFail: true }), fakeEngine(() => taskFail('drift_detected', drift)));
     expect(details(other[0])).not.toHaveProperty('passwordChanged');
   });
+  it('after a change, later items of the execution try no login with the old password and say passwordChanged, in both error modes', async () => {
+    const CHANGED = 'locked_out: The password of this Site Login was changed earlier in this execution, so no login was tried: store the new password where the Site Login reads it, then run again.';
+    const engine = fakeEngine((_input, call) => (call === 0 ? scriptOk({ passwordChanged: true }) : taskFail('login_failed', 'the site rejected the sign-in')));
+    const h = ctx({ items: many(3), continueOnFail: true });
+    const [data] = await executeRunSteps(h, engine);
+    expect(engine.calls).toHaveLength(1);
+    expect(data[0].json.passwordChanged).toBe(true);
+    expect(data.slice(1).map(errorOf)).toEqual([CHANGED, CHANGED]);
+    for (const item of data.slice(1)) expect(details(item)).toMatchObject({ code: 'locked_out', passwordChanged: true });
+    expect(h.staticData[BREAKER_KEY]).toBeUndefined();
+    // A second node on the same Site Login in the same execution: no login either.
+    const [other] = await executeRunSteps({ ...h, getNode: () => ({ ...h.getNode(), name: 'Another node' }) }, engine);
+    expect(errorOf(other[0])).toBe(CHANGED);
+    expect(engine.calls).toHaveLength(1);
+    // Without continue-on-fail, item 1's error is thrown, and it carries passwordChanged.
+    const strict = fakeEngine((_input, call) => (call === 0 ? scriptOk({ passwordChanged: true }) : taskFail('login_failed', 'the site rejected the sign-in')));
+    const err = await executeRunSteps(ctx({ items: many(2) }), strict).catch((e: unknown) => e);
+    expect((err as NodeOperationError).message).toBe(CHANGED);
+    expect((err as NodeOperationError).context).toMatchObject({ code: 'locked_out', passwordChanged: true });
+    expect(strict.calls).toHaveLength(1);
+  });
   it('password_change_failed does not open the login breaker: the next items still sign in', async () => {
     const engine = fakeEngine(() => taskFail('password_change_failed', CHANGE_FAILED));
     const h = ctx({ items: many(3), continueOnFail: true });
@@ -949,7 +970,7 @@ describe('a forced password change (signIn.changePassword)', () => {
     expect(h.staticData[BREAKER_KEY]).toBeUndefined();
     const err = await executeRunSteps(ctx(), engine).catch((e: unknown) => e);
     expect((err as NodeOperationError).description).toBe(
-      'password_change_failed: The site did not take the new password: its change-password page still showed after the sign-in step submitted it. The login breaker stays closed. Check the site\'s password rules and the run variable that holds the new password.',
+      'password_change_failed: The site did not confirm the new password: its change-password page came back, or still showed when the wait for its answer ran out (then the new password may or may not be in force). The login breaker stays closed. Keep the pending password, and check the site\'s password rules and the run variable that holds it.',
     );
   });
 });

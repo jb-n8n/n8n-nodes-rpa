@@ -297,6 +297,7 @@ describe('the step-document JSON Schema', () => {
         ['a {{var.*}} in changePassword.submit', { ...cp, submit: { css: '#go', within: V_ROLE } }],
       ].map(([what, changePassword]) => [what, doc(step({ signIn: { username: loc, password: loc, submit: loc, changePassword } }))] as [string, unknown]))(
         { detect: loc, current: loc, new: [loc], submit: loc, value: '{{var.pw}}' }),
+      ['a changePassword without new', doc(step({ signIn: { username: loc, password: loc, submit: loc, changePassword: { detect: loc, submit: loc, value: '{{var.pw}}' } } }))],
       ['a changePassword outside signIn', doc(step({ click: loc, changePassword: { detect: loc, current: loc, new: [loc], submit: loc, value: '{{var.pw}}' } }))],
       ['a changePassword inside totp', doc(step({ signIn: { username: loc, password: loc, submit: loc, totp: { field: loc, submit: loc, changePassword: { detect: loc, current: loc, new: [loc], submit: loc, value: '{{var.pw}}' } } } }))],
       ['a {{var.*}} in a submit button', doc(step({ submit: { button: V_ROLE, path: '/save' } }))],
@@ -354,6 +355,11 @@ describe('the step-document JSON Schema', () => {
     }
   });
 
+  it('the schema accepts a changePassword without current, as parseScript does', () => {
+    const d = { startUrl: URL_BASE, steps: [{ intent: 'x', signIn: { username: loc, password: loc, submit: loc, changePassword: { detect: loc, new: [loc, loc], submit: loc, value: '{{var.pw}}' } } }] };
+    expect(parses(d)).toBe(true);
+    expect(validateDocument(d), errorsOf(validateDocument)).toBe(true);
+  });
   it('the schema accepts a secret fill with one var template, spaces included, and secret: false with any value', () => {
     const doc = (value: string, secret: boolean) => ({ startUrl: URL_BASE, steps: [{ intent: 'x', fill: { field: loc, value, secret } }] });
     for (const d of [doc('{{var.pw}}', true), doc('{{ var.pw }}', true), doc('literal', false)]) {

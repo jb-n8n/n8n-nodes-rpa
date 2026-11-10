@@ -159,7 +159,7 @@ export function desktopRepairedStepsJson(engine: Engine, proposal: DesktopPropos
 
 /** Error item for a failed or blocked run: `{ error: "<code>: <message>", message, details }` plus screenshot and trace binaries. */
 export async function failureItem(
-  ctx: NodeContext, f: RunFailure | { code: ErrorCode; message: string },
+  ctx: NodeContext, f: RunFailure | { code: ErrorCode; message: string; passwordChanged?: true },
   details: { name: string | null; version: number | null; hash: string }, paired: IPairedItemData[],
 ): Promise<INodeExecutionData> {
   const full = 'ok' in f ? f : undefined;
@@ -177,7 +177,7 @@ export async function failureItem(
     llmTokens: full?.tokens ?? 0,
     log: full ? (plain(full.log) as unknown as IDataObject[]) : [],
     submitted: full?.submitted === true,
-    ...(full?.passwordChanged ? { passwordChanged: true as const } : {}),
+    ...(f.passwordChanged ? { passwordChanged: true as const } : {}),
   };
   return { json: errorJson(`${f.code}: ${f.message}`, f.message, d), pairedItem: paired, ...(binary ? { binary } : {}) };
 }

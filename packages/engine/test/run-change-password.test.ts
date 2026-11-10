@@ -3,6 +3,7 @@ import { unzipSync } from 'fflate';
 import { startPortal } from 'n8n-rpa-sandbox/testing.js';
 import { openSession } from '../src/browser/session.js';
 import { runScriptLane, screenshotMasks, type ScriptLaneInput } from '../src/lane/script-lane.js';
+import { checkTrust } from '../src/lane/trust.js';
 import { UNSIGNED_CHANGE_PASSWORD } from '../src/messages.js';
 import { describeStep } from '../src/proposal/describe.js';
 import { createMasker } from '../src/secrets/mask.js';
@@ -125,6 +126,17 @@ describe('signIn.changePassword', () => {
     } finally { await session.close(); }
   });
 
+  it('a change form without a current-password field: only the new password is typed, and the change goes through', async () => {
+    portal.setState({ forcePasswordChange: true, changeWithoutCurrent: true });
+    const signIn = SIGN_IN as Extract<Step, { signIn: unknown }>;
+    const { current: _current, ...noCurrent } = signIn.signIn.changePassword!;
+    const s = { ...script(), steps: [{ ...signIn, signIn: { ...signIn.signIn, changePassword: noCurrent } }, SIGNED_IN] };
+    const r = await runScriptLane(input(s));
+    if (!r.ok) throw new Error(`${r.code}: ${r.message}`);
+    expect(r.passwordChanged).toBe(true);
+    expect(portal.state()).toMatchObject({ password: NEW_PW, forcePasswordChange: false });
+  });
+
   it('a sign-in that does not land on the change page runs as before and reports nothing', async () => {
     const r = await runScriptLane(input(script()));
     if (!r.ok) throw new Error(`${r.code}: ${r.message}`);
@@ -134,13 +146,18 @@ describe('signIn.changePassword', () => {
   });
 
   it('a rejected new password fails as password_change_failed and the breaker is not tripped', async () => {
-    for (const value of [NO_DIGIT_PW, SHORT_PW]) {
+    // The site sends its change page back (no digit), or the page refuses without posting and the wait runs out (too short).
+    const said: [string, string][] = [
+      [NO_DIGIT_PW, 'Sign in: detected:password_change_failed: the site sent its change-password page back, so it did not take the new password'],
+      [SHORT_PW, 'Sign in: detected:password_change_failed: the site did not confirm the new password within 3 s, so it may or may not be in force'],
+    ];
+    for (const [value, message] of said) {
       portal.reset();
       portal.setState({ forcePasswordChange: true });
       const r = await runScriptLane(input(script(), { vars: { newPassword: value } }));
       if (r.ok) throw new Error('expected failure');
       // Not login_failed or account_locked, the two codes that open the login breaker; no value in the message.
-      expect({ code: r.code, message: r.message }, value).toEqual({ code: 'password_change_failed', message: 'Sign in: detected:password_change_failed' });
+      expect({ code: r.code, message: r.message }, value).toEqual({ code: 'password_change_failed', message });
       expect(r).not.toHaveProperty('passwordChanged');
       expect(jsonOf(r)).not.toContain(value);
       expect(portal.state()).toMatchObject({ password: null, forcePasswordChange: true });
@@ -181,6 +198,14 @@ describe('signIn.changePassword', () => {
       expect(await session.page.inputValue('#username')).toBe('');
     } finally { await session.close(); }
     expect(portal.state().logins).toBe(0);
+  });
+
+  it('the trust gate refuses unsigned steps with changePassword before the browser opens, as it refuses a secret fill', () => {
+    const unsigned = script();
+    for (const allowUnsignedSignIn of [false, true]) {
+      expect(checkTrust(unsigned, { required: false, allowUnsignedWrites: true, allowUnsignedSignIn }, { policy: policy(), firstRun: false }))
+        .toEqual({ ok: false, code: 'script_untrusted', message: UNSIGNED_CHANGE_PASSWORD });
+    }
   });
 
   it('the next run signs in with the new password', async () => {

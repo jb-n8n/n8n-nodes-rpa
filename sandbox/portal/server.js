@@ -63,6 +63,8 @@ export const BASELINE = {
   widgetPosts: 0, logins: 0, locked: false, slowLogin: false, attacks: false, deletes: 0, erp: 'baseline', erpDecoy: false,
   // Test hook: the next sign-in lands on the change-password page. `password` is the one it set (null: PORTAL_PASSWORD).
   forcePasswordChange: false, password: null,
+  // Test hook: the change-password page asks only for the new password, twice (no current-password field).
+  changeWithoutCurrent: false,
 };
 
 let state = loadState();
@@ -98,6 +100,7 @@ export function applyChange(change) {
   if (change.slowLogin !== undefined) next.slowLogin = change.slowLogin === true || change.slowLogin === 'true' || change.slowLogin === 'on';
   // Test hook: the password has expired, so the next sign-in must set a new one on the change-password page.
   if (change.forcePasswordChange !== undefined) next.forcePasswordChange = change.forcePasswordChange === true || change.forcePasswordChange === 'true' || change.forcePasswordChange === 'on';
+  if (change.changeWithoutCurrent !== undefined) next.changeWithoutCurrent = change.changeWithoutCurrent === true || change.changeWithoutCurrent === 'true' || change.changeWithoutCurrent === 'on';
   next.seed = change.seed ?? null;
   state = next;
   sessions.clear(); // a portal release signs everyone out
@@ -375,7 +378,7 @@ async function portalRoute(req, res, rest, url) {
       <form method="post" action="/${BRAND}/mfa"><label for="otp">Authentication code</label><input id="otp" name="code" inputmode="numeric" maxlength="6" autocomplete="one-time-code">
       <button id="verify" type="submit">Verify</button></form>`, 'mfa-totp'));
   }
-  // The password has expired (forcePasswordChange): the current password, a new one twice. The page refuses a new password
+  // The password has expired (forcePasswordChange): the current password (none with changeWithoutCurrent), a new one twice. The page refuses a new password
   // shorter than NEW_PASSWORD_MIN without posting (the typed values stay); the server refuses one without a digit, or
   // that does not match its confirmation, and sends the page back empty.
   if (rest === '/change-password') {
@@ -383,7 +386,7 @@ async function portalRoute(req, res, rest, url) {
     if (req.method === 'POST') {
       const f = await readBody(req);
       const next = f.new || '';
-      const ok = safeEqual(f.current || '', currentPassword()) && next === (f.confirm || '') && next.length >= NEW_PASSWORD_MIN && /[0-9]/.test(next)
+      const ok = (st.changeWithoutCurrent || safeEqual(f.current || '', currentPassword())) && next === (f.confirm || '') && next.length >= NEW_PASSWORD_MIN && /[0-9]/.test(next)
         && next !== currentPassword();
       if (!ok) return redirect(res, `/${BRAND}/change-password?error=1`);
       state.password = next;
@@ -397,7 +400,7 @@ async function portalRoute(req, res, rest, url) {
       <p>Your password has expired. Choose a new one of at least ${NEW_PASSWORD_MIN} characters, with a digit.</p>
       <p class="error" id="too-short" hidden>The new password is too short.</p>
       <form id="change-form" method="post" action="/${BRAND}/change-password">
-        <label for="current-password">Current password</label><input id="current-password" name="current" type="password" autocomplete="current-password">
+        ${st.changeWithoutCurrent ? '' : '<label for="current-password">Current password</label><input id="current-password" name="current" type="password" autocomplete="current-password">'}
         <label for="new-password">New password</label><input id="new-password" name="new" type="password" autocomplete="new-password">
         <label for="confirm-password">Confirm new password</label><input id="confirm-password" name="confirm" type="password" autocomplete="new-password">
         <button id="change-password" type="submit">Change password</button></form>

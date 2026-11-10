@@ -268,11 +268,11 @@
             },
             "changePassword": {
               "type": "object",
-              "description": "A site that forces a new password at sign-in: when detect shows after the sign-in (and its code), the step types the Site Login password into current, the variable's value into each new field, and clicks submit. The change page must be listed under Pages Where the Password May Be Typed, and the steps must be signed.",
-              "required": ["detect", "current", "new", "submit", "value"],
+              "description": "A site that forces a new password at sign-in: when detect shows after the sign-in (and its code), the step types the Site Login password into current (when the form has one), the variable's value into each new field, and clicks submit. The change page must be listed under Pages Where the Password May Be Typed, and the steps must be signed.",
+              "required": ["detect", "new", "submit", "value"],
               "properties": {
                 "detect": { "$ref": "#/definitions/locatorNoFrame", "description": "An element only the change-password page shows." },
-                "current": { "$ref": "#/definitions/locatorNoFrame", "description": "The current password field." },
+                "current": { "$ref": "#/definitions/locatorNoFrame", "description": "The current password field. Leave it out for a form that asks only for the new password." },
                 "new": { "type": "array", "minItems": 1, "maxItems": 2, "items": { "$ref": "#/definitions/locatorNoFrame" }, "description": "The new password field, and its confirmation when the page has one." },
                 "submit": { "$ref": "#/definitions/locatorNoFrame" },
                 "value": { "type": "string", "pattern": "^\\{\\{\\s*var\\.[A-Za-z0-9_]+\\s*\\}\\}$", "description": "Exactly one {{var.name}} template: the run variable that holds the new password. Masked in everything the run shows, like a secret fill." }

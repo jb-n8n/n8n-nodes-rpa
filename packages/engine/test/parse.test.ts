@@ -449,6 +449,12 @@ describe('signIn.changePassword', () => {
     expect(at(si({ ...CP, new: [{ label: 'New password' }], value: '{{ var.pw }}' }))).toEqual([]);
     expect(parseScript(withStep(si(CP))).steps[0]).toEqual(si(CP));
   });
+  it('parses without current, for a change form that asks only for the new password', () => {
+    const { current: _current, ...noCurrent } = CP;
+    expect(at(si(noCurrent))).toEqual([]);
+    expect(at(si({ ...noCurrent, new: [{ label: 'New password', exact: true }] }))).toEqual([]);
+    expect(at(si({ ...CP, current: 'Current password' }))).toEqual(['steps[0].signIn.changePassword.current must be a locator object']);
+  });
   it('refuses a missing value, a literal, text around the template and two variables', () => {
     const { value: _value, ...noValue } = CP;
     expect(at(si(noValue))).toEqual([VALUE]);

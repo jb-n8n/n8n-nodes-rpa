@@ -315,13 +315,13 @@ async function runStepsItem(ctx: NodeContext, engine: Engine, i: number, deps: R
    * `passwordChanged` after a password change.
    */
   const failure = async (
-    f: Extract<TaskResult, { ok: false }> | { code: ErrorCode; message: string }, ran?: { lane: string; submitted?: boolean; passwordChanged?: true },
+    f: Extract<TaskResult, { ok: false }> | { code: ErrorCode; message: string; passwordChanged?: true }, ran?: { lane: string; submitted?: boolean; passwordChanged?: true },
   ): Promise<ItemOutcome> => {
     let item: INodeExecutionData;
     try {
       item = await failureItem(ctx, f, id, paired);
     } catch {
-      item = await failureItem(ctx, { code: f.code, message: f.message }, id, paired);
+      item = await failureItem(ctx, { code: f.code, message: f.message, ...(f.passwordChanged ? { passwordChanged: true as const } : {}) }, id, paired);
       ran = ran ?? ('ok' in f ? { lane: f.lane, submitted: f.submitted, passwordChanged: f.passwordChanged } : undefined);
     }
     if (ran) {
@@ -402,7 +402,7 @@ async function runStepsItem(ctx: NodeContext, engine: Engine, i: number, deps: R
   } catch (error) {
     return configError(errorMessage(error), id.name);
   }
-  if (ran.kind === 'blocked') return failure({ code: ran.code, message: ran.message });
+  if (ran.kind === 'blocked') return failure({ code: ran.code, message: ran.message, ...(ran.passwordChanged ? { passwordChanged: true as const } : {}) });
   const r = ran.result;
   // The repair is used up only by model effort: a model call, or repaired steps. Refusals before any model call
   // (field extraction, no browser, start page down, cancelled early, configuration errors) leave it for a later item.

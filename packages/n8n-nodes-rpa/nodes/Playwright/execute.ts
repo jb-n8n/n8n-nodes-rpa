@@ -26,10 +26,21 @@ export interface GuardSpec {
 
 /** Golden `locked_out` message for a Site Login. */
 export const siteLoginLockedOut = (loginHost: string): string => `A previous login for ${loginHost} failed, so no login was tried.`;
+/**
+ * Golden `locked_out` message for a Site Login whose password a run changed earlier in this execution: the credential
+ * still holds the old one, so no later item or node of the execution signs in with it.
+ */
+export const SITE_LOGIN_PASSWORD_CHANGED =
+  'The password of this Site Login was changed earlier in this execution, so no login was tried: store the new password where the Site Login reads it, then run again.';
 /** Golden `busy` message for a Site Login. */
 export const SITE_LOGIN_BUSY = 'another run using this Site Login is in progress';
-/** What a guarded call did: turned away by the breaker or the lock, or ran (and whether its login failure tripped the breaker). */
-export type GuardedResult<T> = { kind: 'blocked'; code: ErrorCode; message: string } | { kind: 'ran'; result: T; tripped: boolean };
+/**
+ * What a guarded call did: turned away by the breaker, the lock or a password changed earlier in the execution (then
+ * `passwordChanged`), or ran (and whether its login failure tripped the breaker).
+ */
+export type GuardedResult<T> =
+  | { kind: 'blocked'; code: ErrorCode; message: string; passwordChanged?: true }
+  | { kind: 'ran'; result: T; tripped: boolean };
 export type RunOneResult = GuardedResult<TaskResult>;
 
 export const isBreakerCode = (code: ErrorCode | undefined): code is BreakerCode => code === 'login_failed' || code === 'account_locked';
@@ -50,7 +61,23 @@ function trippedInExecution(ctx: NodeContext): Record<string, BreakerRecord> {
 }
 
 /**
- * One engine run behind the login breaker and the run lock. Order: breaker (locked_out; a breaker tripped earlier in
+ * Guard keys whose Site Login password a run changed in this execution (signIn.changePassword), in the same per-execution
+ * context data: every later guarded call for the key in the execution is turned away before any login, since the
+ * credential still holds the old password. The breaker is not touched. Gone when the execution ends.
+ */
+const CHANGED_IN_EXECUTION = 'playwrightPasswordsChanged';
+function changedInExecution(ctx: NodeContext): Record<string, true> {
+  const flow = ctx.getContext('flow');
+  const current = flow[CHANGED_IN_EXECUTION];
+  if (isObject(current)) return current as Record<string, true>;
+  const fresh: Record<string, true> = {};
+  flow[CHANGED_IN_EXECUTION] = fresh;
+  return fresh;
+}
+
+/**
+ * One engine run behind the login breaker and the run lock. Order: a password changed earlier in this execution
+ * (locked_out with SITE_LOGIN_PASSWORD_CHANGED, no login, the breaker untouched) → breaker (locked_out; a breaker tripped earlier in
  * this execution stays open whatever the reset key) → lock (busy) → breaker again (another worker may have tripped it
  * between the first check and the lock) → engine.runTask(input()) → trip the breaker on login_failed / account_locked
  * (the result's code, or an agent run's proof replay failureCode) → release the lock. The trip comes before the
@@ -66,6 +93,7 @@ export async function runOne(
   return await runGuarded(ctx, {
     ...(opts.guard ? { guard: opts.guard } : {}),
     call: () => runTask(ctx, engine, opts),
+    passwordChanged: (result) => result.passwordChanged === true,
     loginFailure: (result) => {
       // A rejected or locked login trips the breaker, whether the script lane hit it or the agent lane's full replay did.
       const replay = result.ok && result.lane === 'agent' ? result.prove : undefined;
@@ -81,10 +109,7 @@ export async function runOne(
  * breaker → lock → breaker again → `call` → trip the breaker when `loginFailure` names a login_failed / account_locked
  * → release the lock. Import Steps' adoptions use it directly. The guard's store is closed once, on every path.
  */
-export async function runGuarded<T>(
-  ctx: NodeContext,
-  opts: { guard?: GuardSpec; call: () => Promise<T>; loginFailure: (result: T) => { code: BreakerCode; message: string } | undefined },
-): Promise<GuardedResult<T>> {
+export async function runGuarded<T>(ctx: NodeContext, opts: GuardedOptions<T>): Promise<GuardedResult<T>> {
   try {
     return await guardedCall(ctx, opts);
   } finally {
@@ -93,12 +118,18 @@ export async function runGuarded<T>(
   }
 }
 
-async function guardedCall<T>(
-  ctx: NodeContext,
-  opts: { guard?: GuardSpec; call: () => Promise<T>; loginFailure: (result: T) => { code: BreakerCode; message: string } | undefined },
-): Promise<GuardedResult<T>> {
+interface GuardedOptions<T> {
+  guard?: GuardSpec;
+  call: () => Promise<T>;
+  loginFailure: (result: T) => { code: BreakerCode; message: string } | undefined;
+  /** Whether the call changed the Site Login's password (later calls for the key in this execution are then turned away). */
+  passwordChanged?: (result: T) => boolean;
+}
+
+async function guardedCall<T>(ctx: NodeContext, opts: GuardedOptions<T>): Promise<GuardedResult<T>> {
   const { guard } = opts;
   if (!guard) return { kind: 'ran', result: await opts.call(), tripped: false };
+  if (changedInExecution(ctx)[guard.key]) return { kind: 'blocked', code: 'locked_out', message: SITE_LOGIN_PASSWORD_CHANGED, passwordChanged: true };
   const staticData = ctx.getWorkflowStaticData('global');
   const lockedOut = async (): Promise<GuardedResult<T> | undefined> => {
     const breaker = trippedInExecution(ctx)[guard.key] ?? await openBreaker(guard.store, staticData, guard.key, guard.resetKey);
@@ -113,6 +144,7 @@ async function guardedCall<T>(
     const after = await lockedOut();
     if (after) return after;
     const result = await opts.call();
+    if (opts.passwordChanged?.(result)) changedInExecution(ctx)[guard.key] = true;
     const login = opts.loginFailure(result);
     if (!login) return { kind: 'ran', result, tripped: false };
     trippedInExecution(ctx)[guard.key] = await tripBreaker(guard.store, staticData, guard.key, { code: login.code, resetKey: guard.resetKey, message: login.message });

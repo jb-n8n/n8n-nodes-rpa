@@ -88,7 +88,8 @@ export interface SignInSpec {
   };
   /**
    * A site that forces a new password at sign-in: once the sign-in (and its code) is done, when `detect` shows, the
-   * step types the Site Login password into `current`, the variable's value into each `new` field, and clicks `submit`.
+   * step types the Site Login password into `current` (when the form has one), the variable's value into each `new`
+   * field, and clicks `submit`.
    * The change page must be a declared login page. `value` follows the rule of a secret fill: exactly one {{var.name}},
    * masked from the start of the run, signed steps only. No variable is allowed in the locators.
    */
@@ -98,7 +99,8 @@ export interface SignInSpec {
 /** signIn.changePassword: the change page's marker, its fields and button, and the variable that holds the new password. */
 export interface ChangePasswordSpec {
   detect: Locator;
-  current: Locator;
+  /** The current-password field; absent for a form that asks only for the new password. */
+  current?: Locator;
   /** One or two fields (the new password and its confirmation). */
   new: Locator[];
   submit: Locator;

@@ -1,5 +1,6 @@
 import {
-  nameMismatch, SIGNATURE_INVALID, SIGNATURE_WITHOUT_KEY, startSiteMismatch, UNSIGNED_REQUIRED, UNSIGNED_SECRET_FILL, UNSIGNED_WRITES, versionMismatch,
+  nameMismatch, SIGNATURE_INVALID, SIGNATURE_WITHOUT_KEY, startSiteMismatch, UNSIGNED_CHANGE_PASSWORD, UNSIGNED_REQUIRED, UNSIGNED_SECRET_FILL, UNSIGNED_WRITES,
+  versionMismatch,
 } from '../messages.js';
 import { flattenSteps } from '../policy/validate.js';
 import { startHostOf, verifyScript } from '../sign.js';
@@ -55,6 +56,11 @@ export function hasSecretFill(steps: Step[]): boolean {
   return flattenSteps(steps).some((s) => 'fill' in s && s.fill.secret === true);
 }
 
+/** Whether a signIn sets a new password (signIn.changePassword): like a secret fill, only signed steps may. */
+function hasChangePassword(steps: Step[]): boolean {
+  return flattenSteps(steps).some((s) => 'signIn' in s && s.signIn.changePassword !== undefined);
+}
+
 const refuse = (message: string): TrustResult => ({ ok: false, code: 'script_untrusted', message });
 function tryParse(raw: unknown, defaultStartUrl: string): Script | undefined {
   try {
@@ -68,7 +74,9 @@ function tryParse(raw: unknown, defaultStartUrl: string): Script | undefined {
 /**
  * The trust gate. It runs before the browser opens, in this order: first-run exemption; a present signature is
  * always verified (no key → SIGNATURE_WITHOUT_KEY; invalid → UNSIGNED_REQUIRED when required, else SIGNATURE_INVALID);
- * absent and required → UNSIGNED_REQUIRED; a fill with secret in unsigned steps → UNSIGNED_SECRET_FILL; unsigned writes without Allow Unsigned Writes → UNSIGNED_WRITES; signed
+ * absent and required → UNSIGNED_REQUIRED; a fill with secret in unsigned steps → UNSIGNED_SECRET_FILL; a signIn with
+ * changePassword in unsigned steps → UNSIGNED_CHANGE_PASSWORD (whatever Allow Unsigned Writes says); unsigned writes
+ * without Allow Unsigned Writes → UNSIGNED_WRITES; signed
  * steps must then match Expected Name, Expected Version and the run's start site. A document that does not parse
  * passes the gate when nothing else refuses it, and the shape check reports it as policy_violation.
  */
@@ -91,6 +99,9 @@ export function checkTrust(raw: unknown, trust: TrustInput, ctx: { policy: Porta
   if (!script) return { ok: true, signed: false };
   // Stricter than the unsigned-writes switch: a secret fill is never run from unsigned steps.
   if (hasSecretFill(script.steps)) return refuse(UNSIGNED_SECRET_FILL);
+  // The same for a new password typed by a signIn, whatever Allow Unsigned Writes says: an unsigned signIn may run with
+  // that switch on, but whoever supplies unsigned steps must not choose the site's next password.
+  if (hasChangePassword(script.steps)) return refuse(UNSIGNED_CHANGE_PASSWORD);
   if (!trust.allowUnsignedWrites && unsignedWrites(script.steps).length > 0) return refuse(UNSIGNED_WRITES);
   return { ok: true, signed: false };
 }
