@@ -191,6 +191,7 @@ Every RPA run holds one browser session from its first step to its last, and eac
 - **The token.**
   - It stays out of Terraform state, Helm values, logs and metrics.
   - **Residual risk:** the gate and Chromium run as the same user (`pwuser`). The run-server and the browsers start without the token in their environment, but a page that escaped Chromium and ran code as that user could read it from the gate's `/proc/<pid>/environ`. With the token it could open sessions on this service, which only n8n's pods can reach. Rotate the token if you suspect a browser compromise.
+- **Plain `ws://` inside the cluster.** The chart serves the gate without TLS (its readiness probe asks `/healthz` over plain HTTP), so the connection between n8n and the browser service carries the token, the passwords a `signIn` step types and the content of the pages in the clear inside the cluster. Whoever can watch that traffic can read them; limit who can, for example with an encrypting network layer between nodes.
 - **Pod hardening:** non-root (uid 1001), no privilege escalation, all capabilities dropped, read-only root filesystem, RuntimeDefault seccomp, no service account token, no service links.
 - **Removing or renaming the release** removes the NetworkPolicy at once while old pods may still drain open sessions for up to `drainSeconds`, with unrestricted egress. Scale to 0 or wait until `rpa_browser_sessions_active` is 0 first, or keep a default-deny policy in the namespace.
 

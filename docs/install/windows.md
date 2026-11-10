@@ -27,8 +27,9 @@ browser installed (the default), they are not a barrier against the n8n that hol
 [Who can reach the ports](#who-can-reach-the-ports)).
 So give the bot user only the access its work needs, and limit who can reach the two ports.
 
-The package was tested on Windows Server 2022. Windows 10, Windows 11 and Windows Server 2019 or 2025 meet the
-installer's requirements but have not been tested end to end.
+The package was tested on Windows Server 2022. CI installs it and drives the ERP Demo through it
+on GitHub's `windows-latest` runner (Windows Server 2025 in November 2026). Windows 10, Windows 11 and Windows Server
+2019 meet the installer's requirements but have not been tested.
 
 **Contents**
 
@@ -299,8 +300,9 @@ what is in the folder until its next start.
 
 The runner and the browser start when the bot user signs in, and the runner can drive apps only while that user's
 desktop is unlocked and shown: on a locked or disconnected desktop runs fail with `runner_unavailable` (section 11).
-**Test connection** on the RPA Desktop Runner credential tells you the state: `session interactive` is what you want,
-`session locked` is not.
+n8n's credential test does not tell you the state: it succeeds whenever the runner answers, also on a locked desktop,
+and the modal shows n8n's own `Connection tested successfully`. A run tells you: on a locked or disconnected desktop
+it fails with `runner_unavailable` and says which.
 
 There are two ways to keep the bot user signed in.
 
@@ -488,9 +490,11 @@ In n8n: **Credentials → Add credential → RPA Desktop Runner**.
 | **Token** | The `Runner token` line, without the label. |
 | **Certificate Fingerprint** | The `Runner fingerprint` line, without the label (64 hexadecimal digits with colons). |
 
-Save, then **Test connection**. You should see `Connected to the desktop runner (session interactive)`. n8n checks
-the runner's certificate against the fingerprint before it sends the token. Test connection shows the bot user's
-session as it is at that moment: on Windows 10 or 11, give the desktop back to the bot user first (section 5).
+Save. n8n tests the credential and the modal says `Connection tested successfully` (n8n's own text) when the runner
+answered with this token and certificate; n8n checks the runner's certificate against the fingerprint before it sends
+the token. The test succeeds on a locked desktop too: the node's own result, `Connected to the desktop runner (session
+interactive)` (or `session locked`, `session not interactive`), shows only when the credential is tested through n8n's
+API. On Windows 10 or 11, give the desktop back to the bot user before a run (section 5).
 
 ### The RPA Browser credential
 
@@ -504,8 +508,15 @@ In n8n: **Credentials → Add credential → RPA Browser**.
 | **Certificate Fingerprint (SHA-256)** | The `Browser fingerprint` line, without the label |
 | **Private Network Endpoint** | Off (it is for plain `ws://` addresses; this one is `wss://`) |
 
-Type the three values directly, not as expressions. Save, then **Test connection**. You should see
-`Connected to the browser server (1.63)`.
+Type the three values directly, not as expressions. Save. n8n tests the credential and the modal says `Connection
+tested successfully` (n8n's own text; the node's own result, `Connected to the browser server (1.63)`, shows when the
+credential is tested through n8n's API).
+
+The browser on this machine serves one session at a time (the installer does not change that). A second browser run
+that starts while one is open waits up to 60 s for it, then fails `browser_unavailable` with `The browser service at
+wss://...:3000/ had no free browser session for 60 s. Add browser capacity (more replicas or sessions per replica) or
+start fewer RPA runs at once.` The capacity advice is for the browser service at scale; here, start fewer browser runs
+at once.
 
 There is no Headless setting to make: that field belongs to the Local Browser mode. The browser on this machine
 opens with a window on the bot user's desktop for every run from n8n. One limit follows from that: a **Save as PDF**
@@ -650,7 +661,8 @@ with `RpaPolicy.exe show`. [`desktop/README.md`](../../desktop/README.md#changin
 and every message of the tool.
 
 Your app's steps come from **Import Steps** (a UiPath project with desktop activities) or are written by hand; the
-README's [Desktop runs](../../README.md#desktop-runs) section describes them.
+README's [Desktop runs](../../README.md#desktop-runs) section describes them, and how a UI Automation inspector shows
+the parts of a control's locator.
 
 ## 9. Upgrade and uninstall
 
@@ -799,13 +811,14 @@ the form `<code>: <message>`.
 | What you see | What it means | What to do, and the log to read |
 |---|---|---|
 | `runner_unavailable: Could not connect to the desktop runner at wss://...:8765/rpa/v1 (...). Is it running, and is the port open?` | n8n cannot reach the runner. | Is the bot user signed in? `Show-RpaConnection.ps1` says `Runner: not listening: see ...\logs\runner.out.log` when it is not running: read `runner.out.log` (the runner writes its failures there and to `runner-<yyyymmdd>.log`), `runner.err.log` and `start-runner.log`. If it listens, check the network path and the firewall rule: `Get-NetFirewallRule -Name RPA-Runner-In \| Get-NetFirewallAddressFilter` shows the addresses it lets in. |
-| `runner_unavailable: the desktop runner's Windows session is locked: unlock it or sign the runner user in again` (or `... is not in an interactive Windows session`) | The bot user's desktop is locked or disconnected. | Sign in again, or hand the session back to the console (section 4). On Windows 10 or 11, an administrator's sign-in disconnects it (section 5). Test connection shows the session state. |
+| `runner_unavailable: the desktop runner's Windows session is locked: unlock it or sign the runner user in again` (or `... is not in an interactive Windows session`) | The bot user's desktop is locked or disconnected. | Sign in again, or hand the session back to the console (section 4). On Windows 10 or 11, an administrator's sign-in disconnects it (section 5). n8n's credential test succeeds on a locked session too, so it does not show this. |
 | `The desktop runner at ... refused the token. Check the Token in the RPA Desktop Runner credential.` | The token in n8n is not the runner's. | Copy the `Runner token` again (section 6). |
 | `The desktop runner at ... presented a certificate with fingerprint ..., which is not the fingerprint in the RPA Desktop Runner credential. Nothing was sent.` | A fingerprint mismatch: the certificate is not the one n8n has. | Run `Show-RpaConnection.ps1`. If its fingerprint is the one presented, the certificate was made again (section 10): if nobody changed the certificate on purpose, find out what did before you accept the new fingerprint, then put it in the credential. If not, something else answers at that address: leave the credential as it is and find out what. `runner-<yyyymmdd>.log` says `generated a new self-signed certificate` when the runner made one. |
 | `The browser server's certificate does not match the Certificate Fingerprint in the RPA Browser credential.` | The same, for the browser. | As above, with the `Browser fingerprint`. |
 | `The browser server at ... refused the token. Check the Token in the RPA Browser credential.` | The browser's token in n8n is wrong. | Copy the `Browser token` again (section 6). |
 | `Could not connect to the browser server at wss://...:3000/. Is it running? ...` (in a run: `browser_unavailable: ...`) | n8n could not connect to the browser: it is not listening, or it did not answer in time. | Is the bot user signed in? `Show-RpaConnection.ps1` says `Browser: not listening: see ...\logs\browser.err.log` when it is not listening: read `browser.err.log` and `start-browser.log`. If it listens, test again: the first connection after a sign-in can take longer. If it still fails, check the network path and the firewall rule `RPA-Browser-In`, as for the runner. |
 | `Save as PDF needs headless Chromium` (the run fails `incomplete`) | A known limit of this install: the browser opens with a window, and Save as PDF needs a headless browser. | Run Save as PDF steps on a headless browser service, with its own RPA Browser credential (README, [Save as PDF](../../README.md#save-as-pdf)). |
+| `browser_unavailable: The browser service at wss://...:3000/ had no free browser session for 60 s. ...` | The browser on this machine serves one session at a time, and another browser run held it for the 60 s this run waited. | Start fewer browser runs at once (section 6). |
 | `busy: the desktop runner is busy with another run` | The runner runs one run at a time, and another one held it longer than this run waited (its lease plus 15 seconds). | Nothing, or run less often. `runner-<yyyymmdd>.log` shows the runs. |
 | `policy_violation: ... application "ErpDemo.exe" is not in the runner's allowedApps` | The policy does not allow the app. | Apply the change (section 7) or `allow-app` (section 8). `RpaPolicy.exe show` prints the policy. |
 | `runner_unavailable: the desktop runner could not start ErpDemo.exe: it is not installed at the path the runner's policy names (allowedApps[].path). ...` | The app is not at the path the policy names. | Correct the path with a change file, or install the app there. |

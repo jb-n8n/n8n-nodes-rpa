@@ -56,7 +56,7 @@ export const OPERATION_OPTIONS: INodePropertyOptions[] = [
   {
     name: 'Run Steps',
     value: 'runSteps',
-    action: 'Run a list of browser steps',
+    action: 'Run a list of browser or desktop steps',
     description: 'Advanced: run a JSON step list, signed or typed here, with optional AI repair when the page changes',
   },
   {

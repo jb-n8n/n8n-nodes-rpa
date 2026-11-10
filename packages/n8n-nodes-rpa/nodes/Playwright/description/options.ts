@@ -237,7 +237,7 @@ export const OPTION_ENTRIES: INodeProperties[] = [
     typeOptions: { multipleValues: true },
     default: {},
     placeholder: 'Add Variable',
-    description: 'Values the steps may type into fields, used as {{var.name}} inside the steps (never secrets)',
+    description: 'Values the steps may type into fields, used as {{var.name}} inside the steps; masked only where a fill with secret: true or a desktop step types them',
     hint: 'Not n8n expressions; {{var.name}} is replaced inside steps.',
     options: [
       {

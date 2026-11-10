@@ -38,7 +38,7 @@ const SPEC_OPERATIONS = [
   { value: 'extract', action: 'Extract a table or list from a page' },
   { value: 'fillForm', action: 'Fill in and submit a form' },
   { value: 'download', action: 'Download a file from a page' },
-  { value: 'runSteps', action: 'Run a list of browser steps' },
+  { value: 'runSteps', action: 'Run a list of browser or desktop steps' },
   { value: 'signSteps', action: 'Sign a repaired step list' },
   { value: 'importSteps', action: 'Import steps from a recording, code or a UiPath bot' },
 ];
@@ -311,14 +311,14 @@ describe('wording and guidance', () => {
       auth_blocked: 'The site asked for a second factor the node cannot answer. A person has to sign in.',
       site_down: 'The site did not answer, returned a server error, or the first page did not finish loading in time. Try again later.',
       browser_unavailable: 'The browser server could not be reached or was rejected. Check the RPA Browser credential (README: Where the browser runs).',
-      drift_detected: 'The page no longer matches the steps: an element was not found or matched more than one. Fix the locator, or use Run Steps with AI repair.',
+      drift_detected: 'The page no longer matches the steps: an element was not found or matched more than one (desktop steps: also a control that cannot take the step\'s action, such as a fill on a button). Fix the locator, or use Run Steps with AI repair.',
       not_found: 'The page or the data was not found.',
       incomplete: 'Not every row the page states was read, a capture failed, a limit was hit, the run timed out, or it was cancelled.',
       script_untrusted: 'The steps are not signed by the Step Signing key, or the signature does not match their name, version, start site, Site Login, approver or the expected version. Nothing ran.',
       policy_violation: 'The steps or the page tried something not allowed: an unlisted or private site, a write, a password field, or a secret outside sign-in. The run stopped.',
       locked_out: 'An earlier login failed and the breaker is open. Check the account, then change Options → Login Breaker Reset Key.',
       busy: 'Another run using this Site Login or desktop runner is in progress. This run was skipped.',
-      runner_unavailable: 'The desktop runner could not be reached, refused the token or the certificate, or its Windows session is locked or signed out. Check the RPA Desktop Runner credential and the runner machine.',
+      runner_unavailable: 'The desktop runner could not be reached, refused the token or the certificate, its Windows session is locked or signed out, or the app is not installed where the runner\'s policy says. Check the RPA Desktop Runner credential and the runner machine.',
     });
   });
 });
@@ -330,7 +330,7 @@ describe('quick operations', () => {
   const SPEC: [string, string][] = [
     ['screenshot', 'Take a screenshot of a page'], ['getPage', 'Get the text, HTML or title of a page'], ['pdf', 'Save a page as PDF'],
     ['extract', 'Extract a table or list from a page'], ['fillForm', 'Fill in and submit a form'], ['download', 'Download a file from a page'],
-    ['runSteps', 'Run a list of browser steps'], ['signSteps', 'Sign a repaired step list'],
+    ['runSteps', 'Run a list of browser or desktop steps'], ['signSteps', 'Sign a repaired step list'],
     ['importSteps', 'Import steps from a recording, code or a UiPath bot'],
   ];
 

@@ -4,14 +4,15 @@ Robotic process automation (RPA) for self-hosted [n8n](https://n8n.io). Take a s
 it as a PDF, extract a table or a list, fill in and submit a form, or download a file: a URL and one or two fields, no
 code. For sites behind a login there is **Run Steps**: a signed list of browser steps that repairs itself with an AI
 chat model when the site changes, with a person approving every fix. **Import Steps** turns a Chrome Recorder export,
-Playwright code or a UiPath project into such steps.
+Playwright code or a UiPath project into such steps. Run Steps also drives Windows desktop apps through a desktop
+runner ([Windows install guide](https://github.com/jb-n8n/n8n-nodes-rpa/blob/main/docs/install/windows.md)).
 
 A personal open-source project (MIT), not an official n8n product. Full documentation:
 **https://github.com/jb-n8n/n8n-nodes-rpa**
 
 ## Install
 
-In a self-hosted n8n: **Settings → Community nodes → Install**, package `n8n-nodes-rpa`. n8n must allow community
+In a self-hosted n8n 2.41 or later: **Settings → Community nodes → Install**, package `n8n-nodes-rpa`. n8n must allow community
 packages (`N8N_COMMUNITY_PACKAGES_ENABLED=true`, the default) and the install of unverified ones. n8n Cloud runs only
 verified community nodes, and a node that drives a browser cannot be verified, so this package is for self-hosted n8n
 only.
@@ -67,9 +68,9 @@ modules included).
 | Extract Data | A table or a repeated list as items, with an optional ID pattern and row count check |
 | Fill and Submit Form | Fills a form on the page and submits it (never a password field) |
 | Download File | The file a link or button downloads, checked by its contents |
-| Run Steps | A JSON list of browser steps, for sites behind a login; optional AI Repair |
+| Run Steps | A JSON list of browser steps, for sites behind a login, or of desktop steps for a Windows app; optional AI Repair (browser steps) |
 | Sign Steps | Signs repaired steps once a person approves them (HMAC), so Run Steps runs only what was approved |
-| Import Steps | Turns a Chrome Recorder export, Playwright code or a UiPath project into steps for approval. Typed passwords are never imported, and imports never write |
+| Import Steps | Turns a Chrome Recorder export, Playwright code or a UiPath project into steps for approval. Values typed into password, PIN, secret and code fields, and values equal to the Site Login's username or password, are stripped, and imports never write |
 
 Each quick operation shows the steps it ran in its output, ready to paste into Run Steps. The package also ships a JSON
 Schema of the step document for editor autocomplete, at `dist/schema/steps.schema.json`
@@ -91,7 +92,10 @@ Schema of the step document for editor autocomplete, at `dist/schema/steps.schem
 
 ## Templates
 
-The package ships workflow templates in `templates/`; import them with **… → Import → From file**:
+The package ships workflow templates in `templates/`, also in the repository's
+[`packages/n8n-nodes-rpa/templates`](https://github.com/jb-n8n/n8n-nodes-rpa/tree/main/packages/n8n-nodes-rpa/templates)
+folder: download a file to your computer (on GitHub, open it and use **Download raw file**) and import it with
+**… → Import → From file**:
 
 | Template | What it does |
 |---|---|

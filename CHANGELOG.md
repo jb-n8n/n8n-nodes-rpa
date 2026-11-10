@@ -6,8 +6,9 @@ All notable changes to `n8n-nodes-rpa`, the `rpa-browser` image and the Windows 
 
 ## 0.2.0 (2026-11-10)
 
-The node `n8n-nodes-rpa` 0.2.0 and the first Windows package, `rpa-windows-x64.zip` (GitHub Release
-`desktop-v0.2.0`, with its SHA-256 and a build attestation). [`docs/install/windows.md`](https://github.com/jb-n8n/n8n-nodes-rpa/blob/main/docs/install/windows.md) is
+The node `n8n-nodes-rpa` 0.2.0, the image `ghcr.io/jb-n8n/rpa-browser:0.2.0` (Playwright 1.63.0, the gate settings
+below) and the first Windows package, `rpa-windows-x64.zip` (GitHub Release `desktop-v0.2.0`, with its SHA-256 and a
+build attestation). [`docs/install/windows.md`](https://github.com/jb-n8n/n8n-nodes-rpa/blob/main/docs/install/windows.md) is
 the install guide, with a sample flow; [`docs/install/licensing.md`](https://github.com/jb-n8n/n8n-nodes-rpa/blob/main/docs/install/licensing.md) is a note on what
 Microsoft's terms say about unattended automation on Windows (not legal advice).
 
@@ -46,7 +47,8 @@ Microsoft's terms say about unattended automation on Windows (not legal advice).
 - **Certificate Fingerprint (SHA-256)** on the RPA Browser credential: in Browser Server mode with a `wss://` address,
   the node connects only to a server whose certificate has that SHA-256 fingerprint, and checks it before it sends the
   token. For a browser server with a self-signed certificate, such as the one the Windows package installs.
-- **The gate** (`images/browser/gate`) can serve TLS, read its token from a file and listen on a chosen address.
+- **The gate** (`images/browser/gate`) can serve TLS, read its token from a file and listen on a chosen address. These
+  settings need the `rpa-browser` image 0.2.0 or later: the 0.1.0 image does not read them.
 
 ### The Windows package
 
@@ -61,8 +63,24 @@ Microsoft's terms say about unattended automation on Windows (not legal advice).
   the data directory too.
 - The browser host opens the browser with a window on the bot user's desktop for every client that does not ask
   otherwise, so runs from n8n get a browser with a window. Save as PDF needs a headless browser and fails on it.
-- The package is built, installed and driven end to end on Windows in CI, and released from the `Desktop release`
-  workflow after a reviewer approves it. It is not code-signed.
+- The package is built, installed and driven end to end on Windows in CI (GitHub's `windows-latest`, Windows Server
+  2025), and released from the `Desktop release` workflow after a reviewer approves it. It is not code-signed.
+- **The desktop test bed**: `deploy/terraform/modules/aws-ec2-desktop-runner` (with an example and
+  `deploy/scripts/desktop-testbed.sh`) runs the package on a Windows Server 2022 VM on EC2.
+
+### Coming from 0.1.0
+
+- **Templates 3 and 5 changed**: **RPA: 3 Approve steps** has four new nodes (**Desktop steps?**, **Ask for approval
+  (desktop steps)**, **Desktop answer** and **Email signed steps**), and **RPA: 5 Import a bot** has new texts. Import
+  both again and pick the SMTP credential on the new email nodes; a 0.1.0 workflow 3 approves desktop steps without the
+  Write steps question.
+- **The compose stack** builds n8n 2.45.3 (0.1.0: 2.41.0) on `node:26-alpine`, with Mailpit 1.32.
+- **Error codes**: a new code, `runner_unavailable`; `busy` also means a desktop runner busy with another run; Run
+  Steps' Data has `values` for desktop reads. The `browser_unavailable` message for a server that cannot be reached
+  has a new sentence for a Windows install.
+- **RPA Browser is no longer marked required** on the node (desktop steps run without it), so n8n does not flag it
+  when it is missing; a browser operation without it fails with `This operation runs in a browser: attach an RPA
+  Browser credential.`
 
 ### Fixes
 
@@ -126,7 +144,7 @@ a build attestation) and the image `ghcr.io/jb-n8n/rpa-browser:0.1.0` (Playwrigh
   a field already holds, but never a value on a login page or in a credential-class field. Proofs open the work's entry
   page with the reused session, so sites that keep window state on the server (such as SAP GUI for HTML) prove.
 - **Approval**: the approval text renders every value on one line and quotes values that could fake a clause. A pending
-  proposal with an unsafe value, or a download step with no checks (shown as `checks: no checks`), is refused at Sign
+  Repaired steps item with an unsafe value, or a download step with no checks (shown as `checks: no checks`), is refused at Sign
   Steps once and must be produced again. When "RPA: 3 Approve steps" activates a version, older `active` rows of the
   same name become `superseded`.
 - **Queue mode**: with several n8n workers, an **RPA Redis** credential on Run Steps shares the login breaker and the

@@ -95,7 +95,7 @@ describe('README', () => {
     expect(at.every((i) => i > -1)).toBe(true);
     expect([...at].sort((a, b) => a - b)).toEqual(at);
     for (const text of ['Take a screenshot of a page', 'Get the text, HTML or title of a page', 'Save a page as PDF', 'Extract a table or list from a page',
-      'Fill in and submit a form', 'Download a file from a page', 'Run a list of browser steps', 'Sign a repaired step list',
+      'Fill in and submit a form', 'Download a file from a page', 'Run a list of browser or desktop steps', 'Sign a repaired step list',
       'Import steps from a recording, code or a UiPath bot']) expect(s).toContain(text);
     expect(s).toContain('Nine operations, in this order:');
     for (const n of names) expect(section('## Operations'), n).toMatch(new RegExp(`^### ${n}$`, 'm'));

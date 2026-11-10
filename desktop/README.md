@@ -3,7 +3,9 @@
 The runner speaks the desktop protocol and drives Windows apps through UI Automation; Run Steps sends it desktop
 steps (README, [Desktop runs](../README.md#desktop-runs)). To install the runner, the policy tool and the RPA browser
 on a Windows machine, follow the [Windows install guide](../docs/install/windows.md), which uses the package this
-folder builds (`installer/`, released as `rpa-windows-x64.zip`).
+folder builds (`installer/`, released as `rpa-windows-x64.zip`). The RPA browser the package installs serves one
+browser session at a time: a second browser run that starts while one is open waits up to 60 s for it, then fails
+`browser_unavailable` with `The browser service at wss://<host>:3000/ had no free browser session for 60 s. ...`.
 
 | Path | What it is |
 |---|---|
@@ -81,7 +83,8 @@ explicit ACL: the runner's user, SYSTEM and Administrators only.
 
 A run acts only on windows of processes it launched whose executable is allowed. If another application's window holds
 the foreground and the runner cannot bring the run's window back, the action is refused; OS surfaces (notifications, the
-taskbar, the Start menu) are ignored. `mode: "repair"` allows only `focus`, `expand`, `read`, `key` with the value
+taskbar, the Start menu) are ignored. `mode: "repair"` (no operation sends it yet: the node refuses AI repair for
+desktop steps) allows only `focus`, `expand`, `read`, `key` with the value
 `Escape` and no target (it goes to the run's focused element, to close a menu or a dialog; an `Escape` listed in
 `gatedKeys` stays refused), and `click` on tabs, list items and tree items. Because Escape fires a form's cancel button
 whatever has the focus, a repair-mode Escape is refused while its window holds a write control, unless a popup menu of
@@ -395,7 +398,9 @@ dotnet test desktop/runner/test/Rpa.Runner.Core.Tests
 ```
 
 No .NET SDK? `docker run --rm -v "$PWD/desktop:/src" -w /src mcr.microsoft.com/dotnet/sdk:8.0 dotnet test runner/test/Rpa.Runner.Core.Tests`.
-The UI parts run only on Windows: the `desktop` workflow builds and publishes everything on `windows-latest`, starts
+The UI parts run only on Windows: the `desktop` workflow builds and publishes everything on `windows-latest` (Windows
+Server 2025 in November 2026), starts
+
 the runner and drives the ERP Demo through it with the scenario client, then builds the Windows package, installs it
 and drives it. Its artifact `rpa-windows-package` holds the package, `rpa-windows-x64.zip`, with its SHA-256 (see
 "Releasing the Windows package"); the artifacts `rpa-desktop-runner` and `erp-demo` are the self-contained win-x64
@@ -481,8 +486,11 @@ owned windows, such as dialogs and open menu drop-downs, never another applicati
 (`foreground: true`, only when it is the run's), then front to back, at most 20.
 
 `clipboard.read { runId }` returns `{ text }`, the clipboard's Unicode text (`""` when it holds none). It returns only
-the run's own copy, so text another application or a person copied (a password) never leaves the machine. It is
-`policy_refused`:
+the run's own copy: it does not return text another application or a person copied (a password). A paste key
+(`Ctrl+V`, `Shift+Insert`) is a key like any other, though: `act` sends it, the app pastes whatever the clipboard
+holds, and an `act` with `action: "read"` or a `snapshot` returns the field's text (a password field, or one named
+like a credential, comes back redacted). On a machine where the clipboard matters, such as a person's own desktop,
+list both chords in `gatedKeys`. `clipboard.read` is `policy_refused`:
 
 - unless the policy sets `clipboardRead`;
 - while the foreground window is not one of the run's (the runner never brings its window back for a read: the text

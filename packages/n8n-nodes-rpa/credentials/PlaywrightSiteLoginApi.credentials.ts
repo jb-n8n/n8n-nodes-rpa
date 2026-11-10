@@ -7,12 +7,12 @@ export class PlaywrightSiteLoginApi implements ICredentialType {
 
   icon: Icon = { light: 'file:rpa.svg', dark: 'file:rpa.svg' };
 
-  documentationUrl = 'https://docs.n8n.io/integrations/community-nodes/';
+  documentationUrl = 'https://github.com/jb-n8n/n8n-nodes-rpa#safety-model';
 
   properties: INodeProperties[] = [
     {
       displayName:
-        'What the browser signs in with, and the only sites it may open, load files from or post to. Anything outside these lists is blocked and the run fails as policy_violation. Used by Run Steps and Sign Steps only.',
+        'What the browser signs in with, and the only sites it may open, load files from or post to. Anything outside these lists is blocked and the run fails as policy_violation. Used by Run Steps, Sign Steps and Import Steps.',
       name: 'notice',
       type: 'notice',
       default: '',
@@ -24,7 +24,7 @@ export class PlaywrightSiteLoginApi implements ICredentialType {
       default: '',
       required: true,
       placeholder: 'https://example.com/login',
-      description: 'Where every run with this credential starts. Its site is always allowed.',
+      description: 'Where a run starts when neither the steps nor the Start URL name a start. Its site is always allowed.',
     },
     { displayName: 'Username', name: 'username', type: 'string', default: '', required: true, description: 'The account the browser signs in as' },
     {

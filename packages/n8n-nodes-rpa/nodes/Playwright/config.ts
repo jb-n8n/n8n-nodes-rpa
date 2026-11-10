@@ -255,7 +255,7 @@ export class UrlPolicyError extends Error {
 
 export const ALLOWED_HOSTS_WITH_SITE_LOGIN = 'Also Allow These Sites must be empty when a Site Login is attached: the Site Login credential sets the allowed sites.';
 export const START_URL_NOT_ON_SITE_LOGIN = (host: string) => `Start URL host ${host} is not one of the Site Login credential's Sites the Browser May Open.`;
-export const SITE_LOGIN_ONLY_RUN_OR_SIGN = 'A Site Login can be attached only to Run Steps and Sign Steps';
+export const SITE_LOGIN_ONLY_RUN_OR_SIGN = 'A Site Login can be attached only to Run Steps, Sign Steps and Import Steps';
 export const ALLOWED_HOST_NOT_HTTP = (entry: string) => `Also Allow These Sites entry ${entry} must be an http:// or https:// site, or just the host`;
 export const RUN_STEPS_NEEDS_START = 'Run Steps needs a Start URL or a Site Login';
 export const URL_REQUIRED = 'URL is required';
