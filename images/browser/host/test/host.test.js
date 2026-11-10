@@ -35,13 +35,30 @@ async function until(fn, what, ms = 10_000) {
   }
 }
 
-/** A data directory of its own, removed after the test. `token` null leaves the token file out. */
+/**
+ * A data directory of its own, removed after the test. `token` null leaves the token file out. On Windows the host
+ * keeps browser-temp in the local application data of the account, so each data directory comes with a folder of its
+ * own for that as well (LOCALAPPDATA names the latest one): a test must not empty the folder of a host that is in use.
+ */
+const LOCAL_APP_DATA = process.env.LOCALAPPDATA;
 function dataDir(t, token = TOKEN) {
   const dir = mkdtempSync(join(tmpdir(), 'rpa-host-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   if (token !== null) writeFileSync(join(dir, 'browser-token'), token, { mode: 0o600 });
+  if (WINDOWS) {
+    const local = mkdtempSync(join(tmpdir(), 'rpa-host-local-'));
+    process.env.LOCALAPPDATA = local;
+    t.after(() => {
+      process.env.LOCALAPPDATA = LOCAL_APP_DATA;
+      rmSync(local, { recursive: true, force: true, maxRetries: 5 });
+    });
+  }
   return dir;
 }
+/** Where the host keeps browser-temp for the data directory made last. */
+const browserTempOf = (dir) => (WINDOWS ? join(process.env.LOCALAPPDATA, 'RPA Runner', 'browser-temp') : join(dir, 'browser-temp'));
+/** The names in a data directory after a start. */
+const DATA_FILES = WINDOWS ? ['browser-cert.pem', 'browser-key.pem', 'browser-token'] : ['browser-cert.pem', 'browser-key.pem', 'browser-temp', 'browser-token'];
 
 /**
  * A stand-in for the browser server behind the injectable runServer. Each call starts a local server that answers
@@ -220,7 +237,7 @@ test('the certificate is created once and reused', async (t) => {
   const created = files();
   assert.match(created[0], /^-----BEGIN CERTIFICATE-----/);
   assert.match(created[1], /^-----BEGIN PRIVATE KEY-----/);
-  assert.deepEqual(readdirSync(dir).sort(), ['browser-cert.pem', 'browser-key.pem', 'browser-temp', 'browser-token'], 'no temporary file is left');
+  assert.deepEqual(readdirSync(dir).sort(), DATA_FILES, 'no temporary file is left');
   await first.host.stop();
   const second = await ownHost(t, { dataDir: dir });
   assert.equal(second.host.fingerprint, first.host.fingerprint);
@@ -489,20 +506,38 @@ function folderWithCanary(t) {
 /** A link to a folder: a junction on Windows (any user may create one there), a symbolic link elsewhere. */
 const linkToFolder = (target, path) => symlinkSync(target, path, 'junction');
 
-test('the browser server gets browser-temp in the data directory as its temp folder', async (t) => {
+test('the browser server gets browser-temp as its temp folder: in the data directory, on Windows in the local application data of the account', async (t) => {
   const { call, dir } = await ownHost(t);
-  const temp = join(dir, 'browser-temp');
+  const temp = WINDOWS ? join(process.env.LOCALAPPDATA, 'RPA Runner', 'browser-temp') : join(dir, 'browser-temp');
   assert.ok(statSync(temp).isDirectory());
   assert.deepEqual([call.env.TEMP, call.env.TMP, call.env.TMPDIR], [temp, temp, temp]);
   const names = Object.keys(call.env).map((name) => (WINDOWS ? name.toUpperCase() : name));
   for (const name of ['TEMP', 'TMP', 'TMPDIR']) assert.equal(names.filter((n) => n === name).length, 1, `${name} is set once`);
   assert.notEqual(process.env.TMPDIR ?? process.env.TEMP, temp, 'the temp folder of the host itself is not changed');
+  assert.equal(existsSync(join(dir, 'browser-temp')), !WINDOWS, 'on Windows nothing of it is in the data directory');
   if (!WINDOWS) assert.equal(statSync(temp).mode & 0o777, 0o700);
+});
+
+test('without LOCALAPPDATA the host does not start on Windows', { skip: !WINDOWS && 'elsewhere browser-temp is in the data directory' }, async (t) => {
+  const fake = fakeBrowserServer();
+  const dir = dataDir(t);
+  const refused = () => assert.rejects(
+    startHost({ dataDir: dir, port: 0, bind: '127.0.0.1', runServer: fake.runServer, log: () => {} }),
+    { message: 'LOCALAPPDATA is not set to a folder; the browser host keeps browser-temp there (%LOCALAPPDATA%\\RPA Runner\\browser-temp) and uses no other place' },
+  );
+  delete process.env.LOCALAPPDATA;
+  await refused();
+  process.env.LOCALAPPDATA = '';
+  await refused();
+  process.env.LOCALAPPDATA = 'not\\a\\full\\path';
+  await refused();
+  assert.equal(existsSync(join(dir, 'browser-temp')), false, 'the data directory is not used instead');
+  assert.equal(fake.calls.length, 0, 'no browser server is started');
 });
 
 test('what a session left in browser-temp is removed at the next start, by stop() and when the browser server exits', async (t) => {
   const dir = dataDir(t);
-  const temp = join(dir, 'browser-temp');
+  const temp = browserTempOf(dir);
   /** What a session that was recording a trace leaves when it is cut off. */
   const leave = () => {
     mkdirSync(join(temp, 'playwright-artifacts-x', 'traces'), { recursive: true });
@@ -529,12 +564,12 @@ test('what a session left in browser-temp is removed at the next start, by stop(
   fake.calls[0].exit(1);
   assert.equal(await second.host.exited, 1);
   assert.deepEqual(readdirSync(temp), [], 'emptied when the browser server exits on its own');
-  assert.deepEqual(readdirSync(dir).sort(), ['browser-cert.pem', 'browser-key.pem', 'browser-temp', 'browser-token']);
+  assert.deepEqual(readdirSync(dir).sort(), DATA_FILES);
 });
 
 test('a link inside browser-temp is removed, never what it points at', async (t) => {
   const dir = dataDir(t);
-  const temp = join(dir, 'browser-temp');
+  const temp = browserTempOf(dir);
   const target = folderWithCanary(t);
   const plant = () => {
     mkdirSync(join(temp, 'deeper'), { recursive: true });
@@ -543,7 +578,7 @@ test('a link inside browser-temp is removed, never what it points at', async (t)
     // A symbolic link to a file needs a privilege on Windows.
     if (!WINDOWS) symlinkSync(join(target.folder, 'canary'), join(temp, 'deeper', 'file-link'));
   };
-  mkdirSync(temp);
+  mkdirSync(temp, { recursive: true, mode: 0o700 });
   plant();
   const { host } = await ownHost(t, { dataDir: dir });
   assert.deepEqual(readdirSync(temp), [], 'emptied at the start');
@@ -554,30 +589,60 @@ test('a link inside browser-temp is removed, never what it points at', async (t)
   assert.ok(target.intact(), 'the folder the links pointed at is untouched after stop()');
 });
 
-test('browser-temp that is a link or a file refuses to start', async (t) => {
+test('browser-temp, or a folder above it, that is a link or a file refuses to start', async (t) => {
   const fake = fakeBrowserServer();
-  const refused = (dir) => assert.rejects(
+  const refused = (dir, path) => assert.rejects(
     startHost({ dataDir: dir, port: 0, bind: '127.0.0.1', runServer: fake.runServer, log: () => {} }),
-    { message: 'browser-temp must be a folder of its own, not a link or a file; remove it' },
+    { message: `${path} must be a folder of its own, not a link or a file` },
   );
   const linked = dataDir(t);
   const target = folderWithCanary(t);
-  linkToFolder(target.folder, join(linked, 'browser-temp'));
-  await refused(linked);
+  mkdirSync(dirname(browserTempOf(linked)), { recursive: true });
+  linkToFolder(target.folder, browserTempOf(linked));
+  await refused(linked, browserTempOf(linked));
   assert.ok(target.intact(), 'the folder the link points at is untouched');
+  assert.deepEqual(readdirSync(target.folder), ['canary'], 'and nothing was put into it');
 
   const file = dataDir(t);
-  writeFileSync(join(file, 'browser-temp'), 'x');
-  await refused(file);
-  assert.equal(readFileSync(join(file, 'browser-temp'), 'utf8'), 'x');
+  mkdirSync(dirname(browserTempOf(file)), { recursive: true });
+  writeFileSync(browserTempOf(file), 'x');
+  await refused(file, browserTempOf(file));
+  assert.equal(readFileSync(browserTempOf(file), 'utf8'), 'x');
+
+  if (WINDOWS) {
+    // The folder that holds browser-temp in the local application data.
+    const above = dataDir(t);
+    linkToFolder(target.folder, dirname(browserTempOf(above)));
+    await refused(above, dirname(browserTempOf(above)));
+    assert.deepEqual(readdirSync(target.folder), ['canary'], 'nothing was created behind the link');
+  }
   assert.equal(fake.calls.length, 0, 'no browser server is started');
+});
+
+test('browser-temp that group or others can use refuses to start', { skip: WINDOWS && 'Windows has no file modes; there browser-temp is in the local application data of the account' }, async (t) => {
+  const fake = fakeBrowserServer();
+  const start = (dir) => startHost({ dataDir: dir, port: 0, bind: '127.0.0.1', runServer: fake.runServer, log: () => {} });
+  for (const mode of [0o755, 0o770, 0o701]) {
+    const dir = dataDir(t);
+    mkdirSync(join(dir, 'browser-temp'));
+    chmodSync(join(dir, 'browser-temp'), mode);
+    writeFileSync(join(dir, 'browser-temp', 'kept'), 'x');
+    await assert.rejects(start(dir), { message: `${join(dir, 'browser-temp')} must be for its owner only (mode 700); change its mode or remove it` });
+    assert.deepEqual(readdirSync(join(dir, 'browser-temp')), ['kept'], 'nothing in it is removed');
+  }
+  assert.equal(fake.calls.length, 0, 'no browser server is started');
+  const own = dataDir(t);
+  mkdirSync(join(own, 'browser-temp'), { mode: 0o700 });
+  const host = await start(own);
+  await host.stop();
 });
 
 test('browser-temp that cannot be emptied refuses the start; after a stop the host says so', { skip: (WINDOWS || process.getuid() === 0) && 'needs file modes and a user they apply to' }, async (t) => {
   const dir = dataDir(t);
-  const locked = join(dir, 'browser-temp', 'locked');
+  const locked = join(browserTempOf(dir), 'locked');
+  mkdirSync(browserTempOf(dir), { mode: 0o700 });
   const lock = () => {
-    mkdirSync(locked, { recursive: true });
+    mkdirSync(locked);
     writeFileSync(join(locked, 'file'), 'x');
     chmodSync(locked, 0o500);
   };
@@ -587,7 +652,7 @@ test('browser-temp that cannot be emptied refuses the start; after a stop the ho
     lock();
     await assert.rejects(
       startHost({ dataDir: dir, port: 0, bind: '127.0.0.1', runServer: fake.runServer, log: () => {}, stopWaitMs: 20 }),
-      { message: 'cannot empty browser-temp: EACCES' },
+      { message: `cannot empty ${browserTempOf(dir)}: EACCES` },
     );
     assert.equal(fake.calls.length, 0, 'no browser server is started');
 
@@ -599,7 +664,7 @@ test('browser-temp that cannot be emptied refuses the start; after a stop the ho
   } finally {
     if (existsSync(locked)) chmodSync(locked, 0o700);
   }
-  assert.deepEqual(warnings, ['browser-temp could not be emptied (EACCES); the next start empties it']);
+  assert.deepEqual(warnings, [`${browserTempOf(dir)} could not be emptied (EACCES); the next start empties it`]);
 });
 
 test('a port in use fails with a line naming the port', async (t) => {
@@ -777,7 +842,7 @@ test('started the default way, the path is given to the browser server but is no
     assert.ok(!answer.body.includes(path.slice(1)), `${plainPath} does not tell the path`);
   }
 
-  assert.equal(started.tmpdir, join(dir, 'browser-temp'), 'the temp folder of the browser server is browser-temp');
+  assert.equal(started.tmpdir, browserTempOf(dir), 'the temp folder of the browser server is browser-temp');
   await host.stop();
   assert.ok(!alive(started.pid), 'the browser server has ended when stop() returns');
   assert.ok(files.exitHandlersRan(), 'it ended through its stdin, so its exit handlers ran');

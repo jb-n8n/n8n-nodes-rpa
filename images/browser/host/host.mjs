@@ -22,12 +22,23 @@
 // - browser-key.pem and browser-cert.pem: the gate's key and self-signed certificate. Created together at the first
 //   start (the key with mode 0600 where the platform has file modes) and reused after that, so the fingerprint stays
 //   the same. With only one of the two present the host does not start.
-// - browser-temp: the temp folder of the browser server and its browsers (TEMP, TMP and TMPDIR of that process only).
-//   Playwright keeps a session's trace, downloads and browser profile there, and a trace holds what was typed into
-//   pages. The host creates the folder, and empties it at every start before the browser server is started, after the
-//   browser server's processes have ended in a stop, and when the browser server exits on its own. A host that is
-//   ended without a chance to stop leaves what Playwright did not remove itself until the next start. Emptying removes
-//   a link and never what it points at; with browser-temp itself a link or a file the host does not start.
+//
+// browser-temp, the temp folder of the browser server and its browsers (TEMP, TMP and TMPDIR of that process only):
+// - Playwright keeps a session's trace, downloads and browser profile there, and a trace holds what was typed into
+//   pages. So the folder is one that only the account of the host can use, without relying on how the data directory
+//   was set up:
+//   - On Windows: %LOCALAPPDATA%\RPA Runner\browser-temp, in the profile of the account the host runs as (a profile
+//     is for its user only unless someone changed that). Without LOCALAPPDATA the host does not start; it uses no
+//     other place.
+//   - Elsewhere: <data directory>/browser-temp, created with mode 0700. With an existing folder that group or others
+//     can use the host does not start.
+//   The host does not start either when the folder, or a folder above it up to the profile (elsewhere: up to the data
+//   directory), is a link or a file.
+// - The host creates the folder, and empties it at every start before the browser server is started, after the browser
+//   server's processes have ended in a stop, and when the browser server exits on its own. A host that is ended
+//   without a chance to stop leaves what Playwright did not remove itself until the next start. Emptying removes a
+//   link (a junction too) and never what it points at.
+// - One host per data directory and, on Windows, per account: a second one would empty the first one's folder.
 //
 // Order and stopping:
 // - The browser server starts first; the gate listens only once the browser server has printed its address.
@@ -48,7 +59,7 @@ import {
 } from 'node:fs';
 import { request } from 'node:http';
 import { isIP } from 'node:net';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { createSecureContext } from 'node:tls';
 import { fileURLToPath } from 'node:url';
 import { MAX_SESSIONS_LIMIT, MIN_TOKEN_LENGTH, createGate } from '../gate/gate.mjs';
@@ -58,6 +69,8 @@ const TOKEN_FILE = 'browser-token';
 const KEY_FILE = 'browser-key.pem';
 const CERT_FILE = 'browser-cert.pem';
 const TEMP_DIR = 'browser-temp';
+/** On Windows browser-temp is in this folder of the account's local application data. */
+const LOCAL_FOLDER = 'RPA Runner';
 /** The variables that name the temp folder: Node and Chromium read TEMP and TMP on Windows, TMPDIR elsewhere. */
 const TEMP_VARIABLES = ['TEMP', 'TMP', 'TMPDIR'];
 const TOKEN_RULE = `${TOKEN_FILE} must hold at least ${MIN_TOKEN_LENGTH} characters of ASCII text without spaces`;
@@ -158,38 +171,65 @@ function certificate(dataDir) {
 }
 
 /**
- * The temp folder of the browser server in the data directory, created when it is missing. Throws when the name is
- * taken by a link or a file: the host would empty, and the browsers would write to, whatever a link points at.
+ * Where browser-temp is: { base, parts }, the folder it is looked for from and the names below it down to browser-temp.
+ * On Windows that is the local application data of the account, from the profile down when it is inside the profile;
+ * elsewhere the data directory.
+ */
+function browserTempPlace(dataDir) {
+  if (process.platform !== 'win32') return { base: resolve(dataDir), parts: [TEMP_DIR] };
+  const local = process.env.LOCALAPPDATA ?? '';
+  if (!isAbsolute(local)) {
+    throw new Error(`LOCALAPPDATA is not set to a folder; the browser host keeps ${TEMP_DIR} there (%LOCALAPPDATA%\\${LOCAL_FOLDER}\\${TEMP_DIR}) and uses no other place`);
+  }
+  const profile = process.env.USERPROFILE ?? '';
+  const below = isAbsolute(profile) ? relative(profile, local) : '';
+  if (below === '' || below.startsWith('..') || isAbsolute(below)) return { base: resolve(local), parts: [LOCAL_FOLDER, TEMP_DIR] };
+  return { base: resolve(profile), parts: [...below.split(sep), LOCAL_FOLDER, TEMP_DIR] };
+}
+
+/**
+ * The temp folder of the browser server, created when it is missing, with the folders above it. Throws when a name on
+ * the way is taken by a link or a file (lstat does not follow a link and reports a junction as a link): the host would
+ * empty, and the browsers would write to, whatever the link points at. Throws as well where there are file modes and
+ * the folder is open to group or others.
  */
 function browserTempFolder(dataDir) {
-  const folder = resolve(dataDir, TEMP_DIR);
-  let found;
-  try {
-    found = lstatSync(folder);
-  } catch (err) {
-    if (err.code !== 'ENOENT') throw new Error(`cannot use ${TEMP_DIR}: ${err.code ?? 'error'}`);
-  }
-  if (found === undefined) {
+  const { base, parts } = browserTempPlace(dataDir);
+  let folder = base;
+  for (const part of parts) {
+    folder = join(folder, part);
+    let found;
     try {
-      mkdirSync(folder, { mode: 0o700 });
+      found = lstatSync(folder);
     } catch (err) {
-      throw new Error(`cannot create ${TEMP_DIR}: ${err.code ?? 'error'}`);
+      if (err.code !== 'ENOENT') throw new Error(`cannot use ${folder}: ${err.code ?? 'error'}`);
     }
-  } else if (!found.isDirectory()) {
-    throw new Error(`${TEMP_DIR} must be a folder of its own, not a link or a file; remove it`);
+    if (found === undefined) {
+      try {
+        mkdirSync(folder, { mode: 0o700 });
+      } catch (err) {
+        throw new Error(`cannot create ${folder}: ${err.code ?? 'error'}`);
+      }
+    } else if (!found.isDirectory()) {
+      throw new Error(`${folder} must be a folder of its own, not a link or a file`);
+    } else if (process.platform !== 'win32' && part === TEMP_DIR && (found.mode & 0o077) !== 0) {
+      throw new Error(`${folder} must be for its owner only (mode 700); change its mode or remove it`);
+    }
   }
   return folder;
 }
 
 /**
- * Removes everything in a folder. An entry the listing reports as a folder is emptied and removed; anything else is
- * removed as it is, so a link (a junction too) goes and what it points at stays. A folder that is swapped for a link
- * between the listing and its removal would be followed; only an account that can write to the folder can do that.
+ * Removes everything in a folder without following a link. The folder itself is checked with lstat directly before it
+ * is listed: it may have become a link since it was last looked at. An entry is entered only when the listing and lstat
+ * both report a folder (lstat reports a junction as a link, and on Windows the listing reports every reparse point as
+ * one); anything else is removed as it is, so a link goes and what it points at stays.
  */
 function removeContent(folder) {
+  if (!lstatSync(folder).isDirectory()) throw Object.assign(new Error(`${folder} is not a folder`), { code: 'ENOTDIR' });
   for (const entry of readdirSync(folder, { withFileTypes: true })) {
     const path = join(folder, entry.name);
-    if (entry.isDirectory()) {
+    if (entry.isDirectory() && lstatSync(path).isDirectory()) {
       removeContent(path);
       rmdirSync(path);
     } else {
@@ -321,7 +361,8 @@ async function endProcessTree(child, gone, isGone, waitMs) {
 
 /**
  * Starts the browser server, then the gate with TLS in front of it, and logs the start line.
- * - dataDir holds browser-token and, after the first start, browser-key.pem, browser-cert.pem and browser-temp.
+ * - dataDir holds browser-token and, after the first start, browser-key.pem and browser-cert.pem; except on Windows
+ *   also browser-temp (see the top of this file).
  * - port and bind are where the gate listens. upstreamPort is the browser server's port on 127.0.0.1; 0 lets the
  *   operating system pick one, and the host uses the port the browser server announces either way.
  * - runServer({ port, path, env }) starts the browser server and returns a child-process-like object: stdout (a
@@ -335,7 +376,7 @@ async function endProcessTree(child, gone, isGone, waitMs) {
  * of the exit code (1 once the browser server has exited on its own, 0 once stop() has finished) and stop(), which
  * closes the gate, ends open sessions, ends the browser server's process tree and empties browser-temp.
  * Rejects, with nothing left running, when a parameter or a file in dataDir is not usable, browser-temp cannot be
- * emptied, the browser server does not come up, it tells its path to a plain request, or the gate cannot listen.
+ * used or emptied, the browser server does not come up, it tells its path to a plain request, or the gate cannot listen.
  */
 export async function startHost({
   dataDir, port = 3000, bind = '0.0.0.0', upstreamPort = 0, maxSessions = 1, runServer = runBrowserServer, log = console.log,
@@ -355,7 +396,7 @@ export async function startHost({
   // browser server is started.
   const browserTemp = browserTempFolder(dataDir);
   const notEmptied = await emptied(browserTemp, stopWaitMs);
-  if (notEmptied !== undefined) throw new Error(`cannot empty ${TEMP_DIR}: ${notEmptied}`);
+  if (notEmptied !== undefined) throw new Error(`cannot empty ${browserTemp}: ${notEmptied}`);
 
   const path = `/${randomBytes(16).toString('hex')}`;
   // Windows takes the names of variables without regard to case.
@@ -382,7 +423,7 @@ export async function startHost({
   /** After the browser server's processes have ended: what its sessions kept in browser-temp is removed. */
   const emptyBrowserTemp = async () => {
     const code = await emptied(browserTemp, stopWaitMs);
-    if (code !== undefined) warn(`${TEMP_DIR} could not be emptied (${code}); the next start empties it`);
+    if (code !== undefined) warn(`${browserTemp} could not be emptied (${code}); the next start empties it`);
   };
 
   let upstream;
