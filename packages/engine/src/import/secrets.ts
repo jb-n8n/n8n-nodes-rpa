@@ -2,7 +2,7 @@
 // the recorded sign-in becomes one signIn event (with a Site Login) or is removed (without one), every other credential
 // value is removed with its step, and labels, locators, addresses and report items that name a secret are redacted.
 import { IMPORT_NEEDS_SITE_LOGIN } from '../messages.js';
-import { CREDENTIAL_FIELD, STRICT_TOTP_FIELD } from '../secrets/credential-field.js';
+import { CREDENTIAL_FIELD, PASSWORD_FIELD, STRICT_TOTP_FIELD } from '../secrets/credential-field.js';
 import { createMasker, type Masker } from '../secrets/mask.js';
 import { canonicalize } from '../sign.js';
 import type { Locator } from '../types.js';
@@ -15,8 +15,6 @@ const TOTP_FIELD = /code|otp|token|2fa|verification|authenticat/i;
 const TOTP_VALUE = /^\d{6,8}$/;
 /** The hint a fill typed from a TOTP activity's output carries (the UiPath importer adds it): that fill is the code. */
 export const TOTP_OUTPUT_HINT = 'one-time code (a TOTP activity output)';
-/** A field that is a password field, not merely credential-looking ("Passenger"): only one starts a sign-in. */
-const PASSWORD_NAMED = /password|passwd|passwort|kennwort|passcode|pwd|\bpin\b/i;
 /** A field labelled like a username, preferred over the nearest fill when no value matches the Site Login username. */
 const USERNAME_NAMED = /user|login|e-?mail|account|\bid\b/i;
 
@@ -64,7 +62,8 @@ const isExpressionCodeField = (e: Typed): boolean => e.hints.includes(TOTP_OUTPU
  * `[strOtp]` from a TOTP activity) or only a template (`{{var.otp}}`, a mapped variable).
  */
 const isExpressionValue = (v: string): boolean => v.trim() === '' || /^\s*\{\{[^{}]*\}\}\s*$/.test(v);
-const isPasswordField = (e: Typed): boolean => e.secure === true || fieldTexts(e).some((t) => PASSWORD_TYPE.test(t) || PASSWORD_NAMED.test(t));
+/** A field that is a password field, not merely credential-looking ("Client secret"): only one starts a sign-in. */
+const isPasswordField = (e: Typed): boolean => e.secure === true || fieldTexts(e).some((t) => PASSWORD_TYPE.test(t) || PASSWORD_FIELD.test(t));
 const isUsernameLike = (e: Typed): boolean => fieldTexts(e).some((t) => USERNAME_NAMED.test(t));
 const sameElement = (a: Candidate[], b: Candidate[]): boolean => {
   const keys = new Set(a.map((c) => canonicalize({ ...c, fallbacks: undefined })));

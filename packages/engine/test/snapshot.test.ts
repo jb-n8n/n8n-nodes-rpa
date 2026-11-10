@@ -206,6 +206,19 @@ describe('field values (the agent sees what a field already holds)', () => {
     expect(byName(s, 'Company code').value).toBe('1000');
     expect(byName(s, 'Company code').valueHidden).toBeUndefined();
   });
+  it('hides the value of a field that says password in another language; "Passenger" stays hidden, a search field shown', async () => {
+    // The test server sends no charset: the meta tag makes the page read as UTF-8, as a portal declares it.
+    await show(`<meta charset="utf-8"><main><label>Kennwort <input value="pw-value-1"></label><label>Contraseña <input value="pw-value-2"></label>
+      <label>Wachtwoord <input value="pw-value-3"></label><label>Пароль <input value="pw-value-4"></label><label>パスワード <input value="pw-value-5"></label>
+      <label>密码 <input value="pw-value-6"></label><label>비밀번호 <input value="pw-value-7"></label><label>Passenger <input value="pw-value-8"></label>
+      <label>Search <input value="quarterly"></label></main>`);
+    const raw = await rawOf(() => snapshot(page, masker, { refStart: 1 }));
+    expect(raw.sent).not.toContain('pw-value');
+    for (const name of ['Kennwort', 'Contraseña', 'Wachtwoord', 'Пароль', 'パスワード', '密码', '비밀번호', 'Passenger']) {
+      expect(byName(raw.result, name), name).toMatchObject({ valueHidden: true });
+    }
+    expect(byName(raw.result, 'Search').value).toBe('quarterly');
+  });
   it('hides card, key, token and security-answer fields the importer does not treat as sign-in fields; "Key date" stays shown', async () => {
     await show(`<main><label>API key <input value="pw-value-1"></label><label>Access-Key <input value="pw-value-2"></label>
       <label>Private_key <input value="pw-value-3"></label><label>Bearer token <input value="pw-value-4"></label><label>CVV <input value="pw-value-5"></label>

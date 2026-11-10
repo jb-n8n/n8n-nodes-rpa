@@ -532,10 +532,10 @@ describe('sign-in grouping and masking', () => {
 
   it('a credential-looking field that is no password field is stripped but is no sign-in', () => {
     for (const opts of [OPTS, { name: 'erp-export', hasSiteLogin: false }] as ImportOptions[]) {
-      const r = importEvents([goto(LOGIN), fill('Name', 'Smith'), fill('Passenger', 'Smythe', [{ label: 'Passenger' }]), click('Search')], opts);
+      const r = importEvents([goto(LOGIN), fill('Name', 'Smith'), fill('Client secret', 'Smythe', [{ label: 'Client secret' }]), click('Search')], opts);
       expect(stepsOf(r).map((s) => s.intent)).toEqual(['Open erp.example.com/acme/login', 'Type into Name', 'Click Search']);
       expect(r.report.items.some((i) => i.reason === IMPORT_NEEDS_SITE_LOGIN || i.what === 'Sign in')).toBe(false);
-      expect(r.report.items).toContainEqual(expect.objectContaining({ kind: 'secret', what: 'Passenger' }));
+      expect(r.report.items).toContainEqual(expect.objectContaining({ kind: 'secret', what: 'Client secret' }));
     }
   });
 });

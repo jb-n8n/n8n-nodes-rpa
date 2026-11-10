@@ -75,6 +75,11 @@ Microsoft's terms say about unattended automation on Windows (not legal advice).
   sign in, and whoever wrote them could test the typed password on a page that copies it into the page.
 - **A `paginate` whose body holds a `submit` or a `download` takes no `{{var.name}}` in its own `when`, `expect` or
   `next`**: they decide whether and how often the write runs. Run Steps and the schema refuse it when the steps are read.
+- **Import Steps drops a recorded password from fields named in other languages**, not only English: Kennwort,
+  contraseña, mot de passe, senha, wachtwoord, пароль, パスワード, 密码, 비밀번호 and more; such a field, and one named
+  `pass`, starts the `signIn` as an English one does. In 0.1.0 a Chrome recording or Playwright code kept the typed
+  password as a literal in the draft. Passenger, passport, compass and bypass fields are no longer stripped as
+  password fields.
 
 ## 0.1.0 (2026-10-26)
 

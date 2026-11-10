@@ -106,6 +106,45 @@ describe('Chrome Recorder JSON', () => {
     expect(JSON.stringify(odd)).not.toContain('oops-pass-1');
   });
 
+  it('a password typed into a field that says password in another language, by a short form or by its type is never imported', () => {
+    const fields: string[][] = [
+      ['aria/Kennwort', '#kennwort'], ['aria/Passwort'], ['aria/Contraseña', '#contrasena'], ['aria/Mot de passe'], ["aria/Parola d'ordine"],
+      ['aria/Senha', '#senha'], ['aria/Wachtwoord'], ['aria/Lösenord'], ['aria/Adgangskode'], ['aria/Passord'], ['aria/Hasło'], ['aria/Heslo'],
+      ['aria/Şifre'], ['aria/Пароль'], ['aria/パスワード'], ['aria/密码'], ['aria/비밀번호'],
+      ['aria/Field 2', '#pwd'], ['aria/Field 2', '#pass'], ['aria/Field 2', '#passwd'], ['aria/Field 2', 'input[type="password"]'],
+    ];
+    fields.forEach((selectors, i) => {
+      const typed = `Geheim-${i}-x7!`;
+      const rec = recording([
+        nav(`${ORIGIN}/acme/login`),
+        { type: 'change', value: 'ops-user-7', selectors: [['aria/User'], ['#user']] },
+        { type: 'change', value: typed, selectors: selectors.map((s) => [s]) },
+        { type: 'click', selectors: [['aria/Sign in[role="button"]']] },
+      ]);
+      for (const opts of [OPTS, { name: 'x', hasSiteLogin: false }] as ImportOptions[]) {
+        const r = importSource('chrome', rec, opts);
+        expect(JSON.stringify(r), selectors[0]).not.toContain(typed);
+        expect(r.report.items.some((it) => it.kind === 'secret'), selectors[0]).toBe(true);
+        if (opts.hasSiteLogin) expect(stepsOf(r).some((s) => 'signIn' in s), selectors[0]).toBe(true);
+      }
+    });
+  });
+
+  it('passenger, passport number, compass, bypass and search fields are no password fields: their values are imported', () => {
+    const values: [string, string][] = [['Passenger', 'Ada Lovelace'], ['Passport number', 'X1234567'], ['Compass', 'NNE'], ['Bypass', 'via north gate'], ['Search', 'quarterly report']];
+    const rec = recording([
+      nav(),
+      ...values.map(([name, value]) => ({ type: 'change', value, selectors: [[`aria/${name}`]] })),
+      { type: 'click', selectors: [['aria/Save[role="button"]']] },
+    ]);
+    for (const opts of [OPTS, { name: 'x', hasSiteLogin: false }] as ImportOptions[]) {
+      const r = importSource('chrome', rec, opts);
+      expect(r.report.items.filter((it) => it.kind === 'secret')).toEqual([]);
+      const fills = stepsOf(r).flatMap((s) => ('fill' in s ? [s.fill.value] : []));
+      expect(fills).toEqual(values.map(([, v]) => v));
+    }
+  });
+
   it('aria with a role becomes a role locator', () => {
     const report = newReport();
     const events = chromeEvents({

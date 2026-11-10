@@ -4,6 +4,7 @@
 // else becomes the flow around them, or a report item. Expressions are kept as text and never evaluated,
 // and no typed value, SecureText or credential asset is ever imported beyond the asset's name as a slot.
 import { IMPORT_EMPTY } from '../messages.js';
+import { CREDENTIAL_FIELD } from '../secrets/credential-field.js';
 import { createMasker } from '../secrets/mask.js';
 import { readZipEntries, type ZipCaps } from '../steps/zip.js';
 import { buildDraft, cleanLabel, describeEvent, MIN_SECRET_LENGTH } from './draft.js';
@@ -1126,7 +1127,7 @@ class Walker {
     const scopeName = displayName;
     if (launch && exe) {
       let args = argsVal && 'literal' in argsVal && argsVal.literal.trim() ? [argsVal.literal.trim()] : undefined;
-      if (args && PASSWORD_FIELD.test(args[0])) {
+      if (args && CREDENTIAL_FIELD.test(args[0])) {
         // A command line that passes a password is never imported.
         if (args[0].trim().length >= 4) this.desktopTypedSecrets.push(args[0]);
         this.add(at, 'secret', displayName, 'the app\'s arguments look like they carry a password or a secret, so they were not imported: pass the sign-in through steps that type run variables instead');
@@ -1232,7 +1233,7 @@ class Walker {
 
     // Typing. A secure value, a credential's password or a password-like field never carries a value: a run variable.
     const fieldHints = [...t.hints, displayName].join(' ');
-    const passwordField = PASSWORD_FIELD.test(fieldHints);
+    const passwordField = CREDENTIAL_FIELD.test(fieldHints);
     const secureProp = name === 'TypeSecureText' || el.attrs.SecureText !== undefined || el.children.some((c) => isProperty(c) && propertyName(c) === 'SecureText');
     const secret = (varName: string, source: string): Item[] => {
       this.secretVars.add(varName.toLowerCase());
@@ -1433,8 +1434,6 @@ function specialKeys(text: string): { text: string; enter: boolean } {
   return { text: out, enter };
 }
 
-/** A field whose selector or display name reads like a password, PIN or secret: what is typed there is never imported. */
-const PASSWORD_FIELD = /pass(word|wort|code)?\b|passwd|pwd|\bpin\b|secret|kennwort|mot de passe/i;
 /** A variable whose name reads like a password. */
 const PASSWORD_NAME = /pass(word|wd)?|pwd|secret|\bpin\b/i;
 

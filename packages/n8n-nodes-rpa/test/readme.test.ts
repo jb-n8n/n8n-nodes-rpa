@@ -378,7 +378,7 @@ describe('README', () => {
     const first = s.slice(s.indexOf('**First day: import a bot.**'));
     for (const text of [
       '`packages/n8n-nodes-rpa/templates/5-import-a-bot.json`', '**RPA: 5 Import a bot**', '**Expected File**', '**Recorder** panel', '**Export → JSON**',
-      '`npx playwright codegen`', '`project.json`', 'password, PIN or code field', 'one `signIn` step', '**RPA: 3 Approve steps**', 'each step list gets its own approval',
+      '`npx playwright codegen`', '`project.json`', 'password, PIN, secret or code field', 'is not recognized', 'one `signIn` step', '**RPA: 3 Approve steps**', 'each step list gets its own approval',
       '`Imported: <n> steps; <m> not translated, <k> removed as secrets.`', '`<name>.workflow.json`', '**Sign Steps** signs them', '(Basic Auth) by default', 'pick or create a Basic Auth credential',
       'Keep **Authentication** on', 'login breaker trips', 'spend on the chat model',
       'reverse proxy', '`proxy_read_timeout`', "Don't submit the form again", '**Executions**',

@@ -125,6 +125,46 @@ describe('Playwright code', () => {
     for (const v of [...typed, 'oops-pass-1']) expect(JSON.stringify(r)).not.toContain(v);
   });
 
+  it('a password typed into a field that says password in another language, by a short form or by its type is never imported', () => {
+    const fields = [
+      "getByLabel('Kennwort')", "getByRole('textbox', { name: 'Kennwort' })", "getByPlaceholder('Contraseña')", "getByLabel('Mot de passe')",
+      'getByLabel("Parola d\'ordine")', "locator('#senha')", "getByPlaceholder('Wachtwoord')", "getByLabel('Lösenord')", "getByLabel('Adgangskode')",
+      "getByLabel('Passord')", "getByLabel('Hasło')", "getByLabel('Heslo')", "getByLabel('Şifre')", "getByLabel('Пароль')", "getByLabel('パスワード')",
+      "getByLabel('密码')", "getByRole('textbox', { name: '비밀번호' })", "locator('#pwd')", "locator('#pass')", "locator('#passwd')",
+      "locator('input[type=\"password\"]')",
+    ];
+    fields.forEach((field, i) => {
+      const typed = `Geheim-${i}-x7!`;
+      const code = test([
+        "  await page.goto('https://portal.example.com/login');",
+        "  await page.getByLabel('User').fill('ops-user-7');",
+        `  await page.${field}.fill('${typed}');`,
+        "  await page.getByRole('button', { name: 'Sign in' }).click();",
+      ].join('\n'));
+      for (const opts of [OPTS, PLAIN]) {
+        const r = importSource('playwright', code, opts);
+        expect(JSON.stringify(r), field).not.toContain(typed);
+        expect(r.report.items.some((it) => it.kind === 'secret'), field).toBe(true);
+        if (opts.hasSiteLogin) expect(stepsOf(r).some((s) => 'signIn' in s), field).toBe(true);
+      }
+    });
+  });
+
+  it('passenger, passport number, compass, bypass and search fields are no password fields: their values are imported', () => {
+    const values: [string, string][] = [['Passenger', 'Ada Lovelace'], ['Passport number', 'X1234567'], ['Compass', 'NNE'], ['Bypass', 'via north gate'], ['Search', 'quarterly report']];
+    const code = test([
+      "  await page.goto('https://portal.example.com/');",
+      ...values.map(([name, value]) => `  await page.getByLabel('${name}').fill('${value}');`),
+      "  await page.getByRole('button', { name: 'Save' }).click();",
+    ].join('\n'));
+    for (const opts of [OPTS, PLAIN]) {
+      const r = importSource('playwright', code, opts);
+      expect(r.report.items.filter((it) => it.kind === 'secret')).toEqual([]);
+      const fills = stepsOf(r).flatMap((s) => ('fill' in s ? [s.fill.value] : []));
+      expect(fills).toEqual(values.map(([, v]) => v));
+    }
+  });
+
   it('exact options carry over', () => {
     const { events } = parse(test([
       "  await page.goto('https://portal.example.com/');",
