@@ -27,8 +27,8 @@ if ($ShowTokens) {
   }
 }
 
-# The fingerprint in the runner's start line, or nothing. The start line is the first line of that exact form in the
-# log of the current run: the runner writes it before it answers anyone, and a later line of the same form is not the
+# The fingerprint in the runner's start line, or nothing. This takes the first line of that exact form in the log of
+# the current run. The runner writes its start line once, when it starts; a later line of the same form is not the
 # start line (a caller can make the runner log text that the caller chose).
 function Get-RunnerFingerprint([string]$log) {
   foreach ($line in @(Get-Content -LiteralPath $log -ErrorAction SilentlyContinue)) {

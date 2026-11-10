@@ -25,10 +25,12 @@ BeforeAll {
   # What Get-RpaMachineFacts says about one path in the data directory.
   function New-PathState([string]$Kind = 'ours') {
     switch ($Kind) {
-      'missing' { @{ Exists = $false; IsLink = $false; OwnerTrusted = $false; Owner = '' } }
-      'ours' { @{ Exists = $true; IsLink = $false; OwnerTrusted = $true; Owner = 'BUILTIN\Administrators' } }
-      'link' { @{ Exists = $true; IsLink = $true; OwnerTrusted = $true; Owner = 'BUILTIN\Administrators' } }
-      'theirs' { @{ Exists = $true; IsLink = $false; OwnerTrusted = $false; Owner = 'BOT-PC\mallory' } }
+      'missing' { @{ Exists = $false; IsLink = $false; Links = 0; OwnerTrusted = $false; Owner = '' } }
+      'ours' { @{ Exists = $true; IsLink = $false; Links = 1; OwnerTrusted = $true; Owner = 'BUILTIN\Administrators' } }
+      'link' { @{ Exists = $true; IsLink = $true; Links = 1; OwnerTrusted = $true; Owner = 'BUILTIN\Administrators' } }
+      'theirs' { @{ Exists = $true; IsLink = $false; Links = 1; OwnerTrusted = $false; Owner = 'BOT-PC\mallory' } }
+      # A second name for a file that Administrators own: a hard link.
+      'hardlink' { @{ Exists = $true; IsLink = $false; Links = 2; OwnerTrusted = $true; Owner = 'BUILTIN\Administrators' } }
     }
   }
 
@@ -41,9 +43,10 @@ BeforeAll {
       UserPasswordExpires = $false; UserPasswordWrong = $false; UserPasswordProblem = $null
       PortsInUse = @{}; Installed = $false; RunnerRunning = $false
       InstalledRunnerPort = $null; InstalledBrowserPort = $null; InstalledBrowser = $false
-      InstalledAllowFrom = $null; InstalledAutoSignInForUser = $false
-      DataDir = $script:DataDir; LogDir = "$($script:DataDir)\logs"
-      DataDirState = New-PathState 'missing'; LogDirState = New-PathState 'missing'
+      InstalledAllowFrom = $null; InstalledAutoSignInForUser = $false; InstalledAutoSignInUser = $null
+      DataDir = $script:DataDir; LogDir = "$($script:DataDir)\logs"; PolicyBackupsDir = "$($script:DataDir)\policy-backups"
+      DataDirState = New-PathState 'missing'; LogDirState = New-PathState 'missing'; PolicyBackupsState = New-PathState 'missing'
+      DataDirForeign = $null
       DataFiles = @{ 'policy.json' = New-PathState 'missing'; 'token' = New-PathState 'missing'; 'browser-token' = New-PathState 'missing' }
       TaskFolderOwner = $null; PublicNetwork = $false
     }
@@ -56,7 +59,7 @@ BeforeAll {
     $facts = New-TestFacts @{
       Installed = $true; UserExists = $true
       InstalledRunnerPort = 8765; InstalledBrowserPort = 3000; InstalledBrowser = $true; InstalledAllowFrom = @('10.0.0.5')
-      DataDirState = New-PathState 'ours'; LogDirState = New-PathState 'ours'
+      DataDirState = New-PathState 'ours'; LogDirState = New-PathState 'ours'; PolicyBackupsState = New-PathState 'ours'
       DataFiles = @{ 'policy.json' = New-PathState 'ours'; 'token' = New-PathState 'ours'; 'browser-token' = New-PathState 'ours' }
     }
     foreach ($key in $Change.Keys) { $facts[$key] = $Change[$key] }
@@ -156,6 +159,24 @@ Describe 'Get-RpaInstallPlan' {
       $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts @{ UserExists = $true; UserPasswordWrong = $true })
       $plan.Refusals | Should -BeExactly @('The password given for rpa-runner is not correct.')
       $plan.Steps.Count | Should -Be 0
+    }
+
+    It 'refuses an upgrade for another user while automatic sign-in is set up for the first one' {
+      $facts = New-InstalledFacts @{ InstalledAutoSignInUser = 'rpa-runner' }
+      $text = 'Automatic sign-in is set up for rpa-runner. Uninstall first, then install for bot2.'
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ User = 'bot2' }) -Facts $facts
+      $plan.Refusals | Should -BeExactly @($text)
+      $plan.Steps.Count | Should -Be 0
+
+      # Also when automatic sign-in is asked for the new user, with or without its password.
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ User = 'bot2'; AutoSignIn = $true }) -Facts $facts
+      $plan.Refusals | Should -BeExactly @($text)
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ User = 'bot2'; AutoSignIn = $true; UserPassword = New-TestPassword }) -Facts $facts
+      $plan.Refusals | Should -BeExactly @($text)
+
+      # The same user: no refusal.
+      $facts = New-InstalledFacts @{ InstalledAutoSignInUser = 'rpa-runner'; InstalledAutoSignInForUser = $true }
+      (Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts $facts).Refusals.Count | Should -Be 0
     }
 
     It 'refuses a new local user without -AutoSignIn and without -UserPassword' {
@@ -284,6 +305,51 @@ Describe 'Get-RpaInstallPlan' {
       $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-InstalledFacts @{ DataFiles = $files })
       $plan.Refusals | Should -BeExactly @("C:\ProgramData\RPA Runner\$Name is a link or junction. Remove it and run the installer again.")
       $plan.Steps.Count | Should -Be 0
+    }
+
+    It 'refuses an existing <Name> that has a second name (a hard link)' -ForEach @(@{ Name = 'policy.json' }, @{ Name = 'token' }, @{ Name = 'browser-token' }) {
+      $files = @{ 'policy.json' = New-PathState 'ours'; 'token' = New-PathState 'ours'; 'browser-token' = New-PathState 'ours' }
+      $files[$Name] = New-PathState 'hardlink'
+      $text = "C:\ProgramData\RPA Runner\$Name has more than one name (a hard link). Check what it is, remove it, and run the installer again."
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-InstalledFacts @{ DataFiles = $files })
+      $plan.Refusals | Should -BeExactly @($text)
+      $plan.Steps.Count | Should -Be 0
+
+      $facts = New-TestFacts @{ DataDirState = New-PathState 'ours'; DataFiles = $files }
+      (Get-RpaInstallPlan -Parameters $script:Parameters -Facts $facts).Refusals | Should -BeExactly @($text)
+    }
+
+    It 'on a first install, refuses a data directory that holds something <Why>' -ForEach @(
+      @{ Why = 'someone else owns'; Entry = @{ Path = 'C:\ProgramData\RPA Runner\browser-key.pem'; IsLink = $false; Links = 1; Owner = 'BOT-PC\mallory' }
+        Text = 'C:\ProgramData\RPA Runner\browser-key.pem exists and is owned by BOT-PC\mallory. Check what is in the data directory, remove it, and run the installer again.' }
+      @{ Why = 'that is a link or junction'; Entry = @{ Path = 'C:\ProgramData\RPA Runner\exports'; IsLink = $true; Links = 1; Owner = 'BUILTIN\Administrators' }
+        Text = 'C:\ProgramData\RPA Runner\exports is a link or junction. Remove it and run the installer again.' }
+      @{ Why = 'that has a second name'; Entry = @{ Path = 'C:\ProgramData\RPA Runner\logs\runner.out.log'; IsLink = $false; Links = 2; Owner = 'BUILTIN\Administrators' }
+        Text = 'C:\ProgramData\RPA Runner\logs\runner.out.log has more than one name (a hard link). Check what it is, remove it, and run the installer again.' }
+    ) {
+      $facts = New-TestFacts @{ DataDirState = New-PathState 'ours'; DataDirForeign = $Entry }
+      $plan = Get-RpaInstallPlan -Parameters $script:Parameters -Facts $facts
+      $plan.Refusals | Should -BeExactly @($Text)
+      $plan.Steps.Count | Should -Be 0
+    }
+
+    It 'on an upgrade, does not judge what the bot user keeps in the data directory' {
+      $entry = @{ Path = 'C:\ProgramData\RPA Runner\browser-key.pem'; IsLink = $false; Links = 1; Owner = 'BOT-PC\rpa-runner' }
+      (Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-InstalledFacts @{ DataDirForeign = $entry })).Refusals.Count | Should -Be 0
+    }
+
+    It 'refuses a policy-backups folder that is a link, or that someone else owns, on a first install and on an upgrade' {
+      $link = 'C:\ProgramData\RPA Runner\policy-backups is a link or junction. Remove it and run the installer again.'
+      $owned = 'C:\ProgramData\RPA Runner\policy-backups exists and is owned by BOT-PC\mallory. Check what is in it, remove it, and run the installer again.'
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-InstalledFacts @{ PolicyBackupsState = New-PathState 'link' })
+      $plan.Refusals | Should -BeExactly @($link)
+      $plan.Steps.Count | Should -Be 0
+      (Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-InstalledFacts @{ PolicyBackupsState = New-PathState 'theirs' })).Refusals | Should -BeExactly @($owned)
+
+      $facts = New-TestFacts @{ DataDirState = New-PathState 'ours'; PolicyBackupsState = New-PathState 'theirs' }
+      (Get-RpaInstallPlan -Parameters $script:Parameters -Facts $facts).Refusals | Should -BeExactly @($owned)
+      # One that is missing is no reason to refuse: the step that protects the data directory makes it.
+      (Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-InstalledFacts @{ PolicyBackupsState = New-PathState 'missing' })).Refusals.Count | Should -Be 0
     }
 
     It 'a first install over a data directory that Administrators or SYSTEM own keeps its files and writes what is missing' {
@@ -479,6 +545,15 @@ Describe 'Invoke-RpaInstallPlan' {
     $plan = @{ Refusals = @(); Warnings = @(); Steps = @('copy program files', 'make coffee') }
     { Invoke-RpaInstallPlan -Plan $plan -Parameters (New-TestParameters) -SourceDir $script:InstallerDir } |
       Should -Throw -ExpectedMessage 'The installer has no step "make coffee"; nothing was changed.'
+  }
+
+  # The question -AutoSignIn asks can sit between the plan and the steps, and a standard user can make the folder.
+  It 'looks at the owner of the scheduled task folder again directly before it registers a task' {
+    Mock -ModuleName RpaInstall Get-RpaTaskFolderOwner { 'BOT-PC\mallory' }
+    Mock -ModuleName RpaInstall Unregister-RpaTask { }
+    { InModuleScope RpaInstall { Register-RpaTask 'RPA Runner' 'C:\Program Files\RPA Runner\scripts\start-runner.ps1' 'BOT-PC\rpa-runner' } } |
+      Should -Throw -ExpectedMessage 'The scheduled task folder \RPA\ exists and is owned by BOT-PC\mallory. Check what is in it, remove it, and run the installer again.'
+    Should -Invoke -ModuleName RpaInstall Unregister-RpaTask -Times 0 -Exactly
   }
 
   It 'runs no plan that has a refusal' {
@@ -872,11 +947,21 @@ Describe 'The installer scripts' {
   }
 
   # The installer runs as an administrator; a tool found along PATH could come from a folder other users can write to.
-  It '<Name> starts no Windows tool by its bare name' -ForEach @(@{ Name = 'RpaInstall.psm1' }, @{ Name = 'Install-Rpa.ps1' }, @{ Name = 'Uninstall-Rpa.ps1' }) {
-    $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $script:InstallerDir $Name), [ref]$null, [ref]$null)
+  # Also what the bot user's tasks run at its logon: a program found along PATH there could be another user's.
+  It '<Name> starts no Windows tool by its bare name' -ForEach $scripts {
+    $ast = [Management.Automation.Language.Parser]::ParseFile($Path, [ref]$null, [ref]$null)
     $bare = @($ast.FindAll({ param($node) $node -is [Management.Automation.Language.CommandAst] }, $true) |
-        ForEach-Object { $_.GetCommandName() } | Where-Object { $_ -match '^(icacls|reg|powercfg|robocopy|cmd|schtasks|net|sc|takeown|shutdown)(\.exe)?$' })
+        ForEach-Object { $_.GetCommandName() } | Where-Object { $_ -match '^(icacls|reg|powercfg|robocopy|cmd|schtasks|net|sc|takeown|shutdown|powershell|pwsh|node|fsutil|quser|logoff)(\.exe)?$' })
     $bare.Count | Should -Be 0
+  }
+
+  It 'the scheduled tasks start Windows PowerShell by its full path' {
+    $source = Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir 'RpaInstall.psm1')
+    $source | Should -Not -Match "-Execute\s+'"
+    $source | Should -Match '-Execute \(Get-RpaWindowsPowerShell\)'
+    $path = InModuleScope RpaInstall { Get-RpaWindowsPowerShell }
+    [IO.Path]::IsPathRooted($path) | Should -BeTrue
+    $path | Should -Match 'WindowsPowerShell[\\/]v1\.0[\\/]powershell\.exe$'
   }
 
   It 'Install-Rpa.ps1 judges who can change its folder before it loads anything else from it' {

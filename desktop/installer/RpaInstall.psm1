@@ -12,9 +12,10 @@
 #
 # Who is not trusted: the bot user (and anything running as it) and every other standard user. The bot user can create
 # files in the data directory and change what is in logs\. So the installer refuses a link or junction where it expects
-# the data directory, logs\, policy.json or a token, refuses one of those that someone other than Administrators or
-# SYSTEM owns (logs\ it takes over instead), passes /L to every icacls call, and deletes folders with rd, which does
-# not enter a junction.
+# the data directory, logs\, policy-backups\, policy.json or a token, refuses one of those that someone other than
+# Administrators or SYSTEM owns (logs\ it takes over instead) and a file of those names that has a second name (a
+# hard link), passes /L to every icacls call, and deletes folders with rd, which does not enter a junction. A data
+# directory that is there before the first install is used only when nothing in it belongs to someone else.
 #
 # Secrets: New-RpaSecret returns a new secret to its caller. No other function returns one in plain text, and none
 # prints or logs one. A token is made inside the function that writes its file, and a generated password inside the
@@ -71,15 +72,25 @@ function Test-RpaAddress([string]$Text) {
 }
 
 # The refusal for something found in the data directory that the installer will not use, or nothing. -State is what
-# Get-RpaPathState returns. A link is refused always; an owner other than Administrators or SYSTEM where -CheckOwner
-# is given.
+# Get-RpaPathState returns. A link is refused always, and so is a file with more than one name: the installer gives
+# what it finds under these names its own owner and access rules, and a second name for another file would hand that
+# file to the bot user. An owner other than Administrators or SYSTEM is refused where -CheckOwner is given.
 function Get-RpaPathRefusal([string]$Path, $State, [bool]$CheckOwner) {
   if (-not $State -or -not $State.Exists) { return $null }
   if ($State.IsLink) { return ('{0} is a link or junction. Remove it and run the installer again.' -f $Path) }
+  if ($State.Links -gt 1) { return ('{0} has more than one name (a hard link). Check what it is, remove it, and run the installer again.' -f $Path) }
   if ($CheckOwner -and -not $State.OwnerTrusted) {
     return ('{0} exists and is owned by {1}. Check what is in it, remove it, and run the installer again.' -f $Path, $State.Owner)
   }
   $null
+}
+
+# The refusal for the first thing in a data directory, found before the first install, that is a link, has a second
+# name or belongs to someone other than Administrators or SYSTEM. -Entry is what Find-RpaForeignEntry returns.
+function Get-RpaForeignRefusal($Entry) {
+  if ($Entry.IsLink) { return ('{0} is a link or junction. Remove it and run the installer again.' -f $Entry.Path) }
+  if ($Entry.Links -gt 1) { return ('{0} has more than one name (a hard link). Check what it is, remove it, and run the installer again.' -f $Entry.Path) }
+  '{0} exists and is owned by {1}. Check what is in the data directory, remove it, and run the installer again.' -f $Entry.Path, $Entry.Owner
 }
 
 # Decides what an install does. -Parameters holds Install-Rpa.ps1's parameters (User, UserPassword, RunnerPort,
@@ -136,12 +147,18 @@ function Get-RpaInstallPlan {
     if ($Facts.UserExists -and $Facts.UserIsAdmin) {
       $refusals.Add(('{0} is an administrator. The bot user must be a standard user.' -f $user))
     }
-    # An existing user's password is never changed, so automatic sign-in can only store one that is given.
-    if ($autoSignIn -and $Facts.UserExists -and -not $hasPassword -and -not $signInKept) {
-      $refusals.Add(('-AutoSignIn for the existing user {0} needs -UserPassword. A password the installer generated earlier is not known to anyone: set a new password for {0} and pass it, or remove {0} so the installer creates it again.' -f $user))
-    }
-    if ($autoSignIn -and $Facts.UserExists -and $hasPassword -and $Facts.UserPasswordWrong) {
-      $refusals.Add(('The password given for {0} is not correct.' -f $user))
+    if ($upgrade -and $Facts.InstalledAutoSignInUser -and -not $Facts.InstalledAutoSignInForUser) {
+      # Windows would go on signing the first user in, and install.json would name the new one: the uninstaller could
+      # no longer tell whose sign-in it has to turn off.
+      $refusals.Add(('Automatic sign-in is set up for {0}. Uninstall first, then install for {1}.' -f $Facts.InstalledAutoSignInUser, $user))
+    } else {
+      # An existing user's password is never changed, so automatic sign-in can only store one that is given.
+      if ($autoSignIn -and $Facts.UserExists -and -not $hasPassword -and -not $signInKept) {
+        $refusals.Add(('-AutoSignIn for the existing user {0} needs -UserPassword. A password the installer generated earlier is not known to anyone: set a new password for {0} and pass it, or remove {0} so the installer creates it again.' -f $user))
+      }
+      if ($autoSignIn -and $Facts.UserExists -and $hasPassword -and $Facts.UserPasswordWrong) {
+        $refusals.Add(('The password given for {0} is not correct.' -f $user))
+      }
     }
     if ($createUser -and -not $autoSignIn -and -not $hasPassword) {
       $refusals.Add(('Give -UserPassword for the new user {0}, or use -AutoSignIn to have a random password stored for automatic sign-in.' -f $user))
@@ -171,6 +188,12 @@ function Get-RpaInstallPlan {
         $fileRefusal = Get-RpaPathRefusal ('{0}\{1}' -f $Facts.DataDir, $name) $state $true
         if ($fileRefusal) { $refusals.Add($fileRefusal) }
       }
+      # The policy tool keeps its backups here and trusts the folder; the bot user could have made it first.
+      $backupsRefusal = Get-RpaPathRefusal $Facts.PolicyBackupsDir $Facts.PolicyBackupsState $true
+      if ($backupsRefusal) { $refusals.Add($backupsRefusal) }
+      # Before the first install nobody is entitled to anything in the data directory. Later the bot user keeps its
+      # own files there (the certificates, exports), so an upgrade does not judge them.
+      if (-not $upgrade -and $Facts.DataDirForeign) { $refusals.Add((Get-RpaForeignRefusal $Facts.DataDirForeign)) }
     }
     # A task folder a standard user made first stays that user's, also after the tasks in it are registered again.
     if ($Facts.TaskFolderOwner) {
@@ -282,6 +305,7 @@ function Get-RpaLayout {
     InstallFile = Join-Path $installDir 'install.json'
     DataDir     = $dataDir
     LogDir      = Join-Path $dataDir 'logs'
+    BackupsDir  = Join-Path $dataDir 'policy-backups'
   }
 }
 
@@ -301,9 +325,10 @@ function Get-RpaAccountName([Security.Principal.SecurityIdentifier]$Sid) {
 }
 
 # What is at a path, without following it: whether anything is there, whether it is a link or junction (a reparse
-# point), and who owns it. An owner that cannot be read is not trusted.
+# point), how many names it has (a file with more than one is hard linked), and who owns it. An owner that cannot be
+# read is not trusted.
 function Get-RpaPathState([string]$Path) {
-  $state = @{ Exists = $false; IsLink = $false; OwnerTrusted = $false; Owner = '' }
+  $state = @{ Exists = $false; IsLink = $false; Links = 0; OwnerTrusted = $false; Owner = '' }
   try { $attributes = [IO.File]::GetAttributes($Path) }
   catch {
     $cause = $_.Exception.GetBaseException()
@@ -312,6 +337,11 @@ function Get-RpaPathState([string]$Path) {
   }
   $state.Exists = $true
   $state.IsLink = [bool]($attributes -band [IO.FileAttributes]::ReparsePoint)
+  $state.Links = 1
+  if (-not ($attributes -band [IO.FileAttributes]::Directory)) {
+    Add-RpaNativeTypes
+    $state.Links = [RpaFiles]::LinkCount($Path)
+  }
   try {
     $owner = (Get-Acl -LiteralPath $Path).GetOwner([Security.Principal.SecurityIdentifier])
     $state.OwnerTrusted = $script:TrustedOwners -contains $owner.Value
@@ -328,6 +358,47 @@ function Get-RpaTaskFolderOwner {
   $security = New-Object Security.AccessControl.RawSecurityDescriptor $sddl
   if (-not $security.Owner -or $script:TrustedOwners -contains $security.Owner.Value) { return $null }
   Get-RpaAccountName $security.Owner
+}
+
+# The first thing in the data directory that is a link, has a second name, or belongs to someone other than
+# Administrators or SYSTEM, or nothing. Links are not entered. policy.json, the tokens and policy-backups\ are judged
+# under their own names by the plan (what is inside policy-backups\ is judged here), and so is logs\ when it is a link.
+function Find-RpaForeignEntry([string]$DataDir) {
+  Add-RpaNativeTypes
+  $named = @($script:DataFiles.Keys) + 'policy-backups'
+  $pending = New-Object Collections.Generic.Stack[string]
+  $pending.Push($DataDir)
+  while ($pending.Count -gt 0) {
+    $directory = $pending.Pop()
+    foreach ($entry in (New-Object IO.DirectoryInfo ('\\?\' + $directory)).EnumerateFileSystemInfos()) {
+      $path = Join-Path $directory $entry.Name
+      $isLink = [bool]($entry.Attributes -band [IO.FileAttributes]::ReparsePoint)
+      $isFolder = [bool]($entry.Attributes -band [IO.FileAttributes]::Directory)
+      if ($directory -eq $DataDir) {
+        if ($named -contains $entry.Name) {
+          if ($isFolder -and -not $isLink) { $pending.Push($path) }
+          continue
+        }
+        if ($entry.Name -eq 'logs' -and $isLink) { continue }
+      }
+      $found = @{ Path = $path; IsLink = $isLink; Links = 1; Owner = 'someone whose name cannot be read' }
+      if ($isLink) { return $found }
+      $trusted = $false
+      try {
+        if ($isFolder) { $security = [IO.Directory]::GetAccessControl('\\?\' + $path, 'Owner') } else { $security = [IO.File]::GetAccessControl('\\?\' + $path, 'Owner') }
+        $owner = $security.GetOwner([Security.Principal.SecurityIdentifier])
+        $trusted = $script:TrustedOwners -contains $owner.Value
+        $found.Owner = Get-RpaAccountName $owner
+      } catch { $trusted = $false }
+      if (-not $trusted) { return $found }
+      if ($isFolder) { $pending.Push($path) }
+      else {
+        $found.Links = [RpaFiles]::LinkCount($path)
+        if ($found.Links -gt 1) { return $found }
+      }
+    }
+  }
+  $null
 }
 
 # The facts Get-RpaInstallPlan judges. Changes nothing.
@@ -354,11 +425,15 @@ function Get-RpaMachineFacts {
     InstalledBrowser           = $false
     InstalledAllowFrom         = $null
     InstalledAutoSignInForUser = $false
+    InstalledAutoSignInUser    = $null
     RunnerRunning              = $false
     DataDir                    = $layout.DataDir
     LogDir                     = $layout.LogDir
+    PolicyBackupsDir           = $layout.BackupsDir
     DataDirState               = $null
     LogDirState                = $null
+    PolicyBackupsState         = $null
+    DataDirForeign             = $null
     DataFiles                  = @{}
     TaskFolderOwner            = $null
     PublicNetwork              = $false
@@ -376,6 +451,8 @@ function Get-RpaMachineFacts {
     $facts.InstalledBrowserPort = [int]$install.browserPort
     $facts.InstalledBrowser = $install.browser -eq $true
     if ($install.allowFrom) { $facts.InstalledAllowFrom = @($install.allowFrom) }
+    # The user automatic sign-in was turned on for by the installer, and whether that is the user of this run.
+    if ($install.autoSignIn -eq $true) { $facts.InstalledAutoSignInUser = [string]$install.user }
     $facts.InstalledAutoSignInForUser = ($install.autoSignIn -eq $true) -and ([string]$install.user -eq $account.Display)
   }
 
@@ -428,7 +505,12 @@ function Get-RpaMachineFacts {
 
   $facts.DataDirState = Get-RpaPathState $layout.DataDir
   $facts.LogDirState = Get-RpaPathState $layout.LogDir
+  $facts.PolicyBackupsState = Get-RpaPathState $layout.BackupsDir
   foreach ($name in $script:DataFiles.Keys) { $facts.DataFiles[$name] = Get-RpaPathState (Join-Path $layout.DataDir $name) }
+  # Before the first install: everything else that is in a data directory someone made earlier.
+  if (-not $facts.Installed -and $facts.DataDirState.Exists -and -not $facts.DataDirState.IsLink -and $facts.DataDirState.OwnerTrusted) {
+    $facts.DataDirForeign = Find-RpaForeignEntry $layout.DataDir
+  }
   $facts.TaskFolderOwner = Get-RpaTaskFolderOwner
   $facts.PublicNetwork = [bool](Get-NetConnectionProfile -ErrorAction SilentlyContinue | Where-Object { $_.NetworkCategory -eq 'Public' })
   $facts
@@ -587,9 +669,9 @@ function Copy-RpaProgramFiles([string]$SourceDir, [string]$InstallDir) {
 }
 
 # The compiled helpers: the LSA secret Windows itself reads the automatic sign-in password from (Store is the test
-# bed's; Remove passes no data, which deletes the secret), a password check, the local groups of a user, and the
-# creation of a user's profile. A password goes in as a SecureString and is turned into plain text only in unmanaged
-# memory that is wiped afterwards.
+# bed's; Remove passes no data, which deletes the secret), a password check, the local groups of a user, the creation
+# of a user's profile, and the number of names a file has. A password goes in as a SecureString and is turned into
+# plain text only in unmanaged memory that is wiped afterwards.
 function Add-RpaNativeTypes {
   if ('RpaLsaSecret' -as [type]) { return }
   Add-Type -TypeDefinition @'
@@ -598,6 +680,31 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Security;
 using System.Text;
+using Microsoft.Win32.SafeHandles;
+public static class RpaFiles {
+  [StructLayout(LayoutKind.Sequential)]
+  struct FileInformation {
+    public uint Attributes;
+    public System.Runtime.InteropServices.ComTypes.FILETIME Created;
+    public System.Runtime.InteropServices.ComTypes.FILETIME Accessed;
+    public System.Runtime.InteropServices.ComTypes.FILETIME Written;
+    public uint VolumeSerialNumber; public uint SizeHigh; public uint SizeLow; public uint NumberOfLinks; public uint IndexHigh; public uint IndexLow;
+  }
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  static extern SafeFileHandle CreateFile(string name, uint access, uint share, IntPtr security, uint disposition, uint flags, IntPtr template);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern bool GetFileInformationByHandle(SafeFileHandle file, out FileInformation information);
+  // How many names a file has; more than one means it is hard linked. A link at the path is opened itself, not
+  // followed, and only the file's attributes are read.
+  public static int LinkCount(string path) {
+    using (SafeFileHandle handle = CreateFile(@"\\?\" + path, 0x80, 7, IntPtr.Zero, 3, 0x02000000 | 0x00200000, IntPtr.Zero)) {
+      if (handle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
+      FileInformation information;
+      if (!GetFileInformationByHandle(handle, out information)) throw new Win32Exception(Marshal.GetLastWin32Error());
+      return (int)information.NumberOfLinks;
+    }
+  }
+}
 public static class RpaLsaSecret {
   [StructLayout(LayoutKind.Sequential)]
   struct UnicodeString { public ushort Length; public ushort MaximumLength; public IntPtr Buffer; }
@@ -736,13 +843,15 @@ function Remove-RpaUser([hashtable]$Account, [string]$Sid) {
 #                  certificates, exports\), which it then owns; it cannot change or delete what it did not create
 #   logs\          the same, and the bot user may change and delete what is in it
 #   a file         SYSTEM and Administrators in full; the bot user may read (policy.json and the tokens)
-# They give the same rights as the test bed's icacls commands. Administrators own all of them: the runner refuses a
+#   backups        SYSTEM and Administrators in full and nobody else (policy-backups\, which the policy tool uses)
+# The first three give the same rights as the test bed's icacls commands. Administrators own all of them: the runner refuses a
 # policy whose file or folder anyone else owns.
 function Get-RpaAccessRules([string]$Kind, [string]$Sid) {
   switch ($Kind) {
     'directory' { 'D:PAI(A;OICIIO;FA;;;CO)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;{0})(A;;DCLC;;;{0})' -f $Sid }
     'logs' { 'D:PAI(A;OICIIO;FA;;;CO)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1301bf;;;{0})' -f $Sid }
     'file' { 'D:PAI(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;{0})' -f $Sid }
+    'backups' { 'D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)' }
   }
 }
 
@@ -767,22 +876,35 @@ function Assert-RpaPathUsable([string]$Path, [bool]$CheckOwner) {
   if ($refusal) { throw $refusal }
 }
 
-# %ProgramData%\RPA Runner and logs\. A folder that is missing is created in one call with its owner and access rules,
-# so there is no moment in which it has others. One that is there is used only when it is no link and, for the data
-# directory, Administrators or SYSTEM own it; then its rules are replaced. policy.json and the tokens get their rules
-# again on every run, which also gives another -User its read access.
-function Protect-RpaDataDirectory([hashtable]$Layout, [string]$Sid) {
+# A folder that is missing is created in one call with its owner (Administrators) and its access rules, so there is
+# no moment in which it has others.
+function New-RpaProtectedFolder([string]$Path, [string]$Rules) {
+  if ((Get-RpaPathState $Path).Exists) { return }
+  $security = New-Object Security.AccessControl.DirectorySecurity
+  $security.SetSecurityDescriptorSddlForm('O:BA' + $Rules)
+  [void][IO.Directory]::CreateDirectory($Path, $security)
+}
+
+# %ProgramData%\RPA Runner, logs\ and policy-backups\. One that is missing is created with its owner and rules. One
+# that is there is used only when it is no link and, for the data directory and policy-backups\, Administrators or
+# SYSTEM own it; the rules of the data directory and of logs\ are then replaced, and policy-backups\ is left to the
+# policy tool. On a first install everything in a data directory that was there already is looked at again once
+# only administrators and the bot user can put anything into it. policy.json and the tokens get their rules again on
+# every run, which also gives another -User its read access.
+function Protect-RpaDataDirectory([hashtable]$Layout, [string]$Sid, [bool]$FirstInstall) {
   foreach ($folder in @(@{ Path = $Layout.DataDir; Kind = 'directory'; CheckOwner = $true }, @{ Path = $Layout.LogDir; Kind = 'logs'; CheckOwner = $false })) {
     $rules = Get-RpaAccessRules $folder.Kind $Sid
-    if (-not (Get-RpaPathState $folder.Path).Exists) {
-      $security = New-Object Security.AccessControl.DirectorySecurity
-      $security.SetSecurityDescriptorSddlForm('O:BA' + $rules)
-      [void][IO.Directory]::CreateDirectory($folder.Path, $security)
-    }
+    New-RpaProtectedFolder $folder.Path $rules
     # Also after creating it: CreateDirectory does not say when someone else made the folder a moment earlier.
     Assert-RpaPathUsable $folder.Path $folder.CheckOwner
     Set-RpaAccessRules $folder.Path $rules $Layout.InstallDir
+    if ($FirstInstall -and $folder.Kind -eq 'directory') {
+      $foreign = Find-RpaForeignEntry $Layout.DataDir
+      if ($foreign) { throw (Get-RpaForeignRefusal $foreign) }
+    }
   }
+  New-RpaProtectedFolder $Layout.BackupsDir (Get-RpaAccessRules 'backups' $Sid)
+  Assert-RpaPathUsable $Layout.BackupsDir $true
   foreach ($name in $script:DataFiles.Keys) {
     $path = Join-Path $Layout.DataDir $name
     if (-not (Get-RpaPathState $path).Exists) { continue }
@@ -813,13 +935,22 @@ function Set-RpaFirewallRule([string]$Name, [string]$DisplayName, [int]$Port, [s
   New-NetFirewallRule -Name $Name -DisplayName $DisplayName -Direction Inbound -Protocol TCP -LocalPort $Port -Program $Program -RemoteAddress $remote -Action Allow -Profile Domain, Private | Out-Null
 }
 
+# Windows PowerShell by its full path. A scheduled task finds a bare powershell.exe along PATH when the bot user signs
+# in, and a folder another user can write to may come first there.
+function Get-RpaWindowsPowerShell {
+  Join-Path (Join-Path (Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell') 'v1.0') 'powershell.exe'
+}
+
 # A task that runs a start script in the bot user's session at its logon: interactive (so it can drive the desktop),
 # not elevated, no time limit. The start script starts its program again whenever it exits. A task of that name that
 # is already there is removed first and not overwritten: an overwritten task keeps its owner and access rules, and a
-# standard user can make one before the installer does.
+# standard user can make one before the installer does. For the same reason the owner of the task folder is looked at
+# again here: the plan saw it before the question -AutoSignIn asks.
 function Register-RpaTask([string]$Name, [string]$ScriptPath, [string]$Account) {
+  $owner = Get-RpaTaskFolderOwner
+  if ($owner) { throw ('The scheduled task folder {0} exists and is owned by {1}. Check what is in it, remove it, and run the installer again.' -f $script:TaskPath, $owner) }
   Unregister-RpaTask $Name
-  $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f $ScriptPath)
+  $action = New-ScheduledTaskAction -Execute (Get-RpaWindowsPowerShell) -Argument ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f $ScriptPath)
   $trigger = New-ScheduledTaskTrigger -AtLogOn -User $Account
   $principal = New-ScheduledTaskPrincipal -UserId $Account -LogonType Interactive -RunLevel Limited
   $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)
@@ -1166,7 +1297,7 @@ function Invoke-RpaInstallPlan {
           $run.CreatedUser = $true
           $run.Sid = Get-RpaSid $account
         }
-        'protect the data directory' { Protect-RpaDataDirectory $layout $run.Sid }
+        'protect the data directory' { Protect-RpaDataDirectory $layout $run.Sid (-not $run.Upgrade) }
         'write policy' { New-RpaProtectedFile -Path (Join-Path $layout.DataDir 'policy.json') -Sid $run.Sid -Text $script:StarterPolicy }
         'write token' { New-RpaProtectedFile -Path (Join-Path $layout.DataDir 'token') -Sid $run.Sid -SecretLength 48 }
         'write browser-token' { New-RpaProtectedFile -Path (Join-Path $layout.DataDir 'browser-token') -Sid $run.Sid -SecretLength 48 }
