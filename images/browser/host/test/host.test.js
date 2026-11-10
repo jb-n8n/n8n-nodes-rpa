@@ -737,7 +737,8 @@ test('stop() ends the whole process tree of the browser server', { skip: !WINDOW
  * what it was started with in started.json beside itself, each upgrade that reaches it in upgrades.log, and in
  * exit-handlers-ran.json that it ended in a way that let its exit handlers run (Playwright's remove its temp folders). A probe.json beside it asks for more before it listens:
  * `requires` and `imports` are module names it tries to load (the outcome of each goes into started.json, and so do the
- * folders require() searches for a name).
+ * folders require() searches for a name); `spawn` is a list of arguments it starts a process with, the way Playwright
+ * starts a browser (the arguments that process got go into started.json).
  */
 const FAKE_CLI = `
 const http = require('node:http');
@@ -758,6 +759,13 @@ process.on('exit', (code) => writeFileSync(join(__dirname, 'exit-handlers-ran.js
   for (const name of probe.imports ?? []) {
     try { await import(name); loads['import ' + name] = 'loaded'; } catch (err) { loads['import ' + name] = String(err.code); }
   }
+  let spawned;
+  if (probe.spawn) {
+    const noted = join(__dirname, 'spawned.json');
+    const child = require('node:child_process').spawn(process.execPath, ['-e', 'require("node:fs").writeFileSync(process.argv[1], JSON.stringify(process.argv.slice(2)))', noted, ...probe.spawn], { stdio: 'ignore' });
+    await new Promise((resolve) => child.on('exit', resolve));
+    spawned = JSON.parse(readFileSync(noted, 'utf8'));
+  }
   const server = http.createServer((req, res) => {
     if (req.url === '/json') return res.end(JSON.stringify({ wsEndpointPath: path }));
     res.end('Running');
@@ -773,7 +781,7 @@ process.on('exit', (code) => writeFileSync(join(__dirname, 'exit-handlers-ran.js
     const variable = (name) => process.env[name] ?? null;
     const environment = { WS_NO_BUFFER_UTIL: variable('WS_NO_BUFFER_UTIL'), WS_NO_UTF_8_VALIDATE: variable('WS_NO_UTF_8_VALIDATE'), NODE_PATH: variable('NODE_PATH') };
     const searched = require.resolve.paths('a-module-that-is-not-installed');
-    writeFileSync(join(__dirname, 'started.json'), JSON.stringify({ pid: process.pid, args, port: server.address().port, variablesWithThePath, loads, searched, environment, tmpdir: tmpdir() }));
+    writeFileSync(join(__dirname, 'started.json'), JSON.stringify({ pid: process.pid, args, port: server.address().port, variablesWithThePath, loads, searched, spawned, environment, tmpdir: tmpdir() }));
     console.log('Listening on ws://' + option('--host') + ':' + server.address().port + path);
   });
 })();
@@ -923,6 +931,17 @@ test('a module planted outside the install is not loaded by the browser server; 
   const root = realpathSync(files.root);
   assert.deepEqual(started.searched, [join(root, 'node_modules', 'playwright', 'node_modules'), join(root, 'node_modules')], 'require() searches inside the install only');
   assert.deepEqual(started.environment, { WS_NO_BUFFER_UTIL: '1', WS_NO_UTF_8_VALIDATE: '1', NODE_PATH: null });
+});
+
+test('on Windows the browser server starts its browsers without --no-sandbox; elsewhere the arguments are left alone', async (t) => {
+  // Playwright adds --no-sandbox to every Chromium it starts unless the client asks for the sandbox, and the run-server
+  // drops that option of a client.
+  const files = installedCopy(t, { probe: { spawn: ['--first', '--no-sandbox', '--no-sandbox-and-more', '--last'] } });
+  const installed = await import(pathToFileURL(files.hostFile).href);
+  const host = await installed.startHost({ dataDir: dataDir(t), port: 0, bind: '127.0.0.1', log: () => {} });
+  t.after(() => host.stop());
+  const kept = WINDOWS ? ['--first', '--no-sandbox-and-more', '--last'] : ['--first', '--no-sandbox', '--no-sandbox-and-more', '--last'];
+  assert.deepEqual(files.started().spawned, kept);
 });
 
 test('the launcher does not start without the path and port the host gives it', (t) => {

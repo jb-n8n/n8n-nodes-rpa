@@ -24,10 +24,16 @@
 // - A WebSocket upgrade reaches Playwright only when its target, up to the query, is exactly the path. The connection
 //   of any other upgrade is closed here. Playwright 1.63 ends with an uncaught error on an upgrade whose target is not
 //   a URL path (`*@`), so one request from any user of the machine would stop the browser server and the host.
+// - On Windows, Chromium is started with its sandbox. Playwright adds --no-sandbox to every Chromium it starts unless
+//   the client asks for the sandbox, and the run-server drops that option of a client. Without the sandbox, code that
+//   gets out of a page runs as the account of the host, which can read the token and the key and drive the desktop. So
+//   on win32 this file takes --no-sandbox out of the arguments of every process the browser server starts. Other
+//   platforms are left as they are: in the rpa-browser image the container is around the browser.
 // - When stdin ends, the process exits. The host holds the other end of that pipe and never writes to it, so stdin ends
 //   when the host is gone, however it ended (on Windows the start script ends the host without a signal). The exit runs
 //   Playwright's own exit handlers, which end the browsers it launched. Start this file with a pipe on stdin: with no
 //   stdin at all it exits at once.
+import childProcess from 'node:child_process';
 import { timingSafeEqual } from 'node:crypto';
 import http from 'node:http';
 import Module, { createRequire } from 'node:module';
@@ -76,6 +82,13 @@ Module.registerHooks({
 process.stdin.once('end', () => process.exit(0));
 process.stdin.once('error', () => process.exit(0));
 process.stdin.resume();
+
+if (process.platform === 'win32') {
+  const { spawn } = childProcess;
+  childProcess.spawn = function spawnWithoutNoSandbox(command, args, options) {
+    return spawn.call(this, command, Array.isArray(args) ? args.filter((arg) => arg !== '--no-sandbox') : args, options);
+  };
+}
 
 /** Whether the target of an upgrade request, up to its query, is the path of this start. */
 const pathBytes = Buffer.from(path);
