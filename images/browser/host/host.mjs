@@ -18,6 +18,11 @@
 // - The gate always serves TLS. n8n connects with wss and a bearer token and checks the certificate by its SHA-256
 //   fingerprint, which the start line shows. There is no plain-text mode.
 //
+// The browser opens with a window, on every platform: the gate adds the launch option {"headless":false} to every
+// session whose client did not set headless itself. A client that sends {"headless":true} gets a headless browser.
+// n8n's engine sends no launch options in Browser Server mode, so a run from n8n gets a browser with a window on the
+// desktop of the session the host runs in.
+//
 // Files in the data directory (who may read and write them is up to the directory's access rules; the installer sets them):
 // - browser-token: the bearer token, at least 32 characters of ASCII text without spaces. Read at start, never printed.
 // - browser-key.pem and browser-cert.pem: the gate's key and self-signed certificate. Created together at the first
@@ -113,6 +118,8 @@ const LAUNCHER_EXITS = new Map([
 const LISTENING = /^Listening on ws:\/\/127\.0\.0\.1:(\d+)(\/\S*)$/;
 /** Lines of the browser server's output longer than this are dropped unread. */
 const MAX_OUTPUT_LINE = 4096;
+/** The launch option the gate adds for a client that does not set it: a browser with a window (see the top of this file). */
+const HEADED = Object.freeze({ headless: false });
 
 const validPort = (n) => Number.isInteger(n) && n >= 0 && n <= 65_535;
 
@@ -521,7 +528,7 @@ export async function startHost({
     const upstream = await announcedPort(child, path, gone.then(stoppedEarly), startTimeoutMs);
     if (await tellsItsPath(upstream, path, Math.min(PLAIN_CHECK_MS, startTimeoutMs))) throw new Error('the browser server answers a plain request with its path; not starting');
     failIfStopped();
-    gate = createGate({ token, upstreamPort: upstream, upstreamPath: path, maxSessions, metricsPort: 0, tls: { key, cert } });
+    gate = createGate({ token, upstreamPort: upstream, upstreamPath: path, maxSessions, metricsPort: 0, tls: { key, cert }, defaultLaunchOptions: HEADED });
     gate.server.on('connection', (socket) => {
       sockets.add(socket);
       socket.once('close', () => sockets.delete(socket));

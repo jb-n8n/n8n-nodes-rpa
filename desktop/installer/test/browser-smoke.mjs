@@ -15,7 +15,8 @@
 //   1. the certificate served on 127.0.0.1:<port> has the fingerprint, and a connection that expects another
 //      fingerprint is closed before a byte is sent;
 //   2. a WebSocket upgrade without the token is answered 401;
-//   3. Playwright's client connects with the token and {"headless":false}, opens a page and reads its title "ok";
+//   3. Playwright's client connects with the token and no launch options, opens a page and reads its title "ok", and
+//      the browser is not headless: the browser host opens it with a window for a client that does not ask otherwise;
 //   4. a second upgrade with the token, while that session is open, is answered 503 with X-RPA-Browser: busy.
 // Every connection goes through pinned(): a TLS connection whose certificate is compared with the fingerprint before
 // anything is sent on it. The certificate is self-signed, so the chain check is off for that one connection and the
@@ -151,7 +152,7 @@ try {
   const server = await tunnel();
   const started = Date.now();
   const browser = await chromium.connect(`ws://127.0.0.1:${server.address().port}/`, {
-    headers: { Authorization: `Bearer ${token}`, 'x-playwright-launch-options': JSON.stringify({ headless: false }) },
+    headers: { Authorization: `Bearer ${token}` },
     timeout: 90_000,
   });
   const page = await (await browser.newContext()).newPage();
@@ -159,8 +160,8 @@ try {
   const title = await page.title();
   const agent = await page.evaluate(() => navigator.userAgent);
   if (title !== 'ok') fail(`the page title is "${title}", not "ok"`);
-  if (agent.includes('HeadlessChrome')) fail('the browser is headless, though {"headless":false} was asked for');
-  say(`ok: connected through the tunnel with {"headless":false}; title "${title}"; browser ${browser.version()}; ${Date.now() - started} ms`);
+  if (agent.includes('HeadlessChrome')) fail('the browser is headless: the browser host did not open it with a window for a client that sent no launch options');
+  say(`ok: connected through the tunnel without launch options; the browser is not headless; title "${title}"; browser ${browser.version()}; ${Date.now() - started} ms`);
 
   const second = await upgradeAnswer([`Authorization: Bearer ${token}`]);
   if (!/^HTTP\/1\.1 503 /.test(second.status) || !second.headers.includes('x-rpa-browser: busy')) fail(`a second upgrade while the session is open was answered "${second.status}", not 503 busy`);

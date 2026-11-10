@@ -478,8 +478,8 @@ jobs:
           $env:RPA_RUNNER_TOKEN = $null
           Assert ($code -eq 0) "the protocol scenario passes against the installed runner (exit code $code)"
 
-          # The browser: through the fingerprint-checking tunnel, with a window ({"headless":false}). While the page
-          # is held open, what this desktop shows of it is written to the log.
+          # The browser: through the fingerprint-checking tunnel, without launch options (the host opens it with a window).
+          # While the page is held open, what this desktop shows of it is written to the log.
           $smoke = Start-Process -FilePath "$install\browser\node.exe" -PassThru -WindowStyle Hidden -RedirectStandardOutput "$env:OUT\logs\browser-smoke.log" -RedirectStandardError "$env:OUT\logs\browser-smoke.err.log" `
             -ArgumentList ('"{0}" --fingerprint {1} --hold-ms 8000' -f (Join-Path $env:GITHUB_WORKSPACE 'desktop\installer\test\browser-smoke.mjs'), $browser[0])
           $null = $smoke.Handle
