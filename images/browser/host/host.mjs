@@ -13,7 +13,8 @@
 // - The browser server loads modules only from the install (the folder that holds host/, gate/ and node_modules/), not
 //   from folders above it or from NODE_PATH, where another user of the machine could put one (run-server.mjs).
 // - The browser server is started without the token: variables of the host's environment that hold it are not passed
-//   on, so neither the browser server nor the browsers it launches hold the token.
+//   on, so neither the browser server nor the browsers it launches hold the token. NODE_OPTIONS is not passed on
+//   either, and the browser server's current folder is the install.
 // - The gate always serves TLS. n8n connects with wss and a bearer token and checks the certificate by its SHA-256
 //   fingerprint, which the start line shows. There is no plain-text mode.
 //
@@ -87,6 +88,8 @@ const TEMPORARY_FILE = /^browser-(?:key|cert)\.pem\.[0-9a-f]{16}\.tmp$/;
 const LAUNCHER_FILE = fileURLToPath(new URL('./run-server.mjs', import.meta.url));
 /** Where run-server.mjs loads Playwright from. */
 const NODE_MODULES = fileURLToPath(new URL('../node_modules', import.meta.url));
+/** The install: the folder that holds host/, gate/ and node_modules/. The browser server runs with it as its current folder. */
+const INSTALL_ROOT = fileURLToPath(new URL('..', import.meta.url));
 /** How long the browser server may take to print its address. */
 const START_TIMEOUT_MS = 30_000;
 /** How long the check of the browser server's plain HTTP answer may take (never longer than the start may take). */
@@ -323,10 +326,13 @@ async function emptied(folder, waitMs) {
 /**
  * Starts Playwright's run-server through run-server.mjs. The path and the port go in two variables of that process's
  * environment, never on its command line. stdin is a pipe the host never writes to: it ends when the host is gone, and
- * the launcher exits then. stdout is a pipe the host reads the address from; stderr is dropped.
+ * the launcher exits then. stdout is a pipe the host reads the address from; stderr is dropped. Its current folder is
+ * the install, whatever folder the host was started in: Playwright ends its browsers on Windows with a bare `taskkill`
+ * through cmd.exe, and cmd.exe looks for a program in the current folder before it looks along PATH.
  */
 function runBrowserServer({ port, path, env }) {
   return spawn(process.execPath, [LAUNCHER_FILE], {
+    cwd: INSTALL_ROOT,
     env: { ...env, RPA_RUN_SERVER_PATH: path, RPA_RUN_SERVER_PORT: String(port) },
     stdio: ['pipe', 'pipe', 'ignore'],
     windowsHide: true,
@@ -437,7 +443,7 @@ async function endProcessTree(child, gone, isGone, waitMs) {
  * - runServer({ port, path, env }) starts the browser server and returns a child-process-like object: stdout (a
  *   stream on which the server prints "Listening on ws://127.0.0.1:<port><path>"), stdin (ended to ask the server to
  *   exit), on('exit'), kill(signal) and, for a real process, pid. env is the host's environment without the variables
- *   that hold the token, with browser-temp as the temp folder. For tests.
+ *   that hold the token and without NODE_OPTIONS, with browser-temp as the temp folder. For tests.
  * - warn gets a line when browser-temp could not be emptied after the browser server ended.
  * - startTimeoutMs is how long the browser server may take to announce its address, and stopWaitMs the unit of the
  *   waits when it is ended (STOP_WAIT_MS). For tests.
@@ -470,7 +476,9 @@ export async function startHost({
   const path = `/${randomBytes(16).toString('hex')}`;
   // Windows takes the names of variables without regard to case.
   const sameName = (name) => (process.platform === 'win32' ? name.toUpperCase() : name);
-  const env = Object.fromEntries(Object.entries(process.env).filter(([name, value]) => !value.includes(token) && !TEMP_VARIABLES.includes(sameName(name))));
+  // NODE_OPTIONS is not passed on either: it can name a file that Node loads before run-server.mjs limits what is loaded.
+  const dropped = (name) => TEMP_VARIABLES.includes(sameName(name)) || sameName(name) === 'NODE_OPTIONS';
+  const env = Object.fromEntries(Object.entries(process.env).filter(([name, value]) => !value.includes(token) && !dropped(name)));
   for (const name of TEMP_VARIABLES) env[name] = browserTemp;
   const child = runServer({ port: upstreamPort, path, env });
   let ended;

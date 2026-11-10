@@ -1039,7 +1039,8 @@ process.on('exit', (code) => writeFileSync(join(__dirname, 'exit-handlers-ran.js
     const variable = (name) => process.env[name] ?? null;
     const environment = { WS_NO_BUFFER_UTIL: variable('WS_NO_BUFFER_UTIL'), WS_NO_UTF_8_VALIDATE: variable('WS_NO_UTF_8_VALIDATE'), NODE_PATH: variable('NODE_PATH') };
     const searched = require.resolve.paths('a-module-that-is-not-installed');
-    writeFileSync(join(__dirname, 'started.json'), JSON.stringify({ pid: process.pid, args, port: server.address().port, variablesWithThePath, loads, searched, spawned, environment, tmpdir: tmpdir() }));
+    const nodeOptions = Object.keys(process.env).filter((name) => name.toUpperCase() === 'NODE_OPTIONS');
+    writeFileSync(join(__dirname, 'started.json'), JSON.stringify({ pid: process.pid, args, port: server.address().port, variablesWithThePath, loads, searched, spawned, environment, tmpdir: tmpdir(), cwd: process.cwd(), nodeOptions }));
     console.log('Listening on ws://' + option('--host') + ':' + server.address().port + path);
   });
 })();
@@ -1190,6 +1191,33 @@ test('a module planted outside the install is not loaded by the browser server; 
   const root = realpathSync(files.root);
   assert.deepEqual(started.searched, [join(root, 'node_modules', 'playwright', 'node_modules'), join(root, 'node_modules')], 'require() searches inside the install only');
   assert.deepEqual(started.environment, { WS_NO_BUFFER_UTIL: '1', WS_NO_UTF_8_VALIDATE: '1', NODE_PATH: null });
+});
+
+test('the browser server runs in the install folder, whatever folder the host was started in, and without NODE_OPTIONS', async (t) => {
+  // Playwright ends its browsers on Windows with a bare `taskkill` through cmd.exe, which looks in the current folder
+  // first; and NODE_OPTIONS can make a Node process load a file before any code of its own.
+  const files = installedCopy(t);
+  const planted = join(files.base, 'planted.cjs');
+  writeFileSync(planted, `require('node:fs').writeFileSync(${JSON.stringify(join(files.base, 'ran-planted'))}, '');\n`);
+  // On Windows the name is written in other letter case: names of variables ignore case there.
+  const name = WINDOWS ? 'Node_Options' : 'NODE_OPTIONS';
+  const before = process.env[name];
+  process.env[name] = `--require=${planted}`;
+  const startedIn = process.cwd();
+  process.chdir(files.base);
+  later(t, () => {
+    process.chdir(startedIn);
+    if (before === undefined) delete process.env[name];
+    else process.env[name] = before;
+  });
+
+  const installed = await import(pathToFileURL(files.hostFile).href);
+  const host = await installed.startHost({ dataDir: dataDir(t), port: 0, bind: '127.0.0.1', log: () => {} });
+  later(t, () => host.stop());
+  const started = files.started();
+  assert.equal(started.cwd, realpathSync(files.root), 'the current folder of the browser server is the install folder');
+  assert.deepEqual(started.nodeOptions, [], 'NODE_OPTIONS is not in the environment of the browser server');
+  assert.ok(!existsSync(join(files.base, 'ran-planted')), 'the file NODE_OPTIONS named was not loaded');
 });
 
 test('on Windows the browser server starts its browsers without --no-sandbox; elsewhere the arguments are left alone', async (t) => {
