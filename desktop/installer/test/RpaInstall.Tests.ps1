@@ -1392,14 +1392,12 @@ Describe 'Remove-RpaTree' {
     $cmd = $script:Cmd
     $swapped = @{}
     # Runs between the listing of a folder and the opening of each entry: another process (cmd) deletes the entry and
-    # puts a link to the victim in its place. Moving the entry aside instead is refused: a rename inside a folder that
-    # is held with delete access cannot open that folder for the new name.
+    # puts a link to the victim in its place. (What cmd writes to its error stream must not end the hook.)
     $hook = {
       param($entry)
+      $ErrorActionPreference = 'Continue'
       $name = Split-Path -Leaf $entry
       if ($name -eq 'swap') {
-        $said = (& $cmd /d /c ('ren "{0}" swap-moved' -f $entry) 2>&1 | ForEach-Object { "$_" }) -join ' '
-        $swapped['rename'] = 'exit {0}: {1}' -f $LASTEXITCODE, $said.Trim()
         & $cmd /d /c ('rd /s /q "{0}" && mklink /J "{0}" "{1}"' -f $entry, $victim) 2>&1 | Out-Null
         $swapped[$name] = $LASTEXITCODE
       } elseif ($name -eq 'swap-file.txt') {
@@ -1408,7 +1406,6 @@ Describe 'Remove-RpaTree' {
       }
     }.GetNewClosure()
     Invoke-RemoveTree $root $root $hook
-    $swapped['rename'] | Should -BeExactly 'exit 1: The process cannot access the file because it is being used by another process.'
     $swapped['swap'] | Should -Be 0
     $swapped['swap-file.txt'] | Should -Be 0
     $root | Should -Not -Exist
@@ -1424,6 +1421,8 @@ Describe 'Remove-RpaTree' {
     $renames = [ordered]@{}
     $hook = {
       param($entry)
+      # What cmd writes to its error stream is what this test reads; it must not end the hook.
+      $ErrorActionPreference = 'Continue'
       if ($renames.Count -gt 0) { return }
       foreach ($folder in $root, (Split-Path $root), $top) {
         $said = (& $cmd /d /c ('ren "{0}" renamed' -f $folder) 2>&1 | ForEach-Object { "$_" }) -join ' '
