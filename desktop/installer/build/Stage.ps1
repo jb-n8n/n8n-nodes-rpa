@@ -11,11 +11,15 @@
 #                   desktop/runner/src/Rpa.Runner.PolicyTool, on Windows: its administrator manifest is embedded
 #                   only there)
 #   -ErpDemoDir     the folder with the published demo app, v1\ErpDemo.exe and v2\ErpDemo.exe
+#   Publish the runner and the policy tool as single files without IncludeNativeLibrariesForSelfExtract: such a
+#   program would unpack native libraries to the temp folder of whoever starts it, at every start, and load them
+#   from there. Without it the publish leaves those libraries beside the program, and this script copies every .dll
+#   it finds there into runner\ with the program.
 #
 #   rpa-windows-x64\
 #     Install-Rpa.ps1  Uninstall-Rpa.ps1  RpaInstall.psd1  RpaInstall.Plan.ps1  RpaInstall.SignIn.ps1
 #     RpaInstall.Machine.ps1  LICENSE  VERSION
-#     runner\    RpaRunner.exe  RpaPolicy.exe  policy.example.json
+#     runner\    RpaRunner.exe  RpaPolicy.exe  *.dll (the native libraries of both)  policy.example.json
 #     browser\   node.exe  LICENSE-node.txt  host\{host.mjs,run-server.mjs}  gate\{gate.mjs,ecs.mjs,selfsigned.mjs}
 #                node_modules\ (playwright)  ms-playwright\ (Chromium)
 #     scripts\   start-loop.ps1  start-runner.ps1  start-browser.ps1  Show-RpaConnection.ps1
@@ -74,6 +78,22 @@ function Invoke-Tool([string]$What, [string]$Exe, [string[]]$Arguments, [string]
   if ($LASTEXITCODE -ne 0) { throw ('{0} failed with exit code {1}.' -f $What, $LASTEXITCODE) }
 }
 
+# Copies a published program and the native libraries its publish left beside it (every .dll there; not the .pdb
+# files, nor what else the caller put in that folder). Two programs may bring a library of the same name; it must then
+# be the same file.
+function Copy-Program([string]$From, [string]$Exe, [string]$To) {
+  New-Item -ItemType Directory -Force -Path $To | Out-Null
+  $files = @(Get-Item -LiteralPath (Join-Path $From $Exe)) + @(Get-ChildItem -LiteralPath $From -File | Where-Object { $_.Extension -eq '.dll' })
+  foreach ($file in $files) {
+    $target = Join-Path $To $file.Name
+    if (Test-Path -LiteralPath $target) {
+      if ((Get-Sha256 $target) -ne (Get-Sha256 $file.FullName)) { throw ('{0} and {1} have the same name and differ.' -f $file.FullName, $target) }
+      continue
+    }
+    Copy-Item -LiteralPath $file.FullName -Destination $target
+  }
+}
+
 foreach ($needed in @((Join-Path $RunnerDir 'RpaRunner.exe'), (Join-Path $PolicyToolDir 'RpaPolicy.exe'),
     (Join-Path $ErpDemoDir 'v1\ErpDemo.exe'), (Join-Path $ErpDemoDir 'v2\ErpDemo.exe'))) {
   if (-not (Test-Path -LiteralPath $needed -PathType Leaf)) { throw ('{0} is missing. Publish it first.' -f $needed) }
@@ -101,8 +121,8 @@ $version = $Matches[1]
 [IO.File]::WriteAllText((Join-Path $stage 'VERSION'), $version + "`r`n", [Text.Encoding]::ASCII)
 
 Write-Host 'The runner, the policy tool and the demo app'
-Copy-Named $RunnerDir @('RpaRunner.exe') (Join-Path $stage 'runner')
-Copy-Named $PolicyToolDir @('RpaPolicy.exe') (Join-Path $stage 'runner')
+Copy-Program $RunnerDir 'RpaRunner.exe' (Join-Path $stage 'runner')
+Copy-Program $PolicyToolDir 'RpaPolicy.exe' (Join-Path $stage 'runner')
 Copy-Named (Join-Path $repo 'desktop\runner') @('policy.example.json') (Join-Path $stage 'runner')
 foreach ($ui in 'v1', 'v2') {
   $target = Join-Path (Join-Path $stage 'erp-demo') $ui

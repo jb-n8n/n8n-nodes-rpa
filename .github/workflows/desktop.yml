@@ -128,20 +128,22 @@ jobs:
       - name: Publish the runner, the policy tool and the demo app (self-contained win-x64, single file)
         timeout-minutes: 10
         run: |
-          $common = @('-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '-p:PublishSingleFile=true',
-                      '-p:IncludeNativeLibrariesForSelfExtract=true', '-p:EnableCompressionInSingleFile=true')
-          dotnet publish desktop/runner/src/Rpa.Runner @common -o "$env:OUT\rpa-desktop-runner"
+          # The runner and the policy tool are published without IncludeNativeLibrariesForSelfExtract: with it, a single
+          # file unpacks native libraries to the temp folder of whoever starts it, at every start, and loads them from
+          # there. Without it they stay beside the program, and Stage.ps1 copies them into the package.
+          $single = @('-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '-p:PublishSingleFile=true')
+          dotnet publish desktop/runner/src/Rpa.Runner @single '-p:EnableCompressionInSingleFile=true' -o "$env:OUT\rpa-desktop-runner"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           Copy-Item desktop/runner/policy.example.json, desktop/README.md "$env:OUT\rpa-desktop-runner\"
           # The policy tool is published on Windows: its manifest, which asks for administrator rights, is embedded
           # only there.
-          dotnet publish desktop/runner/src/Rpa.Runner.PolicyTool -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o "$env:OUT\rpa-policy-tool"
+          dotnet publish desktop/runner/src/Rpa.Runner.PolicyTool @single -o "$env:OUT\rpa-policy-tool"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           foreach ($ui in 'v1', 'v2') {
-            dotnet publish desktop/erp-demo @common "-p:ErpDemoUi=$ui" -o "$env:OUT\erp-demo\$ui"
+            dotnet publish desktop/erp-demo @single '-p:IncludeNativeLibrariesForSelfExtract=true' '-p:EnableCompressionInSingleFile=true' "-p:ErpDemoUi=$ui" -o "$env:OUT\erp-demo\$ui"
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
           }
-          Get-ChildItem -Recurse $env:OUT -Include *.exe | ForEach-Object { '{0} {1:N1} MB' -f $_.FullName, ($_.Length / 1MB) }
+          Get-ChildItem -Recurse $env:OUT -Include *.exe, *.dll | ForEach-Object { '{0} {1:N1} MB' -f $_.FullName, ($_.Length / 1MB) }
 
       # One step for the runner and the client: Windows ends a step's child processes when the step ends. The policy
       # sits at the contract's default location; the token is fresh, random and masked. allowUserWritable: the
@@ -358,9 +360,14 @@ jobs:
             'owner {0}; protected {1}; {2}' -f $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value, $acl.AreAccessRulesProtected, ($rules -join ' ')
           }
           $before = Get-Rules $policy
+          # Published without IncludeNativeLibrariesForSelfExtract, the elevated tool unpacks nothing to the temp
+          # folder of whoever starts it (a single file with it unpacks to <temp>\.net\RpaPolicy and loads from there).
+          $unpacked = Join-Path ([IO.Path]::GetTempPath()) '.net\RpaPolicy'
+          Assert (-not $env:DOTNET_BUNDLE_EXTRACT_BASE_DIR -and -not (Test-Path -LiteralPath $unpacked)) "before the policy tool runs: no DOTNET_BUNDLE_EXTRACT_BASE_DIR, no $unpacked"
           $output = @('n' | & $tool apply (Join-Path $env:GITHUB_WORKSPACE 'desktop\installer\test\e2e-policy-change.json') --yes)
           $code = $LASTEXITCODE
           $output | ForEach-Object { Write-Host "  | $_" }
+          Assert (-not (Test-Path -LiteralPath $unpacked)) "RpaPolicy.exe unpacked nothing: there is no $unpacked"
           Assert ($code -eq 0 -and $output -contains 'Policy updated. The runner restarts within 10 seconds and uses the new policy.') "RpaPolicy.exe apply --yes exits 0 and says that the policy is updated (exit code $code)"
           Assert (($output -join "`n") -notmatch '--yes is ignored|Apply these changes') 'the tool honoured --yes and did not ask'
 
@@ -400,6 +407,8 @@ jobs:
           Assert ([bool]$runnerLine) "the runner's start line is in runner.out.log"
           Assert ([bool]$browserLine) "the browser host's start line is in browser.out.log"
           Assert ([bool](Get-Content "$data\logs\runner.out.log" | Select-String 'policy loaded: 2 allowed app\(s\), 1 write control\(s\), 2 gated key\(s\)')) 'the runner started with the changed policy'
+          $unpacked = Join-Path ([IO.Path]::GetTempPath()) '.net\RpaRunner'
+          Assert (-not $env:DOTNET_BUNDLE_EXTRACT_BASE_DIR -and -not (Test-Path -LiteralPath $unpacked)) "the runner unpacked nothing: there is no $unpacked"
 
           $shown = @(& $powershell -NoProfile -ExecutionPolicy Bypass -File "$install\scripts\Show-RpaConnection.ps1")
           $shown | ForEach-Object { Write-Host "  | $_" }
