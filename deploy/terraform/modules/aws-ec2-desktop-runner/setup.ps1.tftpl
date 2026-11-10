@@ -1,55 +1,65 @@
-# RPA desktop runner test bed, first boot (Terraform module aws-ec2-desktop-runner). The user data (user-data.ps1.tftpl)
-# unpacks and runs this once, as LocalSystem under EC2Launch v2; then the VM restarts and rpa-runner signs in on the
-# console. Every value from Terraform arrives
-# base64-encoded, so no input can break out of a string. Secrets are generated here, written to Secrets Manager first
-# and only then used; none is ever written to output or a log. Progress: %ProgramData%\RPA Runner\setup\setup.log.
+# RPA desktop test bed, first boot (Terraform module aws-ec2-desktop-runner). The user data (user-data.ps1.tftpl)
+# unpacks and runs this once, as LocalSystem under EC2Launch v2. It does what is specific to the test bed and leaves the
+# product to the product's installer: with package_url set it downloads the RPA Windows package, checks its SHA-256,
+# runs its Install-Rpa.ps1 (the user rpa-runner, automatic sign-in, the data directory, the tokens, the firewall rules
+# and the scheduled tasks are the installer's work), applies runner_policy with the package's RpaPolicy.exe, and
+# restarts so that rpa-runner signs in on the console. Without package_url it installs nothing of the product.
+#
+# Every text value from Terraform arrives base64-encoded, so no input can break out of a string. The passwords are made
+# here and written to Secrets Manager before they are used; the two tokens are made by the installer and copied to
+# Secrets Manager after it. None is written to output or a log, and a password is text only on its way to Secrets
+# Manager: Windows gets it as a SecureString that is filled character by character, not by a command that takes text.
+# What belongs to the test bed (this log, the done marker, install-package.ps1, the policy change file, the unpacked
+# package while it installs) is in C:\Program Files\RPA Test Bed, which only SYSTEM and Administrators can read or
+# change. Progress: setup.log there.
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 function Dec([string]$b64) { if ($b64) { [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b64)) } else { '' } }
 
 $Region       = Dec '${region}'
-$TokenArn     = Dec '${runner_token_secret_arn}'
-$UserPwArn    = Dec '${runner_user_password_secret_arn}'
 $AdminPwArn   = Dec '${admin_password_secret_arn}'
-$ArtifactUrl  = Dec '${runner_artifact_url}'
-$ArtifactSha  = Dec '${runner_artifact_sha256}'
-$RunnerConfig = Dec '${runner_config}'
-$PolicyJson   = Dec '${runner_policy}'
+%{ if install_package ~}
+$UserPwArn    = Dec '${runner_user_password_secret_arn}'
+$TokenArn     = Dec '${runner_token_secret_arn}'
+$BrowserArn   = Dec '${browser_token_secret_arn}'
+$PackageUrl   = Dec '${package_url}'
+$PackageSha   = Dec '${package_sha256}'
+$AllowFrom    = Dec '${allow_from}'
+$PolicyChange = Dec '${policy_change}'
 $RunnerPort   = [int]'${runner_port}'
+$BrowserPort  = [int]'${browser_port}'
+$User         = 'rpa-runner'
+%{ endif ~}
 
-$User       = 'rpa-runner'
-$InstallDir = Join-Path $env:ProgramFiles 'RPA Runner'
-$DataDir    = Join-Path $env:ProgramData 'RPA Runner'
-$LogDir     = Join-Path $DataDir 'logs'
-$AdminLogs  = Join-Path $DataDir 'setup'
-$SetupLog   = Join-Path $AdminLogs 'setup.log'
-$Done       = Join-Path $DataDir 'setup.done'
-$Utf8       = New-Object Text.UTF8Encoding $false
+$Root           = Join-Path $env:ProgramFiles 'RPA Test Bed'
+$SetupLog       = Join-Path $Root 'setup.log'
+$Done           = Join-Path $Root 'setup.done'
+$InstallPackage = Join-Path $Root 'install-package.ps1'
 
-New-Item -ItemType Directory -Force -Path $InstallDir, $DataDir, $LogDir, $AdminLogs | Out-Null
-function Log([string]$m) { Add-Content -Path $SetupLog -Value ('{0} {1}' -f (Get-Date -Format o), $m) }
-if (Test-Path $Done) { Log 'setup already done'; exit 0 }
+# Created with its owner (Administrators) and access rules (SYSTEM and Administrators in full, nobody else) in one call.
+if (-not (Test-Path -LiteralPath $Root)) {
+  $rules = New-Object Security.AccessControl.DirectorySecurity
+  $rules.SetSecurityDescriptorSddlForm('O:BAD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)')
+  [void][IO.Directory]::CreateDirectory($Root, $rules)
+}
+function Log([string]$m) { Add-Content -LiteralPath $SetupLog -Value ('{0} {1}' -f (Get-Date -Format o), $m) }
+if (Test-Path -LiteralPath $Done) { Log 'setup already done'; exit 0 }
 trap { Log ('setup FAILED at line {0}: {1}' -f $_.InvocationInfo.ScriptLineNumber, $_.Exception.Message); exit 1 }
 Log 'setup started'
 
-function Invoke-Native([string]$exe, [string[]]$argv) {
-  & $exe @argv | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw ('{0} {1} failed with exit code {2}' -f $exe, $argv[0], $LASTEXITCODE) }
-}
-function Set-Reg([string]$key, [string]$name, [string]$type, [string]$data) {
-  Invoke-Native reg.exe @('add', $key, '/v', $name, '/t', $type, '/d', $data, '/f')
-}
-
 # 64 symbols, so a random byte modulo 64 is uniform; retried until it has an upper, a lower and a digit and no part of
-# an account or full name (Windows' complexity rule refuses a password containing rpa, runner or admin). Letters, digits, - and _ need no escaping in a header, a URL or a shell.
+# an account or full name (Windows' complexity rule refuses a password containing rpa, runner or admin). No command and
+# no pipeline touches the characters.
 function New-Secret([int]$Length) {
   $alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
   $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
   try {
+    $bytes = New-Object byte[] $Length
+    $chars = New-Object char[] $Length
     do {
-      $bytes = New-Object byte[] $Length
       $rng.GetBytes($bytes)
-      $s = -join ($bytes | ForEach-Object { $alphabet[$_ % 64] })
+      for ($i = 0; $i -lt $Length; $i++) { $chars[$i] = $alphabet[$bytes[$i] % 64] }
+      $s = -join $chars
     } until ($s -cmatch '[A-Z]' -and $s -cmatch '[a-z]' -and $s -cmatch '[0-9]' -and $s -notmatch 'rpa|runner|admin')
   } finally { $rng.Dispose() }
   $s
@@ -67,142 +77,80 @@ function Save-Secret([string]$Arn, [string]$Value) {
   }
 }
 
-# Stores an LSA private secret, the way Windows itself keeps the auto-logon password (LSA secret DefaultPassword).
-Add-Type -TypeDefinition @'
-using System;
-using System.ComponentModel;
-using System.Runtime.InteropServices;
-public static class RpaLsaSecret {
-  [StructLayout(LayoutKind.Sequential)]
-  struct UnicodeString { public ushort Length; public ushort MaximumLength; public IntPtr Buffer; }
-  [StructLayout(LayoutKind.Sequential)]
-  struct ObjectAttributes { public int Length; public IntPtr RootDirectory; public IntPtr ObjectName; public uint Attributes; public IntPtr SecurityDescriptor; public IntPtr SecurityQualityOfService; }
-  [DllImport("advapi32.dll")] static extern uint LsaOpenPolicy(IntPtr systemName, ref ObjectAttributes attributes, uint access, out IntPtr policy);
-  [DllImport("advapi32.dll")] static extern uint LsaStorePrivateData(IntPtr policy, ref UnicodeString key, ref UnicodeString data);
-  [DllImport("advapi32.dll")] static extern uint LsaClose(IntPtr policy);
-  [DllImport("advapi32.dll")] static extern int LsaNtStatusToWinError(uint status);
-  const uint PolicyCreateSecret = 0x20;
-  static UnicodeString Make(string s) {
-    UnicodeString u = new UnicodeString();
-    u.Buffer = Marshal.StringToHGlobalUni(s);
-    u.Length = (ushort)(s.Length * 2);
-    u.MaximumLength = (ushort)(s.Length * 2 + 2);
-    return u;
-  }
-  public static void Store(string key, string value) {
-    ObjectAttributes attributes = new ObjectAttributes();
-    attributes.Length = Marshal.SizeOf(typeof(ObjectAttributes));
-    IntPtr policy;
-    uint status = LsaOpenPolicy(IntPtr.Zero, ref attributes, PolicyCreateSecret, out policy);
-    if (status != 0) throw new Win32Exception(LsaNtStatusToWinError(status));
-    UnicodeString k = Make(key);
-    UnicodeString v = Make(value);
-    try {
-      status = LsaStorePrivateData(policy, ref k, ref v);
-      if (status != 0) throw new Win32Exception(LsaNtStatusToWinError(status));
-    } finally {
-      Marshal.ZeroFreeGlobalAllocUnicode(v.Buffer);
-      Marshal.FreeHGlobal(k.Buffer);
-      LsaClose(policy);
-    }
-  }
+# A new random password: written to Secrets Manager first, then handed back as a SecureString.
+function New-StoredPassword([string]$Arn) {
+  $plain = New-Secret 32
+  Save-Secret $Arn $plain
+  $secure = New-Object Security.SecureString
+  foreach ($char in $plain.ToCharArray()) { $secure.AppendChar($char) }
+  $secure.MakeReadOnly()
+  $secure
 }
-'@
 
 # 1. The built-in Administrator (RDP): a new random password, kept only in Secrets Manager.
-$pw = New-Secret 32
-Save-Secret $AdminPwArn $pw
-Get-LocalUser | Where-Object { $_.SID.Value -like 'S-1-5-21-*-500' } | Set-LocalUser -Password (ConvertTo-SecureString $pw -AsPlainText -Force)
+$secure = New-StoredPassword $AdminPwArn
+Get-LocalUser | Where-Object { $_.SID.Value -like 'S-1-5-21-*-500' } | Set-LocalUser -Password $secure
 Log 'Administrator password set (in Secrets Manager)'
 
-# 2. rpa-runner: a standard user (member of Users only) whose password never expires, signed in automatically. Winlogon
-#    reads the password from the LSA secret DefaultPassword; the registry value DefaultPassword is never written.
-$pw = New-Secret 32
-Save-Secret $UserPwArn $pw
-$secure = ConvertTo-SecureString $pw -AsPlainText -Force
-if (Get-LocalUser -Name $User -ErrorAction SilentlyContinue) { Set-LocalUser -Name $User -Password $secure }
-else { New-LocalUser -Name $User -Password $secure -PasswordNeverExpires -UserMayNotChangePassword -AccountNeverExpires -FullName 'RPA Runner' -Description 'Runs the RPA desktop runner (auto-logon)' | Out-Null }
-Add-LocalGroupMember -SID 'S-1-5-32-545' -Member $User -ErrorAction SilentlyContinue
-[RpaLsaSecret]::Store('DefaultPassword', $pw)
-$pw = $null; $secure = $null
-$winlogon = 'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
-Set-Reg $winlogon 'AutoAdminLogon' 'REG_SZ' '1'
-Set-Reg $winlogon 'ForceAutoLogon' 'REG_SZ' '1'
-Set-Reg $winlogon 'DefaultUserName' 'REG_SZ' $User
-Set-Reg $winlogon 'DefaultDomainName' 'REG_SZ' $env:COMPUTERNAME
-Remove-ItemProperty -Path "Registry::$winlogon" -Name 'DefaultPassword', 'AutoLogonCount' -ErrorAction SilentlyContinue
-Log 'rpa-runner created; auto-logon on (password in the LSA secret DefaultPassword)'
-
-# 3. Nothing may lock or cover the desktop: no lock screen, no inactivity lock, no screen saver, no Lock command, no
-#    Server Manager or network prompt at logon, display never off. User settings go into the default profile, which
-#    rpa-runner's profile is copied from at its first logon.
-$policies = 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
-Set-Reg 'HKLM\SOFTWARE\Policies\Microsoft\Windows\Personalization' 'NoLockScreen' 'REG_DWORD' '1'
-Set-Reg $policies 'InactivityTimeoutSecs' 'REG_DWORD' '0'
-Set-Reg $policies 'EnableFirstLogonAnimation' 'REG_DWORD' '0'
-Set-Reg 'HKLM\SOFTWARE\Microsoft\ServerManager' 'DoNotOpenServerManagerAtLogon' 'REG_DWORD' '1'
-Invoke-Native reg.exe @('add', 'HKLM\SYSTEM\CurrentControlSet\Control\Network\NewNetworkWindowOff', '/f')
-Get-ScheduledTask -TaskName 'ServerManager' -ErrorAction SilentlyContinue | Disable-ScheduledTask | Out-Null
-Invoke-Native powercfg.exe @('/change', 'monitor-timeout-ac', '0')
-Invoke-Native powercfg.exe @('/change', 'standby-timeout-ac', '0')
-Invoke-Native reg.exe @('load', 'HKU\RpaDefaultUser', 'C:\Users\Default\NTUSER.DAT')
-try {
-  foreach ($key in 'HKU\RpaDefaultUser\Control Panel\Desktop', 'HKU\RpaDefaultUser\Software\Policies\Microsoft\Windows\Control Panel\Desktop') {
-    Set-Reg $key 'ScreenSaveActive' 'REG_SZ' '0'
-    Set-Reg $key 'ScreenSaverIsSecure' 'REG_SZ' '0'
-  }
-  Set-Reg 'HKU\RpaDefaultUser\Software\Microsoft\Windows\CurrentVersion\Policies\System' 'DisableLockWorkstation' 'REG_DWORD' '1'
-} finally { Invoke-Native reg.exe @('unload', 'HKU\RpaDefaultUser') }
-Log 'lock screen, inactivity lock and screen saver off'
-
-# 4. %ProgramData%\RPA Runner: administrators own it. rpa-runner may read, create files (the runner's certificate) and
-#    write logs, but can't change or delete what it didn't create: policy.json and token. Program Files\RPA Runner keeps
-#    its default ACL (users read and execute).
-$ref = "$($User):"
-Invoke-Native icacls.exe @($DataDir, '/inheritance:r', '/grant:r', '*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F', '*S-1-3-0:(OI)(CI)(IO)F', "$($ref)(OI)(CI)RX")
-Invoke-Native icacls.exe @($DataDir, '/grant', "$($ref)(AD,WD)")
-Invoke-Native icacls.exe @($LogDir, '/grant', "$($ref)(OI)(CI)M")
-# setup\ holds what SYSTEM logs (setup.log, install-runner.log): rpa-runner may read it, never write it.
-Invoke-Native icacls.exe @($AdminLogs, '/inheritance:r', '/grant:r', '*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F', "$($ref)(OI)(CI)RX")
-[IO.File]::WriteAllText((Join-Path $DataDir 'policy.json'), $PolicyJson, $Utf8)
-$token = New-Secret 48
-Save-Secret $TokenArn $token
-$tokenFile = Join-Path $DataDir 'token'
-[IO.File]::WriteAllText($tokenFile, $token, $Utf8)
-$token = $null
-Invoke-Native icacls.exe @($tokenFile, '/inheritance:r', '/grant:r', '*S-1-5-18:F', '*S-1-5-32-544:F', "$($ref)R")
-Log 'policy.json and token written (token in Secrets Manager)'
-
-# 5. Windows Firewall, on for every profile (the metadata block depends on it): the runner port in (the security group limits who can reach it), and no instance metadata for
-#    rpa-runner, so neither the runner nor an app it drives can use the instance role.
-$sid = (New-Object Security.Principal.NTAccount($User)).Translate([Security.Principal.SecurityIdentifier]).Value
+# 2. Windows Firewall on for every profile: the block in step 5 depends on it, and so do the installer's rules.
 Set-NetFirewallProfile -All -Enabled True
-New-NetFirewallRule -Name 'RPA-Runner-In' -DisplayName "RPA desktop runner (TCP $RunnerPort)" -Direction Inbound -Protocol TCP -LocalPort $RunnerPort -Action Allow -Profile Any | Out-Null
+Log 'Windows Firewall on for every profile'
+
+# 3. install-package.ps1, for the first install below and for desktop-testbed.sh install (an upgrade over SSM).
+Set-Content -LiteralPath $InstallPackage -Encoding UTF8 -Value @'
+${install_package_ps1}
+'@
+
+%{ if install_package ~}
+# 4. The product: rpa-runner's password (in Secrets Manager before the installer gets it), then the package's own
+#    installer, which creates rpa-runner as a standard user with that password, stores it for automatic sign-in, and
+#    opens the two ports in Windows Firewall to the module's allowed CIDRs only. A refused or failed install fails the
+#    setup: the lines of install-package.ps1 and of the installer are in this log.
+$secure = New-StoredPassword $UserPwArn
+Log 'rpa-runner password made (in Secrets Manager)'
+& $InstallPackage -Url $PackageUrl -Sha256 $PackageSha -User $User -UserPassword $secure -RunnerPort $RunnerPort -BrowserPort $BrowserPort -AllowFrom $AllowFrom | ForEach-Object { Log $_ }
+$secure = $null
+
+# 5. No instance metadata for rpa-runner, so neither the two programs nor an app they drive can use the instance role.
+#    The rule names the user by its SID, so it comes after the install, and before rpa-runner has ever signed in.
+$sid = (New-Object Security.Principal.NTAccount("$env:COMPUTERNAME\$User")).Translate([Security.Principal.SecurityIdentifier]).Value
 New-NetFirewallRule -Name 'RPA-Runner-No-IMDS' -DisplayName 'Block instance metadata for rpa-runner' -Direction Outbound -Protocol TCP -RemoteAddress '169.254.169.254' -LocalUser "D:(A;;CC;;;$sid)" -Action Block | Out-Null
-Log 'firewall rules added'
+Log 'instance metadata blocked for rpa-runner'
 
-# 6. The runner: its settings, the start and install scripts, the runner itself if a URL was given, and a scheduled task
-#    that starts it in rpa-runner's session at logon (an interactive session, so it can drive the desktop).
-[IO.File]::WriteAllText((Join-Path $InstallDir 'runner.json'), $RunnerConfig, $Utf8)
-Set-Content -Path (Join-Path $InstallDir 'start-runner.ps1') -Encoding UTF8 -Value @'
-${start_runner_ps1}
-'@
-Set-Content -Path (Join-Path $InstallDir 'install-runner.ps1') -Encoding UTF8 -Value @'
-${install_runner_ps1}
-'@
-if ($ArtifactUrl) {
-  try { & (Join-Path $InstallDir 'install-runner.ps1') -Url $ArtifactUrl -Sha256 $ArtifactSha | ForEach-Object { Log $_ } }
-  catch { Log ('runner install failed, the VM is ready without it: {0}' -f $_.Exception.Message) }
-} else { Log 'no runner_artifact_url: runner not installed' }
-$account = "$env:COMPUTERNAME\$User"
-$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f (Join-Path $InstallDir 'start-runner.ps1'))
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $account
-$principal = New-ScheduledTaskPrincipal -UserId $account -LogonType Interactive -RunLevel Limited
-$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)
-Register-ScheduledTask -TaskPath '\RPA\' -TaskName 'RPA Runner' -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
-Log 'scheduled task \RPA\RPA Runner registered'
+# 6. The two tokens the installer made, copied to Secrets Manager. They go nowhere else.
+$DataDir = Join-Path $env:ProgramData 'RPA Runner'
+foreach ($pair in @(@('token', $TokenArn), @('browser-token', $BrowserArn))) {
+  $arn = $pair[1]
+  $value = [IO.File]::ReadAllText((Join-Path $DataDir $pair[0])).Trim()
+  if (-not $value) { throw ('{0} is empty' -f $pair[0]) }
+  Save-Secret $arn $value
+  $value = $null
+}
+Log 'runner and browser tokens copied to Secrets Manager'
 
-Set-Content -Path $Done -Value (Get-Date -Format o)
+# 7. runner_policy, on top of the installer's starter policy (no app allowed), through the package's policy tool. The
+#    change file is in the test bed's folder, which only administrators can change. The tool honours --yes only when
+#    every other process attached to its console is elevated, and otherwise asks "Apply these changes? [y/N]": nobody
+#    is there at a first boot, so the answer is also on its standard input. Its lines go to this log; a refusal fails
+#    the setup and leaves the starter policy.
+function Invoke-PolicyTool([string]$tool, [string]$change) {
+  # What the tool writes to its error stream must not end the setup by itself; its exit code decides.
+  $ErrorActionPreference = 'Continue'
+  'y' | & $tool apply $change --yes 2>&1 | ForEach-Object { Log "RpaPolicy: $_" }
+}
+$change = Join-Path $Root 'policy-change.json'
+[IO.File]::WriteAllText($change, $PolicyChange, (New-Object Text.UTF8Encoding $false))
+$global:LASTEXITCODE = -1
+Invoke-PolicyTool (Join-Path $env:ProgramFiles 'RPA Runner\runner\RpaPolicy.exe') $change
+if ($LASTEXITCODE -ne 0) { throw ('RpaPolicy.exe did not apply the policy change (exit code {0}); the policy stays as it was' -f $LASTEXITCODE) }
+Log 'policy change applied'
+
+Set-Content -LiteralPath $Done -Value (Get-Date -Format o)
 Log 'setup done; restarting so rpa-runner signs in'
-Invoke-Native shutdown.exe @('/r', '/t', '15', '/d', 'p:4:1', '/c', 'RPA test bed setup done')
+& (Join-Path ([Environment]::SystemDirectory) 'shutdown.exe') /r /t 15 /d p:4:1 /c 'RPA test bed setup done' | Out-Null
+if ($LASTEXITCODE -ne 0) { throw ('shutdown.exe failed with exit code {0}' -f $LASTEXITCODE) }
+%{ else ~}
+Set-Content -LiteralPath $Done -Value (Get-Date -Format o)
+Log 'setup done; no package_url, so nothing of the product is installed'
+%{ endif ~}
 exit 0

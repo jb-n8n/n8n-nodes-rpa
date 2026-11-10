@@ -1,6 +1,8 @@
-# A Windows Server 2022 VM for the RPA desktop runner: a dedicated low-privilege user (rpa-runner) signs in on the
-# console automatically, and the runner starts in that interactive session at logon, so it can drive desktop apps.
-# The first-boot setup is user-data.ps1.tftpl; network.tf places the VM, secrets.tf holds the secrets it generates.
+# A Windows Server 2022 VM that runs the RPA desktop runner and the RPA browser, as a test bed. With package_url set,
+# the first boot installs the RPA Windows package with its own installer (Install-Rpa.ps1): a dedicated standard user
+# (rpa-runner) signs in on the console automatically, and both programs start in that interactive session at logon, so
+# they can drive desktop apps and show browser windows. Without package_url the VM gets the test-bed setup only.
+# The first-boot setup is setup.ps1.tftpl; network.tf places the VM, secrets.tf holds the secrets it writes.
 
 locals {
   tags   = merge(var.tags, { Project = "n8n-rpa-desktop-testbed" })
@@ -8,33 +10,38 @@ locals {
 
   burstable = can(regex("^t[23]a?\\.", var.instance_type))
 
-  # policy.json as the runner reads it: optional allowedApps fields that aren't set are left out, not written as null.
-  policy_json = jsonencode(merge(var.runner_policy, {
+  # runner_policy as a change file for RpaPolicy.exe: optional allowedApps fields that aren't set are left out, not
+  # written as null. The tool refuses maxFileBytes in a change, so the variable has no such field.
+  policy_change_json = jsonencode({
     allowedApps = [for a in var.runner_policy.allowedApps : merge(
       { exe = a.exe, path = a.path },
       { for k, v in { sha256 = a.sha256 } : k => v if v != null },
       { for k, v in { allowedArgs = a.allowedArgs } : k => v if v != null },
       { for k, v in { allowUserWritable = a.allowUserWritable } : k => v if v != null },
     )]
-  }))
+    writeControls = var.runner_policy.writeControls
+    gatedKeys     = var.runner_policy.gatedKeys
+  })
 
   # EC2 takes at most 16 KB of user data, so the setup script travels gzipped, without its full-line comments (the files
-  # here keep them), inside a small bootstrap.
+  # here keep them), inside a small bootstrap. Every text value is base64-encoded, so none can break out of a string.
   user_data      = templatefile("${path.module}/user-data.ps1.tftpl", { setup = base64gzip(local.setup) })
   user_data_size = length(local.user_data)
   setup          = replace(local.setup_full, "/(?m)^[ \\t]*#.*\\n/", "")
   setup_full = templatefile("${path.module}/setup.ps1.tftpl", {
     region                          = base64encode(local.region)
     runner_token_secret_arn         = base64encode(aws_secretsmanager_secret.runner_token.arn)
+    browser_token_secret_arn        = base64encode(aws_secretsmanager_secret.browser_token.arn)
     runner_user_password_secret_arn = base64encode(aws_secretsmanager_secret.runner_user_password.arn)
     admin_password_secret_arn       = base64encode(aws_secretsmanager_secret.admin_password.arn)
-    runner_artifact_url             = base64encode(var.runner_artifact_url)
-    runner_artifact_sha256          = base64encode(var.runner_artifact_sha256)
-    runner_config                   = base64encode(jsonencode({ exe = var.runner_executable, args = var.runner_arguments, port = var.runner_port }))
-    runner_policy                   = base64encode(local.policy_json)
+    install_package                 = var.package_url != ""
+    package_url                     = base64encode(var.package_url)
+    package_sha256                  = base64encode(var.package_sha256)
+    allow_from                      = base64encode(join(",", var.allowed_cidrs))
+    policy_change                   = base64encode(local.policy_change_json)
     runner_port                     = var.runner_port
-    start_runner_ps1                = chomp(file("${path.module}/scripts/start-runner.ps1"))
-    install_runner_ps1              = chomp(file("${path.module}/scripts/install-runner.ps1"))
+    browser_port                    = var.browser_port
+    install_package_ps1             = chomp(file("${path.module}/scripts/install-package.ps1"))
   })
 }
 
@@ -46,7 +53,7 @@ data "aws_ssm_parameter" "ami" {
   name = var.ami_ssm_parameter
 }
 
-# --- Instance role: SSM management, and writing (never reading) the three secrets.
+# --- Instance role: SSM management, and writing (never reading) the four secrets.
 
 resource "aws_iam_role" "this" {
   name_prefix = "${var.name}-"
@@ -81,6 +88,7 @@ resource "aws_iam_role_policy" "secrets" {
         Action = "secretsmanager:PutSecretValue"
         Resource = [
           aws_secretsmanager_secret.runner_token.arn,
+          aws_secretsmanager_secret.browser_token.arn,
           aws_secretsmanager_secret.runner_user_password.arn,
           aws_secretsmanager_secret.admin_password.arn,
         ]
@@ -114,8 +122,8 @@ resource "aws_instance" "this" {
   monitoring                  = false
   get_password_data           = false
 
-  # Runs once, on the first boot. A changed input (runner URL, policy, port) replaces the VM so the setup runs again;
-  # install-runner.ps1 over SSM updates the runner without that.
+  # Runs once, on the first boot. A changed input (package URL, policy, port, allowed CIDRs) replaces the VM so the
+  # setup runs again; install-package.ps1 over SSM upgrades the installed package without that.
   user_data                   = local.user_data
   user_data_replace_on_change = true
 
@@ -160,7 +168,7 @@ resource "aws_instance" "this" {
 
     precondition {
       condition     = local.user_data_size <= 16384
-      error_message = "The user data is over EC2's 16 KB limit; shorten runner_policy or runner_arguments."
+      error_message = "The user data is over EC2's 16 KB limit; shorten runner_policy or package_url."
     }
     precondition {
       condition     = !local.create_vpc || local.zone != null

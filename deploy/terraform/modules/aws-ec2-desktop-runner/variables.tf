@@ -1,5 +1,6 @@
-# Inputs of the aws-ec2-desktop-runner module. No input carries a secret: the VM generates the runner token and the
-# Windows passwords on its first boot and writes them to Secrets Manager itself, so they never enter the plan or state.
+# Inputs of the aws-ec2-desktop-runner module. No input carries a secret: the VM makes the Windows passwords on its
+# first boot, the product's installer makes the two tokens, and the VM writes all four to Secrets Manager itself, so
+# they never enter the plan or state.
 
 variable "name" {
   description = "Name of the VM and prefix of every resource (security group, role, secrets). 2 to 32 characters."
@@ -13,7 +14,7 @@ variable "name" {
 }
 
 variable "allowed_cidrs" {
-  description = "Required. The only CIDRs that may reach the runner port and RDP (3389), for example [\"203.0.113.7/32\"]. Never the whole internet: 0.0.0.0/0, ::/0 and any range wider than /16 (IPv4) or /48 (IPv6) are refused."
+  description = "Required. The only CIDRs that may reach the runner port, the browser port and RDP (3389), for example [\"203.0.113.7/32\"]. The security group lets in these only, and the installer's Windows Firewall rules for the two programs get the same list (-AllowFrom). Never the whole internet: 0.0.0.0/0, ::/0 and any range wider than /16 (IPv4) or /48 (IPv6) are refused."
   type        = list(string)
 
   validation {
@@ -25,7 +26,7 @@ variable "allowed_cidrs" {
       for c in var.allowed_cidrs :
       try(strcontains(c, ":") ? tonumber(split("/", c)[1]) >= 48 : tonumber(split("/", c)[1]) >= 16, false)
     ])
-    error_message = "allowed_cidrs must not open the runner or RDP to the internet: 0.0.0.0/0, ::/0 and ranges wider than /16 (IPv4) or /48 (IPv6) are refused (a /8 can hold other AWS customers)."
+    error_message = "allowed_cidrs must not open the runner, the browser or RDP to the internet: 0.0.0.0/0, ::/0 and ranges wider than /16 (IPv4) or /48 (IPv6) are refused (a /8 can hold other AWS customers)."
   }
   validation {
     condition     = alltrue([for c in var.allowed_cidrs : try(lower(cidrsubnet(c, 0, 0)) == lower(c), false)])
@@ -123,25 +124,25 @@ variable "availability_zone" {
 }
 
 variable "associate_public_ip" {
-  description = "Give the VM a public IPv4 address. The runner URL uses it. It changes on every stop and start unless elastic_ip is true. False only with a subnet_id whose route reaches SSM another way."
+  description = "Give the VM a public IPv4 address. The runner and browser URLs use it. It changes on every stop and start unless elastic_ip is true. False only with a subnet_id whose route reaches SSM another way."
   type        = bool
   default     = true
 }
 
 variable "elastic_ip" {
-  description = "Attach an Elastic IP so the runner URL survives stop and start. AWS charges for it while the VM is stopped as well (public IPv4 pricing)."
+  description = "Attach an Elastic IP so the runner and browser URLs survive stop and start. AWS charges for it while the VM is stopped as well (public IPv4 pricing)."
   type        = bool
   default     = false
 }
 
 variable "enable_rdp" {
-  description = "Open RDP (3389) to allowed_cidrs. SSM works without it; RDP is for watching the desktop as Administrator (a second session that leaves the runner user's console session alone)."
+  description = "Open RDP (3389) to allowed_cidrs. SSM works without it; RDP is for watching the desktop as Administrator (a second session that leaves the bot user's console session alone)."
   type        = bool
   default     = true
 }
 
 variable "runner_port" {
-  description = "TCP port the runner listens on (wss://<ip>:<port>/rpa/v1). The runner's default is 8765."
+  description = "TCP port the runner listens on (wss://<ip>:<port>/rpa/v1), passed to the installer as -RunnerPort. The installer's default is 8765."
   type        = number
   default     = 8765
 
@@ -151,47 +152,55 @@ variable "runner_port" {
   }
 }
 
-variable "runner_artifact_url" {
-  description = "HTTPS URL of the runner build: the rpa-desktop release zip (runner/ plus erp-demo/v1 and v2), a zip of the runner's win-x64 publish, or the single executable. Empty: the VM is prepared without a runner (install one later with install-runner.ps1 over SSM). The URL is stored in the instance's user data and in state, so use a public release asset or a short-lived pre-signed URL, never one with a long-lived credential in it. Changing it replaces the VM."
+variable "browser_port" {
+  description = "TCP port the RPA browser listens on (wss://<ip>:<port>), passed to the installer as -BrowserPort. The installer's default is 3000."
+  type        = number
+  default     = 3000
+
+  validation {
+    condition     = var.browser_port >= 1024 && var.browser_port <= 65535 && floor(var.browser_port) == var.browser_port && var.browser_port != 3389
+    error_message = "browser_port must be a whole number from 1024 to 65535, other than 3389."
+  }
+  validation {
+    condition     = var.browser_port != var.runner_port
+    error_message = "browser_port and runner_port must differ: each program needs its own port."
+  }
+}
+
+variable "package_url" {
+  description = "HTTPS URL of the RPA Windows package (rpa-windows-x64.zip). The first boot downloads it, checks package_sha256, unpacks it and runs its Install-Rpa.ps1. Empty (with package_sha256 empty too): the VM gets the test-bed setup only and nothing of the product is installed. The URL is stored in the instance's user data and in state, so use a public release asset or a short-lived pre-signed URL, never one with a long-lived credential in it. Changing it replaces the VM; desktop-testbed.sh install upgrades without that."
   type        = string
   default     = ""
 
   validation {
-    condition     = var.runner_artifact_url == "" || can(regex("^https://[^\\s'\"`]+$", var.runner_artifact_url))
-    error_message = "runner_artifact_url must be empty or an https:// URL without spaces or quotes."
+    # RFC 3986's characters without the single quote: the same test as desktop-testbed.sh and the script on the VM.
+    condition     = var.package_url == "" || can(regex("^https://[A-Za-z0-9._~:/?#\\[\\]@!$&()*+,;=%-]+$", var.package_url))
+    error_message = "package_url must be empty or an https:// URL of plain URL characters, without spaces or quotes."
+  }
+  # Both or neither. Both rules are here, not one on each variable: two variables that validate each other are a cycle.
+  validation {
+    condition     = var.package_url == "" || var.package_sha256 != ""
+    error_message = "package_url needs package_sha256: the VM compares the download with it before it unpacks or runs anything."
+  }
+  validation {
+    condition     = var.package_url != "" || var.package_sha256 == ""
+    error_message = "package_sha256 is set without package_url: set both, or neither."
   }
 }
 
-variable "runner_artifact_sha256" {
-  description = "SHA-256 of the file at runner_artifact_url (64 hex characters). When set, the VM refuses a download that doesn't match. Empty: not checked."
+variable "package_sha256" {
+  description = "SHA-256 of the file at package_url (64 hex characters). Required with package_url: the VM refuses a download that does not match, before it unpacks or runs anything from it."
   type        = string
   default     = ""
 
   validation {
-    condition     = var.runner_artifact_sha256 == "" || can(regex("^[0-9A-Fa-f]{64}$", var.runner_artifact_sha256))
-    error_message = "runner_artifact_sha256 must be empty or 64 hexadecimal characters."
+    condition     = var.package_sha256 == "" || can(regex("^[0-9A-Fa-f]{64}$", var.package_sha256))
+    error_message = "package_sha256 must be empty or 64 hexadecimal characters."
   }
-}
-
-variable "runner_executable" {
-  description = "File name of the runner executable inside the artifact."
-  type        = string
-  default     = "RpaRunner.exe"
-
-  validation {
-    condition     = can(regex("^[A-Za-z0-9][A-Za-z0-9._-]*\\.exe$", var.runner_executable))
-    error_message = "runner_executable must be a plain .exe file name (letters, digits, dot, underscore, hyphen)."
-  }
-}
-
-variable "runner_arguments" {
-  description = "Command-line arguments for the runner. The start script also sets RPA_RUNNER_TOKEN_FILE, RPA_RUNNER_PORT and RPA_RUNNER_POLICY_FILE in its environment. Never put the token here."
-  type        = list(string)
-  default     = []
 }
 
 variable "runner_policy" {
-  description = "The runner's local policy, written to %ProgramData%\\RPA Runner\\policy.json (administrators may change it, the runner user may only read it). Each allowedApps entry pins the absolute local path that runs; sha256 pins its hash, allowedArgs lists the exact argument lists a launch may pass (none without it), allowUserWritable (default false) permits a path the runner's user could change. The default allows the demo app installed by install-runner.ps1, with --ui v1 or --ui v2, and gates its Post button, the OK/Save button (automation id 1) of every common dialog it owns, such as its Export Save dialog, and Ctrl+S / F11."
+  description = "What the runner's policy gets on top of the installer's starter policy (which allows no app), when package_url is set: the first boot writes it as a change file and applies it with the package's RpaPolicy.exe. Each allowedApps entry pins the absolute local path that runs; sha256 pins its hash, allowedArgs lists the exact argument lists a launch may pass (none without it), allowUserWritable (default false) permits a path the bot user could change. The default allows the ERP Demo (v1) that the package installs, with --ui v1 or --ui v2, and gates its Post button, the OK/Save button (automation id 1) of every common dialog it owns, such as its Export Save dialog, and Ctrl+S / F11. The file size limit (maxFileBytes) is not part of it: RpaPolicy.exe does not change that limit, so it stays at the installer's default, and a maxFileBytes given here is ignored."
   type = object({
     allowedApps = list(object({
       exe               = string
@@ -204,18 +213,16 @@ variable "runner_policy" {
       exe          = string
       automationId = string
     })), [])
-    gatedKeys    = optional(list(string), [])
-    maxFileBytes = optional(number, 20971520)
+    gatedKeys = optional(list(string), [])
   })
   default = {
     allowedApps = [{
       exe         = "ErpDemo.exe"
-      path        = "C:\\Program Files\\RPA Runner\\erp-demo\\ErpDemo.exe"
+      path        = "C:\\Program Files\\RPA Runner\\erp-demo\\v1\\ErpDemo.exe"
       allowedArgs = [["--ui", "v1"], ["--ui", "v2"]]
     }]
     writeControls = [{ exe = "ErpDemo.exe", automationId = "btnPost" }, { exe = "ErpDemo.exe", automationId = "1" }]
     gatedKeys     = ["Ctrl+S", "F11"]
-    maxFileBytes  = 20971520
   }
 
   validation {
@@ -229,15 +236,30 @@ variable "runner_policy" {
     condition     = alltrue([for a in var.runner_policy.allowedApps : a.sha256 == null || can(regex("^[0-9A-Fa-f]{64}$", coalesce(a.sha256, "-")))])
     error_message = "runner_policy.allowedApps[].sha256 must be 64 hexadecimal characters."
   }
+  # The limits RpaPolicy.exe puts on a change, checked here so that a plan fails and not a first boot.
   validation {
-    condition     = var.runner_policy.maxFileBytes >= 1 && var.runner_policy.maxFileBytes <= 37748736 && floor(var.runner_policy.maxFileBytes) == var.runner_policy.maxFileBytes
-    error_message = "runner_policy.maxFileBytes must be a whole number from 1 to 37748736 (36 MiB, the runner's ceiling)."
+    condition = (
+      length(var.runner_policy.allowedApps) + length(flatten([for a in var.runner_policy.allowedApps : [for l in coalesce(a.allowedArgs, []) : 1]])) +
+      length(var.runner_policy.writeControls) + length(var.runner_policy.gatedKeys)
+    ) <= 40
+    error_message = "runner_policy may hold at most 40 entries: allowedApps, their allowedArgs lists, writeControls and gatedKeys together (the limit RpaPolicy.exe has for one change)."
+  }
+  validation {
+    condition = alltrue(flatten([
+      [for a in var.runner_policy.allowedApps : [length(a.exe) <= 260, length(a.path) <= 260, [for l in coalesce(a.allowedArgs, []) : [length(l) <= 20, [for v in l : length(v) <= 260]]]]],
+      [for w in var.runner_policy.writeControls : [length(w.exe) <= 260, length(w.automationId) <= 260]],
+    ]))
+    error_message = "runner_policy: a name, path, id or argument may be at most 260 characters, and an allowedArgs list may hold at most 20 arguments (the limits RpaPolicy.exe has for a change)."
+  }
+  validation {
+    condition     = alltrue([for a in var.runner_policy.allowedApps : !can(regex("~[0-9]", a.path))])
+    error_message = "runner_policy.allowedApps[].path must be the full path, not a short (8.3) name such as C:\\PROGRA~1 (RpaPolicy.exe refuses one)."
   }
 }
 
 
 variable "secret_recovery_window_days" {
-  description = "Recovery window of the three secrets on destroy: 0 deletes them at once, 7 to 30 keeps them restorable that long."
+  description = "Recovery window of the four secrets on destroy: 0 deletes them at once, 7 to 30 keeps them restorable that long."
   type        = number
   default     = 7
 

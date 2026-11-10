@@ -4,7 +4,7 @@ variable "aws_region" {
 }
 
 variable "allowed_cidrs" {
-  description = "Required: the CIDRs that may reach the runner (8765) and RDP (3389), usually your own public IPv4 as a /32 (curl -s https://checkip.amazonaws.com). The module refuses 0.0.0.0/0."
+  description = "Required: the CIDRs that may reach the runner (8765), the browser (3000) and RDP (3389), usually your own public IPv4 as a /32 (curl -s https://checkip.amazonaws.com). The module refuses 0.0.0.0/0."
   type        = list(string)
 }
 
@@ -26,14 +26,14 @@ variable "elastic_ip" {
   default     = false
 }
 
-variable "runner_artifact_url" {
-  description = "HTTPS URL of the rpa-desktop release zip (or a zip with RpaRunner.exe, or the .exe). Empty: no runner yet; install one later with desktop-testbed.sh install-runner."
+variable "package_url" {
+  description = "HTTPS URL of the RPA Windows package (rpa-windows-x64.zip), installed on the first boot. Empty: nothing of the product is installed. It is stored in the user data and the state: use a public release asset or a short-lived pre-signed URL."
   type        = string
   default     = ""
 }
 
-variable "runner_artifact_sha256" {
-  description = "SHA-256 of the runner build at runner_artifact_url. Empty: not checked."
+variable "package_sha256" {
+  description = "SHA-256 of the file at package_url (64 hex characters). Required with package_url; the VM checks the download against it before it unpacks or runs anything."
   type        = string
   default     = ""
 }
