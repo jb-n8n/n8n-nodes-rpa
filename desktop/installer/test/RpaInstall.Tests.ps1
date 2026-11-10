@@ -1129,6 +1129,8 @@ Describe 'Invoke-RpaInstallPlan' {
       Mock -ModuleName RpaInstall Copy-RpaProgramFiles { }
       Mock -ModuleName RpaInstall Read-RpaInstallFile { }
       Mock -ModuleName RpaInstall Get-RpaSid { 'S-1-5-21-1-2-3-1001' }
+      # The step's name, which the installer prints as it starts it.
+      Mock -ModuleName RpaInstall Write-Host { }
       $plan = @{ Refusals = @(); Warnings = @(); Steps = @('copy program files') }
       { Invoke-RpaInstallPlan -Plan $plan -Parameters (New-TestParameters @{ NoBrowser = $true }) -SourceDir $package } | Should -Not -Throw
       Should -Invoke -ModuleName RpaInstall Copy-RpaProgramFiles -Times 1 -Exactly
@@ -1308,6 +1310,8 @@ Describe 'Invoke-RpaUninstall' {
       Mock -ModuleName RpaInstall Copy-RpaProgramFiles { }
       Mock -ModuleName RpaInstall Read-RpaInstallFile { }
       Mock -ModuleName RpaInstall Get-RpaSid { 'S-1-5-21-1-2-3-1001' }
+      # The step's name, which the installer prints as it starts it.
+      Mock -ModuleName RpaInstall Write-Host { }
       $plan = @{ Refusals = @(); Warnings = @(); Steps = @('copy program files') }
       { Invoke-RpaInstallPlan -Plan $plan -Parameters (New-TestParameters @{ NoBrowser = $true }) -SourceDir $package } | Should -Not -Throw
       Should -Invoke -ModuleName RpaInstall Copy-RpaProgramFiles -Times 1 -Exactly
