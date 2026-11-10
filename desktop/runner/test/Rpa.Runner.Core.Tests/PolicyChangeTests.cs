@@ -442,6 +442,148 @@ public class PolicyChangeTests
             result.Summary);
     }
 
+    private static string Control(string id) => $$"""{ "writeControls": [{ "exe": "ErpDemo.exe", "automationId": {{J(id)}} }] }""";
+
+    // The start of a write control line up to its id: 35 characters, so 41 more fill a row of 76.
+    private const string ControlStart = "Add write control \"ErpDemo.exe\" / \"";
+
+    [Fact]
+    public void A_long_line_is_printed_in_rows_of_76_characters_that_continue_after_eight_spaces()
+    {
+        Assert.Equal(35, ControlStart.Length);
+        var result = PolicyChange.Apply("", Control(new string('x', 100)));
+        Assert.Equal([$"{ControlStart}{new string('x', 100)}\"", Count(writes: 1)], result.Summary);
+        Assert.Equal(
+            [
+                $"{ControlStart}{new string('x', 41)}",
+                $"        {new string('x', 59)}\"",
+                Count(writes: 1),
+            ],
+            PolicyChange.Printed(result.Summary));
+
+        // A line of exactly 76 characters is one row; one more character is a second row.
+        Assert.Equal([$"{ControlStart}{new string('x', 40)}\"", Count(writes: 1)], PolicyChange.Printed(PolicyChange.Apply("", Control(new string('x', 40))).Summary));
+        Assert.Equal(
+            [$"{ControlStart}{new string('x', 41)}", "        \"", Count(writes: 1)],
+            PolicyChange.Printed(PolicyChange.Apply("", Control(new string('x', 41))).Summary));
+    }
+
+    [Fact]
+    public void A_value_of_260_characters_of_words_is_wrapped_and_every_later_row_starts_with_eight_spaces()
+    {
+        // 52 words with single spaces between them: no spaces warning, and nothing the old checks would notice.
+        var value = string.Join(' ', Enumerable.Range(10, 52).Select(i => $"w{i}x")) + "y";
+        Assert.Equal(260, value.Length);
+        var result = PolicyChange.Apply("", Control(value));
+        Assert.Equal(2, result.Summary.Count);
+
+        var rows = PolicyChange.Printed(result.Summary);
+        var line = rows.Take(rows.Count - 1).ToList();
+        Assert.Equal(5, line.Count);
+        Assert.StartsWith($"{ControlStart}w10x w11x ", line[0]);
+        Assert.All(line.Take(4), row => Assert.InRange(row.Length, 70, 76));
+        Assert.InRange(line[4].Length, 10, 76);
+        Assert.All(line.Skip(1), row =>
+        {
+            Assert.StartsWith("        ", row);
+            Assert.NotEqual(' ', row[8]);
+        });
+        // No row ends with a space, so the rows put together, without the eight spaces, are the line.
+        Assert.All(line, row => Assert.NotEqual(' ', row[^1]));
+        Assert.Equal(result.Summary[0], line[0] + string.Concat(line.Skip(1).Select(row => row[8..])));
+        Assert.Equal(Count(writes: 1), rows[^1]);
+    }
+
+    [Fact]
+    public void Text_from_a_value_never_starts_a_row()
+    {
+        // Each id is cut so that a console 76 or 80 columns wide would have put the words at the left edge.
+        var change = $$"""
+            { "writeControls": [{ "exe": "ErpDemo.exe", "automationId": {{J(new string('x', 41) + "WARNING: nothing to see here")}} },
+                                { "exe": "ErpDemo.exe", "automationId": {{J(new string('y', 45) + "Allow app \"Harmless.exe\" at \"C:\\Windows\\Harmless.exe\"")}} },
+                                { "exe": "ErpDemo.exe", "automationId": {{J(new string('z', 41) + "This change: 0 app(s) allowed or updated, 0 helper process pattern(s), 0 write control(s), 0 gated key(s).")}} }] }
+            """;
+        var result = PolicyChange.Apply("", change);
+        var rows = PolicyChange.Printed(result.Summary);
+        Assert.Equal(
+            [
+                $"{ControlStart}{new string('x', 41)}",
+                "        WARNING: nothing to see here\"",
+                $"{ControlStart}{new string('y', 41)}",
+                "        yyyyAllow app \\\"Harmless.exe\\\" at \\\"C:\\\\Windows\\\\Harmless.exe\\\"\"",
+                $"{ControlStart}{new string('z', 41)}",
+                "        This change: 0 app(s) allowed or updated, 0 helper process pattern(s",
+                "        ), 0 write control(s), 0 gated key(s).\"",
+                Count(writes: 3),
+            ],
+            rows);
+
+        // Every row is the start of one of the tool's lines or begins with eight spaces; the faked words are only on
+        // rows of the second kind.
+        Assert.Equal(result.Summary.Count, rows.Count(row => !row.StartsWith("        ", StringComparison.Ordinal)));
+        string[] faked = ["WARNING:", "Allow app", "This change:"];
+        Assert.All(rows.Take(rows.Count - 1).Where(row => faked.Any(row.Contains)), row => Assert.StartsWith("        ", row));
+        Assert.Equal(Count(writes: 3), Assert.Single(rows, row => row.StartsWith("This change:", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void An_escape_at_the_end_of_a_row_is_kept_whole()
+    {
+        // The row has room for 76 characters; the escape would start before the end and finish after it.
+        IReadOnlyList<string> Rows(string id) => PolicyChange.Printed(PolicyChange.Apply("", Control(id)).Summary);
+
+        foreach (var before in new[] { 36, 39, 40 })
+        {
+            Assert.Equal(
+                [$"{ControlStart}{new string('x', before)}", "        \\u00A0tail\"", NonAscii, Count(writes: 1)],
+                Rows(new string('x', before) + "\u00a0tail"));
+        }
+        Assert.Equal([$"{ControlStart}{new string('x', 35)}\\u00A0", "        tail\"", NonAscii, Count(writes: 1)], Rows(new string('x', 35) + "\u00a0tail"));
+
+        Assert.Equal([$"{ControlStart}{new string('x', 40)}", "        \\\"t\"", Count(writes: 1)], Rows(new string('x', 40) + "\"t"));
+        Assert.Equal([$"{ControlStart}{new string('x', 40)}", "        \\\\t\"", Count(writes: 1)], Rows(new string('x', 40) + "\\t"));
+        Assert.Equal([$"{ControlStart}{new string('x', 39)}\\\\", "        t\"", Count(writes: 1)], Rows(new string('x', 39) + "\\t"));
+        // A backslash followed by text that looks like an escape is two characters and then plain text.
+        Assert.Equal([$"{ControlStart}{new string('x', 38)}\\\\u", "        00A0\"", Count(writes: 1)], Rows(new string('x', 38) + "\\u00A0"));
+    }
+
+    [Fact]
+    public void A_row_is_not_broken_next_to_a_space_when_that_can_be_avoided()
+    {
+        IReadOnlyList<string> Rows(string id) => PolicyChange.Printed(PolicyChange.Apply("", Control(id)).Summary);
+
+        // A space as the last character of the row, or as the first of the next, could not be seen. The break moves back.
+        Assert.Equal([$"{ControlStart}{new string('x', 39)}", "        x yyy\"", Count(writes: 1)], Rows(new string('x', 40) + " yyy"));
+        Assert.Equal([$"{ControlStart}{new string('x', 40)}", "        x yyy\"", Count(writes: 1)], Rows(new string('x', 41) + " yyy"));
+        Assert.Equal([$"{ControlStart}{new string('x', 41)}", "        x yyy\"", Count(writes: 1)], Rows(new string('x', 42) + " yyy"));
+
+        // A run of spaces that fits in a row is kept on one row.
+        Assert.Equal(
+            [ControlStart, $"        a{new string(' ', 60)}b\"", Spaces, Count(writes: 1)],
+            Rows("a" + new string(' ', 60) + "b"));
+
+        // More spaces than a row holds: the row is full and the break is among them. The spaces warning is under the line.
+        Assert.Equal(
+            [ControlStart, $"        a{new string(' ', 67)}", $"        {new string(' ', 33)}b\"", Spaces, Count(writes: 1)],
+            Rows("a" + new string(' ', 100) + "b"));
+    }
+
+    [Fact]
+    public void Lines_under_an_app_keep_their_start_and_wrap_the_same_way()
+    {
+        var path = Path.Combine(Root, new string('d', 60), "ErpDemo.exe");
+        var change = $$"""{ "allowedApps": [{ "exe": "ErpDemo.exe", "path": {{J(path)}}, "sha256": "{{ShaA}}", "allowUserWritable": true, "allowedArgs": [["{{new string('a', 80)}}", "b"]] }] }""";
+        var result = PolicyChange.Apply("", change);
+        var rows = PolicyChange.Printed(result.Summary);
+        Assert.All(rows.Take(rows.Count - 1), row => Assert.InRange(row.Length, 1, 76));
+        // The tool's lines start at the left edge, the argument line after two spaces; everything else after eight.
+        string[] starts = ["Allow app \"ErpDemo.exe\" at \"", "WARNING: \"", "  with arguments: \"aaaa", "This change: 1 app(s)"];
+        Assert.Equal(starts.Length, rows.Count(row => !row.StartsWith("        ", StringComparison.Ordinal)));
+        Assert.All(starts, start => Assert.Single(rows, row => row.StartsWith(start, StringComparison.Ordinal)));
+        Assert.Equal($"  with arguments: \"{new string('a', 57)}", rows.Single(row => row.StartsWith("  with", StringComparison.Ordinal)));
+        Assert.Contains($"        {new string('a', 23)}\" \"b\"", rows);
+    }
+
     [Fact]
     public void Refuses_a_change_with_more_than_40_entries()
     {

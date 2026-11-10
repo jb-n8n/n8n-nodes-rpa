@@ -32,6 +32,11 @@ public static class PolicyChange
     public const int MaxArguments = 20;
     public const int MaxValueLength = 260;
 
+    /// <summary>The longest row of a summary line; a longer line continues on the next row.</summary>
+    public const int RowLength = 76;
+
+    private const string RowIndent = "        ";
+
     private const string NonAsciiWarning = @"WARNING: this line holds characters outside plain ASCII, shown as \u escapes";
     private const string SpacesWarning = "WARNING: a value in this line has leading, trailing or repeated spaces";
     private const string HelperWarning = "WARNING: any program at this path counts as part of the app that started it";
@@ -182,6 +187,58 @@ public static class PolicyChange
             else literal.Append(CultureInfo.InvariantCulture, $"\\u{(int)c:X4}");
         }
         return literal.Append('"').ToString();
+    }
+
+    /// <summary>
+    /// The summary as it is printed, row by row: every line but the last in rows of at most <see cref="RowLength"/>
+    /// characters (<see cref="Rows"/>). The last line, the count, holds nothing from the change and stays whole.
+    /// </summary>
+    public static IReadOnlyList<string> Printed(IReadOnlyList<string> summary) =>
+        summary.Count == 0 ? [] : [.. summary.Take(summary.Count - 1).SelectMany(Rows), summary[^1]];
+
+    /// <summary>
+    /// One summary line as the rows it is printed in. The tool breaks a long line itself, so that a console does not
+    /// do it and put the rest of a value at the left edge, where it could look like a line of the tool's. A row holds
+    /// at most <see cref="RowLength"/> characters, and every row after the first starts with eight spaces: a row that
+    /// starts at the left edge (or after the two spaces of <c>with arguments</c>) is the start of a line.
+    /// <para>
+    /// A break falls between characters of the printed text, with an escape (<c>\uXXXX</c>, <c>\"</c>, <c>\\</c>)
+    /// kept whole, and not next to a space when that can be avoided (a space at the end of a row could not be seen):
+    /// the rows put together without the eight spaces are the line.
+    /// </para>
+    /// </summary>
+    internal static IEnumerable<string> Rows(string line)
+    {
+        var units = Units(line);
+        var indent = "";
+        for (var start = 0; start < units.Count;)
+        {
+            var end = start;
+            for (var length = indent.Length; end < units.Count && length + units[end].Length <= RowLength; end++) length += units[end].Length;
+            if (end < units.Count)
+            {
+                var cut = end;
+                while (cut > start + 1 && (units[cut - 1] == " " || units[cut] == " ")) cut--;
+                if (units[cut - 1] != " " && units[cut] != " ") end = cut;
+            }
+            yield return indent + string.Concat(units.Skip(start).Take(end - start));
+            start = end;
+            indent = RowIndent;
+        }
+    }
+
+    /// <summary>The printed text in pieces that stay on one row: single characters, and each escape as one piece.</summary>
+    private static List<string> Units(string line)
+    {
+        var units = new List<string>();
+        for (var at = 0; at < line.Length; at += units[^1].Length)
+        {
+            var length = line[at] != '\\' ? 1
+                : at + 5 < line.Length && line[at + 1] == 'u' && line.AsSpan(at + 2, 4).IndexOfAnyExcept("0123456789ABCDEF") < 0 ? 6
+                : Math.Min(2, line.Length - at);
+            units.Add(line.Substring(at, length));
+        }
+        return units;
     }
 
     private static readonly JsonDocumentOptions DocumentOptions = new() { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true };

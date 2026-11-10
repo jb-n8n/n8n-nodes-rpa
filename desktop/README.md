@@ -128,7 +128,9 @@ person who is signed in, and reads its input from that window. Started without a
 .\RpaPolicy.exe show
 .\RpaPolicy.exe allow-app "C:\Program Files\ERP Demo\ErpDemo.exe" --pin-hash
 # Changing the policy at C:\ProgramData\RPA Runner\policy.json (0 app(s), 0 helper process pattern(s) today).
-# Allow app "ErpDemo.exe" at "C:\\Program Files\\ERP Demo\\ErpDemo.exe" (SHA-256 pinned 3A7F...)
+# Allow app "ErpDemo.exe" at "C:\\Program Files\\ERP Demo\\ErpDemo.exe" (SHA-2
+#         56 pinned 3A7F5C1E9B2D4F60718293A4B5C6D7E8F90A1B2C3D4E5F60718293A4B5
+#         C6D7E8)
 # This change: 1 app(s) allowed or updated, 0 helper process pattern(s), 0 write control(s), 0 gated key(s).
 # Apply these changes? [y/N] y
 # Policy updated. The runner restarts within 10 seconds and uses the new policy.
@@ -175,7 +177,7 @@ for it:
 | A name, path, id or argument longer than 260 characters | `a value in the change is longer than 260 characters` |
 | A short (8.3) name such as `C:\PROGRA~1\...` in an app `path` or a helper `pathPattern` (any `~` followed by a digit): it would name an existing entry's file without being that entry | `write the full path, not a short (8.3) name: <the path>` |
 | An entry that is not an object, or an argument that is not text | `an entry in <key> must be an object`, `an allowed argument must be text` |
-| A summary longer than 8,000 characters: every line the tool prints for the change before it asks, from the first line to the count line, line breaks counted. A value shown as `\uXXXX` escapes is six times as long as it is in the file. | `the summary of this change would be longer than 8000 characters; split it into smaller changes` |
+| A summary longer than 8,000 characters: everything the tool prints for the change before it asks, from the first line to the count line, as printed (line breaks and the eight spaces of continued rows counted). A value shown as `\uXXXX` escapes is six times as long as it is in the file. | `the summary of this change would be longer than 8000 characters; split it into smaller changes` |
 
 ### What the tool prints
 
@@ -195,6 +197,13 @@ line is last, directly above the prompt:
 | `Turn on clipboard read` | `clipboardRead` becomes `true`. |
 | `This change: <a> app(s) allowed or updated, <h> helper process pattern(s), <w> write control(s), <k> gated key(s).` | The count of the lines above (`, clipboard read turned on` before the full stop when it is). Compare it with what you read: if lines scrolled out of view, the counts still show them. |
 
+The tool breaks a long line itself, into rows of at most 76 characters: a line that continues is indented by eight
+spaces, and a row that starts at the left edge is the tool's own (a `with arguments` line starts after two spaces).
+So text from a value does not start a row, however long the value is, in a window at least 77 columns wide. A break
+falls between characters as printed, with a `\uXXXX`, `\"` or `\\` kept whole, and not next to a space where that can
+be avoided: put the rows together without the eight spaces and you have the line. The count line holds nothing from
+the change and is printed whole.
+
 Warnings come directly under the line they belong to (under an app line, before its `with arguments` lines):
 
 | Warning | When |
@@ -212,7 +221,7 @@ prints (messages, the `show` output, paths) has control and format characters wr
 
 These measures make a misleading change harder to write; they do not replace reading the lines. Read each of them and
 the count line, and answer `n` when anything is unclear. Limits that remain: a summary may be up to 8,000 characters
-long (100 rows of a window 80 columns wide), which is more than a small window shows at once, so scroll up to the first
+long (more than 100 rows), which is more than a small window shows at once, so scroll up to the first
 line (`Creating a new policy ...` or `Changing the policy ...`) before you answer; and the tool cannot tell whether a
 path that looks right is the program you mean.
 

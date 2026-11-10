@@ -341,9 +341,10 @@ public static class PolicyCommand
             Print(output, "Nothing to change.");
             return 0;
         }
-        if (result.Summary.Prepend(first).Sum(line => Visible(line).Length + 1) > MaxSummaryLength)
+        var rows = PolicyChange.Printed(result.Summary);
+        if (rows.Prepend(Visible(first)).Sum(row => row.Length + 1) > MaxSummaryLength)
             return Fail(output, $"the summary of this change would be longer than {MaxSummaryLength} characters; split it into smaller changes");
-        foreach (var line in result.Summary) Print(output, line);
+        foreach (var row in rows) Print(output, row);
         if (!arguments.Yes)
         {
             Print(output, "Apply these changes? [y/N] ", endLine: false);

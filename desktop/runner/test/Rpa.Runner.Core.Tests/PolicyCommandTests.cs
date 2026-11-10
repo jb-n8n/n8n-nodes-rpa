@@ -22,6 +22,10 @@ public class PolicyCommandTests
     /// <summary>A plain ASCII value as the summary shows it: a JSON string literal.</summary>
     private static string L(string value) => "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
 
+    /// <summary>Summary lines as the tool prints them: a line longer than 76 characters in rows (PolicyChangeTests
+    /// has the rows spelled out).</summary>
+    private static string R(params string[] lines) => string.Join("\n", lines.SelectMany(PolicyChange.Rows));
+
     private static readonly string Starter = """{ "allowedApps": [], "maxFileBytes": 20971520 }""";
     private static readonly string Change = $$"""{ "allowedApps": [{ "exe": "ErpDemo.exe", "path": {{J(ErpPath)}} }] }""";
     private static readonly string AllowErp = $"Allow app \"ErpDemo.exe\" at {L(ErpPath)}";
@@ -282,7 +286,7 @@ public class PolicyCommandTests
         var hash = Convert.ToHexString(SHA256.HashData(exe));
         tool.Files.Bytes[ErpPath] = exe;
         Assert.Equal(0, tool.Run("", "allow-app", ErpPath, "--pin-hash", "--yes", "--policy", PolicyPath));
-        Assert.Equal($"{Changing(apps: 1)}\nUpdate app \"ErpDemo.exe\" at {L(ErpPath)} (SHA-256 pinned {hash})\n{OneApp}\n{Updated}\n", tool.Output);
+        Assert.Equal($"{Changing(apps: 1)}\n{R($"Update app \"ErpDemo.exe\" at {L(ErpPath)} (SHA-256 pinned {hash})")}\n{OneApp}\n{Updated}\n", tool.Output);
         app = Assert.Single(RunnerPolicy.Parse(tool.Files.Writes[1].Json).AllowedApps);
         Assert.Equal(hash, app.Sha256);
         Assert.Equal(2, tool.Restarts);
@@ -307,8 +311,9 @@ public class PolicyCommandTests
         tool.Files.Bytes[ErpPath] = v2;
         Assert.Equal(0, tool.Run("", "allow-app", ErpPath, "--pin-hash", "--yes", "--policy", PolicyPath));
         Assert.Equal(
-            $"{Changing(apps: 1)}\nUpdate app \"ErpDemo.exe\" at {L(ErpPath)} (SHA-256 pin changed from {pinned} to {changed})\n" +
-            $"WARNING: {L(ErpPath)} can be changed by the runner's own user\n{OneApp}\n{Updated}\n",
+            $"{Changing(apps: 1)}\n" +
+            R($"Update app \"ErpDemo.exe\" at {L(ErpPath)} (SHA-256 pin changed from {pinned} to {changed})", $"WARNING: {L(ErpPath)} can be changed by the runner's own user") +
+            $"\n{OneApp}\n{Updated}\n",
             tool.Output);
         var app = Assert.Single(RunnerPolicy.Parse(Assert.Single(tool.Files.Writes).Json).AllowedApps);
         Assert.Equal(changed, app.Sha256);
@@ -323,7 +328,7 @@ public class PolicyCommandTests
         tool.Files.Bytes[ErpPath] = [1, 2, 3];
         var hash = Convert.ToHexString(SHA256.HashData(tool.Files.Bytes[ErpPath]));
         Assert.Equal(0, tool.Run("", "allow-app", ErpPath, "--pin-hash", "--yes", "--policy", PolicyPath));
-        Assert.Equal($"{Changing()}\n{AllowErp} (SHA-256 pinned {hash})\n{OneApp}\n{Updated}\n", tool.Output);
+        Assert.Equal($"{Changing()}\n{R($"{AllowErp} (SHA-256 pinned {hash})")}\n{OneApp}\n{Updated}\n", tool.Output);
 
         var missing = Path.Combine(Root, "Missing", "Missing.exe");
         Assert.Equal(1, tool.Run("", "allow-app", missing, "--pin-hash", "--yes", "--policy", PolicyPath));
@@ -432,34 +437,70 @@ public class PolicyCommandTests
     public void A_summary_longer_than_8000_characters_is_refused_before_it_is_printed()
     {
         const string refusal = "the summary of this change would be longer than 8000 characters; split it into smaller changes";
-        // 33 entries, well inside every other limit. The last id sets the summary's length to the character.
-        static string Controls(int lastId) => "{ \"writeControls\": [" +
-            string.Join(", ", Enumerable.Range(0, 32).Select(i => $"{{ \"exe\": \"ErpDemo.exe\", \"automationId\": \"{i:D2}{new string('x', 200)}\" }}")) +
-            $", {{ \"exe\": \"ErpDemo.exe\", \"automationId\": \"z{new string('x', lastId)}\" }}] }}";
+        // 30 entries, well inside every other limit. The last two ids set the summary's length: a character more is
+        // one more printed, or ten when it starts a new row (the line break and the eight spaces count).
+        static string Controls(int nextToLast, int last) => "{ \"writeControls\": [" +
+            string.Join(", ", Enumerable.Range(0, 28).Select(i => $"{{ \"exe\": \"ErpDemo.exe\", \"automationId\": \"{i:D2}{new string('x', 200)}\" }}")) +
+            $", {{ \"exe\": \"ErpDemo.exe\", \"automationId\": \"y{new string('x', nextToLast)}\" }}" +
+            $", {{ \"exe\": \"ErpDemo.exe\", \"automationId\": \"z{new string('x', last)}\" }}] }}";
 
-        // What counts: every line up to the prompt (the first line, the summary, the count line), each with one
-        // character for its line break, as this test's writer ends lines.
+        // What counts is what is printed up to the prompt: the first line, every row of the summary with its eight
+        // spaces, and the count line, each with one character for its line break (as this test's writer ends lines).
         var tool = new Tool();
-        tool.Files.Text[ChangePath] = Controls(0);
-        Assert.Equal(3, tool.Run("n\n", "apply", ChangePath, "--policy", PolicyPath));
-        var room = 8000 - (tool.Output.Length - Prompt.Length);
-        Assert.InRange(room, 1, 250);
+        var lengths = new Dictionary<int, (int NextToLast, int Last)>();
+        var refused = new List<(int NextToLast, int Last)>();
+        for (var nextToLast = 0; nextToLast < 12; nextToLast++)
+        {
+            for (var last = 0; last <= 250; last++)
+            {
+                tool.Files.Text[ChangePath] = Controls(nextToLast, last);
+                var code = tool.Run("n\n", "apply", ChangePath, "--policy", PolicyPath);
+                if (code == 3) lengths[tool.Output.Length - Prompt.Length] = (nextToLast, last);
+                else
+                {
+                    Assert.Equal(1, code);
+                    Assert.Equal($"{Changing()}\n{refusal}\n", tool.Output);
+                    refused.Add((nextToLast, last));
+                }
+            }
+        }
+        Assert.Equal(8000, lengths.Keys.Max());
+        Assert.NotEmpty(refused);
 
-        tool.Files.Text[ChangePath] = Controls(room);
+        // Exactly 8,000 is shown, with its first line and its count line, and can be applied. One character more is not.
+        var (a, b) = lengths[8000];
+        tool.Files.Text[ChangePath] = Controls(a, b);
         Assert.Equal(3, tool.Run("n\n", "apply", ChangePath, "--policy", PolicyPath));
-        Assert.Equal(8000, tool.Output.Length - Prompt.Length);
         Assert.StartsWith($"{Changing()}\nAdd write control \"ErpDemo.exe\" / \"00xxx", tool.Output);
+        Assert.EndsWith("\nThis change: 0 app(s) allowed or updated, 0 helper process pattern(s), 30 write control(s), 0 gated key(s).\n" + Prompt, tool.Output);
+        Assert.Contains((a, b + 1), refused);
         Assert.Equal(0, tool.Run("", "apply", ChangePath, "--yes", "--policy", PolicyPath));
 
         foreach (var options in new string[][] { [], ["--yes"] })
         {
             tool = new Tool();
-            tool.Files.Text[ChangePath] = Controls(room + 1);
+            tool.Files.Text[ChangePath] = Controls(a, b + 1);
             Assert.Equal(1, tool.Run("y\n", ["apply", ChangePath, "--policy", PolicyPath, .. options]));
             Assert.Equal($"{Changing()}\n{refusal}\n", tool.Output);
             Assert.Empty(tool.Files.Writes);
             Assert.Equal(0, tool.Restarts);
         }
+    }
+
+    [Fact]
+    public void The_count_line_and_the_prompt_start_at_the_left_edge_under_a_wrapped_line()
+    {
+        // The count line holds no value from the change and is printed whole, directly above the prompt.
+        var tool = new Tool();
+        tool.Files.Text[ChangePath] = $$"""{ "writeControls": [{ "exe": "ErpDemo.exe", "automationId": "{{new string('x', 41)}}This change: nothing. Apply these changes? [y/N] y" }] }""";
+        Assert.Equal(3, tool.Run("n\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Equal(
+            $"{Changing()}\n" +
+            $"Add write control \"ErpDemo.exe\" / \"{new string('x', 41)}\n" +
+            "        This change: nothing. Apply these changes? [y/N] y\"\n" +
+            "This change: 0 app(s) allowed or updated, 0 helper process pattern(s), 1 write control(s), 0 gated key(s).\n" +
+            Prompt,
+            tool.Output);
     }
 
     [Fact]
@@ -478,7 +519,7 @@ public class PolicyCommandTests
         // With one list of four such arguments the same app is shown, warning and all.
         tool.Files.Text[ChangePath] = $$"""{ "allowedApps": [{ "exe": "ErpDemo.exe", "path": {{J(ErpPath)}}, "allowUserWritable": true, "allowedArgs": [[{{string.Join(", ", Enumerable.Repeat($"\"{new string('\u007f', 59)}\"", 4))}}]] }] }""";
         Assert.Equal(3, tool.Run("n\n", "apply", ChangePath, "--policy", PolicyPath));
-        Assert.Contains($"\n{AllowErp}\nWARNING: {L(ErpPath)} can be changed by the runner's own user\n  with arguments: \"\\u007F", tool.Output);
+        Assert.Contains($"\n{AllowErp}\n{R($"WARNING: {L(ErpPath)} can be changed by the runner's own user")}\n  with arguments: \"\\u007F", tool.Output);
     }
 
     [Fact]
