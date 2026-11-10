@@ -102,6 +102,9 @@ Invoke-WebRequest -UseBasicParsing -Uri "$base/rpa-windows-x64.zip" -OutFile rpa
 Invoke-WebRequest -UseBasicParsing -Uri "$base/rpa-windows-x64.zip.sha256" -OutFile rpa-windows-x64.zip.sha256
 ```
 
+In a shell that runs as another account, such as SYSTEM in a run-command tool, `$env:USERPROFILE` is that account's
+profile and the files land there. That is fine: the next steps work in `$download` and install from `$package`.
+
 **Check the hash.** `Get-FileHash` computes the zip's SHA-256; the `.sha256` file holds the published one (in lower
 case; PowerShell's `-eq` ignores case):
 
@@ -171,6 +174,15 @@ it); a new window needs it again, which is why later sections start scripts anot
 for the password without showing it; type a password that meets your Windows password rules. That password is for
 signing the bot user in by hand (section 4). To have Windows sign the bot user in by itself instead, read section 4
 first and use `-AutoSignIn`.
+
+In a shell that cannot answer a question, such as a run-command tool, nobody can answer `Read-Host`. There, after
+reading section 4, run the second line as:
+
+```powershell
+.\Install-Rpa.ps1 -AllowFrom <n8n address> -AutoSignIn -Force
+```
+
+The installer then gives the new user a password nobody learns, stores it for automatic sign-in, and asks nothing.
 
 The parameters:
 
@@ -253,9 +265,12 @@ Sign in as rpa-runner, then run Show-RpaConnection.ps1:
 If rpa-runner is already signed in, sign out and sign in again.
 ```
 
-The steps listed depend on the parameters (`create user` only for a new user, the sign-in steps only with
-`-AutoSignIn`). The installer prints no secret. Exit codes: 0 installed, 1 refused or failed, 3 declined at a
-question. When it refuses, it says why and `Nothing was changed.`; fix the cause and run the same command again.
+The steps listed depend on the parameters (`create user` only for a new user). With `-AutoSignIn`, three more follow
+`write install.json` (`store sign-in password`, `turn on automatic sign-in`, `keep the desktop unlocked`), and the line
+`Automatic sign-in is on: Windows signs rpa-runner in at its next start.` comes before `Sign in as rpa-runner`: the
+sign-in happens when you restart the machine (`Restart-Computer`, section 4). The installer prints no secret. Exit
+codes: 0 installed, 1 refused or failed, 3 declined at a question. When it refuses, it says why and
+`Nothing was changed.`; fix the cause and run the same command again.
 
 ### What the installer changes on the machine
 
@@ -449,9 +464,11 @@ Paste each token straight into its n8n credential field below and nowhere else. 
 lines through the PowerShell host's own writer, not through a cmdlet or the pipeline, so that no cmdlet's parameters
 carry a token (PowerShell's module logging records those). A transcript records what the window shows, though: where
 PowerShell transcription is turned on (by Group Policy, for example), the transcript can hold the tokens. A
-run-command tool keeps the output of a command: do not run `-ShowTokens` through one, or change both tokens
-afterwards (section 10). A token that went anywhere else is changed as in section 10. When you have copied the
-values, close the window or run `Clear-Host`, so that the tokens do not stay on the screen.
+run-command tool keeps the output of a command, so whoever can read its history can read both tokens. If such a tool
+is your only shell, run `-ShowTokens` there, copy the tokens into n8n, limit who can read that history, and change
+both tokens (section 10) once you have a shell that keeps no output. A token that went anywhere else is changed as in
+section 10. When you have copied the values, close the window or run `Clear-Host`, so that the tokens do not stay on
+the screen.
 
 The fingerprints are read from files the bot user can write (the runner's start line in `logs\runner.out.log`, the
 browser's `browser-cert.pem`). So copy them while you trust what has run as the bot user, best right after the
@@ -596,6 +613,14 @@ password typed from the variables does not appear in the output.
 If the run fails, the item has an `error` such as `runner_unavailable: ...` or `policy_violation: ...`; section 11
 says what each means.
 
+### Try the browser
+
+Create a new workflow with one RPA node. Choose **Take a screenshot of a page** (operation **Screenshot**), set
+**URL** to `https://example.com`, leave **Capture** at Full Page, and pick your **RPA Browser** credential (section 6).
+While it runs, a browser window opens on the bot user's desktop. The output item has `url` `https://example.com/`,
+`title` `Example Domain` and `status` `200`, and the **Binary** tab has the page as a PNG in `screenshot`
+(`screenshot.png`).
+
 ## 8. Allowing your own app
 
 The runner starts only the apps its policy lists, at the path the policy names. Install your app where only
@@ -699,8 +724,9 @@ To remove the data directory too, add `-RemoveData`. It is refused while the bot
 It ends with `RPA is removed.` and a `Removed:` line for `C:\ProgramData\RPA Runner` and, when it is still there, for
 the browser's temporary folder in the bot user's profile (step 1 already removes it when no process of the bot user
 runs; a `Kept:` line with the reason when it could not remove it). The uninstaller never removes a Windows user;
-remove one the installer created with `Remove-LocalUser rpa-runner` when you no longer need it. Then delete the
-package folders and the downloads.
+remove one the installer created with `Remove-LocalUser rpa-runner` when you no longer need it. Windows keeps its
+profile folder (`C:\Users\rpa-runner`); remove it in Settings (System, About, Advanced system settings, User
+Profiles) or leave it. Then delete the package folders and the downloads.
 
 When the uninstaller could not put a setting back, it lists it and keeps the list in
 `C:\Program Files\RPA Runner\uninstall-leftovers.json`. The next install only records those settings, with what they
@@ -778,6 +804,7 @@ the form `<code>: <message>`.
 | `The desktop runner at ... presented a certificate with fingerprint ..., which is not the fingerprint in the RPA Desktop Runner credential. Nothing was sent.` | A fingerprint mismatch: the certificate is not the one n8n has. | Run `Show-RpaConnection.ps1`. If its fingerprint is the one presented, the certificate was made again (section 10): if nobody changed the certificate on purpose, find out what did before you accept the new fingerprint, then put it in the credential. If not, something else answers at that address: leave the credential as it is and find out what. `runner-<yyyymmdd>.log` says `generated a new self-signed certificate` when the runner made one. |
 | `The browser server's certificate does not match the Certificate Fingerprint in the RPA Browser credential.` | The same, for the browser. | As above, with the `Browser fingerprint`. |
 | `The browser server at ... refused the token. Check the Token in the RPA Browser credential.` | The browser's token in n8n is wrong. | Copy the `Browser token` again (section 6). |
+| `Could not connect to the browser server at wss://...:3000/. Is it running? ...` (in a run: `browser_unavailable: ...`) | n8n could not connect to the browser: it is not listening, or it did not answer in time. | Is the bot user signed in? `Show-RpaConnection.ps1` says `Browser: not listening: see ...\logs\browser.err.log` when it is not listening: read `browser.err.log` and `start-browser.log`. If it listens, test again: the first connection after a sign-in can take longer. If it still fails, check the network path and the firewall rule `RPA-Browser-In`, as for the runner. |
 | `Save as PDF needs headless Chromium` (the run fails `incomplete`) | A known limit of this install: the browser opens with a window, and Save as PDF needs a headless browser. | Run Save as PDF steps on a headless browser service, with its own RPA Browser credential (README, [Save as PDF](../../README.md#save-as-pdf)). |
 | `busy: the desktop runner is busy with another run` | The runner runs one run at a time, and another one held it longer than this run waited (its lease plus 15 seconds). | Nothing, or run less often. `runner-<yyyymmdd>.log` shows the runs. |
 | `policy_violation: ... application "ErpDemo.exe" is not in the runner's allowedApps` | The policy does not allow the app. | Apply the change (section 7) or `allow-app` (section 8). `RpaPolicy.exe show` prints the policy. |

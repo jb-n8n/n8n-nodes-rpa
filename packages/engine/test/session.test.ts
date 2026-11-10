@@ -679,7 +679,7 @@ describe('browser endpoint rules and golden connect errors', () => {
     expect(accepted).toBeInstanceOf(BrowserUnavailableError);
     expect((accepted as Error).message).toBe(browserUnreachable('ws://browser:3000/'));
     expect((accepted as Error).message).toBe(
-      'Could not connect to the browser server at ws://browser:3000/. Is it running? Start it with: docker compose up -d browser (README: Where the browser runs).');
+      'Could not connect to the browser server at ws://browser:3000/. Is it running? With the compose stack: docker compose up -d browser. On a Windows install: is the bot account signed in? (README: Where the browser runs).');
   });
   it('a compose browser that is stopped (its name does not resolve) gets the golden unreachable message', async () => {
     const endpoint = { mode: 'playwright' as const, wsUrl: 'ws://browser:3000/?x=1', privateNetwork: true, token: 'tok-123456' };
