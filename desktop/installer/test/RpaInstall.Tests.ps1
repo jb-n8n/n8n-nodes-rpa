@@ -386,6 +386,17 @@ Describe 'Get-RpaInstallPlan' {
       [array]::IndexOf($plan.Steps, 'write browser-token') | Should -BeGreaterThan ([array]::IndexOf($plan.Steps, 'protect the data directory'))
     }
 
+    It 'an upgrade creates a local user that is missing, as a first install does' {
+      $facts = New-InstalledFacts @{ UserExists = $false }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ UserPassword = New-TestPassword }) -Facts $facts
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Steps[0..2] | Should -BeExactly @('stop running services', 'copy program files', 'create user')
+
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts $facts
+      $plan.Refusals | Should -BeExactly @('Give -UserPassword for the new user rpa-runner, or use -AutoSignIn to have a random password stored for automatic sign-in.')
+      $plan.Steps.Count | Should -Be 0
+    }
+
     It 'a domain user that exists gets tasks and no create user step' {
       $parameters = New-TestParameters @{ User = 'CORP\svc-rpa' }
       $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts @{ UserIsDomain = $true; UserExists = $true })
@@ -446,6 +457,14 @@ Describe 'Get-RpaInstallPlan' {
       foreach ($step in $script:SignInSteps) { $plan.Steps | Should -Not -Contain $step }
     }
 
+    It 'an upgrade with -AutoSignIn whose recorded user is missing creates it and sets automatic sign-in up again' {
+      $facts = New-InstalledFacts @{ UserExists = $false; InstalledAutoSignInForUser = $true }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ AutoSignIn = $true }) -Facts $facts
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Steps | Should -Contain 'create user'
+      @($plan.Steps | Where-Object { $script:SignInSteps -contains $_ }) | Should -BeExactly $script:SignInSteps
+    }
+
     It 'that upgrade with -UserPassword stores the password again and changes nothing else about sign-in' {
       $parameters = New-TestParameters @{ AutoSignIn = $true; UserPassword = New-TestPassword }
       $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-InstalledFacts @{ InstalledAutoSignInForUser = $true })
@@ -466,6 +485,136 @@ Describe 'Invoke-RpaInstallPlan' {
     $plan = @{ Refusals = @('no'); Warnings = @(); Steps = @() }
     { Invoke-RpaInstallPlan -Plan $plan -Parameters (New-TestParameters) -SourceDir $script:InstallerDir } |
       Should -Throw -ExpectedMessage 'The plan has refusals; nothing was changed.'
+  }
+}
+
+Describe 'A failed install' {
+  BeforeAll {
+    # The state of a first install with -AutoSignIn that created its user, wrote install.json and then changed two
+    # settings: A existed as an empty string, B did not exist.
+    function New-FailedRun([string]$InstallFile) {
+      InModuleScope RpaInstall -Parameters @{ File = $InstallFile } {
+        $changes = @(
+          (New-Object psobject -Property ([ordered]@{ kind = 'registry'; key = 'HKLM\SOFTWARE\Example'; name = 'A'; existed = $true; type = 'REG_SZ'; value = '' }))
+          (New-Object psobject -Property ([ordered]@{ kind = 'registry'; key = 'HKLM\SOFTWARE\Example'; name = 'B'; existed = $false }))
+        )
+        $run = @{
+          Layout = @{ InstallFile = $File }; Account = @{ Display = 'rpa-runner'; Name = 'rpa-runner' }; Sid = 'S-1-5-21-1-2-3-1001'
+          Upgrade = $false; AutoSignInBefore = $false; NewChanges = $changes; CreatedUser = $true; WroteInstallFile = $true
+          Install = [ordered]@{ version = '0.0.0'; user = 'rpa-runner'; autoSignIn = $true; signInChanges = $changes }
+        }
+        Save-RpaInstallFile $run
+        $run
+      }
+    }
+  }
+
+  It 'removes the user it created and install.json when everything it changed is put back' {
+    Mock -ModuleName RpaInstall Restore-RpaSignInChanges { @() }
+    Mock -ModuleName RpaInstall Remove-RpaUser { }
+    $file = Join-Path $TestDrive 'undone.json'
+    $run = New-FailedRun $file
+    $result = InModuleScope RpaInstall -Parameters @{ Run = $run } { Undo-RpaFailedRun $Run 6>$null }
+    @($result.NotPutBack).Count | Should -Be 0
+    $result.UserKept | Should -BeNullOrEmpty
+    Should -Invoke -ModuleName RpaInstall Remove-RpaUser -Times 1 -Exactly
+    $file | Should -Not -Exist
+  }
+
+  It 'keeps the user it created and the record of what it could not put back' {
+    Mock -ModuleName RpaInstall Restore-RpaSignInChanges { param($Changes) @(@{ Change = $Changes[0]; Text = 'registry HKLM\SOFTWARE\Example A: Access is denied.' }) }
+    Mock -ModuleName RpaInstall Remove-RpaUser { }
+    $file = Join-Path $TestDrive 'left.json'
+    $run = New-FailedRun $file
+    $result = InModuleScope RpaInstall -Parameters @{ Run = $run } { Undo-RpaFailedRun $Run 6>$null }
+    $result.NotPutBack | Should -BeExactly @('registry HKLM\SOFTWARE\Example A: Access is denied.')
+    $result.UserKept | Should -BeExactly 'rpa-runner'
+    Should -Invoke -ModuleName RpaInstall Remove-RpaUser -Times 0 -Exactly
+
+    # install.json stays: it holds the one record that could not be put back, and does not say that automatic sign-in is on.
+    $kept = Get-Content -Raw -LiteralPath $file | ConvertFrom-Json
+    $kept.autoSignIn | Should -BeFalse
+    @($kept.signInChanges).Count | Should -Be 1
+    $kept.signInChanges[0].name | Should -BeExactly 'A'
+    $kept.signInChanges[0].existed | Should -BeTrue
+    $kept.signInChanges[0].value | Should -BeExactly ''
+  }
+}
+
+Describe 'Registry values in install.json' {
+  # What the registry holds (the .NET kind and data) goes into install.json as a type and a value, and comes back
+  # from there as the same data.
+  It 'keeps <Why> so that it comes back the same' -ForEach @(
+    @{ Why = 'an empty string'; Kind = 'String'; Type = 'REG_SZ'; Data = ''; Value = '' }
+    @{ Why = 'a string with spaces and quotes'; Kind = 'String'; Type = 'REG_SZ'; Data = 'say "hi" to C:\Program Files\x /d %PATH%'; Value = 'say "hi" to C:\Program Files\x /d %PATH%' }
+    @{ Why = 'a string with variables'; Kind = 'ExpandString'; Type = 'REG_EXPAND_SZ'; Data = '%SystemRoot%\system32'; Value = '%SystemRoot%\system32' }
+    @{ Why = 'the number 0'; Kind = 'DWord'; Type = 'REG_DWORD'; Data = 0; Value = '0' }
+    @{ Why = 'the largest 32-bit number'; Kind = 'DWord'; Type = 'REG_DWORD'; Data = -1; Value = '4294967295' }
+    @{ Why = 'the largest 64-bit number'; Kind = 'QWord'; Type = 'REG_QWORD'; Data = [long]-1; Value = '18446744073709551615' }
+    @{ Why = 'a list of strings'; Kind = 'MultiString'; Type = 'REG_MULTI_SZ'; Data = [string[]]@('one', 'two words'); Value = @('one', 'two words') }
+    @{ Why = 'a list of one string'; Kind = 'MultiString'; Type = 'REG_MULTI_SZ'; Data = [string[]]@('one'); Value = @('one') }
+    @{ Why = 'an empty list'; Kind = 'MultiString'; Type = 'REG_MULTI_SZ'; Data = [string[]]@(); Value = @() }
+    @{ Why = 'bytes'; Kind = 'Binary'; Type = 'REG_BINARY'; Data = [byte[]]@(0, 16, 255); Value = '0010FF' }
+    @{ Why = 'no bytes'; Kind = 'Binary'; Type = 'REG_BINARY'; Data = [byte[]]@(); Value = '' }
+    @{ Why = 'bytes without a type'; Kind = 'None'; Type = 'REG_NONE'; Data = [byte[]]@(7); Value = '07' }
+  ) {
+    $recorded = InModuleScope RpaInstall -Parameters @{ Kind = $Kind; Data = $Data } { ConvertFrom-RpaRegistryData $Kind $Data }
+    $recorded.type | Should -BeExactly $Type
+    @($recorded.value) | Should -BeExactly @($Value)
+
+    # Through install.json and back.
+    $record = New-Object psobject -Property ([ordered]@{ kind = 'registry'; existed = $true; type = $recorded.type; value = $recorded.value })
+    $read = (ConvertTo-Json -InputObject @{ signInChanges = @($record) } -Depth 5 | ConvertFrom-Json).signInChanges[0]
+    $back = InModuleScope RpaInstall -Parameters @{ Read = $read } { , (ConvertTo-RpaRegistryData $Read.type $Read.value) }
+    , $back | Should -BeOfType $Data.GetType()
+    @($back).Count | Should -Be @($Data).Count
+    for ($i = 0; $i -lt @($Data).Count; $i++) { @($back)[$i] | Should -BeExactly @($Data)[$i] }
+  }
+
+  It 'refuses a kind of value it does not record' {
+    { InModuleScope RpaInstall { ConvertFrom-RpaRegistryData 'Unknown' $null } } | Should -Throw -ExpectedMessage '*does not record*'
+    { InModuleScope RpaInstall { ConvertTo-RpaRegistryData 'REG_LINK' 'x' } } | Should -Throw -ExpectedMessage '*not a registry type the installer writes*'
+  }
+
+  # reg.exe gets no data when the data is an empty string (Windows PowerShell 5.1 leaves it out of the command line).
+  It 'the module uses reg.exe only to load and unload a registry file' {
+    $source = Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir 'RpaInstall.psm1')
+    $uses = @([regex]::Matches($source, "reg\.exe @\('(\w+)'") | ForEach-Object { $_.Groups[1].Value })
+    $uses | Should -BeExactly @('load', 'unload')
+    $source | Should -Not -Match "'reg(\.exe)?'"
+  }
+
+  It 'writes values to the real registry and puts back what was there: an empty string, quotes, a number, a list, nothing' -Skip:($env:OS -ne 'Windows_NT') {
+    $key = 'HKU\{0}\Software\RpaInstallTest-{1}' -f [Security.Principal.WindowsIdentity]::GetCurrent().User.Value, [guid]::NewGuid().ToString('N')
+    try {
+      InModuleScope RpaInstall -Parameters @{ Key = $key } {
+        $before = @(
+          @{ Name = 'empty'; Type = 'REG_SZ'; Value = '' }
+          @{ Name = 'quoted'; Type = 'REG_SZ'; Value = 'say "hi" to C:\Program Files\x /d' }
+          @{ Name = 'number'; Type = 'REG_DWORD'; Value = '4294967295' }
+          @{ Name = 'list'; Type = 'REG_MULTI_SZ'; Value = @('a b', 'c') }
+        )
+        foreach ($value in $before) { Set-RpaRegistryValue $Key $value.Name $value.Type $value.Value }
+        # The records as install.json keeps them, read back from its text.
+        $records = @($before.Name + 'missing' | ForEach-Object { New-Object psobject -Property (Get-RpaRegistryRecord $Key $_) })
+        $records = @((ConvertTo-Json -InputObject @{ signInChanges = $records } -Depth 5 | ConvertFrom-Json).signInChanges)
+        ($records | Where-Object { $_.name -eq 'empty' }).value | Should -BeExactly ''
+        ($records | Where-Object { $_.name -eq 'missing' }).existed | Should -BeFalse
+
+        foreach ($record in $records) { Set-RpaRegistryValue $Key $record.name 'REG_SZ' 'changed by the test' }
+        foreach ($record in $records) { Restore-RpaSignInChange $record }
+
+        foreach ($value in $before) {
+          $now = Get-RpaRegistryRecord $Key $value.Name
+          $now.existed | Should -BeTrue
+          $now.type | Should -BeExactly $value.Type
+          @($now.value) | Should -BeExactly @($value.Value)
+        }
+        (Get-RpaRegistryRecord $Key 'missing').existed | Should -BeFalse
+      }
+    } finally {
+      Remove-Item -LiteralPath ('Registry::HKEY_USERS\' + $key.Substring(4)) -Recurse -Force -ErrorAction SilentlyContinue
+    }
   }
 }
 

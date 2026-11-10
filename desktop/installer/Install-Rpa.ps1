@@ -248,7 +248,23 @@ if ($upgrade) { Write-Host 'Upgrading RPA:' } else { Write-Host 'Installing RPA:
 try { Invoke-RpaInstallPlan -Plan $plan -Parameters $parameters -SourceDir $package }
 catch {
   Write-Host $_.Exception.Message
-  Write-Host 'The install did not finish. Fix the cause and run Install-Rpa.ps1 again with the same parameters.'
+  $notPutBack = @($_.Exception.Data['NotPutBack'] | Where-Object { $_ })
+  $userKept = $_.Exception.Data['UserKept']
+  if ($notPutBack.Count -eq 0) {
+    Write-Host 'The install did not finish. Fix the cause and run Install-Rpa.ps1 again with the same parameters.'
+  } else {
+    # The undo could not put everything back, so it removed nothing more. What is left, and what to do about it.
+    Write-Host 'The install did not finish, and the settings listed above could not be put back.'
+    Write-Host ('  They stay recorded in {0}, with what they were before:' -f (Get-RpaLayout).InstallFile)
+    Write-Host '  Uninstall-Rpa.ps1 and the next run of Install-Rpa.ps1 use that record.'
+    Write-Host '  The set-up of automatic sign-in did not finish. What the earlier steps installed is left in place.'
+    if ($userKept) {
+      Write-Host ('  The user {0}, which this run created, is kept. Its password is known to nobody.' -f $userKept)
+      Write-Host ('  What to do: fix the cause, remove the user {0}, and run Install-Rpa.ps1 again with the same parameters.' -f $userKept)
+    } else {
+      Write-Host '  What to do: fix the cause and run Install-Rpa.ps1 again with the same parameters.'
+    }
+  }
   exit 1
 }
 

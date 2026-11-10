@@ -99,8 +99,10 @@ function Get-RpaInstallPlan {
   $upgrade = [bool]$Facts.Installed
   $runnerPort = [int]$Parameters.RunnerPort
   $browserPort = [int]$Parameters.BrowserPort
+  # A local user that does not exist is created, on a first install and on an upgrade (someone removed it since).
+  $createUser = -not $Facts.UserExists -and -not $Facts.UserIsDomain
   # Automatic sign-in that an earlier run turned on for this same user stays as it is.
-  $signInKept = $autoSignIn -and $upgrade -and [bool]$Facts.InstalledAutoSignInForUser
+  $signInKept = $autoSignIn -and $upgrade -and [bool]$Facts.InstalledAutoSignInForUser -and [bool]$Facts.UserExists
   $allowFrom = $null
   $refusals = New-Object Collections.Generic.List[string]
   $warnings = New-Object Collections.Generic.List[string]
@@ -141,7 +143,7 @@ function Get-RpaInstallPlan {
     if ($autoSignIn -and $Facts.UserExists -and $hasPassword -and $Facts.UserPasswordWrong) {
       $refusals.Add(('The password given for {0} is not correct.' -f $user))
     }
-    if (-not $upgrade -and -not $Facts.UserExists -and -not $Facts.UserIsDomain -and -not $autoSignIn -and -not $hasPassword) {
+    if ($createUser -and -not $autoSignIn -and -not $hasPassword) {
       $refusals.Add(('Give -UserPassword for the new user {0}, or use -AutoSignIn to have a random password stored for automatic sign-in.' -f $user))
     }
 
@@ -195,11 +197,12 @@ function Get-RpaInstallPlan {
 
   if ($refusals.Count -eq 0) {
     # An upgrade replaces the program files and keeps the user, the policy and both tokens (and the certificates,
-    # which no step touches). The program files come before the user, so that a failed copy leaves no new user behind.
+    # which no step touches); what is missing of them is made again. The program files come before the user, so that
+    # a failed copy leaves no new user behind.
     # install.json is written before the sign-in steps, so that the uninstaller knows about them even when one fails.
     if ($upgrade) { $steps.Add('stop running services') }
     $steps.Add('copy program files')
-    if (-not $upgrade -and -not $Facts.UserExists) { $steps.Add('create user') }
+    if ($createUser) { $steps.Add('create user') }
     $steps.Add('protect the data directory')
     # A file that is there is never written again; one that is missing is written, on a first install and on an upgrade.
     foreach ($name in $script:DataFiles.Keys) {
@@ -450,8 +453,73 @@ function Invoke-RpaNative([string]$Exe, [string[]]$Arguments) {
   }
 }
 
-function Set-RpaRegistryValue([string]$Key, [string]$Name, [string]$Type, [string]$Data) {
-  Invoke-RpaNative reg.exe @('add', $Key, '/v', $Name, '/t', $Type, '/d', $Data, '/f')
+# ---------------------------------------------------------------------------------------------------------------------
+# Registry values, read and written through .NET (not reg.exe: Windows PowerShell 5.1 leaves an empty string out of a
+# tool's command line, and quotes in the data would need escaping). install.json keeps a value as its type (REG_SZ,
+# REG_DWORD, ...) and its data: a string as it is (also an empty one), a number in decimal, a list of strings as a
+# list, bytes as hex pairs.
+# ---------------------------------------------------------------------------------------------------------------------
+
+$script:RegistryKinds = @{
+  REG_SZ = 'String'; REG_EXPAND_SZ = 'ExpandString'; REG_DWORD = 'DWord'; REG_QWORD = 'QWord'
+  REG_MULTI_SZ = 'MultiString'; REG_BINARY = 'Binary'; REG_NONE = 'None'
+}
+
+# What the registry returned for a value, as the type and data install.json keeps. -Kind is the .NET kind's name.
+function ConvertFrom-RpaRegistryData([string]$Kind, $Data) {
+  switch ($Kind) {
+    'String' { return @{ type = 'REG_SZ'; value = [string]$Data } }
+    'ExpandString' { return @{ type = 'REG_EXPAND_SZ'; value = [string]$Data } }
+    'DWord' { return @{ type = 'REG_DWORD'; value = [string][BitConverter]::ToUInt32([BitConverter]::GetBytes([int]$Data), 0) } }
+    'QWord' { return @{ type = 'REG_QWORD'; value = [string][BitConverter]::ToUInt64([BitConverter]::GetBytes([long]$Data), 0) } }
+    'MultiString' { return @{ type = 'REG_MULTI_SZ'; value = [string[]]@($Data) } }
+    'Binary' { return @{ type = 'REG_BINARY'; value = -join (@($Data) | ForEach-Object { ([byte]$_).ToString('X2') }) } }
+    'None' { return @{ type = 'REG_NONE'; value = -join (@($Data) | ForEach-Object { ([byte]$_).ToString('X2') }) } }
+  }
+  throw ('a registry value of the kind {0}, which the installer does not record' -f $Kind)
+}
+
+# The object .NET takes for a recorded type and data. Lists and bytes come back wrapped, so that PowerShell hands the
+# caller one array and not its elements.
+function ConvertTo-RpaRegistryData([string]$Type, $Value) {
+  switch ($Type) {
+    'REG_DWORD' { return [BitConverter]::ToInt32([BitConverter]::GetBytes([uint32]$Value), 0) }
+    'REG_QWORD' { return [BitConverter]::ToInt64([BitConverter]::GetBytes([uint64]$Value), 0) }
+    'REG_MULTI_SZ' { return , [string[]]@($Value | Where-Object { $null -ne $_ }) }
+    { $_ -eq 'REG_BINARY' -or $_ -eq 'REG_NONE' } {
+      $hex = [string]$Value
+      $bytes = New-Object byte[] ([int]($hex.Length / 2))
+      for ($i = 0; $i -lt $bytes.Length; $i++) { $bytes[$i] = [Convert]::ToByte($hex.Substring($i * 2, 2), 16) }
+      return , $bytes
+    }
+    { $_ -eq 'REG_SZ' -or $_ -eq 'REG_EXPAND_SZ' } { return [string]$Value }
+  }
+  throw ('{0} is not a registry type the installer writes' -f $Type)
+}
+
+# Opens the registry key a recorded key names (HKLM\... or HKU\...), or returns nothing when it is not there. With
+# -Create the key is made when it is missing. The caller disposes what it gets.
+function Open-RpaRegistryKey([string]$Key, [bool]$Writable, [bool]$Create) {
+  $actual = Resolve-RpaRegistryKey $Key
+  $at = $actual.IndexOf('\')
+  $root = [Microsoft.Win32.Registry]::LocalMachine
+  if ($actual.Substring(0, $at) -eq 'HKU') { $root = [Microsoft.Win32.Registry]::Users }
+  if ($Create) { return $root.CreateSubKey($actual.Substring($at + 1)) }
+  $root.OpenSubKey($actual.Substring($at + 1), $Writable)
+}
+
+# Writes one value, making its key when that is missing. -Value is in the form install.json keeps.
+function Set-RpaRegistryValue([string]$Key, [string]$Name, [string]$Type, $Value) {
+  $data = ConvertTo-RpaRegistryData $Type $Value
+  $open = Open-RpaRegistryKey $Key $true $true
+  try { $open.SetValue($Name, $data, [Microsoft.Win32.RegistryValueKind]$script:RegistryKinds[$Type]) } finally { $open.Dispose() }
+}
+
+# Deletes one value. A value or key that is not there is not an error.
+function Remove-RpaRegistryValue([string]$Key, [string]$Name) {
+  $open = Open-RpaRegistryKey $Key $true $false
+  if (-not $open) { return }
+  try { $open.DeleteValue($Name, $false) } finally { $open.Dispose() }
 }
 
 function Get-RpaSid([hashtable]$Account) {
@@ -800,24 +868,15 @@ function Resolve-RpaRegistryKey([string]$Key) {
 # A registry value as it is now, in the form install.json keeps it: whether it exists, and its type and data.
 function Get-RpaRegistryRecord([string]$Key, [string]$Name) {
   $record = [ordered]@{ kind = 'registry'; key = $Key; name = $Name; existed = $false }
-  $actual = Resolve-RpaRegistryKey $Key
-  $at = $actual.IndexOf('\')
-  $root = [Microsoft.Win32.Registry]::LocalMachine
-  if ($actual.Substring(0, $at) -eq 'HKU') { $root = [Microsoft.Win32.Registry]::Users }
-  $open = $root.OpenSubKey($actual.Substring($at + 1))
+  $open = Open-RpaRegistryKey $Key $false $false
   if (-not $open) { return $record }
   try {
     if (@($open.GetValueNames()) -notcontains $Name) { return $record }
     $data = $open.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    $recorded = ConvertFrom-RpaRegistryData ([string]$open.GetValueKind($Name)) $data
     $record.existed = $true
-    switch ($open.GetValueKind($Name)) {
-      'DWord' { $record.type = 'REG_DWORD'; $record.value = [string][BitConverter]::ToUInt32([BitConverter]::GetBytes([int]$data), 0) }
-      'QWord' { $record.type = 'REG_QWORD'; $record.value = [string][BitConverter]::ToUInt64([BitConverter]::GetBytes([long]$data), 0) }
-      'ExpandString' { $record.type = 'REG_EXPAND_SZ'; $record.value = [string]$data }
-      'MultiString' { $record.type = 'REG_MULTI_SZ'; $record.value = @($data) -join '\0' }
-      'Binary' { $record.type = 'REG_BINARY'; $record.value = -join (@($data) | ForEach-Object { $_.ToString('X2') }) }
-      default { $record.type = 'REG_SZ'; $record.value = [string]$data }
-    }
+    $record.type = $recorded.type
+    $record.value = $recorded.value
   } finally { $open.Dispose() }
   $record
 }
@@ -825,7 +884,7 @@ function Get-RpaRegistryRecord([string]$Key, [string]$Name) {
 # Sets a registry value for a sign-in step, after recording what was there.
 function Set-RpaSignInValue([hashtable]$Run, [string]$Key, [string]$Name, [string]$Type, [string]$Data) {
   Add-RpaSignInChange $Run (Get-RpaRegistryRecord $Key $Name)
-  Set-RpaRegistryValue (Resolve-RpaRegistryKey $Key) $Name $Type $Data
+  Set-RpaRegistryValue $Key $Name $Type $Data
 }
 
 # Removes a registry value for a sign-in step, after recording what was there.
@@ -833,7 +892,7 @@ function Remove-RpaSignInValue([hashtable]$Run, [string]$Key, [string]$Name) {
   $record = Get-RpaRegistryRecord $Key $Name
   if (-not $record.existed) { return }
   Add-RpaSignInChange $Run $record
-  Invoke-RpaNative reg.exe @('delete', (Resolve-RpaRegistryKey $Key), '/v', $Name, '/f')
+  Remove-RpaRegistryValue $Key $Name
 }
 
 # Makes the registry of a user reachable under HKU\<SID>: it is there while the user is signed in; otherwise it is
@@ -907,7 +966,7 @@ function Set-RpaDesktopUnlocked([hashtable]$Run) {
   $networkPrompt = 'HKLM\SYSTEM\CurrentControlSet\Control\Network\NewNetworkWindowOff'
   if (-not (Test-Path -LiteralPath ('Registry::HKEY_LOCAL_MACHINE{0}' -f $networkPrompt.Substring(4)))) {
     Add-RpaSignInChange $Run ([ordered]@{ kind = 'key'; key = $networkPrompt; name = '' })
-    Invoke-RpaNative reg.exe @('add', $networkPrompt, '/f')
+    (Open-RpaRegistryKey $networkPrompt $true $true).Dispose()
   }
   foreach ($task in @(Get-ScheduledTask -TaskName 'ServerManager' -ErrorAction SilentlyContinue | Where-Object { $_.State -ne 'Disabled' })) {
     Add-RpaSignInChange $Run ([ordered]@{ kind = 'task'; key = $task.TaskPath; name = $task.TaskName })
@@ -940,21 +999,22 @@ function Set-RpaDesktopUnlocked([hashtable]$Run) {
 function Restore-RpaSignInChange($Change) {
   switch ([string]$Change.kind) {
     'registry' {
-      $key = Resolve-RpaRegistryKey ([string]$Change.key)
       if ($Change.existed) {
-        $data = [string]$Change.value
+        $value = $Change.value
         # Automatic sign-in that was on for someone before the install cannot come back: its stored password was
         # replaced. Turning it on without one would only produce failed sign-ins.
-        if ($Change.key -eq $script:Winlogon -and $Change.name -eq 'AutoAdminLogon') { $data = '0' }
-        Set-RpaRegistryValue $key ([string]$Change.name) ([string]$Change.type) $data
-      } elseif ((Get-RpaRegistryRecord ([string]$Change.key) ([string]$Change.name)).existed) {
-        Invoke-RpaNative reg.exe @('delete', $key, '/v', [string]$Change.name, '/f')
+        if ($Change.key -eq $script:Winlogon -and $Change.name -eq 'AutoAdminLogon') { $value = '0' }
+        Set-RpaRegistryValue ([string]$Change.key) ([string]$Change.name) ([string]$Change.type) $value
+      } else {
+        Remove-RpaRegistryValue ([string]$Change.key) ([string]$Change.name)
       }
     }
     'key' {
-      if (Test-Path -LiteralPath ('Registry::HKEY_LOCAL_MACHINE{0}' -f ([string]$Change.key).Substring(4))) {
-        Invoke-RpaNative reg.exe @('delete', [string]$Change.key, '/f')
-      }
+      # The key did not exist before; it holds nothing the installer did not put there.
+      $key = [string]$Change.key
+      $at = $key.LastIndexOf('\')
+      $parent = Open-RpaRegistryKey $key.Substring(0, $at) $true $false
+      if ($parent) { try { $parent.DeleteSubKeyTree($key.Substring($at + 1), $false) } finally { $parent.Dispose() } }
     }
     'task' { Get-ScheduledTask -TaskPath ([string]$Change.key) -TaskName ([string]$Change.name) -ErrorAction SilentlyContinue | Enable-ScheduledTask | Out-Null }
     'power' {
@@ -970,7 +1030,9 @@ function Restore-RpaSignInChange($Change) {
 
 # Puts recorded changes back, the last one first. The values of a user go into that user's registry, loaded from its
 # profile when the user is not signed in. With -KeepWinlogon the automatic sign-in values and the stored password are
-# left alone (someone has pointed automatic sign-in at another account since). Returns what could not be put back.
+# left alone (someone has pointed automatic sign-in at another account since). Returns what could not be put back:
+# for each, the record (Change; nothing when a user's registry could not be closed again) and a line that names it
+# with the reason (Text).
 function Restore-RpaSignInChanges([object[]]$Changes, [bool]$KeepWinlogon) {
   $failed = @()
   $ordered = @($Changes)
@@ -983,9 +1045,9 @@ function Restore-RpaSignInChanges([object[]]$Changes, [bool]$KeepWinlogon) {
       if ($change.kind -eq 'registry' -and $key -match '^HKU\\(S-[0-9-]+)\\') { $mounted = Mount-RpaUserHive $Matches[1] }
       Restore-RpaSignInChange $change
     } catch {
-      $failed += ('{0} {1} {2}: {3}' -f $change.kind, $key, $change.name, $_.Exception.Message).Trim()
+      $failed += @{ Change = $change; Text = ('{0} {1} {2}: {3}' -f $change.kind, $key, $change.name, $_.Exception.GetBaseException().Message).Trim() }
     } finally {
-      try { Dismount-RpaUserHive $mounted } catch { $failed += $_.Exception.Message }
+      try { Dismount-RpaUserHive $mounted } catch { $failed += @{ Change = $null; Text = $_.Exception.Message } }
     }
   }
   $failed
@@ -1001,18 +1063,33 @@ function Start-RpaTasks {
 
 # After a failed step: puts back the sign-in changes this run made and removes a user this run created, so that the
 # installer can be run again with the same parameters. A first install that got as far as install.json loses it again;
-# an upgrade keeps it, without this run's sign-in records. When a change cannot be put back, install.json stays as it
-# is, so that Uninstall-Rpa.ps1 still knows about it.
+# an upgrade keeps it, without this run's sign-in records.
+# When a change cannot be put back, nothing more is removed: install.json stays and keeps the records of what could
+# not be put back (and says that automatic sign-in is not on), so that Uninstall-Rpa.ps1 and a later run still know
+# what was there before; and a user this run created stays, because those records and what is left in Windows name it.
+# Returns the lines that name what could not be put back (NotPutBack) and the user that was kept (UserKept).
 function Undo-RpaFailedRun([hashtable]$Run) {
   $failed = @()
   if (@($Run.NewChanges).Count -gt 0) {
     Write-Host '  undo: put back the sign-in settings this run changed'
     $failed = @(Restore-RpaSignInChanges $Run.NewChanges $false)
-    foreach ($line in $failed) { Write-Host ('    could not put back: {0}' -f $line) }
+    foreach ($entry in $failed) { Write-Host ('    could not put back: {0}' -f $entry.Text) }
   }
-  if ($failed.Count -eq 0 -and $Run.WroteInstallFile) {
+  $result = @{ NotPutBack = @($failed | ForEach-Object { $_.Text }); UserKept = $null }
+  $newIds = @($Run.NewChanges | ForEach-Object { Get-RpaChangeId $_ })
+  if ($failed.Count -gt 0) {
+    $leftIds = @($failed | Where-Object { $_.Change } | ForEach-Object { Get-RpaChangeId $_.Change })
+    $Run.Install.signInChanges = @($Run.Install.signInChanges | Where-Object { $id = Get-RpaChangeId $_; ($newIds -notcontains $id) -or ($leftIds -contains $id) })
+    $Run.Install.autoSignIn = $Run.AutoSignInBefore
+    Save-RpaInstallFile $Run
+    if ($Run.CreatedUser) {
+      Write-Host ('  undo: the user {0}, which this run created, is kept' -f $Run.Account.Display)
+      $result.UserKept = $Run.Account.Display
+    }
+    return $result
+  }
+  if ($Run.WroteInstallFile) {
     if ($Run.Upgrade) {
-      $newIds = @($Run.NewChanges | ForEach-Object { Get-RpaChangeId $_ })
       $Run.Install.signInChanges = @($Run.Install.signInChanges | Where-Object { $newIds -notcontains (Get-RpaChangeId $_) })
       $Run.Install.autoSignIn = $Run.AutoSignInBefore
       Save-RpaInstallFile $Run
@@ -1024,11 +1101,14 @@ function Undo-RpaFailedRun([hashtable]$Run) {
     Write-Host ('  undo: remove the user {0}, which this run created' -f $Run.Account.Display)
     try { Remove-RpaUser $Run.Account $Run.Sid } catch { Write-Host ('    could not remove {0}: {1}' -f $Run.Account.Display, $_.Exception.Message) }
   }
+  $result
 }
 
 # Runs exactly the steps of the plan, in order, and names each as it starts. -SourceDir is the unpacked package (the
 # folder Install-Rpa.ps1 is in). What can be checked without changing anything is checked first: the plan, every step
-# name, the package and the user. When a step fails, the sign-in changes and the user of this run are undone.
+# name, the package and the user. When a step fails, the sign-in changes and the user of this run are undone, and the
+# error that is thrown carries, in its Data, what could not be put back (NotPutBack) and a user that was kept for that
+# reason (UserKept).
 function Invoke-RpaInstallPlan {
   param(
     [Parameter(Mandatory = $true)][hashtable]$Plan,
@@ -1126,9 +1206,11 @@ function Invoke-RpaInstallPlan {
         'start tasks' { Start-RpaTasks }
       }
     } catch {
-      $message = 'The step "{0}" failed: {1}' -f $step, $_.Exception.Message
-      Undo-RpaFailedRun $run
-      throw $message
+      $failure = New-Object InvalidOperationException ('The step "{0}" failed: {1}' -f $step, $_.Exception.Message)
+      $undone = Undo-RpaFailedRun $run
+      $failure.Data['NotPutBack'] = [string[]]@($undone.NotPutBack)
+      $failure.Data['UserKept'] = $undone.UserKept
+      throw $failure
     }
   }
 }
@@ -1171,7 +1253,7 @@ function Invoke-RpaUninstall {
     $account = Get-RpaAccount -User $result.User -ComputerName $env:COMPUTERNAME
     $current = (Get-ItemProperty -LiteralPath ('Registry::HKEY_LOCAL_MACHINE{0}' -f $script:Winlogon.Substring(4)) -Name 'DefaultUserName' -ErrorAction SilentlyContinue).DefaultUserName
     $result.SignInKept = $result.AutoSignIn -and ($current -ne $account.Name)
-    $result.NotRestored = @(Restore-RpaSignInChanges @($install.signInChanges) $result.SignInKept)
+    $result.NotRestored = @(Restore-RpaSignInChanges @($install.signInChanges) $result.SignInKept | ForEach-Object { $_.Text })
   }
   Write-Host '  remove the program files'
   # A folder that is someone's current directory cannot be removed, and the uninstaller may be run from inside it.
