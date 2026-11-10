@@ -15,7 +15,7 @@ BeforeAll {
   function New-TestParameters([hashtable]$Change = @{}) {
     $parameters = @{
       User = 'rpa-runner'; UserPassword = $null; RunnerPort = 8765; BrowserPort = 3000
-      AllowFrom = @('10.0.0.5'); AllowFromAnyAddress = $false
+      AllowFrom = @('10.0.0.5'); AllowFromAnyAddress = $false; IncludePublicNetwork = $false
       NoBrowser = $false; NoFirewall = $false; AutoSignIn = $false; Force = $false
     }
     foreach ($key in $Change.Keys) { $parameters[$key] = $Change[$key] }
@@ -43,7 +43,8 @@ BeforeAll {
       UserPasswordExpires = $false; UserPasswordWrong = $false; UserPasswordProblem = $null
       PortsInUse = @{}; Installed = $false; RunnerRunning = $false
       InstalledRunnerPort = $null; InstalledBrowserPort = $null; InstalledBrowser = $false
-      InstalledAllowFrom = $null; InstalledAutoSignInForUser = $false; InstalledAutoSignInUser = $null
+      InstalledAllowFrom = $null; InstalledPublicNetwork = $false
+      InstalledAutoSignInForUser = $false; InstalledAutoSignInUser = $null
       DataDir = $script:DataDir; LogDir = "$($script:DataDir)\logs"; PolicyBackupsDir = "$($script:DataDir)\policy-backups"
       DataDirState = New-PathState 'missing'; LogDirState = New-PathState 'missing'; PolicyBackupsState = New-PathState 'missing'
       DataDirForeign = $null
@@ -233,6 +234,23 @@ Describe 'Get-RpaInstallPlan' {
       $plan.AllowFrom | Should -BeExactly $given
     }
 
+    # powershell -File ... -AllowFrom 10.0.0.5,10.0.0.6 hands the installer one string, not two.
+    It 'takes several addresses in one string, separated by commas' {
+      $parameters = New-TestParameters @{ UserPassword = New-TestPassword; AllowFrom = @('10.0.0.5,10.0.0.6') }
+      $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts)
+      $plan.Refusals.Count | Should -Be 0
+      $plan.AllowFrom | Should -BeExactly @('10.0.0.5', '10.0.0.6')
+
+      $parameters.AllowFrom = @(' 10.0.0.5 , 10.1.0.0/16,', 'fd00::1')
+      $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts)
+      $plan.Refusals.Count | Should -Be 0
+      $plan.AllowFrom | Should -BeExactly @('10.0.0.5', '10.1.0.0/16', 'fd00::1')
+
+      $parameters.AllowFrom = @('10.0.0.5,n8n.example.com')
+      $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts)
+      $plan.Refusals | Should -BeExactly @('-AllowFrom: n8n.example.com is not an IP address or a range such as 10.0.0.0/24.')
+    }
+
     It '-AllowFromAnyAddress lets any address in' {
       $parameters = New-TestParameters @{ UserPassword = New-TestPassword; AllowFrom = @(); AllowFromAnyAddress = $true }
       $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts)
@@ -258,6 +276,102 @@ Describe 'Get-RpaInstallPlan' {
       $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts)
       $plan.Refusals.Count | Should -Be 0
       $plan.AllowFrom | Should -BeNullOrEmpty
+    }
+  }
+
+  Context 'on which networks the firewall rules apply' {
+    BeforeAll {
+      $script:PublicRefusal = "This machine's network is Public, and -AllowFromAnyAddress does not open the ports on a Public network. Use -AllowFrom <n8n address>, or add -IncludePublicNetwork, or use -NoFirewall."
+      $script:PublicWarning = 'This machine is on a network that Windows treats as Public. The firewall rules are for Domain and Private networks, so they let nothing in on that network.'
+    }
+
+    It 'with -AllowFrom addresses the rules apply on every network, also a Public one' {
+      $parameters = New-TestParameters @{ UserPassword = New-TestPassword }
+      foreach ($public in $false, $true) {
+        $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts @{ PublicNetwork = $public })
+        $plan.Refusals.Count | Should -Be 0
+        $plan.Warnings.Count | Should -Be 0
+        $plan.PublicNetwork | Should -BeTrue
+      }
+    }
+
+    It 'with -AllowFromAnyAddress the rules apply on Domain and Private networks only, unless -IncludePublicNetwork is given' {
+      $parameters = New-TestParameters @{ UserPassword = New-TestPassword; AllowFrom = @(); AllowFromAnyAddress = $true }
+      $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts)
+      $plan.Refusals.Count | Should -Be 0
+      $plan.PublicNetwork | Should -BeFalse
+
+      $parameters.IncludePublicNetwork = $true
+      $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts)
+      $plan.Refusals.Count | Should -Be 0
+      $plan.AllowFrom | Should -BeExactly @('any')
+      $plan.PublicNetwork | Should -BeTrue
+    }
+
+    It 'refuses a first install with -AllowFromAnyAddress on a Public network without -IncludePublicNetwork' {
+      $parameters = New-TestParameters @{ UserPassword = New-TestPassword; AllowFrom = @(); AllowFromAnyAddress = $true }
+      $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts @{ PublicNetwork = $true })
+      $plan.Refusals | Should -BeExactly @($script:PublicRefusal)
+      $plan.Steps.Count | Should -Be 0
+
+      $parameters.IncludePublicNetwork = $true
+      $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts @{ PublicNetwork = $true })
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Warnings.Count | Should -Be 0
+      $plan.PublicNetwork | Should -BeTrue
+    }
+
+    It '-NoFirewall on a Public network is not refused and not warned about' {
+      $parameters = New-TestParameters @{ UserPassword = New-TestPassword; AllowFrom = @(); AllowFromAnyAddress = $true; NoFirewall = $true }
+      $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts @{ PublicNetwork = $true })
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Warnings.Count | Should -Be 0
+      $plan.PublicNetwork | Should -BeFalse
+    }
+
+    It 'an upgrade without firewall parameters keeps the recorded choice of networks' {
+      $none = New-TestParameters @{ AllowFrom = @() }
+      $plan = Get-RpaInstallPlan -Parameters $none -Facts (New-InstalledFacts @{ InstalledAllowFrom = 'any'; InstalledPublicNetwork = $true; PublicNetwork = $true })
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Warnings.Count | Should -Be 0
+      $plan.PublicNetwork | Should -BeTrue
+
+      $plan = Get-RpaInstallPlan -Parameters $none -Facts (New-InstalledFacts @{ InstalledAllowFrom = 'any'; InstalledPublicNetwork = $false })
+      $plan.PublicNetwork | Should -BeFalse
+
+      # Recorded addresses: every network, whatever an earlier version recorded.
+      $plan = Get-RpaInstallPlan -Parameters $none -Facts (New-InstalledFacts @{ InstalledAllowFrom = @('10.1.2.3'); InstalledPublicNetwork = $false })
+      $plan.PublicNetwork | Should -BeTrue
+    }
+
+    It 'an upgrade with only -IncludePublicNetwork adds Public networks to a recorded any address' {
+      $parameters = New-TestParameters @{ AllowFrom = @(); IncludePublicNetwork = $true }
+      $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-InstalledFacts @{ InstalledAllowFrom = 'any'; InstalledPublicNetwork = $false; PublicNetwork = $true })
+      $plan.Refusals.Count | Should -Be 0
+      $plan.AllowFrom | Should -BeExactly @('any')
+      $plan.PublicNetwork | Should -BeTrue
+    }
+
+    It 'an upgrade that leaves any address on Domain and Private networks warns on a Public network' {
+      $facts = New-InstalledFacts @{ InstalledAllowFrom = 'any'; InstalledPublicNetwork = $false; PublicNetwork = $true }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ AllowFrom = @() }) -Facts $facts
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Warnings | Should -BeExactly @($script:PublicWarning)
+
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ AllowFrom = @(); AllowFromAnyAddress = $true }) -Facts $facts
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Warnings | Should -BeExactly @($script:PublicWarning)
+    }
+
+    It '-IncludePublicNetwork alone does not say which addresses may connect' {
+      $parameters = New-TestParameters @{ UserPassword = New-TestPassword; AllowFrom = @(); IncludePublicNetwork = $true }
+      $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts)
+      $plan.Refusals | Should -BeExactly @('Say which addresses may connect: -AllowFrom <n8n address>, or -AllowFromAnyAddress, or -NoFirewall.')
+    }
+
+    It 'a rule for every network names all three kinds; one without Public names Domain and Private' {
+      InModuleScope RpaInstall { Get-RpaFirewallProfiles $true } | Should -BeExactly @('Domain', 'Private', 'Public')
+      InModuleScope RpaInstall { Get-RpaFirewallProfiles $false } | Should -BeExactly @('Domain', 'Private')
     }
   }
 
@@ -394,14 +508,6 @@ Describe 'Get-RpaInstallPlan' {
       $plan.Warnings | Should -BeExactly @('The password given for rpa-runner could not be checked: The account is disabled.')
     }
 
-    It 'warns that the firewall rules let nothing in on a Public network' {
-      $parameters = New-TestParameters @{ UserPassword = New-TestPassword }
-      $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts @{ PublicNetwork = $true })
-      $plan.Warnings | Should -BeExactly @('This machine is on a network that Windows treats as Public. The firewall rules are for Domain and Private networks, so they let nothing in on that network.')
-
-      $parameters.NoFirewall = $true
-      (Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts @{ PublicNetwork = $true })).Warnings.Count | Should -Be 0
-    }
   }
 
   Context 'steps' {
@@ -560,6 +666,58 @@ Describe 'Invoke-RpaInstallPlan' {
     $plan = @{ Refusals = @('no'); Warnings = @(); Steps = @() }
     { Invoke-RpaInstallPlan -Plan $plan -Parameters (New-TestParameters) -SourceDir $script:InstallerDir } |
       Should -Throw -ExpectedMessage 'The plan has refusals; nothing was changed.'
+  }
+}
+
+Describe 'install.json' {
+  BeforeAll {
+    function New-TestRecord([hashtable]$Plan, $Previous, [hashtable]$Change = @{}) {
+      $parameters = New-TestParameters $Change
+      InModuleScope RpaInstall -Parameters @{ Plan = $Plan; Previous = $Previous; Parameters = $parameters } {
+        New-RpaInstallRecord -Version '0.2.0' -Account (Get-RpaAccount -User $Parameters.User -ComputerName 'BOT-PC') -Parameters $Parameters -Plan $Plan -Previous $Previous
+      }
+    }
+  }
+
+  It 'holds these fields, in this order' {
+    $plan = @{ Steps = @('write install.json'); AllowFrom = @('10.0.0.5', '10.1.0.0/16'); PublicNetwork = $true }
+    $record = New-TestRecord $plan $null
+    @($record.Keys) | Should -BeExactly @('version', 'user', 'runnerPort', 'browserPort', 'browser', 'autoSignIn', 'allowFrom', 'publicNetwork', 'signInChanges')
+    $record.version | Should -BeExactly '0.2.0'
+    $record.user | Should -BeExactly 'rpa-runner'
+    $record.runnerPort | Should -Be 8765
+    $record.browserPort | Should -Be 3000
+    $record.browser | Should -BeTrue
+    $record.autoSignIn | Should -BeFalse
+    $record.allowFrom | Should -BeExactly @('10.0.0.5', '10.1.0.0/16')
+    $record.publicNetwork | Should -BeTrue
+    @($record.signInChanges).Count | Should -Be 0
+  }
+
+  It 'records any address as the word any, and whether Public networks are included' {
+    $record = New-TestRecord @{ Steps = @(); AllowFrom = @('any'); PublicNetwork = $false } $null
+    $record.allowFrom | Should -BeExactly 'any'
+    $record.allowFrom | Should -BeOfType [string]
+    $record.publicNetwork | Should -BeFalse
+    (New-TestRecord @{ Steps = @(); AllowFrom = @('any'); PublicNetwork = $true } $null).publicNetwork | Should -BeTrue
+  }
+
+  It 'says that automatic sign-in is on when this run turns it on or an earlier run did' {
+    (New-TestRecord @{ Steps = @('turn on automatic sign-in'); AllowFrom = @('any'); PublicNetwork = $false } $null).autoSignIn | Should -BeTrue
+    $previous = '{ "user": "rpa-runner", "autoSignIn": true, "allowFrom": "any", "publicNetwork": true, "signInChanges": [ { "kind": "secret", "key": "DefaultPassword", "name": "" } ] }' | ConvertFrom-Json
+    $record = New-TestRecord @{ Steps = @(); AllowFrom = $null; PublicNetwork = $false } $previous @{ NoFirewall = $true }
+    $record.autoSignIn | Should -BeTrue
+    @($record.signInChanges).Count | Should -Be 1
+    # A run that makes no firewall rule keeps what an earlier run recorded about them.
+    $record.allowFrom | Should -BeExactly 'any'
+    $record.publicNetwork | Should -BeTrue
+  }
+
+  It 'records nothing about addresses for an install without firewall rules' {
+    $record = New-TestRecord @{ Steps = @(); AllowFrom = $null; PublicNetwork = $false } $null @{ NoFirewall = $true; NoBrowser = $true }
+    $record.allowFrom | Should -BeNullOrEmpty
+    $record.publicNetwork | Should -BeFalse
+    $record.browser | Should -BeFalse
   }
 }
 

@@ -2,7 +2,7 @@
 # administrator Windows PowerShell (powershell.exe, 64-bit), from the unpacked package (the folder this file is in):
 #
 #   .\Install-Rpa.ps1 [-User <name>] [-UserPassword <SecureString>] [-RunnerPort 8765] [-BrowserPort 3000]
-#                     [-AllowFrom <address>[,<address>...] | -AllowFromAnyAddress | -NoFirewall]
+#                     [-AllowFrom <address>[,<address>...] | -AllowFromAnyAddress [-IncludePublicNetwork] | -NoFirewall]
 #                     [-NoBrowser] [-AutoSignIn] [-Force]
 #
 # Both programs run inside the signed-in session of one Windows user, the bot user, started by scheduled tasks at that
@@ -16,10 +16,14 @@
 #                  For example: -UserPassword (Read-Host 'Password' -AsSecureString)
 #   -RunnerPort    The runner's port (default 8765).   -BrowserPort  The browser's port (default 3000).
 #   -AllowFrom     The addresses that may connect: IP addresses or ranges such as 10.0.0.0/24, normally the n8n host.
-#                  The firewall rules let in these addresses only, for the two programs only, on networks Windows
-#                  treats as Domain or Private (not Public).
-#   -AllowFromAnyAddress  The firewall rules let in any address instead.
-#   -NoFirewall    Leave Windows Firewall alone. One of these three is needed on a first install.
+#                  The firewall rules let in these addresses only, for the two programs only, on every network
+#                  (Domain, Private and Public, as Windows names them).
+#   -AllowFromAnyAddress  The firewall rules let in any address instead, on Domain and Private networks only. Where
+#                  the machine's network is Public (most cloud machines and machines outside a domain) that lets
+#                  nothing in, and a first install is refused; then give -AllowFrom, or add -IncludePublicNetwork.
+#   -IncludePublicNetwork  With -AllowFromAnyAddress: the rules apply on Public networks too.
+#   -NoFirewall    Leave Windows Firewall alone. One of -AllowFrom, -AllowFromAnyAddress and -NoFirewall is needed on
+#                  a first install.
 #   -NoBrowser     Install the runner only.
 #   -AutoSignIn    Have Windows sign the bot user in by itself at every start and keep the desktop unlocked. The
 #                  password is stored on this machine, and several settings change for the whole machine; the installer
@@ -33,8 +37,8 @@
 #
 # Programs go to C:\Program Files\RPA Runner, data (policy.json, the tokens, the certificates, logs) to
 # C:\ProgramData\RPA Runner. Running the installer again upgrades: it replaces the programs and keeps the data and the
-# user; give it the same -User, ports and -NoBrowser as before. It keeps the firewall addresses of the earlier run when
-# none are given, and automatic sign-in that an earlier run turned on (then -AutoSignIn needs no -UserPassword; give
+# user; give it the same -User, ports and -NoBrowser as before. It keeps the firewall addresses and networks of the
+# earlier run when none are given, and automatic sign-in that an earlier run turned on (then -AutoSignIn needs no -UserPassword; give
 # one to store a changed password). Without a user of its own making, -AutoSignIn needs -UserPassword: a password the
 # installer generated is stored for Windows and known to nobody. The installer prints no secret.
 # Exit codes: 0 installed, 1 refused or failed, 3 declined at the question.
@@ -46,6 +50,7 @@ param(
   [ValidateRange(1, 65535)][int]$BrowserPort = 3000,
   [string[]]$AllowFrom = @(),
   [switch]$AllowFromAnyAddress,
+  [switch]$IncludePublicNetwork,
   [switch]$NoBrowser,
   [switch]$NoFirewall,
   [switch]$AutoSignIn,
@@ -212,7 +217,7 @@ Import-Module (Join-Path $package 'RpaInstall.psm1') -Force
 
 $parameters = @{
   User = $User; UserPassword = $UserPassword; RunnerPort = $RunnerPort; BrowserPort = $BrowserPort
-  AllowFrom = $AllowFrom; AllowFromAnyAddress = [bool]$AllowFromAnyAddress
+  AllowFrom = $AllowFrom; AllowFromAnyAddress = [bool]$AllowFromAnyAddress; IncludePublicNetwork = [bool]$IncludePublicNetwork
   NoBrowser = [bool]$NoBrowser; NoFirewall = [bool]$NoFirewall; AutoSignIn = [bool]$AutoSignIn; Force = [bool]$Force
 }
 $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (Get-RpaMachineFacts -Parameters $parameters)
@@ -283,11 +288,13 @@ else {
   if ($plan.AllowFrom -notcontains 'any') { $from = $plan.AllowFrom -join ', ' }
   if ($NoBrowser) { Write-Host ('  Firewall:  inbound TCP {0} is open to {1} (rule RPA-Runner-In)' -f $RunnerPort, $from) }
   else { Write-Host ('  Firewall:  inbound TCP {0} and {1} are open to {2} (rules RPA-Runner-In and RPA-Browser-In)' -f $RunnerPort, $BrowserPort, $from) }
-  Write-Host '             on Domain and Private networks, not on Public ones'
+  if ($plan.PublicNetwork) { Write-Host '             on Domain, Private and Public networks' }
+  else { Write-Host '             on Domain and Private networks, not on Public ones' }
 }
 Write-Host ('  Remove:    {0}' -f (Join-Path $layout.InstallDir 'Uninstall-Rpa.ps1'))
 Write-Host ''
 if ($plan.Steps -contains 'turn on automatic sign-in') { Write-Host ('Automatic sign-in is on: Windows signs {0} in at its next start.' -f $User) }
 Write-Host ('Sign in as {0}, then run Show-RpaConnection.ps1:' -f $User)
-Write-Host ('  powershell -ExecutionPolicy Bypass -File "{0}"' -f (Join-Path (Join-Path $layout.InstallDir 'scripts') 'Show-RpaConnection.ps1'))
+# Windows PowerShell by its full path, so that the line does not depend on what is found along PATH where it is typed.
+Write-Host ('  {0} -ExecutionPolicy Bypass -File "{1}"' -f (Join-Path $PSHOME 'powershell.exe'), (Join-Path (Join-Path $layout.InstallDir 'scripts') 'Show-RpaConnection.ps1'))
 if (-not $upgrade) { Write-Host ('If {0} is already signed in, sign out and sign in again.' -f $User) }

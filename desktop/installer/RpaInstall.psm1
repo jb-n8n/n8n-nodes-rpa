@@ -94,9 +94,10 @@ function Get-RpaForeignRefusal($Entry) {
 }
 
 # Decides what an install does. -Parameters holds Install-Rpa.ps1's parameters (User, UserPassword, RunnerPort,
-# BrowserPort, NoBrowser, NoFirewall, AllowFrom, AllowFromAnyAddress, AutoSignIn, Force); -Facts is what
-# Get-RpaMachineFacts returns. With a refusal there are no steps: the installer changes nothing. AllowFrom in the
-# result is what the firewall rules let in: addresses and ranges, or the one word any, or nothing without rules.
+# BrowserPort, NoBrowser, NoFirewall, AllowFrom, AllowFromAnyAddress, IncludePublicNetwork, AutoSignIn, Force); -Facts
+# is what Get-RpaMachineFacts returns. With a refusal there are no steps: the installer changes nothing. AllowFrom in
+# the result is what the firewall rules let in: addresses and ranges, or the one word any, or nothing without rules;
+# PublicNetwork says whether the rules also apply on networks Windows treats as Public.
 function Get-RpaInstallPlan {
   param(
     [Parameter(Mandatory = $true)][hashtable]$Parameters,
@@ -115,6 +116,7 @@ function Get-RpaInstallPlan {
   # Automatic sign-in that an earlier run turned on for this same user stays as it is.
   $signInKept = $autoSignIn -and $upgrade -and [bool]$Facts.InstalledAutoSignInForUser -and [bool]$Facts.UserExists
   $allowFrom = $null
+  $publicNetwork = $false
   $refusals = New-Object Collections.Generic.List[string]
   $warnings = New-Object Collections.Generic.List[string]
   $steps = New-Object Collections.Generic.List[string]
@@ -165,14 +167,28 @@ function Get-RpaInstallPlan {
     }
 
     if ($firewall) {
-      $given = @($Parameters.AllowFrom | Where-Object { $_ })
+      # powershell -File hands a,b over as one string, so every value is split at its commas.
+      $given = @($Parameters.AllowFrom | ForEach-Object { ([string]$_).Split(',') } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
       $any = [bool]$Parameters.AllowFromAnyAddress
-      if ($given.Count -gt 0 -and -not $any) { $allowFrom = $given }
-      elseif ($any -and $given.Count -eq 0) { $allowFrom = @('any') }
-      elseif (-not $any -and $upgrade -and $Facts.InstalledAllowFrom) { $allowFrom = @($Facts.InstalledAllowFrom) }
+      $includePublic = [bool]$Parameters.IncludePublicNetwork
+      # Rules for given addresses apply on every network: the address list is what limits them. Rules for any address
+      # apply on Domain and Private networks, and on Public ones only when that is asked for.
+      if ($given.Count -gt 0 -and -not $any) { $allowFrom = $given; $publicNetwork = $true }
+      elseif ($any -and $given.Count -eq 0) { $allowFrom = @('any'); $publicNetwork = $includePublic }
+      elseif (-not $any -and $upgrade -and $Facts.InstalledAllowFrom) {
+        $allowFrom = @($Facts.InstalledAllowFrom)
+        $publicNetwork = ($allowFrom -notcontains 'any') -or $includePublic -or [bool]$Facts.InstalledPublicNetwork
+      }
       else { $refusals.Add('Say which addresses may connect: -AllowFrom <n8n address>, or -AllowFromAnyAddress, or -NoFirewall.') }
       foreach ($address in $given) {
         if (-not (Test-RpaAddress $address)) { $refusals.Add(('-AllowFrom: {0} is not an IP address or a range such as 10.0.0.0/24.' -f $address)) }
+      }
+      if ($allowFrom -and -not $publicNetwork -and $Facts.PublicNetwork) {
+        if ($upgrade) {
+          $warnings.Add('This machine is on a network that Windows treats as Public. The firewall rules are for Domain and Private networks, so they let nothing in on that network.')
+        } else {
+          $refusals.Add("This machine's network is Public, and -AllowFromAnyAddress does not open the ports on a Public network. Use -AllowFrom <n8n address>, or add -IncludePublicNetwork, or use -NoFirewall.")
+        }
       }
     }
 
@@ -213,9 +229,6 @@ function Get-RpaInstallPlan {
     if ($Facts.UserPasswordProblem) {
       $warnings.Add(('The password given for {0} could not be checked: {1}' -f $user, $Facts.UserPasswordProblem))
     }
-    if ($firewall -and $Facts.PublicNetwork) {
-      $warnings.Add('This machine is on a network that Windows treats as Public. The firewall rules are for Domain and Private networks, so they let nothing in on that network.')
-    }
   }
 
   if ($refusals.Count -eq 0) {
@@ -248,7 +261,7 @@ function Get-RpaInstallPlan {
     if ($upgrade) { $steps.Add('start tasks') }
   }
 
-  @{ Refusals = $refusals.ToArray(); Warnings = $warnings.ToArray(); Steps = $steps.ToArray(); AllowFrom = $allowFrom }
+  @{ Refusals = $refusals.ToArray(); Warnings = $warnings.ToArray(); Steps = $steps.ToArray(); AllowFrom = $allowFrom; PublicNetwork = $publicNetwork }
 }
 
 # 64 symbols, so a random byte modulo 64 is uniform; retried until it has an upper, a lower and a digit and no part of
@@ -424,6 +437,7 @@ function Get-RpaMachineFacts {
     InstalledBrowserPort       = $null
     InstalledBrowser           = $false
     InstalledAllowFrom         = $null
+    InstalledPublicNetwork     = $false
     InstalledAutoSignInForUser = $false
     InstalledAutoSignInUser    = $null
     RunnerRunning              = $false
@@ -451,6 +465,7 @@ function Get-RpaMachineFacts {
     $facts.InstalledBrowserPort = [int]$install.browserPort
     $facts.InstalledBrowser = $install.browser -eq $true
     if ($install.allowFrom) { $facts.InstalledAllowFrom = @($install.allowFrom) }
+    $facts.InstalledPublicNetwork = $install.publicNetwork -eq $true
     # The user automatic sign-in was turned on for by the installer, and whether that is the user of this run.
     if ($install.autoSignIn -eq $true) { $facts.InstalledAutoSignInUser = [string]$install.user }
     $facts.InstalledAutoSignInForUser = ($install.autoSignIn -eq $true) -and ([string]$install.user -eq $account.Display)
@@ -926,13 +941,19 @@ function New-RpaProtectedFile {
   try { $stream.Write($bytes, 0, $bytes.Length) } finally { $stream.Dispose() }
 }
 
+# The kinds of network a firewall rule applies on, as Windows names them.
+function Get-RpaFirewallProfiles([bool]$PublicNetwork) {
+  if ($PublicNetwork) { return @('Domain', 'Private', 'Public') }
+  @('Domain', 'Private')
+}
+
 # Inbound, for the one program on the one port, from the given addresses only (or from any), on Domain and Private
-# networks. Not on Public networks.
-function Set-RpaFirewallRule([string]$Name, [string]$DisplayName, [int]$Port, [string]$Program, [string[]]$AllowFrom) {
+# networks, and on Public networks too with -PublicNetwork.
+function Set-RpaFirewallRule([string]$Name, [string]$DisplayName, [int]$Port, [string]$Program, [string[]]$AllowFrom, [bool]$PublicNetwork) {
   Remove-NetFirewallRule -Name $Name -ErrorAction SilentlyContinue
   $remote = $AllowFrom
   if (@($AllowFrom).Count -eq 1 -and $AllowFrom[0] -eq 'any') { $remote = 'Any' }
-  New-NetFirewallRule -Name $Name -DisplayName $DisplayName -Direction Inbound -Protocol TCP -LocalPort $Port -Program $Program -RemoteAddress $remote -Action Allow -Profile Domain, Private | Out-Null
+  New-NetFirewallRule -Name $Name -DisplayName $DisplayName -Direction Inbound -Protocol TCP -LocalPort $Port -Program $Program -RemoteAddress $remote -Action Allow -Profile (Get-RpaFirewallProfiles $PublicNetwork) | Out-Null
 }
 
 # Windows PowerShell by its full path. A scheduled task finds a bare powershell.exe along PATH when the bot user signs
@@ -968,6 +989,38 @@ function Unregister-RpaTask([string]$Name) {
 # What names a recorded change: two records with the same identity are the same setting.
 function Get-RpaChangeId($Change) {
   '{0}|{1}|{2}' -f $Change.kind, $Change.key, $Change.name
+}
+
+# What install.json holds. autoSignIn says that the installer turned automatic sign-in on, in this run or an earlier
+# one (it is written before the sign-in steps run). allowFrom is what the firewall rules let in (a list of addresses
+# and ranges, or the word any) and publicNetwork whether they also apply on Public networks; a run that makes no rule
+# keeps what an earlier run recorded. signInChanges are the records of what -AutoSignIn changed.
+function New-RpaInstallRecord {
+  param([string]$Version, [hashtable]$Account, [hashtable]$Parameters, [hashtable]$Plan, $Previous)
+  $allowFrom = $null
+  $publicNetwork = $false
+  if ($Previous -and $Previous.allowFrom) {
+    $allowFrom = $Previous.allowFrom
+    $publicNetwork = $Previous.publicNetwork -eq $true
+  }
+  if ($Plan.AllowFrom) {
+    $allowFrom = @($Plan.AllowFrom)
+    if ($allowFrom.Count -eq 1 -and $allowFrom[0] -eq 'any') { $allowFrom = 'any' }
+    $publicNetwork = [bool]$Plan.PublicNetwork
+  }
+  $changes = @()
+  if ($Previous -and $Previous.signInChanges) { $changes = @($Previous.signInChanges) }
+  [ordered]@{
+    version       = $Version
+    user          = $Account.Display
+    runnerPort    = [int]$Parameters.RunnerPort
+    browserPort   = [int]$Parameters.BrowserPort
+    browser       = -not $Parameters.NoBrowser
+    autoSignIn    = (@($Plan.Steps) -contains 'turn on automatic sign-in') -or [bool]($Previous -and $Previous.autoSignIn -eq $true)
+    allowFrom     = $allowFrom
+    publicNetwork = $publicNetwork
+    signInChanges = $changes
+  }
 }
 
 # Writes install.json from the run's state: what the start scripts, Show-RpaConnection.ps1 and the uninstaller read.
@@ -1301,33 +1354,15 @@ function Invoke-RpaInstallPlan {
         'write policy' { New-RpaProtectedFile -Path (Join-Path $layout.DataDir 'policy.json') -Sid $run.Sid -Text $script:StarterPolicy }
         'write token' { New-RpaProtectedFile -Path (Join-Path $layout.DataDir 'token') -Sid $run.Sid -SecretLength 48 }
         'write browser-token' { New-RpaProtectedFile -Path (Join-Path $layout.DataDir 'browser-token') -Sid $run.Sid -SecretLength 48 }
-        'add the runner firewall rule' { Set-RpaFirewallRule $script:RunnerRule ('RPA desktop runner (TCP {0})' -f $runnerPort) $runnerPort (Join-Path (Join-Path $layout.InstallDir 'runner') 'RpaRunner.exe') $Plan.AllowFrom }
-        'add the browser firewall rule' { Set-RpaFirewallRule $script:BrowserRule ('RPA browser (TCP {0})' -f $browserPort) $browserPort (Join-Path (Join-Path $layout.InstallDir 'browser') 'node.exe') $Plan.AllowFrom }
+        'add the runner firewall rule' { Set-RpaFirewallRule $script:RunnerRule ('RPA desktop runner (TCP {0})' -f $runnerPort) $runnerPort (Join-Path (Join-Path $layout.InstallDir 'runner') 'RpaRunner.exe') $Plan.AllowFrom ([bool]$Plan.PublicNetwork) }
+        'add the browser firewall rule' { Set-RpaFirewallRule $script:BrowserRule ('RPA browser (TCP {0})' -f $browserPort) $browserPort (Join-Path (Join-Path $layout.InstallDir 'browser') 'node.exe') $Plan.AllowFrom ([bool]$Plan.PublicNetwork) }
         'remove the browser firewall rule' { Remove-NetFirewallRule -Name $script:BrowserRule -ErrorAction SilentlyContinue }
         'register the runner task' { Register-RpaTask $script:RunnerTask (Join-Path $scripts 'start-runner.ps1') $account.Qualified }
         'register the browser task' { Register-RpaTask $script:BrowserTask (Join-Path $scripts 'start-browser.ps1') $account.Qualified }
         'remove the browser task' { Unregister-RpaTask $script:BrowserTask }
         'write install.json' {
-          # autoSignIn says that the installer turned automatic sign-in on, in this run or an earlier one; it is
-          # written before the sign-in steps run. allowFrom keeps an earlier choice when this run made no rules.
-          $allowFrom = $null
-          if ($previous -and $previous.allowFrom) { $allowFrom = $previous.allowFrom }
-          if ($Plan.AllowFrom) {
-            $allowFrom = @($Plan.AllowFrom)
-            if ($allowFrom.Count -eq 1 -and $allowFrom[0] -eq 'any') { $allowFrom = 'any' }
-          }
-          $changes = @()
-          if ($previous -and $previous.signInChanges) { $changes = @($previous.signInChanges) }
-          $run.Install = [ordered]@{
-            version       = ([string](Get-Content -LiteralPath (Join-Path $layout.InstallDir 'VERSION') -TotalCount 1)).Trim()
-            user          = $account.Display
-            runnerPort    = $runnerPort
-            browserPort   = $browserPort
-            browser       = -not $Parameters.NoBrowser
-            autoSignIn    = ($steps -contains 'turn on automatic sign-in') -or $run.AutoSignInBefore
-            allowFrom     = $allowFrom
-            signInChanges = $changes
-          }
+          $version = ([string](Get-Content -LiteralPath (Join-Path $layout.InstallDir 'VERSION') -TotalCount 1)).Trim()
+          $run.Install = New-RpaInstallRecord -Version $version -Account $account -Parameters $Parameters -Plan $Plan -Previous $previous
           Save-RpaInstallFile $run
           $run.WroteInstallFile = $true
         }
