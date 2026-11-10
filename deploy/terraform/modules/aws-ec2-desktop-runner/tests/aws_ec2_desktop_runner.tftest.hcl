@@ -242,7 +242,7 @@ run "without_a_package_the_user_data_installs_nothing_of_the_product" {
   }
   assert {
     condition = alltrue([
-      for text in ["& $InstallPackage", "$PackageUrl", "$PackageSha", "RpaPolicy.exe", "ReadAllText(", "RPA-Runner-No-IMDS", "shutdown.exe"] :
+      for text in ["& $InstallPackage", "$PackageUrl", "$PackageSha", "RpaPolicy.exe", "ReadAllText(", "shutdown.exe"] :
       !strcontains(local.setup, text)
     ])
     error_message = "Without package_url the first boot downloads nothing, installs nothing, reads no token and does not restart."
@@ -250,6 +250,13 @@ run "without_a_package_the_user_data_installs_nothing_of_the_product" {
   assert {
     condition     = strcontains(local.setup, "Set-LocalUser -Password") && strcontains(local.setup, "Set-NetFirewallProfile -All -Enabled True") && strcontains(local.setup, "Set-Content -LiteralPath $Done")
     error_message = "The test-bed setup still runs: the Administrator password, Windows Firewall on, the done marker."
+  }
+  assert {
+    condition = (
+      strcontains(local.setup, "New-NetFirewallRule -Name 'RPA-TestBed-No-IMDS' -DisplayName 'Block instance metadata for members of Users' -Direction Outbound -Protocol TCP -RemoteAddress '169.254.169.254' -LocalUser 'D:(A;;CC;;;BU)' -Action Block") &&
+      strcontains(local.setup, "wevtutil.exe') sl 'Microsoft-Windows-PowerShell/Operational' '/ca:O:BAG:SYD:(A;;0xf0007;;;SY)(A;;0x7;;;BA)'")
+    )
+    error_message = "Without a package too: the instance metadata address is blocked for every member of Users, and the Windows PowerShell event log is for SYSTEM and Administrators only."
   }
   assert {
     condition     = aws_instance.this.user_data_replace_on_change == true
@@ -279,10 +286,11 @@ run "the_first_boot_leaves_the_install_to_the_installer" {
   }
   assert {
     condition = (
-      strcontains(local.setup, "& $InstallPackage -Url $PackageUrl -Sha256 $PackageSha -User $User -UserPassword $secure -RunnerPort $RunnerPort -BrowserPort $BrowserPort -AllowFrom $AllowFrom |") &&
-      strcontains(local.setup, "& $installer -User $User -UserPassword $UserPassword -RunnerPort $RunnerPort -BrowserPort $BrowserPort -AllowFrom $AllowFrom -AutoSignIn -Force *>&1")
+      strcontains(local.setup, "& $InstallPackage -Url $PackageUrl -Sha256 $PackageSha -User $User -UserPassword $secure -RunnerPort $RunnerPort -BrowserPort $BrowserPort |") &&
+      strcontains(local.setup, "& $installer -User $User -UserPassword $UserPassword -RunnerPort $RunnerPort -BrowserPort $BrowserPort -AllowFromAnyAddress -IncludePublicNetwork -AutoSignIn -Force *>&1") &&
+      !strcontains(local.setup, "-AllowFrom ")
     )
-    error_message = "The first boot hands the package, the user, its password, the ports and the addresses to install-package.ps1, which calls Install-Rpa.ps1 with -User, -UserPassword, -AllowFrom, -AutoSignIn and -Force."
+    error_message = "The first boot hands the package, the user, its password and the ports to install-package.ps1, which calls Install-Rpa.ps1 with -User, -UserPassword, -AllowFromAnyAddress -IncludePublicNetwork (the security group limits the addresses), -AutoSignIn and -Force."
   }
   assert {
     condition     = length(split("ReadAllText(", local.setup)) == 2 && strcontains(split("ReadAllText(", local.setup)[0], "& $InstallPackage -Url $PackageUrl") && strcontains(split("ReadAllText(", local.setup)[1], "Save-Secret $arn $value")
@@ -290,11 +298,22 @@ run "the_first_boot_leaves_the_install_to_the_installer" {
   }
   assert {
     condition = (
-      strcontains(split("& $InstallPackage -Url $PackageUrl", local.setup)[1], "New-NetFirewallRule -Name 'RPA-Runner-No-IMDS'") &&
-      strcontains(local.setup, "-RemoteAddress '169.254.169.254' -LocalUser \"D:(A;;CC;;;$sid)\" -Action Block") &&
-      strcontains(local.setup, "Set-NetFirewallProfile -All -Enabled True")
+      strcontains(split("$secure = New-StoredPassword $AdminPwArn", local.setup)[0], "New-NetFirewallRule -Name 'RPA-TestBed-No-IMDS' -DisplayName 'Block instance metadata for members of Users' -Direction Outbound -Protocol TCP -RemoteAddress '169.254.169.254' -LocalUser 'D:(A;;CC;;;BU)' -Action Block") &&
+      strcontains(split("New-NetFirewallRule -Name 'RPA-TestBed-No-IMDS' -DisplayName 'Block instance metadata for members of Users' -Direction Outbound -Protocol TCP -RemoteAddress '169.254.169.254' -LocalUser 'D:(A;;CC;;;BU)' -Action Block", local.setup)[0], "Set-NetFirewallProfile -All -Enabled True") &&
+      strcontains(split("Set-Content -LiteralPath $InstallPackage", local.setup)[0], "wevtutil.exe') sl 'Microsoft-Windows-PowerShell/Operational' '/ca:O:BAG:SYD:(A;;0xf0007;;;SY)(A;;0x7;;;BA)'")
     )
-    error_message = "After the install, the bot user is blocked from the instance metadata address, with Windows Firewall on."
+    error_message = "Before any secret write and anything of the product: Windows Firewall on, the instance metadata address blocked for every member of Users, and the Windows PowerShell event log for SYSTEM and Administrators only."
+  }
+  assert {
+    # In install-package.ps1 (embedded): the rule for the bot user by its SID, straight after the installer returns in
+    # both modes, before the script decides whether the install was good.
+    condition = (
+      strcontains(split("& $installer @upgrade *>&1", local.setup)[1], "Set-MetadataBlock $botUser") &&
+      strcontains(split("Set-MetadataBlock $botUser", local.setup)[1], "if (-not $script:installed) { throw \"Install-Rpa.ps1 did not finish") &&
+      strcontains(local.setup, "New-NetFirewallRule -Name 'RPA-Runner-No-IMDS' -DisplayName 'Block instance metadata for the RPA bot user' -Direction Outbound -Protocol TCP -RemoteAddress '169.254.169.254' -LocalUser \"D:(A;;CC;;;$sid)\" -Action Block") &&
+      strcontains(local.setup, "Set-NetFirewallRule -Name 'RPA-Runner-No-IMDS' -Protocol TCP -RemoteAddress '169.254.169.254' -LocalUser \"D:(A;;CC;;;$sid)\" -Action Block -Enabled True")
+    )
+    error_message = "install-package.ps1 adds or updates the bot user's instance metadata block after the installer returns, for a first install and for an upgrade."
   }
   assert {
     condition = (
@@ -318,7 +337,6 @@ run "the_package_reaches_the_vm" {
     condition = alltrue([for v in [
       "https://bucket.s3.us-west-2.amazonaws.com/rpa-windows-x64.zip?X-Amz-Expires=3600&X-Amz-Signature=0a1b2c",
       "0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef",
-      "203.0.113.7/32,198.51.100.0/24",
       jsonencode({ allowedApps = [{ allowedArgs = [["--ui", "v1"], ["--ui", "v2"]], exe = "ErpDemo.exe", path = "C:\\Program Files\\RPA Runner\\erp-demo\\v1\\ErpDemo.exe" }], gatedKeys = ["Ctrl+S", "F11"], writeControls = [{ automationId = "btnPost", exe = "ErpDemo.exe" }, { automationId = "1", exe = "ErpDemo.exe" }] }),
       "arn:aws:secretsmanager:us-west-2:123456789012:secret:rpa-desktop-testbed-runner-token-AbCdEf",
       "arn:aws:secretsmanager:us-west-2:123456789012:secret:rpa-desktop-testbed-browser-token-StUvWx",
@@ -326,7 +344,7 @@ run "the_package_reaches_the_vm" {
       "arn:aws:secretsmanager:us-west-2:123456789012:secret:rpa-desktop-testbed-admin-password-MnOpQr",
       "us-west-2",
     ] : strcontains(local.setup, "'${base64encode(v)}'")])
-    error_message = "The package URL and hash, the allowed CIDRs (for -AllowFrom), the policy change, the secret ARNs and the region reach the VM base64-encoded."
+    error_message = "The package URL and hash, the policy change, the secret ARNs and the region reach the VM base64-encoded."
   }
   assert {
     condition     = strcontains(local.setup, "$RunnerPort   = [int]'8765'") && strcontains(local.setup, "$BrowserPort  = [int]'3443'")
@@ -357,6 +375,51 @@ run "the_package_reaches_the_vm" {
   assert {
     condition     = local.user_data_size <= 12288
     error_message = "The user data stays well under EC2's 16 KB with a package and a pre-signed URL."
+  }
+}
+
+run "a_change_of_allowed_cidrs_does_not_change_the_user_data" {
+  command = plan
+
+  variables {
+    allowed_cidrs  = ["192.0.2.0/24", "2001:db8:77::/48"]
+    package_url    = "https://example.com/releases/download/v1/rpa-windows-x64.zip"
+    package_sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  }
+
+  assert {
+    # The setup rendered here from everything it may depend on. allowed_cidrs is not among these inputs, so two plans
+    # that differ only in it have the same user data, and the VM is not replaced.
+    condition = local.setup_full == templatefile("${path.module}/setup.ps1.tftpl", {
+      region                          = base64encode("us-west-2")
+      runner_token_secret_arn         = base64encode("arn:aws:secretsmanager:us-west-2:123456789012:secret:rpa-desktop-testbed-runner-token-AbCdEf")
+      browser_token_secret_arn        = base64encode("arn:aws:secretsmanager:us-west-2:123456789012:secret:rpa-desktop-testbed-browser-token-StUvWx")
+      runner_user_password_secret_arn = base64encode("arn:aws:secretsmanager:us-west-2:123456789012:secret:rpa-desktop-testbed-runner-user-password-GhIjKl")
+      admin_password_secret_arn       = base64encode("arn:aws:secretsmanager:us-west-2:123456789012:secret:rpa-desktop-testbed-admin-password-MnOpQr")
+      install_package                 = true
+      package_url                     = base64encode("https://example.com/releases/download/v1/rpa-windows-x64.zip")
+      package_sha256                  = base64encode("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+      policy_change                   = base64encode(local.policy_change_json)
+      runner_port                     = 8765
+      browser_port                    = 3000
+      install_package_ps1             = chomp(file("${path.module}/scripts/install-package.ps1"))
+    })
+    error_message = "The setup script depends only on the region, the secret ARNs, the package, the policy and the two ports."
+  }
+  assert {
+    condition     = local.user_data == templatefile("${path.module}/user-data.ps1.tftpl", { setup = base64gzip(replace(local.setup_full, "/(?m)^[ \\t]*#.*\\n/", "")) })
+    error_message = "The user data is that setup script, gzipped, and nothing else."
+  }
+  assert {
+    condition = alltrue([
+      for text in ["192.0.2", "2001:db8:77", base64encode("192.0.2.0/24,2001:db8:77::/48"), base64encode("192.0.2.0/24"), "AllowFrom $", "allow_from"] :
+      !strcontains(local.setup_full, text) && !strcontains(file("${path.module}/setup.ps1.tftpl"), text)
+    ])
+    error_message = "No allowed CIDR is in the setup script, encoded or not, and the template has no input for one."
+  }
+  assert {
+    condition     = toset(keys(aws_vpc_security_group_ingress_rule.allowed)) == toset(flatten([for p in ["runner", "browser", "rdp"] : [for c in var.allowed_cidrs : "${p} ${c}"]]))
+    error_message = "The changed CIDRs are in the security group's rules."
   }
 }
 

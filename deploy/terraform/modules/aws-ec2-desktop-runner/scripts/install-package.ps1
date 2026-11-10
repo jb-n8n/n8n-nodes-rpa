@@ -10,11 +10,14 @@
 #   2. compares the zip's SHA-256 with -Sha256 and stops when they differ, before anything is unpacked or run;
 #   3. unpacks it there, after checking that every entry lands inside the package's one top folder, rpa-windows-x64;
 #   4. runs the package's Install-Rpa.ps1 inside this PowerShell. With the first-install parameters (-User,
-#      -UserPassword, -RunnerPort, -BrowserPort, -AllowFrom; the first boot gives them) that is a first install with
-#      -AutoSignIn and -Force. Without them it is an upgrade with -Force, for the user and ports the install was made
-#      with (install.json): the installer then keeps the user, the data, the policy, the tokens and the firewall
-#      addresses, and a run in progress fails;
-#   5. removes the unpacked package.
+#      -UserPassword, -RunnerPort, -BrowserPort; the first boot gives them) that is a first install with
+#      -AllowFromAnyAddress -IncludePublicNetwork -AutoSignIn -Force: Windows Firewall then lets the two ports in from
+#      any address, and the test bed's security group is what limits who reaches them. Without them it is an upgrade
+#      with -Force, for the user and ports the install was made with (install.json): the installer then keeps the
+#      user, the data, the policy, the tokens and the firewall choice, and a run in progress fails;
+#   5. straight after the installer returns, adds (or replaces) the outbound Windows Firewall rule RPA-Runner-No-IMDS,
+#      which blocks the instance metadata address for the bot user by its SID;
+#   6. removes the unpacked package.
 # Install-Rpa.ps1 itself reads who could change the unpacked package and refuses when that is anyone but
 # administrators. The SHA-256 is what ties the download to the package you chose; the URL only says where it is.
 #
@@ -28,13 +31,11 @@ param(
   [Parameter(Mandatory = $true, ParameterSetName = 'FirstInstall')][string]$User,
   [Parameter(Mandatory = $true, ParameterSetName = 'FirstInstall')][Security.SecureString]$UserPassword,
   [Parameter(Mandatory = $true, ParameterSetName = 'FirstInstall')][int]$RunnerPort,
-  [Parameter(Mandatory = $true, ParameterSetName = 'FirstInstall')][int]$BrowserPort,
-  [Parameter(Mandatory = $true, ParameterSetName = 'FirstInstall')][string]$AllowFrom
+  [Parameter(Mandatory = $true, ParameterSetName = 'FirstInstall')][int]$BrowserPort
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $logFile = Join-Path $PSScriptRoot 'install-package.log'
-$installFile = Join-Path (Join-Path $env:ProgramFiles 'RPA Runner') 'install.json'
 $work = $null
 $script:installed = $false
 
@@ -48,6 +49,21 @@ function Say([string]$message) {
 function Remove-Work([string]$path) {
   $ErrorActionPreference = 'Continue'
   & (Join-Path ([Environment]::SystemDirectory) 'cmd.exe') /d /c ('rd /s /q "\\?\{0}"' -f $path) 2>&1 | Out-Null
+}
+
+# The outbound rule that blocks the instance metadata address for the bot user, by its SID, so that neither the two
+# programs nor an app they drive reach the instance role through it. A rule of that name is changed in place to name
+# the user of this install, so there is no moment without it. (The first boot also adds a rule for every member of
+# Users.)
+function Set-MetadataBlock([string]$user) {
+  $account = $user
+  if ($user.IndexOf('\') -lt 0) { $account = '{0}\{1}' -f $env:COMPUTERNAME, $user }
+  $sid = (New-Object Security.Principal.NTAccount($account)).Translate([Security.Principal.SecurityIdentifier]).Value
+  if (Get-NetFirewallRule -Name 'RPA-Runner-No-IMDS' -ErrorAction SilentlyContinue) {
+    Set-NetFirewallRule -Name 'RPA-Runner-No-IMDS' -Protocol TCP -RemoteAddress '169.254.169.254' -LocalUser "D:(A;;CC;;;$sid)" -Action Block -Enabled True
+  } else {
+    New-NetFirewallRule -Name 'RPA-Runner-No-IMDS' -DisplayName 'Block instance metadata for the RPA bot user' -Direction Outbound -Protocol TCP -RemoteAddress '169.254.169.254' -LocalUser "D:(A;;CC;;;$sid)" -Action Block | Out-Null
+  }
 }
 
 # One line of the installer: into the log and the output, and the line with which it reports success is noted. The
@@ -64,13 +80,16 @@ try {
   if ($Url -cnotmatch '^https://[A-Za-z0-9._~:/?#\[\]@!$&()*+,;=%-]+\z') { throw 'The package URL must be an https:// URL of plain URL characters, without spaces or quotes.' }
   if ($Sha256 -notmatch '^[0-9A-Fa-f]{64}\z') { throw 'The SHA-256 must be 64 hexadecimal characters.' }
   $first = $PSCmdlet.ParameterSetName -eq 'FirstInstall'
+  $botUser = $User
   if (-not $first) {
+    $installFile = Join-Path (Join-Path $env:ProgramFiles 'RPA Runner') 'install.json'
     if (-not (Test-Path -LiteralPath $installFile -PathType Leaf)) {
       throw 'RPA is not installed on this machine, so there is nothing to upgrade. A first install needs choices this script does not make (the user, the addresses that may connect): run Install-Rpa.ps1 from an unpacked package, or set package_url and package_sha256 and replace the VM.'
     }
     $install = Get-Content -Raw -LiteralPath $installFile -Encoding UTF8 | ConvertFrom-Json
     $upgrade = @{ User = [string]$install.user; RunnerPort = [int]$install.runnerPort; BrowserPort = [int]$install.browserPort; Force = $true }
     if ($install.browser -ne $true) { $upgrade.NoBrowser = $true }
+    $botUser = $upgrade.User
   }
   $shown = ([Uri]$Url).GetLeftPart([UriPartial]::Path)
 
@@ -108,12 +127,22 @@ try {
   $global:LASTEXITCODE = 0
   if ($first) {
     Say 'running Install-Rpa.ps1 (first install)'
-    & $installer -User $User -UserPassword $UserPassword -RunnerPort $RunnerPort -BrowserPort $BrowserPort -AllowFrom $AllowFrom -AutoSignIn -Force *>&1 | ForEach-Object { Read-InstallerLine $_ }
+    & $installer -User $User -UserPassword $UserPassword -RunnerPort $RunnerPort -BrowserPort $BrowserPort -AllowFromAnyAddress -IncludePublicNetwork -AutoSignIn -Force *>&1 | ForEach-Object { Read-InstallerLine $_ }
   } else {
     Say 'running Install-Rpa.ps1 (upgrade)'
     & $installer @upgrade *>&1 | ForEach-Object { Read-InstallerLine $_ }
   }
-  if (-not $script:installed) { throw "Install-Rpa.ps1 did not finish (exit code $LASTEXITCODE); its lines above say why." }
+  $code = $LASTEXITCODE
+  # Whatever the installer did: when its user is there, the user gets the block. After a good install a block that
+  # cannot be added fails this script; after a failed one (the installer may have removed the user again) it is a line.
+  try {
+    Set-MetadataBlock $botUser
+    Say "instance metadata blocked for $botUser (rule RPA-Runner-No-IMDS)"
+  } catch {
+    if ($script:installed) { throw ('The instance metadata block for {0} could not be added: {1}' -f $botUser, $_.Exception.Message) }
+    Say ('no instance metadata block for {0}: {1}' -f $botUser, $_.Exception.Message)
+  }
+  if (-not $script:installed) { throw "Install-Rpa.ps1 did not finish (exit code $code); its lines above say why." }
   Say 'done'
 } catch {
   Say ('FAILED: {0}' -f $_.Exception.Message)

@@ -24,7 +24,8 @@ locals {
   })
 
   # EC2 takes at most 16 KB of user data, so the setup script travels gzipped, without its full-line comments (the files
-  # here keep them), inside a small bootstrap. Every text value is base64-encoded, so none can break out of a string.
+  # here keep them), inside a small bootstrap. Every text value reaches the script base64-encoded. allowed_cidrs is not
+  # among the values: it only shapes the security group, so a change of it does not replace the VM.
   user_data      = templatefile("${path.module}/user-data.ps1.tftpl", { setup = base64gzip(local.setup) })
   user_data_size = length(local.user_data)
   setup          = replace(local.setup_full, "/(?m)^[ \\t]*#.*\\n/", "")
@@ -37,7 +38,6 @@ locals {
     install_package                 = var.package_url != ""
     package_url                     = base64encode(var.package_url)
     package_sha256                  = base64encode(var.package_sha256)
-    allow_from                      = base64encode(join(",", var.allowed_cidrs))
     policy_change                   = base64encode(local.policy_change_json)
     runner_port                     = var.runner_port
     browser_port                    = var.browser_port
@@ -122,8 +122,9 @@ resource "aws_instance" "this" {
   monitoring                  = false
   get_password_data           = false
 
-  # Runs once, on the first boot. A changed input (package URL, policy, port, allowed CIDRs) replaces the VM so the
-  # setup runs again; install-package.ps1 over SSM upgrades the installed package without that.
+  # Runs once, on the first boot. A changed input (package URL or hash, policy, a port) replaces the VM so the setup
+  # runs again; install-package.ps1 over SSM upgrades the installed package without that. A changed allowed_cidrs
+  # does not: it is not in the user data.
   user_data                   = local.user_data
   user_data_replace_on_change = true
 

@@ -14,7 +14,7 @@ variable "name" {
 }
 
 variable "allowed_cidrs" {
-  description = "Required. The only CIDRs that may reach the runner port, the browser port and RDP (3389), for example [\"203.0.113.7/32\"]. The security group lets in these only, and the installer's Windows Firewall rules for the two programs get the same list (-AllowFrom). Never the whole internet: 0.0.0.0/0, ::/0 and any range wider than /16 (IPv4) or /48 (IPv6) are refused."
+  description = "Required. The only CIDRs that may reach the runner port, the browser port and RDP (3389), for example [\"203.0.113.7/32\"]. The security group lets in these only; it is the test bed's limit, because the installer's Windows Firewall rules on the VM let the two ports in from any address. Changing the list updates the security group in place and does not replace the VM. Never the whole internet: 0.0.0.0/0, ::/0 and any range wider than /16 (IPv4) or /48 (IPv6) are refused."
   type        = list(string)
 
   validation {
@@ -142,7 +142,7 @@ variable "enable_rdp" {
 }
 
 variable "runner_port" {
-  description = "TCP port the runner listens on (wss://<ip>:<port>/rpa/v1), passed to the installer as -RunnerPort. The installer's default is 8765."
+  description = "TCP port the runner listens on (wss://<ip>:<port>/rpa/v1), passed to the installer as -RunnerPort. The installer's default is 8765. With a package, changing it replaces the VM."
   type        = number
   default     = 8765
 
@@ -153,7 +153,7 @@ variable "runner_port" {
 }
 
 variable "browser_port" {
-  description = "TCP port the RPA browser listens on (wss://<ip>:<port>), passed to the installer as -BrowserPort. The installer's default is 3000."
+  description = "TCP port the RPA browser listens on (wss://<ip>:<port>), passed to the installer as -BrowserPort. The installer's default is 3000. With a package, changing it replaces the VM."
   type        = number
   default     = 3000
 

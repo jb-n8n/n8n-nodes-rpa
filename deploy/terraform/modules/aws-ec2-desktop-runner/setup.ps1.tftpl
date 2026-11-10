@@ -24,7 +24,6 @@ $TokenArn     = Dec '${runner_token_secret_arn}'
 $BrowserArn   = Dec '${browser_token_secret_arn}'
 $PackageUrl   = Dec '${package_url}'
 $PackageSha   = Dec '${package_sha256}'
-$AllowFrom    = Dec '${allow_from}'
 $PolicyChange = Dec '${policy_change}'
 $RunnerPort   = [int]'${runner_port}'
 $BrowserPort  = [int]'${browser_port}'
@@ -87,35 +86,44 @@ function New-StoredPassword([string]$Arn) {
   $secure
 }
 
-# 1. The built-in Administrator (RDP): a new random password, kept only in Secrets Manager.
+# 1. Windows Firewall on for every profile, and no instance metadata for any member of the Windows group Users (BU):
+#    an outbound rule blocks 169.254.169.254 for them. It needs no user of the product, so it is there whether or not
+#    a package is installed now, by hand later, or its install fails half way. It comes before every secret write
+#    below, which all run as SYSTEM: SYSTEM is not a member of Users, and a write that fails here would show that the
+#    rule reaches further than meant. install-package.ps1 adds a second rule for the bot user by its SID.
+Set-NetFirewallProfile -All -Enabled True
+if (-not (Get-NetFirewallRule -Name 'RPA-TestBed-No-IMDS' -ErrorAction SilentlyContinue)) {
+  New-NetFirewallRule -Name 'RPA-TestBed-No-IMDS' -DisplayName 'Block instance metadata for members of Users' -Direction Outbound -Protocol TCP -RemoteAddress '169.254.169.254' -LocalUser 'D:(A;;CC;;;BU)' -Action Block | Out-Null
+}
+Log 'Windows Firewall on for every profile; instance metadata blocked for members of Users'
+
+# 2. The Windows PowerShell event log, for SYSTEM and Administrators only. Windows PowerShell can record the text of
+#    scripts it runs there, and this script's text holds the package URL.
+& (Join-Path ([Environment]::SystemDirectory) 'wevtutil.exe') sl 'Microsoft-Windows-PowerShell/Operational' '/ca:O:BAG:SYD:(A;;0xf0007;;;SY)(A;;0x7;;;BA)' | Out-Null
+if ($LASTEXITCODE -ne 0) { throw ('wevtutil.exe could not set the access of the Windows PowerShell event log (exit code {0})' -f $LASTEXITCODE) }
+Log 'Windows PowerShell event log readable by SYSTEM and Administrators only'
+
+# 3. The built-in Administrator (RDP): a new random password, kept only in Secrets Manager.
 $secure = New-StoredPassword $AdminPwArn
 Get-LocalUser | Where-Object { $_.SID.Value -like 'S-1-5-21-*-500' } | Set-LocalUser -Password $secure
 Log 'Administrator password set (in Secrets Manager)'
 
-# 2. Windows Firewall on for every profile: the block in step 5 depends on it, and so do the installer's rules.
-Set-NetFirewallProfile -All -Enabled True
-Log 'Windows Firewall on for every profile'
-
-# 3. install-package.ps1, for the first install below and for desktop-testbed.sh install (an upgrade over SSM).
+# 4. install-package.ps1, for the first install below and for desktop-testbed.sh install (an upgrade over SSM).
 Set-Content -LiteralPath $InstallPackage -Encoding UTF8 -Value @'
 ${install_package_ps1}
 '@
 
 %{ if install_package ~}
-# 4. The product: rpa-runner's password (in Secrets Manager before the installer gets it), then the package's own
-#    installer, which creates rpa-runner as a standard user with that password, stores it for automatic sign-in, and
-#    opens the two ports in Windows Firewall to the module's allowed CIDRs only. A refused or failed install fails the
-#    setup: the lines of install-package.ps1 and of the installer are in this log.
+# 5. The product: rpa-runner's password (in Secrets Manager before the installer gets it), then the package's own
+#    installer, which creates rpa-runner as a standard user with that password and stores it for automatic sign-in.
+#    Its Windows Firewall rules let the two ports in from any address: the allowed CIDRs are not in this script, so a
+#    change of them does not replace the VM, and the security group is what limits who reaches the ports.
+#    install-package.ps1 adds the metadata block for rpa-runner straight after the installer returns. A refused or
+#    failed install fails the setup: the lines of install-package.ps1 and of the installer are in this log.
 $secure = New-StoredPassword $UserPwArn
 Log 'rpa-runner password made (in Secrets Manager)'
-& $InstallPackage -Url $PackageUrl -Sha256 $PackageSha -User $User -UserPassword $secure -RunnerPort $RunnerPort -BrowserPort $BrowserPort -AllowFrom $AllowFrom | ForEach-Object { Log $_ }
+& $InstallPackage -Url $PackageUrl -Sha256 $PackageSha -User $User -UserPassword $secure -RunnerPort $RunnerPort -BrowserPort $BrowserPort | ForEach-Object { Log $_ }
 $secure = $null
-
-# 5. No instance metadata for rpa-runner, so neither the two programs nor an app they drive can use the instance role.
-#    The rule names the user by its SID, so it comes after the install, and before rpa-runner has ever signed in.
-$sid = (New-Object Security.Principal.NTAccount("$env:COMPUTERNAME\$User")).Translate([Security.Principal.SecurityIdentifier]).Value
-New-NetFirewallRule -Name 'RPA-Runner-No-IMDS' -DisplayName 'Block instance metadata for rpa-runner' -Direction Outbound -Protocol TCP -RemoteAddress '169.254.169.254' -LocalUser "D:(A;;CC;;;$sid)" -Action Block | Out-Null
-Log 'instance metadata blocked for rpa-runner'
 
 # 6. The two tokens the installer made, copied to Secrets Manager. They go nowhere else.
 $DataDir = Join-Path $env:ProgramData 'RPA Runner'

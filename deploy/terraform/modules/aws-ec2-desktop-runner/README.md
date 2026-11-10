@@ -14,7 +14,7 @@ This is a test bed, not the production layout: one VM, one auto-signed-in user, 
   - `subnet_id`: an existing subnet
 
   The zone is the first one, by name, that offers `instance_type`, unless you set `availability_zone`.
-- **Security group:** the runner port (8765), the browser port (3000) and RDP (3389, unless `enable_rdp = false`) from `allowed_cidrs` only. Egress is TCP 80 and 443, which SSM, Secrets Manager, the package download and Windows Update need.
+- **Security group:** the runner port (8765), the browser port (3000) and RDP (3389, unless `enable_rdp = false`) from `allowed_cidrs` only. This is what limits who reaches the two programs: Windows Firewall on the VM lets the two ports in from any address (see [Who can reach the ports](#who-can-reach-the-ports)). A changed `allowed_cidrs` updates the rules in place; it does not replace the VM. Egress is TCP 80 and 443, which SSM, Secrets Manager, the package download and Windows Update need.
 - **The VM:** the latest Windows Server 2022 English Full AMI, found through the public SSM parameter. `t3.large` by default. IMDSv2 only, with one hop. An encrypted gp3 root volume. A role with `AmazonSSMManagedInstanceCore` and an inline policy that may only write the four secrets.
 - **Four Secrets Manager secrets,** created empty. The VM fills them on first boot (see [Secrets](#secrets)).
 - Optional: an Elastic IP (`elastic_ip = true`), so the URLs survive stop and start.
@@ -25,26 +25,43 @@ Every resource carries the tag `Project = n8n-rpa-desktop-testbed`.
 
 The user data is a small bootstrap that unpacks [`setup.ps1.tftpl`](setup.ps1.tftpl) and runs it once, as LocalSystem under EC2Launch v2. The setup script is gzipped and stripped of comments so it fits EC2's 16 KB limit. It does what is specific to the test bed and leaves the product to the installer. Its files are in `C:\Program Files\RPA Test Bed\`, a folder it creates for SYSTEM and Administrators only: `setup.log` (progress), `setup.done`, `install-package.ps1` and its log, and the policy change file. In order:
 
-1. Gives the built-in Administrator a new random password and stores it in Secrets Manager. You need it for RDP.
-2. Turns Windows Firewall on for every profile.
-3. Writes [`install-package.ps1`](scripts/install-package.ps1) to the test bed's folder.
+1. Turns Windows Firewall on for every profile and adds an outbound rule, `RPA-TestBed-No-IMDS`, that blocks the instance metadata address (169.254.169.254) for every member of the Windows group Users (see [The instance metadata blocks](#the-instance-metadata-blocks)). This comes first, before any secret is written and before anything of the product.
+2. Sets the access of the Windows PowerShell event log (`Microsoft-Windows-PowerShell/Operational`) to SYSTEM and Administrators. Windows PowerShell can record the text of scripts it runs in that log, and the setup script's text holds `package_url`.
+3. Gives the built-in Administrator a new random password and stores it in Secrets Manager. You need it for RDP.
+4. Writes [`install-package.ps1`](scripts/install-package.ps1) to the test bed's folder.
 
 With `package_url` set, it goes on:
 
-4. Makes a random password for `rpa-runner`, stores it in Secrets Manager, and runs `install-package.ps1` (see [The package](#the-package)), which ends in:
+5. Makes a random password for `rpa-runner`, stores it in Secrets Manager, and runs `install-package.ps1` (see [The package](#the-package)), which ends in:
 
    ```
    Install-Rpa.ps1 -User rpa-runner -UserPassword <the password, as a SecureString> -RunnerPort <runner_port>
-                   -BrowserPort <browser_port> -AllowFrom <allowed_cidrs> -AutoSignIn -Force
+                   -BrowserPort <browser_port> -AllowFromAnyAddress -IncludePublicNetwork -AutoSignIn -Force
    ```
 
-   The installer does the rest of what this module used to do itself, and what it does is described in [`desktop/README.md`](../../../../desktop/README.md) and in the header of `Install-Rpa.ps1`: the user (a member of Users only), automatic sign-in and the no-lock settings, the programs under `C:\Program Files\RPA Runner`, the data directory `%ProgramData%\RPA Runner` with its access rules, a starter policy that allows no app, the two tokens, the scheduled tasks `\RPA\RPA Runner` and `\RPA\RPA Browser`, and the Windows Firewall rules `RPA-Runner-In` and `RPA-Browser-In`. `-AllowFrom` gets `allowed_cidrs`, so Windows Firewall lets in the same addresses as the security group.
-5. Adds an outbound Windows Firewall rule that blocks the instance metadata address for `rpa-runner`, so neither the two programs nor an app they drive can use the instance role. The rule names the user by its SID, so it comes after the install, and before `rpa-runner` has signed in for the first time.
+   The installer does the rest of what this module used to do itself, and what it does is described in [`desktop/README.md`](../../../../desktop/README.md) and in the header of `Install-Rpa.ps1`: the user (a member of Users only), automatic sign-in and the no-lock settings, the programs under `C:\Program Files\RPA Runner`, the data directory `%ProgramData%\RPA Runner` with its access rules, a starter policy that allows no app, the two tokens, the scheduled tasks `\RPA\RPA Runner` and `\RPA\RPA Browser`, and the Windows Firewall rules `RPA-Runner-In` and `RPA-Browser-In`. Straight after the installer returns, `install-package.ps1` adds the second metadata rule, `RPA-Runner-No-IMDS`, for `rpa-runner` by its SID.
 6. Reads the two tokens the installer made and stores them in Secrets Manager.
 7. Applies `runner_policy` with the package's policy tool (see [The policy](#the-policy)).
 8. Writes `setup.done` and restarts the VM. `rpa-runner` signs in on the console and the two tasks start the runner and the browser.
 
 A step that fails ends the setup there: `setup.log` gets a line `setup FAILED at line <n>: <reason>`, with the lines of `install-package.ps1`, the installer and the policy tool above it, and the VM does not restart. Nothing runs the setup again; fix the input and replace the VM.
+
+### Who can reach the ports
+
+The installer is run with `-AllowFromAnyAddress -IncludePublicNetwork`: its two Windows Firewall rules let the runner port and the browser port in from any address, on every kind of network. In this test bed the security group in front of the VM is what limits them to `allowed_cidrs`, as it was before the installer existed. The CIDRs are deliberately not passed to the VM. They would be part of the user data, and a change of the user data replaces the VM, with new passwords, tokens and certificates; `desktop-testbed.sh up` takes your current public address by default, so a second `up` from another network would do that.
+
+This is a choice for this module only. On a machine without such a filter in front of it, name the n8n host instead: `Install-Rpa.ps1 -AllowFrom <n8n address>`.
+
+### The instance metadata blocks
+
+Two outbound Windows Firewall rules block TCP to 169.254.169.254, where the instance role's credentials are handed out:
+
+- **`RPA-TestBed-No-IMDS`**, for every member of the Windows group Users (`-LocalUser 'D:(A;;CC;;;BU)'`). The first boot adds it before anything else, with or without a package. It names no user of the product, so it is there for a bot user of any name: one a hand install creates later, and one left behind by an install that failed half way. SYSTEM is not a member of Users, and the SSM agent and the first boot's secret writes run as SYSTEM. An administrator who signs in (over RDP, for example) usually is a member of Users, so expect the address to be blocked in that session as well; an administrator can remove the rule.
+- **`RPA-Runner-No-IMDS`**, for the bot user by its SID. `install-package.ps1` adds it, or changes an existing rule of that name in place, straight after the installer returns, at first boot and at every `desktop-testbed.sh install`.
+
+The rules stop a connection to that address from a process of those users. They do nothing about credentials an administrator or SYSTEM hands on.
+
+**Not run on a machine yet:** the Users-wide rule is new and has only been written, not tried. What a first boot has to show is that the SSM agent stays online (also after the role's credentials have been renewed, some hours later), that the secret writes that follow the rule work, and that a request to the metadata address fails as `rpa-runner`.
 
 ## The package
 
@@ -53,10 +70,11 @@ A step that fails ends the setup there: `setup.log` gets a line `setup FAILED at
 1. Downloads the zip from the `https://` URL into a new folder under `C:\Program Files\RPA Test Bed\pkg\`, created for SYSTEM and Administrators only. Nothing is downloaded or unpacked under a temp folder.
 2. Compares the zip's SHA-256 with the one given and stops when they differ. Nothing is unpacked or run before that. The hash is required everywhere: by the module (`package_sha256`), by `desktop-testbed.sh` and by the script. The hash is what ties the download to the package you chose; the URL only says where the file is.
 3. Unpacks the zip after checking that every entry lands inside its one top folder, `rpa-windows-x64`.
-4. Runs `Install-Rpa.ps1` from there, inside the same PowerShell, so the password never appears on a command line. The installer itself reads who could change the unpacked package and refuses to run when that is anyone but administrators.
-5. Removes the unpacked package.
+4. Runs `Install-Rpa.ps1` from there, inside the same PowerShell: the password is handed over as a `SecureString` and is not put on a command line. The installer itself reads who could change the unpacked package and refuses to run when that is anyone but administrators.
+5. Adds or updates the metadata rule for the bot user, `RPA-Runner-No-IMDS` (see [The instance metadata blocks](#the-instance-metadata-blocks)), whatever the installer reported, as long as its user is there.
+6. Removes the unpacked package.
 
-Over SSM the script takes only the URL and the hash and runs the installer as an upgrade, with `-Force` and the user and ports the install was made with. The installer then replaces the programs and keeps the user, the data, the policy, the tokens and the firewall addresses; a run in progress fails. It does not make a first install: on a VM without the product it stops with a message.
+Over SSM the script takes only the URL and the hash and runs the installer as an upgrade, with `-Force` and the user and ports the install was made with. The installer then replaces the programs and keeps the user, the data, the policy, the tokens and the firewall choice of the install; a run in progress fails. It does not make a first install: on a VM without the product it stops with a message.
 
 The script writes its own lines and the installer's to `install-package.log` beside it and to its output. Neither holds a URL's query string, where a pre-signed URL carries its signature.
 
@@ -64,21 +82,17 @@ The zip must be somewhere the VM can fetch it over HTTPS without a login: a rele
 
 ### Without a package
 
-With `package_url` and `package_sha256` empty (the default), the first boot stops after step 3 and does not restart. That leaves you:
+With `package_url` and `package_sha256` empty (the default), the first boot stops after step 4 and does not restart. That leaves you:
 
-- a Windows Server 2022 VM with the Administrator password in Secrets Manager (`desktop-testbed.sh rdp-password`), Windows Firewall on, SSM, and `C:\Program Files\RPA Test Bed\` with `install-package.ps1`, `setup.log` and `setup.done`
+- a Windows Server 2022 VM with the Administrator password in Secrets Manager (`desktop-testbed.sh rdp-password`), Windows Firewall on, the metadata block for members of Users, SSM, and `C:\Program Files\RPA Test Bed\` with `install-package.ps1`, `setup.log` and `setup.done`
 - no `rpa-runner` user, no programs, no data directory, no scheduled tasks, no firewall rules of the product; the token and `rpa-runner` password secrets stay empty
 - the runner and browser ports open in the security group to `allowed_cidrs`, with nothing listening and no Windows Firewall rule behind them
 
-This is the clean machine for trying the installer by hand: RDP in as Administrator, unpack the package in a folder only administrators can change, and run `Install-Rpa.ps1` as its header describes. Two things the first boot would have done are then yours to do:
+This is the clean machine for trying the installer by hand: RDP in as Administrator, unpack the package in a folder only administrators can change, and run `Install-Rpa.ps1` as its header describes. What the first boot would have done besides, and does not do for a hand install:
 
-- The instance metadata block of step 5 is not there, because the user it names does not exist yet. A bot user you create can reach the instance metadata service and, through it, the instance role (SSM, and writing the four secrets). Add the rule after the install, from an administrator PowerShell:
-
-  ```powershell
-  $sid = (New-Object Security.Principal.NTAccount("$env:COMPUTERNAME\rpa-runner")).Translate([Security.Principal.SecurityIdentifier]).Value
-  New-NetFirewallRule -Name 'RPA-Runner-No-IMDS' -DisplayName 'Block instance metadata for rpa-runner' -Direction Outbound -Protocol TCP -RemoteAddress '169.254.169.254' -LocalUser "D:(A;;CC;;;$sid)" -Action Block
-  ```
+- The bot user you create is a member of Users, so `RPA-TestBed-No-IMDS` covers it. The rule by SID, `RPA-Runner-No-IMDS`, is added the first time you run `desktop-testbed.sh install`.
 - The tokens are not in Secrets Manager. `Show-RpaConnection.ps1 -ShowTokens` shows them on the VM.
+- `runner_policy` is not applied. Use `RpaPolicy.exe` on the VM.
 
 After a first install made by hand, `desktop-testbed.sh install` upgrades it like any other.
 
@@ -102,7 +116,7 @@ export RPA_RUNNER_TOKEN="$(aws secretsmanager get-secret-value --region <region>
   --secret-id "$(terraform output -raw runner_token_secret_arn)" --query SecretString --output text)"
 ```
 
-The secrets' ARNs, the URLs, `allowed_cidrs`, `runner_policy`, `package_url` and `package_sha256` are in the user data and the state. None of them is a secret, as long as `package_url` is a public release asset or a short-lived pre-signed URL.
+The secrets' ARNs, the two ports, `runner_policy`, `package_url` and `package_sha256` are in the user data and the state (`allowed_cidrs` is in the state only). None of them is a secret, as long as `package_url` is a public release asset or a short-lived pre-signed URL.
 
 ## Automatic sign-in
 
@@ -177,7 +191,7 @@ deploy/scripts/desktop-testbed.sh down
 
 | Name | Default | Notes |
 |---|---|---|
-| `allowed_cidrs` | required | Who may reach the runner port, the browser port and RDP, in the security group and in the installer's Windows Firewall rules. 0.0.0.0/0, ::/0, and ranges wider than /16 (IPv4) or /48 (IPv6) are refused: a /8 can hold other AWS customers. Host bits must be zero. |
+| `allowed_cidrs` | required | Who may reach the runner port, the browser port and RDP: the security group's rules. Not passed to the VM, so a change updates the rules in place ([Who can reach the ports](#who-can-reach-the-ports)). 0.0.0.0/0, ::/0, and ranges wider than /16 (IPv4) or /48 (IPv6) are refused: a /8 can hold other AWS customers. Host bits must be zero. |
 | `name` | `rpa-desktop-testbed` | Name and prefix of every resource |
 | `instance_type` | `t3.large` | x86_64 only; Graviton types are refused |
 | `cpu_credits` | `unlimited` | t2/t3/t3a only. `standard` throttles, which makes the first boot slow. |
@@ -188,8 +202,8 @@ deploy/scripts/desktop-testbed.sh down
 | `associate_public_ip` | true | Must stay true in the module's own VPC |
 | `elastic_ip` | false | A fixed address; billed while the VM is stopped too |
 | `enable_rdp` | true | SSM works without RDP |
-| `runner_port` | 8765 | The installer's `-RunnerPort` |
-| `browser_port` | 3000 | The installer's `-BrowserPort`. Must differ from `runner_port`. |
+| `runner_port` | 8765 | The installer's `-RunnerPort`. With a package, a change replaces the VM. |
+| `browser_port` | 3000 | The installer's `-BrowserPort`. Must differ from `runner_port`. With a package, a change replaces the VM. |
 | `package_url`, `package_sha256` | empty | The RPA Windows package and its SHA-256, both or neither ([The package](#the-package)). A URL without a hash is refused. A changed URL replaces the VM; `desktop-testbed.sh install` doesn't. |
 | `runner_policy` | allows ERP Demo v1 | Applied with `RpaPolicy.exe` when `package_url` is set. See [The policy](#the-policy) |
 | `secret_recovery_window_days` | 7 | 0 deletes the secrets at once on destroy |
@@ -210,13 +224,14 @@ While running, you pay for the instance, including the Windows licence, and its 
 
 ## Security notes
 
-- **Exposure:** only `allowed_cidrs`, only the runner port, the browser port and RDP. The security group and the installer's Windows Firewall rules both carry that list. The runner and the browser serve TLS only and check their bearer tokens. With the fingerprints in n8n's credentials, n8n checks each certificate before it sends a token.
+- **Exposure:** only `allowed_cidrs`, only the runner port, the browser port and RDP, by the security group. Windows Firewall on the VM does not repeat that list: it lets the two ports in from any address, so whoever can change the security group decides who reaches them. The runner and the browser serve TLS only and check their bearer tokens. With the fingerprints in n8n's credentials, n8n checks each certificate before it sends a token.
 - **What runs as SYSTEM at first boot, and what it trusts.** The setup script comes from the user data. It downloads one file, the package, over HTTPS, and trusts it only after its SHA-256 matches `package_sha256`. Whoever can change the module's inputs or the instance's user data chooses both the URL and the hash, and so chooses what runs as SYSTEM; that is the same trust as applying the Terraform configuration. After the hash check the package is unpacked and run from a folder only SYSTEM and Administrators can change.
-- **The user data** holds the setup script, the secrets' ARNs, `allowed_cidrs`, `runner_policy`, `package_url` and `package_sha256`. Anyone who may call `ec2:DescribeInstanceAttribute` on the instance can read it, and so can any process on the VM that can reach the instance metadata service (administrators and SYSTEM; `rpa-runner` is blocked). Windows PowerShell may also record the text of scripts it runs in the VM's own event log, and the setup script's text includes `package_url`. So `package_url` is not a place for a long-lived credential.
+- **The user data** holds the setup script, the secrets' ARNs, the two ports, `runner_policy`, `package_url` and `package_sha256`. Anyone who may call `ec2:DescribeInstanceAttribute` on the instance can read it, and so can any process on the VM that can reach the instance metadata service (SYSTEM; the two firewall rules block members of Users and the bot user). So `package_url` is not a place for a long-lived credential.
+- **The Windows PowerShell event log.** Windows PowerShell can record the text of scripts it runs in `Microsoft-Windows-PowerShell/Operational`, and the setup script's text includes `package_url`. The first boot sets that log's access to SYSTEM and Administrators (`wevtutil sl ... /ca:O:BAG:SYD:(A;;0xf0007;;;SY)(A;;0x7;;;BA)`), so any other reader the log had (the Event Log Readers group, for one) loses it. Who could read the log before that on this Windows was not checked on a machine, and neither was the command.
 - **The passwords and tokens on their way to Secrets Manager.** Each value is text inside the setup's PowerShell process while it is handed to the AWS Tools cmdlet that writes it, over HTTPS, with the instance role. If PowerShell module logging is turned on for the VM (Windows has it off unless someone turns it on), Windows records that cmdlet's parameters, the value among them, in the VM's event log. The setup writes no secret to its own log or output.
 - **`desktop-testbed.sh install`** sends one PowerShell command line over SSM Run Command: the path of `install-package.ps1`, the URL and the hash. SSM keeps that command, with the URL and its query string, in its command history; use a short-lived URL. The script accepts only `https://` URLs made of URL characters, without quotes, so the URL cannot end the quoted string it travels in.
 - **RDP as Administrator** opens a session of its own and leaves `rpa-runner`'s console session alone. Don't RDP in as `rpa-runner`: disconnecting that session locks its desktop, and the runner then reports `desktop_unavailable` until the VM restarts.
-- **The instance role** can use SSM and write, never read, its four secrets. With a package installed by the first boot, `rpa-runner` can't reach the instance metadata service, so it can't use the role at all ([without a package](#without-a-package) that block is yours to add). Administrators and SYSTEM can, with two consequences:
+- **The instance role** can use SSM and write, never read, its four secrets. Two outbound firewall rules block the metadata address, where the role's credentials come from, for members of Users and for the bot user ([The instance metadata blocks](#the-instance-metadata-blocks)). SYSTEM reaches it, and an administrator can remove the rules, with two consequences:
   - `AmazonSSMManagedInstanceCore` also allows `ssm:GetParameter(s)` on every parameter, so an administrator on the VM could read the account's SecureString parameters in the region. Keep the test bed in an account without production parameters, or replace the managed policy with an inline one limited to `ssm:UpdateInstanceInformation`, `ssmmessages:*Channel` and `ec2messages:*`.
   - The role keeps `PutSecretValue` after the first boot, so an administrator on the VM could replace a secret's value.
 - **The two programs and the apps the runner drives run as the same user.** A driven app could read the token files, stop the runner or take its port. The access rules on `policy.json` only keep the runner itself from changing its policy; they are no boundary against the apps. Only allow apps you trust in `runner_policy`; the production model runs them under separate users.
@@ -233,12 +248,14 @@ While running, you pay for the instance, including the Windows licence, and its 
   - the setup gzipped inside it
   - the package URL and hash, the allowed CIDRs, the policy change and the ARNs base64-encoded
   - no step the installer does (no user, no sign-in setup, no access rules on the data directory, no inbound rule, no scheduled task)
-  - the installer called with `-User`, `-UserPassword`, `-AllowFrom`, `-AutoSignIn` and `-Force`, and the hash compared before the zip is opened
+  - the installer called with `-User`, `-UserPassword`, `-AllowFromAnyAddress -IncludePublicNetwork`, `-AutoSignIn` and `-Force`, and the hash compared before the zip is opened
+  - the metadata block for members of Users before any secret write and any product step, with and without a package; the block for the bot user after the installer returns
+  - no allowed CIDR in it: a change of `allowed_cidrs` leaves the user data as it is
   - the token files read only after the install, and no password or token written to a log, a file or the output
   - without `package_url`: no download, no install, no token read, no restart
 - the outputs
 - the input validations (0.0.0.0/0, ::/0, /1, /8, IPv6 /32, host bits, Arm types, a package URL without its hash and a hash without its URL, http:// URLs, quotes, short hashes, equal ports, a policy change over the policy tool's limits)
 
-These tests read the rendered script; they do not run it. The first-boot script and `install-package.ps1` run only on a real VM.
+These tests read the rendered script; they do not run it. The first-boot script and `install-package.ps1` run only on a real VM, and no first boot has been run with this version yet.
 
 `deploy/scripts/test/desktop-testbed.test.mjs` runs `desktop-testbed.sh` against fake `terraform`, `aws`, `curl` and `pbcopy` commands.
