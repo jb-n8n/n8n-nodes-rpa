@@ -35,12 +35,24 @@ on:
       - "images/browser/server/**"
       - ".github/workflows/desktop.yml"
   workflow_dispatch:
-  # For a workflow that needs the package: it calls this one and downloads the artifact the output names.
+  # For a workflow that needs the package. Any job of the calling run can upload an artifact of the same name, with a
+  # .sha256 file that matches its own zip, before the caller downloads it. So a caller downloads the artifact by its
+  # id (package-artifact-id) from its own run, and compares rpa-windows-x64.zip with package-sha256, the hash this
+  # workflow computed, not with the .sha256 file inside the artifact.
   workflow_call:
     outputs:
       package-artifact:
         description: The name of the artifact that holds rpa-windows-x64.zip and rpa-windows-x64.zip.sha256
         value: ${{ jobs.windows.outputs.package-artifact }}
+      package-artifact-id:
+        description: The id of that artifact in the calling run; download it by this id
+        value: ${{ jobs.windows.outputs.package-artifact-id }}
+      package-artifact-digest:
+        description: The SHA-256 digest of that artifact as it was uploaded
+        value: ${{ jobs.windows.outputs.package-artifact-digest }}
+      package-sha256:
+        description: The SHA-256 of rpa-windows-x64.zip as the stage step computed it; compare the downloaded zip with this
+        value: ${{ jobs.windows.outputs.package-sha256 }}
 
 permissions: {}
 
@@ -79,8 +91,12 @@ jobs:
     permissions:
       contents: read
     outputs:
-      # The name the step "Upload the Windows package" uses.
+      # The name the step "Upload the Windows package" uses, the id and digest that step reports, and the zip's
+      # SHA-256 from the step "Stage the Windows package".
       package-artifact: rpa-windows-package
+      package-artifact-id: ${{ steps.upload-package.outputs.artifact-id }}
+      package-artifact-digest: ${{ steps.upload-package.outputs.artifact-digest }}
+      package-sha256: ${{ steps.stage.outputs.sha256 }}
     defaults:
       run:
         shell: pwsh
@@ -241,13 +257,19 @@ jobs:
         run: node --test "images/browser/host/test/*.test.js" "images/browser/gate/test/*.test.js"
 
       # Downloads Node (checked against the SHA-256 in the script), Playwright (npm ci, checked against the lockfile)
-      # and Chromium (Playwright's installer; the list of its files checked against the SHA-256 in the script).
+      # and Chromium (Playwright's installer; the list of its files checked against the SHA-256 in the script). The
+      # zip's SHA-256 is an output of this step and of the workflow (package-sha256).
       - name: Stage the Windows package
+        id: stage
         timeout-minutes: 15
         shell: powershell
         run: |
           & desktop\installer\build\Stage.ps1 -Out "$env:OUT\package" -RunnerDir "$env:OUT\rpa-desktop-runner" -PolicyToolDir "$env:OUT\rpa-policy-tool" -ErpDemoDir "$env:OUT\erp-demo"
-          Get-Content "$env:OUT\package\rpa-windows-x64.zip.sha256"
+          $zip = "$env:OUT\package\rpa-windows-x64.zip"
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()
+          if ([IO.File]::ReadAllText("$zip.sha256") -ne "$hash  rpa-windows-x64.zip") { throw "rpa-windows-x64.zip.sha256 does not name the zip's SHA-256 $hash" }
+          "rpa-windows-x64.zip SHA-256 $hash"
+          "sha256=$hash" | Out-File -Append -Encoding ascii -LiteralPath $env:GITHUB_OUTPUT
 
       # The account of this job is an administrator, so it cannot be the bot user: the installer creates a standard
       # local user, with a random password that is made here and never printed. The package is unpacked where only
@@ -569,8 +591,9 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
-      # The package that was installed above, as a zip with its SHA-256.
+      # The package that was installed above, as a zip with its SHA-256; its id and digest are outputs of the job.
       - name: Upload the Windows package
+        id: upload-package
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: rpa-windows-package
