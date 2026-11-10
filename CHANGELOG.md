@@ -59,6 +59,8 @@ Microsoft's terms say about unattended automation on Windows (not legal advice).
 - `Show-RpaConnection.ps1` prints what the n8n credentials need: the URLs and fingerprints, and the tokens with
   `-ShowTokens`. `Uninstall-Rpa.ps1` removes the install and puts back what `-AutoSignIn` changed; `-RemoveData` removes
   the data directory too.
+- The browser host opens the browser with a window on the bot user's desktop for every client that does not ask
+  otherwise, so runs from n8n get a browser with a window. Save as PDF needs a headless browser and fails on it.
 - The package is built, installed and driven end to end on Windows in CI, and released from the `Desktop release`
   workflow after a reviewer approves it. It is not code-signed.
 

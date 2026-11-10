@@ -22,7 +22,7 @@ npm has), with a build attestation and a SHA-256 file. Check it, install it into
 runs as, then restart n8n (on macOS use `shasum -a 256 -c`):
 
 ```sh
-v=0.1.0
+v=0.2.0
 gh release download "v$v" --repo jb-n8n/n8n-nodes-rpa --pattern "n8n-nodes-rpa-$v.tgz*"
 gh attestation verify "n8n-nodes-rpa-$v.tgz" --repo jb-n8n/n8n-nodes-rpa
 sha256sum -c "n8n-nodes-rpa-$v.tgz.sha256"

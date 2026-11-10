@@ -11,7 +11,7 @@ The repository is a pnpm monorepo:
 | Path | What it is |
 |---|---|
 | `packages/engine` | The engine: step runner, policy, AI repair, proof, signing. Its only runtime dependencies are `playwright-core` and `fflate`, and it ships inside the node package (not published on its own). |
-| `packages/n8n-nodes-rpa` | The community node **RPA**, published to npm as `n8n-nodes-rpa` and attached to each GitHub Release: the node, its four credentials, its workflow templates and the bundled engine. Its runtime dependencies are the engine's plus `redis` (the login breaker and lock shared across queue-mode workers). |
+| `packages/n8n-nodes-rpa` | The community node **RPA**, published to npm as `n8n-nodes-rpa` and attached to each GitHub Release: the node, its five credentials, its workflow templates and the bundled engine. Its runtime dependencies are the engine's plus `redis` (the login breaker and lock shared across queue-mode workers). |
 | `packages/eval` | The seeded heal-rate eval and the acceptance tests. |
 | `sandbox/portal` | A mock site: public fixture pages (`/public/...`), a site behind a login with TOTP that changes on every "release", and attack pages. The Hello world template and the tests use it. |
 | `images/browser` | The `rpa-browser` image: the browser server, the token gate in front of it (`images/browser/gate`) and the supervisor that runs both. The compose stack runs it. |
@@ -830,13 +830,13 @@ Focused test runs: `pnpm --filter n8n-rpa-engine exec vitest run <file>`, `pnpm 
 ### Project status
 
 What exists:
-- The engine and the generic node, with nine operations, four credentials and six templates.
+- The engine and the generic node, with nine operations, five credentials and six templates.
 - End-to-end testing on a real dockerised n8n 2.41: the README's path from a blank n8n, the self-healing feed through approval, the failure outcomes, and queue mode with Redis and several workers.
 - A security review fixed one high and seven medium findings (egress through workers and WebRTC, AI repair side effects, review message honesty, Site Login form timing, breaker resets, masking, compose isolation, supply chain). See [the report](docs/security-review.md) for what remains.
 - The live heal-rate eval passed its gate on the sandbox (25 seeded releases; at least 90% heal, prove and approve; zero model calls on the runs after; no false completes; no leaks).
 
 Known limits:
-- **Web only**, and self-hosted n8n only: n8n Cloud runs only verified community nodes, and a node that drives a browser cannot be verified.
+- **Self-hosted n8n only**: n8n Cloud runs only verified community nodes, and a node that drives a browser cannot be verified.
 - **AI-built and AI-repaired steps extract IDs only.** Write the extract step yourself when you need record content.
 - **Read-only repair.** AI repair is refused for steps that submit forms or download through a form (`submit`, `download.via`). A click that exports a file is repaired when the Site Login lists its POST in **Requests That Only Read**.
 - **No date-range check** on downloaded files.

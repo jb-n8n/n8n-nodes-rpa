@@ -55,10 +55,11 @@ What is unclear to us from these sources:
 - They do not mention Windows Server. Whether the guidance applies to a bot on Windows Server is not stated.
 - The hardware places the Product Terms list (dedicated hardware, Azure, Windows 365) do not name other clouds.
 
-### Windows 10 and Windows 11 licence terms
+### Windows 11 licence terms (pre-installed)
 
-The Windows licence terms (the version for Windows that came pre-installed on a device, last updated April 2024)
-grant the right to run one instance "for use by one person at a time". They say that "device" does not include a
+We read one version of the Windows licence terms: the Windows 11 terms for Windows that came pre-installed on a
+device, last updated April 2024. We did not read the Windows 10 terms or the terms of other ways of buying Windows.
+These terms grant the right to run one instance "for use by one person at a time". They say that "device" does not include a
 system "on which the software is installed or accessed solely for remote use over a network", and they do not allow
 using the software "as server software", installing it "on a server for remote access or use over a network", or
 installing it "on a device for use only by remote users". Their remote access clause lets one designated licensed

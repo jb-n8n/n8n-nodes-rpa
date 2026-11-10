@@ -12,6 +12,7 @@ import { fakeEngine, scriptOk } from './fake-engine.js';
 import { harness } from './harness.js';
 
 const SAMPLES = new URL('../../../docs/install/samples/', import.meta.url);
+const GUIDE = new URL('../../../docs/install/windows.md', import.meta.url);
 const text = (file: string) => readFileSync(new URL(file, SAMPLES), 'utf8');
 const json = (file: string) => JSON.parse(text(file)) as Record<string, unknown>;
 
@@ -110,6 +111,18 @@ describe('the install guide\'s sample flow', () => {
     for (const chord of change.gatedKeys as unknown[]) expect(typeof chord).toBe('string');
     // The app the steps launch is the one the change allows.
     expect(apps.map((a) => a.exe)).toContain((steps.app as { exe: string }).exe);
+  });
+
+  it('the sample workflow\'s RPA node has the node\'s current version', () => {
+    const version = new Playwright().description.version;
+    expect(runNode().typeVersion).toBe(Math.max(...[version].flat()));
+  });
+
+  it('the policy change the guide has a person type is the sample file', () => {
+    // docs/install/windows.md, "Allow the ERP Demo": the change file is written from a PowerShell here-string.
+    const blocks = [...readFileSync(GUIDE, 'utf8').matchAll(/^@'\n([\s\S]*?)\n'@/gm)].map((m) => m[1]);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toBe(text('erp-demo-policy-change.json').replace(/\n$/, ''));
   });
 
   it('the sample policy change has no allowUserWritable anywhere', () => {
