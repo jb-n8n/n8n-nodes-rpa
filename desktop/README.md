@@ -139,7 +139,9 @@ person who is signed in, and reads its input from that window. Started without a
 - `allow-app <path-to-exe>` adds the application to `allowedApps` with its file name and full path. `--pin-hash` also
   pins the file's SHA-256, so the runner starts only a file with that hash (run the command again after the app is
   updated). An app the policy already has keeps its allowed argument lists, and its pin unless `--pin-hash` gives a
-  new one.
+  new one. The path must be a local one: a UNC or device path (`\\server\share\...`, `\\.\...`) and a short (8.3) name
+  are refused before the tool opens anything, with the messages a change file gets for such a path. `--pin-hash`
+  needs a file (`Application file not found: <path>`, `<path> is not a regular file`) and reads it as a stream.
 - `apply <change.json>` adds what a change file lists. A change file is a JSON object with any of `allowedApps`,
   `writeControls`, `gatedKeys`, `helperProcesses` and `clipboardRead`, written as in the policy file. It must be on a
   local drive (`the change file must be on a local drive` otherwise).
@@ -222,12 +224,26 @@ path that looks right is the program you mean.
 - **Writing.** The tool writes the new policy to a temporary file beside the policy
   (`policy.json.<32 hex digits>.tmp`, created for Administrators and SYSTEM only) and swaps it in in one step. If the
   swap fails the tool says so (`Writing the policy failed: ...`), exits 1, and the runner keeps running with the
-  policy it has.
-- **Backups.** The old policy goes to `policy-backups\` beside the policy, as `policy.json.<yyyyMMdd-HHmmss>.bak`.
-  When that name is taken (by a file or a folder), the tool takes `-2.bak`, then `-3.bak`, and so on. The tool creates
-  the folder for Administrators and SYSTEM only. A folder that is already there is used only when it is a real folder
-  (not a link) that passes the test the runner's start check uses for the policy's folder; otherwise:
-  `the backup folder cannot be trusted: <problem>`.
+  policy it has. When there was no policy file at the start, the new one is moved into place only if nothing has its
+  name by then; otherwise the tool prints
+  `a policy file appeared while the change was being applied; nothing was written` and exits 1. Look at the file that
+  appeared before you run the command again: the tool did not make it.
+- **Backups.** Before the swap the tool copies the old policy to `policy-backups\` beside the policy, as
+  `policy.json.<yyyyMMdd-HHmmss>.bak`. When that name is taken (by a file or a folder), the tool takes `-2.bak`, then
+  `-3.bak`, and so on. The tool creates the folder for Administrators and SYSTEM only. A backup is a new file in that
+  folder: its owner is Administrators and its access rules are the ones it inherits from the folder, not the policy
+  file's (which let the runner's user read the policy).
+- **What can stop a change before it is shown.** The runner's user may be able to create files and folders beside the
+  policy, so the tool looks at what it is about to use before it prints the summary, and stops with exit 1 when:
+  - a `policy-backups` folder is already there and is a link, or someone other than an administrator owns it, can
+    change it or can create files or folders in it:
+    `the backup folder cannot be trusted: <problem>; an administrator must check and remove it`;
+  - a file has the folder's name: `<path> exists and is not a folder; an administrator must check and remove it`;
+  - a folder has the policy file's name:
+    `<path> is a folder, not a policy file; an administrator must check and remove it`.
+
+  When one of these is shown, look at the item and at who created it, move anything you want to keep, remove the
+  item, and run the command again. The tool does not remove it for you.
 - **After writing.** The tool runs the runner's start check on the new policy file. When it finds a problem the tool
   says so, exits 1 and leaves the runner running: fix the permissions before the runner's next start.
 - **The runner.** The tool then ends the running `RpaRunner.exe`, which reads the policy only at start. The runner's

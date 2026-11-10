@@ -268,8 +268,13 @@ public static class PolicyChange
 
     private static void CheckFullPath(JsonElement entry, string key)
     {
-        if (entry.TryGetProperty(key, out var value) && value.ValueKind == JsonValueKind.String && Regex.IsMatch(value.GetString()!, "~[0-9]"))
-            throw Refused($"write the full path, not a short (8.3) name: {Literal(value.GetString()!)}");
+        if (entry.TryGetProperty(key, out var value) && value.ValueKind == JsonValueKind.String) RefuseShortName(value.GetString()!);
+    }
+
+    /// <summary>Refuses a path that holds <c>~</c> followed by a digit, as a short (8.3) name does.</summary>
+    internal static void RefuseShortName(string path)
+    {
+        if (Regex.IsMatch(path, "~[0-9]")) throw Refused($"write the full path, not a short (8.3) name: {Literal(path)}");
     }
 
     /// <summary>A change must be small enough to read before the prompt: few entries, short argument lists, short values.</summary>

@@ -5,6 +5,14 @@ using System.Text.Json;
 
 namespace Rpa.Runner.Core.Policy;
 
+/// <summary>What has a name in the file system: nothing, a file or a folder.</summary>
+public enum PathKind
+{
+    None,
+    File,
+    Folder,
+}
+
 /// <summary>The files the policy tool touches (the real file system in RpaPolicy.exe, a fake in the tests).</summary>
 public interface IPolicyFiles
 {
@@ -14,16 +22,31 @@ public interface IPolicyFiles
     /// <summary>The file's size in bytes, or null when there is no such file.</summary>
     long? Length(string path);
 
+    /// <summary>What is at the path. A link counts as what it is itself, not as what it points to.</summary>
+    PathKind Kind(string path);
+
     /// <summary>What the runner's own start check finds wrong with the policy file and its folder (someone other than
     /// an administrator owns them or can change them); empty when it would pass.</summary>
     IReadOnlyList<string> Problems(string path);
 
-    /// <summary>Replaces the policy file's text. An existing file is kept under the name
-    /// <see cref="PolicyCommand.BackupPath"/> gives.</summary>
-    void WriteWithBackup(string path, string json, DateTimeOffset now);
+    /// <summary>What is wrong with an existing backup folder: it is a link, or someone other than an administrator
+    /// owns it, can change it or can create files or folders in it. Empty when the tool would use it.</summary>
+    IReadOnlyList<string> BackupFolderProblems(string folder);
 
-    byte[] ReadAllBytes(string path);
+    /// <summary>
+    /// Writes the policy file's text. <paramref name="existed"/> says whether a policy file was there when the tool
+    /// checked it at its start. When it was, it is replaced and its text is kept under the name
+    /// <see cref="PolicyCommand.BackupPath"/> gives. When it was not, the new file is written only if nothing has its
+    /// name by now; otherwise <see cref="PolicyAppearedException"/> is thrown and nothing is written.
+    /// </summary>
+    void WriteWithBackup(string path, string json, DateTimeOffset now, bool existed);
+
+    /// <summary>Opens a file on a disk for reading (never a device or a pipe).</summary>
+    Stream OpenRead(string path);
 }
+
+/// <summary>No policy file existed when the tool checked, and something has its name at the write.</summary>
+public sealed class PolicyAppearedException() : IOException("a policy file appeared while the change was being applied; nothing was written");
 
 /// <summary>
 /// What the policy tool finds out about the console it runs in (RpaPolicy.exe asks Windows; the tests give values).
@@ -88,6 +111,22 @@ public static class PolicyCommand
     /// administrators only: the policy's folder may let the runner's user create files.</summary>
     public static string BackupFolder(string policyPath) =>
         Path.Combine(Path.GetDirectoryName(Path.GetFullPath(policyPath)) ?? "", "policy-backups");
+
+    /// <summary>
+    /// Why the backup folder of this policy cannot be used, or null when it can. A folder that is not there yet is
+    /// fine: the tool creates it. RpaPolicy.exe asks again when it writes.
+    /// </summary>
+    public static string? BackupFolderRefusal(string policyPath, IPolicyFiles files)
+    {
+        var folder = BackupFolder(policyPath);
+        switch (files.Kind(folder))
+        {
+            case PathKind.None: return null;
+            case PathKind.File: return $"{folder} exists and is not a folder; an administrator must check and remove it";
+        }
+        var problems = files.BackupFolderProblems(folder);
+        return problems.Count == 0 ? null : $"the backup folder cannot be trusted: {string.Join("; ", problems)}; an administrator must check and remove it";
+    }
 
     /// <summary>
     /// <c>policy.json.&lt;yyyyMMdd-HHmmss&gt;.bak</c> in the backup folder, or with <c>-2</c>, <c>-3</c> and so on
@@ -232,6 +271,8 @@ public static class PolicyCommand
     /// </summary>
     private static string? ExistingPolicy(string path, IPolicyFiles files)
     {
+        if (files.Kind(path) == PathKind.Folder)
+            throw new RunnerPolicy.InvalidPolicyException($"{path} is a folder, not a policy file; an administrator must check and remove it");
         if (files.Length(path) is null) return null;
         var problems = files.Problems(path);
         if (problems.Count > 0)
@@ -252,18 +293,40 @@ public static class PolicyCommand
         return text;
     }
 
-    /// <summary>The change that allows one application: its file name, its full path and, when asked, its hash.</summary>
+    /// <summary>
+    /// The change that allows one application: its file name, its full path and, when asked, its hash. Whoever started
+    /// the tool chose the path. A UNC or device path (opening one makes the elevated tool sign in to a server, or read
+    /// a device) and a short (8.3) name are refused on the text as given, before the tool resolves or opens the path;
+    /// the full path is tested again. The hash is taken from a file, not a folder, read as a stream.
+    /// </summary>
     private static string AllowApp(Arguments arguments, IPolicyFiles files)
     {
-        var path = Path.GetFullPath(arguments.Target!);
+        var target = arguments.Target!;
+        PolicyChange.RefuseShortName(target);
+        var path = RunnerPolicy.IsUncOrDevice(target) ? target : Path.GetFullPath(target);
+        // The parser's own words for such a path in a change file.
+        if (RunnerPolicy.IsUncOrDevice(path))
+            throw new RunnerPolicy.InvalidPolicyException("the change: allowedApps[].path must be an absolute local path (no UNC or device paths)");
         var app = new Dictionary<string, string> { ["exe"] = Path.GetFileName(path), ["path"] = path };
-        if (arguments.PinHash) app["sha256"] = Convert.ToHexString(SHA256.HashData(files.ReadAllBytes(path)));
+        if (arguments.PinHash)
+        {
+            switch (files.Kind(path))
+            {
+                case PathKind.None: throw new FileNotFoundException($"Application file not found: {path}");
+                case PathKind.Folder: throw new RunnerPolicy.InvalidPolicyException($"{path} is not a regular file");
+            }
+            using var file = files.OpenRead(path);
+            app["sha256"] = Convert.ToHexString(SHA256.HashData(file));
+        }
         return JsonSerializer.Serialize(new Dictionary<string, object> { ["allowedApps"] = new[] { app } });
     }
 
     private static int Change(string change, Arguments arguments, TextReader input, TextWriter output, IPolicyFiles files, Action restartRunner)
     {
         var current = ExistingPolicy(arguments.PolicyPath, files);
+        // Only an existing policy is backed up. A backup folder that cannot be used is said now, not after the
+        // administrator has read the summary and answered.
+        if (current is not null && BackupFolderRefusal(arguments.PolicyPath, files) is { } refusal) return Fail(output, refusal);
         var first = $"Creating a new policy at {arguments.PolicyPath}.";
         if (current is not null)
         {
@@ -289,7 +352,13 @@ public static class PolicyCommand
         }
         try
         {
-            files.WriteWithBackup(arguments.PolicyPath, result.Json, DateTimeOffset.Now);
+            files.WriteWithBackup(arguments.PolicyPath, result.Json, DateTimeOffset.Now, existed: current is not null);
+        }
+        catch (Exception e) when (e is PolicyAppearedException or RunnerPolicy.InvalidPolicyException)
+        {
+            // Refused at the write, with nothing written: a policy file that was not there at the start check, or a
+            // backup folder that changed since then.
+            return Fail(output, e.Message);
         }
         catch (Exception e)
         {

@@ -34,9 +34,15 @@ public class PolicyCommandTests
     {
         public Dictionary<string, string> Text { get; } = [];
         public Dictionary<string, byte[]> Bytes { get; } = [];
-        public List<(string Path, string Json, DateTimeOffset Now)> Writes { get; } = [];
+        public HashSet<string> Folders { get; } = [];
+        public List<(string Path, string Json, DateTimeOffset Now, bool Existed)> Writes { get; } = [];
         public List<string> Reads { get; } = [];
-        public List<string> BytesRead { get; } = [];
+
+        /// <summary>The streams handed out for hashing, by path.</summary>
+        public List<(string Path, OneWayStream Stream)> Opened { get; } = [];
+
+        /// <summary>Every path whose kind was asked for.</summary>
+        public List<string> Looked { get; } = [];
 
         /// <summary>What the runner's start check says about a file; nothing unless a test puts it here.</summary>
         public Dictionary<string, string[]> Untrusted { get; } = [];
@@ -46,13 +52,27 @@ public class PolicyCommandTests
 
         public List<string> Checked { get; } = [];
 
+        /// <summary>What is wrong with a backup folder; nothing unless a test puts it here.</summary>
+        public Dictionary<string, string[]> BackupProblems { get; } = [];
+
         /// <summary>When set, writing the policy fails with it.</summary>
         public Exception? WriteFailure { get; set; }
+
+        /// <summary>Runs when the tool starts to write (something that happens while the administrator reads).</summary>
+        public Action? BeforeWrite { get; set; }
 
         public IReadOnlyList<string> Problems(string path)
         {
             Checked.Add(path);
             return Untrusted.GetValueOrDefault(path, []);
+        }
+
+        public IReadOnlyList<string> BackupFolderProblems(string folder) => BackupProblems.GetValueOrDefault(folder, []);
+
+        public PathKind Kind(string path)
+        {
+            Looked.Add(path);
+            return Folders.Contains(path) ? PathKind.Folder : Text.ContainsKey(path) || Bytes.ContainsKey(path) ? PathKind.File : PathKind.None;
         }
 
         public string? Read(string path)
@@ -67,21 +87,63 @@ public class PolicyCommandTests
         public long? Length(string path) =>
             Sizes.TryGetValue(path, out var size) ? size : Text.TryGetValue(path, out var text) ? Encoding.UTF8.GetByteCount(text) : null;
 
-        /// <summary>As RpaPolicy.exe does: the old text goes to the name PolicyCommand.BackupPath gives.</summary>
-        public void WriteWithBackup(string path, string json, DateTimeOffset now)
+        /// <summary>
+        /// As RpaPolicy.exe does: an existing policy's text goes to the name PolicyCommand.BackupPath gives; a new
+        /// policy is written only when nothing has its name.
+        /// </summary>
+        public void WriteWithBackup(string path, string json, DateTimeOffset now, bool existed)
         {
+            BeforeWrite?.Invoke();
             if (WriteFailure is not null) throw WriteFailure;
-            Writes.Add((path, json, now));
-            if (Text.TryGetValue(path, out var old)) Text[PolicyCommand.BackupPath(path, now, Text.ContainsKey)] = old;
+            if (!existed && Kind(path) != PathKind.None) throw new PolicyAppearedException();
+            Writes.Add((path, json, now, existed));
+            if (existed) Text[PolicyCommand.BackupPath(path, now, Text.ContainsKey)] = Text[path];
             Text[path] = json;
             if (UntrustedAfterWrite.Length > 0) Untrusted[path] = UntrustedAfterWrite;
         }
 
-        public byte[] ReadAllBytes(string path)
+        public Stream OpenRead(string path)
         {
-            BytesRead.Add(path);
-            return Bytes.TryGetValue(path, out var bytes) ? bytes : throw new FileNotFoundException($"Could not find file '{path}'.");
+            if (!Bytes.TryGetValue(path, out var bytes)) throw new FileNotFoundException($"Could not find file '{path}'.");
+            var stream = new OneWayStream(bytes);
+            Opened.Add((path, stream));
+            return stream;
         }
+    }
+
+    /// <summary>A file as a stream that can only be read forward, a piece at a time: no length, no position.</summary>
+    private sealed class OneWayStream(byte[] bytes) : Stream
+    {
+        private int _at;
+
+        public int LargestRead { get; private set; }
+        public bool Closed { get; private set; }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            var read = Math.Min(count, bytes.Length - _at);
+            Array.Copy(bytes, _at, buffer, offset, read);
+            _at += read;
+            LargestRead = Math.Max(LargestRead, read);
+            return read;
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            Closed = true;
+            base.Dispose(disposing);
+        }
+
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     // The consoles a test can put the tool in. Each entry of the list is one other process attached to the console:
@@ -214,7 +276,7 @@ public class PolicyCommandTests
         Assert.Equal($"{Changing()}\n{AllowErp}\n{OneApp}\n{Prompt}{Updated}\n", tool.Output);
         var app = Assert.Single(RunnerPolicy.Parse(tool.Files.Writes[0].Json).AllowedApps);
         Assert.Equal(("ErpDemo.exe", ErpPath, null), (app.Exe, app.Path, app.Sha256));
-        Assert.Empty(tool.Files.BytesRead);
+        Assert.Empty(tool.Files.Opened);
 
         byte[] exe = [0x4d, 0x5a, 0x90, 0x00, 0x03];
         var hash = Convert.ToHexString(SHA256.HashData(exe));
@@ -265,8 +327,74 @@ public class PolicyCommandTests
 
         var missing = Path.Combine(Root, "Missing", "Missing.exe");
         Assert.Equal(1, tool.Run("", "allow-app", missing, "--pin-hash", "--yes", "--policy", PolicyPath));
-        Assert.Equal($"Could not find file '{missing}'.\n", tool.Output);
+        Assert.Equal($"Application file not found: {missing}\n", tool.Output);
         Assert.Single(tool.Files.Writes);
+    }
+
+    [Fact]
+    public void Allow_app_pin_hash_hashes_the_file_from_a_stream()
+    {
+        // Three megabytes, read forward a piece at a time and never held whole.
+        var exe = new byte[3 * 1024 * 1024];
+        new Random(5).NextBytes(exe);
+        var tool = new Tool();
+        tool.Files.Bytes[ErpPath] = exe;
+        Assert.Equal(0, tool.Run("", "allow-app", ErpPath, "--pin-hash", "--yes", "--policy", PolicyPath));
+        Assert.Equal(Convert.ToHexString(SHA256.HashData(exe)), Assert.Single(RunnerPolicy.Parse(Assert.Single(tool.Files.Writes).Json).AllowedApps).Sha256);
+        var (path, stream) = Assert.Single(tool.Files.Opened);
+        Assert.Equal(ErpPath, path);
+        Assert.InRange(stream.LargestRead, 1, 1024 * 1024);
+        Assert.True(stream.Closed);
+    }
+
+    [Theory]
+    [InlineData(@"\\server\share\App.exe")]
+    [InlineData("//server/share/App.exe")]
+    [InlineData(@"\\?\C:\Apps\App.exe")]
+    [InlineData(@"\\.\PhysicalDrive0")]
+    [InlineData(@"\\.\pipe\App.exe")]
+    public void Allow_app_refuses_a_UNC_or_device_path_before_it_touches_it(string target)
+    {
+        // The text the parser has for such a path in a change file.
+        var refusal = Assert.Throws<RunnerPolicy.InvalidPolicyException>(() => PolicyChange.Apply("", $$"""{ "allowedApps": [{ "exe": "App.exe", "path": {{J(target)}} }] }""")).Message;
+        Assert.Equal("the change: allowedApps[].path must be an absolute local path (no UNC or device paths)", refusal);
+        foreach (var options in new string[][] { ["--pin-hash"], [] })
+        {
+            var tool = new Tool();
+            tool.Files.Bytes[target] = [1, 2, 3];
+            Assert.Equal(1, tool.Run("y\n", ["allow-app", target, "--policy", PolicyPath, .. options]));
+            Assert.Equal($"{refusal}\n", tool.Output);
+            Assert.Empty(tool.Files.Opened);
+            Assert.Empty(tool.Files.Looked);
+            Assert.Empty(tool.Files.Writes);
+        }
+    }
+
+    [Fact]
+    public void Allow_app_refuses_a_short_8_3_name_before_it_touches_it()
+    {
+        var target = Path.Combine(Root, "ERPDEM~1", "ErpDemo.exe");
+        foreach (var options in new string[][] { ["--pin-hash"], [] })
+        {
+            var tool = new Tool();
+            tool.Files.Bytes[target] = [1, 2, 3];
+            Assert.Equal(1, tool.Run("y\n", ["allow-app", target, "--policy", PolicyPath, .. options]));
+            Assert.Equal($"write the full path, not a short (8.3) name: {L(target)}\n", tool.Output);
+            Assert.Empty(tool.Files.Opened);
+            Assert.Empty(tool.Files.Looked);
+            Assert.Empty(tool.Files.Writes);
+        }
+    }
+
+    [Fact]
+    public void Allow_app_pin_hash_needs_a_regular_file()
+    {
+        var tool = new Tool();
+        tool.Files.Folders.Add(ErpPath);
+        Assert.Equal(1, tool.Run("y\n", "allow-app", ErpPath, "--pin-hash", "--policy", PolicyPath));
+        Assert.Equal($"{ErpPath} is not a regular file\n", tool.Output);
+        Assert.Empty(tool.Files.Opened);
+        Assert.Empty(tool.Files.Writes);
     }
 
     [Fact]
@@ -523,7 +651,7 @@ public class PolicyCommandTests
     [Fact]
     public void A_failed_write_is_reported_and_the_runner_is_not_restarted()
     {
-        Exception[] failures = [new IOException("the backup folder cannot be trusted: PC\\bot owns the backup folder"), new UnauthorizedAccessException("Access to the path is denied."), new InvalidOperationException("unexpected")];
+        Exception[] failures = [new IOException("The process cannot access the file because it is being used by another process."), new UnauthorizedAccessException("Access to the path is denied."), new InvalidOperationException("unexpected")];
         foreach (var failure in failures)
         {
             var tool = new Tool();
@@ -535,6 +663,126 @@ public class PolicyCommandTests
             Assert.Equal(Starter, tool.Files.Text[PolicyPath]);
             Assert.Equal(0, tool.Restarts);
         }
+    }
+
+    [Fact]
+    public void A_backup_folder_that_cannot_be_trusted_stops_the_change_before_the_summary()
+    {
+        // The runner's user may be able to create the folder before the tool does. The administrator is told before
+        // anything is shown or asked.
+        var folder = PolicyCommand.BackupFolder(PolicyPath);
+        string[][] commands = [["apply", ChangePath], ["apply", ChangePath, "--yes"], ["allow-app", ErpPath], ["allow-app", ErpPath, "--yes"]];
+        foreach (var command in commands)
+        {
+            var tool = new Tool();
+            tool.Files.Folders.Add(folder);
+            tool.Files.BackupProblems[folder] = [@"PC\bot owns the backup folder", @"PC\bot can create files or folders in the backup folder"];
+            Assert.Equal(1, tool.Run("y\n", [.. command, "--policy", PolicyPath]));
+            Assert.Equal(
+                @"the backup folder cannot be trusted: PC\bot owns the backup folder; PC\bot can create files or folders in the backup folder; " +
+                "an administrator must check and remove it\n",
+                tool.Output);
+            Assert.Equal("y\n", tool.Unread);
+            Assert.Empty(tool.Files.Writes);
+            Assert.Equal(0, tool.Restarts);
+        }
+
+        // A folder with nothing wrong is used.
+        var fine = new Tool();
+        fine.Files.Folders.Add(folder);
+        Assert.Equal(0, fine.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Single(fine.Files.Writes);
+    }
+
+    [Fact]
+    public void A_file_with_the_backup_folder_s_name_stops_the_change_before_the_summary()
+    {
+        var folder = PolicyCommand.BackupFolder(PolicyPath);
+        var tool = new Tool();
+        tool.Files.Text[folder] = "planted";
+        Assert.Equal(1, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Equal($"{folder} exists and is not a folder; an administrator must check and remove it\n", tool.Output);
+        Assert.Equal("y\n", tool.Unread);
+        Assert.Empty(tool.Files.Writes);
+    }
+
+    [Fact]
+    public void A_folder_with_the_policy_file_s_name_is_refused()
+    {
+        string[][] commands = [["apply", ChangePath, "--yes"], ["allow-app", ErpPath], ["show"]];
+        foreach (var command in commands)
+        {
+            var tool = new Tool();
+            tool.Files.Text.Remove(PolicyPath);
+            tool.Files.Folders.Add(PolicyPath);
+            Assert.Equal(1, tool.Run("y\n", [.. command, "--policy", PolicyPath]));
+            Assert.Equal($"{PolicyPath} is a folder, not a policy file; an administrator must check and remove it\n", tool.Output);
+            Assert.Equal("y\n", tool.Unread);
+            Assert.Empty(tool.Files.Writes);
+        }
+    }
+
+    [Fact]
+    public void A_new_policy_needs_no_backup_folder()
+    {
+        // Nothing is backed up, so a folder that cannot be trusted is not used; the next change is the one refused.
+        var folder = PolicyCommand.BackupFolder(PolicyPath);
+        var tool = new Tool();
+        tool.Files.Text.Remove(PolicyPath);
+        tool.Files.Folders.Add(folder);
+        tool.Files.BackupProblems[folder] = [@"PC\bot owns the backup folder"];
+        Assert.Equal(0, tool.Run("", "apply", ChangePath, "--yes", "--policy", PolicyPath));
+        Assert.False(Assert.Single(tool.Files.Writes).Existed);
+        Assert.DoesNotContain(tool.Files.Text.Keys, name => name.StartsWith(folder, StringComparison.Ordinal));
+
+        tool.Files.Text[ChangePath] = """{ "gatedKeys": ["Ctrl+S"] }""";
+        Assert.Equal(1, tool.Run("", "apply", ChangePath, "--yes", "--policy", PolicyPath));
+        Assert.Equal(@"the backup folder cannot be trusted: PC\bot owns the backup folder; an administrator must check and remove it" + "\n", tool.Output);
+        Assert.Single(tool.Files.Writes);
+    }
+
+    [Fact]
+    public void A_backup_folder_that_stops_being_trusted_while_the_administrator_reads_is_refused_in_the_same_words()
+    {
+        // RpaPolicy.exe checks the folder again when it writes; its refusal is printed as it is.
+        const string refusal = @"the backup folder cannot be trusted: PC\bot owns the backup folder; an administrator must check and remove it";
+        var tool = new Tool();
+        tool.Files.WriteFailure = new RunnerPolicy.InvalidPolicyException(refusal);
+        Assert.Equal(1, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Equal($"{Changing()}\n{AllowErp}\n{OneApp}\n{Prompt}{refusal}\n", tool.Output);
+        Assert.Equal(Starter, tool.Files.Text[PolicyPath]);
+        Assert.Equal(0, tool.Restarts);
+    }
+
+    [Fact]
+    public void A_policy_file_that_appears_while_the_change_is_applied_is_not_replaced()
+    {
+        // No policy at the start check, so nothing was checked. A file that has the name at the write may be anyone's:
+        // it is not merged, not replaced and not moved to the backups.
+        foreach (var asFolder in new[] { false, true })
+        {
+            var tool = new Tool();
+            tool.Files.Text.Remove(PolicyPath);
+            tool.Files.BeforeWrite = () =>
+            {
+                if (asFolder) tool.Files.Folders.Add(PolicyPath);
+                else tool.Files.Text[PolicyPath] = "planted";
+            };
+            Assert.Equal(1, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+            Assert.Equal(
+                $"Creating a new policy at {PolicyPath}.\n{AllowErp}\n{OneApp}\n{Prompt}a policy file appeared while the change was being applied; nothing was written\n",
+                tool.Output);
+            Assert.Empty(tool.Files.Writes);
+            Assert.Equal(asFolder ? null : "planted", tool.Files.Text.GetValueOrDefault(PolicyPath));
+            Assert.DoesNotContain(tool.Files.Text.Keys, name => name.Contains("policy-backups"));
+            Assert.Equal(0, tool.Restarts);
+        }
+
+        // A policy that was there at the start check is replaced, with a backup.
+        var existing = new Tool();
+        Assert.Equal(0, existing.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.True(Assert.Single(existing.Files.Writes).Existed);
+        Assert.Contains(existing.Files.Text.Keys, name => name.Contains("policy-backups"));
     }
 
     [Fact]
