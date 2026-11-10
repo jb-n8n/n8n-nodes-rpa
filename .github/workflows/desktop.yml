@@ -478,9 +478,11 @@ jobs:
           $after = Get-State
           foreach ($name in $before.Keys) { Assert ($after[$name] -eq $before[$name]) "unchanged by the upgrade: $name" }
 
-      # Uninstall keeps the data directory; -RemoveData, run from the unpacked package afterwards, removes it. No
-      # process of rpa-ci-bot is running (the programs of the steps above ran as this job's account and ended with
-      # their step), which -RemoveData asks for.
+      # Uninstall keeps the data directory; -RemoveData, run from the unpacked package afterwards, removes it.
+      # -RemoveData is refused while a process is running of an account that owns something in the data directory.
+      # On an installed machine that is the bot user, which is signed out first. Here the runner ran as this job's
+      # account, so that account owns what the runner made there (its exports folder): the refusal is checked, what
+      # this job's account owns is removed, and then the data directory goes.
       - name: Uninstall, then remove the data
         timeout-minutes: 10
         shell: powershell
@@ -500,10 +502,23 @@ jobs:
           Assert ((Test-Path -LiteralPath "$data\policy.json") -and (Test-Path -LiteralPath "$data\token") -and (Test-Path -LiteralPath "$data\browser-token")) 'the data directory is kept, with the policy and the tokens'
           Assert ([bool](Get-LocalUser -Name rpa-ci-bot -ErrorAction SilentlyContinue)) 'the Windows user is kept'
 
-          # Who owns what the programs made there: -RemoveData is refused while such an account has a process running.
-          Get-ChildItem -LiteralPath $data -Force | ForEach-Object { Write-Host ('  {0} is owned by {1}' -f $_.Name, (Get-Acl -LiteralPath $_.FullName).Owner) }
+          $uninstaller = 'C:\rpa-ci\package\rpa-windows-x64\Uninstall-Rpa.ps1'
+          $me = [Security.Principal.WindowsIdentity]::GetCurrent().User
+          $mine = @()
+          if ('S-1-5-18', 'S-1-5-32-544' -notcontains $me.Value) {
+            $mine = @(Get-ChildItem -LiteralPath $data -Force | Where-Object { (Get-Acl -LiteralPath $_.FullName).GetOwner([Security.Principal.SecurityIdentifier]) -eq $me })
+          }
+          if ($mine.Count -gt 0) {
+            Write-Host "owned by this job's account: $(($mine | ForEach-Object { $_.Name }) -join ', ')"
+            $refused = @(& (Join-Path $PSHOME 'powershell.exe') -NoProfile -ExecutionPolicy Bypass -File $uninstaller -RemoveData)
+            $code = $LASTEXITCODE
+            $refused | ForEach-Object { Write-Host "  | $_" }
+            Assert ($code -eq 1 -and ($refused -join "`n") -match ' is signed in\. Sign .+ out, then run Uninstall-Rpa\.ps1 -RemoveData again\.' -and $refused -contains 'Nothing was changed.') '-RemoveData is refused while the account that owns something in the data directory has a process running'
+            Assert ((Test-Path -LiteralPath "$data\policy.json") -and (Test-Path -LiteralPath "$data\token")) 'the refusal removed nothing'
+            $mine | ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force }
+          }
           $global:LASTEXITCODE = 0
-          & 'C:\rpa-ci\package\rpa-windows-x64\Uninstall-Rpa.ps1' -RemoveData
+          & $uninstaller -RemoveData
           Assert ($LASTEXITCODE -eq 0) "Uninstall-Rpa.ps1 -RemoveData, from the unpacked package, exits 0 (it was $LASTEXITCODE)"
           Assert (-not (Test-Path -LiteralPath $data)) 'the data directory is gone'
 
