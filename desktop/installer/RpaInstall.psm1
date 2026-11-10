@@ -310,7 +310,8 @@ function Get-RpaInstallPlan {
 # Get-RpaUninstallFacts returns. Only -RemoveData can be refused: the data directory is deleted by path, so no
 # process may be running of an account that can write into it or owns something in it (such a process could swap a
 # folder for a junction while the tree is being removed), and a data directory that is itself a link is not removed.
-# Accounts are matched by their SID: an account that only has the name of the bot user is not the bot user.
+# Accounts are matched by their SID: an account that only has the name of the bot user is not the bot user. A
+# process whose account Windows does not give is refused too.
 function Get-RpaUninstallPlan {
   param(
     [Parameter(Mandatory = $true)][hashtable]$Parameters,
@@ -327,6 +328,15 @@ function Get-RpaUninstallPlan {
       if ($Facts.AutoSignInSid -and $Facts.AutoSignInSid -eq $account.Sid) {
         $refusals.Add(('Automatic sign-in is on for {0}, and Windows signs it in again after a sign-out. Run Uninstall-Rpa.ps1 without -RemoveData first, which turns that off; then sign {0} out and run Uninstall-Rpa.ps1 -RemoveData from the unpacked package.' -f $account.Name))
       }
+    }
+    # A process can take Administrators and SYSTEM off the access rules of its own token, and Windows then tells
+    # nobody which account it runs as. Such a process counts as one of an account in question.
+    $unknown = @($Facts.UnknownProcesses | Where-Object { $_ })
+    if ($unknown.Count -gt 0 -and @($Facts.Accounts | Where-Object { $_ }).Count -gt 0) {
+      $more = ''
+      if ($unknown.Count -eq 2) { $more = ', nor that of 1 more process' }
+      if ($unknown.Count -gt 2) { $more = ', nor that of {0} more processes' -f ($unknown.Count - 1) }
+      $refusals.Add(('The owner of {0} cannot be read{1}; it may belong to an account that can change what is in {2}. End it, then run Uninstall-Rpa.ps1 -RemoveData again.' -f $unknown[0], $more, $Facts.DataDir))
     }
   }
   @{ Refusals = $refusals.ToArray() }
@@ -804,7 +814,7 @@ function Copy-RpaProgramFiles([string]$SourceDir, [string]$InstallDir) {
 
 # The compiled helpers: the LSA secret Windows itself reads the automatic sign-in password from (Store is the test
 # bed's; Remove passes no data, which deletes the secret), a password check, the local groups of a user, the creation
-# of a user's profile, the number of names a file has, and the creation of a file that follows no link. A password
+# of a user's profile, the account a process runs as, the number of names a file has, and the creation of a file that follows no link. A password
 # goes in as a SecureString and is turned into plain text only in unmanaged memory that is wiped afterwards.
 function Add-RpaNativeTypes {
   if ('RpaLsaSecret' -as [type]) { return }
@@ -956,6 +966,35 @@ public static class RpaAccounts {
       return names;
     } finally {
       NetApiBufferFree(buffer);
+    }
+  }
+  [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr OpenProcess(uint access, bool inherit, int id);
+  [DllImport("advapi32.dll", SetLastError = true)] static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+  [StructLayout(LayoutKind.Sequential)]
+  struct ProcessBasicInformation { public IntPtr ExitStatus; public IntPtr PebBaseAddress; public IntPtr AffinityMask; public IntPtr BasePriority; public IntPtr UniqueProcessId; public IntPtr InheritedFromUniqueProcessId; }
+  [DllImport("ntdll.dll")] static extern int NtQueryInformationProcess(IntPtr process, int informationClass, out ProcessBasicInformation information, int length, out int returned);
+  const uint ProcessQueryLimitedInformation = 0x1000;
+  const uint TokenQuery = 0x8;
+  const int NoSuchProcess = 87;
+  // The SID of the account a process runs as, read from the process's token. An empty text for a process that has
+  // ended, and for one of Windows' kernel that runs no program (it has no memory for one: System, Registry, ...),
+  // whose token an administrator may not read. Nothing when Windows does not say: the process cannot be opened, or
+  // its token cannot (a process can take Administrators and SYSTEM off its token's access rules).
+  public static string ProcessOwner(int id) {
+    IntPtr process = OpenProcess(ProcessQueryLimitedInformation, false, id);
+    if (process == IntPtr.Zero) return Marshal.GetLastWin32Error() == NoSuchProcess ? "" : null;
+    try {
+      IntPtr token;
+      if (OpenProcessToken(process, TokenQuery, out token)) {
+        try { using (System.Security.Principal.WindowsIdentity identity = new System.Security.Principal.WindowsIdentity(token)) { return identity.User.Value; } }
+        finally { CloseHandle(token); }
+      }
+      ProcessBasicInformation basic;
+      int returned;
+      if (NtQueryInformationProcess(process, 0, out basic, Marshal.SizeOf(typeof(ProcessBasicInformation)), out returned) == 0 && basic.PebBaseAddress == IntPtr.Zero) return "";
+      return null;
+    } finally {
+      CloseHandle(process);
     }
   }
   // Makes the profile of a user that has never signed in. A profile that is there already is left alone.
@@ -1672,17 +1711,25 @@ function Get-RpaDataAccounts([hashtable]$Layout, $Install) {
   @($accounts.Keys | ForEach-Object { @{ Sid = $_; Name = $accounts[$_] } })
 }
 
-# The SIDs of the accounts that own a running process. A process whose owner Windows does not give (the idle
-# process, one that ends meanwhile) is left out.
+# The accounts the running processes belong to: their SIDs (Sids), read from each process's own token, which also
+# gives the SID of an account that was removed while its process goes on (Windows' management interface gives
+# nothing then). Unknown names the processes whose account cannot be read: a process can take Administrators and
+# SYSTEM off the access rules of its token. Left out are the idle process, a process that has ended meanwhile, and
+# the processes of Windows' kernel that run no program (System, Registry, ...).
 function Get-RpaProcessOwners {
+  Add-RpaNativeTypes
+  # Reading the token of another account's process takes the "Debug programs" privilege. An elevated Windows
+  # PowerShell has it switched on; this asks for it where it is not. Without it those processes count as unknown.
+  try { [Diagnostics.Process]::EnterDebugMode() } catch { }
   $sids = @{}
-  foreach ($process in Get-CimInstance -ClassName Win32_Process) {
-    try {
-      $owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -ErrorAction Stop
-      if ($owner.Sid) { $sids[[string]$owner.Sid] = $true }
-    } catch { }
+  $unknown = @()
+  foreach ($process in [Diagnostics.Process]::GetProcesses()) {
+    if ($process.Id -eq 0) { continue }
+    $owner = [RpaAccounts]::ProcessOwner($process.Id)
+    if ($null -eq $owner) { $unknown += '{0} (process {1})' -f $process.ProcessName, $process.Id }
+    elseif ($owner) { $sids[$owner] = $true }
   }
-  @($sids.Keys)
+  @{ Sids = @($sids.Keys); Unknown = $unknown }
 }
 
 # The facts Get-RpaUninstallPlan judges. Changes nothing.
@@ -1691,13 +1738,18 @@ function Get-RpaUninstallFacts {
   $layout = Get-RpaLayout
   $install = Read-RpaInstallFile $layout.InstallFile
   $facts = @{
-    DataDir       = $layout.DataDir
-    DataDirState  = Get-RpaPathState $layout.DataDir
-    Accounts      = @(Get-RpaDataAccounts $layout $install)
-    RunningSids   = @()
-    AutoSignInSid = $null
+    DataDir          = $layout.DataDir
+    DataDirState     = Get-RpaPathState $layout.DataDir
+    Accounts         = @(Get-RpaDataAccounts $layout $install)
+    RunningSids      = @()
+    UnknownProcesses = @()
+    AutoSignInSid    = $null
   }
-  if ($facts.Accounts.Count -gt 0) { $facts.RunningSids = @(Get-RpaProcessOwners) }
+  if ($facts.Accounts.Count -gt 0) {
+    $owners = Get-RpaProcessOwners
+    $facts.RunningSids = @($owners.Sids)
+    $facts.UnknownProcesses = @($owners.Unknown)
+  }
   if ($install -and $install.autoSignIn -eq $true) {
     try { $facts.AutoSignInSid = Get-RpaSid (Get-RpaAccount -User ([string]$install.user) -ComputerName $env:COMPUTERNAME) } catch { }
   }

@@ -907,7 +907,7 @@ Describe 'Get-RpaUninstallPlan' {
     function New-UninstallFacts([hashtable]$Change = @{}) {
       $facts = @{
         DataDir = $script:DataDir; DataDirState = New-PathState 'ours'
-        Accounts = @(@{ Sid = $script:BotSid; Name = 'rpa-runner' }); RunningSids = @('S-1-5-18', 'S-1-5-21-1-2-3-500'); AutoSignInSid = $null
+        Accounts = @(@{ Sid = $script:BotSid; Name = 'rpa-runner' }); RunningSids = @('S-1-5-18', 'S-1-5-21-1-2-3-500'); UnknownProcesses = @(); AutoSignInSid = $null
       }
       foreach ($key in $Change.Keys) { $facts[$key] = $Change[$key] }
       $facts
@@ -944,6 +944,40 @@ Describe 'Get-RpaUninstallPlan' {
     )
   }
 
+  # A process can take Administrators and SYSTEM off the access rules of its own token; Windows then tells nobody
+  # which account it runs as. It may be the bot user's.
+  It 'refuses -RemoveData while a process is running whose owner cannot be read' {
+    $facts = New-UninstallFacts @{ UnknownProcesses = @('powershell (process 5184)') }
+    $plan = Get-RpaUninstallPlan -Parameters @{ RemoveData = $true } -Facts $facts
+    $plan.Refusals | Should -BeExactly @('The owner of powershell (process 5184) cannot be read; it may belong to an account that can change what is in C:\ProgramData\RPA Runner. End it, then run Uninstall-Rpa.ps1 -RemoveData again.')
+
+    $facts = New-UninstallFacts @{ UnknownProcesses = @('powershell (process 5184)', 'cmd (process 77)', 'node (process 78)'); RunningSids = @($script:BotSid) }
+    $plan = Get-RpaUninstallPlan -Parameters @{ RemoveData = $true } -Facts $facts
+    $plan.Refusals | Should -BeExactly @(
+      'rpa-runner is signed in. Sign rpa-runner out, then run Uninstall-Rpa.ps1 -RemoveData again.'
+      'The owner of powershell (process 5184) cannot be read, nor that of 2 more processes; it may belong to an account that can change what is in C:\ProgramData\RPA Runner. End it, then run Uninstall-Rpa.ps1 -RemoveData again.'
+    )
+  }
+
+  It 'does not mind such a process without -RemoveData, or when no account can change what is in the data directory' {
+    $facts = New-UninstallFacts @{ UnknownProcesses = @('powershell (process 5184)') }
+    (Get-RpaUninstallPlan -Parameters @{ RemoveData = $false } -Facts $facts).Refusals.Count | Should -Be 0
+    $facts = New-UninstallFacts @{ UnknownProcesses = @('powershell (process 5184)'); Accounts = @() }
+    (Get-RpaUninstallPlan -Parameters @{ RemoveData = $true } -Facts $facts).Refusals.Count | Should -Be 0
+  }
+
+  It 'reads the account of a process from the process itself' -Skip:($env:OS -ne 'Windows_NT') {
+    InModuleScope RpaInstall {
+      Add-RpaNativeTypes
+      [RpaAccounts]::ProcessOwner($PID) | Should -BeExactly ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)
+      # The System process runs no program: its account is SYSTEM where Windows says so, and nobody's otherwise.
+      @('', 'S-1-5-18') | Should -Contain ([RpaAccounts]::ProcessOwner(4))
+      $owners = Get-RpaProcessOwners
+      $owners.Sids | Should -Contain ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)
+      $owners.Sids | Should -Contain 'S-1-5-18'
+    }
+  }
+
   It 'says how to get there when Windows signs the bot user in again by itself' {
     $facts = New-UninstallFacts @{ RunningSids = @($script:BotSid); AutoSignInSid = $script:BotSid }
     $plan = Get-RpaUninstallPlan -Parameters @{ RemoveData = $true } -Facts $facts
@@ -975,7 +1009,7 @@ Describe 'Invoke-RpaUninstall' {
     Mock -ModuleName RpaInstall Unregister-RpaTask { }
     Mock -ModuleName RpaInstall Remove-RpaProgramFiles { }
     Mock -ModuleName RpaInstall Get-RpaUninstallFacts {
-      @{ DataDir = 'C:\ProgramData\RPA Runner'; DataDirState = @{ Exists = $true; IsLink = $false }; Accounts = @(@{ Sid = 'S-1-5-21-1-2-3-1001'; Name = 'rpa-runner' }); RunningSids = @('S-1-5-21-1-2-3-1001'); AutoSignInSid = $null }
+      @{ DataDir = 'C:\ProgramData\RPA Runner'; DataDirState = @{ Exists = $true; IsLink = $false }; Accounts = @(@{ Sid = 'S-1-5-21-1-2-3-1001'; Name = 'rpa-runner' }); RunningSids = @('S-1-5-21-1-2-3-1001'); UnknownProcesses = @(); AutoSignInSid = $null }
     }
     $failure = $null
     try { Invoke-RpaUninstall -Plan @{ Refusals = @() } -RemoveData 6>$null } catch { $failure = $_.Exception }
