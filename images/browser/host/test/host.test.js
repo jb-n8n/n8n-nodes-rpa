@@ -9,7 +9,7 @@ import { request as httpsRequest } from 'node:https';
 import { connect, createServer as createTcpServer } from 'node:net';
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -126,6 +126,22 @@ function get(port, path) {
       res.on('data', (c) => { body += c; });
       res.on('end', () => resolve({ status: res.statusCode, body }));
     }).on('error', reject).end();
+  });
+}
+
+/**
+ * One upgrade request written as text on loopback, so the target can be anything. Resolves with what came back: all of
+ * it once the other side closed the connection, or what had arrived when the wait ended (an accepted upgrade stays open).
+ */
+function rawUpgrade(port, target, ms = 500) {
+  return new Promise((resolve) => {
+    const chunks = [];
+    const answer = (closed) => resolve({ closed, text: Buffer.concat(chunks).toString('latin1') });
+    const s = connect({ host: '127.0.0.1', port }, () => s.write(`GET ${target} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n`));
+    const timer = setTimeout(() => { answer(false); s.destroy(); }, ms);
+    s.on('data', (c) => chunks.push(c));
+    s.on('error', () => {});
+    s.on('close', () => { clearTimeout(timer); answer(true); });
   });
 }
 
@@ -493,14 +509,15 @@ test('stop() ends the whole process tree of the browser server', { skip: !WINDOW
 
 /**
  * What Playwright's cli.js does for `run-server`, as far as the host can tell: listens on --host and --port, prints its
- * address, answers upgrades on --path, tells the path to GET /json and "Running" to every other plain request. It also
- * notes what it was started with in started.json beside itself. A probe.json beside it asks for more before it listens:
+ * address, answers upgrades on --path, tells the path to GET /json and "Running" to every other plain request, and
+ * ends with an uncaught error on an upgrade whose target is not a URL path (Playwright 1.63 does, for `*@`). It notes
+ * what it was started with in started.json beside itself, and each upgrade that reaches it in upgrades.log. A probe.json beside it asks for more before it listens:
  * `requires` and `imports` are module names it tries to load (the outcome of each goes into started.json, and so do the
  * folders require() searches for a name).
  */
 const FAKE_CLI = `
 const http = require('node:http');
-const { existsSync, readFileSync, writeFileSync } = require('node:fs');
+const { appendFileSync, existsSync, readFileSync, writeFileSync } = require('node:fs');
 const { join } = require('node:path');
 const args = process.argv.slice(2);
 const option = (name) => args[args.indexOf(name) + 1];
@@ -520,6 +537,7 @@ const probe = existsSync(join(__dirname, 'probe.json')) ? JSON.parse(readFileSyn
     res.end('Running');
   });
   server.on('upgrade', (req, socket) => {
+    appendFileSync(join(__dirname, 'upgrades.log'), (req.url.split('?')[0] === path ? 'own' : 'other') + '\\n');
     if (new URL('http://localhost' + req.url).pathname !== path) return socket.end('HTTP/1.1 400 Bad Request\\r\\n\\r\\n');
     socket.write('HTTP/1.1 101 Switching Protocols\\r\\nUpgrade: websocket\\r\\nConnection: Upgrade\\r\\n\\r\\n');
     socket.pipe(socket);
@@ -551,7 +569,8 @@ function installedCopy(t, { probe } = {}) {
   writeFileSync(join(cliDir, 'cli.js'), FAKE_CLI);
   if (probe) writeFileSync(join(cliDir, 'probe.json'), JSON.stringify(probe));
   const started = () => JSON.parse(readFileSync(join(cliDir, 'started.json'), 'utf8'));
-  return { base, root, hostFile: join(root, 'host', 'host.mjs'), launcherFile: join(root, 'host', 'run-server.mjs'), started };
+  const upgrades = () => (existsSync(join(cliDir, 'upgrades.log')) ? readFileSync(join(cliDir, 'upgrades.log'), 'utf8').trim().split('\n') : []);
+  return { base, root, upgrades, hostFile: join(root, 'host', 'host.mjs'), launcherFile: join(root, 'host', 'run-server.mjs'), started };
 }
 
 /** Puts a module `name` into `folder` (a node_modules folder, or one NODE_PATH names). Loading it leaves `ran-<name>` in `base`. */
@@ -598,6 +617,45 @@ test('started the default way, the path is given to the browser server but is no
 
   await host.stop();
   await until(() => !alive(started.pid), 'the browser server to end');
+});
+
+test('an upgrade that is not for the path of the browser server is closed before the browser server sees it', async (t) => {
+  // Any local user can connect to the browser server's port. Playwright 1.63 ends with an uncaught error on an upgrade
+  // whose target is `*@`, which would stop the host and free the gate's port at every start.
+  const files = installedCopy(t);
+  const installed = await import(pathToFileURL(files.hostFile).href);
+  const dir = dataDir(t);
+  const host = await installed.startHost({ dataDir: dir, port: 0, bind: '127.0.0.1', log: () => {} });
+  t.after(() => host.stop());
+  let exited = false;
+  host.exited.then(() => { exited = true; });
+  const started = files.started();
+  t.after(() => { if (alive(started.pid)) process.kill(started.pid); });
+  const path = started.args[started.args.indexOf('--path') + 1];
+
+  const others = ['*@', '*', '/', '/other', `${path}x`, `${path}/more`, `${path.slice(0, -1)}`, `/${path}`, `${path.toUpperCase()}`, `http://127.0.0.1:${started.port}${path}`, 'http://[', '/%'];
+  for (const [index, target] of others.entries()) {
+    const answer = await rawUpgrade(started.port, target);
+    assert.ok(answer.closed, `target ${index}: the connection is closed`);
+    assert.doesNotMatch(answer.text, /^HTTP\/1\.1 101/, `target ${index}: no upgrade`);
+    assert.ok(alive(started.pid), `target ${index}: the browser server keeps running`);
+  }
+  // A request line that is not HTTP at all never becomes an upgrade; it must not end the browser server either.
+  const garbage = await rawUpgrade(started.port, 'a b c\r\n\x00');
+  assert.ok(garbage.closed);
+  assert.equal(files.upgrades().length, 0, 'none of them reached the browser server');
+
+  const own = await rawUpgrade(started.port, `${path}?session=1`);
+  assert.match(own.text, /^HTTP\/1\.1 101/, 'an upgrade to the path, with a query, reaches the browser server');
+  assert.equal(files.upgrades().join(), 'own');
+
+  const cert = readFileSync(join(dir, 'browser-cert.pem'), 'utf8');
+  const { status, socket } = await upgradeTls(host.port, cert, AUTH);
+  assert.equal(status, 101, 'the gate still serves a session');
+  socket.destroy();
+  assert.equal(files.upgrades().join(), 'own,own');
+  assert.ok(alive(started.pid));
+  assert.equal(exited, false, 'the host is still up');
 });
 
 test('a module planted outside the install is not loaded by the browser server; a module inside the install is', async (t) => {

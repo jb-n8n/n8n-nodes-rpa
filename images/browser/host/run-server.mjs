@@ -20,12 +20,15 @@
 //   this needs (Node 22.15 or later has them) the launcher does not start.
 // - Every plain HTTP request to the server is answered 404 by this file. Playwright 1.63's run-server answers
 //   GET /json with its path, to anyone who can connect to its port; on a machine with other users that would hand them
-//   the path. Only WebSocket upgrades reach Playwright. The host checks this at every start and does not start
-//   otherwise.
+//   the path. The host checks this at every start and does not start otherwise.
+// - A WebSocket upgrade reaches Playwright only when its target, up to the query, is exactly the path. The connection
+//   of any other upgrade is closed here. Playwright 1.63 ends with an uncaught error on an upgrade whose target is not
+//   a URL path (`*@`), so one request from any user of the machine would stop the browser server and the host.
 // - When stdin ends, the process exits. The host holds the other end of that pipe and never writes to it, so stdin ends
 //   when the host is gone, however it ended (on Windows the start script ends the host without a signal). The exit runs
 //   Playwright's own exit handlers, which end the browsers it launched. Start this file with a pipe on stdin: with no
 //   stdin at all it exits at once.
+import { timingSafeEqual } from 'node:crypto';
 import http from 'node:http';
 import Module, { createRequire } from 'node:module';
 import { dirname, sep } from 'node:path';
@@ -74,13 +77,27 @@ process.stdin.once('end', () => process.exit(0));
 process.stdin.once('error', () => process.exit(0));
 process.stdin.resume();
 
+/** Whether the target of an upgrade request, up to its query, is the path of this start. */
+const pathBytes = Buffer.from(path);
+function isForThePath(target) {
+  if (typeof target !== 'string') return false;
+  const query = target.indexOf('?');
+  const asked = Buffer.from(query === -1 ? target : target.slice(0, query));
+  return asked.length === pathBytes.length && timingSafeEqual(asked, pathBytes);
+}
 const emit = http.Server.prototype.emit;
-http.Server.prototype.emit = function emitUnlessPlainRequest(event, ...args) {
-  if (event !== 'request') return emit.call(this, event, ...args);
-  const response = args[1];
-  response.writeHead(404, { 'content-type': 'text/plain', connection: 'close' });
-  response.end('not found\n');
-  return true;
+http.Server.prototype.emit = function emitOnlyUpgradesForThePath(event, ...args) {
+  if (event === 'request') {
+    const response = args[1];
+    response.writeHead(404, { 'content-type': 'text/plain', connection: 'close' });
+    response.end('not found\n');
+    return true;
+  }
+  if (event === 'upgrade' && !isForThePath(args[0]?.url)) {
+    args[1]?.destroy();
+    return true;
+  }
+  return emit.call(this, event, ...args);
 };
 
 const cli = fileURLToPath(new URL('../node_modules/playwright/cli.js', import.meta.url));
