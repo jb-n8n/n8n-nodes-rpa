@@ -41,7 +41,7 @@ internal sealed class PolicyFiles : IPolicyFiles
     private const uint FileAttributeReparsePoint = 0x400;
 
     // FILE_FLAG_OPEN_REPARSE_POINT (a link is opened as itself), FILE_FLAG_BACKUP_SEMANTICS (a folder can be opened,
-    // and is then refused for what it is), SECURITY_SQOS_PRESENT with SECURITY_IDENTIFICATION.
+    // and is then refused for what it is), SECURITY_SQOS_PRESENT with SECURITY_IDENTIFICATION (see Open).
     private const uint OpenFlags = 0x00200000 | 0x02000000 | 0x00100000 | 0x00010000;
 
     private static readonly SecurityIdentifier Administrators = new(WellKnownSidType.BuiltinAdministratorsSid, null);
@@ -62,11 +62,13 @@ internal sealed class PolicyFiles : IPolicyFiles
 
     /// <summary>
     /// Opens a file whose path the caller chose, and says what the handle is before anything is read. The caller may
-    /// not be an administrator, and this open runs elevated. So the open asks for identification only (a pipe's
-    /// server can learn who opened it but cannot act as that user), a link in the last name of the path is opened as
-    /// the link and not followed, and the final path of what was opened is asked from the handle, which shows a
-    /// network share reached through a link earlier in the path (the open has reached the share by then; nothing is
-    /// read from it). The content is read through this same handle.
+    /// not be an administrator, and this open runs elevated. PolicyCommand has tested the path before this (its
+    /// drive, and each name in it for a link). The open asks Windows for identification only (SECURITY_SQOS_PRESENT
+    /// with SECURITY_IDENTIFICATION): for a named pipe on this machine, Windows then lets the pipe's server learn who
+    /// opened it and refuses the server's attempt to act as that user. The flag says nothing about a server on
+    /// another machine. A link in the last name of the path is opened as the link and not followed, and the final
+    /// path of what was opened is asked from the handle: it shows a network share the path led to after all (the
+    /// open has reached the share by then; nothing is read from it). The content is read through this same handle.
     /// </summary>
     public OpenedFile? Open(string path)
     {

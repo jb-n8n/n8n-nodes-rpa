@@ -110,8 +110,8 @@ public sealed class PolicyAppearedException() : IOException("a policy file appea
 /// </summary>
 /// <param name="OtherProcesses">One entry for each other process attached to the tool's console: true when that
 /// process is elevated, false when it is not or when that could not be read. Null when the tool has no console.</param>
-/// <param name="TakesKeys">True when the tool reads its input from a console window on the desktop of a person who is
-/// signed in, so that someone can press Enter in it.</param>
+/// <param name="TakesKeys">True when the tool's console has a window, the tool runs on the window station of a
+/// signed-in desktop, and its input is that console. Whether the window is visible is not part of it.</param>
 /// <param name="Buffer">The size of the console screen buffer the tool prints into: its width in columns and the rows
 /// it keeps (what can be scrolled back to). Null when the tool's output is not a console (a file, a pipe).</param>
 public sealed record PolicyConsole(IReadOnlyList<bool>? OtherProcesses, bool TakesKeys, (int Columns, int Rows)? Buffer)
@@ -124,9 +124,12 @@ public sealed record PolicyConsole(IReadOnlyList<bool>? OtherProcesses, bool Tak
     public bool HonoursOptions => OtherProcesses is { Count: > 0 } && OtherProcesses.All(elevated => elevated);
 
     /// <summary>
-    /// The tool waits for Enter before it exits only when it is alone in a console someone can type in: that window
-    /// closes with the tool. With no console, or one nobody can type in (a scheduled task, a hidden process), there is
-    /// no wait: its input may never give a line. This decides nothing else.
+    /// The tool waits for Enter before it exits only when no other process is attached to its console and
+    /// <see cref="TakesKeys"/> holds: such a window closes with the tool. The test does not ask whether the window
+    /// can be seen, so a tool alone in a console with a hidden window on a signed-in desktop waits as well. Without
+    /// a console, on a window station nobody is signed in to (a service, a scheduled task that runs whether a user
+    /// is signed in or not) or with input from a file or a pipe there is no wait: that input may never give a line.
+    /// This decides nothing else.
     /// </summary>
     public bool ClosesWithTheTool => OtherProcesses is { Count: 0 } && TakesKeys;
 }

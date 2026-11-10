@@ -33,9 +33,10 @@ internal static class WindowsConsole
         var asked = DateTime.UtcNow;
         if (AttachedProcesses() is not { } ids) return new PolicyConsole(null, TakesKeys: false, Buffer: null);
         var others = ids.Where(id => id != (uint)Environment.ProcessId).Select(id => IsElevated(id, asked)).ToList();
-        // Someone can press Enter in the console when it has a window, the window is on the desktop of a person who
-        // is signed in (a service or a scheduled task runs on a window station nobody sees), and the tool's input is
-        // that console and not a file or a pipe.
+        // The three facts behind the wait for Enter: the console has a window, the tool runs on the window station of
+        // a signed-in desktop (a service, and a scheduled task that runs whether a user is signed in or not, run on
+        // another one), and the tool's input is that console and not a file or a pipe. Whether the window is visible
+        // is not asked.
         var takesKeys = GetConsoleWindow() != 0 && Environment.UserInteractive && !Console.IsInputRedirected;
         return new PolicyConsole(others, takesKeys, Buffer());
     }

@@ -111,8 +111,9 @@ it, and they look different:
   the tool then opens a console window of its own. In that window `--yes` is ignored (the tool prints
   `--yes is ignored: start RpaPolicy from an administrator console to use it` and asks anyway) and `--policy` is
   refused (`--policy needs an administrator console`), because whoever started the tool chose its arguments while the
-  administrator prompt showed only the program's name. Before the window closes the tool prints
-  `Press Enter to close.` and waits, so its output can be read.
+  administrator prompt showed only the program's name. Before it asks, the tool also looks at the size of that
+  window's buffer (see "What the tool prints"). Before the window closes the tool prints `Press Enter to close.` and
+  waits, so its output can be read.
 
 The test behind this: the tool honours `--yes` and `--policy` only when it shares its console with at least one other
 program and every program attached to that console is elevated. It asks Windows about each one, and a program it
@@ -120,9 +121,11 @@ cannot ask about counts as not elevated. Alone in its console, without a console
 elevated (in a console that an elevation helper shares with a normal shell, for example), it ignores `--yes` and
 refuses `--policy`.
 
-The wait for Enter has its own test: the tool waits only when it is alone in a console window on the desktop of a
-person who is signed in, and reads its input from that window. Started without a console, or where nobody can type
-(a scheduled task, a hidden process, input that comes from a file or a pipe), it does not wait.
+The wait for Enter has its own test: the tool waits when no other program is attached to its console, the console
+has a window, the tool runs on the window station of a signed-in desktop, and its input is that console. The test
+does not ask whether the window can be seen, so a tool alone in a console with a hidden window on a signed-in desktop
+waits as well. Without a console, on a window station nobody is signed in to (a service, or a scheduled task set to
+run whether a user is signed in or not), or with input that comes from a file or a pipe, it does not wait.
 
 ```powershell
 .\RpaPolicy.exe show
@@ -141,21 +144,32 @@ person who is signed in, and reads its input from that window. Started without a
 - `allow-app <path-to-exe>` adds the application to `allowedApps` with its file name and full path. `--pin-hash` also
   pins the file's SHA-256, so the runner starts only a file with that hash (run the command again after the app is
   updated). An app the policy already has keeps its allowed argument lists, and its pin unless `--pin-hash` gives a
-  new one. The path must be a local one: a UNC or device path (`\\server\share\...`, `\\.\...`) and a short (8.3) name
-  are refused before the tool opens anything, with the messages a change file gets for such a path. `--pin-hash`
-  reads the file as a stream (`Application file not found: <path>` when there is none).
+  new one. Give the application by its real location on a local drive (the tests are described below). A UNC or device
+  path (`\\server\share\...`, `\\.\...`) and a short (8.3) name are refused before the tool opens anything, with
+  the messages a change file gets for such a path. `--pin-hash` reads the file as a stream
+  (`Application file not found: <path>` when there is none).
 - `apply <change.json>` adds what a change file lists. A change file is a JSON object with any of `allowedApps`,
   `writeControls`, `gatedKeys`, `helperProcesses` and `clipboardRead`, written as in the policy file. It must be on a
   local drive (`the change file must be on a local drive` for a UNC or device path).
-- The change file and the application file are paths chosen by whoever started the tool, and the tool opens them with
-  administrator rights. It opens each one once, without following a link in the last name of the path and in a way
-  that lets a named pipe's server identify the tool's user but not act as that user, and reads it only when what it
-  opened is a regular file on a local fixed drive. A folder, a link (a symbolic link or a junction), a pipe or
-  another device, and a file on a network share or a removable drive are refused:
-  `<path> is not a regular file on a local drive`. A link in an earlier part of the path is found only after the
-  open, from the final path of what was opened: when it leads to a network share, the tool has contacted that share
-  by then, and reads nothing from it. A link earlier in the path that stays on a local fixed drive is followed, and
-  `allow-app` writes the path as you gave it into the policy.
+- The change file and the application are paths chosen by whoever started the tool, and the tool works with
+  administrator rights. Before it opens such a path or writes it into the policy (`allow-app` with and without
+  `--pin-hash`), it tests the path itself:
+  - Its drive must be a letter that is a volume of its own with the drive type "fixed". A mapped network drive, a
+    removable drive and a letter that `subst` made for a folder are refused.
+  - No name in the path may be a link (a junction, a symbolic link, a mount point). The tool asks about each name
+    from the drive downward without following it and stops at the first link, so it does not go where the link
+    leads (a network share, for example).
+
+  A path that fails either test is refused: `<path> is not a regular file on a local drive`. So give an application
+  by its real location, not through a link or a substituted drive letter: a policy entry under such a path would
+  name whatever the link points to later.
+
+  Then the tool opens the file once (`apply` always, `allow-app` only for `--pin-hash`). It does not follow a link in
+  the last name of the path, and it asks Windows to let a named pipe's server on this machine identify the tool's
+  user without acting as that user. It reads the file only when what it opened is a regular file whose final path
+  is on a local fixed drive; a folder, a link, a pipe or another device, and a file on a network share or a
+  removable drive get the same refusal. This second test also covers a path that someone changed between the first
+  test and the open; the open has then gone where the path led, and the tool reads nothing from it.
 - Every command takes `--policy <path>` (default `%ProgramData%\RPA Runner\policy.json`). `apply` and `allow-app` take
   `--yes`, which writes without asking. Both options work only from an administrator console.
 
@@ -187,6 +201,12 @@ for it:
 | A short (8.3) name such as `C:\PROGRA~1\...` in an app `path` or a helper `pathPattern` (any `~` followed by a digit): it would name an existing entry's file without being that entry | `write the full path, not a short (8.3) name: <the path>` |
 | An entry that is not an object, or an argument that is not text | `an entry in <key> must be an object`, `an allowed argument must be text` |
 | A summary longer than 8,000 characters: everything the tool prints for the change before it asks, from the first line to the count line, as printed (line breaks and the eight spaces of continued rows counted). A value shown as `\uXXXX` escapes is six times as long as it is in the file. | `the summary of this change would be longer than 8000 characters; split it into smaller changes` |
+| A key the policy file does not have, at the top or inside an entry | `the change: unknown key "<key>"`, `the change: unknown key "<key>" in <list>` |
+
+A refusal that repeats a name or a value from a file (a key, a path, a key chord, an exe name) prints it like a value
+in the summary: in double quotes with `\uXXXX` escapes, and only its first 60 characters, followed by `…` when it is
+longer. The same checks and the same form apply to the policy file itself (`show`, and the policy a change is merged
+into), with the file's path or `the current policy` in place of `the change`.
 
 ### What the tool prints
 
@@ -206,12 +226,35 @@ line is last, directly above the prompt:
 | `Turn on clipboard read` | `clipboardRead` becomes `true`. |
 | `This change: <a> app(s) allowed or updated, <h> helper process pattern(s), <w> write control(s), <k> gated key(s).` | The count of the lines above (`, clipboard read turned on` before the full stop when it is). Compare it with what you read: if lines scrolled out of view, the counts still show them. |
 
-The tool breaks a long line itself, into rows of at most 76 characters: a line that continues is indented by eight
-spaces, and a row that starts at the left edge is the tool's own (a `with arguments` line starts after two spaces).
-So text from a value does not start a row, however long the value is, in a window at least 77 columns wide. A break
-falls between characters as printed, with a `\uXXXX`, `\"` or `\\` kept whole, and not next to a space where that can
-be avoided: put the rows together without the eight spaces and you have the line. The count line holds nothing from
-the change and is printed whole.
+The tool breaks a long line itself, into rows of at most 76 characters, and starts every row after the first with
+eight spaces. Its own words are broken only after a space, so the words a line starts with (up to the opening quote
+of its first value), every other word of the tool's and a 64-digit hash each stay on one row. Inside a value a break
+falls between characters as printed, with a `\uXXXX`, `\"` or `\\` kept whole, and not next to one of the value's
+spaces where that can be avoided inside the value: put the rows together without the eight spaces and you have the
+line.
+
+Where this holds: for the summary lines, and for every refusal and failure message. There, in a window at least 77
+columns wide, a row that starts at the left edge is the start of one of the tool's own lines (a `with arguments` line
+starts after two spaces), and text from a value, from a file or from a path you gave is on a row that starts with
+eight spaces unless it follows the tool's own words on a line's first row. Where it does not hold in that form:
+
+- `show` prints your policy file. Each line of the file starts a row with whatever the file holds, and only the rest
+  of a long line is on rows that start with eight spaces (a line of the file that itself starts with eight spaces
+  looks the same).
+- The first line (`Creating a new policy ...`, `Changing the policy ...`, `Policy file: ...`), the count line and the
+  tool's fixed messages (`Policy updated. ...`) are not broken by the tool. They hold the tool's own words, numbers
+  and the policy file's path (the default, or the one you gave with `--policy`); in a window narrower than they are,
+  the console breaks them.
+
+Before it asks, the tool reads the size of its console's screen buffer: its width, and the rows it keeps and lets
+you scroll back to. Whoever starts the tool through the administrator prompt may be able to choose that size. When
+the buffer has fewer than 77 columns, or keeps fewer rows than the first line, the summary, the count line and the
+prompt take in 77 columns, the tool does not ask and exits 1:
+`This window cannot show the whole summary (it needs <rows> rows and 77 columns). Start RpaPolicy from an
+administrator console and run the command again.` The test is made only when the tool is about to ask and its output
+is a console. It looks at the buffer, not at how much of it the window shows at once. A terminal that keeps its
+scrollback itself may report a buffer only as tall as its window; a long summary is then refused in it, also in an
+administrator console (use a classic console window or a taller window, or split the change).
 
 Warnings come directly under the line they belong to (under an app line, before its `with arguments` lines):
 
@@ -230,7 +273,7 @@ prints (messages, the `show` output, paths) has control and format characters wr
 
 These measures make a misleading change harder to write; they do not replace reading the lines. Read each of them and
 the count line, and answer `n` when anything is unclear. Limits that remain: a summary may be up to 8,000 characters
-long (more than 100 rows), which is more than a small window shows at once, so scroll up to the first
+long (more than 100 rows), which the buffer keeps but a window does not show at once, so scroll up to the first
 line (`Creating a new policy ...` or `Changing the policy ...`) before you answer; and the tool cannot tell whether a
 path that looks right is the program you mean.
 
@@ -241,17 +284,48 @@ path that looks right is the program you mean.
   replace it, the tool stops: `the existing policy file cannot be trusted: <problem>; an administrator must check and
   replace it`. Such a file may have been put there by a user who is not an administrator.
 - **Writing.** The tool writes the new policy to a temporary file beside the policy
-  (`policy.json.<32 hex digits>.tmp`, created for Administrators and SYSTEM only) and swaps it in in one step. If the
-  swap fails the tool says so (`Writing the policy failed: ...`), exits 1, and the runner keeps running with the
-  policy it has. When there was no policy file at the start, the new one is moved into place only if nothing has its
-  name by then; otherwise the tool prints
+  (`policy.json.<32 hex digits>.tmp`, created for Administrators and SYSTEM only) and swaps it in in one step. It
+  replaces the policy file only while the file still holds what the tool read at its start: it compares before it
+  creates anything, and again, with the backup copy, directly before the swap. When the file changed in between
+  (another administrator edited it while you read the summary), the tool prints
+  `the policy file changed while this change was being applied; nothing was written` and exits 1. Run the command
+  again to see the change against the policy as it is now. When there was no policy file at the start, the new one
+  is moved into place only if nothing has its name by then; otherwise the tool prints
   `a policy file appeared while the change was being applied; nothing was written` and exits 1. Look at the file that
   appeared before you run the command again: the tool did not make it.
-- **Backups.** Before the swap the tool copies the old policy to `policy-backups\` beside the policy, as
-  `policy.json.<yyyyMMdd-HHmmss>.bak`. When that name is taken (by a file or a folder), the tool takes `-2.bak`, then
-  `-3.bak`, and so on. The tool creates the folder for Administrators and SYSTEM only. A backup is a new file in that
-  folder: its owner is Administrators and its access rules are the ones it inherits from the folder, not the policy
-  file's (which let the runner's user read the policy).
+- **Backups.** Before the swap the tool writes the old policy (the bytes it read at its start) to `policy-backups\`
+  beside the policy, as `policy.json.<yyyyMMdd-HHmmss>.bak`. When that name is taken (by a file or a folder), the
+  tool takes `-2.bak`, then `-3.bak`, and so on. The tool creates the folder for Administrators and SYSTEM only. A
+  backup is a new file in that folder: its owner is Administrators and its access rules are the ones it inherits
+  from the folder, not the policy file's (which let the runner's user read the policy). The tool does not delete a
+  backup it has made, so a change that failed or was stopped after this step leaves a backup of a policy that did
+  not change.
+- **When writing fails.** The tool exits 1 and does not restart the runner. A failure before the swap (the
+  temporary file or the backup could not be written) leaves the policy file untouched:
+  `Writing the policy failed: <reason>. The runner keeps running with the policy it has.` After a swap that failed,
+  the tool looks at what is under the policy's name before it removes anything:
+  - The policy file is there and holds the old policy: the tool removes the temporary file and prints the message
+    above.
+  - The policy file is there, but holds something else or cannot be read: the tool removes the temporary file and
+    prints `... The policy file at <path> is still there, but the tool could not confirm that it is unchanged; look
+    at it. A copy of the old policy is at <backup>.`
+  - There is no policy file (Windows documents a failed replace that leaves none): the tool moves the old policy
+    back from its backup copy, which fails when something has the name by then, gives it the permissions its folder
+    gives, runs the runner's start check on it, and only then removes the temporary file:
+    `... After the failed swap there was no policy file at <path>; the tool put the old policy back there from its
+    backup copy, with the permissions its folder gives.` Permissions someone had set on the old file by hand are not
+    carried over; when the start check finds a problem, the message names it.
+  - There is no policy file and the old policy could not be moved back: both files stay where they are, and the
+    message names them: `... After the failed swap there is no policy file at <path>, and putting the old policy
+    back failed: <reason>. The old policy is at <backup>. The changed policy, which was not applied, is at
+    <temporary file>. An administrator must put the old policy back at <path>: the runner reads it when it starts.`
+    Copy the backup to the policy's path, check that the runner's user can read it and that only administrators can
+    change it, and delete the temporary file.
+
+  For a new policy the messages are `Writing the policy failed: <reason>. No policy file was written.` and, when
+  the file is in place but still has the temporary file's permissions,
+  `The policy file was written at <path>, but it could not be given the permissions of its folder: <reason>. ...`
+  When a temporary file could not be removed, the message ends with its path.
 - **What can stop a change before it is shown.** The runner's user may be able to create files and folders beside the
   policy, so the tool looks at what it is about to use before it prints the summary, and stops with exit 1 when:
   - a `policy-backups` folder is already there and is a link, or someone other than an administrator owns it, can
