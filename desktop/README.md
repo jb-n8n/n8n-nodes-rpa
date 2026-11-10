@@ -380,6 +380,40 @@ The UI parts run only on Windows: the `desktop` workflow builds and publishes ev
 the runner and drives the ERP Demo through it with the scenario client. Its artifacts `rpa-desktop-runner` and
 `erp-demo` are self-contained win-x64 builds (no .NET install needed).
 
+## Releasing the Windows package
+
+The Windows package, `rpa-windows-x64.zip`, is released from the `desktop-release` workflow
+(`.github/workflows/desktop-release.yml`), never from a laptop. Pushing a tag `desktop-v<version>`, where `<version>`
+is the `<Version>` in `desktop/Directory.Build.props` (for example `desktop-v0.2.0`), starts it:
+
+1. It checks that the tag names that version, that the tagged commit is on `main`, and that `CHANGELOG.md` has a
+   section `## <version>`, which becomes the release notes. If any check fails, nothing is built.
+2. It runs the `desktop` workflow, which builds the package, tests it, installs it on `windows-latest` and drives it.
+3. It checks the package it built: the zip's SHA-256 matches `rpa-windows-x64.zip.sha256` beside it, and the
+   `VERSION` file in the zip is the tag's version.
+4. In the protected `release` environment, it checks the package again, records a build attestation of the zip and
+   creates the GitHub Release `desktop-v<version>` with `rpa-windows-x64.zip` and `rpa-windows-x64.zip.sha256`. It
+   stops if a release for that tag exists already; it does not replace one. The release is not marked as the
+   repository's latest release, which stays the node's.
+
+Run by hand (Actions, `desktop-release`, Run workflow on `main`, with `dry_run` on, the default), it does steps 1 to 3
+with the version of `desktop/Directory.Build.props` in place of a tag, and stops before the attestation and the
+release.
+
+The package is not code-signed: the zip has no signature, and neither have the runner, the policy tool, the ERP Demo
+or the PowerShell scripts in it (the files it ships from other projects, such as `node.exe` and Chromium, are as those projects publish them). What a release
+has instead is the zip's SHA-256 and a build attestation, which records the workflow of this repository that built
+the zip and the commit it built it from. Check both before you unpack a download:
+
+```sh
+gh attestation verify rpa-windows-x64.zip --repo jb-n8n/n8n-nodes-rpa
+sha256sum -c rpa-windows-x64.zip.sha256
+```
+
+In PowerShell, compare `(Get-FileHash rpa-windows-x64.zip -Algorithm SHA256).Hash` with the hash in
+`rpa-windows-x64.zip.sha256` (the case differs). The hash only shows that the download matches the file next to it on
+the release page; the attestation ties the zip to the workflow run that built it.
+
 ## Protocol
 
 JSON-RPC 2.0 over WebSocket, one request per message, `Authorization: Bearer <token>` on the upgrade (HTTP 401
