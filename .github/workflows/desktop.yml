@@ -356,6 +356,10 @@ jobs:
 
       # The policy tool honours --yes only when every other process attached to its console is elevated; the shell of
       # this step is. The letter n on its input would decline if the tool asked after all.
+      # ci-policy-change.json is for this hosted machine only. No bot user signs in here, so the runner runs as this
+      # job's account, an administrator, who can change the installed demo apps: hence allowUserWritable for both.
+      # On a real machine the change leaves allowUserWritable out: the runner runs as the bot user, a standard user,
+      # who cannot change what is under Program Files.
       - name: Change the policy with the installed RpaPolicy.exe
         timeout-minutes: 5
         shell: powershell
@@ -401,7 +405,7 @@ jobs:
           # folder of whoever starts it (a single file with it unpacks to <temp>\.net\RpaPolicy and loads from there).
           $unpacked = Join-Path ([IO.Path]::GetTempPath()) '.net\RpaPolicy'
           Assert (-not $env:DOTNET_BUNDLE_EXTRACT_BASE_DIR -and -not (Test-Path -LiteralPath $unpacked)) "before the policy tool runs: no DOTNET_BUNDLE_EXTRACT_BASE_DIR, no $unpacked"
-          $output = @('n' | & $tool apply (Join-Path $env:GITHUB_WORKSPACE 'desktop\installer\test\e2e-policy-change.json') --yes)
+          $output = @('n' | & $tool apply (Join-Path $env:GITHUB_WORKSPACE 'desktop\installer\test\ci-policy-change.json') --yes)
           $code = $LASTEXITCODE
           $output | ForEach-Object { Write-Host "  | $_" }
           Assert (-not (Test-Path -LiteralPath $unpacked)) "RpaPolicy.exe unpacked nothing: there is no $unpacked"
@@ -419,8 +423,10 @@ jobs:
 
       # The logon tasks do not start on this machine: nobody signs in as rpa-ci-bot. The two start scripts are
       # started by hand, as the account of this job (an administrator, which the access rules let read the tokens),
-      # in this job's desktop session. The programs go on running after this step: the upgrade and the uninstall
-      # below find them running and stop them, as on a machine in use.
+      # in this job's desktop session. That is for this hosted machine only: on a real machine nobody starts them from
+      # an elevated shell; the logon tasks start both programs in the bot user's session when it signs in. The
+      # programs go on running after this step: the upgrade and the uninstall below find them running and stop them,
+      # as on a machine in use.
       - name: Start the installed runner and browser and drive them (protocol scenario, browser smoke)
         timeout-minutes: 15
         shell: powershell
