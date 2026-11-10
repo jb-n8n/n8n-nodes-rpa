@@ -199,8 +199,9 @@ cmd_down() {
 }
 
 # One word about the first boot, from the test bed's own folder on the VM: done (the done marker is there), failed (the
-# log holds a "setup FAILED" line), running, or "not started".
-FIRST_BOOT_PS="\$d = 'C:\\Program Files\\RPA Test Bed'; if (Test-Path -LiteralPath (\$d + '\\setup.done')) { 'done' } elseif (-not (Test-Path -LiteralPath (\$d + '\\setup.log'))) { 'not started' } elseif (Select-String -LiteralPath (\$d + '\\setup.log') -SimpleMatch -Pattern 'setup FAILED' -Quiet) { 'failed' } else { 'running' }"
+# failed marker is there), running (the log is), or "not started". It only asks whether files are there: the setup
+# appends to its log while it runs, and Windows PowerShell 5.1 may not share a file it appends to with a reader.
+FIRST_BOOT_PS="\$d = 'C:\\Program Files\\RPA Test Bed'; if (Test-Path -LiteralPath (\$d + '\\setup.done')) { 'done' } elseif (Test-Path -LiteralPath (\$d + '\\setup.failed')) { 'failed' } elseif (-not (Test-Path -LiteralPath (\$d + '\\setup.log'))) { 'not started' } else { 'running' }"
 
 cmd_status() {
   load_outputs

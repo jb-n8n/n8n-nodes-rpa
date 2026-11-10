@@ -23,7 +23,7 @@ Every resource carries the tag `Project = n8n-rpa-desktop-testbed`.
 
 ## What the first boot does
 
-The user data is a small bootstrap that unpacks [`setup.ps1.tftpl`](setup.ps1.tftpl) and runs it once, as LocalSystem under EC2Launch v2. The setup script is gzipped and stripped of comments so it fits EC2's 16 KB limit. It does what is specific to the test bed and leaves the product to the installer. Its files are in `C:\Program Files\RPA Test Bed\`, a folder it creates for SYSTEM and Administrators only: `setup.log` (progress), `setup.done`, `install-package.ps1` and its log, and the policy change file. In order:
+The user data is a small bootstrap that unpacks [`setup.ps1.tftpl`](setup.ps1.tftpl) and runs it once, as LocalSystem under EC2Launch v2. The setup script is gzipped and stripped of comments so it fits EC2's 16 KB limit. It does what is specific to the test bed and leaves the product to the installer. Its files are in `C:\Program Files\RPA Test Bed\`, a folder it creates for SYSTEM and Administrators only: `setup.log` (progress), `setup.done` or `setup.failed`, `install-package.ps1` and its log, and the policy change file. In order:
 
 1. Turns Windows Firewall on for every profile and adds an outbound rule, `RPA-TestBed-No-IMDS`, that blocks the instance metadata address (169.254.169.254) for every member of the Windows group Users (see [The instance metadata blocks](#the-instance-metadata-blocks)). This comes first, before any secret is written and before anything of the product.
 2. Sets the access of the Windows PowerShell event log (`Microsoft-Windows-PowerShell/Operational`) to SYSTEM and Administrators. Windows PowerShell can record the text of scripts it runs in that log, and the setup script's text holds `package_url`.
@@ -44,7 +44,7 @@ With `package_url` set, it goes on:
 7. Applies `runner_policy` with the package's policy tool (see [The policy](#the-policy)).
 8. Writes `setup.done` and restarts the VM. `rpa-runner` signs in on the console and the two tasks start the runner and the browser.
 
-A step that fails ends the setup there: `setup.log` gets a line `setup FAILED at line <n>: <reason>`, with the lines of `install-package.ps1`, the installer and the policy tool above it, and the VM does not restart. Nothing runs the setup again; fix the input and replace the VM. `desktop-testbed.sh status` says whether the first boot finished, failed or is still running.
+A step that fails ends the setup there: it writes the marker `setup.failed`, `setup.log` gets a line `setup FAILED at line <n>: <reason>`, with the lines of `install-package.ps1`, the installer and the policy tool above it, and the VM does not restart. Nothing runs the setup again; fix the input and replace the VM. `desktop-testbed.sh status` says whether the first boot finished, failed or is still running, from whether `setup.done`, `setup.failed` and `setup.log` are there; it does not open the log, which the setup appends to while it runs.
 
 ### Who can reach the ports
 

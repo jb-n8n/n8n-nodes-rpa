@@ -10,9 +10,9 @@
 # made by the installer and copied to Secrets Manager after it. None is written to output or a log, and a password is
 # text only on its way to Secrets Manager: Windows gets it as a SecureString that is filled character by character,
 # not by a command that takes text.
-# What belongs to the test bed (this log, the done marker, install-package.ps1, the policy change file, the unpacked
-# package while it installs) is in C:\Program Files\RPA Test Bed, which only SYSTEM and Administrators can read or
-# change. Progress: setup.log there.
+# What belongs to the test bed (this log, the done and failed markers, install-package.ps1, the policy change file,
+# the unpacked package while it installs) is in C:\Program Files\RPA Test Bed, which only SYSTEM and Administrators
+# can read or change. Progress: setup.log there.
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 function Dec([string]$b64) { if ($b64) { [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b64)) } else { '' } }
@@ -34,6 +34,7 @@ $User         = 'rpa-runner'
 $Root           = Join-Path $env:ProgramFiles 'RPA Test Bed'
 $SetupLog       = Join-Path $Root 'setup.log'
 $Done           = Join-Path $Root 'setup.done'
+$Failed         = Join-Path $Root 'setup.failed'
 $InstallPackage = Join-Path $Root 'install-package.ps1'
 
 # Created with its owner (Administrators) and access rules (SYSTEM and Administrators in full, nobody else) in one call.
@@ -44,7 +45,9 @@ if (-not (Test-Path -LiteralPath $Root)) {
 }
 function Log([string]$m) { Add-Content -LiteralPath $SetupLog -Value ('{0} {1}' -f (Get-Date -Format o), $m) }
 if (Test-Path -LiteralPath $Done) { Log 'setup already done'; exit 0 }
-trap { Log ('setup FAILED at line {0}: {1}' -f $_.InvocationInfo.ScriptLineNumber, $_.Exception.Message); exit 1 }
+# A failure leaves the marker setup.failed, written before the log line: desktop-testbed.sh status asks only whether
+# the markers are there and never opens the log, which the setup appends to while it runs.
+trap { Set-Content -LiteralPath $Failed -Value (Get-Date -Format o); Log ('setup FAILED at line {0}: {1}' -f $_.InvocationInfo.ScriptLineNumber, $_.Exception.Message); exit 1 }
 Log 'setup started'
 
 # 64 symbols, so a random byte modulo 64 is uniform; retried until it has an upper, a lower and a digit and no part of

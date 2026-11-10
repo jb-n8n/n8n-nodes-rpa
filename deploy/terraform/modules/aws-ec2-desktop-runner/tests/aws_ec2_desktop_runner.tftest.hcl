@@ -252,6 +252,11 @@ run "without_a_package_the_user_data_installs_nothing_of_the_product" {
     error_message = "The test-bed setup still runs: the Administrator password, Windows Firewall on, the done marker."
   }
   assert {
+    # desktop-testbed.sh status asks whether setup.failed is there; it does not read setup.log.
+    condition     = strcontains(local.setup, "$Failed         = Join-Path $Root 'setup.failed'") && strcontains(local.setup, "trap { Set-Content -LiteralPath $Failed -Value (Get-Date -Format o); Log ('setup FAILED at line")
+    error_message = "A failed setup writes the marker setup.failed before its log line."
+  }
+  assert {
     condition = (
       strcontains(local.setup, "New-NetFirewallRule -Name 'RPA-TestBed-No-IMDS' -DisplayName 'Block instance metadata for members of Users' -Direction Outbound -Protocol TCP -RemoteAddress '169.254.169.254' -LocalUser 'D:(A;;CC;;;BU)' -Action Block") &&
       strcontains(local.setup, "wevtutil.exe') sl 'Microsoft-Windows-PowerShell/Operational' '/ca:O:BAG:SYD:(A;;0xf0007;;;SY)(A;;0x7;;;BA)'")

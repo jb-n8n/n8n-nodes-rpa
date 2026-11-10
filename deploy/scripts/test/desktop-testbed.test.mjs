@@ -198,7 +198,9 @@ test('status shows state, URL and SSM, and needs a brought-up test bed', () => {
     assert.match(r.stdout, /first boot: unknown/, 'no answer from the VM');
     const send = t.calls().find((c) => c.includes('send-command'));
     const params = JSON.parse(send[send.indexOf('--parameters') + 1]);
-    assert.match(params.commands[0], /^\$d = 'C:\\Program Files\\RPA Test Bed'; if \(Test-Path -LiteralPath \(\$d \+ '\\setup\.done'\)\) \{ 'done' \}/);
+    assert.match(params.commands[0], /^\$d = 'C:\\Program Files\\RPA Test Bed'; if \(Test-Path -LiteralPath \(\$d \+ '\\setup\.done'\)\) \{ 'done' \} elseif \(Test-Path -LiteralPath \(\$d \+ '\\setup\.failed'\)\) \{ 'failed' \}/);
+    // The setup appends to setup.log while it runs: status only asks whether the markers are there.
+    assert.ok(!params.commands[0].includes('Select-String') && !params.commands[0].includes('Get-Content'), 'status does not open setup.log');
     for (const [answer, shown] of [['done', /first boot: finished$/m], ['failed', /first boot: FAILED \(see C:\\Program Files\\RPA Test Bed\\setup\.log on the VM\)$/m], ['running\r', /first boot: still running$/m], ['not started', /first boot: not started yet$/m], ['done\x1b[2J', /first boot: unknown/]]) {
       r = t.run(['status'], { FAKE_SSM_OUTPUT: answer });
       assert.equal(r.code, 0, r.out);
