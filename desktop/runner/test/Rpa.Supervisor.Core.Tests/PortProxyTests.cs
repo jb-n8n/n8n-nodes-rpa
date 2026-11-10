@@ -27,17 +27,28 @@ public sealed class PortProxyTests : IAsyncLifetime
         foreach (var item in _cleanup) item.Dispose();
     }
 
-    private sealed record Setup(FakeRdpHost Host, int ListenPort, int TargetPort);
+    private sealed record Setup(FakeRdpHost Host, SessionManager Manager, int ListenPort, int TargetPort);
 
-    private Setup Start(TimeProvider time, int idleSeconds = 15, int readySeconds = 45)
+    private Setup Start(TimeProvider time, int idleSeconds = 15, int readySeconds = 45, string stateFile = "")
     {
         var listen = FreePort();
         var target = FreePort();
-        var options = new SupervisorOptions(Bot, [new PortMap(listen, target)], ["127.0.0.1"], idleSeconds, readySeconds);
+        var options = new SupervisorOptions(Bot, [new PortMap(listen, target)], ["127.0.0.1"], idleSeconds, readySeconds,
+            stateFile);
         var host = new FakeRdpHost(_sessions, time, _events);
         var manager = new SessionManager(_sessions, host, options, _log, time);
         _proxy = new PortProxy(manager, options, _log).RunAsync(_stop.Token);
-        return new Setup(host, listen, target);
+        return new Setup(host, manager, listen, target);
+    }
+
+    // Advances the fake time in steps until the condition holds.
+    private static async Task DriveUntil(FakeTimeProvider time, Func<bool> done, TimeSpan step)
+    {
+        for (var i = 0; i < 300 && !done(); i++)
+        {
+            time.Advance(step);
+            await Task.Delay(10);
+        }
     }
 
     private static int FreePort()
@@ -217,5 +228,50 @@ public sealed class PortProxyTests : IAsyncLifetime
         Assert.All(waiting, client => Assert.False(client.Client.Poll(0, SelectMode.SelectRead)));
         Assert.Equal(1, setup.Host.Calls);
         Assert.Contains(_log.Failures, f => f.Message.Contains("64"));
+    }
+
+    [Fact]
+    public async Task A_sign_in_that_keeps_failing_leaves_LastFailure_set_and_written_to_the_state_file_and_the_client_is_closed()
+    {
+        var dir = Directory.CreateTempSubdirectory("rpa-supervisor-").FullName;
+        _cleanup.Add(new Deleter(dir));
+        var stateFile = Path.Combine(dir, "supervisor-state.json");
+        var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-11-10T08:00:00Z"));
+        var setup = Start(time, readySeconds: 45, stateFile: stateFile);
+        setup.Host.AlwaysFail = SessionFailure.HostExited;
+        var client = await Connect(setup.ListenPort);
+        var read = client.GetStream().ReadAsync(new byte[1]).AsTask();
+
+        await DriveUntil(time, () => read.IsCompleted, TimeSpan.FromSeconds(1));
+
+        Assert.Equal(0, await read.WaitAsync(Patience));
+        Assert.StartsWith("HostExited", setup.Manager.LastFailure);
+        Assert.Contains("\"lastFailure\":\"HostExited", File.ReadAllText(stateFile));
+    }
+
+    [Fact]
+    public async Task A_connection_whose_target_ended_is_closed_and_the_session_is_signed_out_after_IdleSeconds()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-11-10T08:00:00Z"));
+        var setup = Start(time, idleSeconds: 15);
+        // The target listens first: with fake time the proxy's poll would wait for the clock.
+        var target = Target(setup.TargetPort);
+        var client = await Connect(setup.ListenPort);
+        var inner = await Accept(target);
+        await client.GetStream().WriteAsync("a"u8.ToArray());
+        await Read(inner, 1);
+
+        // The target ends; the client stays open and says nothing.
+        inner.Dispose();
+        await AssertEnds(client);
+        await DriveUntil(time, () => _sessions.SignOuts.Count > 0, TimeSpan.FromSeconds(1));
+
+        Assert.Single(_sessions.SignOuts);
+        Assert.Empty(_sessions.ForUser(Bot));
+    }
+
+    private sealed class Deleter(string dir) : IDisposable
+    {
+        public void Dispose() => Directory.Delete(dir, true);
     }
 }

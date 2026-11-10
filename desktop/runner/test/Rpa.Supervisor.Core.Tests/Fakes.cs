@@ -62,9 +62,9 @@ public sealed class FakeRdpHost(FakeSessions sessions, TimeProvider time, List<s
     /// <summary>When set, each attempt waits for it before it does anything else.</summary>
     public TaskCompletionSource? Gate { get; set; }
 
-    /// <summary>When set, a failed attempt leaves a session behind (as a Remote Desktop client that times out after
-    /// the session was made can).</summary>
-    public bool LeaveSessionOnFailure { get; set; }
+    /// <summary>When set, a failed attempt leaves a session in this state behind: Disconnected as a Remote Desktop
+    /// client that times out after the session was made can, Active as a person who signs in during the attempt.</summary>
+    public SessionState? LeaveSessionOnFailure { get; set; }
 
     public int Calls => Volatile.Read(ref _calls);
     public List<FakeConnection> Connections { get; } = [];
@@ -79,7 +79,7 @@ public sealed class FakeRdpHost(FakeSessions sessions, TimeProvider time, List<s
         var id = _nextId++;
         if (outcome is { } failure)
         {
-            if (LeaveSessionOnFailure) sessions.Add(new SessionInfo(id, user, SessionState.Disconnected, time.GetUtcNow()));
+            if (LeaveSessionOnFailure is { } state) sessions.Add(new SessionInfo(id, user, state, time.GetUtcNow()));
             throw new SessionException(failure, $"the fake failed with {failure}");
         }
         sessions.Add(new SessionInfo(id, user, SessionState.Active, time.GetUtcNow()));

@@ -17,6 +17,7 @@ public sealed class PortProxy(SessionManager manager, SupervisorOptions options,
     internal const int MaxWaiting = 64;
 
     private static readonly TimeSpan TargetPoll = TimeSpan.FromMilliseconds(250);
+    private static readonly TimeSpan AcceptRetry = TimeSpan.FromMilliseconds(500);
     private int _waiting;
     private int _fullLogged;
 
@@ -57,8 +58,18 @@ public sealed class PortProxy(SessionManager manager, SupervisorOptions options,
             catch (SocketException e)
             {
                 log.Failure(null, $"Accepting a connection on port {map.ListenPort} failed: {e.Message}");
+                try
+                {
+                    // A repeating error must not spin or flood the log.
+                    await Task.Delay(AcceptRetry, manager.Time, ct);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    return;
+                }
                 continue;
             }
+            client.NoDelay = true;
 
             if (Interlocked.Increment(ref _waiting) > MaxWaiting)
             {
@@ -122,10 +133,9 @@ public sealed class PortProxy(SessionManager manager, SupervisorOptions options,
                 : $"No session within {options.ReadySeconds} s; the connection to port {map.ListenPort} is closed.");
             return null;
         }
-        catch (Exception e) when (e is not OperationCanceledException)
+        catch (SessionException)
         {
-            log.Info($"The connection from {client.RemoteEndPoint} to port {map.ListenPort} is refused: {e.Message}");
-            return null;
+            return null; // the manager has recorded why, at most once per 30 s for the same failure
         }
     }
 
@@ -133,7 +143,7 @@ public sealed class PortProxy(SessionManager manager, SupervisorOptions options,
     {
         while (true)
         {
-            var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+            var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
             try
             {
                 await socket.ConnectAsync(new IPEndPoint(IPAddress.Loopback, port), ct);
@@ -155,11 +165,14 @@ public sealed class PortProxy(SessionManager manager, SupervisorOptions options,
     private static async Task PipeAsync(Socket client, Socket target, CancellationToken ct)
     {
         using var broken = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        await Task.WhenAll(CopyAsync(client, target, broken), CopyAsync(target, client, broken));
+        // The client may half-close and still read the answer; a connection lives no longer than its target, so a
+        // client that stays open and silent cannot keep the session signed in.
+        await Task.WhenAll(CopyAsync(client, target, broken, endsBoth: false), CopyAsync(target, client, broken, endsBoth: true));
     }
 
-    // Copies until the source ends, then passes the end on. A reset or a stop ends both directions.
-    private static async Task CopyAsync(Socket from, Socket to, CancellationTokenSource broken)
+    // Copies until the source ends, then passes the end on (and with endsBoth, ends the other direction too). A reset
+    // or a stop ends both directions.
+    private static async Task CopyAsync(Socket from, Socket to, CancellationTokenSource broken, bool endsBoth)
     {
         var buffer = new byte[16 * 1024];
         try
@@ -171,6 +184,7 @@ public sealed class PortProxy(SessionManager manager, SupervisorOptions options,
                 while (!pending.IsEmpty) pending = pending[await to.SendAsync(pending, SocketFlags.None, broken.Token)..];
             }
             to.Shutdown(SocketShutdown.Send);
+            if (endsBoth) broken.Cancel();
         }
         catch (Exception e) when (e is SocketException or OperationCanceledException or ObjectDisposedException)
         {

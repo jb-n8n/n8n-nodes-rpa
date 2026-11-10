@@ -1,20 +1,26 @@
+using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using System.Text.Json;
 
 namespace Rpa.Supervisor.Core;
 
 /// <summary>
 /// Owns the bot user's session. A connection that needs it calls EnsureAsync: the first signs the user in, later ones
-/// reuse the session while it is Active. A session of the user that the supervisor did not create (a person signed
-/// in as the bot user) is never signed out or taken over; EnsureAsync refuses with UserSignedIn instead. The session is
-/// signed out when no Hold has been taken for IdleSeconds, when its Remote Desktop connection closes, and on StopAsync.
-/// The state file names the session the supervisor created, so that after a restart it signs its own stale session
-/// out and still leaves a person's alone. The password never passes through here.
+/// reuse the session while it is Active. The supervisor takes a session as its own in two cases only: on a sign-in,
+/// the session its Remote Desktop connection reports; after a failed attempt, a half-made session that is inferred to
+/// be the attempt's (see SignOutLeftoverAsync). It does not sign out or take over any other session of the user (a
+/// person signed in as the bot user); EnsureAsync refuses with UserSignedIn instead. Its own session is signed out
+/// when no Hold has been taken for IdleSeconds, when its Remote Desktop connection closes, and on StopAsync. The state
+/// file names that session, so that after a restart the supervisor signs its own stale session out and still leaves a
+/// person's alone. The password never passes through here.
 /// </summary>
 public sealed class SessionManager
 {
     // Attempts after a Timeout or a HostExited start at least this far apart: right after boot the Remote Desktop
     // service refuses at once, and the attempts must not spin.
     private static readonly TimeSpan RetrySpacing = TimeSpan.FromSeconds(2);
+    // A failure that repeats (a refused connection after another) is logged and written at most this often.
+    private static readonly TimeSpan RepeatInterval = TimeSpan.FromSeconds(30);
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
     private readonly ISessions _sessions;
@@ -32,6 +38,7 @@ public sealed class SessionManager
     private IRdpConnection? _connection;
     private SessionException? _blocked;
     private bool _stopping;
+    private long? _failureRecordedAt;
 
     public SessionManager(ISessions sessions, IRdpHost host, SupervisorOptions options, ISupervisorLog log, TimeProvider time)
     {
@@ -56,7 +63,7 @@ public sealed class SessionManager
         await _lock.WaitAsync(ct);
         try
         {
-            if (_stopping) throw new InvalidOperationException("The RPA Supervisor is stopping.");
+            if (_stopping) throw new SessionException(SessionFailure.HostExited, "The RPA Supervisor is stopping.");
             if (_blocked is { } blocked) throw Fail(blocked);
             if (_connection is { Closed.IsCompleted: false }
                 && _sessions.ForUser(_options.User).Any(s => IsOurs(s) && s.State == SessionState.Active))
@@ -113,44 +120,22 @@ public sealed class SessionManager
         while (true)
         {
             await ClearSessionsAsync();
+            var startedAt = Time.GetUtcNow();
             var started = Time.GetTimestamp();
+            Exception failure;
             try
             {
                 var connection = await _host.ConnectAsync(_options.User, attempt.Token);
+                // On success the supervisor adopts the session its connection reports.
                 if (await AdoptAsync(connection)) return;
-                await SignOutLeftoverAsync();
-                last = new SessionException(SessionFailure.HostExited,
+                failure = new SessionException(SessionFailure.HostExited,
                     $"Session {connection.SessionId} of the Remote Desktop connection is not a session of {_options.User}.");
             }
-            catch (SessionException e) when (e.Reason is SessionFailure.Timeout or SessionFailure.HostExited)
+            catch (Exception e)
             {
-                await SignOutLeftoverAsync();
-                last = e;
+                failure = e;
             }
-            catch (SessionException e) when (e.Reason is SessionFailure.WrongPassword or SessionFailure.PasswordExpired)
-            {
-                // Another attempt with the same password could lock the account out.
-                await SignOutLeftoverAsync();
-                _blocked = new SessionException(e.Reason,
-                    $"{e.Message} No further sign-in is tried until the RPA Supervisor service is restarted.");
-                throw Fail(_blocked);
-            }
-            catch (SessionException e)
-            {
-                await SignOutLeftoverAsync();
-                throw Fail(e);
-            }
-            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-            {
-                await SignOutLeftoverAsync();
-                throw Fail(last ?? new SessionException(SessionFailure.Timeout,
-                    $"{_options.User} was not signed in within {_options.ReadySeconds} s."));
-            }
-            catch (Exception)
-            {
-                await SignOutLeftoverAsync();
-                throw;
-            }
+            last = await AttemptFailedAsync(failure, startedAt, last, ct);
 
             _log.Info($"Sign-in attempt for {_options.User} failed ({last.Reason}): {last.Message}");
             if (deadline.IsCancellationRequested) throw Fail(last);
@@ -160,10 +145,43 @@ public sealed class SessionManager
             {
                 await Task.Delay(wait, Time, attempt.Token);
             }
-            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            catch (OperationCanceledException)
             {
-                throw Fail(last);
+                // Recorded also when the caller gave up first, so the reason the sign-in kept failing is not lost.
+                var reason = Fail(last);
+                if (!ct.IsCancellationRequested) throw reason;
+                throw;
             }
+        }
+    }
+
+    // After a failed attempt: signs out a session the attempt may have left, then returns the failure when another
+    // attempt may follow, or throws.
+    private async Task<SessionException> AttemptFailedAsync(Exception failure, DateTimeOffset startedAt,
+        SessionException? last, CancellationToken ct)
+    {
+        // WrongPassword, PasswordExpired, NotAllowed and NoPassword fail before a session exists.
+        if (failure is not SessionException { Reason: not (SessionFailure.Timeout or SessionFailure.HostExited) })
+            await SignOutLeftoverAsync(startedAt);
+        switch (failure)
+        {
+            case SessionException { Reason: SessionFailure.Timeout or SessionFailure.HostExited } retry:
+                return retry;
+            case SessionException { Reason: SessionFailure.WrongPassword or SessionFailure.PasswordExpired } e:
+                // Another attempt with the same password could lock the account out.
+                _blocked = new SessionException(e.Reason,
+                    $"{e.Message} No further sign-in is tried until the RPA Supervisor service is restarted.");
+                throw Fail(_blocked);
+            case SessionException e:
+                throw Fail(e);
+            case OperationCanceledException when !ct.IsCancellationRequested:
+                throw Fail(last ?? new SessionException(SessionFailure.Timeout,
+                    $"{_options.User} was not signed in within {_options.ReadySeconds} s."));
+            default:
+                // The caller gave up, or something unexpected failed: keep the reason the sign-in kept failing for.
+                if (last is not null) Fail(last);
+                ExceptionDispatchInfo.Throw(failure);
+                throw new UnreachableException();
         }
     }
 
@@ -171,7 +189,7 @@ public sealed class SessionManager
     private async Task ClearSessionsAsync()
     {
         if (!await SignOutOursAsync())
-            throw new InvalidOperationException(_state.LastFailure);
+            throw new SessionException(SessionFailure.HostExited, _state.LastFailure ?? "Signing the session out failed.");
         if (_sessions.ForUser(_options.User).FirstOrDefault() is { } other)
             throw Fail(new SessionException(SessionFailure.UserSignedIn,
                 $"{_options.User} has a session the RPA Supervisor did not create (session {other.Id}, {other.State}). " +
@@ -188,16 +206,28 @@ public sealed class SessionManager
         }
         _connection = connection;
         Save(_state with { SessionId = session.Id, LogonTime = session.LogonTime, LastFailure = null });
+        _failureRecordedAt = null;
         _log.Info($"Signed {_options.User} in: session {session.Id}.");
         _ = WatchAsync(connection);
         StartIdleClock();
         return true;
     }
 
-    // Before an attempt the user had no session, so a session listed after a failed attempt was made by that attempt.
-    private async Task SignOutLeftoverAsync()
+    // Called after a failure that can leave a half-made session (Timeout, HostExited, a cancelled attempt, an
+    // unexpected exception). Just before the attempt the user had no session. A session listed now is inferred to be
+    // the attempt's, and signed out, only when it is the user's only session, it began at or after the attempt started,
+    // and it is not Active (nobody connected to a desktop is signed out). Anything else is left alone and logged; the
+    // next check refuses it with UserSignedIn.
+    private async Task SignOutLeftoverAsync(DateTimeOffset startedAt)
     {
-        if (_sessions.ForUser(_options.User).FirstOrDefault() is not { } left) return;
+        var listed = _sessions.ForUser(_options.User);
+        if (listed.Count == 0) return;
+        if (listed is not [{ State: not SessionState.Active } left] || left.LogonTime < startedAt)
+        {
+            _log.Info($"After the failed sign-in {_options.User} has a session the RPA Supervisor does not take as its own " +
+                $"(session {listed[0].Id}, {listed[0].State}); it is left alone.");
+            return;
+        }
         Save(_state with { SessionId = left.Id, LogonTime = left.LogonTime });
         _log.Info($"Session {left.Id} was left by a failed sign-in; signing it out.");
         await SignOutOursAsync();
@@ -223,9 +253,7 @@ public sealed class SessionManager
             }
             catch (Exception e)
             {
-                var message = $"Signing {_options.User} out of session {id} failed: {e.Message} It is tried again on the next connection.";
-                Save(_state with { LastFailure = message });
-                _log.Failure(null, message);
+                Record(null, $"Signing {_options.User} out of session {id} failed: {e.Message} It is tried again on the next connection.");
                 return false;
             }
             Save(_state with { SessionId = null, LogonTime = null });
@@ -292,11 +320,22 @@ public sealed class SessionManager
 
     private bool IsOurs(SessionInfo session) => session.Id == _state.SessionId && session.LogonTime == _state.LogonTime;
 
+    // Records a sign-in failure and returns a fresh exception to throw.
     private SessionException Fail(SessionException e)
     {
-        Save(_state with { LastFailure = $"{e.Reason}: {e.Message}" });
-        _log.Failure(e.Reason, e.Message);
+        Record(e.Reason, e.Message);
         return new SessionException(e.Reason, e.Message);
+    }
+
+    // Records a failure in LastFailure, the state file and the log. The same failure again is recorded at most once per
+    // RepeatInterval, so refused connections do not write without limit.
+    private void Record(SessionFailure? reason, string message)
+    {
+        var text = reason is { } r ? $"{r}: {message}" : message;
+        if (text == _state.LastFailure && _failureRecordedAt is { } at && Time.GetElapsedTime(at) < RepeatInterval) return;
+        _failureRecordedAt = Time.GetTimestamp();
+        Save(_state with { LastFailure = text });
+        _log.Failure(reason, message);
     }
 
     private async Task DisposeQuietlyAsync(IRdpConnection connection)
