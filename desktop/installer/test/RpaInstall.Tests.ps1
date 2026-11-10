@@ -2312,18 +2312,31 @@ Describe 'Show-RpaConnection.ps1' {
     }
   }
 
-  # The administrator check is a Windows one, and the desktop workflow runs these tests as an administrator.
-  It 'prints both tokens with -ShowTokens' -Skip:($env:OS -ne 'Windows_NT') {
-    $output = @(& $script:ShowScript -ShowTokens)
+  # PowerShell's module logging records the parameters of every cmdlet, so a token must not be one.
+  It 'writes the token lines through the host, not through a cmdlet or the pipeline' {
+    $source = Get-Content -Raw -LiteralPath $script:ShowScript
+    $source | Should -Match ([regex]::Escape('if ($ShowTokens) { $Host.UI.WriteLine((Get-TokenLine $service.Name $service.Token)) }'))
+    @([regex]::Matches($source, 'Get-TokenLine')).Count | Should -Be 2
+  }
+
+  # The administrator check is a Windows one, and the desktop workflow runs these tests as an administrator. The token
+  # lines go to the host, so the script runs in a Windows PowerShell of its own, whose output is read here, as a remote
+  # command tool reads it.
+  It 'prints both tokens with -ShowTokens, in the output of powershell.exe' -Skip:($env:OS -ne 'Windows_NT') {
+    $output = @(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script:ShowScript -ShowTokens)
+    $LASTEXITCODE | Should -Be 0
     $output | Should -Contain "Runner token: $($script:RunnerToken)"
     $output | Should -Contain "Browser token: $($script:BrowserToken)"
+    # In the order of the other lines: each token line follows the lines of its service.
+    [array]::IndexOf($output, "Runner token: $($script:RunnerToken)") | Should -BeGreaterThan ([array]::IndexOf($output, "Runner fingerprint: $($script:RunnerFingerprint)"))
+    [array]::IndexOf($output, "Browser token: $($script:BrowserToken)") | Should -BeGreaterThan ([array]::IndexOf($output, "Browser fingerprint: $($script:BrowserFingerprint)"))
   }
 
   It 'with -ShowTokens says which token file is missing and what to do' -Skip:($env:OS -ne 'Windows_NT') {
     $file = Join-Path $script:MadeUpData 'browser-token'
     Remove-Item -LiteralPath $file
     try {
-      $output = @(& $script:ShowScript -ShowTokens)
+      $output = @(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script:ShowScript -ShowTokens)
       $output | Should -Contain "Browser token: $file is missing. Run Install-Rpa.ps1 again: it writes a token file that is missing."
       $output | Should -Contain "Runner token: $($script:RunnerToken)"
     } finally {

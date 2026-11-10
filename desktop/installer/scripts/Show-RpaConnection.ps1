@@ -4,9 +4,14 @@
 #
 #   powershell -ExecutionPolicy Bypass -File "C:\Program Files\RPA Runner\scripts\Show-RpaConnection.ps1" [-ShowTokens]
 #
-# The tokens are shown only with -ShowTokens, which needs an administrator PowerShell. The runner's fingerprint comes
-# from its start line in logs\runner.out.log; the browser's is the SHA-256 of its certificate (browser-cert.pem). The
-# bot user can write both files, so the fingerprints are what this machine's bot user reports.
+# The tokens are shown only with -ShowTokens, which needs an administrator PowerShell. The two token lines are written
+# through the host's own writer, not through a cmdlet or the pipeline, so that no cmdlet's parameters carry a token
+# (PowerShell's module logging records those). What remains: a transcript records what the window shows, a program
+# that runs this script and reads its output (a remote command tool, for example) keeps that output, and a PowerShell
+# command that calls this script in its own session gets the two lines on the screen, not as output. Everything else
+# is written to the pipeline. The runner's fingerprint comes from its start line in logs\runner.out.log; the browser's
+# is the SHA-256 of its certificate (browser-cert.pem). The bot user can write both files, so the fingerprints are
+# what this machine's bot user reports.
 param([switch]$ShowTokens)
 $ErrorActionPreference = 'Stop'
 $installDir = Split-Path -Parent $PSScriptRoot
@@ -84,5 +89,5 @@ foreach ($service in $services) {
   if ($service.Fingerprint) { Write-Output ('{0} fingerprint: {1}' -f $service.Name, $service.Fingerprint) }
   else { Write-Output ('{0} fingerprint: not known yet' -f $service.Name) }
   if ($listening -notcontains $service.Port) { Write-Output ('{0}: not listening: see {1}' -f $service.Name, $service.Log) }
-  if ($ShowTokens) { Write-Output (Get-TokenLine $service.Name $service.Token) }
+  if ($ShowTokens) { $Host.UI.WriteLine((Get-TokenLine $service.Name $service.Token)) }
 }
