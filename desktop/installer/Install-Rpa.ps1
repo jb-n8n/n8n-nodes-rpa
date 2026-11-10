@@ -36,8 +36,11 @@
 # else could change them. It does not judge this script itself, which is running by then.
 #
 # Programs go to C:\Program Files\RPA Runner, data (policy.json, the tokens, the certificates, logs) to
-# C:\ProgramData\RPA Runner. Running the installer again upgrades: it replaces the programs and keeps the data and the
-# user; give it the same -User, ports and -NoBrowser as before. It keeps the firewall addresses and networks of the
+# C:\ProgramData\RPA Runner. A data directory that is there before the first install (for example one an uninstall
+# kept) is used only when everything in it belongs to Administrators or SYSTEM; the installer names the first thing
+# that does not, for you to check and remove. Running the installer again upgrades: it replaces the programs and keeps
+# the data and the user; give it the same -User, ports and -NoBrowser as before (another -User is refused while
+# automatic sign-in is set up for the first one). It keeps the firewall addresses and networks of the
 # earlier run when none are given, and automatic sign-in that an earlier run turned on (then -AutoSignIn needs no -UserPassword; give
 # one to store a changed password). Without a user of its own making, -AutoSignIn needs -UserPassword: a password the
 # installer generated is stored for Windows and known to nobody. The installer prints no secret.
@@ -69,16 +72,18 @@ if ($PSVersionTable.PSEdition -eq 'Core') {
   exit 1
 }
 
-# Before anything else is loaded from this folder: where the package really is and who may change it. The installer
-# runs as an administrator, loads its module from the package and copies its programs from it. What is checked, as it
-# is when the installer starts:
+# ---- package check: begin (the same text in Install-Rpa.ps1 and Uninstall-Rpa.ps1; a test compares the two) ----
+# Before anything else is loaded from the folder this script is in: where that folder really is and who may change
+# it. The script runs as an administrator and loads its module from the package (the installer also copies the
+# programs from it). What is checked, as it is when the script starts:
 #   - the package is on a local fixed drive (not a network share or drive, not a removable or optical drive);
 #   - its real location, which Windows gives for the opened folder: a subst drive, a junction or a symbolic link on
 #     the way to the package is resolved, and everything after this point uses the real location;
 #   - every file and folder of the package: its owner, its access rules, and that it is no link or junction;
 #   - each folder above the package up to the drive: a right to delete, rename or re-permission what is below it.
 # Accepted are Administrators, SYSTEM, Windows' own installer account and the person running this. This script itself
-# is already running when the check starts, so the check says nothing about it.
+# is already running when the check starts, so the check says nothing about it. The check cannot be a file of its
+# own, because that file would be loaded from the package before the package is judged.
 Add-Type -TypeDefinition @'
 using System;
 using System.ComponentModel;
@@ -120,24 +125,6 @@ function Get-PackagePlace([string]$Path) {
   }
 }
 
-# The real location of the folder the installer was started from. Sets $refusal instead when the package is not on a
-# local fixed drive or its location cannot be read.
-$refusal = $null
-$package = $PSScriptRoot
-$notLocal = 'Run the installer from a folder on a local drive. {0} is on {1}.'
-$place = Get-PackagePlace $PSScriptRoot
-if ($place) { $refusal = $notLocal -f $PSScriptRoot, $place }
-else {
-  try { $final = [RpaPackagePath]::Final($PSScriptRoot) } catch { $final = $null }
-  if (-not $final) { $refusal = 'Run the installer from a folder on a local drive. The real location of {0} could not be read.' -f $PSScriptRoot }
-  elseif ($final.StartsWith('\\?\UNC\')) { $refusal = $notLocal -f $PSScriptRoot, 'a network share' }
-  else {
-    $package = $final.Substring(4)
-    $place = Get-PackagePlace $package
-    if ($place) { $refusal = $notLocal -f $PSScriptRoot, $place }
-  }
-}
-
 $packageTrusted = @{}
 foreach ($sid in 'S-1-5-32-544', 'S-1-5-18', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464', 'S-1-3-0',
   [Security.Principal.WindowsIdentity]::GetCurrent().User.Value) { $packageTrusted[$sid] = $true }
@@ -158,11 +145,12 @@ function Find-PackageChanger($Security, [int]$Rights) {
   try { $who.Translate([Security.Principal.NTAccount]).Value } catch { $who.Value }
 }
 
-# Why the package cannot be used, or nothing. Identical security descriptors are judged once, so a package of tens of
-# thousands of files costs one read per file. Folders are walked without entering a link, with paths of any length.
-function Get-PackageRefusal([string]$Folder) {
+# Why the package cannot be used, or nothing. -Tool is what this script is called in the texts. Identical security
+# descriptors are judged once, so a package of tens of thousands of files costs one read per file. Folders are walked
+# without entering a link, with paths of any length.
+function Get-PackageRefusal([string]$Folder, [string]$Tool) {
   $changed = '{0} can be changed by {1}. Unpack the package in a folder only you or administrators can change, and run it from there.'
-  $link = '{0} is a link or junction. Unpack the package again and run the installer from the new folder.'
+  $link = '{0} is a link or junction. Unpack the package again and run the {1} from the new folder.'
   $sections = [Security.AccessControl.AccessControlSections]'Owner, Access'
   # Create files or folders, delete, delete what is inside, change the rules, take ownership, and the generic forms
   # of "write" and "all".
@@ -174,10 +162,10 @@ function Get-PackageRefusal([string]$Folder) {
   $long = '\\?\'
 
   $unreadable = 'someone whose access rules cannot be read'
-  if ([IO.File]::GetAttributes($Folder) -band [IO.FileAttributes]::ReparsePoint) { return ($link -f $Folder) }
+  if ([IO.File]::GetAttributes($Folder) -band [IO.FileAttributes]::ReparsePoint) { return ($link -f $Folder, $Tool) }
   $above = [IO.Path]::GetDirectoryName($Folder)
   while ($above) {
-    if ([IO.File]::GetAttributes($above) -band [IO.FileAttributes]::ReparsePoint) { return ($link -f $above) }
+    if ([IO.File]::GetAttributes($above) -band [IO.FileAttributes]::ReparsePoint) { return ($link -f $above, $Tool) }
     try { $who = Find-PackageChanger ([IO.Directory]::GetAccessControl($above, $sections)) $replace } catch { $who = $unreadable }
     if ($who) { return ($changed -f $above, $who) }
     $above = [IO.Path]::GetDirectoryName($above)
@@ -192,7 +180,7 @@ function Get-PackageRefusal([string]$Folder) {
     $directory = $pending.Pop()
     foreach ($entry in (New-Object IO.DirectoryInfo ($long + $directory)).EnumerateFileSystemInfos()) {
       $path = Join-Path $directory $entry.Name
-      if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) { return ($link -f $path) }
+      if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) { return ($link -f $path, $Tool) }
       try {
         if ($entry.Attributes -band [IO.FileAttributes]::Directory) {
           $security = [IO.Directory]::GetAccessControl($long + $path, $sections)
@@ -206,12 +194,36 @@ function Get-PackageRefusal([string]$Folder) {
   }
   $null
 }
-if (-not $refusal) { $refusal = Get-PackageRefusal $package }
-if ($refusal) {
-  Write-Host $refusal
+
+# Judges the package this script was started from. -Started is the folder the script is in, -Tool what the script is
+# called in the texts (installer, uninstaller). Returns the real location of the package (Package) and why it cannot
+# be used (Refusal), or nothing there. A package whose real location is -Installed, the install directory under
+# Program Files, is not walked: that folder is the installer's own work, and only administrators can change it.
+function Test-Package([string]$Started, [string]$Tool, [string]$Installed) {
+  $result = @{ Package = $Started; Refusal = $null }
+  $notLocal = 'Run the {2} from a folder on a local drive. {0} is on {1}.'
+  $place = Get-PackagePlace $Started
+  if ($place) { $result.Refusal = $notLocal -f $Started, $place, $Tool; return $result }
+  try { $final = [RpaPackagePath]::Final($Started) } catch { $final = $null }
+  if (-not $final) { $result.Refusal = 'Run the {1} from a folder on a local drive. The real location of {0} could not be read.' -f $Started, $Tool; return $result }
+  if ($final.StartsWith('\\?\UNC\')) { $result.Refusal = $notLocal -f $Started, 'a network share', $Tool; return $result }
+  $result.Package = $final.Substring(4)
+  $place = Get-PackagePlace $result.Package
+  if ($place) { $result.Refusal = $notLocal -f $Started, $place, $Tool; return $result }
+  if ($Installed -and $result.Package -eq $Installed) { return $result }
+  # A package with tens of thousands of files takes some seconds to read.
+  Write-Host "Checking the package's files..."
+  $result.Refusal = Get-PackageRefusal $result.Package $Tool
+  $result
+}
+# ---- package check: end ----
+$check = Test-Package $PSScriptRoot 'installer' ''
+if ($check.Refusal) {
+  Write-Host $check.Refusal
   Write-Host 'Nothing was changed.'
   exit 1
 }
+$package = $check.Package
 
 Import-Module (Join-Path $package 'RpaInstall.psm1') -Force
 

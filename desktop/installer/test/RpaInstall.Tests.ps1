@@ -669,6 +669,117 @@ Describe 'Invoke-RpaInstallPlan' {
   }
 }
 
+Describe 'Get-RpaUninstallPlan' {
+  BeforeAll {
+    # What Get-RpaUninstallFacts says on a machine where rpa-runner is the bot user and is not signed in.
+    function New-UninstallFacts([hashtable]$Change = @{}) {
+      $facts = @{ DataDir = $script:DataDir; DataDirState = New-PathState 'ours'; SignedIn = @(); AutoSignInUser = $null }
+      foreach ($key in $Change.Keys) { $facts[$key] = $Change[$key] }
+      $facts
+    }
+  }
+
+  It 'refuses -RemoveData while the bot user is signed in' {
+    $plan = Get-RpaUninstallPlan -Parameters @{ RemoveData = $true } -Facts (New-UninstallFacts @{ SignedIn = @('rpa-runner') })
+    $plan.Refusals | Should -BeExactly @('rpa-runner is signed in. Sign rpa-runner out, then run Uninstall-Rpa.ps1 -RemoveData again.')
+  }
+
+  It 'without -RemoveData works as before while the bot user is signed in' {
+    $plan = Get-RpaUninstallPlan -Parameters @{ RemoveData = $false } -Facts (New-UninstallFacts @{ SignedIn = @('rpa-runner') })
+    $plan.Refusals.Count | Should -Be 0
+  }
+
+  It 'takes -RemoveData when the bot user is not signed in' {
+    (Get-RpaUninstallPlan -Parameters @{ RemoveData = $true } -Facts (New-UninstallFacts)).Refusals.Count | Should -Be 0
+  }
+
+  It 'says how to get there when Windows signs the bot user in again by itself' {
+    $facts = New-UninstallFacts @{ SignedIn = @('rpa-runner'); AutoSignInUser = 'rpa-runner' }
+    $plan = Get-RpaUninstallPlan -Parameters @{ RemoveData = $true } -Facts $facts
+    $plan.Refusals | Should -BeExactly @(
+      'rpa-runner is signed in. Sign rpa-runner out, then run Uninstall-Rpa.ps1 -RemoveData again.'
+      'Automatic sign-in is on for rpa-runner, and Windows signs it in again after a sign-out. Run Uninstall-Rpa.ps1 without -RemoveData first, which turns that off; then sign rpa-runner out and run Uninstall-Rpa.ps1 -RemoveData from the unpacked package.'
+    )
+  }
+
+  It 'refuses -RemoveData for a data directory that is a link or junction' {
+    $plan = Get-RpaUninstallPlan -Parameters @{ RemoveData = $true } -Facts (New-UninstallFacts @{ DataDirState = New-PathState 'link' })
+    $plan.Refusals | Should -BeExactly @('C:\ProgramData\RPA Runner is a link or junction. Remove it and run this again.')
+    (Get-RpaUninstallPlan -Parameters @{ RemoveData = $false } -Facts (New-UninstallFacts @{ DataDirState = New-PathState 'link' })).Refusals.Count | Should -Be 0
+  }
+}
+
+Describe 'What the uninstaller could not put back' {
+  BeforeAll {
+    function New-TestFailure([string]$Name, $Value) {
+      $change = New-Object psobject -Property ([ordered]@{ kind = 'registry'; key = 'HKLM\SOFTWARE\Example'; name = $Name; existed = $true; type = 'REG_SZ'; value = $Value })
+      @{ Change = $change; Text = "registry HKLM\SOFTWARE\Example $Name (it was REG_SZ `"$Value`"): Access is denied." }
+    }
+  }
+
+  It 'lists each setting with what it was before, why it was not put back, for which user and when' {
+    $failed = @((New-TestFailure 'A' ''), @{ Change = $null; Text = 'The registry of the user could not be closed.' })
+    $list = InModuleScope RpaInstall -Parameters @{ Failed = $failed } { Add-RpaLeftovers $null $Failed 'rpa-runner' '2026-11-09 10:00:00 UTC' }
+    $read = ConvertTo-Json -InputObject $list -Depth 6 | ConvertFrom-Json
+    $read.note | Should -Not -BeNullOrEmpty
+    @($read.notPutBack).Count | Should -Be 2
+    $first = $read.notPutBack[0]
+    $first.kind | Should -BeExactly 'registry'
+    $first.key | Should -BeExactly 'HKLM\SOFTWARE\Example'
+    $first.name | Should -BeExactly 'A'
+    $first.existed | Should -BeTrue
+    $first.type | Should -BeExactly 'REG_SZ'
+    $first.value | Should -BeExactly ''
+    $first.reason | Should -BeExactly 'registry HKLM\SOFTWARE\Example A (it was REG_SZ ""): Access is denied.'
+    $first.user | Should -BeExactly 'rpa-runner'
+    $first.at | Should -BeExactly '2026-11-09 10:00:00 UTC'
+    $read.notPutBack[1].kind | Should -BeExactly 'other'
+    $read.notPutBack[1].reason | Should -BeExactly 'The registry of the user could not be closed.'
+  }
+
+  It 'keeps what an earlier uninstall listed, and the first record of a setting that is listed again' {
+    $earlier = InModuleScope RpaInstall -Parameters @{ Failed = @(New-TestFailure 'A' 'the first value') } { Add-RpaLeftovers $null $Failed 'rpa-runner' '2026-11-09 10:00:00 UTC' }
+    $earlier = ConvertTo-Json -InputObject $earlier -Depth 6 | ConvertFrom-Json
+    $failed = @((New-TestFailure 'A' 'a later value'), (New-TestFailure 'B' 'b'))
+    $list = InModuleScope RpaInstall -Parameters @{ Earlier = $earlier; Failed = $failed } { Add-RpaLeftovers $Earlier $Failed 'bot2' '2026-11-10 10:00:00 UTC' }
+    $read = ConvertTo-Json -InputObject $list -Depth 6 | ConvertFrom-Json
+    @($read.notPutBack | ForEach-Object { $_.name }) | Should -BeExactly @('A', 'B')
+    $read.notPutBack[0].value | Should -BeExactly 'the first value'
+    $read.notPutBack[0].at | Should -BeExactly '2026-11-09 10:00:00 UTC'
+    $read.notPutBack[1].user | Should -BeExactly 'bot2'
+  }
+
+  It 'names a setting with what it was before: <Text>' -ForEach @(
+    @{ Change = @{ kind = 'registry'; key = 'HKLM\S'; name = 'N'; existed = $true; type = 'REG_SZ'; value = '' }; Text = 'registry HKLM\S N (it was REG_SZ "")' }
+    @{ Change = @{ kind = 'registry'; key = 'HKLM\S'; name = 'N'; existed = $true; type = 'REG_DWORD'; value = '1' }; Text = 'registry HKLM\S N (it was REG_DWORD "1")' }
+    @{ Change = @{ kind = 'registry'; key = 'HKLM\S'; name = 'N'; existed = $false }; Text = 'registry HKLM\S N (it did not exist)' }
+    @{ Change = @{ kind = 'key'; key = 'HKLM\S\K'; name = '' }; Text = 'registry key HKLM\S\K (it did not exist)' }
+    @{ Change = @{ kind = 'task'; key = '\Microsoft\Windows\Server Manager\'; name = 'ServerManager' }; Text = 'scheduled task \Microsoft\Windows\Server Manager\ServerManager (it was enabled)' }
+    @{ Change = @{ kind = 'power'; key = 'SUB_VIDEO'; name = 'VIDEOIDLE'; value = '600' }; Text = 'power timeout SUB_VIDEO VIDEOIDLE (it was 600 seconds)' }
+    @{ Change = @{ kind = 'secret'; key = 'DefaultPassword'; name = '' }; Text = 'the password stored for automatic sign-in (it is still stored)' }
+  ) {
+    $record = New-Object psobject -Property $Change
+    InModuleScope RpaInstall -Parameters @{ Record = $record } { Get-RpaChangeText $Record } | Should -BeExactly $Text
+  }
+
+  It 'writes the list where only administrators can read or change it, and adds to one that is there' -Skip:($env:OS -ne 'Windows_NT') {
+    $dataDir = Join-Path $TestDrive 'RPA Runner'
+    New-Item -ItemType Directory -Path $dataDir | Out-Null
+    & (Join-Path ([Environment]::SystemDirectory) 'icacls.exe') $dataDir /setowner '*S-1-5-32-544' | Out-Null
+    $file = InModuleScope RpaInstall -Parameters @{ Dir = $dataDir; Failed = @(New-TestFailure 'A' '') } { Save-RpaLeftovers @{ DataDir = $Dir } $Failed 'rpa-runner' }
+    $file | Should -BeExactly (Join-Path $dataDir 'uninstall-leftovers.json')
+    $acl = Get-Acl -LiteralPath $file
+    $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value | Should -BeExactly 'S-1-5-32-544'
+    $acl.AreAccessRulesProtected | Should -BeTrue
+    @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) | ForEach-Object { $_.IdentityReference.Value } | Sort-Object) | Should -BeExactly @('S-1-5-18', 'S-1-5-32-544')
+
+    $null = InModuleScope RpaInstall -Parameters @{ Dir = $dataDir; Failed = @(New-TestFailure 'B' 'b') } { Save-RpaLeftovers @{ DataDir = $Dir } $Failed 'rpa-runner' }
+    $read = Get-Content -Raw -LiteralPath $file -Encoding UTF8 | ConvertFrom-Json
+    @($read.notPutBack | ForEach-Object { $_.name }) | Should -BeExactly @('A', 'B')
+    $read.notPutBack[0].value | Should -BeExactly ''
+  }
+}
+
 Describe 'install.json' {
   BeforeAll {
     function New-TestRecord([hashtable]$Plan, $Previous, [hashtable]$Change = @{}) {
@@ -1122,17 +1233,43 @@ Describe 'The installer scripts' {
     $path | Should -Match 'WindowsPowerShell[\\/]v1\.0[\\/]powershell\.exe$'
   }
 
-  It 'Install-Rpa.ps1 judges who can change its folder before it loads anything else from it' {
-    $path = Join-Path $script:InstallerDir 'Install-Rpa.ps1'
+  It '<Name> judges who can change its folder before it loads anything else from it' -ForEach @(@{ Name = 'Install-Rpa.ps1' }, @{ Name = 'Uninstall-Rpa.ps1' }) {
+    $path = Join-Path $script:InstallerDir $Name
     $source = Get-Content -Raw -LiteralPath $path
     $refusal = $source.IndexOf("'{0} can be changed by {1}. Unpack the package in a folder only you or administrators can change, and run it from there.'")
     $refusal | Should -BeGreaterThan 0
-    $source.IndexOf("'{0} is a link or junction. Unpack the package again and run the installer from the new folder.'") | Should -BeGreaterThan 0
-    $source.IndexOf("'Run the installer from a folder on a local drive. {0} is on {1}.'") | Should -BeGreaterThan 0
+    $source.IndexOf("'{0} is a link or junction. Unpack the package again and run the {1} from the new folder.'") | Should -BeGreaterThan 0
+    $source.IndexOf("'Run the {2} from a folder on a local drive. {0} is on {1}.'") | Should -BeGreaterThan 0
     $ast = [Management.Automation.Language.Parser]::ParseFile($path, [ref]$null, [ref]$null)
+    # The check is called, and its refusal ends the script, before the one place that loads the module.
+    $check = @($ast.FindAll({ param($node) $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Test-Package' }, $true))
+    $check.Count | Should -Be 1
     $loads = @($ast.FindAll({ param($node) $node -is [Management.Automation.Language.CommandAst] -and ($node.GetCommandName() -eq 'Import-Module' -or $node.InvocationOperator -eq 'Dot') }, $true))
     $loads.Count | Should -Be 1
+    $loads[0].Extent.StartOffset | Should -BeGreaterThan $check[0].Extent.StartOffset
     $loads[0].Extent.StartOffset | Should -BeGreaterThan $refusal
+  }
+
+  # The check has to run before anything is loaded from the package, so it cannot live in a file of its own: each of
+  # the two scripts carries it.
+  It 'Install-Rpa.ps1 and Uninstall-Rpa.ps1 carry the same package check, word for word' {
+    $blocks = foreach ($name in 'Install-Rpa.ps1', 'Uninstall-Rpa.ps1') {
+      $source = (Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir $name)) -replace "`r`n", "`n"
+      $begin = $source.IndexOf('# ---- package check: begin')
+      $end = $source.IndexOf('# ---- package check: end')
+      $begin | Should -BeGreaterThan 0
+      $end | Should -BeGreaterThan $begin
+      $source.Substring($begin, $end - $begin)
+    }
+    $blocks[0].Length | Should -BeGreaterThan 2000
+    $blocks[1] | Should -BeExactly $blocks[0]
+  }
+
+  It 'says that it is checking before it reads the files of a package' {
+    $source = Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir 'Install-Rpa.ps1')
+    $said = $source.IndexOf("Write-Host `"Checking the package's files...`"")
+    $said | Should -BeGreaterThan 0
+    $source.IndexOf('Get-PackageRefusal $', $said) | Should -BeGreaterThan $said
   }
 
   Context 'on Windows' {
@@ -1176,9 +1313,10 @@ Describe 'The installer scripts' {
       & icacls.exe $file /grant '*S-1-5-32-545:M' | Out-Null
       try {
         $run = Invoke-TestInstaller
-        $run.Output.Count | Should -Be 2
-        $run.Output[0] | Should -Match ([regex]::Escape("$($script:Leaf)\package\scripts\start-loop.ps1 can be changed by $($script:Users). $($script:Unpack)") + '$')
-        $run.Output[1] | Should -BeExactly 'Nothing was changed.'
+        $run.Output.Count | Should -Be 3
+        $run.Output[0] | Should -BeExactly "Checking the package's files..."
+        $run.Output[1] | Should -Match ([regex]::Escape("$($script:Leaf)\package\scripts\start-loop.ps1 can be changed by $($script:Users). $($script:Unpack)") + '$')
+        $run.Output[2] | Should -BeExactly 'Nothing was changed.'
         $run.ExitCode | Should -Be 1
       } finally { & icacls.exe $file /remove '*S-1-5-32-545' | Out-Null }
     }
@@ -1188,8 +1326,9 @@ Describe 'The installer scripts' {
       & cmd.exe /d /c ('mklink /J "{0}" "{1}"' -f $junction, (Join-Path $script:Area 'elsewhere')) | Out-Null
       try {
         $run = Invoke-TestInstaller
-        $run.Output.Count | Should -Be 2
-        $run.Output[0] | Should -Match ([regex]::Escape("$($script:Leaf)\package\runner is a link or junction. Unpack the package again and run the installer from the new folder.") + '$')
+        $run.Output.Count | Should -Be 3
+        $run.Output[0] | Should -BeExactly "Checking the package's files..."
+        $run.Output[1] | Should -Match ([regex]::Escape("$($script:Leaf)\package\runner is a link or junction. Unpack the package again and run the installer from the new folder.") + '$')
         $run.ExitCode | Should -Be 1
       } finally { & cmd.exe /d /c ('rd "{0}"' -f $junction) | Out-Null }
     }
@@ -1198,8 +1337,9 @@ Describe 'The installer scripts' {
       & icacls.exe $script:Area /grant '*S-1-5-32-545:(DC)' | Out-Null
       try {
         $run = Invoke-TestInstaller
-        $run.Output.Count | Should -Be 2
-        $run.Output[0] | Should -Match ([regex]::Escape("$($script:Leaf) can be changed by $($script:Users). $($script:Unpack)") + '$')
+        $run.Output.Count | Should -Be 3
+        $run.Output[0] | Should -BeExactly "Checking the package's files..."
+        $run.Output[1] | Should -Match ([regex]::Escape("$($script:Leaf) can be changed by $($script:Users). $($script:Unpack)") + '$')
         $run.ExitCode | Should -Be 1
       } finally { & icacls.exe $script:Area /remove '*S-1-5-32-545' | Out-Null }
     }
@@ -1216,8 +1356,8 @@ Describe 'The installer scripts' {
 
         & icacls.exe $file /grant '*S-1-5-32-545:M' | Out-Null
         $output = @(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $started -RunnerPort 7 -BrowserPort 7 -AllowFromAnyAddress)
-        $output[0] | Should -Match ([regex]::Escape("$($script:Leaf)\package\RpaInstall.psm1 can be changed by $($script:Users). $($script:Unpack)") + '$')
-        $output[0] | Should -Not -Match 'via'
+        $output[1] | Should -Match ([regex]::Escape("$($script:Leaf)\package\RpaInstall.psm1 can be changed by $($script:Users). $($script:Unpack)") + '$')
+        $output[1] | Should -Not -Match 'via'
       } finally {
         & icacls.exe $file /remove '*S-1-5-32-545' | Out-Null
         & cmd.exe /d /c ('rd "{0}"' -f $via) | Out-Null
@@ -1227,9 +1367,22 @@ Describe 'The installer scripts' {
     It 'Install-Rpa.ps1 refuses a package folder that other users can change' -Skip:($env:OS -ne 'Windows_NT') {
       & icacls.exe $script:Package /grant '*S-1-5-32-545:(OI)(CI)M' | Out-Null
       $run = Invoke-TestInstaller
-      $run.Output.Count | Should -Be 2
-      $run.Output[0] | Should -Match ([regex]::Escape("$($script:Leaf)\package can be changed by $($script:Users). $($script:Unpack)") + '$')
+      $run.Output.Count | Should -Be 3
+      $run.Output[1] | Should -Match ([regex]::Escape("$($script:Leaf)\package can be changed by $($script:Users). $($script:Unpack)") + '$')
       $run.ExitCode | Should -Be 1
+    }
+
+    # Refused before the module is loaded and before anything is removed; a package that passes is not tried here,
+    # because the uninstaller would then remove an install from the machine the tests run on.
+    It 'Uninstall-Rpa.ps1 run from a package that other users can change is refused' -Skip:($env:OS -ne 'Windows_NT') {
+      Copy-Item -LiteralPath (Join-Path $script:InstallerDir 'Uninstall-Rpa.ps1') -Destination $script:Package
+      & icacls.exe $script:Package /grant '*S-1-5-32-545:(OI)(CI)M' | Out-Null
+      $output = @(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $script:Package 'Uninstall-Rpa.ps1'))
+      $LASTEXITCODE | Should -Be 1
+      $output.Count | Should -Be 3
+      $output[0] | Should -BeExactly "Checking the package's files..."
+      $output[1] | Should -Match ([regex]::Escape("$($script:Leaf)\package can be changed by $($script:Users). $($script:Unpack)") + '$')
+      $output[2] | Should -BeExactly 'Nothing was changed.'
     }
   }
 }
