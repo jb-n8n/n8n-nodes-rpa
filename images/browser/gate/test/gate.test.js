@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { createServer, request } from 'node:http';
 import { request as httpsRequest } from 'node:https';
-import { connect } from 'node:net';
+import { connect, createServer as createTcpServer } from 'node:net';
 import { connect as tlsConnect } from 'node:tls';
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -230,6 +230,182 @@ test('a token shorter than 32 characters is refused', () => {
   assert.equal(run.status, 1);
   assert.match(run.stderr, /BROWSER_GATE_TOKEN must be at least 32 characters/);
   assert.doesNotMatch(run.stderr, /short/);
+});
+
+// ---- Default launch options (the browser host's default of a browser with a window). ----
+
+/**
+ * A stand-in for the run-server that keeps the head of each request exactly as the gate wrote it (the request line and
+ * the headers, without the blank line), answers 101 and then holds the connection.
+ */
+async function recordingUpstream(t) {
+  const heads = [];
+  const sockets = new Set();
+  let connections = 0;
+  const server = createTcpServer((s) => {
+    connections += 1;
+    sockets.add(s);
+    s.on('error', () => {});
+    let text = '';
+    s.on('data', (chunk) => {
+      if (text.includes('\r\n\r\n')) return;
+      text += chunk.toString('latin1');
+      const end = text.indexOf('\r\n\r\n');
+      if (end < 0) return;
+      heads.push(text.slice(0, end));
+      s.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n');
+    });
+  });
+  const port = await listen(server);
+  t.after(async () => { for (const s of sockets) s.destroy(); await close(server); });
+  return { port, heads, connections: () => connections };
+}
+
+/**
+ * A gate on a recording upstream. send(target, headerLines) writes one authorised upgrade by hand (so header names keep
+ * their spelling and may repeat) and resolves with the gate's answer up to its blank line (`text`, `status` its first
+ * line) and the head the upstream received for it (undefined when nothing was forwarded).
+ */
+async function recordingGate(t, options = {}) {
+  const up = await recordingUpstream(t);
+  const g = createGate({ token: TOKEN, upstreamPort: up.port, upstreamPath: UPSTREAM_PATH, ...options });
+  const sockets = new Set();
+  g.on('connection', (c) => sockets.add(c));
+  const port = await listen(g);
+  t.after(async () => { for (const c of sockets) c.destroy(); await close(g); });
+  const send = async (target, headerLines = []) => {
+    const before = up.heads.length;
+    const text = await new Promise((resolve, reject) => {
+      let received = '';
+      const lines = [`GET ${target} HTTP/1.1`, 'Host: x', 'Connection: Upgrade', 'Upgrade: websocket', `Authorization: Bearer ${TOKEN}`, ...headerLines, '', ''];
+      const s = connect({ host: '127.0.0.1', port }, () => s.write(lines.join('\r\n')));
+      s.on('data', (c) => {
+        received += c.toString('latin1');
+        if (received.includes('\r\n\r\n') && received.startsWith('HTTP/1.1 101')) { s.destroy(); resolve(received); }
+      });
+      s.on('close', () => resolve(received));
+      s.on('error', reject);
+    });
+    const status = text.split('\r\n')[0];
+    if (status.startsWith('HTTP/1.1 101')) await until(() => up.heads.length > before, 'the upstream to receive the request');
+    return { text, status, head: up.heads[before] };
+  };
+  return { send, upstreamPort: up.port, connections: up.connections };
+}
+
+/** The launch-options header lines of a head, whatever their spelling. */
+const launchLines = (head) => head.split('\r\n').filter((line) => /^x-playwright-launch-options:/i.test(line));
+const requestLine = (head) => head.split('\r\n')[0];
+const HEADED = Object.freeze({ headless: false });
+const HEADED_LINE = 'x-playwright-launch-options: {"headless":false}';
+
+test('with default launch options, a client that sends none gets them', async (t) => {
+  const g = await recordingGate(t, { defaultLaunchOptions: HEADED });
+  const { status, head } = await g.send('/pw?session=1', ['User-Agent: Playwright/1.63.0']);
+  assert.match(status, /^HTTP\/1\.1 101/);
+  assert.equal(head, [
+    `GET ${UPSTREAM_PATH}?session=1 HTTP/1.1`, `Host: 127.0.0.1:${g.upstreamPort}`, 'Connection: Upgrade', 'Upgrade: websocket',
+    'User-Agent: Playwright/1.63.0', HEADED_LINE,
+  ].join('\r\n'));
+  // An empty header or an empty query asks for no option either.
+  for (const [target, lines] of [['/', ['x-playwright-launch-options: ']], ['/?launch-options=', []]]) {
+    const empty = await g.send(target, lines);
+    assert.match(empty.status, /^HTTP\/1\.1 101/, `${target} ${lines}`);
+    assert.deepEqual(launchLines(empty.head), [HEADED_LINE], `${target} ${lines}`);
+    assert.equal(requestLine(empty.head), `GET ${UPSTREAM_PATH} HTTP/1.1`);
+  }
+});
+
+test("a client's own launch option wins over the default", async (t) => {
+  const g = await recordingGate(t, { defaultLaunchOptions: HEADED });
+  // The key order is pinned: the default's keys first, in the default's order, then the client's other keys in its order.
+  const cases = [
+    ['x-playwright-launch-options: {"headless":true}', '{"headless":true}'],
+    ['x-playwright-launch-options: {"slowMo":50}', '{"headless":false,"slowMo":50}'],
+    ['X-Playwright-Launch-Options: {"timeout":1000,"slowMo":5,"headless":true}', '{"headless":true,"timeout":1000,"slowMo":5}'],
+  ];
+  for (const [line, sent] of cases) {
+    const { status, head } = await g.send('/pw?session=1', [line]);
+    assert.match(status, /^HTTP\/1\.1 101/, line);
+    assert.deepEqual(launchLines(head), [`x-playwright-launch-options: ${sent}`], line);
+    assert.equal(requestLine(head), `GET ${UPSTREAM_PATH}?session=1 HTTP/1.1`, line);
+  }
+});
+
+test("a client's launch-options query is replaced by the header", async (t) => {
+  const g = await recordingGate(t, { defaultLaunchOptions: HEADED });
+  const slowMo = encodeURIComponent('{"slowMo":50}');
+  const merged = '{"headless":false,"slowMo":50}';
+  const cases = [
+    // [client target, client header lines, query the upstream gets, launch options the upstream gets]
+    [`/pw?session=1&launch-options=${slowMo}&x=a%20b`, [], '?session=1&x=a%20b', merged],
+    [`/?launch-options=${slowMo}`, [], '', merged],
+    // A name written with an escape is the same parameter to the run-server.
+    [`/?a=1&launch%2Doptions=${slowMo}`, [], '?a=1', merged],
+    // With both, the run-server reads the query when it is not empty and ignores the header.
+    [`/?launch-options=${slowMo}`, ['x-playwright-launch-options: {"headless":true}'], '', merged],
+    // An empty query falls back to the header, as on the run-server.
+    ['/?launch-options=&b=2', ['x-playwright-launch-options: {"headless":true}'], '?b=2', '{"headless":true}'],
+  ];
+  for (const [target, lines, search, sent] of cases) {
+    const { status, head } = await g.send(target, lines);
+    assert.match(status, /^HTTP\/1\.1 101/, target);
+    assert.equal(requestLine(head), `GET ${UPSTREAM_PATH}${search} HTTP/1.1`, target);
+    assert.deepEqual(launchLines(head), [`x-playwright-launch-options: ${sent}`], target);
+  }
+});
+
+test('without default launch options the replayed request is unchanged', async (t) => {
+  const query = encodeURIComponent('{"slowMo":5}');
+  for (const options of [{}, { defaultLaunchOptions: {} }]) {
+    const g = await recordingGate(t, options);
+    const host = `Host: 127.0.0.1:${g.upstreamPort}`;
+    const header = await g.send('/pw?session=1', ['User-Agent: Playwright/1.63.0', 'X-Playwright-Launch-Options: {"headless":true}']);
+    assert.equal(header.head, [
+      `GET ${UPSTREAM_PATH}?session=1 HTTP/1.1`, host, 'Connection: Upgrade', 'Upgrade: websocket', 'User-Agent: Playwright/1.63.0',
+      'X-Playwright-Launch-Options: {"headless":true}',
+    ].join('\r\n'), JSON.stringify(options));
+    const inQuery = await g.send(`/?session=1&launch-options=${query}`);
+    assert.equal(inQuery.head, [`GET ${UPSTREAM_PATH}?session=1&launch-options=${query} HTTP/1.1`, host, 'Connection: Upgrade', 'Upgrade: websocket'].join('\r\n'), JSON.stringify(options));
+    const none = await g.send('/');
+    assert.equal(none.head, [`GET ${UPSTREAM_PATH} HTTP/1.1`, host, 'Connection: Upgrade', 'Upgrade: websocket'].join('\r\n'), JSON.stringify(options));
+  }
+});
+
+test('a default the allow rule refuses stops the gate at start', () => {
+  const start = (defaultLaunchOptions) => () => createGate({ token: TOKEN, upstreamPort: 1, upstreamPath: UPSTREAM_PATH, defaultLaunchOptions });
+  assert.throws(start({ args: ['--no-sandbox'] }), /defaultLaunchOptions .*"args"/);
+  assert.throws(start({ headless: 'no' }), /defaultLaunchOptions .*"headless"/);
+  assert.throws(start({ headless: false, timeout: -1 }), /defaultLaunchOptions .*"timeout"/);
+  assert.throws(start({ headless: false, executablePath: '/bin/sh' }), /defaultLaunchOptions .*"executablePath"/);
+  for (const notAnObject of [['headless'], '{"headless":false}', null, true]) {
+    assert.throws(start(notAnObject), /defaultLaunchOptions must be an object/, JSON.stringify(notAnObject));
+  }
+  assert.doesNotThrow(start({ headless: false, timeout: 0, slowMo: 10 }));
+});
+
+test('with default launch options, a request the allow rule refuses is still refused as before', async (t) => {
+  const withDefaults = await recordingGate(t, { defaultLaunchOptions: HEADED });
+  const without = await recordingGate(t);
+  const ok = encodeURIComponent('{"headless":true}');
+  const refused = [
+    ['/', ['x-playwright-launch-options: {"env":{}}']],
+    ['/', ['x-playwright-launch-options: {"headless":"no"}']],
+    [`/?launch-options=${encodeURIComponent('{"args":["--no-sandbox"]}')}`, []],
+    // Given twice: the header under two spellings arrives joined and does not parse; the query twice is refused.
+    ['/', ['x-playwright-launch-options: {"headless":true}', 'X-Playwright-Launch-Options: {"slowMo":1}']],
+    [`/?launch-options=${ok}&launch-options=${ok}`, []],
+    [`/?launch-options=${ok}&launch%2Doptions=${ok}`, []],
+    // An empty query does not hide a refused header.
+    ['/?launch-options=', ['x-playwright-launch-options: {"env":{}}']],
+    ['/', ['x-playwright-proxy: *']],
+  ];
+  for (const [target, lines] of refused) {
+    const answer = await withDefaults.send(target, lines);
+    assert.match(answer.status, /^HTTP\/1\.1 403 /, `${target} ${lines}`);
+    assert.equal(answer.text, (await without.send(target, lines)).text, `${target} ${lines}`);
+  }
+  assert.equal(withDefaults.connections(), 0, 'nothing reached the run-server');
 });
 
 // ---- The session limit, /healthz, metrics and drain (the browser service). ----

@@ -498,6 +498,17 @@ test('an authorised upgrade that names the local end of a tunnel in its Host hea
   assert.equal(call.requests[0].headers.host, `127.0.0.1:${call.listeningPort}`, 'the run-server sees its own address');
 });
 
+test('the gate opens the browser with a window for a client that sends no launch options; a client that does keeps its own', async (t) => {
+  const { host, call, cert } = await ownHost(t, { start: { maxSessions: 2 } });
+  const none = await upgradeTls(host.port, cert, AUTH);
+  const own = await upgradeTls(host.port, cert, { ...AUTH, 'x-playwright-launch-options': '{"headless":true,"slowMo":5}' });
+  assert.equal(none.status, 101);
+  assert.equal(own.status, 101);
+  none.socket.destroy();
+  own.socket.destroy();
+  assert.deepEqual(call.requests.map((r) => r.headers['x-playwright-launch-options']), ['{"headless":false}', '{"headless":true,"slowMo":5}']);
+});
+
 test('the run-server never sees the token', async (t) => {
   // The host does not keep the token in its environment, but a start script might: such variables are not passed on.
   process.env.RPA_TEST_TOKEN_COPY = TOKEN;

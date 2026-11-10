@@ -3,6 +3,8 @@
 // this gate is reachable on the compose network. A WebSocket upgrade is forwarded byte for byte, to that path, only
 // when it carries "Authorization: Bearer <token>", asks for no launch option outside a short allowlist and does not
 // ask the browser to use the client's network. Everything else is refused. The path is never logged or echoed.
+// A gate created with default launch options (the browser host's { headless: false }; the gate's own main block sets
+// none) replays the client's launch options over those defaults, in one header it writes itself.
 //
 // As a scalable browser service, each replica takes at most maxSessions sessions at a time and answers the rest
 // 503 + "X-RPA-Browser: busy" (the engine waits and retries); GET /healthz reports whether this replica should get new
@@ -39,6 +41,8 @@ const LAUNCH_OPTION_CHECKS = {
   slowMo: (v) => Number.isFinite(v) && v >= 0,
 };
 export const ALLOWED_LAUNCH_OPTIONS = Object.freeze(Object.keys(LAUNCH_OPTION_CHECKS));
+/** Whether one [name, value] of a launch-options object passes the allowlist. */
+const allowedOption = ([k, v]) => Object.hasOwn(LAUNCH_OPTION_CHECKS, k) && LAUNCH_OPTION_CHECKS[k](v);
 
 const UPSTREAM_PATH = new RegExp(`^/[A-Za-z0-9_-]{${MIN_UPSTREAM_PATH_SECRET},}$`);
 const UPSTREAM_PATH_RULE = `BROWSER_UPSTREAM_PATH must be "/" followed by at least ${MIN_UPSTREAM_PATH_SECRET} letters, digits, "-" or "_"`;
@@ -64,7 +68,47 @@ function launchOptionsAllowed(value) {
     return false;
   }
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
-  return Object.entries(parsed).every(([k, v]) => Object.hasOwn(LAUNCH_OPTION_CHECKS, k) && LAUNCH_OPTION_CHECKS[k](v));
+  return Object.entries(parsed).every(allowedOption);
+}
+
+/**
+ * createGate's defaultLaunchOptions, checked: undefined when absent or empty (the gate then replays every request as it
+ * always has), otherwise a frozen copy. Throws, naming the option, on anything the allowlist refuses.
+ */
+function launchDefaults(value) {
+  if (value === undefined) return undefined;
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`defaultLaunchOptions must be an object of launch options (${ALLOWED_LAUNCH_OPTIONS.join(', ')})`);
+  }
+  const entries = Object.entries(value);
+  for (const entry of entries) {
+    if (!allowedOption(entry)) {
+      throw new Error(`defaultLaunchOptions has ${JSON.stringify(entry[0])}, which the gate does not allow: only headless (true or false), timeout and slowMo (numbers from 0)`);
+    }
+  }
+  return entries.length === 0 ? undefined : Object.freeze(Object.fromEntries(entries));
+}
+
+/**
+ * For a gate with default launch options, and an upgrade that passed requestAllowed: the query to replay and the one
+ * x-playwright-launch-options value to send instead of the client's.
+ * - The client's options are what playwright-core 1.63.0's run-server would read: the launch-options query when it is
+ *   not empty, otherwise the x-playwright-launch-options header (remote/playwrightServer.ts, onConnection:
+ *   `JSON.parse(launchOptionsParam || launchOptionsHeaderValue)`), so with both the query wins and the header is ignored.
+ * - The defaults go under them: a key the client sent wins. Key order: the defaults' keys in their order, then the
+ *   client's other keys in its order.
+ * - The value is JSON.stringify of allow-listed keys and checked values only (booleans and finite numbers), never the
+ *   client's text, so it holds no CR or LF.
+ * - The query keeps every parameter but launch-options, as written; a parameter counts as launch-options when its name
+ *   decodes to it (launch%2Doptions too), as on the run-server.
+ */
+function launchReplay(req, url, defaults) {
+  const text = url.searchParams.get('launch-options') || req.headers['x-playwright-launch-options'] || '';
+  const client = text === '' ? {} : JSON.parse(text);
+  const merged = new Map(Object.entries(defaults));
+  for (const entry of Object.entries(client)) if (allowedOption(entry)) merged.set(...entry);
+  const kept = url.search.slice(1).split('&').filter((part) => !new URLSearchParams(part).has('launch-options')).join('&');
+  return { search: kept === '' ? '' : `?${kept}`, launchOptions: JSON.stringify(Object.fromEntries(merged)) };
 }
 
 /** Whether an authorised upgrade asks only for what the gate allows. Duplicate headers arrive joined, so they fail to parse. */
@@ -157,11 +201,16 @@ function metricsText(s) {
  * TLS_HANDSHAKE_TIMEOUT_MS, one that it has not accepted as a session TLS_REQUEST_DEADLINE_MS after the handshake (open
  * sessions are left alone), and holds at most TLS_MAX_CONNECTIONS connections. The metrics server stays plain HTTP.
  * tlsHandshakeTimeoutMs and tlsRequestDeadlineMs are for tests.
+ * defaultLaunchOptions (optional; the browser host sets it, the gate's own main block does not) is an object of launch
+ * options on the allowlist, such as { headless: false }; anything else throws here. When it has a key, every accepted
+ * session is replayed with exactly one x-playwright-launch-options header: the client's launch options (query or
+ * header, as the run-server reads them) over these defaults, and the launch-options query parameter removed (see
+ * launchReplay). Absent or {}, requests are replayed as they came.
  */
 export function createGate({
   token, upstreamHost = '127.0.0.1', upstreamPort, upstreamPath, maxSessions = 4, metricsPort,
   upstreamConnectTimeoutMs = UPSTREAM_CONNECT_TIMEOUT_MS, tls, tlsHandshakeTimeoutMs = TLS_HANDSHAKE_TIMEOUT_MS,
-  tlsRequestDeadlineMs = TLS_REQUEST_DEADLINE_MS,
+  tlsRequestDeadlineMs = TLS_REQUEST_DEADLINE_MS, defaultLaunchOptions,
 }) {
   if (typeof token !== 'string' || token.length < MIN_TOKEN_LENGTH) {
     throw new Error(`BROWSER_GATE_TOKEN must be at least ${MIN_TOKEN_LENGTH} characters`);
@@ -172,6 +221,7 @@ export function createGate({
   if (tls !== undefined && (!pemText(tls?.key) || !pemText(tls?.cert))) {
     throw new Error('tls must be { key, cert }, both PEM text');
   }
+  const defaults = launchDefaults(defaultLaunchOptions);
 
   let active = 0;
   let sessionsTotal = 0;
@@ -243,6 +293,7 @@ export function createGate({
     // After the token and request checks, so a wrong token or option is still 401/403 (the engine retries only on 503).
     if (draining) { refused.draining += 1; return unavailable(socket, 'draining'); }
     if (active >= maxSessions) { refused.capacity += 1; return unavailable(socket, 'busy'); }
+    const replay = defaults ? launchReplay(req, url, defaults) : undefined;
 
     // Accepted: from here the connection is a session, so the TLS request deadline no longer applies (no timer without TLS).
     clearTimeout(requestDeadlines.get(socket));
@@ -269,12 +320,15 @@ export function createGate({
       // minus the token, then the bytes already read, then pipe both ways. Host becomes the run-server's own address:
       // bound to loopback, it refuses (403) any Host but localhost, 127.0.0.1 or [::1] (DNS-rebinding protection),
       // and n8n sends Host: browser:3000. Origin is passed on, so the run-server's Origin check still applies.
-      const lines = [`${req.method} ${upstreamPath}${url.search} HTTP/${req.httpVersion}`, `Host: ${upstreamHost}:${upstreamPort}`];
+      // With default launch options, the client's launch options go in one header of the gate's own (launchReplay).
+      const lines = [`${req.method} ${upstreamPath}${replay ? replay.search : url.search} HTTP/${req.httpVersion}`, `Host: ${upstreamHost}:${upstreamPort}`];
       for (let i = 0; i < req.rawHeaders.length; i += 2) {
         const name = req.rawHeaders[i].toLowerCase();
         if (name === 'authorization' || name === 'host') continue;
+        if (replay && name === 'x-playwright-launch-options') continue;
         lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
       }
+      if (replay) lines.push(`x-playwright-launch-options: ${replay.launchOptions}`);
       upstream.write(`${lines.join('\r\n')}\r\n\r\n`);
       if (head && head.length) upstream.write(head);
       upstream.pipe(socket);
