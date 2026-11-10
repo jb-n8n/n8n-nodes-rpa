@@ -74,7 +74,8 @@ Microsoft's terms say about unattended automation on Windows (not legal advice).
   (desktop steps)**, **Desktop answer** and **Email signed steps**), and **RPA: 5 Import a bot** has new texts. Import
   both again and pick the SMTP credential on the new email nodes; a 0.1.0 workflow 3 approves desktop steps without the
   Write steps question.
-- **The compose stack** builds n8n 2.45.3 (0.1.0: 2.41.0) on `node:26-alpine`, with Mailpit 1.32.
+- **The compose stack** runs n8n from the `n8nio/n8n:2.45.3` image (0.1.0: 2.41.0), builds the package in a
+  `node:26-alpine` stage, and runs Mailpit 1.32.
 - **Error codes**: a new code, `runner_unavailable`; `busy` also means a desktop runner busy with another run; Run
   Steps' Data has `values` for desktop reads. The `browser_unavailable` message for a server that cannot be reached
   has a new sentence for a Windows install.
@@ -100,7 +101,9 @@ Microsoft's terms say about unattended automation on Windows (not legal advice).
   password fields.
 - **The approval emails say that the evidence and the change list are as reported by the run**: in **RPA: 3 Approve
   steps**, the review email's Evidence and What changed and the approval email's Evidence. Sign Steps recomputes the
-  safety flags from the steps, not these. Import template 3 again for the new texts.
+  safety flags from the steps, not these. The desktop approval email (**Ask for approval (desktop steps)**) keeps its
+  `Evidence:` label: its evidence is a fixed text and its change list is checked step by step. Import template 3 again
+  for the new texts.
 
 ## 0.1.0 (2026-10-26)
 

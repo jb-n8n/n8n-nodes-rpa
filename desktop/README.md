@@ -490,7 +490,8 @@ the run's own copy: it does not return text another application or a person copi
 (`Ctrl+V`, `Shift+Insert`) is a key like any other, though: `act` sends it, the app pastes whatever the clipboard
 holds, and an `act` with `action: "read"` or a `snapshot` returns the field's text (a password field, or one named
 like a credential, comes back redacted). On a machine where the clipboard matters, such as a person's own desktop,
-list both chords in `gatedKeys`. `clipboard.read` is `policy_refused`:
+list both chords in `gatedKeys`, so that an `act` needs `write: true` to send them (an app's own Paste menu item is a
+click, which the two chords do not cover). `clipboard.read` is `policy_refused`:
 
 - unless the policy sets `clipboardRead`;
 - while the foreground window is not one of the run's (the runner never brings its window back for a read: the text
