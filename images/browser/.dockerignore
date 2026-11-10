@@ -1,5 +1,7 @@
 # Build context of the rpa-browser image: only the Dockerfile, entrypoint.sh, gate/gate.mjs and server/ are used.
+# host/ is the browser host for a machine without containers; the image runs entrypoint.sh instead.
 **/node_modules
 test
 gate/test
+host
 .dockerignore
