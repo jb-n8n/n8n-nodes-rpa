@@ -47,9 +47,11 @@
 # (unless -Force is given), and is refused while automatic sign-in is set up for the first user or while the data
 # directory holds what the first user left there. An upgrade keeps the firewall addresses and networks of the earlier
 # run when none are given, and automatic sign-in that an earlier run turned on (then -AutoSignIn needs no
-# -UserPassword; give one to store a changed password). Without a user of its own making, -AutoSignIn needs
-# -UserPassword: a password the installer generated is stored for Windows and known to nobody. The installer prints
-# no secret.
+# -UserPassword; give one to store a changed password). On a change of user (another -User on an upgrade, or a first
+# install over a data directory whose access rules name another user) both tokens are replaced, because the earlier
+# user could read them, and the n8n credentials then need the new ones. Without a user of its own making,
+# -AutoSignIn needs -UserPassword: a password the installer generated is stored for Windows and known to nobody. The
+# installer prints no secret.
 # When an earlier uninstall could not put a setting of -AutoSignIn back, it left a list in
 # C:\Program Files\RPA Runner\uninstall-leftovers.json. The installer reads that list (when it is a file of
 # Administrators or SYSTEM), records each setting with what it was before the earlier install, and removes the list
@@ -331,6 +333,11 @@ else {
 }
 Write-Host ('  Remove:    {0}' -f (Join-Path $layout.InstallDir 'Uninstall-Rpa.ps1'))
 Write-Host ''
+if ($plan.Steps -contains 'remove the old tokens') {
+  if ($NoBrowser) { Write-Host 'The runner token is new and the browser token is removed: the earlier bot user could read them.' }
+  else { Write-Host 'Both tokens are new: the earlier bot user could read the old ones.' }
+  Write-Host 'Update the n8n credentials with the new tokens, which Show-RpaConnection.ps1 -ShowTokens shows.'
+}
 if ($plan.Steps -contains 'turn on automatic sign-in') { Write-Host ('Automatic sign-in is on: Windows signs {0} in at its next start.' -f $User) }
 Write-Host ('Sign in as {0}, then run Show-RpaConnection.ps1:' -f $User)
 # Windows PowerShell by its full path, so that the line does not depend on what is found along PATH where it is typed.

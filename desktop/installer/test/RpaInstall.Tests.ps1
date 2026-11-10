@@ -48,7 +48,7 @@ BeforeAll {
       InstalledRunnerPort = $null; InstalledBrowserPort = $null; InstalledBrowser = $false
       InstalledAllowFrom = $null; InstalledPublicNetwork = $false
       InstalledAutoSignInForUser = $false; InstalledAutoSignInUser = $null; InstalledUser = $null; InstalledForUser = $false
-      UserSid = $null
+      UserSid = $null; EarlierUsers = @()
       DataDir = $script:DataDir; LogDir = "$($script:DataDir)\logs"; PolicyBackupsDir = "$($script:DataDir)\policy-backups"
       DataDirState = New-PathState 'missing'; LogDirState = New-PathState 'missing'; PolicyBackupsState = New-PathState 'missing'
       DataDirEntries = $null
@@ -622,20 +622,23 @@ Describe 'Get-RpaInstallPlan' {
   }
 
   Context 'an upgrade with another -User' {
-    BeforeAll { $script:NotTheUser = 'bot2 is not the user this install was made for (rpa-runner).' }
+    BeforeAll {
+      $script:NotTheUser = 'bot2 is not the user this install was made for (rpa-runner).'
+      $script:TokensReplaced = 'rpa-runner could read the tokens in the data directory, so both are replaced; the n8n credentials then need the new tokens.'
+    }
 
     It 'says so and has it confirmed: a question without -Force, a warning with it' {
       $facts = New-InstalledFacts @{ InstalledForUser = $false; UserSid = 'S-1-5-21-1-2-3-1003' }
       $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ User = 'bot2' }) -Facts $facts
       $plan.Refusals.Count | Should -Be 0
-      $plan.Questions | Should -BeExactly @($script:NotTheUser)
+      $plan.Questions | Should -BeExactly @($script:NotTheUser, $script:TokensReplaced)
       $plan.Warnings.Count | Should -Be 0
       $plan.Steps | Should -Not -Contain 'create user'
 
       $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ User = 'bot2'; Force = $true }) -Facts $facts
       $plan.Refusals.Count | Should -Be 0
       $plan.Questions.Count | Should -Be 0
-      $plan.Warnings | Should -BeExactly @($script:NotTheUser)
+      $plan.Warnings | Should -BeExactly @($script:NotTheUser, $script:TokensReplaced)
     }
 
     # A mistyped name: the user does not exist and would be created.
@@ -643,7 +646,7 @@ Describe 'Get-RpaInstallPlan' {
       $facts = New-InstalledFacts @{ InstalledForUser = $false; UserExists = $false; UserSid = $null }
       $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ User = 'bot2'; UserPassword = New-TestPassword }) -Facts $facts
       $plan.Refusals.Count | Should -Be 0
-      $plan.Questions | Should -BeExactly @($script:NotTheUser)
+      $plan.Questions | Should -BeExactly @($script:NotTheUser, $script:TokensReplaced)
       $plan.Steps | Should -Contain 'create user'
     }
 
@@ -653,6 +656,122 @@ Describe 'Get-RpaInstallPlan' {
       $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ UserPassword = New-TestPassword }) -Facts (New-InstalledFacts @{ UserExists = $false; UserSid = $null })
       $plan.Refusals.Count | Should -Be 0
       $plan.Questions.Count | Should -Be 0
+    }
+  }
+
+  # The user the install was made for before could read both tokens.
+  Context 'a change of user replaces the tokens' {
+    BeforeAll {
+      $script:Replaced = '{0} could read the tokens in the data directory, so both are replaced; the n8n credentials then need the new tokens.'
+      $script:OtherSid = 'S-1-5-21-1-2-3-1003'
+      $script:Kept = @{ 'policy.json' = New-PathState 'ours'; 'token' = New-PathState 'ours'; 'browser-token' = New-PathState 'ours' }
+      # A data directory an uninstall kept, with no install: its access rules name the bot user of that install.
+      function New-KeptDataFacts([hashtable]$Change = @{}) {
+        $facts = New-TestFacts @{
+          DataDirState = New-PathState 'ours'; LogDirState = New-PathState 'ours'; PolicyBackupsState = New-PathState 'ours'
+          DataFiles = $script:Kept; DataDirEntries = New-DataEntries
+          EarlierUsers = @(@{ Sid = $script:BotSid; Name = 'rpa-runner' })
+        }
+        foreach ($key in $Change.Keys) { $facts[$key] = $Change[$key] }
+        $facts
+      }
+    }
+
+    It 'an upgrade for another user removes both tokens before that user gets its access, writes new ones and says so with the question' {
+      $facts = New-InstalledFacts @{ InstalledForUser = $false; UserSid = $script:OtherSid }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ User = 'bot2' }) -Facts $facts
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Questions | Should -BeExactly @('bot2 is not the user this install was made for (rpa-runner).', ($script:Replaced -f 'rpa-runner'))
+      $plan.Warnings.Count | Should -Be 0
+      $plan.Steps | Should -BeExactly @(
+        'stop running services'
+        'copy program files'
+        'remove the old tokens'
+        'protect the data directory'
+        'write token'
+        'write browser-token'
+        'add the runner firewall rule'
+        'add the browser firewall rule'
+        'register the runner task'
+        'register the browser task'
+        'write install.json'
+        'start tasks'
+      )
+    }
+
+    It 'with -Force the same lines are warnings' {
+      $facts = New-InstalledFacts @{ InstalledForUser = $false; UserSid = $script:OtherSid }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ User = 'bot2'; Force = $true }) -Facts $facts
+      $plan.Questions.Count | Should -Be 0
+      $plan.Warnings | Should -BeExactly @('bot2 is not the user this install was made for (rpa-runner).', ($script:Replaced -f 'rpa-runner'))
+      $plan.Steps | Should -Contain 'remove the old tokens'
+    }
+
+    It 'an upgrade for another user with -NoBrowser removes both tokens and writes the runner token only' {
+      $facts = New-InstalledFacts @{ InstalledForUser = $false; UserSid = $script:OtherSid }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ User = 'bot2'; NoBrowser = $true }) -Facts $facts
+      $plan.Questions | Should -BeExactly @('bot2 is not the user this install was made for (rpa-runner).', 'rpa-runner could read the tokens in the data directory, so the runner token is replaced and the browser token removed; the n8n credentials then need the new runner token.')
+      $plan.Steps | Should -Contain 'remove the old tokens'
+      $plan.Steps | Should -Contain 'write token'
+      $plan.Steps | Should -Not -Contain 'write browser-token'
+    }
+
+    It 'an upgrade that creates another user replaces the tokens too' {
+      $facts = New-InstalledFacts @{ InstalledForUser = $false; UserExists = $false; UserSid = $null }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ User = 'bot2'; UserPassword = New-TestPassword }) -Facts $facts
+      $plan.Steps[0..3] | Should -BeExactly @('stop running services', 'copy program files', 'create user', 'remove the old tokens')
+      $plan.Questions[1] | Should -BeExactly ($script:Replaced -f 'rpa-runner')
+    }
+
+    It 'a first install over a data directory whose access rules name another user replaces the tokens and warns' {
+      $facts = New-KeptDataFacts @{ UserExists = $true; UserSid = $script:OtherSid }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ User = 'bot2' }) -Facts $facts
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Questions.Count | Should -Be 0
+      $plan.Warnings | Should -BeExactly @($script:Replaced -f 'rpa-runner')
+      $plan.Steps | Should -BeExactly @(
+        'copy program files'
+        'remove the old tokens'
+        'protect the data directory'
+        'write token'
+        'write browser-token'
+        'add the runner firewall rule'
+        'add the browser firewall rule'
+        'register the runner task'
+        'register the browser task'
+        'write install.json'
+      )
+    }
+
+    It 'a first install that creates the user over such a data directory replaces the tokens' {
+      $facts = New-KeptDataFacts
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ UserPassword = New-TestPassword }) -Facts $facts
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Warnings | Should -BeExactly @($script:Replaced -f 'rpa-runner')
+      $plan.Steps[0..2] | Should -BeExactly @('copy program files', 'create user', 'remove the old tokens')
+    }
+
+    It 'keeps the tokens for <Why>' -ForEach @(
+      @{ Why = 'an upgrade for the same user'; Kind = 'upgrade' }
+      @{ Why = 'a first install for the user the access rules name'; Kind = 'same' }
+      @{ Why = 'a first install over a data directory whose rules name nobody'; Kind = 'nobody' }
+      @{ Why = 'a change of user with no token there'; Kind = 'none' }
+    ) {
+      switch ($Kind) {
+        'upgrade' { $parameters = New-TestParameters; $facts = New-InstalledFacts }
+        'same' { $parameters = New-TestParameters; $facts = New-KeptDataFacts @{ UserExists = $true; UserSid = $script:BotSid } }
+        'nobody' { $parameters = New-TestParameters @{ User = 'bot2' }; $facts = New-KeptDataFacts @{ UserExists = $true; UserSid = $script:OtherSid; EarlierUsers = @() } }
+        'none' {
+          $parameters = New-TestParameters @{ User = 'bot2'; Force = $true }
+          $missing = @{ 'policy.json' = New-PathState 'ours'; 'token' = New-PathState 'missing'; 'browser-token' = New-PathState 'missing' }
+          $facts = New-InstalledFacts @{ InstalledForUser = $false; UserSid = $script:OtherSid; DataFiles = $missing }
+        }
+      }
+      $plan = Get-RpaInstallPlan -Parameters $parameters -Facts $facts
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Steps | Should -Not -Contain 'remove the old tokens'
+      @($plan.Warnings + $plan.Questions | Where-Object { $_ -like '*could read the tokens*' }).Count | Should -Be 0
+      if ($Kind -ne 'none') { foreach ($step in 'write token', 'write browser-token') { $plan.Steps | Should -Not -Contain $step } }
     }
   }
 
@@ -817,6 +936,28 @@ Describe 'Get-RpaInstallPlan' {
       $plan.Refusals.Count | Should -Be 0
       @($plan.Steps | Where-Object { $script:SignInSteps -contains $_ }) | Should -BeExactly @('store sign-in password')
     }
+  }
+}
+
+Describe 'Remove-RpaOldTokens' {
+  It 'removes both token files, and refuses a token that has a second name without removing it' -Skip:($env:OS -ne 'Windows_NT') {
+    $root = Join-Path ([IO.Path]::GetTempPath()) ('rpa-tokens-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $root | Out-Null
+    try {
+      InModuleScope RpaInstall -Parameters @{ Root = $root } {
+        param($Root)
+        foreach ($name in 'token', 'browser-token') { Set-Content -LiteralPath (Join-Path $Root $name) -Value 'made up' -NoNewline }
+        Remove-RpaOldTokens @{ DataDir = $Root }
+        Join-Path $Root 'token' | Should -Not -Exist
+        Join-Path $Root 'browser-token' | Should -Not -Exist
+
+        $token = Join-Path $Root 'token'
+        Set-Content -LiteralPath $token -Value 'made up' -NoNewline
+        New-Item -ItemType HardLink -Path (Join-Path $Root 'second-name') -Target $token | Out-Null
+        { Remove-RpaOldTokens @{ DataDir = $Root } } | Should -Throw -ExpectedMessage "$token has more than one name (a hard link). Check what it is, remove it, and run the installer again."
+        $token | Should -Exist
+      }
+    } finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
   }
 }
 
@@ -2300,6 +2441,16 @@ Describe 'The installer scripts' {
     $source | Should -Match ([regex]::Escape("if (`$plan.Steps -contains 'write policy') { Write-Host ('             It is new and allows no app. Change it with {0}' -f `$policyTool) }"))
     $source | Should -Match ([regex]::Escape("else { Write-Host ('             It was there already and is kept as it is. Change it with {0}' -f `$policyTool) }"))
     $source | Should -Not -Match 'A new policy allows no app'
+  }
+
+  # The earlier bot user could read the tokens the plan replaced on a change of user.
+  It 'Install-Rpa.ps1 says at its end when it replaced the tokens, and where the new ones are shown' {
+    $source = Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir 'Install-Rpa.ps1')
+    $said = $source.IndexOf("if (`$plan.Steps -contains 'remove the old tokens') {")
+    $said | Should -BeGreaterThan $source.IndexOf("Write-Host 'RPA is installed.'")
+    $source.IndexOf("  if (`$NoBrowser) { Write-Host 'The runner token is new and the browser token is removed: the earlier bot user could read them.' }", $said) | Should -BeGreaterThan $said
+    $source.IndexOf("  else { Write-Host 'Both tokens are new: the earlier bot user could read the old ones.' }", $said) | Should -BeGreaterThan $said
+    $source.IndexOf("  Write-Host 'Update the n8n credentials with the new tokens, which Show-RpaConnection.ps1 -ShowTokens shows.'", $said) | Should -BeGreaterThan $said
   }
 
   It 'says that it is checking before it reads the files of a package' {

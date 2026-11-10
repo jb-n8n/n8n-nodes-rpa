@@ -126,6 +126,15 @@ function Get-RpaInstallPlan {
   $signInKept = $autoSignIn -and $upgrade -and [bool]$Facts.InstalledAutoSignInForUser -and [bool]$Facts.UserExists
   # An upgrade that names another user than the one install.json records.
   $userChanged = $upgrade -and [bool]$Facts.InstalledUser -and -not $Facts.InstalledForUser
+  # A first install over a data directory whose access rules name another user: the bot user of an earlier install
+  # (the uninstaller takes the bot user from these rules too, when install.json is gone).
+  $earlier = @($Facts.EarlierUsers | Where-Object { $_ -and $_.Sid -ne [string]$Facts.UserSid })
+  $previousUser = $null
+  if ($userChanged) { $previousUser = [string]$Facts.InstalledUser }
+  elseif (-not $upgrade -and $earlier.Count -gt 0) { $previousUser = [string]$earlier[0].Name }
+  # That user could read both tokens, so a change of user replaces them.
+  $tokens = @('token', 'browser-token' | Where-Object { $Facts.DataFiles -and $Facts.DataFiles[$_] -and $Facts.DataFiles[$_].Exists })
+  $replaceTokens = [bool]$previousUser -and $tokens.Count -gt 0
   $allowFrom = $null
   $publicNetwork = $false
   $refusals = New-Object Collections.Generic.List[string]
@@ -241,6 +250,12 @@ function Get-RpaInstallPlan {
       $text = '{0} is not the user this install was made for ({1}).' -f $user, $Facts.InstalledUser
       if ($Parameters.Force) { $warnings.Add($text) } else { $questions.Add($text) }
     }
+    if ($replaceTokens) {
+      if ($browser) { $text = '{0} could read the tokens in the data directory, so both are replaced; the n8n credentials then need the new tokens.' -f $previousUser }
+      else { $text = '{0} could read the tokens in the data directory, so the runner token is replaced and the browser token removed; the n8n credentials then need the new runner token.' -f $previousUser }
+      # Said with the question about the user where there is one, before anything changes.
+      if ($userChanged -and -not $Parameters.Force) { $questions.Add($text) } else { $warnings.Add($text) }
+    }
     if ($autoSignIn -and $Facts.UserExists -and $Facts.UserPasswordExpires) {
       $warnings.Add(("{0}'s password expires; automatic sign-in stops working when it does." -f $user))
     }
@@ -257,19 +272,21 @@ function Get-RpaInstallPlan {
 
   if ($refusals.Count -eq 0) {
     # An upgrade replaces the program files and keeps the user, the policy and both tokens (and the certificates,
-    # which no step touches); what is missing of them is made again. The program files come before the user, so that
-    # a failed copy leaves no new user behind.
+    # which no step touches); what is missing of them is made again. A change of user removes both tokens before the
+    # new user gets its access to the data directory, and new ones are written. The program files come before the
+    # user, so that a failed copy leaves no new user behind.
     # install.json is written before the sign-in steps, so that the uninstaller knows about them even when one fails.
     if ($upgrade) { $steps.Add('stop running services') }
     $steps.Add('copy program files')
     if ($createUser) { $steps.Add('create user') }
+    if ($replaceTokens) { $steps.Add('remove the old tokens') }
     $steps.Add('protect the data directory')
     # A file that is there is never written again; one that is missing is written, on a first install and on an upgrade.
     foreach ($name in $script:DataFiles.Keys) {
       if ($name -eq 'browser-token' -and -not $browser) { continue }
       $state = $null
       if ($Facts.DataFiles) { $state = $Facts.DataFiles[$name] }
-      if (-not $state -or -not $state.Exists) { $steps.Add($script:DataFiles[$name]) }
+      if (-not $state -or -not $state.Exists -or ($replaceTokens -and $tokens -contains $name)) { $steps.Add($script:DataFiles[$name]) }
     }
     if ($firewall) {
       $steps.Add('add the runner firewall rule')

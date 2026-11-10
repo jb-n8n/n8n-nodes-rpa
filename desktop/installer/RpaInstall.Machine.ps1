@@ -14,8 +14,8 @@ $script:Utf8 = New-Object Text.UTF8Encoding $false
 # Administrators and SYSTEM: the only owners the installer accepts for what it finds in the data directory.
 $script:TrustedOwners = @('S-1-5-32-544', 'S-1-5-18')
 $script:KnownSteps = @(
-  'stop running services', 'copy program files', 'create user', 'protect the data directory', 'write policy',
-  'write token', 'write browser-token', 'add the runner firewall rule', 'add the browser firewall rule',
+  'stop running services', 'copy program files', 'create user', 'remove the old tokens', 'protect the data directory',
+  'write policy', 'write token', 'write browser-token', 'add the runner firewall rule', 'add the browser firewall rule',
   'remove the browser firewall rule', 'register the runner task', 'register the browser task',
   'remove the browser task', 'write install.json', 'store sign-in password', 'turn on automatic sign-in',
   'keep the desktop unlocked', 'start tasks')
@@ -206,6 +206,7 @@ function Get-RpaMachineFacts {
     InstalledUser              = $null
     InstalledForUser           = $false
     UserSid                    = $null
+    EarlierUsers               = @()
     RunnerRunning              = $false
     DataDir                    = $layout.DataDir
     LogDir                     = $layout.LogDir
@@ -296,6 +297,11 @@ function Get-RpaMachineFacts {
   # Everything else that is in a data directory that is there already.
   if ($facts.DataDirState.Exists -and -not $facts.DataDirState.IsLink -and $facts.DataDirState.OwnerTrusted) {
     $facts.DataDirEntries = Get-RpaDataEntries $layout.DataDir
+    # Without an install, the bot user of an earlier one is the user the data directory's access rules name, as the
+    # uninstaller takes it when install.json is gone.
+    if (-not $install) {
+      $facts.EarlierUsers = @(Get-RpaDataAccounts $layout $null $facts.DataDirEntries | Where-Object { $_.Bot } | ForEach-Object { @{ Sid = $_.Sid; Name = $_.Name } })
+    }
   }
   $facts.Leftovers = @{ File = $layout.LeftoversFile; State = (Read-RpaLeftovers $layout.LeftoversFile).State }
   $facts.TaskFolderOwner = Get-RpaTaskFolderOwner
@@ -951,6 +957,18 @@ function Protect-RpaDataDirectory([hashtable]$Layout, [string]$Sid, [bool]$Judge
   }
 }
 
+# Removes the two token files on a change of user: the earlier bot user could read them, and the steps after this one
+# write new ones. Each is looked at again first; a link or a file with a second name in its place is refused and not
+# removed.
+function Remove-RpaOldTokens([hashtable]$Layout) {
+  foreach ($name in 'token', 'browser-token') {
+    $path = Join-Path $Layout.DataDir $name
+    if (-not (Get-RpaPathState $path).Exists) { continue }
+    Assert-RpaPathUsable $path $true
+    [IO.File]::Delete($path)
+  }
+}
+
 # Writes a new file the bot user may only read (or, with -AdministratorsOnly, nobody but SYSTEM and Administrators):
 # created with its owner and access rules in one call, and only when nothing is there (a file someone put there in
 # the meantime makes this fail). A link in the file's place is refused, and the create does not follow one that gets
@@ -1199,6 +1217,7 @@ function Invoke-RpaInstallPlan {
           $run.CreatedUser = $true
           $run.Sid = Get-RpaSid $account
         }
+        'remove the old tokens' { Remove-RpaOldTokens $layout }
         'protect the data directory' { Protect-RpaDataDirectory $layout $run.Sid $judge $ownSid }
         'write policy' { New-RpaProtectedFile -Path (Join-Path $layout.DataDir 'policy.json') -Sid $run.Sid -Text $script:StarterPolicy }
         'write token' { New-RpaProtectedFile -Path (Join-Path $layout.DataDir 'token') -Sid $run.Sid -SecretLength 48 }
