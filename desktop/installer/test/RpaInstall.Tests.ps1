@@ -1099,13 +1099,15 @@ Describe 'What the browser left in the local application data of the bot user' {
     BeforeEach {
       $env:RPA_TEST_LINK = ''
       $env:RPA_TEST_MISSING = ''
+      $env:RPA_TEST_WRITABLE = ''
       Mock -ModuleName RpaInstall Get-RpaProfileFolder { if ($Sid -eq 'S-1-5-21-1-2-3-1001') { $env:RPA_TEST_PROFILE } }
       Mock -ModuleName RpaInstall Get-RpaPathState {
         @{ Exists = ($Path -ne $env:RPA_TEST_MISSING); IsLink = ($Path -eq $env:RPA_TEST_LINK); IsFolder = $true; Links = 1; OwnerTrusted = $false; Owner = 'BOT-PC\rpa-runner' }
       }
+      Mock -ModuleName RpaInstall Get-RpaOtherWriters { if ($Path -eq $env:RPA_TEST_WRITABLE) { @('BOT-PC\mallory', 'BUILTIN\Users') } }
       Mock -ModuleName RpaInstall Remove-RpaTree { }
     }
-    AfterEach { $env:RPA_TEST_LINK = $null; $env:RPA_TEST_MISSING = $null }
+    AfterEach { $env:RPA_TEST_LINK = $null; $env:RPA_TEST_MISSING = $null; $env:RPA_TEST_WRITABLE = $null }
 
     It 'removes RPA Runner in the local application data of the profile Windows records for the bot user' {
       $results = Invoke-RemoveBrowserTemp @($script:Bot) @('S-1-5-18')
@@ -1114,6 +1116,20 @@ Describe 'What the browser left in the local application data of the bot user' {
       $results[0].Name | Should -BeExactly 'rpa-runner'
       $results[0].Removed | Should -BeTrue
       Should -Invoke -ModuleName RpaInstall Remove-RpaTree -Times 1 -Exactly -ParameterFilter { $Path -eq $script:Temp }
+      # Who else may change each of the four folders, asked about the bot user.
+      foreach ($folder in $script:Folders) {
+        Should -Invoke -ModuleName RpaInstall Get-RpaOtherWriters -Times 1 -Exactly -ParameterFilter { $Path -eq $folder -and $Sid -eq 'S-1-5-21-1-2-3-1001' }
+      }
+    }
+
+    # With no process of the bot user running, only another account that may change a folder on the way could put a
+    # link in its place between the last look and the removal. The bot user can give another account that right.
+    It 'removes nothing when someone other than the bot user, Administrators and SYSTEM owns folder <Index> or may change it, and names them' -ForEach @(@{ Index = 0 }, @{ Index = 1 }, @{ Index = 2 }, @{ Index = 3 }) {
+      $env:RPA_TEST_WRITABLE = $script:Folders[$Index]
+      $results = Invoke-RemoveBrowserTemp @($script:Bot)
+      $results[0].Removed | Should -BeFalse
+      $results[0].Why | Should -BeExactly ('{0} is owned or may be changed by BOT-PC\mallory, BUILTIN\Users, not only by rpa-runner, Administrators and SYSTEM, so nothing was removed there. Check who may change it and remove the folder.' -f $script:Folders[$Index])
+      Should -Invoke -ModuleName RpaInstall Remove-RpaTree -Times 0 -Exactly
     }
 
     It 'leaves it while a process of the bot user is running, and says so' {
@@ -1208,6 +1224,28 @@ Describe 'What the browser left in the local application data of the bot user' {
       $env:RPA_TEST_PROFILE = $before
       & $cmd /d /c ('rd "{0}"' -f $local) 2>$null | Out-Null
     }
+  }
+
+  It 'on Windows: names who other than the bot user, Administrators and SYSTEM owns a folder or may change it' -Skip:($env:OS -ne 'Windows_NT') {
+    $dir = Join-Path $TestDrive ('writers-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $dir | Out-Null
+    $icacls = Join-Path ([Environment]::SystemDirectory) 'icacls.exe'
+    # The account that runs the test stands for the bot user, Guests for another account.
+    $me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $guests = (New-Object Security.Principal.SecurityIdentifier 'S-1-5-32-546').Translate([Security.Principal.NTAccount]).Value
+    function Get-Writers { @(InModuleScope RpaInstall -Parameters @{ Dir = $dir; Sid = $me } { Get-RpaOtherWriters $Dir $Sid }) }
+    # As in a profile: the user, Administrators and SYSTEM, nothing inherited. Reading, and a rule that applies only
+    # to what is created inside the folder, do not count.
+    & $icacls $dir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "*${me}:(OI)(CI)F" | Out-Null
+    & $icacls $dir /grant '*S-1-5-32-546:(RX)' | Out-Null
+    & $icacls $dir /grant '*S-1-5-32-546:(OI)(CI)(IO)(M)' | Out-Null
+    Get-Writers | Should -BeNullOrEmpty
+    & $icacls $dir /grant '*S-1-5-32-546:(AD)' | Out-Null
+    Get-Writers | Should -BeExactly @($guests)
+    & $icacls $dir /remove:g '*S-1-5-32-546' | Out-Null
+    Get-Writers | Should -BeNullOrEmpty
+    & $icacls $dir /setowner '*S-1-5-32-546' | Out-Null
+    Get-Writers | Should -BeExactly @($guests)
   }
 
   It 'on Windows: finds the profile folder of an account by its SID, and none for an account without one' -Skip:($env:OS -ne 'Windows_NT') {

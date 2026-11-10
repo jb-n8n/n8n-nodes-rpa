@@ -1095,6 +1095,30 @@ function Get-RpaProfileFolder([string]$Sid) {
   $folder.TrimEnd('\')
 }
 
+# Who other than the account -Sid, Administrators and SYSTEM owns the folder -Path or may change it, by name: an
+# allowing access rule of the folder itself (not one that applies only to what is created inside it) that lets write,
+# add a file or folder, delete, delete what is inside, change the rules or take ownership. Read without following a
+# link. Rules that cannot be read count as someone's whose name cannot be read.
+function Get-RpaOtherWriters([string]$Path, [string]$Sid) {
+  $trusted = @($script:TrustedOwners) + $Sid
+  # Write data or add a file, append data or add a folder, write extended attributes, delete what is inside, write
+  # attributes, delete, change the rules, take ownership; and generic write and all.
+  $write = 0x2 -bor 0x4 -bor 0x10 -bor 0x40 -bor 0x100 -bor 0x10000 -bor 0x40000 -bor 0x80000 -bor 0x40000000 -bor 0x10000000
+  try {
+    $acl = Get-Acl -LiteralPath $Path
+    $names = @()
+    $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier])
+    if ($trusted -notcontains $owner.Value) { $names += Get-RpaAccountName $owner }
+    foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+      if ($rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow) { continue }
+      if ($rule.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) { continue }
+      if ($trusted -contains $rule.IdentityReference.Value -or ([int]$rule.FileSystemRights -band $write) -eq 0) { continue }
+      $names += Get-RpaAccountName $rule.IdentityReference
+    }
+    @($names | Select-Object -Unique)
+  } catch { @('someone whose name cannot be read') }
+}
+
 # Removes what the browser host keeps in the local application data of the bot user: the folder RPA Runner there,
 # which holds browser-temp, the temp folder of the browser server. A host that was ended without a chance to stop
 # leaves a session's trace in it, with what was typed into pages, until its next start. -Accounts, -RunningSids and
@@ -1104,10 +1128,13 @@ function Get-RpaProfileFolder([string]$Sid) {
 # The folders belong to the bot user, which can put a link in the place of any of them, and the removal runs as an
 # administrator. So the folder is left as it is, with the reason:
 #   - while a process of that account is running, or one whose account cannot be read (the test -RemoveData uses:
-#     owners read from the processes' tokens, matched by SID). Only that account and administrators can write into
-#     its profile, so with none of its processes running nothing puts a link there while the tree is removed;
+#     owners read from the processes' tokens, matched by SID);
 #   - when, directly before the removal, the profile folder, AppData, Local or RPA Runner is a link or junction or is
 #     no folder: nothing is removed where a link points;
+#   - when, in that same last look, anyone other than that account, Administrators and SYSTEM owns one of the four
+#     folders or may change it (the bot user can give another account that right): a process of that account could
+#     put a link in the place of a folder between the look and the removal. With neither of these, nothing but an
+#     administrator can change the folders while the tree is removed;
 #   - when it cannot be read or removed.
 # The tree is removed with Remove-RpaTree, which does not enter a link inside it. Returns, for each folder found,
 # Path, Name (the account), Removed and Why (sentences for the person, when it was left).
@@ -1129,12 +1156,19 @@ function Remove-RpaBrowserTemp([object[]]$Accounts, [string[]]$RunningSids, [obj
       } elseif ($unknown.Count -gt 0) {
         $result.Why = 'The owner of {0} cannot be read; it may be a process of {1}. End it, {2}' -f $unknown[0], $account.Name, $later
       } else {
-        # The last look before the removal, at each folder itself and not at what a link in its place points to.
+        # The last look before the removal, at each folder itself and not at what a link in its place points to, and
+        # at who may change it.
         foreach ($folder in $folders) {
           $state = Get-RpaPathState $folder
-          if ($state.Exists -and -not $state.IsLink -and $state.IsFolder) { continue }
-          $result.Why = '{0} is not a folder of its own (it is a link, a junction or a file), so nothing was removed there. Check it and remove the folder.' -f $folder
-          break
+          if (-not ($state.Exists -and -not $state.IsLink -and $state.IsFolder)) {
+            $result.Why = '{0} is not a folder of its own (it is a link, a junction or a file), so nothing was removed there. Check it and remove the folder.' -f $folder
+            break
+          }
+          $others = @(Get-RpaOtherWriters $folder $account.Sid)
+          if ($others.Count -gt 0) {
+            $result.Why = '{0} is owned or may be changed by {1}, not only by {2}, Administrators and SYSTEM, so nothing was removed there. Check who may change it and remove the folder.' -f $folder, ($others -join ', '), $account.Name
+            break
+          }
         }
         if (-not $result.Why) {
           Remove-RpaTree $result.Path
