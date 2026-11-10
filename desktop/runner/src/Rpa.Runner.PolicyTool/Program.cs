@@ -11,7 +11,7 @@ using Rpa.Runner.Windows;
 // RPA policy tool: shows a change to the runner's policy file in plain lines, asks, and applies it. Everything it
 // decides is in PolicyCommand; this file gives it the real files, what Windows says about the console (WindowsConsole)
 // and the runner's restart.
-var console = new PolicyConsole(null, TakesKeys: false, Buffer: null);
+var console = new PolicyConsole(null, TakesKeys: false, Buffer: () => null);
 try
 {
     console = WindowsConsole.Ask();

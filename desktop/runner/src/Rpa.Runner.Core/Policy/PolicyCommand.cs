@@ -112,9 +112,10 @@ public sealed class PolicyAppearedException() : IOException("a policy file appea
 /// process is elevated, false when it is not or when that could not be read. Null when the tool has no console.</param>
 /// <param name="TakesKeys">True when the tool's console has a window, the tool runs on the window station of a
 /// signed-in desktop, and its input is that console. Whether the window is visible is not part of it.</param>
-/// <param name="Buffer">The size of the console screen buffer the tool prints into: its width in columns and the rows
-/// it keeps (what can be scrolled back to). Null when the tool's output is not a console (a file, a pipe).</param>
-public sealed record PolicyConsole(IReadOnlyList<bool>? OtherProcesses, bool TakesKeys, (int Columns, int Rows)? Buffer)
+/// <param name="Buffer">Reads the size of the console screen buffer the tool prints into: its width in columns and
+/// the rows it keeps (what can be scrolled back to). The tool calls it when it is about to ask. It gives null when
+/// the tool's output is not a console (a file, a pipe).</param>
+public sealed record PolicyConsole(IReadOnlyList<bool>? OtherProcesses, bool TakesKeys, Func<(int Columns, int Rows)?> Buffer)
 {
     /// <summary>
     /// <c>--yes</c> and <c>--policy</c> are honoured only when the tool shares its console with at least one other
@@ -481,7 +482,7 @@ public static class PolicyCommand
         var rows = PolicyChange.Printed(result.Summary);
         if (rows.Prepend(Visible(first)).Sum(row => row.Length + 1) > MaxSummaryLength)
             return Fail(output, $"the summary of this change would be longer than {MaxSummaryLength} characters; split it into smaller changes");
-        if (!arguments.Yes && console.Buffer is { } buffer)
+        if (!arguments.Yes && console.Buffer() is { } buffer)
         {
             // The tool is about to ask, and whoever started it may have chosen the size of its console's buffer: a
             // buffer of a few rows keeps only the last lines. What the buffer must hold is counted as a console

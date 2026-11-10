@@ -31,18 +31,18 @@ internal static class WindowsConsole
     public static PolicyConsole Ask()
     {
         var asked = DateTime.UtcNow;
-        if (AttachedProcesses() is not { } ids) return new PolicyConsole(null, TakesKeys: false, Buffer: null);
+        if (AttachedProcesses() is not { } ids) return new PolicyConsole(null, TakesKeys: false, Buffer: () => null);
         var others = ids.Where(id => id != (uint)Environment.ProcessId).Select(id => IsElevated(id, asked)).ToList();
         // The three facts behind the wait for Enter: the console has a window, the tool runs on the window station of
         // a signed-in desktop (a service, and a scheduled task that runs whether a user is signed in or not, run on
         // another one), and the tool's input is that console and not a file or a pipe. Whether the window is visible
         // is not asked.
         var takesKeys = GetConsoleWindow() != 0 && Environment.UserInteractive && !Console.IsInputRedirected;
-        return new PolicyConsole(others, takesKeys, Buffer());
+        return new PolicyConsole(others, takesKeys, Buffer);
     }
 
-    /// <summary>The size of the screen buffer behind the tool's standard output, or null when that is not a console
-    /// (Windows then has no buffer to tell about).</summary>
+    /// <summary>The size, at this moment, of the screen buffer behind the tool's standard output, or null when that
+    /// is not a console (Windows then has no buffer to tell about).</summary>
     private static (int Columns, int Rows)? Buffer() =>
         GetConsoleScreenBufferInfo(GetStdHandle(StandardOutput), out var info) ? (info.Size.X, info.Size.Y) : null;
 
