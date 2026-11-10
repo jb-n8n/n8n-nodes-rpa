@@ -9,7 +9,7 @@ import { createMasker } from '../secrets/mask.js';
 import { canonicalize } from '../sign.js';
 import { absoluteHttpUrl, parseScript, ScriptShapeError } from '../steps/parse.js';
 import { SESSION_SEGMENT, stablePath } from '../steps/urls.js';
-import type { Locator, Script, Step } from '../types.js';
+import type { ClickModifier, Locator, Script, Step } from '../types.js';
 import type { Candidate, Draft, ImportEvent, ImportItem, ImportOptions, ImportReport } from './types.js';
 
 /** Labels in intents and report items are at most this many characters. */
@@ -66,6 +66,36 @@ function placeOf(url: string): string {
     return cleanLabel(`${u.host}${u.pathname === '/' ? '' : u.pathname}`);
   }
   return cleanLabel(url.split(/[?#]/)[0] ?? '');
+}
+
+/** The order a click step lists its modifiers in. */
+const CLICK_MODIFIER_ORDER: readonly ClickModifier[] = ['Ctrl', 'Shift', 'Alt'];
+/** The buttons and keys a report may name; any other text from the source reads "another button" or "another key". */
+const NAMED_BUTTONS = new Set(['right', 'middle', 'back', 'forward']);
+const NAMED_HELD_KEYS = new Set(['win', 'windows', 'meta']);
+
+/**
+ * A recorded click's button and held keys as the click step's `modifiers`, in the order Ctrl, Shift, Alt, each once: the
+ * one mapping for every importer. `button` is UiPath's MouseButton (`BTN_LEFT`) or Playwright's (`left`); `keys` are
+ * UiPath's KeyModifiers (`Ctrl`, `None`) or Playwright's (`Control`, `ControlOrMeta`, `Shift`, `Alt`). Another button, or
+ * a key other than Ctrl, Shift and Alt (Win, Meta), has no step: the error says why.
+ */
+export function clickModifiers(button: string, keys: string[]): { modifiers?: ClickModifier[] } | { error: string } {
+  const b = button.toLowerCase();
+  if (b && !/left/.test(b)) {
+    const named = b.replace(/^btn_/, '');
+    return { error: `${NAMED_BUTTONS.has(named) ? `a ${named}-button click` : 'a click with another button'} is not a step: browser steps click with the left button` };
+  }
+  const held = new Set<ClickModifier>();
+  for (const m of keys.map((x) => x.trim().toLowerCase()).filter(Boolean)) {
+    if (m === 'none') continue;
+    if (m === 'ctrl' || m === 'control' || m === 'controlormeta') held.add('Ctrl');
+    else if (m === 'shift') held.add('Shift');
+    else if (m === 'alt') held.add('Alt');
+    else return { error: `a click with ${NAMED_HELD_KEYS.has(m) ? m : 'another key'} held down is not a step: a browser click may hold Ctrl, Shift and Alt` };
+  }
+  const modifiers = CLICK_MODIFIER_ORDER.filter((m) => held.has(m));
+  return modifiers.length ? { modifiers } : {};
 }
 
 /** The intent-like text of an event, for steps and report items. */

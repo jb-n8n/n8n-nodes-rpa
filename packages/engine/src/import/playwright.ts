@@ -5,7 +5,8 @@
 // comment ends the parse with an `error` item. Typed values only ever reach fill/select events, which stripSecrets checks
 // and drops: never a report item.
 import { IMPORT_UNSUPPORTED_TARGET } from '../messages.js';
-import { cleanLabel } from './draft.js';
+import { cleanLabel, clickModifiers } from './draft.js';
+import type { ClickModifier } from '../types.js';
 import type { Candidate, ImportEvent, ImportItem, ImportReport } from './types.js';
 
 /** Code larger than this is refused before it is read. */
@@ -41,6 +42,7 @@ const R = {
   unique: (m: string) => `.${m}() is not imported: a step finds one element by its locator; make the locator unique (a name, a label or a scope)`,
   method: (m: string) => `.${m}() is not imported`,
   options: (m: string) => `${m} options are not imported: the steps click, type or choose with defaults`,
+  heldOpens: 'a click with keys held that opens a new tab or starts a download is not imported: the popup and download steps click without keys',
   javascript: 'the steps do not run page JavaScript: add a waitFor on what the page shows when it is ready',
   handler: 'event handlers (dialogs, requests, routes) are not imported',
   key: 'only Enter is imported: add a step for what this key does',
@@ -535,6 +537,19 @@ function flatten(node: Node): { root: Node; segs: Seg[] } {
 
 const strOf = (n: Node | undefined): string | undefined => (n?.k === 'str' ? n.v : undefined);
 const objOf = (n: Node | undefined): Map<string, Node> | undefined => (n?.k === 'obj' ? n.props : undefined);
+/**
+ * A click's options when they are only `button` and `modifiers` written out as text (what the recorder writes for a
+ * right-click or a Ctrl+click), mapped by clickModifiers; undefined for any other option or shape.
+ */
+function clickOptions(args: Node[]): ReturnType<typeof clickModifiers> | undefined {
+  const props = args.length === 1 ? objOf(args[0]) : undefined;
+  if (!props || [...props.keys()].some((k) => k !== 'button' && k !== 'modifiers')) return undefined;
+  const button = props.get('button');
+  const keys = props.get('modifiers');
+  if (button !== undefined && strOf(button) === undefined) return undefined;
+  if (keys !== undefined && (keys.k !== 'arr' || keys.items.some((m) => strOf(m) === undefined))) return undefined;
+  return clickModifiers(strOf(button) ?? '', keys?.k === 'arr' ? keys.items.map((m) => strOf(m) ?? '') : []);
+}
 
 /** Why a statement that is not an expression of the grammar was not imported. */
 function unparsed(toks: Tok[]): string {
@@ -855,8 +870,8 @@ export function playwrightEvents(code: string, report: ImportReport): ImportEven
   let marking: Promised | undefined;
   let lastField = '';
 
-  const click = (at: string, b: Built) => {
-    const e: Extract<ImportEvent, { kind: 'click' }> = { at, kind: 'click', target: targetOf(b), label: b.label };
+  const click = (at: string, b: Built, modifiers?: ClickModifier[]) => {
+    const e: Extract<ImportEvent, { kind: 'click' }> = { at, kind: 'click', target: targetOf(b), label: b.label, ...(modifiers ? { modifiers } : {}) };
     if (marking) { if (marking.kind === 'download') e.download = true; else e.popup = true; marking.clicked = true; marking = undefined; }
     events.push(e);
   };
@@ -872,10 +887,16 @@ export function playwrightEvents(code: string, report: ImportReport): ImportEven
     switch (name) {
       case 'click':
       case 'dblclick':
-      case 'tap':
-        if (args.length) return item(at, 'untranslated', what, R.options(name));
+      case 'tap': {
+        // A click may hold keys (`modifiers`) or name its button; any other option, and any option on a double click or
+        // a tap, is not imported.
+        const held = !args.length ? {} : name === 'click' ? clickOptions(args) : undefined;
+        if (!held) return item(at, 'untranslated', what, R.options(name));
+        if ('error' in held) return item(at, 'untranslated', what, held.error);
+        if (held.modifiers && marking) return item(at, 'untranslated', what, R.heldOpens);
         if (name !== 'click') item(at, 'converted', what, `a ${name === 'tap' ? 'tap' : 'double click'} became a single click: check that one click does the same`);
-        return click(at, b);
+        return click(at, b, held.modifiers);
+      }
       case 'fill':
       case 'type':
       case 'pressSequentially': {

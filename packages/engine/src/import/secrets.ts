@@ -33,6 +33,9 @@ const AMBIGUOUS_USERNAME =
 const SIGN_IN_PAGES =
   'the username and password are on different pages with more than one click, or a field, between them; the import builds signIn with next only when one click or Enter separates them: add the sign-in by hand';
 const BETWEEN_PAGES = 'it checks the page between the username and the password, which signIn passes in one step (next)';
+const HOVER_BETWEEN_PAGES = 'it is on the page between the username and the password, which signIn passes in one step (next)';
+/** A wait or a hover: neither leaves the page nor types, so the sign-in grouping steps over both. */
+const isPause = (e: ImportEvent): boolean => e.kind === 'waitFor' || e.kind === 'hover';
 const CODE_FROM_EXPRESSION = 'the code is not typed text (an expression or a variable, such as a TOTP activity\'s output): the sign-in types a fresh code from the Site Login\'s authenticator secret';
 const CODE_UNJOINED = 'the code step could not be joined to the sign-in: it must follow the sign-in\'s submit on the same page, then a click or Enter';
 const SIGN_IN_INCOMPLETE =
@@ -160,7 +163,7 @@ export function stripSecrets(input: ImportEvent[], opts: ImportOptions, report: 
   const submitAfter = (from: number): number => {
     for (let k = from + 1; k < events.length; k++) {
       const e = events[k];
-      if (e.kind === 'report' || e.kind === 'expectUrl' || e.kind === 'waitFor') continue;
+      if (e.kind === 'report' || e.kind === 'expectUrl' || isPause(e)) continue;
       if (e.kind === 'click' && focusOf.has(k)) continue;
       return e.kind === 'click' || e.kind === 'enter' ? k : -1;
     }
@@ -181,13 +184,13 @@ export function stripSecrets(input: ImportEvent[], opts: ImportOptions, report: 
       let j = from - 1;
       for (let clicks = 0; leaving && j >= 0; j--) {
         const e = events[j];
-        if (e.kind === 'report' || e.kind === 'waitFor' || e.kind === 'expectUrl') continue;
+        if (e.kind === 'report' || isPause(e) || e.kind === 'expectUrl') continue;
         if (((e.kind === 'click' && !focusOf.has(j)) || e.kind === 'enter') && clicks++ === 0) continue;
         break;
       }
       for (; j >= 0; j--) {
         const e = events[j];
-        if (e.kind === 'report' || e.kind === 'waitFor' || (e.kind === 'click' && focusOf.has(j))) continue;
+        if (e.kind === 'report' || isPause(e) || (e.kind === 'click' && focusOf.has(j))) continue;
         if (e.kind === 'fill' || e.kind === 'select' || e.kind === 'check') {
           if (e.kind === 'fill' && roles[j] !== 'password' && roles[j] !== 'totp') fills.push(j);
           continue;
@@ -207,9 +210,9 @@ export function stripSecrets(input: ImportEvent[], opts: ImportOptions, report: 
       return { confident, ambiguous: [...new Set([fills[0], ...fills.filter(usernameLike)].filter((j) => j !== undefined))] };
     };
     /**
-     * The one click or Enter (`next`) that left the page before `to` for the page `to` is on, and the URL checks and
-     * waits after it; undefined unless only those, report events and `to`'s focus click lie between `next` and `to`, and
-     * only URL checks, waits and report events lie between the previous page's last field (or its focus click) and `next`.
+     * The one click or Enter (`next`) that left the page before `to` for the page `to` is on, and the URL checks,
+     * waits and hovers after it; undefined unless only those, report events and `to`'s focus click lie between `next` and
+     * `to`, and only URL checks, waits, hovers and report events lie between the previous page's last field (or its focus click) and `next`.
      * A click marked `popup` is never `next`.
      */
     const leftFor = (to: number): { next: number; checks: number[] } | undefined => {
@@ -218,7 +221,7 @@ export function stripSecrets(input: ImportEvent[], opts: ImportOptions, report: 
       for (let j = to - 1; j >= 0; j--) {
         const e = events[j];
         if (e.kind === 'report') continue;
-        if (e.kind === 'expectUrl' || e.kind === 'waitFor') { if (next < 0) checks.push(j); continue; }
+        if (e.kind === 'expectUrl' || isPause(e)) { if (next < 0) checks.push(j); continue; }
         if (next < 0 && e.kind === 'click' && focusOf.get(j) === to) continue;
         // A click that opened a popup left the page for another tab: the password page is not where `next` leads.
         if (next < 0 && e.kind === 'click' && e.popup) return undefined;
@@ -274,7 +277,7 @@ export function stripSecrets(input: ImportEvent[], opts: ImportOptions, report: 
       for (let k = s + 1; k < events.length; k++) {
         const e = events[k];
         if (e.kind === 'report') continue;
-        if (e.kind === 'expectUrl' || e.kind === 'waitFor') { between.push(k); continue; }
+        if (e.kind === 'expectUrl' || isPause(e)) { between.push(k); continue; }
         if (e.kind === 'click' && focusOf.has(k) && isCode(focusOf.get(k)!)) continue;
         if (e.kind === 'fill' && isCode(k)) t = k;
         break;
@@ -299,9 +302,15 @@ export function stripSecrets(input: ImportEvent[], opts: ImportOptions, report: 
       const hops = twoPage ? [twoPage.next, ...twoPage.checks] : [];
       const members = [s, ...hops, ...(ts >= 0 ? [ts, ...between] : [])];
       for (const i of members) removed.add(i);
-      const checkName = (i: number, wait: string) => events[i].kind === 'expectUrl' ? `URL check ${(events[i] as { path: string }).path}` : wait;
-      for (const i of twoPage ? [...twoPage.checks].reverse() : []) add(events[i].at, 'dropped', checkName(i, 'Wait between the username and the password'), BETWEEN_PAGES);
-      for (const i of ts >= 0 ? between : []) add(events[i].at, 'dropped', checkName(i, 'Wait between the sign-in and the code'), 'it checks the page between the password and the code, which signIn passes in one step');
+      const checkName = (i: number, wait: string) => {
+        const e = events[i];
+        return e.kind === 'expectUrl' ? `URL check ${e.path}` : e.kind === 'hover' ? `Hover over ${nameOf(e.label, e.target) || 'the element'}` : wait;
+      };
+      const isHover = (i: number) => events[i].kind === 'hover';
+      for (const i of twoPage ? [...twoPage.checks].reverse() : []) add(events[i].at, 'dropped', checkName(i, 'Wait between the username and the password'), isHover(i) ? HOVER_BETWEEN_PAGES : BETWEEN_PAGES);
+      for (const i of ts >= 0 ? between : []) {
+        add(events[i].at, 'dropped', checkName(i, 'Wait between the sign-in and the code'), `it ${isHover(i) ? 'is on' : 'checks'} the page between the password and the code, which signIn passes in one step`);
+      }
       const enterSubmit = (k: number, fallback: Candidate[]): Candidate[] => {
         const e = events[k];
         if (e.kind === 'click') return e.target;

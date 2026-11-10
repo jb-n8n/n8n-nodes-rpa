@@ -742,6 +742,30 @@ describe('UiPath: hover and clicks with keys held', () => {
     ]);
   });
 
+  it('a UiPath hover inside a sign-in leaves it one signIn step, and no typed value survives', () => {
+    const hover = `<uix:NHover DisplayName="Hover 'Help'"><uix:NHover.Target>${target("<webctrl tag='A' aaname='Help' />")}</uix:NHover.Target></uix:NHover>`;
+    const body = (at: 'user' | 'password' | 'submit') => [
+      typeInto('Username', "<webctrl tag='INPUT' aaname='Username' />", SECRETS.username),
+      ...(at === 'user' ? [hover] : []),
+      typeInto('Password', "<webctrl tag='INPUT' type='password' aaname='Password' />", SECRETS.password),
+      ...(at === 'password' ? [hover] : []),
+      click('Sign in', "<webctrl tag='BUTTON' aaname='Sign in' />"),
+      ...(at === 'submit' ? [hover] : []),
+      typeInto('Verification code', "<webctrl tag='INPUT' aaname='Verification code' />", '482913'),
+      click('Verify', "<webctrl tag='BUTTON' aaname='Verify' />"),
+      click('Reports', "<webctrl tag='A' aaname='Reports' />"),
+    ].join('');
+    const verbs = { user: ['goto', 'hover', 'signIn', 'click'], password: ['goto', 'signIn', 'hover', 'click'], submit: ['goto', 'signIn', 'click'] };
+    for (const at of ['user', 'password', 'submit'] as const) {
+      const r = importSource('uipath', xaml(card(body(at), 'https://portal.example.com/login')), { name: 'hover-sign-in', hasSiteLogin: true, secrets: SECRETS });
+      expect(errors(r), at).toEqual([]);
+      const all = r.drafts.flatMap((d) => d.script.steps);
+      expect(all.map(verbOf), at).toEqual(verbs[at]);
+      expect((all.find((s) => 'signIn' in s) as S<'signIn'>).signIn.totp, at).toBeDefined();
+      for (const v of [SECRETS.username, SECRETS.password, '482913']) expect(JSON.stringify(r), at).not.toContain(v);
+    }
+  });
+
   it('a UiPath hover imports as hover', () => {
     const r = run([
       `<uix:NHover DisplayName="Hover 'Reports'"><uix:NHover.Target>${target("<webctrl tag='A' aaname='Reports' />")}</uix:NHover.Target></uix:NHover>`,

@@ -426,6 +426,121 @@ describe('Playwright code', () => {
     expect(r.report.items).toEqual([expect.objectContaining({ at: 'line 8', kind: 'untranslated', what: 'Hover Tools', reason: expect.stringContaining('hover options') })]);
   });
 
+  it('a Playwright click with Control held imports as a click with modifiers', () => {
+    const r = importSource('playwright', test([
+      "  await page.goto('https://portal.example.com/');", // 4
+      "  await page.getByRole('row', { name: 'Beta' }).click({ modifiers: ['Control'] });", // 5
+      "  await page.getByRole('row', { name: 'Gamma' }).click({ modifiers: ['Shift', 'Control'] });", // 6
+      "  await page.getByRole('row', { name: 'Delta' }).click({ button: 'left', modifiers: ['Alt'] });", // 7
+      "  await page.click('#epsilon', { modifiers: ['Control'] });", // 8
+      "  await page.getByRole('button', { name: 'Search' }).click({ button: 'left' });", // 9
+      "  await page.getByRole('row', { name: 'Zeta' }).click({ modifiers: ['Meta'] });", // 10
+      `  await page.getByRole('row', { name: 'Eta' }).click({ modifiers: ['${SECRETS.password}'] });`, // 11
+      `  await page.getByRole('row', { name: 'Theta' }).click({ button: '${SECRETS.password}' });`, // 12
+    ].join('\n')), PLAIN);
+    expect(stepsOf(r).slice(1)).toEqual([
+      { intent: 'Click Beta', click: { role: 'row', name: 'Beta' }, modifiers: ['Ctrl'] },
+      { intent: 'Click Gamma', click: { role: 'row', name: 'Gamma' }, modifiers: ['Ctrl', 'Shift'] },
+      { intent: 'Click Delta', click: { role: 'row', name: 'Delta' }, modifiers: ['Alt'] },
+      { intent: 'Click the element', click: { css: '#epsilon' }, modifiers: ['Ctrl'] },
+      { intent: 'Click Search', click: { role: 'button', name: 'Search' } },
+    ]);
+    expect(r.report.items).toEqual([
+      expect.objectContaining({ at: 'line 10', kind: 'untranslated', what: 'Click Zeta', reason: 'a click with meta held down is not a step: a browser click may hold Ctrl, Shift and Alt' }),
+      // Text from the code that is not a known key or button is never quoted in the report.
+      expect.objectContaining({ at: 'line 11', kind: 'untranslated', reason: 'a click with another key held down is not a step: a browser click may hold Ctrl, Shift and Alt' }),
+      expect.objectContaining({ at: 'line 12', kind: 'untranslated', reason: 'a click with another button is not a step: browser steps click with the left button' }),
+    ]);
+    expect(JSON.stringify(r)).not.toContain(SECRETS.password);
+  });
+
+  it('a Playwright click with ControlOrMeta held imports as a click with Ctrl', () => {
+    const r = importSource('playwright', test([
+      "  await page.goto('https://portal.example.com/');", // 4
+      "  await page.getByRole('row', { name: 'Beta' }).click({ modifiers: ['ControlOrMeta'] });", // 5
+      "  await page.getByRole('row', { name: 'Gamma' }).click({ modifiers: ['ControlOrMeta', 'Control'] });", // 6
+      "  const page1Promise = page.waitForEvent('popup');", // 7
+      "  await page.getByRole('link', { name: 'Report' }).click({ modifiers: ['ControlOrMeta'] });", // 8
+      '  const page1 = await page1Promise;', // 9
+    ].join('\n')), PLAIN);
+    expect(stepsOf(r).slice(1)).toEqual([
+      { intent: 'Click Beta', click: { role: 'row', name: 'Beta' }, modifiers: ['Ctrl'] },
+      { intent: 'Click Gamma', click: { role: 'row', name: 'Gamma' }, modifiers: ['Ctrl'] },
+    ]);
+    // A Ctrl+click that opens a new tab is not a popup step: that step clicks without keys, which may not open the tab.
+    expect(r.report.items).toContainEqual(expect.objectContaining({ at: 'line 8', kind: 'untranslated', what: 'Click Report', reason: expect.stringContaining('opens a new tab or starts a download') }));
+  });
+
+  it('a Playwright right-click is reported as untranslated, not imported as a click', () => {
+    const r = importSource('playwright', test([
+      "  await page.goto('https://portal.example.com/');", // 4
+      "  await page.getByRole('row', { name: 'Beta' }).click({ button: 'right' });", // 5
+      "  await page.getByRole('row', { name: 'Gamma' }).click({ button: 'middle', modifiers: ['Control'] });", // 6
+      "  await page.getByRole('button', { name: 'Search' }).click();", // 7
+    ].join('\n')), PLAIN);
+    expect(stepsOf(r).slice(1)).toEqual([{ intent: 'Click Search', click: { role: 'button', name: 'Search' } }]);
+    expect(r.report.items.map((i) => [i.at, i.kind, i.reason])).toEqual([
+      ['line 5', 'untranslated', 'a right-button click is not a step: browser steps click with the left button'],
+      ['line 6', 'untranslated', 'a middle-button click is not a step: browser steps click with the left button'],
+    ]);
+  });
+
+  it('a Playwright click with another option is reported as before, with the options note', () => {
+    const r = importSource('playwright', test([
+      "  await page.goto('https://portal.example.com/');", // 4
+      "  await page.getByRole('button', { name: 'Save' }).click({ timeout: 5000 });", // 5
+      "  await page.getByRole('row', { name: 'Beta' }).click({ modifiers: ['Control'], timeout: 5000 });", // 6
+      "  await page.getByRole('row', { name: 'Gamma' }).dblclick({ modifiers: ['Control'] });", // 7
+      "  await page.getByRole('button', { name: 'Search' }).click();", // 8
+    ].join('\n')), PLAIN);
+    expect(stepsOf(r).slice(1)).toEqual([{ intent: 'Click Search', click: { role: 'button', name: 'Search' } }]);
+    expect(r.report.items.map((i) => [i.at, i.kind, i.reason])).toEqual([
+      ['line 5', 'untranslated', 'click options are not imported: the steps click, type or choose with defaults'],
+      ['line 6', 'untranslated', 'click options are not imported: the steps click, type or choose with defaults'],
+      ['line 7', 'untranslated', 'dblclick options are not imported: the steps click, type or choose with defaults'],
+    ]);
+  });
+
+  it('a hover inside a sign-in leaves it one signIn step, and no typed value survives', () => {
+    const hover = "  await page.getByText('Help').hover();";
+    const code = (at: 'user' | 'password' | 'submit') => test([
+      "  await page.goto('https://portal.example.com/login');",
+      `  await page.getByLabel('Username').fill('${SECRETS.username}');`,
+      ...(at === 'user' ? [hover] : []),
+      `  await page.getByLabel('Password').fill('${SECRETS.password}');`,
+      ...(at === 'password' ? [hover] : []),
+      "  await page.getByRole('button', { name: 'Sign in' }).click();",
+      ...(at === 'submit' ? [hover] : []),
+      `  await page.getByLabel('Verification code').fill('${TOTP_CODE}');`,
+      "  await page.getByRole('button', { name: 'Verify' }).click();",
+      "  await page.getByRole('link', { name: 'Reports' }).click();",
+    ].join('\n'));
+    const opts: ImportOptions = { name: 'hover-sign-in', hasSiteLogin: true, secrets: SECRETS };
+    const verbs = { user: ['goto', 'hover', 'signIn', 'click'], password: ['goto', 'signIn', 'hover', 'click'], submit: ['goto', 'signIn', 'click'] };
+    for (const at of ['user', 'password', 'submit'] as const) {
+      const r = importSource('playwright', code(at), opts);
+      const steps = stepsOf(r);
+      expect(steps.map(verbOf), at).toEqual(verbs[at]);
+      expect((steps.find((s) => 'signIn' in s) as S<'signIn'>).signIn.totp, at).toBeDefined();
+      for (const v of [SECRETS.username, SECRETS.password, TOTP_CODE]) expect(JSON.stringify(r), at).not.toContain(v);
+    }
+    // Between the submit and the code it is on the page signIn passes in one step: dropped, with a report line.
+    expect(importSource('playwright', code('submit'), opts).report.items).toContainEqual(expect.objectContaining({ kind: 'dropped', what: 'Hover over Help' }));
+    // Identity-first: a hover between Next and the password page is dropped like a wait there, and signIn keeps next.
+    const twoPage = importSource('playwright', test([
+      "  await page.goto('https://portal.example.com/login');",
+      `  await page.getByLabel('Username').fill('${SECRETS.username}');`,
+      "  await page.getByRole('button', { name: 'Next' }).click();",
+      hover,
+      `  await page.getByLabel('Password').fill('${SECRETS.password}');`,
+      "  await page.getByRole('button', { name: 'Sign in' }).click();",
+    ].join('\n')), opts);
+    expect(stepsOf(twoPage).map(verbOf)).toEqual(['goto', 'signIn']);
+    expect((stepsOf(twoPage)[1] as S<'signIn'>).signIn.next).toBeDefined();
+    expect(twoPage.report.items).toContainEqual(expect.objectContaining({ kind: 'dropped', what: 'Hover over Help', reason: expect.stringContaining('between the username and the password') }));
+    for (const v of [SECRETS.username, SECRETS.password]) expect(JSON.stringify(twoPage)).not.toContain(v);
+  });
+
   it('unterminated literals end the parse with a report item', () => {
     const cases = [
       `await page.goto('https://a.example/');\nawait page.getByLabel('Password').fill('${SECRETS.password}`,
