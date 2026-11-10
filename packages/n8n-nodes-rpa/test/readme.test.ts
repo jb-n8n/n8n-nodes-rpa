@@ -389,7 +389,8 @@ describe('README', () => {
     const s = section('## Run Steps reference');
     const at = s.slice(s.indexOf('**Step schema.**'));
     for (const text of ['`packages/engine/schema/steps.schema.json`', 'draft-07', '`json.schemas`', '`$schema` key', 'refuses keys it does not know',
-      'six rules', 'compiles', '`detect.require`', 'absolute `goto`', 'parses as a URL', 'stricter than Run Steps', '`http:host`', 'UTF-16', '`{{$...}}`']) expect(at, text).toContain(text);
+      'seven rules', 'compiles', '`detect.require`', 'absolute `goto`', 'parses as a URL', 'stricter than Run Steps', '`http:host`', 'UTF-16', '`{{$...}}`',
+      'no `when` tests a variable that a secret `fill` types']) expect(at, text).toContain(text);
   });
 
   it('documents the One-Time Code Workflow in the Run Steps reference', () => {

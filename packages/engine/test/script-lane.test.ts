@@ -6,7 +6,8 @@ import { createMasker } from '../src/secrets/mask.js';
 import { MAX_BUDGET_MS, openLaneRuntime, runScriptLane, screenshotMasks, type ScriptLaneInput } from '../src/lane/script-lane.js';
 import { ENDPOINT_NOT_SECURE, nameMismatch, offListSite, privateAddress, UNSIGNED_REQUIRED, UNSIGNED_WRITES } from '../src/messages.js';
 import type { Script, Step } from '../src/types.js';
-import { baselineScript, LOCAL, policyFor, reportScript, SECRETS, SIGN_IN_STEPS, signedLaneInput, TEST_KEY } from './helpers.js';
+import { APPROVER, baselineScript, LOCAL, policyFor, reportScript, SECRETS, SIGN_IN_STEPS, signedLaneInput, TEST_KEY } from './helpers.js';
+import { verifyScript } from '../src/sign.js';
 import { notReachedNetworkIdle, tooManyRows } from '../src/messages.js';
 import { publicPolicy } from './helpers.js';
 import { bound } from './timing.js';
@@ -549,5 +550,46 @@ describe('public pages: start page, status handling and verification', () => {
     if (!fine.ok) throw new Error(fine.message);
     expect(fine.rows).toHaveLength(10_000);
     expect(fine.verified).toBe(true);
+  });
+});
+
+/**
+ * Step lists signed before the browser step gaps (conditions, new verbs, a password change) must verify, parse and run
+ * exactly as before. Each change in that work adds its case here, against this one fixture or a sibling of it.
+ */
+describe('a step list signed before this change verifies and runs', () => {
+  const signedBefore = (url: string): Script => ({
+    name: 'signed-before-step-gaps', version: 1, startUrl: `${url}/acme/login`,
+    steps: [
+      ...SIGN_IN_STEPS,
+      { intent: 'Close a banner if one shows', when: { visible: { css: '#no-such-banner' } }, click: { css: '#no-such-banner button' } },
+      { intent: 'Open Service', click: { role: 'link', name: 'Service', exact: true, within: { role: 'navigation' } } },
+      { intent: 'Open Recalls & Stop-Sales', click: { role: 'link', name: 'Recalls & Stop-Sales' }, expect: { heading: 'Recalls & Stop-Sales' }, checkpoint: true },
+      { intent: 'Read the notices', extract: { scope: { css: 'main' }, idPattern: 'N26-\\d{4}', textMode: 'textContent' } },
+    ],
+  });
+  /** signScript(signedBefore('http://127.0.0.1:9999'), TEST_KEY, { approvedBy: APPROVER }) with the code of 0.2.0. */
+  const SIGNED_AT_0_2_0 = '81b17b4dd7d981aab6887d3560b2f04ac1939fc37df64633c621eb7c19b352d4';
+
+  it('the signature made before the change still verifies, and signing gives the same one', () => {
+    const doc = signedBefore('http://127.0.0.1:9999');
+    expect(verifyScript(doc, TEST_KEY, { approvedBy: APPROVER, signature: SIGNED_AT_0_2_0 })).toBe(true);
+    expect(signedLaneInput(doc, {}).trust.signature).toBe(SIGNED_AT_0_2_0);
+  });
+  it('when.visible: a step whose element shows runs, one whose element is absent is skipped', async () => {
+    portal.setState({ interrupts: ['survey'] });
+    const r = await runScriptLane(input(signedBefore(portal.url)));
+    expect(r).toMatchObject({ ok: true, verified: true, name: 'signed-before-step-gaps' });
+    if (!r.ok) return;
+    expect(r.log.map((e) => [e.intent, e.status, e.note])).toEqual([
+      ['Sign in', 'ok', undefined],
+      ['Skip the survey', 'ok', undefined],
+      ['Check sign-in worked', 'ok', undefined],
+      ['Close a banner if one shows', 'skipped', 'condition not met'],
+      ['Open Service', 'ok', undefined],
+      ['Open Recalls & Stop-Sales', 'ok', undefined],
+      ['Read the notices', 'ok', undefined],
+    ]);
+    expect(sorted(r.rows.map((x) => x.id))).toEqual(sorted(SANDBOX.bulletins));
   });
 });

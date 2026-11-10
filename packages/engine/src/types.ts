@@ -21,10 +21,21 @@ export interface Expect {
   visible?: Locator;
 }
 
+/**
+ * When a browser step runs; otherwise it is skipped with "condition not met". `visible` and `hidden` look at the element
+ * once, without waiting. A variable condition compares the run variable's value with literal text (case and spaces
+ * count); a variable that is not set fails the step.
+ */
+export type StepWhen =
+  | { visible: Locator }
+  | { hidden: Locator }
+  | { var: string; equals: string }
+  | { var: string; notEquals: string };
+
 export interface StepBase {
   intent: string;
   optional?: boolean;
-  when?: { visible: Locator };
+  when?: StepWhen;
   expect?: Expect;
   checkpoint?: boolean;
   timeoutMs?: number;

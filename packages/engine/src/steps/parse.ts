@@ -1,9 +1,10 @@
 import { DESKTOP_VERBS, MAX_STEP_TIMEOUT_MS, STEP_VERBS, type DesktopScript, type DesktopVerb, type Script, type Step, type StepVerb } from '../types.js';
 import {
   BROWSER_STEPS_NEED_BROWSER, browserLocatorOnDesktop, browserStepOnDesktop, DESKTOP_STEPS_NEED_RUNNER, desktopLocatorInBrowser, exportDirOnlyInFill,
-  FIRST_STEP_GOTO, reservedTemplate, secretFillValue, varInWriteLocator, varNotRendered,
+  FIRST_STEP_GOTO, reservedTemplate, secretFillValue, varInWriteLocator, varNotRendered, whenVarOnWrite, whenVarSecret,
 } from '../messages.js';
 import { SECRET_FILL_VALUE } from '../secrets/render.js';
+import { secretFillVariables } from '../secrets/secret-fills.js';
 import { DESKTOP_WRITE_VERBS, READ_NAME, stepChordProblem } from './desktop-vocabulary.js';
 
 export class ScriptShapeError extends Error {
@@ -129,6 +130,48 @@ function checkSubmitTarget(v: Obj, path: string, issues: string[]) {
   if (v.method !== undefined && !(typeof v.method === 'string' && METHODS.has(v.method.toUpperCase()))) issues.push(`${path}.method must be one of ${[...METHODS].join(', ')}`);
 }
 
+/** The browser verbs that sign in or write: no run variable may steer them (a locator or a `when`). */
+const BROWSER_WRITE_VERBS: readonly StepVerb[] = ['signIn', 'submit', 'download'];
+/** A run variable's name, as Options → Variables accepts it. */
+const VAR_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const WHEN_FORMS = ['visible', 'hidden', 'var'] as const;
+
+/**
+ * A step's `when`: exactly one of `{ visible }`, `{ hidden }` (a locator each) or `{ var, equals | notEquals }` (a run
+ * variable against literal text). `writes`: the step signs in or writes, so a variable may not decide whether it runs.
+ */
+function checkWhen(w: unknown, path: string, writes: boolean, issues: string[]) {
+  const at = `${path}.when`;
+  if (!isObj(w)) { issues.push(`${at} must be an object`); return; }
+  checkKeys(w, [...WHEN_FORMS, 'equals', 'notEquals'], at, issues);
+  const forms = WHEN_FORMS.filter((k) => Object.hasOwn(w, k));
+  if (forms.length !== 1) { issues.push(`${at} must have exactly one of visible, hidden, or var with equals or notEquals`); return; }
+  const ops = (['equals', 'notEquals'] as const).filter((k) => Object.hasOwn(w, k));
+  if (forms[0] !== 'var') {
+    ops.forEach((k) => issues.push(`${at}.${k} is used only with var`));
+    checkLocator(w[forms[0]], `${at}.${forms[0]}`, issues);
+    return;
+  }
+  if (writes) issues.push(whenVarOnWrite(path));
+  if (typeof w.var !== 'string' || !VAR_NAME.test(w.var)) issues.push(`${at}.var must be a variable name: letters, digits and _, not starting with a digit`);
+  if (ops.length !== 1) { issues.push(`${at} with var needs exactly one of equals or notEquals`); return; }
+  const value = w[ops[0]];
+  if (typeof value !== 'string') issues.push(`${at}.${ops[0]} must be a string`);
+  else if (value.includes('{{')) issues.push(`${at}.${ops[0]} is compared as literal text and may not hold {{`);
+}
+
+/**
+ * A condition never tests a secret: no `when.var` may name a variable that a secret fill types, anywhere in the list
+ * (paginate bodies included). Runs on a list that already has the right shape.
+ */
+function checkWhenSecrets(steps: Step[], secret: Set<string>, issues: string[], path = 'steps') {
+  steps.forEach((s, i) => {
+    const at = `${path}[${i}]`;
+    if (s.when && 'var' in s.when && secret.has(s.when.var)) issues.push(whenVarSecret(at));
+    if ('paginate' in s) checkWhenSecrets(s.paginate.each, secret, issues, `${at}.paginate.each`);
+  });
+}
+
 function checkSteps(steps: unknown, path: string, issues: string[], nested: boolean) {
   if (!Array.isArray(steps) || steps.length === 0) { issues.push(`${path} must be a non-empty array`); return; }
   if (steps.length > 200) issues.push(`${path} has more than 200 steps`);
@@ -151,13 +194,8 @@ function checkStep(s: unknown, path: string, issues: string[], nested: boolean) 
   if (s.optional !== undefined && typeof s.optional !== 'boolean') issues.push(`${path}.optional must be a boolean`);
   if (s.checkpoint !== undefined && typeof s.checkpoint !== 'boolean') issues.push(`${path}.checkpoint must be a boolean`);
   if (s.timeoutMs !== undefined && !isInt(s.timeoutMs, 100, MAX_STEP_TIMEOUT_MS)) issues.push(`${path}.timeoutMs must be an integer between 100 and ${MAX_STEP_TIMEOUT_MS}`);
-  if (s.when !== undefined) {
-    if (!isObj(s.when)) issues.push(`${path}.when must be an object`);
-    else {
-      checkKeys(s.when, ['visible'], `${path}.when`, issues);
-      checkLocator(s.when.visible, `${path}.when.visible`, issues);
-    }
-  }
+  const verb = known[0] as StepVerb;
+  if (s.when !== undefined) checkWhen(s.when, path, BROWSER_WRITE_VERBS.includes(verb), issues);
   if (s.expect !== undefined) {
     if (!isObj(s.expect)) issues.push(`${path}.expect must be an object`);
     else {
@@ -167,7 +205,6 @@ function checkStep(s: unknown, path: string, issues: string[], nested: boolean) 
       if (s.expect.visible !== undefined) checkLocator(s.expect.visible, `${path}.expect.visible`, issues);
     }
   }
-  const verb = known[0] as StepVerb;
   const v = s[verb];
   const p = `${path}.${verb}`;
   switch (verb) {
@@ -385,6 +422,7 @@ export function parseScript(input: unknown, opts: { defaultStartUrl?: string } =
     });
   }
   checkSteps(doc.steps, 'steps', issues, false);
+  if (!issues.length) checkWhenSecrets(doc.steps as Step[], secretFillVariables(doc.steps as Step[]), issues);
   if (issues.length) throw new ScriptShapeError(issues);
   return structuredClone({ ...doc, startUrl }) as unknown as Script;
 }
@@ -460,7 +498,7 @@ function varsInLocators(v: unknown, path: string, out: string[]) {
  */
 function checkBrowserWriteLocators(steps: unknown, issues: string[], path = 'steps') {
   if (!Array.isArray(steps)) return;
-  const writes = (s: unknown) => isObj(s) && ['signIn', 'submit', 'download'].some((verb) => Object.hasOwn(s, verb));
+  const writes = (s: unknown) => isObj(s) && BROWSER_WRITE_VERBS.some((verb) => Object.hasOwn(s, verb));
   steps.forEach((s, i) => {
     if (!isObj(s)) return;
     const at = `${path}[${i}]`;

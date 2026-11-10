@@ -468,7 +468,7 @@ Credentials: **RPA Browser** (for browser steps), **RPA Desktop Runner** (for de
 }
 ```
 
-Every step has an `intent` (plain words, shown in logs and errors) and one verb. Optional step fields: `optional`, `when: { visible: <locator> }`, `expect: { url?, heading?, visible? }`, `checkpoint`, `timeoutMs` (100 to 300000 milliseconds for a browser step). A top-level `interrupts` list (`{ target, click }`) dismisses pop-ups whenever they appear.
+Every step has an `intent` (plain words, shown in logs and errors) and one verb. Optional step fields: `optional`, `when` (see **Conditions**), `expect: { url?, heading?, visible? }`, `checkpoint`, `timeoutMs` (100 to 300000 milliseconds for a browser step). A top-level `interrupts` list (`{ target, click }`) dismisses pop-ups whenever they appear.
 
 | Verb | Shape |
 |---|---|
@@ -490,6 +490,21 @@ Every step has an `intent` (plain words, shown in logs and errors) and one verb.
 | `detect` | `{ name, checks, require? }` waits for one of several elements |
 
 A locator is an object: `{ "text": "Sign in" }`, `{ "label": "Email address" }`, `{ "role": "button", "name": "Submit" }`, `{ "testId": "submit-button" }` or `{ "css": "table.results" }`, with optional `exact`, `within`, `frame` and `fallbacks` (other locators tried in order).
+
+
+**Conditions.** `when` runs a step only when its condition holds; otherwise the step is skipped, the log notes `condition not met`, and the run goes on. It takes exactly one of `{ "visible": <locator> }` (the element shows), `{ "hidden": <locator> }` (it does not show), `{ "var": "<name>", "equals": "<text>" }` or `{ "var": "<name>", "notEquals": "<text>" }` (the run variable's value, compared as text: case and spaces count). An element condition looks once, without waiting: put a `waitFor` before it when the page is still loading. The text is literal and may not hold `{{`. A variable that is not set fails the step (`missing input "<name>"`). There is no else: write the opposite condition on the next step.
+
+```json
+{
+  "steps": [
+    { "intent": "Open the reports page", "goto": "https://example.com/reports" },
+    { "intent": "Pick the full report", "when": { "var": "report", "equals": "full" }, "click": { "role": "radio", "name": "Full" } },
+    { "intent": "Pick the summary otherwise", "when": { "var": "report", "notEquals": "full" }, "click": { "role": "radio", "name": "Summary" } }
+  ]
+}
+```
+
+A run variable never decides whether a write runs: a variable condition is refused on `signIn`, `submit` and `download` steps and on the click that opens a write window, and on a variable that a secret `fill` types. Those steps may still use `visible` or `hidden` with a fixed locator. Only element conditions keep a step in the sign-in block (the gated steps right after `signIn`). Desktop step sets take `when: { "visible": <locator> }` only.
 
 **Two-page sign-in.** For a site that asks for the username on one page and the password on the next (identity-first sign-ins such as Microsoft Entra's), `signIn.next` is the button between them: the step types the username, clicks `next` and types the password only when the password field shows on a listed login page, so a rejected username stops the run before the password is typed: `login_failed` when the site sends the username page back; an inline error on the same page times out as drift (and AI repair is not attempted once the username was typed). A "Stay signed in?" prompt after it is an ordinary `click` step with `when`.
 
@@ -521,7 +536,7 @@ For a site that shows its error in place, such as a single-page login that keeps
 "json.schemas": [{ "fileMatch": ["*.steps.json"], "url": "./packages/engine/schema/steps.schema.json" }]
 ```
 
-The schema checks what Run Steps checks, except six rules it cannot express: that a regular expression compiles (`idPattern`, `check.name`, field patterns), that `detect.require` names one of the checks, that a document without `startUrl` begins with an absolute `goto` (Run Steps' **Start URL** can stand in for it), that `startUrl` parses as a URL (the schema checks only its `http://` or `https://` start, and is stricter than Run Steps in one case: Run Steps also accepts an address without the two slashes, such as `http:host`, which the schema refuses), lengths counted in UTF-16 units (an `intent` of 101 emoji passes the schema, not Run Steps), and that no `goto`, `fill` or `select` value uses a `{{$...}}` template (names that start with `$` are reserved: `{{$exportDir}}` belongs to desktop step sets). The `{{var.name}}` rules of **Variables in locators** are in the schema too: where the run never renders one, and in the steps that write or sign in. The schema covers browser step documents; a desktop step set (`"surface": "desktop"`) does not validate against it.
+The schema checks what Run Steps checks, except seven rules it cannot express: that a regular expression compiles (`idPattern`, `check.name`, field patterns), that `detect.require` names one of the checks, that a document without `startUrl` begins with an absolute `goto` (Run Steps' **Start URL** can stand in for it), that `startUrl` parses as a URL (the schema checks only its `http://` or `https://` start, and is stricter than Run Steps in one case: Run Steps also accepts an address without the two slashes, such as `http:host`, which the schema refuses), lengths counted in UTF-16 units (an `intent` of 101 emoji passes the schema, not Run Steps), that no `goto`, `fill` or `select` value uses a `{{$...}}` template (names that start with `$` are reserved: `{{$exportDir}}` belongs to desktop step sets), and that no `when` tests a variable that a secret `fill` types. The `{{var.name}}` rules of **Variables in locators** are in the schema too: where the run never renders one, and in the steps that write or sign in. The schema covers browser step documents; a desktop step set (`"surface": "desktop"`) does not validate against it.
 
 **File checks.** A `download` step can declare what the file must be. The checks live in the step document, so they are part of what Sign Steps signs: removing or loosening one changes the hash and the signature fails. Every run, including a normal one, enforces them.
 - `check.name`: a regular expression the sanitized file name must match.

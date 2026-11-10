@@ -1,6 +1,6 @@
 import type { PortalPolicy, PortalSecrets, Script, Step } from '../types.js';
 import { verbOf } from '../steps/parse.js';
-import { secretInLocation, SIGNIN_NEEDS_SITE_LOGIN, varInWriteLocator, WINDOW_STEP_NOT_CLICK } from '../messages.js';
+import { secretInLocation, SIGNIN_NEEDS_SITE_LOGIN, varInWriteLocator, whenVarOnWrite, WINDOW_STEP_NOT_CLICK } from '../messages.js';
 import { createMasker } from '../secrets/mask.js';
 import { canonicalize } from '../sign.js';
 import { interruptAction } from '../proposal/describe.js';
@@ -41,16 +41,19 @@ export function flattenSteps(steps: Step[]): Step[] {
   return out;
 }
 
+/** A step gated on an element (`when.visible` or `when.hidden`), not on a run variable. */
+const elementGated = (s: Step) => s.when !== undefined && !('var' in s.when);
+
 /**
- * Index of the step that ends the leading login block: the signIn, then any consecutive `when`-gated steps (e.g.
- * dismissing a survey), then an immediately following detect. A detect elsewhere is never part of the block.
- * -1 when the script has no signIn.
+ * Index of the step that ends the leading login block: the signIn, then any consecutive steps gated on an element
+ * (e.g. dismissing a survey; a step gated on a run variable ends the block), then an immediately following detect. A
+ * detect elsewhere is never part of the block. -1 when the script has no signIn.
  */
 export function loginBlockEnd(script: Script): number {
   const signIn = signInIndex(script);
   if (signIn < 0) return -1;
   let end = signIn;
-  while (end + 1 < script.steps.length && 'when' in script.steps[end + 1] && !('detect' in script.steps[end + 1])) end++;
+  while (end + 1 < script.steps.length && elementGated(script.steps[end + 1]) && !('detect' in script.steps[end + 1])) end++;
   if (end + 1 < script.steps.length && 'detect' in script.steps[end + 1]) end++;
   return end;
 }
@@ -276,8 +279,11 @@ export function validateScript(script: Script, ctx: PolicyContext): PolicyResult
     const at = policy.writeWindow.step;
     const target = Number.isInteger(at) && at >= 0 ? script.steps[at] : undefined;
     if (!target || !('click' in target)) violations.push(WINDOW_STEP_NOT_CLICK);
-    // A run variable must never steer the click that opens the write window.
-    else if (hasVarInLocators(target)) violations.push(varInWriteLocator(`step "${target.intent}"`));
+    // A run variable must never steer the click that opens the write window, nor decide whether it runs.
+    else {
+      if (hasVarInLocators(target)) violations.push(varInWriteLocator(`step "${target.intent}"`));
+      if (target.when && 'var' in target.when) violations.push(whenVarOnWrite(`steps[${at}]`));
+    }
   }
   if (signIns > 0 && !ctx.secrets) violations.push(SIGNIN_NEEDS_SITE_LOGIN);
 

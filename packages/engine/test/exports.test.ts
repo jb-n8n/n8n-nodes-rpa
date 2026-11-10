@@ -54,6 +54,7 @@ const EXPORTS = [
   'settle', 'shownFailure', 'signDesktopSteps', 'signInCodeFieldMissing', 'signScript', 'signSteps', 'snapshot', 'sniffMime', 'startHostOf', 'startSiteMismatch',
   'stepChanges', 'stopTrace', 'stripShownPrefix', 'substituteVars', 'toErrorCode', 'tokenRefused', 'tooManyRows', 'totp', 'unsignedWrites',
   'validateScript', 'varInWriteLocator', 'varNotRendered', 'verbOf', 'verifyRows', 'verifyScript', 'versionMismatch', 'violationMessage', 'wantTrace',
+  'whenVarOnWrite', 'whenVarSecret',
 ];
 
 describe('engine exports', () => {

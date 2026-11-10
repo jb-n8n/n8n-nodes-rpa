@@ -151,3 +151,56 @@ describe('runSteps basics', () => {
     } finally { await session.close(); }
   });
 });
+
+describe('runSteps conditions', () => {
+  const fillUser = (intent: string, when: Step['when'], value: string): Step => ({ intent, when, fill: { field: { css: '#username' }, value } });
+  const notes = (r: Awaited<ReturnType<typeof runSteps>>) => r.state.log.map((l) => [l.status, l.note]);
+  it('a step with when.hidden runs when the element is absent and is skipped when it shows', async () => {
+    const ctx = await ctxFor();
+    try {
+      const r = await runSteps(ctx, [
+        fillUser('No banner', { hidden: { css: '#cookie-overlay' } }, 'absent'),
+        fillUser('User field gone', { hidden: { css: '#username' } }, 'shown'),
+      ]);
+      expect(r.ok).toBe(true);
+      expect(notes(r)).toEqual([['ok', undefined], ['skipped', 'condition not met']]);
+      expect(await session.page.inputValue('#username')).toBe('absent');
+    } finally { await session.close(); }
+  });
+  it('a step with a variable condition runs when the variable equals the value and is skipped with "condition not met" when it does not', async () => {
+    const ctx = await ctxFor();
+    try {
+      const r = await runSteps(ctx, [
+        fillUser('Same value', { var: 'dealer', equals: 'SM-7702' }, 'equal'),
+        fillUser('Other case', { var: 'dealer', equals: 'sm-7702' }, 'case differs'),
+      ]);
+      expect(r.ok).toBe(true);
+      expect(notes(r)).toEqual([['ok', undefined], ['skipped', 'condition not met']]);
+      expect(await session.page.inputValue('#username')).toBe('equal');
+    } finally { await session.close(); }
+  });
+  it('notEquals is the reverse', async () => {
+    const ctx = await ctxFor();
+    try {
+      const r = await runSteps(ctx, [
+        fillUser('Not another value', { var: 'dealer', notEquals: 'SM-0000' }, 'differs'),
+        fillUser('Not this value', { var: 'dealer', notEquals: 'SM-7702' }, 'same'),
+      ]);
+      expect(r.ok).toBe(true);
+      expect(notes(r)).toEqual([['ok', undefined], ['skipped', 'condition not met']]);
+      expect(await session.page.inputValue('#username')).toBe('differs');
+    } finally { await session.close(); }
+  });
+  it('a variable condition on an unset variable fails the run', async () => {
+    const ctx = await ctxFor();
+    try {
+      const r = await runSteps(ctx, [
+        fillUser('Unknown', { var: 'region', equals: '' }, 'never'),
+        fillUser('After', undefined, 'never either'),
+      ]);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.failure).toMatchObject({ index: 0, message: 'missing input "region"' });
+      expect(await session.page.inputValue('#username')).toBe('');
+    } finally { await session.close(); }
+  });
+});

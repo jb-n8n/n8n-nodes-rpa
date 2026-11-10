@@ -42,6 +42,8 @@
     "nonEmptyString": { "type": "string", "minLength": 1 },
     "regex": { "type": "string", "minLength": 1, "description": "A JavaScript regular expression (it must compile)." },
     "varTemplate": { "type": "string", "pattern": "\\{\\{\\s*var\\.[A-Za-z0-9_]+\\s*\\}\\}", "description": "A string that holds a {{var.name}} template (a run variable)." },
+    "varName": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "description": "The name of a run variable (Options → Variables), without {{var. }}." },
+    "conditionText": { "type": "string", "not": { "type": "string", "pattern": "\\{\\{" }, "description": "Literal text a run variable is compared with. Never rendered, so it may not hold {{." },
     "noVarLocator": {
       "type": "object",
       "description": "A locator no run variable may steer: no {{var.name}} in its name or text, within or fallbacks included (the other keys never take one).",
@@ -68,8 +70,9 @@
     },
     "writeWhen": {
       "type": "object",
-      "description": "The when of a step that writes or signs in: its locator holds no {{var.name}}.",
-      "properties": { "visible": { "$ref": "#/definitions/noVarLocator" } }
+      "description": "The when of a step that writes or signs in: an element condition only, never a run variable, and its locator holds no {{var.name}}.",
+      "properties": { "visible": { "$ref": "#/definitions/noVarLocator" }, "hidden": { "$ref": "#/definitions/noVarLocator" } },
+      "not": { "required": ["var"] }
     },
     "writeExpect": {
       "type": "object",
@@ -171,10 +174,13 @@
         "optional": { "type": "boolean", "description": "Whether the run continues when this step finds nothing." },
         "when": {
           "type": "object",
-          "required": ["visible"],
-          "properties": { "visible": { "$ref": "#/definitions/locator" } },
-          "additionalProperties": false,
-          "description": "Run the step only when this element is visible."
+          "description": "Run the step only when this holds, else skip it: an element is visible, an element is not visible (hidden), or a run variable's value equals (or does not equal) a literal text. Checked once, without waiting.",
+          "oneOf": [
+            { "type": "object", "required": ["visible"], "properties": { "visible": { "$ref": "#/definitions/locator" } }, "additionalProperties": false },
+            { "type": "object", "required": ["hidden"], "properties": { "hidden": { "$ref": "#/definitions/locator" } }, "additionalProperties": false },
+            { "type": "object", "required": ["var", "equals"], "properties": { "var": { "$ref": "#/definitions/varName" }, "equals": { "$ref": "#/definitions/conditionText" } }, "additionalProperties": false },
+            { "type": "object", "required": ["var", "notEquals"], "properties": { "var": { "$ref": "#/definitions/varName" }, "notEquals": { "$ref": "#/definitions/conditionText" } }, "additionalProperties": false }
+          ]
         },
         "expect": {
           "type": "object",

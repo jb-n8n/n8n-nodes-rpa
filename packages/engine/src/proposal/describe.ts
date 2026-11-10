@@ -1,7 +1,7 @@
 import { canonicalize } from '../sign.js';
 import type { DownloadTemplate } from '../steps/file-check.js';
 import { verbOf } from '../steps/parse.js';
-import type { Interrupt, Locator, Step, SubmitTarget } from '../types.js';
+import type { Interrupt, Locator, Step, StepWhen, SubmitTarget } from '../types.js';
 
 // How the change list and the safety flags describe steps, pop-up handlers and locators. Run Steps
 // builds the change list with these; Sign Steps checks it against the same descriptions of the steps it signs.
@@ -93,7 +93,14 @@ function stepAction(step: Step): string {
   else if ('read' in step) s = `read the ${step.read.what}`;
   else if ('extractTable' in step) s = `extract table ${reviewLocator(step.extractTable.table)}${step.extractTable.idPattern ? `, ID pattern ${token(step.extractTable.idPattern)}` : ''}`;
   else s = verb;
-  return step.when ? `if ${reviewLocator(step.when.visible)} shows, ${s}` : s;
+  return step.when ? `${describeWhen(step.when)}, ${s}` : s;
+}
+
+/** A step's condition for a reviewer: the element, or the variable's name and the JSON-quoted text it is compared with. */
+function describeWhen(w: StepWhen): string {
+  if ('visible' in w) return `if ${reviewLocator(w.visible)} shows`;
+  if ('hidden' in w) return `if ${reviewLocator(w.hidden)} does not show`;
+  return 'equals' in w ? `if variable ${token(w.var)} is ${q(w.equals)}` : `if variable ${token(w.var)} is not ${q(w.notEquals)}`;
 }
 
 /**

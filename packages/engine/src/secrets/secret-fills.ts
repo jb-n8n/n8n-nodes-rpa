@@ -21,6 +21,16 @@ function secretFillTemplates(steps: readonly Step[], out: string[] = []): string
   return out;
 }
 
+/** The names of the variables the fill.secret steps type (a value that is not one {{var.name}} names none). */
+export function secretFillVariables(steps: readonly Step[]): Set<string> {
+  const names = new Set<string>();
+  for (const template of secretFillTemplates(steps)) {
+    const name = SECRET_FILL_VALUE.exec(template)?.[1];
+    if (name !== undefined) names.add(name);
+  }
+  return names;
+}
+
 /**
  * At run start: the value of every variable a fill.secret step names goes into the run's masker, so the steps before the
  * secret fill (a locator or plain fill rendering it, a page error showing it) never show it, and refuse to render it.

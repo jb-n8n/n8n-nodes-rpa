@@ -1,12 +1,13 @@
 import type { Page } from 'playwright-core';
 import type { AllowedSubmit, WriteWindow } from '../browser/session.js';
 import { maskClipped, type Masker } from '../secrets/mask.js';
-import type { CodeProvider, PortalPolicy, PortalSecrets, RunState, Script, Step, StepLogEntry, StepsResult, Violation } from '../types.js';
+import type { CodeProvider, PortalPolicy, PortalSecrets, RunState, Script, Step, StepLogEntry, StepsResult, StepWhen, Violation } from '../types.js';
 import type { InterruptHandle } from './interrupts.js';
 import { HANDLERS, type AnyVerb } from './handlers/index.js';
 import { desktopVerbOf, verbOf } from './parse.js';
 import { renderLocators } from './render-locators.js';
 import { registerSecretFills } from '../secrets/secret-fills.js';
+import { renderVars } from '../secrets/render.js';
 import { PolicyError } from './errors.js';
 import { shownMessage } from './urls.js';
 import { BLOCKED_STOP } from '../messages.js';
@@ -106,6 +107,18 @@ function logOutput(state: RunState, verb: AnyVerb, outputsBefore: number, downlo
 }
 
 /**
+ * Whether a step's `when` holds now. `visible` and `hidden` look once, without waiting. A variable condition reads the
+ * run variable as renderVars does (an unset one throws `missing input "x"`, one that holds a secret is refused) and
+ * compares it with the literal text.
+ */
+async function conditionMet(when: StepWhen, surface: Surface, ctx: StepContext): Promise<boolean> {
+  if ('visible' in when) return surface.isVisible(when.visible);
+  if ('hidden' in when) return !(await surface.isVisible(when.hidden));
+  const value = renderVars(`{{var.${when.var}}}`, ctx.vars, ctx.masker);
+  return 'equals' in when ? value === when.equals : value !== when.notEquals;
+}
+
+/**
  * Runs steps in order. `afterStep` is awaited with the index of each top-level step the run got past (it passed, or
  * was skipped because its `when` condition was not met or because it is optional), before the next step starts.
  */
@@ -150,7 +163,7 @@ export async function runSteps(
     try {
       // {{var.x}} in a locator is rendered for this run into a copy; the step itself keeps its template.
       const live = renderLocators(step, ctx.vars, ctx.masker);
-      if (live.when && !(await surface.isVisible(live.when.visible))) {
+      if (live.when && !(await conditionMet(live.when, surface, ctx))) {
         log('skipped', 0, { note: 'condition not met' });
         if (!opts.nested) await opts.afterStep?.(i);
         continue;

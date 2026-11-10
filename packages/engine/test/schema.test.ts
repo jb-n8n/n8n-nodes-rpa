@@ -110,6 +110,9 @@ const EVERY_FIELD = {
     { intent: 'Open one by variable', click: { role: 'link', name: '{{var.item}}' } },
     { intent: 'Open one by its text', click: { text: '{{var.item}} details', within: { role: 'region', name: '{{ var.region }}' }, fallbacks: [{ role: 'link', name: '{{var.item}}' }, { text: '{{var.item}}' }] }, when: { visible: V_TEXT }, expect: { visible: V_ROLE } },
     { intent: 'Download by variable path', download: { trigger: { text: 'Export' }, via: { path: '/export/{{var.id}}' } } },
+    { intent: 'Close the banner while it shows', click: { css: '#banner-close' }, when: { hidden: { text: 'Loading {{var.item}}' } } },
+    { intent: 'Pick the full report', click: { text: 'Full' }, when: { var: 'mode', equals: 'full' } },
+    { intent: 'Pick the short report', click: { text: 'Short' }, when: { var: '_mode2', notEquals: '' } },
     { intent: 'Check', check: { field: { label: 'Agree' }, checked: false } },
     { intent: 'Check default', check: { field: { label: 'Agree' } } },
     { intent: 'Click all', clickAll: { target: loc, max: 100 } },
@@ -233,6 +236,16 @@ describe('the step-document JSON Schema', () => {
       ['a read of cookies', doc(step({ read: { what: 'cookies' } }))],
       ['optional as a string', doc(step({ click: loc, optional: 'yes' }))],
       ['a when without visible', doc(step({ click: loc, when: {} }))],
+      ['a when with two forms', doc(step({ click: loc, when: { visible: loc, hidden: loc } }))],
+      ['a when with a locator and a variable', doc(step({ click: loc, when: { visible: loc, var: 'm', equals: 'x' } }))],
+      ['a when with an unknown key', doc(step({ click: loc, when: { hidden: loc, script: 'x' } }))],
+      ['a when with equals beside a locator', doc(step({ click: loc, when: { hidden: loc, equals: 'x' } }))],
+      ['a when variable without equals or notEquals', doc(step({ click: loc, when: { var: 'm' } }))],
+      ['a when variable with both equals and notEquals', doc(step({ click: loc, when: { var: 'm', equals: 'a', notEquals: 'b' } }))],
+      ['a when variable name that starts with a digit', doc(step({ click: loc, when: { var: '1m', equals: 'x' } }))],
+      ['a when variable name written as a template', doc(step({ click: loc, when: { var: '{{var.m}}', equals: 'x' } }))],
+      ['a when value that holds {{', doc(step({ click: loc, when: { var: 'm', equals: '{{var.other}}' } }))],
+      ['a when notEquals that is not a string', doc(step({ click: loc, when: { var: 'm', notEquals: 1 } }))],
       ['an unknown expect key', doc(step({ click: loc, expect: { title: 'T' } }))],
       ['a secret fill with text around the template', doc(step({ fill: { field: loc, value: 'x{{var.p}}', secret: true } }))],
       ['a secret fill with a literal', doc(step({ fill: { field: loc, value: 'literal', secret: true } }))],
@@ -254,6 +267,10 @@ describe('the step-document JSON Schema', () => {
       ['a {{var.*}} in a download trigger', doc(step({ download: { trigger: V_TEXT } }))],
       ['a {{var.*}} in a download file check', doc(step({ download: { trigger: loc, check: { name: '^{{var.month}}' } } }))],
       ['a {{var.*}} in when.visible of a download', doc(step({ download: { trigger: loc }, when: { visible: V_TEXT } }))],
+      ['a {{var.*}} in when.hidden of a submit', doc(step({ submit: { button: loc, path: '/save' }, when: { hidden: V_ROLE } }))],
+      ['a variable condition on a signIn', doc(step({ signIn: { username: loc, password: loc, submit: loc }, when: { var: 'm', equals: 'x' } }))],
+      ['a variable condition on a submit', doc(step({ submit: { button: loc, path: '/save' }, when: { var: 'm', notEquals: 'x' } }))],
+      ['a variable condition on a download inside paginate', doc(step({ paginate: { next: loc, until: 'absent', max: 2, each: [step({ download: { trigger: loc }, when: { var: 'm', equals: 'x' } })] } }))],
       ['a {{var.*}} in expect.visible of a submit', doc(step({ submit: { button: loc, path: '/save' }, expect: { visible: { css: '#ok', fallbacks: [V_ROLE] } } }))],
       ['a {{var.*}} in a download inside paginate', doc(step({ paginate: { next: loc, until: 'absent', max: 2, each: [step({ download: { trigger: V_ROLE } })] } }))],
       // A {{var.*}} where the run never renders it: anything but a role locator's name and a text locator's text.
@@ -321,6 +338,8 @@ describe('the step-document JSON Schema', () => {
       ['an intent of 101 emoji (202 code units)', doc({ intent: '😀'.repeat(101), click: loc })],
       // 6. names that start with $ are reserved in templates ({{$exportDir}} belongs to desktop step sets)
       ['a {{$...}} template', doc({ intent: 'x', fill: { field: loc, value: '{{$now}}' } })],
+      // 7. a when variable condition may not test a variable that a secret fill types (a rule across steps)
+      ['a condition on a secret fill variable', doc({ intent: 'x', fill: { field: loc, value: '{{var.pw}}', secret: true } }, { intent: 'y', click: loc, when: { var: 'pw', equals: 'x' } })],
     ];
     for (const [what, d] of gaps) {
       expect(parses(d), `parseScript accepts ${what}`).toBe(false);

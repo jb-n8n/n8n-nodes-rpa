@@ -151,6 +151,10 @@ export const formPostsElsewhere = (host: string, hosts: string[]): string => `th
 export const WINDOW_STEP_NOT_CLICK = 'the write window must be on a click step';
 /** A {{var.x}} in a locator of a step that writes or types secrets: a run variable must never steer a write. */
 export const varInWriteLocator = (at: string): string => `${at}: {{var.*}} is not allowed in a locator of a step that writes or signs in; use a fixed locator`;
+/** A `when` on a run variable on a step that signs in or writes (signIn, submit, download, the write window click). */
+export const whenVarOnWrite = (at: string): string => `${at}.when may not use a variable on a step that signs in or writes`;
+/** A `when` on a variable that a secret fill types: whether the step ran would tell whether the secret equals a literal. */
+export const whenVarSecret = (at: string): string => `${at}.when may not test a variable that a secret fill types`;
 /**
  * A {{var.x}} in a locator key the run never renders (label, testId, css, frame, role, a window selector, a UI Automation
  * controlType, automationId or className, any key of a pop-up handler): it would be matched as literal text.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseScript, ScriptShapeError, verbOf } from '../src/steps/parse.js';
+import { parseDesktopScript, parseScript, ScriptShapeError, verbOf } from '../src/steps/parse.js';
 import { baselineScript, reportScript } from './helpers.js';
 import { FIRST_STEP_GOTO, varInWriteLocator } from '../src/messages.js';
 
@@ -303,5 +303,68 @@ describe('run variables in locators of write steps', () => {
       { intent: 'F', fill: { field: { label: 'Q' }, value: '{{var.q}}' } },
       { intent: 'D', download: { trigger: { text: 'x' }, via: { path: '/d/{{var.id}}' } } },
     ]) expect(issuesOf(withStep(step))).toEqual([]);
+  });
+});
+
+describe('step conditions (when)', () => {
+  const click = (when: unknown) => ({ intent: 'Maybe', click: { css: '#a' }, when });
+  const at = (step: unknown) => issuesOf(withStep(step));
+  it('each of the four forms parses', () => {
+    for (const when of [
+      { visible: { css: '#a' } },
+      { hidden: { role: 'dialog', name: '{{var.who}}' } },
+      { var: 'mode', equals: 'full' },
+      { var: '_mode_2', notEquals: '' },
+    ]) expect(at(click(when)), JSON.stringify(when)).toEqual([]);
+  });
+  it('refuses two forms at once, an unknown key, a bad variable name and a value that is not literal text', () => {
+    expect(at(click({ visible: { css: '#a' }, hidden: { css: '#b' } }))).toEqual(['steps[0].when must have exactly one of visible, hidden, or var with equals or notEquals']);
+    expect(at(click({ visible: { css: '#a' }, var: 'mode', equals: 'x' }))).toEqual(['steps[0].when must have exactly one of visible, hidden, or var with equals or notEquals']);
+    expect(at(click({ var: 'mode', equals: 'a', notEquals: 'b' }))).toEqual(['steps[0].when with var needs exactly one of equals or notEquals']);
+    expect(at(click({ var: 'mode' }))).toEqual(['steps[0].when with var needs exactly one of equals or notEquals']);
+    expect(at(click({ hidden: { css: '#a' }, equals: 'x' }))).toEqual(['steps[0].when.equals is used only with var']);
+    expect(at(click({ var: 'mode', equals: 'x', script: 'y' }))).toEqual(['steps[0].when has unknown key "script"']);
+    expect(at(click({}))).toEqual(['steps[0].when must have exactly one of visible, hidden, or var with equals or notEquals']);
+    for (const name of ['1st', 'a-b', 'var.mode', '{{var.mode}}', '', 7]) {
+      expect(at(click({ var: name, equals: 'x' })), String(name)).toEqual(['steps[0].when.var must be a variable name: letters, digits and _, not starting with a digit']);
+    }
+    expect(at(click({ var: 'mode', equals: 3 }))).toEqual(['steps[0].when.equals must be a string']);
+    expect(at(click({ var: 'mode', equals: '{{var.other}}' }))).toEqual(['steps[0].when.equals is compared as literal text and may not hold {{']);
+    expect(at(click({ var: 'mode', notEquals: 'a {{ b' }))).toEqual(['steps[0].when.notEquals is compared as literal text and may not hold {{']);
+  });
+  it('refuses a variable condition on a step that signs in or writes, nested in paginate too', () => {
+    const W = { var: 'mode', equals: 'full' };
+    const si = { username: { label: 'U' }, password: { label: 'P' }, submit: { role: 'button', name: 'Go' } };
+    for (const step of [
+      { intent: 'In', signIn: si, when: W },
+      { intent: 'S', submit: { path: '/x', button: { css: '#b' } }, when: W },
+      { intent: 'D', download: { trigger: { text: 'x' } }, when: W },
+    ]) expect(at(step), Object.keys(step)[1]).toEqual(['steps[0].when may not use a variable on a step that signs in or writes']);
+    const nested = { intent: 'P', paginate: { next: { text: 'N' }, until: 'absent', max: 2, each: [{ intent: 'D', download: { trigger: { text: 'x' } }, when: W }] } };
+    expect(at(nested)).toEqual(['steps[0].paginate.each[0].when may not use a variable on a step that signs in or writes']);
+    // The element forms stay allowed there, with a fixed locator.
+    expect(at({ intent: 'In', signIn: si, when: { hidden: { css: '#signed-in' } } })).toEqual([]);
+    expect(at({ intent: 'S', submit: { path: '/x', button: { css: '#b' } }, when: { hidden: { text: '{{var.who}}' } } })).toEqual([varInWriteLocator('steps[0].when.hidden.text')]);
+  });
+  it('refuses a variable condition on a variable that a secret fill types, anywhere in the list', () => {
+    const doc = (...steps: unknown[]) => ({ ...baselineScript(URL0), steps: [{ intent: 'Open', goto: `${URL0}/a` }, ...steps] });
+    const secret = { intent: 'Type the export password', fill: { field: { label: 'Export password' }, value: '{{ var.exportPw }}', secret: true } };
+    expect(issuesOf(doc(click({ var: 'exportPw', equals: 'x' }), secret))).toEqual(['steps[1].when may not test a variable that a secret fill types']);
+    const nested = { intent: 'P', paginate: { next: { text: 'N' }, until: 'absent', max: 2, each: [secret] } };
+    expect(issuesOf(doc(nested, click({ var: 'exportPw', notEquals: '' })))).toEqual(['steps[2].when may not test a variable that a secret fill types']);
+    const inLoop = { intent: 'P', paginate: { next: { text: 'N' }, until: 'absent', max: 2, each: [click({ var: 'exportPw', equals: 'x' })] } };
+    expect(issuesOf(doc(secret, inLoop))).toEqual(['steps[2].paginate.each[0].when may not test a variable that a secret fill types']);
+    // A plain fill of the same variable is no secret, and another variable is fine.
+    expect(issuesOf(doc({ intent: 'F', fill: { field: { label: 'Q' }, value: '{{var.exportPw}}' } }, click({ var: 'exportPw', equals: 'x' })))).toEqual([]);
+    expect(issuesOf(doc(secret, click({ var: 'mode', equals: 'x' })))).toEqual([]);
+  });
+  it('a desktop step with when.hidden or a variable condition is refused as before', () => {
+    const uia = { uia: { path: [{ controlType: 'Button', automationId: 'ok' }] } };
+    const desk = (when: unknown) => {
+      try { parseDesktopScript({ surface: 'desktop', name: 'd', version: 1, app: { exe: 'App.exe' }, steps: [{ intent: 'x', click: uia, when }] }); return []; } catch (e) { return (e as ScriptShapeError).issues; }
+    };
+    expect(desk({ visible: uia })).toEqual([]);
+    expect(desk({ hidden: uia })).toEqual(['steps[0].when has unknown key "hidden"', 'steps[0].when.visible must be a locator object']);
+    expect(desk({ var: 'mode', equals: 'x' })).toEqual(['steps[0].when has unknown key "var"', 'steps[0].when has unknown key "equals"', 'steps[0].when.visible must be a locator object']);
   });
 });
