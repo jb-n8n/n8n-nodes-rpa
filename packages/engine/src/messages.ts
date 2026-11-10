@@ -42,7 +42,7 @@ export const startSiteMismatch = (signed: string, expected: string) => `the sign
 
 // Network guard. Golden: tests assert them verbatim.
 export const browserUnreachable = (url: string) =>
-  `Could not connect to the browser server at ${url}. Is it running? With the compose stack: docker compose up -d browser. On a Windows install: is the bot user signed in? (README: Where the browser runs).`;
+  `Could not connect to the browser server at ${url}. Is it running? With the compose stack: docker compose up -d browser. On a Windows install: is the bot account signed in? (README: Where the browser runs).`;
 export const browserVersionMismatch = (server: string, client: string) =>
   `The browser server is version ${server} but this node needs ${client}. Use image mcr.microsoft.com/playwright:v${client}.`;
 export const CHROMIUM_MISSING = 'Chromium not found. Run: npx playwright install chromium';

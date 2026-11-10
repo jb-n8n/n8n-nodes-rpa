@@ -165,7 +165,7 @@ describe('v2 credential tests', () => {
     const r = await browserTestResult({ mode: 'playwright', wsUrl: `ws://127.0.0.1:${port}/?token=abc123`, token: 'tok-7f3a9c' }, engine);
     expect(r).toEqual({
       status: 'Error',
-      message: `Could not connect to the browser server at ws://127.0.0.1:${port}/. Is it running? With the compose stack: docker compose up -d browser. On a Windows install: is the bot user signed in? (README: Where the browser runs).`,
+      message: `Could not connect to the browser server at ws://127.0.0.1:${port}/. Is it running? With the compose stack: docker compose up -d browser. On a Windows install: is the bot account signed in? (README: Where the browser runs).`,
     });
     expect(r.message).not.toContain('tok-7f3a9c');
     expect(r.message).not.toContain('abc123');

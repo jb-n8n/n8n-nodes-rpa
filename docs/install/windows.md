@@ -268,8 +268,9 @@ If rpa-runner is already signed in, sign out and sign in again.
 The steps listed depend on the parameters (`create user` only for a new user). With `-AutoSignIn`, three more follow
 `write install.json` (`store sign-in password`, `turn on automatic sign-in`, `keep the desktop unlocked`), and the line
 `Automatic sign-in is on: Windows signs rpa-runner in at its next start.` comes before `Sign in as rpa-runner`: the
-sign-in happens when you restart the machine (`Restart-Computer`, section 4). The installer prints no secret. Exit codes: 0 installed, 1 refused or failed, 3 declined at a
-question. When it refuses, it says why and `Nothing was changed.`; fix the cause and run the same command again.
+sign-in happens when you restart the machine (`Restart-Computer`, section 4). The installer prints no secret. Exit
+codes: 0 installed, 1 refused or failed, 3 declined at a question. When it refuses, it says why and
+`Nothing was changed.`; fix the cause and run the same command again.
 
 ### What the installer changes on the machine
 
@@ -466,8 +467,8 @@ PowerShell transcription is turned on (by Group Policy, for example), the transc
 run-command tool keeps the output of a command, so whoever can read its history can read both tokens. If such a tool
 is your only shell, run `-ShowTokens` there, copy the tokens into n8n, limit who can read that history, and change
 both tokens (section 10) once you have a shell that keeps no output. A token that went anywhere else is changed as in
-section 10. When you have copied the
-values, close the window or run `Clear-Host`, so that the tokens do not stay on the screen.
+section 10. When you have copied the values, close the window or run `Clear-Host`, so that the tokens do not stay on
+the screen.
 
 The fingerprints are read from files the bot user can write (the runner's start line in `logs\runner.out.log`, the
 browser's `browser-cert.pem`). So copy them while you trust what has run as the bot user, best right after the
