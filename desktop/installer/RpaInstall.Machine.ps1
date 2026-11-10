@@ -356,14 +356,15 @@ function Stop-RpaServices([string]$InstallDir) {
 }
 
 # Deletes the folder -Path and everything in it, through handles (RpaTree): the folders from -From (an existing folder
-# above -Path, or -Path itself when not given) down to -Path are held open without delete sharing until the end, so
-# that they cannot be renamed or replaced meanwhile; each entry is opened inside the folder that holds it, never by
-# a path; a link or junction inside is removed as the link itself and not entered. Paths of any length. -From is the
-# highest folder that someone other than an administrator may change (the bot user's profile folder for its temp
-# folder); its own path is not checked here. Nothing when -Path is not there. A folder on the way that is a link,
-# or that cannot be held open, ends the removal before anything is deleted. What cannot be opened or deleted is left
-# and the rest removed, in one pass; then the text names the first entry left. -BeforeOpen is for tests only: it
-# runs between the listing of a folder and the opening of each entry, with that entry's path.
+# above -Path, or -Path itself when not given) down to -Path are held open without delete sharing until the end
+# (Windows then refuses another open of them with delete access, which a rename or a move needs); each entry is
+# opened inside the folder that holds it, not by a path; a link or junction inside is removed as the link itself and
+# not entered. Paths of any length. -From is the highest folder that someone other than an administrator may change
+# (the bot user's profile folder for its temp folder); its own path is not checked here. Nothing when -Path is not
+# there. A folder on the way that is a link, or that cannot be held open, ends the removal before anything is deleted.
+# What cannot be opened or deleted is left and the rest removed, in one pass; then the text names the first entry left.
+# -BeforeOpen is for tests only: it runs between the listing of a folder and the opening of each entry, with that
+# entry's path.
 function Remove-RpaTree([string]$Path, [string]$From, [scriptblock]$BeforeOpen) {
   $Path = $Path.TrimEnd('\')
   if ($From) { $From = $From.TrimEnd('\') } else { $From = $Path }
@@ -484,9 +485,10 @@ public sealed class RpaTreeOutcome {
 }
 // Removes a folder tree through handles. The folders from the top one down to the one removed are opened one inside
 // the other, without following a link, with list access and without delete sharing, and stay open until the end:
-// while they are held, no one can rename, move or replace them. Each entry of a held folder is opened by its name
-// inside that folder's handle (never by a path), the same way and with delete access; its attributes are read from
-// the handle. A link (junction, symbolic link, mount point) is deleted as the link itself and never entered; a
+// while they are held, Windows refuses another open of them with delete access, which a rename or a move needs, and
+// a rename of a folder above an open one. Each entry of a held folder is opened by its name inside that folder's
+// handle (not by a path), the same way and with delete access; its attributes are read from the handle. A link
+// (junction, symbolic link, mount point) is deleted as the link itself and not entered; a
 // folder is walked while it is held, then deleted; a file is deleted. What cannot be opened or deleted, a folder not
 // empty at the end, and a folder more than MaxDepth below the one removed are left, and the walk goes on.
 public static class RpaTree {
@@ -1395,8 +1397,9 @@ function Get-RpaOtherWriters([string]$Path, [string]$Sid) {
 #     account that right). This look is an early refusal with a clear reason; it reads neither rules that apply only
 #     to what is inside a folder nor conditional rules, and it says nothing about handles opened earlier;
 #   - when it cannot be read or removed: Remove-RpaTree holds the four folders open without delete sharing while the
-#     tree is removed, so that they cannot be renamed or replaced meanwhile, and removes a link inside the tree as the
-#     link itself, without entering it. A folder another process holds, or an entry it cannot open or delete, is left.
+#     tree is removed (Windows refuses a rename or move of a folder held that way), and removes a link inside the
+#     tree as the link itself, without entering it. A folder another process holds, or an entry it cannot open or
+#     delete, is left.
 # Returns, for each folder found, Path, Name (the account), Removed and Why (sentences for the person, when it was
 # left).
 function Remove-RpaBrowserTemp([object[]]$Accounts, [string[]]$RunningSids, [object[]]$UnknownProcesses) {
