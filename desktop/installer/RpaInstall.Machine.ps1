@@ -370,6 +370,8 @@ function Remove-RpaTree([string]$Path, [string]$From, [scriptblock]$BeforeOpen) 
   if ($Path -ne $From -and -not $Path.StartsWith($From + '\', [StringComparison]::OrdinalIgnoreCase)) { throw ('{0} is not inside {1}.' -f $Path, $From) }
   $below = @()
   if ($Path.Length -gt $From.Length) { $below = @($Path.Substring($From.Length + 1).Split('\')) }
+  # Each name is opened inside the folder above it; an empty name would open that folder itself.
+  if (@($below | Where-Object { $_ -eq '' -or $_ -eq '.' -or $_ -eq '..' }).Count -gt 0) { throw ('{0} is not inside {1}.' -f $Path, $From) }
   Add-RpaNativeTypes
   $hook = $null
   if ($BeforeOpen) { $hook = [Action[string]]$BeforeOpen }
@@ -499,11 +501,19 @@ public static class RpaTree {
   struct IoStatusBlock { public IntPtr Status; public IntPtr Information; }
   [StructLayout(LayoutKind.Sequential)]
   struct BasicInfo { public long Created; public long Accessed; public long Written; public long Changed; public uint Attributes; }
+  [StructLayout(LayoutKind.Sequential)]
+  struct FileInformation {
+    public uint Attributes;
+    public System.Runtime.InteropServices.ComTypes.FILETIME Created;
+    public System.Runtime.InteropServices.ComTypes.FILETIME Accessed;
+    public System.Runtime.InteropServices.ComTypes.FILETIME Written;
+    public uint VolumeSerialNumber; public uint SizeHigh; public uint SizeLow; public uint NumberOfLinks; public uint IndexHigh; public uint IndexLow;
+  }
   [DllImport("ntdll.dll")]
   static extern int NtCreateFile(out IntPtr handle, uint access, ref ObjectAttributes attributes, out IoStatusBlock status, IntPtr allocationSize, uint fileAttributes, uint share, uint disposition, uint options, IntPtr eaBuffer, uint eaLength);
   [DllImport("ntdll.dll")] static extern int RtlNtStatusToDosError(int status);
-  [DllImport("kernel32.dll", SetLastError = true, EntryPoint = "GetFileInformationByHandleEx")]
-  static extern bool GetBasicInfo(SafeFileHandle file, int infoClass, out BasicInfo info, uint size);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern bool GetFileInformationByHandle(SafeFileHandle file, out FileInformation information);
   [DllImport("kernel32.dll", SetLastError = true, EntryPoint = "GetFileInformationByHandleEx")]
   static extern bool GetDirectoryInfo(SafeFileHandle file, int infoClass, IntPtr buffer, uint size);
   [DllImport("kernel32.dll", SetLastError = true, EntryPoint = "SetFileInformationByHandle")]
@@ -550,14 +560,14 @@ public static class RpaTree {
         if (error == NotFound || error == PathNotFound) { outcome.Missing = true; return outcome; }
         if (error != 0) { outcome.Unheld = path; outcome.Reason = Message(error); return outcome; }
         held.Add(handle);
-        uint attributes;
-        error = Attributes(handle, out attributes);
+        uint attributes, links;
+        error = Read(handle, out attributes, out links);
         if (error != 0) { outcome.Unheld = path; outcome.Reason = Message(error); return outcome; }
         if ((attributes & ReparsePoint) != 0) { outcome.Link = path; return outcome; }
         if ((attributes & Directory) == 0) { outcome.NotFolder = path; return outcome; }
         if (last) {
           Walk(handle, path, 0, path, outcome.Left, beforeOpen);
-          string problem = DeleteThrough(handle, attributes);
+          string problem = DeleteThrough(handle, attributes, links);
           if (problem != null) Leave(outcome.Left, path, problem);
         }
       }
@@ -576,16 +586,18 @@ public static class RpaTree {
       if (beforeOpen != null) beforeOpen(entry);
       SafeFileHandle handle;
       error = OpenInside(folder, name, ListDirectory | ReadAttributes | WriteAttributes | Delete | Synchronize, out handle);
+      // Gone since the listing: nothing to remove.
+      if (error == NotFound || error == PathNotFound) continue;
       if (error != 0) { Leave(left, entry, Message(error)); continue; }
       using (handle) {
-        uint attributes;
-        error = Attributes(handle, out attributes);
+        uint attributes, links;
+        error = Read(handle, out attributes, out links);
         if (error != 0) { Leave(left, entry, Message(error)); continue; }
         if ((attributes & Directory) != 0 && (attributes & ReparsePoint) == 0) {
           if (depth + 1 > MaxDepth) { Leave(left, entry, "it is more than " + MaxDepth + " folders below " + root); continue; }
           Walk(handle, entry, depth + 1, root, left, beforeOpen);
         }
-        string problem = DeleteThrough(handle, attributes);
+        string problem = DeleteThrough(handle, attributes, links);
         if (problem != null) Leave(left, entry, problem);
       }
     }
@@ -621,11 +633,14 @@ public static class RpaTree {
     }
   }
 
-  static int Attributes(SafeFileHandle handle, out uint attributes) {
-    BasicInfo info;
+  // The attributes of the entry held by handle and how many names it has (more than one: a hard link).
+  static int Read(SafeFileHandle handle, out uint attributes, out uint links) {
+    FileInformation information;
     attributes = 0;
-    if (!GetBasicInfo(handle, FileBasicInfo, out info, (uint)Marshal.SizeOf(typeof(BasicInfo)))) return Marshal.GetLastWin32Error();
-    attributes = info.Attributes;
+    links = 0;
+    if (!GetFileInformationByHandle(handle, out information)) return Marshal.GetLastWin32Error();
+    attributes = information.Attributes;
+    links = information.NumberOfLinks;
     return 0;
   }
 
@@ -660,9 +675,11 @@ public static class RpaTree {
 
   // Deletes the entry held by handle when its last handle closes: a read-only attribute is cleared first, then the
   // entry is marked for deletion, with POSIX semantics where the file system has them (the name goes when this handle
-  // closes, also while another program has the entry open). Nothing when that worked, else why not.
-  static string DeleteThrough(SafeFileHandle handle, uint attributes) {
+  // closes, also while another program has the entry open). The attributes belong to the file, not to one of its
+  // names, so they are not changed on a file with another name elsewhere. Nothing when that worked, else why not.
+  static string DeleteThrough(SafeFileHandle handle, uint attributes, uint links) {
     if ((attributes & ReadOnly) != 0) {
+      if (links > 1) return "it is read-only and has another name (a hard link), so its attributes were not changed";
       BasicInfo info = new BasicInfo();
       info.Attributes = attributes & Settable;
       if (info.Attributes == 0) info.Attributes = Normal;

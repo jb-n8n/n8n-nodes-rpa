@@ -1327,6 +1327,42 @@ Describe 'Remove-RpaTree' {
     { Invoke-RemoveTree (Join-Path $TestDrive 'a') (Join-Path $TestDrive 'b') $null } | Should -Throw -ExpectedMessage ('{0} is not inside {1}.' -f (Join-Path $TestDrive 'a'), (Join-Path $TestDrive 'b'))
   }
 
+  # Each name below the folder to hold from is opened inside the folder above it; an empty name would open that one.
+  It 'refuses a path with an empty name, . or .. below the folder to hold from: <Below>' -ForEach @(@{ Below = 'a\\b' }, @{ Below = 'a\.\b' }, @{ Below = 'a\..\b' }) {
+    $from = 'C:\Users\bot'
+    { Invoke-RemoveTree ('{0}\{1}' -f $from, $Below) $from $null } | Should -Throw -ExpectedMessage ('{0}\{1} is not inside {0}.' -f $from, $Below)
+  }
+
+  # The attributes belong to the file, not to one of its names: clearing read-only on a second name would change the
+  # file outside the tree.
+  It 'on Windows: leaves a read-only file that has another name outside the tree, and changes nothing on it' -Skip:($env:OS -ne 'Windows_NT') {
+    $base = New-TestBase 'hardlink'
+    $victim = New-Victim (Join-Path $base 'victim')
+    $outside = Join-Path $victim 'a.txt'
+    (Get-Item -LiteralPath $outside).Attributes = 'ReadOnly'
+    $root = New-Folder (Join-Path $base 'root')
+    $link = Join-Path $root 'second-name.txt'
+    & $script:Cmd /d /c ('mklink /H "{0}" "{1}"' -f $link, $outside) | Out-Null
+    # Making the second name sets Archive.
+    $attributes = (Get-Item -LiteralPath $outside).Attributes
+    [bool]($attributes -band [IO.FileAttributes]::ReadOnly) | Should -BeTrue
+    Set-Content -LiteralPath (Join-Path $root 'other.txt') -Value 'x'
+    $failure = Get-Failure { Invoke-RemoveTree $root $root $null }
+    $failure | Should -BeExactly ('Could not remove {0} (it is read-only and has another name (a hard link), so its attributes were not changed). Close what is using it and run this again.' -f $link)
+    (Get-Item -LiteralPath $outside).Attributes | Should -Be $attributes
+    Join-Path $root 'other.txt' | Should -Not -Exist
+    (Get-Item -LiteralPath $outside).Attributes = 'Normal'
+  }
+
+  It 'on Windows: an entry that goes away between the listing and its opening is not counted as left' -Skip:($env:OS -ne 'Windows_NT') {
+    $root = New-TestBase 'gone'
+    Set-Content -LiteralPath (Join-Path $root 'goes.txt') -Value 'x'
+    Set-Content -LiteralPath (Join-Path $root 'stays.txt') -Value 'x'
+    $hook = { param($entry) if ((Split-Path -Leaf $entry) -eq 'goes.txt') { [IO.File]::Delete($entry) } }
+    Invoke-RemoveTree $root $root $hook
+    $root | Should -Not -Exist
+  }
+
   It 'on Windows: removes a junction, a folder symbolic link and a file symbolic link in the tree as links, and what they point at keeps every file' -Skip:($env:OS -ne 'Windows_NT') {
     $base = New-TestBase 'links'
     $victim = New-Victim (Join-Path $base 'victim')
