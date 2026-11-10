@@ -11,18 +11,39 @@ internal static class WindowsConsole
     private const uint ProcessQueryLimitedInformation = 0x1000;
     private const uint TokenQuery = 0x0008;
     private const int TokenElevation = 20;
+    private const int StandardOutput = -11;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Coord
+    {
+        public short X, Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ScreenBufferInfo
+    {
+        public Coord Size, Cursor;
+        public ushort Attributes;
+        public short WindowLeft, WindowTop, WindowRight, WindowBottom;
+        public Coord MaximumWindowSize;
+    }
 
     public static PolicyConsole Ask()
     {
         var asked = DateTime.UtcNow;
-        if (AttachedProcesses() is not { } ids) return new PolicyConsole(null, TakesKeys: false);
+        if (AttachedProcesses() is not { } ids) return new PolicyConsole(null, TakesKeys: false, Buffer: null);
         var others = ids.Where(id => id != (uint)Environment.ProcessId).Select(id => IsElevated(id, asked)).ToList();
         // Someone can press Enter in the console when it has a window, the window is on the desktop of a person who
         // is signed in (a service or a scheduled task runs on a window station nobody sees), and the tool's input is
         // that console and not a file or a pipe.
         var takesKeys = GetConsoleWindow() != 0 && Environment.UserInteractive && !Console.IsInputRedirected;
-        return new PolicyConsole(others, takesKeys);
+        return new PolicyConsole(others, takesKeys, Buffer());
     }
+
+    /// <summary>The size of the screen buffer behind the tool's standard output, or null when that is not a console
+    /// (Windows then has no buffer to tell about).</summary>
+    private static (int Columns, int Rows)? Buffer() =>
+        GetConsoleScreenBufferInfo(GetStdHandle(StandardOutput), out var info) ? (info.Size.X, info.Size.Y) : null;
 
     /// <summary>The ids of the processes attached to this console, the tool's own among them; null without a console.</summary>
     private static uint[]? AttachedProcesses()
@@ -70,6 +91,12 @@ internal static class WindowsConsole
 
     [DllImport("kernel32.dll")]
     private static extern nint GetConsoleWindow();
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern nint GetStdHandle(int which);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetConsoleScreenBufferInfo(nint output, out ScreenBufferInfo info);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern nint OpenProcess(uint access, bool inherit, uint processId);

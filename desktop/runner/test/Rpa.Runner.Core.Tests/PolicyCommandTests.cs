@@ -247,9 +247,9 @@ public class PolicyCommandTests
 
     // The consoles a test can put the tool in. Each entry of the list is one other process attached to the console:
     // true when it is elevated.
-    private static readonly PolicyConsole Elevated = new([true], TakesKeys: false);
-    private static readonly PolicyConsole OwnWindow = new([], TakesKeys: true);
-    private static readonly PolicyConsole NoConsole = new(null, TakesKeys: false);
+    private static readonly PolicyConsole Elevated = new([true], TakesKeys: false, Buffer: null);
+    private static readonly PolicyConsole OwnWindow = new([], TakesKeys: true, Buffer: null);
+    private static readonly PolicyConsole NoConsole = new(null, TakesKeys: false, Buffer: null);
 
     /// <summary>Consoles in which whoever chose the arguments may not be an administrator.</summary>
     public static TheoryData<bool[]?, bool> OtherConsoles => new()
@@ -859,7 +859,7 @@ public class PolicyCommandTests
         // Whoever starts the tool chooses its arguments. When that may be a program that is not elevated, the change
         // is still shown and asked about.
         var policy = Path.Combine(RunnerOptions.DefaultDataDir(), "policy.json");
-        var tool = new Tool { Console = new PolicyConsole(others, takesKeys) };
+        var tool = new Tool { Console = new PolicyConsole(others, takesKeys, null) };
         tool.Files.Text[policy] = Starter;
         var closing = tool.Console.ClosesWithTheTool ? $"{Closing}\n" : "";
         string[][] commands = [["apply", ChangePath, "--yes"], ["allow-app", ErpPath, "--yes"]];
@@ -884,7 +884,7 @@ public class PolicyCommandTests
     {
         foreach (var takesKeys in new[] { false, true })
         {
-            var tool = new Tool { Console = new PolicyConsole(others, takesKeys) };
+            var tool = new Tool { Console = new PolicyConsole(others, takesKeys, null) };
             Assert.Equal(0, tool.Run("", "apply", ChangePath, "--yes", "--policy", PolicyPath));
             Assert.Equal($"{Changing()}\n{AllowErp}\n{OneApp}\n{Updated}\n", tool.Output);
             Assert.Equal(PolicyPath, Assert.Single(tool.Files.Writes).Path);
@@ -895,21 +895,108 @@ public class PolicyCommandTests
     public void The_console_decides_the_options_and_the_wait_separately()
     {
         // Options: at least one other process, and every one of them elevated.
-        Assert.True(new PolicyConsole([true], false).HonoursOptions);
-        Assert.True(new PolicyConsole([true, true], true).HonoursOptions);
-        Assert.False(new PolicyConsole([], true).HonoursOptions);
-        Assert.False(new PolicyConsole(null, false).HonoursOptions);
-        Assert.False(new PolicyConsole([false], true).HonoursOptions);
-        Assert.False(new PolicyConsole([true, false], false).HonoursOptions);
-        Assert.False(new PolicyConsole([false, true], false).HonoursOptions);
+        Assert.True(new PolicyConsole([true], false, null).HonoursOptions);
+        Assert.True(new PolicyConsole([true, true], true, null).HonoursOptions);
+        Assert.False(new PolicyConsole([], true, null).HonoursOptions);
+        Assert.False(new PolicyConsole(null, false, null).HonoursOptions);
+        Assert.False(new PolicyConsole([false], true, null).HonoursOptions);
+        Assert.False(new PolicyConsole([true, false], false, null).HonoursOptions);
+        Assert.False(new PolicyConsole([false, true], false, null).HonoursOptions);
 
         // The wait: alone in a console someone can type in. Company, elevated or not, means the console is not the tool's.
-        Assert.True(new PolicyConsole([], true).ClosesWithTheTool);
-        Assert.False(new PolicyConsole([], false).ClosesWithTheTool);
-        Assert.False(new PolicyConsole(null, false).ClosesWithTheTool);
-        Assert.False(new PolicyConsole(null, true).ClosesWithTheTool);
-        Assert.False(new PolicyConsole([true], true).ClosesWithTheTool);
-        Assert.False(new PolicyConsole([false], true).ClosesWithTheTool);
+        Assert.True(new PolicyConsole([], true, null).ClosesWithTheTool);
+        Assert.False(new PolicyConsole([], false, null).ClosesWithTheTool);
+        Assert.False(new PolicyConsole(null, false, null).ClosesWithTheTool);
+        Assert.False(new PolicyConsole(null, true, null).ClosesWithTheTool);
+        Assert.False(new PolicyConsole([true], true, null).ClosesWithTheTool);
+        Assert.False(new PolicyConsole([false], true, null).ClosesWithTheTool);
+    }
+
+    /// <summary>The rows a line takes in a window 77 columns wide.</summary>
+    private static int Rows77(string line) => line.Length / 77 + 1;
+
+    private static string CannotShow(int rows) =>
+        $"This window cannot show the whole summary (it needs {rows} rows and 77 columns). Start RpaPolicy from an administrator console and run the command again.";
+
+    [Fact]
+    public void A_window_that_cannot_show_the_whole_summary_is_not_asked()
+    {
+        // Whoever started the tool may have chosen the size of its window's buffer. The first line, the summary rows
+        // and the count line, as a window 77 columns wide shows them, and one row for the prompt.
+        var needed = Rows77(Changing()) + 1 + Rows77(OneApp) + 1;
+        Assert.InRange(needed, 5, 7);
+        (int Columns, int Rows)[] small = [(76, 9001), (40, 300), (77, needed - 1), (120, needed - 1), (9001, 1), (0, 0)];
+        foreach (var buffer in small)
+        {
+            // In an administrator console, and where --policy is refused (the runner's own policy file is changed).
+            foreach (var others in new bool[][] { [true], [false], [] })
+            {
+                var tool = new Tool { Console = new PolicyConsole(others, TakesKeys: false, buffer) };
+                var policy = tool.Console.HonoursOptions ? PolicyPath : Path.Combine(RunnerOptions.DefaultDataDir(), "policy.json");
+                tool.Files.Text[policy] = Starter;
+                var first = $"Changing the policy at {policy} (0 app(s), 0 helper process pattern(s) today).";
+                string[][] commands = [["apply", ChangePath], ["allow-app", ErpPath]];
+                foreach (var command in commands)
+                {
+                    Assert.Equal(1, tool.Run("y\n", [.. command, .. tool.Console.HonoursOptions ? new[] { "--policy", PolicyPath } : []]));
+                    Assert.Equal($"{first}\n{R(CannotShow(Rows77(first) + 1 + Rows77(OneApp) + 1))}\n", tool.Output);
+                    Assert.Equal("y\n", tool.Unread);
+                    Assert.Empty(tool.Files.Writes);
+                }
+            }
+        }
+
+        // A window that holds every row is asked, and so is a tool whose output is not a console.
+        (int Columns, int Rows)?[] enough = [(77, needed), (120, 9001), null];
+        foreach (var buffer in enough)
+        {
+            var tool = new Tool { Console = new PolicyConsole([true], TakesKeys: false, buffer) };
+            Assert.Equal(3, tool.Run("n\n", "apply", ChangePath, "--policy", PolicyPath));
+            Assert.Equal($"{Changing()}\n{AllowErp}\n{OneApp}\n{Prompt}", tool.Output);
+        }
+    }
+
+    [Fact]
+    public void The_rows_a_window_needs_are_those_of_the_whole_summary()
+    {
+        // 28 write controls of 200 characters: each is four rows, and the first line and the count line are two each
+        // in 77 columns.
+        var tool = new Tool();
+        tool.Files.Text[ChangePath] = "{ \"writeControls\": [" +
+            string.Join(", ", Enumerable.Range(0, 28).Select(i => $"{{ \"exe\": \"ErpDemo.exe\", \"automationId\": \"{i:D2}{new string('x', 198)}\" }}")) + "] }";
+        var count = "This change: 0 app(s) allowed or updated, 0 helper process pattern(s), 28 write control(s), 0 gated key(s).";
+        var needed = Rows77(Changing()) + 28 * 4 + Rows77(count) + 1;
+        tool.Console = new PolicyConsole([true], TakesKeys: false, (80, needed - 1));
+        Assert.Equal(1, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Equal($"{Changing()}\n{R(CannotShow(needed))}\n", tool.Output);
+        tool.Console = new PolicyConsole([true], TakesKeys: false, (80, needed));
+        Assert.Equal(3, tool.Run("n\n", "apply", ChangePath, "--policy", PolicyPath));
+        // Printed: the first line, 28 lines of four rows, the count line and the prompt.
+        Assert.Equal(1 + 28 * 4 + 1 + 1, tool.Output.Split('\n').Length);
+    }
+
+    [Fact]
+    public void A_window_s_size_is_not_asked_about_when_the_tool_does_not_ask()
+    {
+        // --yes from an administrator console: nothing is asked, so nothing has to be read first.
+        var tool = new Tool { Console = new PolicyConsole([true], TakesKeys: false, (40, 3)) };
+        Assert.Equal(0, tool.Run("", "apply", ChangePath, "--yes", "--policy", PolicyPath));
+        Assert.Equal($"{Changing()}\n{AllowErp}\n{OneApp}\n{Updated}\n", tool.Output);
+        Assert.Equal(0, tool.Run("", "apply", ChangePath, "--yes", "--policy", PolicyPath));
+        Assert.EndsWith("Nothing to change.\n", tool.Output);
+        Assert.Equal(0, tool.Run("", "show", "--policy", PolicyPath));
+
+        // A --yes that is ignored still asks, so the window is looked at; and the tool's own window waits for Enter.
+        var policy = Path.Combine(RunnerOptions.DefaultDataDir(), "policy.json");
+        var own = new Tool { Console = new PolicyConsole([], TakesKeys: true, (80, 3)) };
+        own.Files.Text[policy] = Starter;
+        Assert.Equal(1, own.Run("y\n", "apply", ChangePath, "--yes"));
+        var first = $"Changing the policy at {policy} (0 app(s), 0 helper process pattern(s) today).";
+        Assert.Equal(
+            "--yes is ignored: start RpaPolicy from an administrator console to use it\n" +
+            $"{first}\n{R(CannotShow(Rows77(first) + 1 + Rows77(OneApp) + 1))}\n{Closing}\n",
+            own.Output);
+        Assert.Empty(own.Files.Writes);
     }
 
     [Fact]
@@ -943,7 +1030,7 @@ public class PolicyCommandTests
     {
         // No console (a hidden process), a console nobody can type in (a scheduled task), and consoles other
         // processes are attached to: nothing is added and nothing more is read, whatever the exit.
-        PolicyConsole[] consoles = [NoConsole, new([], TakesKeys: false), Elevated, new([true], TakesKeys: true), new([false], TakesKeys: true)];
+        PolicyConsole[] consoles = [NoConsole, new([], TakesKeys: false, Buffer: null), Elevated, new([true], TakesKeys: true, Buffer: null), new([false], TakesKeys: true, Buffer: null)];
         foreach (var console in consoles)
         {
             var tool = new Tool { Console = console };
@@ -1379,7 +1466,7 @@ public class PolicyCommandTests
         string[][] commands = [["apply", ChangePath, "--policy", PolicyPath], ["allow-app", ErpPath, "--policy", PolicyPath, "--yes"], ["show", "--policy", PolicyPath]];
         foreach (var command in commands)
         {
-            var tool = new Tool { Console = new PolicyConsole(others, takesKeys) };
+            var tool = new Tool { Console = new PolicyConsole(others, takesKeys, null) };
             Assert.Equal(1, tool.Run("\n", command));
             Assert.Equal($"--policy needs an administrator console\n{(tool.Console.ClosesWithTheTool ? Closing + "\n" : "")}", tool.Output);
             Assert.Empty(tool.Files.Reads);

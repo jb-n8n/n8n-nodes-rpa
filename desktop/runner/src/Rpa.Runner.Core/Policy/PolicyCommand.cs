@@ -112,7 +112,9 @@ public sealed class PolicyAppearedException() : IOException("a policy file appea
 /// process is elevated, false when it is not or when that could not be read. Null when the tool has no console.</param>
 /// <param name="TakesKeys">True when the tool reads its input from a console window on the desktop of a person who is
 /// signed in, so that someone can press Enter in it.</param>
-public sealed record PolicyConsole(IReadOnlyList<bool>? OtherProcesses, bool TakesKeys)
+/// <param name="Buffer">The size of the console screen buffer the tool prints into: its width in columns and the rows
+/// it keeps (what can be scrolled back to). Null when the tool's output is not a console (a file, a pipe).</param>
+public sealed record PolicyConsole(IReadOnlyList<bool>? OtherProcesses, bool TakesKeys, (int Columns, int Rows)? Buffer)
 {
     /// <summary>
     /// <c>--yes</c> and <c>--policy</c> are honoured only when the tool shares its console with at least one other
@@ -145,6 +147,12 @@ public static class PolicyCommand
     /// it is shown as escapes, so the limits on a change alone do not keep its summary short).
     /// </summary>
     public const int MaxSummaryLength = 8000;
+
+    /// <summary>
+    /// The narrowest console the tool asks in: one column more than its longest row
+    /// (<see cref="PolicyChange.RowLength"/>), so that the console does not break a row.
+    /// </summary>
+    public const int MinColumns = PolicyChange.RowLength + 1;
 
     public const string Usage = """
         Usage: RpaPolicy show [--policy <path>]
@@ -243,7 +251,7 @@ public static class PolicyCommand
         int code;
         try
         {
-            code = Command(args, input, output, files, restartRunner, console.HonoursOptions);
+            code = Command(args, input, output, files, restartRunner, console);
         }
         catch (Exception e)
         {
@@ -259,7 +267,7 @@ public static class PolicyCommand
         return code;
     }
 
-    private static int Command(string[] args, TextReader input, TextWriter output, IPolicyFiles files, Action restartRunner, bool honourOptions)
+    private static int Command(string[] args, TextReader input, TextWriter output, IPolicyFiles files, Action restartRunner, PolicyConsole console)
     {
         if (args is ["--help"] or ["-h"] or ["/?"])
         {
@@ -271,7 +279,7 @@ public static class PolicyCommand
             PrintUsage(output);
             return 2;
         }
-        if (!honourOptions)
+        if (!console.HonoursOptions)
         {
             if (arguments.Policy is not null) return Fail(output, "--policy needs an administrator console");
             if (arguments.Yes)
@@ -283,8 +291,8 @@ public static class PolicyCommand
         return arguments.Command switch
         {
             "show" => Show(arguments.PolicyPath, output, files),
-            "apply" => Change(ChangeFile(arguments.Target!, files), arguments, input, output, files, restartRunner),
-            _ => Change(AllowApp(arguments, files), arguments, input, output, files, restartRunner),
+            "apply" => Change(ChangeFile(arguments.Target!, files), arguments, input, output, files, restartRunner, console),
+            _ => Change(AllowApp(arguments, files), arguments, input, output, files, restartRunner, console),
         };
     }
 
@@ -446,7 +454,7 @@ public static class PolicyCommand
         return JsonSerializer.Serialize(new Dictionary<string, object> { ["allowedApps"] = new[] { app } });
     }
 
-    private static int Change(string change, Arguments arguments, TextReader input, TextWriter output, IPolicyFiles files, Action restartRunner)
+    private static int Change(string change, Arguments arguments, TextReader input, TextWriter output, IPolicyFiles files, Action restartRunner, PolicyConsole console)
     {
         var before = ExistingPolicy(arguments.PolicyPath, files);
         var current = before is null ? null : Text(before, before.Length);
@@ -470,6 +478,18 @@ public static class PolicyCommand
         var rows = PolicyChange.Printed(result.Summary);
         if (rows.Prepend(Visible(first)).Sum(row => row.Length + 1) > MaxSummaryLength)
             return Fail(output, $"the summary of this change would be longer than {MaxSummaryLength} characters; split it into smaller changes");
+        if (!arguments.Yes && console.Buffer is { } buffer)
+        {
+            // The tool is about to ask, and whoever started it may have chosen the size of its console's buffer: a
+            // buffer of a few rows keeps only the last lines. What the buffer must hold is counted as a console
+            // MinColumns wide shows it (a line of that length or more takes a further row), plus the prompt's row.
+            var needed = rows.Prepend(Visible(first)).Sum(row => row.Length / MinColumns + 1) + 1;
+            if (buffer.Columns < MinColumns || buffer.Rows < needed)
+            {
+                return Fail(output, $"This window cannot show the whole summary (it needs {needed} rows and {MinColumns} columns). " +
+                                    "Start RpaPolicy from an administrator console and run the command again.");
+            }
+        }
         foreach (var row in rows) Print(output, row);
         if (!arguments.Yes)
         {
