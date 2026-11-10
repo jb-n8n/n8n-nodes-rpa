@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { checkTrust, hasSignature, isEmptySteps, unsignedWrites, type TrustInput } from '../src/lane/trust.js';
 import {
-  nameMismatch, SIGNATURE_INVALID, SIGNATURE_WITHOUT_KEY, startSiteMismatch, UNSIGNED_REQUIRED, UNSIGNED_WRITES, versionMismatch,
+  nameMismatch, SIGNATURE_INVALID, SIGNATURE_WITHOUT_KEY, startSiteMismatch, UNSIGNED_REQUIRED, UNSIGNED_SIGN_IN, UNSIGNED_WRITES, versionMismatch,
 } from '../src/messages.js';
 import { signScript } from '../src/sign.js';
 import type { Script, Step } from '../src/types.js';
@@ -26,7 +26,8 @@ describe('golden trust messages', () => {
     expect(UNSIGNED_REQUIRED).toBe('The steps are not signed, or the signature is not valid, and Require Signed Steps is on. Sign them with Sign Steps first.');
     expect(SIGNATURE_INVALID).toBe('The signature is not valid for these steps: it does not match their name, version, start site, Site Login or approver.');
     expect(SIGNATURE_WITHOUT_KEY).toBe('a signature is present but no Step Signing credential is attached');
-    expect(UNSIGNED_WRITES).toBe('Unsigned steps cannot sign in, submit a form or download through a form. Sign them with Sign Steps, or turn on Options → Allow Unsigned Writes.');
+    expect(UNSIGNED_WRITES).toBe('Unsigned steps cannot submit a form or download through a form. Sign them with Sign Steps, or turn on Options → Allow Unsigned Writes.');
+    expect(UNSIGNED_SIGN_IN).toBe('Unsigned steps cannot sign in: a step list with signIn must be signed. Sign it with Sign Steps or through an approval; Allow Unsigned Writes does not cover it.');
     expect(nameMismatch('prices', 'stock')).toBe('the signed steps are named "prices", not "stock"');
     expect(versionMismatch(3, 4)).toBe('the signed steps are version 3, but Expected Version is 4');
     expect(startSiteMismatch('a.example', 'b.example')).toBe('the signed steps start on a.example, but this run starts on b.example');
@@ -122,11 +123,29 @@ describe('unsigned writes', () => {
     expect(unsignedWrites([WAIT, plainDownload])).toEqual([]);
   });
   it('unsigned steps that write are refused unless Allow Unsigned Writes is on', () => {
-    for (const steps of [baselineScript(site.url).steps, [WAIT, submit], [WAIT, viaInPaginate]]) {
+    for (const steps of [[WAIT, submit], [WAIT, viaInPaginate]]) {
       const doc = readOnly({ startUrl: PAGE, steps });
       expect(checkTrust(doc, { required: false }, RUN)).toEqual(refused(UNSIGNED_WRITES));
       expect(checkTrust(doc, { required: false, allowUnsignedWrites: true }, RUN)).toEqual({ ok: true, signed: false });
     }
+  });
+  it('unsigned steps that sign in are refused, whatever Allow Unsigned Writes says', () => {
+    for (const steps of [baselineScript(site.url).steps, [...baselineScript(site.url).steps, submit]]) {
+      const doc = readOnly({ startUrl: PAGE, steps });
+      expect(checkTrust(doc, { required: false }, RUN)).toEqual(refused(UNSIGNED_SIGN_IN));
+      expect(checkTrust(doc, { required: false, allowUnsignedWrites: true }, RUN)).toEqual(refused(UNSIGNED_SIGN_IN));
+    }
+  });
+  it('signed steps that sign in pass, with Require Signed Steps on or off', () => {
+    const doc = readOnly({ startUrl: PAGE, steps: baselineScript(site.url).steps });
+    expect(checkTrust(doc, signedTrust(doc), RUN)).toEqual({ ok: true, signed: true });
+    expect(checkTrust(doc, signedTrust(doc, { required: false }), RUN)).toEqual({ ok: true, signed: true });
+  });
+  it('the trust of Import Steps\' draft mode (allowUnsignedSignIn) admits an unsigned sign-in', () => {
+    const doc = readOnly({ startUrl: PAGE, steps: baselineScript(site.url).steps });
+    expect(checkTrust(doc, { required: false, allowUnsignedWrites: true, allowUnsignedSignIn: true }, RUN)).toEqual({ ok: true, signed: false });
+    // Never with Require Signed Steps on.
+    expect(checkTrust(doc, { required: true, allowUnsignedWrites: true, allowUnsignedSignIn: true }, RUN)).toEqual(refused(UNSIGNED_REQUIRED));
   });
   it('signed steps may write', () => {
     const doc = readOnly({ startUrl: PAGE, steps: [WAIT, submit] });

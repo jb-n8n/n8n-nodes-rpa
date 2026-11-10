@@ -20,7 +20,7 @@ export const draftWrites = (steps: Script['steps']) =>
  * One run in draft mode. Before any browser: the document is copied (plain data only) and parsed, and one that is
  * empty, does not parse, or submits or downloads through a form is refused (policy_violation, configError). The copy
  * then runs as an ordinary task whose trust is a first run's (unsigned, writes allowed: the sign-in is the only one
- * left) under the no-write policy, so every session (script, agent, prove) is no-write and the Site Login rules still
+ * left; allowUnsignedSignIn, which Run Steps never sets, lets that sign-in pass the trust gate) under the no-write policy, so every session (script, agent, prove) is no-write and the Site Login rules still
  * decide where the password is typed. Rows, files and captures are removed from a success: nothing from an adoption
  * run is delivered. Never throws.
  */
@@ -42,7 +42,7 @@ export async function runDraft(input: DraftTaskInput): Promise<TaskResult> {
   if (draftWrites(script.steps).length > 0) return refuse(IMPORT_REFUSES_WRITES);
   // Built key by key: nothing else from the caller reaches the task (a stray trust or startStatus included).
   const task: TaskInput = {
-    script: raw, trust: { required: false, allowUnsignedWrites: true }, policy: noWritePolicy(input.policy), endpoint: input.endpoint,
+    script: raw, trust: { required: false, allowUnsignedWrites: true, allowUnsignedSignIn: true }, policy: noWritePolicy(input.policy), endpoint: input.endpoint,
     ...(input.secrets ? { secrets: input.secrets } : {}), ...(input.output ? { output: input.output } : {}), ...(input.vars ? { vars: input.vars } : {}),
     ...(input.budgetMs !== undefined ? { budgetMs: input.budgetMs } : {}),
     ...(input.defaultStepTimeoutMs !== undefined ? { defaultStepTimeoutMs: input.defaultStepTimeoutMs } : {}),

@@ -69,6 +69,9 @@ Microsoft's terms say about unattended automation on Windows (not legal advice).
 - **A rejected password is `login_failed`** without a `detect` step: when the site sends the password page back
   after `signIn` submitted it, the step fails with `login_failed` and the login breaker opens. In 0.1.0 a hand-written
   sign-in passed, and the run failed later as drift (with AI Repair on, the model then tried to repair it).
+- **A step list that signs in must be signed**, whatever **Allow Unsigned Writes** says: Run Steps refuses unsigned
+  steps with `signIn` as `script_untrusted` before the browser opens. In 0.1.0 Allow Unsigned Writes let unsigned steps
+  sign in, and whoever wrote them could test the typed password on a page that copies it into the page.
 
 ## 0.1.0 (2026-10-26)
 

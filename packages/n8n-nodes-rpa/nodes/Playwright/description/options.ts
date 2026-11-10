@@ -275,7 +275,7 @@ export const OPTION_ENTRIES: INodeProperties[] = [
     type: 'boolean',
     default: false,
     noDataExpression: true,
-    description: `Whether unsigned steps may sign in, submit a form or download through a form. ${LITERAL}`,
+    description: `Whether unsigned steps may submit a form or download through a form. Steps that sign in must always be signed. ${LITERAL}`,
     displayOptions: only(['runSteps']),
   },
   {

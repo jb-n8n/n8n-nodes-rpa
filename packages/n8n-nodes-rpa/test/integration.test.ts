@@ -138,6 +138,25 @@ describe('Run Steps and Sign Steps against the sandbox (real engine)', () => {
     expect(fixed[0].json).toMatchObject({ lane: 'script', version: 1 });
   });
 
+  it('unsigned steps that sign in are refused before any login, even with Require Signed Steps off and Allow Unsigned Writes on', async () => {
+    const steps = {
+      startUrl: `${portal.url}/acme/login`,
+      steps: [
+        { intent: 'Sign in', signIn: { username: { label: 'Dealer user ID' }, password: { label: 'Password' }, submit: { role: 'button', name: 'Sign in' } } },
+        { intent: 'Open the notices', goto: `${portal.url}/acme/service/recalls-and-stop-sales` },
+        { intent: 'Read notices', extract: { scope: { css: 'main' }, idPattern: 'N26-\\d{4}', textMode: 'textContent' } },
+      ],
+    };
+    const [data] = await run(undefined, {
+      over: { steps: JSON.stringify(steps), requireSignedSteps: false },
+      options: { name: '', allowUnsignedWrites: true },
+    });
+    expect(data[0].json.error).toBe(
+      'script_untrusted: Unsigned steps cannot sign in: a step list with signIn must be signed. Sign it with Sign Steps or through an approval; Allow Unsigned Writes does not cover it.',
+    );
+    expect(portal.state().logins).toBe(0);
+  });
+
   it('an edited record, a blank signature or a wrong Expected Version is script_untrusted before any login', async () => {
     const record = await sign(repairedItem(v(1), null));
     const before = portal.state().logins;

@@ -30,7 +30,7 @@ const EXPORTS = [
   'RunnerBusyError', 'RunnerClient', 'RunnerConnectError', 'RunnerDisconnectedError', 'RunnerError', 'RunnerTimeoutError',
   'RunnerTokenRefusedError', 'SECRET_FILL_VALUE', 'SESSION_WAIT_MS', 'SHOWN_PREFIXES', 'SIGNATURE_INVALID', 'SIGNATURE_WITHOUT_KEY', 'SIGNIN_NEEDS_SITE_LOGIN',
   'SIGNIN_NEXT_NO_PASSWORD', 'STEPS_CHANGED_AFTER_REVIEW', 'STEPS_HASH_MISMATCH', 'STEPS_NAME_MISMATCH', 'STEPS_VERSION_MISMATCH',
-  'STEP_VERBS', 'ScriptShapeError', 'SignInPolicyError', 'UNSIGNED_REQUIRED', 'UNSIGNED_SECRET_FILL', 'UNSIGNED_WRITES', 'UNVERIFIED_COUNT_FLAG', 'USE_CASE_WORDS',
+  'STEP_VERBS', 'ScriptShapeError', 'SignInPolicyError', 'UNSIGNED_REQUIRED', 'UNSIGNED_SECRET_FILL', 'UNSIGNED_SIGN_IN', 'UNSIGNED_WRITES', 'UNVERIFIED_COUNT_FLAG', 'USE_CASE_WORDS',
   'WINDOW_STEP_NOT_CLICK', 'WORKFLOW_CODE', 'WRITE_STEPS_INVALID', 'absoluteHttpUrl', 'adoptDraft', 'agentSignInLocked', 'agentSignInRejected',
   'agentSystemPrompt', 'binaryName', 'browserLocatorOnDesktop', 'browserStepOnDesktop', 'browserUnreachable', 'browserVersionMismatch',
   'build', 'buildProposal', 'candidatesFor', 'candidatesOf', 'canonicalize', 'captureTooLarge', 'changeListMatches', 'checkDesktopTrust',
