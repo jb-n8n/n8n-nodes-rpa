@@ -269,6 +269,29 @@ describe('the step-document JSON Schema', () => {
     }
   });
 
+  it('schema and parseScript agree on a {{var.*}} in a paginate\'s own locators: refused over a write, accepted over a read-only body', () => {
+    const own: [string, Record<string, unknown>][] = [
+      ['when.visible text', { when: { visible: V_TEXT } }],
+      ['when.visible role', { when: { visible: V_ROLE } }],
+      ['when.visible within', { when: { visible: { css: '#t', within: V_ROLE } } }],
+      ['when.visible fallbacks', { when: { visible: { css: '#t', fallbacks: [V_TEXT] } } }],
+      ['expect.visible', { expect: { visible: V_ROLE } }],
+      ['next', { next: V_ROLE }],
+      ['next within', { next: { text: 'Next', within: V_TEXT } }],
+      ['next fallbacks', { next: { text: 'Next', fallbacks: [V_ROLE] } }],
+    ];
+    const bodies: [string, unknown, boolean][] = [
+      ['submit', { intent: 's', submit: { button: loc, path: '/save' } }, false],
+      ['download', { intent: 'd', download: { trigger: loc } }, false],
+      ['a read-only body', { intent: 'c', click: V_ROLE }, true],
+    ];
+    for (const [where, { next, ...rest }] of own) for (const [body, each, ok] of bodies) {
+      const d = { startUrl: URL_BASE, steps: [{ intent: 'p', ...rest, paginate: { next: next ?? loc, until: 'absent', max: 2, each: [{ intent: 'r', click: loc }, each] } }] };
+      expect(parses(d), `parseScript, ${where} over ${body}`).toBe(ok);
+      expect(validateDocument(d), `the schema, ${where} over ${body}: ${errorsOf(validateDocument)}`).toBe(ok);
+    }
+  });
+
   it('the schema accepts a secret fill with one var template, spaces included, and secret: false with any value', () => {
     const doc = (value: string, secret: boolean) => ({ startUrl: URL_BASE, steps: [{ intent: 'x', fill: { field: loc, value, secret } }] });
     for (const d of [doc('{{var.pw}}', true), doc('{{ var.pw }}', true), doc('literal', false)]) {

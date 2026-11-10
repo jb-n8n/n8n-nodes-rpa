@@ -73,6 +73,8 @@ Microsoft's terms say about unattended automation on Windows (not legal advice).
 - **A step list that signs in must be signed**, whatever **Allow Unsigned Writes** says: Run Steps refuses unsigned
   steps with `signIn` as `script_untrusted` before the browser opens. In 0.1.0 Allow Unsigned Writes let unsigned steps
   sign in, and whoever wrote them could test the typed password on a page that copies it into the page.
+- **A `paginate` whose body holds a `submit` or a `download` takes no `{{var.name}}` in its own `when`, `expect` or
+  `next`**: they decide whether and how often the write runs. Run Steps and the schema refuse it when the steps are read.
 
 ## 0.1.0 (2026-10-26)
 

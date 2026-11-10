@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseScript, ScriptShapeError, verbOf } from '../src/steps/parse.js';
 import { baselineScript, reportScript } from './helpers.js';
-import { FIRST_STEP_GOTO } from '../src/messages.js';
+import { FIRST_STEP_GOTO, varInWriteLocator } from '../src/messages.js';
 
 const URL0 = 'http://127.0.0.1:9999';
 const withStep = (step: unknown) => ({ ...baselineScript(URL0), steps: [step] });
@@ -260,6 +260,36 @@ describe('run variables in locators of write steps', () => {
     refused({ intent: 'D', download: { trigger: { text: 'x' } }, expect: { visible: V } }, /steps\[0\]\.expect/);
     const nested = { intent: 'P', paginate: { next: { text: 'N' }, until: 'absent', max: 2, each: [{ intent: 'D', download: { trigger: V } }] } };
     refused(nested, /each\[0\]\.download\.trigger/);
+  });
+  describe('a paginate whose body writes', () => {
+    const T = { text: 'Row {{var.who}}' };
+    const pg = (each: unknown[], own: { when?: unknown; expect?: unknown; next?: unknown }) => ({
+      intent: 'P', ...(own.when ? { when: own.when } : {}), ...(own.expect ? { expect: own.expect } : {}),
+      paginate: { next: own.next ?? { text: 'N' }, until: 'absent', max: 5, each },
+    });
+    const own: [string, { when?: unknown; expect?: unknown; next?: unknown }, string][] = [
+      ['when.visible text', { when: { visible: T } }, 'steps[0].when.visible.text'],
+      ['when.visible role', { when: { visible: V } }, 'steps[0].when.visible.name'],
+      ['when.visible within', { when: { visible: { css: '#t', within: V } } }, 'steps[0].when.visible.within.name'],
+      ['when.visible fallbacks', { when: { visible: { css: '#t', fallbacks: [T] } } }, 'steps[0].when.visible.fallbacks[0].text'],
+      ['expect.visible', { expect: { visible: V } }, 'steps[0].expect.visible.name'],
+      ['next', { next: { role: 'link', name: 'Page {{var.n}}' } }, 'steps[0].paginate.next.name'],
+      ['next within', { next: { text: 'Next', within: T } }, 'steps[0].paginate.next.within.text'],
+      ['next fallbacks', { next: { text: 'Next', fallbacks: [V] } }, 'steps[0].paginate.next.fallbacks[0].name'],
+    ];
+    const bodies: [string, unknown][] = [
+      ['submit', { intent: 'S', submit: { path: '/x', button: { role: 'button', name: 'Save' } } }],
+      ['download', { intent: 'D', download: { trigger: { text: 'Export' } } }],
+    ];
+    it('refuses {{var.*}} in its own when, expect and next, within and fallbacks included', () => {
+      for (const [where, o, path] of own) for (const [verb, body] of bodies) {
+        expect(issuesOf(withStep(pg([{ intent: 'C', click: { css: '#a' } }, body], o))), `${where} over ${verb}`).toEqual([varInWriteLocator(path)]);
+      }
+    });
+    it('keeps accepting them over a read-only body', () => {
+      const read = [{ intent: 'C', click: V }, { intent: 'E', extract: { scope: { css: 'table' }, item: { css: 'tr' }, fields: { a: { locator: { css: 'td' } } } } }];
+      for (const [where, o] of own) expect(issuesOf(withStep(pg(read, o))), where).toEqual([]);
+    });
   });
   it('still allows a variable in a non-write click, waitFor, extract and fill value', () => {
     for (const step of [

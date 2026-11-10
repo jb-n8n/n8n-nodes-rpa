@@ -454,16 +454,22 @@ function varsInLocators(v: unknown, path: string, out: string[]) {
 /**
  * A run variable must never steer a write: signIn, submit and download steps (and, for a desktop step set, any step
  * with write: true) may not hold `{{var.x}}` in any locator, including `when`, `expect` and fallbacks. Walks paginate
- * bodies. The write window step is checked by the policy (it is declared there, not in the steps).
+ * bodies. A paginate whose body writes may not hold one in its own locators either (`when` and `expect` gate the body,
+ * `next` decides how often it repeats). The write window step is checked by the policy (it is declared there, not in
+ * the steps).
  */
 function checkBrowserWriteLocators(steps: unknown, issues: string[], path = 'steps') {
   if (!Array.isArray(steps)) return;
+  const writes = (s: unknown) => isObj(s) && ['signIn', 'submit', 'download'].some((verb) => Object.hasOwn(s, verb));
   steps.forEach((s, i) => {
     if (!isObj(s)) return;
     const at = `${path}[${i}]`;
-    if (['signIn', 'submit', 'download'].some((verb) => Object.hasOwn(s, verb))) {
+    const ownLocators = writes(s) ? s
+      : isObj(s.paginate) && Array.isArray(s.paginate.each) && s.paginate.each.some(writes) ? { ...s, paginate: { ...s.paginate, each: undefined } }
+      : undefined;
+    if (ownLocators) {
       const hits: string[] = [];
-      varsInLocators(s, at, hits);
+      varsInLocators(ownLocators, at, hits);
       hits.forEach((h) => issues.push(varInWriteLocator(h)));
     }
     if (isObj(s.paginate)) checkBrowserWriteLocators(s.paginate.each, issues, `${at}.paginate.each`);
