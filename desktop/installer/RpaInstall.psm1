@@ -435,14 +435,29 @@ function Get-RpaPathState([string]$Path) {
   $state
 }
 
+# The owner a security descriptor names when that is not Administrators or SYSTEM, else nothing.
+function Get-RpaForeignOwner([string]$Sddl) {
+  $security = New-Object Security.AccessControl.RawSecurityDescriptor $Sddl
+  if (-not $security.Owner -or $script:TrustedOwners -contains $security.Owner.Value) { return $null }
+  Get-RpaAccountName $security.Owner
+}
+
 # The owner of the scheduled task folder when it is there and that owner is not Administrators or SYSTEM, else nothing.
 function Get-RpaTaskFolderOwner {
   $scheduler = New-Object -ComObject Schedule.Service
   $null = $scheduler.Connect()
   try { $sddl = [string]$scheduler.GetFolder($script:TaskPath.TrimEnd('\')).GetSecurityDescriptor(1) } catch { return $null }
-  $security = New-Object Security.AccessControl.RawSecurityDescriptor $sddl
-  if (-not $security.Owner -or $script:TrustedOwners -contains $security.Owner.Value) { return $null }
-  Get-RpaAccountName $security.Owner
+  Get-RpaForeignOwner $sddl
+}
+
+# The owner of a task in the scheduled task folder when that owner is not Administrators or SYSTEM, else nothing. It
+# is asked about a task that was just registered, so a task that cannot be read counts as someone else's.
+function Get-RpaTaskOwner([string]$Name) {
+  $scheduler = New-Object -ComObject Schedule.Service
+  $null = $scheduler.Connect()
+  try { $sddl = [string]$scheduler.GetFolder($script:TaskPath.TrimEnd('\')).GetTask($Name).GetSecurityDescriptor(1) }
+  catch { return 'someone whose name cannot be read' }
+  Get-RpaForeignOwner $sddl
 }
 
 # What is in the data directory, read without entering a link:
@@ -789,8 +804,8 @@ function Copy-RpaProgramFiles([string]$SourceDir, [string]$InstallDir) {
 
 # The compiled helpers: the LSA secret Windows itself reads the automatic sign-in password from (Store is the test
 # bed's; Remove passes no data, which deletes the secret), a password check, the local groups of a user, the creation
-# of a user's profile, and the number of names a file has. A password goes in as a SecureString and is turned into
-# plain text only in unmanaged memory that is wiped afterwards.
+# of a user's profile, the number of names a file has, and the creation of a file that follows no link. A password
+# goes in as a SecureString and is turned into plain text only in unmanaged memory that is wiped afterwards.
 function Add-RpaNativeTypes {
   if ('RpaLsaSecret' -as [type]) { return }
   Add-Type -TypeDefinition @'
@@ -813,6 +828,32 @@ public static class RpaFiles {
   static extern SafeFileHandle CreateFile(string name, uint access, uint share, IntPtr security, uint disposition, uint flags, IntPtr template);
   [DllImport("kernel32.dll", SetLastError = true)]
   static extern bool GetFileInformationByHandle(SafeFileHandle file, out FileInformation information);
+  [StructLayout(LayoutKind.Sequential)]
+  struct SecurityAttributes { public int Length; public IntPtr Descriptor; public bool Inherit; }
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, EntryPoint = "CreateFile")]
+  static extern SafeFileHandle CreateFileSecured(string name, uint access, uint share, ref SecurityAttributes security, uint disposition, uint flags, IntPtr template);
+  [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  static extern bool ConvertStringSecurityDescriptorToSecurityDescriptor(string sddl, uint revision, out IntPtr descriptor, out uint size);
+  [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr memory);
+  // Creates a file that is not there yet, with its owner and access rules (SDDL) from the first moment, and writes
+  // its content. Nothing may be at the path: a file, a folder or a link there makes this fail. A link is not
+  // followed (FILE_FLAG_OPEN_REPARSE_POINT), so no file appears where a link points.
+  public static void CreateNew(string path, string sddl, byte[] content) {
+    IntPtr descriptor;
+    uint size;
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptor(sddl, 1, out descriptor, out size)) throw new Win32Exception(Marshal.GetLastWin32Error());
+    try {
+      SecurityAttributes security = new SecurityAttributes();
+      security.Length = Marshal.SizeOf(typeof(SecurityAttributes));
+      security.Descriptor = descriptor;
+      using (SafeFileHandle handle = CreateFileSecured(@"\\?\" + path, 0x40000000, 0, ref security, 1, 0x80 | 0x00200000, IntPtr.Zero)) {
+        if (handle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
+        using (System.IO.FileStream stream = new System.IO.FileStream(handle, System.IO.FileAccess.Write)) { stream.Write(content, 0, content.Length); }
+      }
+    } finally {
+      LocalFree(descriptor);
+    }
+  }
   // How many names a file has; more than one means it is hard linked. A link at the path is opened itself, not
   // followed, and only the file's attributes are read.
   public static int LinkCount(string path) {
@@ -1037,18 +1078,18 @@ function Protect-RpaDataDirectory([hashtable]$Layout, [string]$Sid, [bool]$Judge
 
 # Writes a new file the bot user may only read (or, with -AdministratorsOnly, nobody but SYSTEM and Administrators):
 # created with its owner and access rules in one call, and only when nothing is there (a file someone put there in
-# the meantime makes this fail). With -SecretLength the content is a new secret made here; the text is UTF-8 without
-# a byte order mark and without a line break at the end.
+# the meantime makes this fail). A link in the file's place is refused, and the create does not follow one that gets
+# there after that look: an ordinary create would make the file where a symbolic link points. With -SecretLength the
+# content is a new secret made here; the text is UTF-8 without a byte order mark and without a line break at the end.
 function New-RpaProtectedFile {
   param([string]$Path, [string]$Sid, [string]$Text, [int]$SecretLength, [switch]$AdministratorsOnly)
   $rules = Get-RpaAccessRules 'file' $Sid
   if ($AdministratorsOnly) { $rules = Get-RpaAccessRules 'administrators file' '' }
-  $security = New-Object Security.AccessControl.FileSecurity
-  $security.SetSecurityDescriptorSddlForm('O:BA' + $rules)
+  if ((Get-RpaPathState $Path).IsLink) { throw ('{0} is a link or junction. Remove it and run the installer again.' -f $Path) }
   if ($SecretLength -gt 0) { $Text = New-RpaSecret -Length $SecretLength }
-  $bytes = $script:Utf8.GetBytes($Text)
-  $stream = New-Object IO.FileStream($Path, [IO.FileMode]::CreateNew, [Security.AccessControl.FileSystemRights]::Write, [IO.FileShare]::None, 4096, [IO.FileOptions]::None, $security)
-  try { $stream.Write($bytes, 0, $bytes.Length) } finally { $stream.Dispose() }
+  Add-RpaNativeTypes
+  try { [RpaFiles]::CreateNew($Path, 'O:BA' + $rules, $script:Utf8.GetBytes($Text)) }
+  catch { throw ('{0} could not be created: {1}' -f $Path, $_.Exception.GetBaseException().Message) }
 }
 
 # The kinds of network a firewall rule applies on, as Windows names them.
@@ -1073,19 +1114,39 @@ function Get-RpaWindowsPowerShell {
 }
 
 # A task that runs a start script in the bot user's session at its logon: interactive (so it can drive the desktop),
-# not elevated, no time limit. The start script starts its program again whenever it exits. A task of that name that
-# is already there is removed first and not overwritten: an overwritten task keeps its owner and access rules, and a
-# standard user can make one before the installer does. For the same reason the owner of the task folder is looked at
-# again here: the plan saw it before the question -AutoSignIn asks.
-function Register-RpaTask([string]$Name, [string]$ScriptPath, [string]$Account) {
-  $owner = Get-RpaTaskFolderOwner
-  if ($owner) { throw ('The scheduled task folder {0} exists and is owned by {1}. Check what is in it, remove it, and run the installer again.' -f $script:TaskPath, $owner) }
-  Unregister-RpaTask $Name
+# not elevated, no time limit. The start script starts its program again whenever it exits.
+function Register-RpaScheduledTask([string]$Name, [string]$ScriptPath, [string]$Account) {
   $action = New-ScheduledTaskAction -Execute (Get-RpaWindowsPowerShell) -Argument ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f $ScriptPath)
   $trigger = New-ScheduledTaskTrigger -AtLogOn -User $Account
   $principal = New-ScheduledTaskPrincipal -UserId $Account -LogonType Interactive -RunLevel Limited
   $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)
   Register-ScheduledTask -TaskPath $script:TaskPath -TaskName $Name -Action $action -Trigger $trigger -Principal $principal -Settings $settings | Out-Null
+}
+
+# Registers one of the two tasks. A task of that name that is already there is removed first and not overwritten: an
+# overwritten task keeps its owner and access rules, and a standard user can make one before the installer does. A
+# standard user can also make the task folder first, and whoever owns the folder can change what is in it. So the
+# owner of the folder is looked at directly before (the plan saw it before the question -AutoSignIn asks), and the
+# owners of the folder and of the new task are read once more after the registration, because the folder can still
+# have been made between that look and the registration; a task that is then not in the hands of Administrators or
+# SYSTEM is removed again.
+function Register-RpaTask([string]$Name, [string]$ScriptPath, [string]$Account) {
+  $folderText = 'The scheduled task folder {0} exists and is owned by {1}. Check what is in it, remove it, and run the installer again.'
+  $owner = Get-RpaTaskFolderOwner
+  if ($owner) { throw ($folderText -f $script:TaskPath, $owner) }
+  Unregister-RpaTask $Name
+  Register-RpaScheduledTask $Name $ScriptPath $Account
+  $refusal = $null
+  $owner = Get-RpaTaskFolderOwner
+  if ($owner) { $refusal = $folderText -f $script:TaskPath, $owner }
+  else {
+    $owner = Get-RpaTaskOwner $Name
+    if ($owner) { $refusal = 'The scheduled task {0}{1} is owned by {2}. Check what is in the scheduled task folder {0}, remove it, and run the installer again.' -f $script:TaskPath, $Name, $owner }
+  }
+  if ($refusal) {
+    Unregister-RpaTask $Name
+    throw $refusal
+  }
 }
 
 function Unregister-RpaTask([string]$Name) {

@@ -816,6 +816,82 @@ Describe 'Invoke-RpaInstallPlan' {
     Should -Invoke -ModuleName RpaInstall Unregister-RpaTask -Times 0 -Exactly
   }
 
+  # A standard user can still make the folder between that look and the registration, and the task then lies in a
+  # folder that user owns. So the owners are read once more, after the registration.
+  Context 'after a task is registered' {
+    BeforeEach {
+      $env:RPA_TEST_TASK_REGISTERED = ''
+      Mock -ModuleName RpaInstall Unregister-RpaTask { }
+      Mock -ModuleName RpaInstall Register-RpaScheduledTask { $env:RPA_TEST_TASK_REGISTERED = '1' }
+    }
+    AfterEach { $env:RPA_TEST_TASK_REGISTERED = $null }
+
+    It 'removes the task again and stops when the folder is not owned by Administrators or SYSTEM by then' {
+      Mock -ModuleName RpaInstall Get-RpaTaskFolderOwner { if ($env:RPA_TEST_TASK_REGISTERED) { 'BOT-PC\mallory' } }
+      Mock -ModuleName RpaInstall Get-RpaTaskOwner { }
+      { InModuleScope RpaInstall { Register-RpaTask 'RPA Runner' 'C:\Program Files\RPA Runner\scripts\start-runner.ps1' 'BOT-PC\rpa-runner' } } |
+        Should -Throw -ExpectedMessage 'The scheduled task folder \RPA\ exists and is owned by BOT-PC\mallory. Check what is in it, remove it, and run the installer again.'
+      Should -Invoke -ModuleName RpaInstall Register-RpaScheduledTask -Times 1 -Exactly
+      # Once before the registration (a task of that name is never overwritten), once to take the new task away.
+      Should -Invoke -ModuleName RpaInstall Unregister-RpaTask -Times 2 -Exactly
+    }
+
+    It 'removes the task again and stops when the task is not owned by Administrators or SYSTEM' {
+      Mock -ModuleName RpaInstall Get-RpaTaskFolderOwner { }
+      Mock -ModuleName RpaInstall Get-RpaTaskOwner { 'BOT-PC\mallory' }
+      { InModuleScope RpaInstall { Register-RpaTask 'RPA Runner' 'C:\Program Files\RPA Runner\scripts\start-runner.ps1' 'BOT-PC\rpa-runner' } } |
+        Should -Throw -ExpectedMessage 'The scheduled task \RPA\RPA Runner is owned by BOT-PC\mallory. Check what is in the scheduled task folder \RPA\, remove it, and run the installer again.'
+      Should -Invoke -ModuleName RpaInstall Unregister-RpaTask -Times 2 -Exactly
+    }
+
+    It 'leaves the task when Administrators or SYSTEM own the folder and the task' {
+      Mock -ModuleName RpaInstall Get-RpaTaskFolderOwner { }
+      Mock -ModuleName RpaInstall Get-RpaTaskOwner { }
+      { InModuleScope RpaInstall { Register-RpaTask 'RPA Runner' 'C:\Program Files\RPA Runner\scripts\start-runner.ps1' 'BOT-PC\rpa-runner' } } | Should -Not -Throw
+      Should -Invoke -ModuleName RpaInstall Register-RpaScheduledTask -Times 1 -Exactly
+      Should -Invoke -ModuleName RpaInstall Unregister-RpaTask -Times 1 -Exactly
+      Should -Invoke -ModuleName RpaInstall Get-RpaTaskOwner -Times 1 -Exactly
+    }
+  }
+
+  # A file symbolic link that points at a path that does not exist: an ordinary "create new" follows it and makes the
+  # file where the link points.
+  It 'creates no file through a link that stands where the file is to be: <Kind>' -Skip:($env:OS -ne 'Windows_NT') -ForEach @(
+    @{ Kind = 'a file symbolic link'; Make = 'mklink "{0}" "{1}"' }
+    @{ Kind = 'a junction'; Make = 'mklink /J "{0}" "{1}"' }
+  ) {
+    $dir = Join-Path $TestDrive ('link-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $dir | Out-Null
+    $slot = Join-Path $dir 'token'
+    $target = Join-Path $dir 'where-the-link-points'
+    & (Join-Path ([Environment]::SystemDirectory) 'cmd.exe') /d /c ($Make -f $slot, $target) | Out-Null
+    [bool]([IO.File]::GetAttributes($slot) -band [IO.FileAttributes]::ReparsePoint) | Should -BeTrue
+    $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+
+    { InModuleScope RpaInstall -Parameters @{ Path = $slot; Sid = $sid } { New-RpaProtectedFile -Path $Path -Sid $Sid -SecretLength 48 } } |
+      Should -Throw -ExpectedMessage "$slot is a link or junction. Remove it and run the installer again."
+    $target | Should -Not -Exist
+
+    # Also when the link gets there after that look: the create itself does not follow it.
+    { InModuleScope RpaInstall -Parameters @{ Path = $slot } { Add-RpaNativeTypes; [RpaFiles]::CreateNew($Path, 'O:BAD:PAI(A;;FA;;;SY)(A;;FA;;;BA)', [byte[]]@(120)) } } | Should -Throw
+    $target | Should -Not -Exist
+  }
+
+  It 'writes a new file with its owner, its access rules and its text in one call, and never over a file that is there' -Skip:($env:OS -ne 'Windows_NT') {
+    $file = Join-Path $TestDrive ('new-' + [guid]::NewGuid().ToString('N'))
+    $sid = 'S-1-5-32-545'
+    InModuleScope RpaInstall -Parameters @{ Path = $file; Sid = $sid } { New-RpaProtectedFile -Path $Path -Sid $Sid -Text '{ "a": 1 }' }
+    [IO.File]::ReadAllBytes($file) | Should -BeExactly ([Text.Encoding]::ASCII.GetBytes('{ "a": 1 }'))
+    $acl = Get-Acl -LiteralPath $file
+    $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value | Should -BeExactly 'S-1-5-32-544'
+    $acl.AreAccessRulesProtected | Should -BeTrue
+    $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) | ForEach-Object { '{0}={1}' -f $_.IdentityReference.Value, [int]$_.FileSystemRights } | Sort-Object)
+    # SYSTEM and Administrators in full (0x1f01ff), the given account may read (0x120089).
+    $rules | Should -BeExactly @('S-1-5-18=2032127', 'S-1-5-32-544=2032127', 'S-1-5-32-545=1179785')
+    { InModuleScope RpaInstall -Parameters @{ Path = $file; Sid = $sid } { New-RpaProtectedFile -Path $Path -Sid $Sid -Text 'again' } } | Should -Throw -ExpectedMessage "$file could not be created:*"
+    [IO.File]::ReadAllText($file) | Should -BeExactly '{ "a": 1 }'
+  }
+
   It 'runs no plan that has a refusal' {
     $plan = @{ Refusals = @('no'); Warnings = @(); Steps = @() }
     { Invoke-RpaInstallPlan -Plan $plan -Parameters (New-TestParameters) -SourceDir $script:InstallerDir } |
