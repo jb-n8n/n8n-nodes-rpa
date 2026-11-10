@@ -6,5 +6,5 @@
   "type": "module",
   "description": "Zero-dependency bearer-token gate in front of a Playwright run-server, baked into the rpa-browser image (images/browser).",
   "exports": { ".": "./gate.mjs" },
-  "scripts": { "test": "node --test \"test/**/*.test.js\" \"../test/**/*.test.js\"" }
+  "scripts": { "test": "node --test \"test/**/*.test.js\" \"../test/**/*.test.js\" \"../host/test/**/*.test.js\"" }
 }
