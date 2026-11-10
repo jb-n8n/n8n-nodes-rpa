@@ -1,0 +1,303 @@
+using System.Text.Json.Nodes;
+using Microsoft.Extensions.Time.Testing;
+
+namespace Rpa.Supervisor.Core.Tests;
+
+public sealed class SessionManagerTests : IDisposable
+{
+    private const string Bot = "rpabot";
+    private readonly string _dir = Directory.CreateTempSubdirectory("rpa-supervisor-").FullName;
+    private readonly FakeTimeProvider _time = new(DateTimeOffset.Parse("2026-11-10T08:00:00Z"));
+    private readonly List<string> _events = [];
+    private readonly FakeSessions _sessions;
+    private readonly FakeRdpHost _host;
+    private readonly RecordingLog _log = new();
+
+    public SessionManagerTests()
+    {
+        _sessions = new FakeSessions(_events);
+        _host = new FakeRdpHost(_sessions, _time, _events);
+    }
+
+    public void Dispose() => Directory.Delete(_dir, true);
+
+    private string StateFile => Path.Combine(_dir, "supervisor-state.json");
+
+    private SessionManager Manager(int idleSeconds = 15, int readySeconds = 45) =>
+        new(_sessions, _host, new SupervisorOptions(Bot, [new PortMap(8765, 18765)], ["127.0.0.1"], idleSeconds,
+            readySeconds, StateFile), _log, _time);
+
+    private void WriteState(uint sessionId, DateTimeOffset logonTime) =>
+        File.WriteAllText(StateFile, new JsonObject { ["sessionId"] = sessionId, ["logonTime"] = logonTime }.ToJsonString());
+
+    private JsonNode ReadState() => JsonNode.Parse(File.ReadAllText(StateFile))!;
+
+    // Advances the fake time in steps while the task runs, for waits between attempts.
+    private async Task<T> Drive<T>(Task<T> task)
+    {
+        for (var i = 0; i < 1000 && !task.IsCompleted; i++)
+        {
+            _time.Advance(TimeSpan.FromSeconds(1));
+            await Task.Delay(1);
+        }
+        return await task;
+    }
+
+    private static async Task<SessionException> Fails(Func<Task> act) => await Assert.ThrowsAsync<SessionException>(act);
+
+    [Fact]
+    public async Task The_first_EnsureAsync_signs_the_user_in_and_records_the_session_in_the_state_file()
+    {
+        var manager = Manager();
+        await manager.EnsureAsync(CancellationToken.None);
+
+        Assert.Equal(1, _host.Calls);
+        var session = Assert.Single(_sessions.ForUser(Bot));
+        Assert.Equal(SessionState.Active, session.State);
+        var state = ReadState();
+        Assert.Equal(session.Id, state["sessionId"]!.GetValue<uint>());
+        Assert.Equal(session.LogonTime, state["logonTime"]!.GetValue<DateTimeOffset>());
+        Assert.Null(manager.LastFailure);
+    }
+
+    [Fact]
+    public async Task A_second_EnsureAsync_while_a_session_of_ours_is_Active_does_not_connect_again()
+    {
+        var manager = Manager();
+        await manager.EnsureAsync(CancellationToken.None);
+        await manager.EnsureAsync(CancellationToken.None);
+
+        Assert.Equal(1, _host.Calls);
+        Assert.Empty(_sessions.SignOuts);
+    }
+
+    [Fact]
+    public async Task Two_EnsureAsync_calls_at_once_make_one_connection()
+    {
+        var manager = Manager();
+        _host.Gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var first = manager.EnsureAsync(CancellationToken.None);
+        var second = manager.EnsureAsync(CancellationToken.None);
+        Assert.False(first.IsCompleted);
+        Assert.False(second.IsCompleted);
+
+        _host.Gate.SetResult();
+        await Task.WhenAll(first, second);
+
+        Assert.Equal(1, _host.Calls);
+        Assert.Single(_sessions.ForUser(Bot));
+    }
+
+    [Fact]
+    public async Task A_session_of_the_user_that_the_state_file_does_not_name_is_not_signed_out_and_EnsureAsync_throws_UserSignedIn()
+    {
+        // A person signed in as the bot user. Session ids are reused, so the state file naming the same id with
+        // another logon time does not make it ours.
+        var logon = _time.GetUtcNow().AddMinutes(-5);
+        _sessions.Add(new SessionInfo(3, Bot, SessionState.Active, logon));
+        _sessions.Add(new SessionInfo(4, "someone-else", SessionState.Active, logon));
+        WriteState(3, logon.AddHours(-1));
+        var manager = Manager();
+
+        var e = await Fails(() => manager.EnsureAsync(CancellationToken.None));
+
+        Assert.Equal(SessionFailure.UserSignedIn, e.Reason);
+        Assert.Empty(_sessions.SignOuts);
+        Assert.Equal(0, _host.Calls);
+        Assert.Contains(_log.Failures, f => f.Reason == SessionFailure.UserSignedIn);
+        Assert.Contains("UserSignedIn", manager.LastFailure);
+        Assert.Contains("UserSignedIn", ReadState()["lastFailure"]!.GetValue<string>());
+
+        // Once the person signed out, the next connection gets a session.
+        await _sessions.SignOutAsync(3, CancellationToken.None);
+        await manager.EnsureAsync(CancellationToken.None);
+        Assert.Equal(1, _host.Calls);
+        Assert.Null(manager.LastFailure);
+    }
+
+    [Fact]
+    public async Task A_session_the_state_file_names_is_signed_out_before_a_new_one_is_made()
+    {
+        // The supervisor crashed and restarted: its last session is still there, disconnected.
+        var logon = _time.GetUtcNow().AddMinutes(-20);
+        _sessions.Add(new SessionInfo(7, Bot, SessionState.Disconnected, logon));
+        WriteState(7, logon);
+        var manager = Manager();
+
+        await manager.EnsureAsync(CancellationToken.None);
+
+        Assert.Equal(["signout 7", "connect"], _events);
+        var session = Assert.Single(_sessions.ForUser(Bot));
+        Assert.NotEqual(7u, session.Id);
+        Assert.Equal(session.Id, ReadState()["sessionId"]!.GetValue<uint>());
+    }
+
+    [Fact]
+    public async Task With_no_Hold_for_IdleSeconds_the_session_is_signed_out_and_a_Hold_taken_before_that_keeps_it()
+    {
+        var manager = Manager(idleSeconds: 15);
+        await manager.EnsureAsync(CancellationToken.None);
+        var id = _sessions.ForUser(Bot)[0].Id;
+
+        _time.Advance(TimeSpan.FromSeconds(14));
+        Assert.Empty(_sessions.SignOuts);
+        var hold = manager.Hold();
+        _time.Advance(TimeSpan.FromMinutes(10));
+        Assert.Empty(_sessions.SignOuts);
+
+        hold.Dispose();
+        _time.Advance(TimeSpan.FromSeconds(14));
+        Assert.Empty(_sessions.SignOuts);
+        _time.Advance(TimeSpan.FromSeconds(1));
+        Assert.Equal([id], _sessions.SignOuts);
+        Assert.Empty(_sessions.ForUser(Bot));
+        Assert.Null(ReadState()["sessionId"]);
+        Assert.True(_host.Connections[0].Disposed);
+    }
+
+    [Fact]
+    public async Task IdleSeconds_0_signs_out_as_soon_as_the_last_Hold_is_released()
+    {
+        var manager = Manager(idleSeconds: 0);
+        var first = manager.Hold();
+        var second = manager.Hold();
+        await manager.EnsureAsync(CancellationToken.None);
+        var id = _sessions.ForUser(Bot)[0].Id;
+
+        first.Dispose();
+        Assert.Empty(_sessions.SignOuts);
+        second.Dispose();
+        await _sessions.WaitForSignOutsAsync(1);
+        Assert.Equal([id], _sessions.SignOuts);
+    }
+
+    [Theory]
+    [InlineData(SessionFailure.WrongPassword)]
+    [InlineData(SessionFailure.PasswordExpired)]
+    public async Task WrongPassword_and_PasswordExpired_stop_further_attempts_the_next_EnsureAsync_throws_the_same_reason_without_calling_the_host(SessionFailure reason)
+    {
+        var manager = Manager();
+        _host.Outcomes.Enqueue(reason);
+
+        Assert.Equal(reason, (await Fails(() => manager.EnsureAsync(CancellationToken.None))).Reason);
+        Assert.Equal(reason, (await Fails(() => manager.EnsureAsync(CancellationToken.None))).Reason);
+
+        Assert.Equal(1, _host.Calls);
+        Assert.Contains(reason.ToString(), manager.LastFailure);
+        Assert.Equal(2, _log.Failures.Count(f => f.Reason == reason));
+    }
+
+    [Fact]
+    public async Task EnsureAsync_tries_again_after_a_Timeout_or_a_HostExited_until_ReadySeconds_have_passed_then_throws_the_last_reason()
+    {
+        // Right after boot: two failed attempts, then a session.
+        var manager = Manager(readySeconds: 45);
+        _host.AttemptDuration = TimeSpan.FromSeconds(10);
+        _host.Outcomes.Enqueue(SessionFailure.Timeout);
+        _host.Outcomes.Enqueue(SessionFailure.HostExited);
+        await manager.EnsureAsync(CancellationToken.None);
+        Assert.Equal(3, _host.Calls);
+        Assert.Single(_sessions.ForUser(Bot));
+        await manager.StopAsync();
+
+        // Every attempt takes 10 s: attempts at 0, 10, 20, 30 and 40 s, then the last reason.
+        var again = new FakeRdpHost(_sessions, _time, []) { AttemptDuration = TimeSpan.FromSeconds(10) };
+        again.Outcomes.Enqueue(SessionFailure.Timeout);
+        again.AlwaysFail = SessionFailure.HostExited;
+        var slow = new SessionManager(_sessions, again, new SupervisorOptions(Bot, [], [], ReadySeconds: 45), _log, _time);
+        var started = _time.GetTimestamp();
+        Assert.Equal(SessionFailure.HostExited, (await Fails(() => slow.EnsureAsync(CancellationToken.None))).Reason);
+        Assert.Equal(5, again.Calls);
+        Assert.True(_time.GetElapsedTime(started) >= TimeSpan.FromSeconds(45));
+
+        // Attempts that fail at once are spaced out, not repeated in a tight loop.
+        var fast = new FakeRdpHost(_sessions, _time, []) { AlwaysFail = SessionFailure.HostExited };
+        var quick = new SessionManager(_sessions, fast, new SupervisorOptions(Bot, [], [], ReadySeconds: 45), _log, _time);
+        var e = await Drive(Fails(() => quick.EnsureAsync(CancellationToken.None)));
+        Assert.Equal(SessionFailure.HostExited, e.Reason);
+        Assert.InRange(fast.Calls, 2, 24);
+    }
+
+    [Theory]
+    [InlineData(SessionFailure.Timeout)]
+    [InlineData(SessionFailure.HostExited)]
+    public async Task Timeout_and_HostExited_allow_a_new_attempt_on_the_next_call(SessionFailure reason)
+    {
+        var manager = Manager(readySeconds: 10);
+        _host.AttemptDuration = TimeSpan.FromSeconds(11);
+        _host.Outcomes.Enqueue(reason);
+
+        Assert.Equal(reason, (await Fails(() => manager.EnsureAsync(CancellationToken.None))).Reason);
+        Assert.Equal(1, _host.Calls);
+
+        await manager.EnsureAsync(CancellationToken.None);
+        Assert.Equal(2, _host.Calls);
+        Assert.Single(_sessions.ForUser(Bot));
+    }
+
+    [Fact]
+    public async Task A_session_left_by_a_failed_attempt_is_signed_out_before_the_next_attempt()
+    {
+        // Without this the left session would look like a person's and every later connection would be refused.
+        var manager = Manager();
+        _host.AttemptDuration = TimeSpan.FromSeconds(10);
+        _host.LeaveSessionOnFailure = true;
+        _host.Outcomes.Enqueue(SessionFailure.Timeout);
+
+        await manager.EnsureAsync(CancellationToken.None);
+
+        Assert.Equal(["connect", "signout 10", "connect"], _events);
+        Assert.Equal(11u, Assert.Single(_sessions.ForUser(Bot)).Id);
+    }
+
+    [Fact]
+    public async Task When_the_connections_Closed_completes_the_session_is_signed_out_and_the_next_EnsureAsync_connects_again()
+    {
+        var manager = Manager();
+        using var hold = manager.Hold();
+        await manager.EnsureAsync(CancellationToken.None);
+        var id = _sessions.ForUser(Bot)[0].Id;
+
+        _host.Connections[0].Drop();
+        await _sessions.WaitForSignOutsAsync(1);
+        Assert.Equal([id], _sessions.SignOuts);
+
+        await manager.EnsureAsync(CancellationToken.None);
+        Assert.Equal(2, _host.Calls);
+        Assert.NotEqual(id, Assert.Single(_sessions.ForUser(Bot)).Id);
+    }
+
+    [Fact]
+    public async Task A_failed_sign_out_is_tried_again_on_the_next_call_and_is_logged()
+    {
+        var manager = Manager(idleSeconds: 15);
+        await manager.EnsureAsync(CancellationToken.None);
+        var id = _sessions.ForUser(Bot)[0].Id;
+        _sessions.FailSignOuts = 1;
+
+        _time.Advance(TimeSpan.FromSeconds(15));
+        Assert.Equal([id], _sessions.SignOuts);
+        Assert.Contains(_log.Failures, f => f.Reason is null && f.Message.Contains($"session {id}"));
+        Assert.Contains($"session {id}", manager.LastFailure);
+        Assert.Equal(id, ReadState()["sessionId"]!.GetValue<uint>());
+
+        await manager.EnsureAsync(CancellationToken.None);
+        Assert.Equal([id, id], _sessions.SignOuts);
+        Assert.Equal(2, _host.Calls);
+        Assert.NotEqual(id, Assert.Single(_sessions.ForUser(Bot)).Id);
+    }
+
+    [Fact]
+    public async Task StopAsync_signs_our_session_out()
+    {
+        var manager = Manager();
+        using var hold = manager.Hold();
+        await manager.EnsureAsync(CancellationToken.None);
+        var id = _sessions.ForUser(Bot)[0].Id;
+
+        await manager.StopAsync();
+
+        Assert.Equal([id], _sessions.SignOuts);
+        Assert.Null(ReadState()["sessionId"]);
+    }
+}
