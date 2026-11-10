@@ -1832,12 +1832,14 @@ function Invoke-RpaUninstall {
   $layout = Get-RpaLayout
   $install = Read-RpaInstallFile $layout.InstallFile
   $result = @{
-    User = $null; AutoSignIn = $false; SignInKept = $false; SignInFailed = $false; HadChanges = $false; NotRestored = @()
+    User = $null; UserKept = $false; AutoSignIn = $false; SignInKept = $false; SignInFailed = $false; HadChanges = $false; NotRestored = @()
     LeftoversFile = $null; LeftoversProblem = $null; DataRemoved = $false; DataKept = $false; Layout = $layout
   }
   if ($install) {
     $result.User = [string]$install.user
     $result.AutoSignIn = $install.autoSignIn -eq $true
+    # The uninstaller removes no Windows user; whether the recorded one is still there is for the closing text.
+    try { $null = Get-RpaSid (Get-RpaAccount -User $result.User -ComputerName $env:COMPUTERNAME); $result.UserKept = $true } catch { }
   }
 
   Write-Host '  stop running services'
@@ -1929,7 +1931,7 @@ function Get-RpaUninstallSummary([hashtable]$Result) {
       $lines += '             user it installs for, and that user was there before.'
     }
   }
-  if ($Result.User) { $lines += '  Kept:      the Windows user {0}' -f $Result.User }
+  if ($Result.User -and $Result.UserKept) { $lines += '  Kept:      the Windows user {0}' -f $Result.User }
   $lines
 }
 

@@ -1027,7 +1027,7 @@ Describe 'What the uninstaller reports' {
   BeforeAll {
     function New-UninstallResult([hashtable]$Change = @{}) {
       $result = @{
-        User = 'rpa-runner'; AutoSignIn = $true; SignInKept = $false; SignInFailed = $false; HadChanges = $true; NotRestored = @()
+        User = 'rpa-runner'; UserKept = $true; AutoSignIn = $true; SignInKept = $false; SignInFailed = $false; HadChanges = $true; NotRestored = @()
         LeftoversFile = $null; LeftoversProblem = $null; DataRemoved = $false; DataKept = $true
         Layout = @{ InstallDir = 'C:\Program Files\RPA Runner'; DataDir = $script:DataDir; LeftoversFile = 'C:\Program Files\RPA Runner\uninstall-leftovers.json' }
       }
@@ -1086,6 +1086,11 @@ Describe 'What the uninstaller reports' {
     $lines = Get-Summary (New-UninstallResult @{ AutoSignIn = $false; HadChanges = $false; DataRemoved = $true; DataKept = $false })
     $lines | Should -Contain '  Removed:   C:\ProgramData\RPA Runner'
     ($lines -join "`n") | Should -Not -Match 'A later install'
+  }
+
+  It 'does not say that it kept a Windows user that is no longer there' {
+    $lines = Get-Summary (New-UninstallResult @{ AutoSignIn = $false; HadChanges = $false; UserKept = $false })
+    ($lines -join "`n") | Should -Not -Match 'the Windows user'
   }
 }
 
