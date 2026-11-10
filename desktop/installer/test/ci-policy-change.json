@@ -1,0 +1,14 @@
+{
+  "allowedApps": [
+    { "exe": "ErpDemo.exe", "path": "C:\\Program Files\\RPA Runner\\erp-demo\\v1\\ErpDemo.exe", "allowUserWritable": true },
+    { "exe": "ErpDemo.exe", "path": "C:\\Program Files\\RPA Runner\\erp-demo\\v2\\ErpDemo.exe", "allowUserWritable": true }
+  ],
+  "writeControls": [
+    { "exe": "ErpDemo.exe", "automationId": "btnPost" }
+  ],
+  "gatedKeys": ["Ctrl+S", "F11"],
+  "helperProcesses": [
+    { "exe": "msedgewebview2.exe", "pathPattern": "C:\\Program Files (x86)\\Microsoft\\EdgeWebView\\Application\\*\\msedgewebview2.exe" }
+  ],
+  "clipboardRead": true
+}

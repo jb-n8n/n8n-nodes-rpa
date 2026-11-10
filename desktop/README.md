@@ -8,6 +8,7 @@
 | `runner/src/Rpa.Runner.Core` | The platform-neutral part (net8.0): the WebSocket server (TLS, bearer token), JSON-RPC, the run lock and lease, the local policy floor, target resolution, snapshots and file retrieval. |
 | `runner/src/Rpa.Runner.Windows` | The Windows driver (net8.0-windows): UI Automation through [FlaUI](https://github.com/FlaUI/FlaUI) (MIT), session health, the foreground check, window capture. |
 | `runner/src/Rpa.Runner` | The executable, `RpaRunner.exe`. |
+| `runner/src/Rpa.Runner.PolicyTool` | The policy tool, `RpaPolicy.exe`: shows a change to the policy file, asks, and applies it as an administrator. |
 | `runner/test/Rpa.Runner.Core.Tests` | Unit tests of the core with a fake desktop (run anywhere). |
 | `runner/test/Rpa.Runner.Scenario` | The protocol test client CI runs against the real runner and the ERP Demo on Windows. |
 | `erp-demo` | ERP Demo: a small "legacy ERP" WinForms app with a v1 and a v2 UI. |
@@ -35,7 +36,11 @@ never tokens, typed values or file contents.
 The runner refuses to start without a policy file (default `<data dir>\policy.json`), and refuses when anyone but
 administrators could change or replace it (its owner, its access rules, or its folder's). Prepare the data directory
 as an administrator: the runner leaves an existing directory's permissions alone and creates only new files and the
-`logs\` and `exports\` folders in it (those get an ACL for the runner's user, SYSTEM and Administrators). See [`runner/policy.example.json`](runner/policy.example.json):
+`logs\` and `exports\` folders in it (those get an ACL for the runner's user, SYSTEM and Administrators). See
+[`runner/policy.example.json`](runner/policy.example.json), which the package also holds as
+`runner\policy.example.json`. It is an example of a whole policy file, not a change file for `RpaPolicy.exe apply`
+(a change may not hold `maxFileBytes`, so the tool refuses it), and its app path is not where the package installs
+the ERP Demo. The keys:
 
 - `allowedApps`: the only executables `app.launch` starts. `exe` is the file name a step set names; `path` (required)
   pins the absolute local path that runs (UNC and device paths are refused). Optional: `sha256` pins the file's hash;
@@ -84,19 +89,291 @@ Key chords that reach the Windows shell rather than the app (anything with Win, 
 Alt+Tab, Alt+Esc) are never sent. `type` goes only into editable text fields, as Unicode keystrokes (no shortcuts or
 mnemonics), and stops if the keyboard focus moves.
 
-**This is weaker than the browser's guarantee.** The browser policy is enforced on the network: every request and
-redirect is checked against an allow-list. A desktop app talks to its own back end, which the runner cannot filter.
-The runner limits which apps and windows a run touches, which controls and keys count as writes, and where files come
-from; what an allowed app does with an allowed click is up to the app. On a person's own desktop the runner acts with
-that person's access. Two limits to keep in mind:
+**This is weaker than the browser's network policy.** The browser policy is enforced on the network: every request
+and redirect is checked against an allow-list. A desktop app talks to its own back end, which the runner cannot
+filter. The runner limits which apps and windows a run touches, which controls and keys count as writes, and where
+files come from; what an allowed app does with an allowed click is up to the app. On a person's own desktop the runner
+acts with that person's access. Three limits to keep in mind:
 
 - `write: true` and `mode: "repair"` are chosen by the caller. They keep honest mistakes and AI repair away from
-  writes; against a compromised n8n, what still holds is the allowed apps and windows, the shell-chord block, export
-  confinement and password redaction.
+  writes. Against a caller that holds the runner token and nothing else (a compromised n8n without the browser
+  token), the runner still applies the allowed apps and windows, the shell-chord block, export confinement and
+  password redaction.
 - An allowed app's own file dialogs carry shell powers: through them a caller can copy files the runner's user can
   read into the export directory, or start programs from a context menu (those programs are not the run's, so the
-  runner will not act on them). `file.retrieve` itself never returns files from elsewhere. A dedicated Windows user
-  with AppLocker is the real control.
+  runner will not act on them). `file.retrieve` itself reads only from the run's export directory. A dedicated
+  Windows user with AppLocker narrows what that user can start.
+- The RPA browser runs as the same Windows user as the runner when it is installed beside it, which the installer
+  does unless it is given `-NoBrowser`. With the browser installed, whoever holds the browser token and can reach the
+  browser's port acts as the bot user through the browser: it can read the files the bot user can read (the runner's
+  token among them), and it can create files with a name and content of its choice where the bot user can write,
+  which is a way to run programs as the bot user. The runner's policy does not limit that, so the policy is a limit
+  for the runner token only; on a machine where the policy must hold against n8n itself, install with `-NoBrowser`
+  and run the browser on another machine. On Windows Server 2022 a plain Playwright client with the browser token
+  read a file of the bot user through a `file://` page, and, after a CDP session set the download folder of its
+  browser context (`Browser.setDownloadBehavior`), saved a download with the name and content it chose into a folder
+  of the bot user's profile; the file belonged to the bot user. A file only administrators could read was refused.
+
+## Changing the policy
+
+`RpaPolicy.exe` changes the policy file for you. It prints what a change does in plain lines, asks, and writes the
+file. It needs administrator rights, because only administrators may change the policy. There are two ways to start
+it, and they look different:
+
+- **From an administrator console** (a Command Prompt or PowerShell window opened with "Run as administrator"). The
+  tool prints into that window and returns to its prompt. Use this way for `--yes` and `--policy`.
+- **From anywhere else** (a normal console, a shortcut, another program). Windows shows its administrator prompt, and
+  the tool then opens a console window of its own. In that window `--yes` is ignored (the tool prints
+  `--yes is ignored: start RpaPolicy from an administrator console to use it` and asks anyway) and `--policy` is
+  refused (`--policy needs an administrator console`), because whoever started the tool chose its arguments while the
+  administrator prompt showed only the program's name. Before it asks, the tool also looks at the size of that
+  window's buffer (see "What the tool prints"). Before the window closes the tool prints `Press Enter to close.` and
+  waits, so its output can be read.
+
+The test behind this: the tool honours `--yes` and `--policy` only when it shares its console with at least one other
+program and every program attached to that console is elevated. It asks Windows about each one, and a program it
+cannot ask about counts as not elevated. Alone in its console, without a console, or beside a program that is not
+elevated (in a console that an elevation helper shares with a normal shell, for example), it ignores `--yes` and
+refuses `--policy`.
+
+The wait for Enter has its own test: the tool waits when no other program is attached to its console, the console
+has a window, the tool runs on the window station of a signed-in desktop, and its input is that console. The test
+does not ask whether the window can be seen, so a tool alone in a console with a hidden window on a signed-in desktop
+waits as well. Without a console, on a window station nobody is signed in to (a service, or a scheduled task set to
+run whether a user is signed in or not), or with input that comes from a file or a pipe, it does not wait.
+
+```powershell
+.\RpaPolicy.exe show
+.\RpaPolicy.exe allow-app "C:\Program Files\ERP Demo\ErpDemo.exe" --pin-hash
+# Changing the policy at C:\ProgramData\RPA Runner\policy.json (0 app(s), 0 helper process pattern(s) today).
+# Allow app "ErpDemo.exe" at "C:\\Program Files\\ERP Demo\\ErpDemo.exe"
+#         (SHA-256 pinned
+#         3A7F5C1E9B2D4F60718293A4B5C6D7E8F90A1B2C3D4E5F60718293A4B5C6D7E8)
+# This change: 1 app(s) allowed or updated, 0 helper process pattern(s), 0 write control(s), 0 gated key(s).
+# Apply these changes? [y/N] y
+# Policy updated. The runner restarts within 10 seconds and uses the new policy.
+.\RpaPolicy.exe apply change.json
+```
+
+- `show` prints the policy file, and says why when the runner would refuse it.
+- `allow-app <path-to-exe>` adds the application to `allowedApps` with its file name and full path. `--pin-hash` also
+  pins the file's SHA-256, so the runner starts only a file with that hash (run the command again after the app is
+  updated). An app the policy already has keeps its allowed argument lists, and its pin unless `--pin-hash` gives a
+  new one. Give the application by its real location on a local drive (the tests are described below). A UNC or device
+  path (`\\server\share\...`, `\\.\...`) and a short (8.3) name are refused before the tool opens anything, with
+  the messages a change file gets for such a path. `--pin-hash` reads the file as a stream
+  (`Application file not found: <path>` when there is none).
+- `apply <change.json>` adds what a change file lists. A change file is a JSON object with any of `allowedApps`,
+  `writeControls`, `gatedKeys`, `helperProcesses` and `clipboardRead`, written as in the policy file. It must be on a
+  local drive (`the change file must be on a local drive` for a UNC or device path).
+- The change file and the application are paths chosen by whoever started the tool, and the tool works with
+  administrator rights. Before it opens such a path or writes it into the policy (`allow-app` with and without
+  `--pin-hash`), it tests the path itself:
+  - Its drive must be a letter that is a volume of its own with the drive type "fixed". A mapped network drive, a
+    removable drive and a letter that `subst` made for a folder are refused.
+  - No name in the path may be a link (a junction, a symbolic link, a mount point). The tool asks about each name
+    from the drive downward without following it and stops at the first link, so it does not go where the link
+    leads (a network share, for example).
+
+  A path that fails either test is refused: `<path> is not a regular file on a local drive`. So give an application
+  by its real location, not through a link or a substituted drive letter: a policy entry under such a path would
+  name whatever the link points to later.
+
+  Then the tool opens the file once (`apply` always, `allow-app` only for `--pin-hash`). It does not follow a link in
+  the last name of the path, and it asks Windows to let a named pipe's server on this machine identify the tool's
+  user without acting as that user. It reads the file only when what it opened is a regular file whose final path
+  is on a local fixed drive; a folder, a link, a pipe or another device, and a file on a network share or a
+  removable drive get the same refusal. This second test also covers a path that someone changed between the first
+  test and the open; the open has then gone where the path led, and the tool reads nothing from it.
+- Every command takes `--policy <path>` (default `%ProgramData%\RPA Runner\policy.json`). `apply` and `allow-app` take
+  `--yes`, which writes without asking. Both options work only from an administrator console.
+
+### What a change may do
+
+A change only adds. Entries the policy already has are skipped, `clipboardRead` may only be `true`, and `maxFileBytes`
+or an unknown key is refused: to remove an entry or change the file size limit, edit the policy file by hand. A change
+whose result the runner would refuse is refused, and nothing is written.
+
+An `allowedApps` entry with the same `exe` and `path` as an existing one (in any letter case) is merged into the
+existing entry and does not take its place:
+
+- `sha256` sets the pin or changes it. An entry without `sha256` keeps the existing pin; a change does not remove one.
+- `allowedArgs` lists are added to the existing lists (a list is the same when its strings are equal, in order); a
+  change does not remove one.
+- `allowUserWritable: true` turns it on. Left out, it stays as it is. `false` for an entry where it is on is refused
+  (`a policy change cannot turn allowUserWritable off for <path>`).
+
+A change file may be written by a user who is not an administrator (a recorder, for example), and the lines the tool
+prints are all the administrator sees before saying yes. So the tool limits a change and the length of what it prints
+for it:
+
+| Refused | Message |
+|---|---|
+| A change file larger than 256 KiB (checked before it is read) | `the change file is larger than 256 KiB` |
+| More than 40 entries in `allowedApps`, `writeControls`, `gatedKeys` and `helperProcesses` together, each allowed argument list counting as one | `a change may hold at most 40 entries; this one holds <n>` |
+| An argument list with more than 20 arguments | `an allowed argument list may hold at most 20 arguments` |
+| A name, path, id or argument longer than 260 characters | `a value in the change is longer than 260 characters` |
+| A short (8.3) name such as `C:\PROGRA~1\...` in an app `path` or a helper `pathPattern` (any `~` followed by a digit): it would name an existing entry's file without being that entry | `write the full path, not a short (8.3) name: <the path>` |
+| An entry that is not an object, or an argument that is not text | `an entry in <key> must be an object`, `an allowed argument must be text` |
+| A summary longer than 8,000 characters: everything the tool prints for the change before it asks, from the first line to the count line, as printed (line breaks and the eight spaces of continued rows counted). A value shown as `\uXXXX` escapes is six times as long as it is in the file. | `the summary of this change would be longer than 8000 characters; split it into smaller changes` |
+| A key the policy file does not have, at the top or inside an entry | `the change: unknown key "<key>"`, `the change: unknown key "<key>" in <list>` |
+
+A refusal that repeats a name or a value from a file (a key, a path, a key chord, an exe name) prints it like a value
+in the summary: in double quotes with `\uXXXX` escapes, and only its first 60 characters, followed by `...` when it
+is longer. The same checks and the same form apply to the policy file itself (`show`, and the policy a change is merged
+into), with the file's path or `the current policy` in place of `the change`.
+
+### What the tool prints
+
+The first line names the policy file: `Creating a new policy at <path>.` or
+`Changing the policy at <path> (<n> app(s), <m> helper process pattern(s) today).` Then one line for each thing the
+change does. Lines that only tighten the policy come first, lines that widen what may run come after them, and a count
+line is last, directly above the prompt:
+
+| Line | Meaning |
+|---|---|
+| `Add write control "<exe>" / "<automationId>"` | A new `writeControls` entry. |
+| `Add gated key "<chord>"` | A new `gatedKeys` entry. |
+| `Allow app "<exe>" at "<path>"` | A new `allowedApps` entry. ` (SHA-256 pinned <64 hex digits>)` follows when it sets `sha256`. |
+| `Update app "<exe>" at "<path>" (<what changes>)` | The existing entry for this exe and path changes. In the parentheses, joined by `; `: `SHA-256 pinned <hash>` (it had no pin), `SHA-256 pin changed from <hash> to <hash>`, `allowed arguments added`, `user-writable path allowed`. |
+| `  with arguments: "<arg>" "<arg>" ...` | Under an `Allow app` or `Update app` line, one line for each `allowedArgs` list it adds; `  with arguments: (none)` for an empty list. |
+| `Add helper process "<exe>" at "<pathPattern>"` | A new `helperProcesses` entry. |
+| `Turn on clipboard read` | `clipboardRead` becomes `true`. |
+| `This change: <a> app(s) allowed or updated, <h> helper process pattern(s), <w> write control(s), <k> gated key(s).` | The count of the lines above (`, clipboard read turned on` before the full stop when it is). Compare it with what you read: if lines scrolled out of view, the counts still show them. |
+
+The tool breaks a long line itself, into rows of at most 76 characters, and starts every row after the first with
+eight spaces. Its own words are broken only after a space, so the words a line starts with (up to the opening quote
+of its first value), every other word of the tool's and a 64-digit hash each stay on one row. Inside a value a break
+falls between characters as printed, with a `\uXXXX`, `\"` or `\\` kept whole, and not next to one of the value's
+spaces where that can be avoided inside the value: put the rows together without the eight spaces and you have the
+line.
+
+Where this holds: for the summary lines, and for every refusal and failure message. There, in a window at least 77
+columns wide, every row after a line's first starts with eight spaces, and a row that starts at the left edge is the
+start of one of the tool's lines (a `with arguments` line starts after two spaces). So text from a change file or
+from the policy file is not at the start of a row: it follows the tool's own words, or it is on a row that starts
+with eight spaces. Where it does not hold in that form:
+
+- Some messages start with a path, not with the tool's words. `<path> is not a regular file on a local drive`
+  starts with the path as it was given on the command line, which whoever started the tool chose; read such a line
+  to its end. `<path> exists and is not a folder; ...`, `<path> is a folder, not a policy file; ...` and the line
+  with which `show` says why the runner would refuse the file (`<path>: ...`) start with the backup folder's or the
+  policy file's own path.
+- `show` prints your policy file. Each line of the file starts a row with whatever the file holds, and only the rest
+  of a long line is on rows that start with eight spaces (a line of the file that itself starts with eight spaces
+  looks the same).
+- The first line (`Creating a new policy ...`, `Changing the policy ...`, `Policy file: ...`), the count line and the
+  tool's fixed messages (`Policy updated. ...`) are not broken by the tool. They hold the tool's own words, numbers
+  and the policy file's path (the default, or the one you gave with `--policy`); in a window narrower than they are,
+  the console breaks them.
+
+Before it asks, the tool reads the size of its console's screen buffer: its width, and the rows it keeps and lets
+you scroll back to. Whoever starts the tool through the administrator prompt may be able to choose that size. When
+the buffer has fewer than 77 columns, or keeps fewer rows than the first line, the summary, the count line and the
+prompt take in 77 columns, the tool does not ask and exits 1:
+`This window cannot show the whole summary (it needs <rows> rows and 77 columns). Start RpaPolicy from an
+administrator console and run the command again.` The test is made only when the tool is about to ask and its output
+is a console. It looks at the buffer, not at how much of it the window shows at once. A terminal that keeps its
+scrollback itself may report a buffer only as tall as its window; a long summary is then refused in it, also in an
+administrator console (use a classic console window or a taller window, or split the change).
+
+Warnings come directly under the line they belong to (under an app line, before its `with arguments` lines):
+
+| Warning | When |
+|---|---|
+| `WARNING: this line holds characters outside plain ASCII, shown as \u escapes` | A value in the line has a character other than a printable ASCII one. |
+| `WARNING: a value in this line has leading, trailing or repeated spaces` | A value in the line starts or ends with a space, or has two or more spaces in a row. Spaces are printed as they are, and a long run of them can push the rest of a value onto the next row of the window, where it can look like a line of its own. |
+| `WARNING: "<path>" can be changed by the runner's own user` | The app is, or becomes, `allowUserWritable`. It is printed on every line for such an app. |
+| `WARNING: any program at this path counts as part of the app that started it` | Under every `Add helper process` line. |
+
+Every value from the change is printed as a JSON string literal: in double quotes, with `"` and `\` escaped (so a
+Windows path shows doubled backslashes) and every character outside printable ASCII written as `\uXXXX`. A no-break
+space in `C:\Program Files` is printed as `\u00A0`, an invisible character as its code, and a file named
+`x.exe (SHA-256 pinned)` inside its quotes; the quotes show where each value starts and ends. Everything else the tool
+prints (messages, the `show` output, paths) has control and format characters written as `\uXXXX` too.
+
+These measures make a misleading change harder to write; they do not replace reading the lines. Read each of them and
+the count line, and answer `n` when anything is unclear. Limits that remain: a summary may be up to 8,000 characters
+long (more than 100 rows), which the buffer keeps but a window does not show at once, so scroll up to the first
+line (`Creating a new policy ...` or `Changing the policy ...`) before you answer; and the tool cannot tell whether a
+path that looks right is the program you mean.
+
+### What the tool writes, and what it trusts
+
+- **The existing policy file.** Before the tool reads an existing policy file (for `show`, `apply` and `allow-app`) it
+  runs the runner's own start check on it. When someone other than an administrator owns the file or could change or
+  replace it, the tool stops: `the existing policy file cannot be trusted: <problem>; an administrator must check and
+  replace it`. Such a file may have been put there by a user who is not an administrator.
+- **Writing.** The tool writes the new policy to a temporary file beside the policy
+  (`policy.json.<32 hex digits>.tmp`, created for Administrators and SYSTEM only) and swaps it in in one step. It
+  compares the policy file with what it read at its start before it creates anything, and again, with the backup
+  copy, directly before the swap, and does not swap when the file differs; a change made between that last comparison
+  and the swap is not seen. When the file changed in between
+  (another administrator edited it while you read the summary), the tool prints
+  `the policy file changed while this change was being applied; nothing was written` and exits 1. Run the command
+  again to see the change against the policy as it is now. When there was no policy file at the start, the new one
+  is moved into place only if nothing has its name by then; otherwise the tool prints
+  `a policy file appeared while the change was being applied; nothing was written` and exits 1. Look at the file that
+  appeared before you run the command again: the tool did not make it.
+- **Backups.** Before the swap the tool writes the old policy (the bytes it read at its start) to `policy-backups\`
+  beside the policy, as `policy.json.<yyyyMMdd-HHmmss>.bak`. When that name is taken (by a file or a folder), the
+  tool takes `-2.bak`, then `-3.bak`, and so on. The tool creates the folder for Administrators and SYSTEM only. A
+  backup is a new file in that folder: its owner is Administrators and its access rules are the ones it inherits
+  from the folder, not the policy file's (which let the runner's user read the policy). The tool does not delete a
+  backup it has made, so a change that failed or was stopped after this step leaves a backup of a policy that did
+  not change.
+- **When writing fails.** The tool exits 1 and does not restart the runner. A failure before the swap (the
+  temporary file or the backup could not be written) leaves the policy file untouched:
+  `Writing the policy failed: <reason>. The runner keeps running with the policy it has.` After a swap that failed,
+  the tool looks at what is under the policy's name before it removes anything:
+  - The policy file is there and holds the old policy: the tool removes the temporary file and prints the message
+    above.
+  - The policy file is there, but holds something else or cannot be read (a file that another program is deleting
+    keeps its name for a while and cannot be opened): the tool removes nothing and prints
+    `... The policy file at <path> is still there, but the tool could not confirm that it is unchanged; look at it.
+    A copy of the old policy is at <backup>. The changed policy, which was not applied, is at <temporary file>.`
+    Look at the policy file; when it is gone or wrong, copy the backup to its path as described below, and delete
+    the temporary file.
+  - There is no policy file (Windows documents a failed replace that leaves none): the tool moves the old policy
+    back from its backup copy, which fails when something has the name by then, gives it the permissions its folder
+    gives, runs the runner's start check on it, and only then removes the temporary file:
+    `... After the failed swap there was no policy file at <path>; the tool put the old policy back there from its
+    backup copy, with the permissions its folder gives.` Permissions someone had set on the old file by hand are not
+    carried over; when the start check finds a problem, the message names it.
+  - There is no policy file and the old policy could not be moved back: both files stay where they are, and the
+    message names them: `... After the failed swap there is no policy file at <path>, and putting the old policy
+    back failed: <reason>. The old policy is at <backup>. The changed policy, which was not applied, is at
+    <temporary file>. An administrator must put the old policy back at <path>: the runner reads it when it starts.`
+    Copy the backup to the policy's path, check that the runner's user can read it and that only administrators can
+    change it, and delete the temporary file.
+
+  For a new policy the messages are `Writing the policy failed: <reason>. No policy file was written.` and, when
+  the file is in place but still has the temporary file's permissions,
+  `The policy file was written at <path>, but it could not be given the permissions of its folder: <reason>. ...`
+  When a temporary file could not be removed, the message ends with its path.
+- **What can stop a change before it is shown.** The runner's user may be able to create files and folders beside the
+  policy, so the tool looks at what it is about to use before it prints the summary, and stops with exit 1 when:
+  - a `policy-backups` folder is already there and is a link, or someone other than an administrator owns it, can
+    change it or can create files or folders in it:
+    `the backup folder cannot be trusted: <problem>; an administrator must check and remove it`;
+  - a file has the folder's name: `<path> exists and is not a folder; an administrator must check and remove it`;
+  - a folder has the policy file's name:
+    `<path> is a folder, not a policy file; an administrator must check and remove it`.
+
+  When one of these is shown, look at the item and at who created it, move anything you want to keep, remove the
+  item, and run the command again. The tool does not remove it for you.
+- **After writing.** The tool runs the runner's start check on the new policy file. When it finds a problem the tool
+  says so, exits 1 and leaves the runner running: fix the permissions before the runner's next start.
+- **The runner.** The tool then ends the running `RpaRunner.exe`, which reads the policy only at start. The runner's
+  start script starts it again within 10 seconds; start a runner you started by hand again yourself. When the runner
+  cannot be ended the tool prints `Policy updated, but the runner could not be restarted: ... Restart it by hand.`
+- **Layout.** The tool writes the whole file in one layout (two-space indent, the key order of the example), so
+  comments in a hand-edited policy are not kept; the backup still has them.
+
+`Nothing to change.` means the policy already has everything; the file is not written and the runner is not restarted.
+
+Exit codes: 0 applied or nothing to change, 1 refused or failed, 2 wrong arguments (the usage is printed), 3 declined
+at the prompt.
 
 ## ERP Demo
 
@@ -116,8 +393,70 @@ dotnet test desktop/runner/test/Rpa.Runner.Core.Tests
 
 No .NET SDK? `docker run --rm -v "$PWD/desktop:/src" -w /src mcr.microsoft.com/dotnet/sdk:8.0 dotnet test runner/test/Rpa.Runner.Core.Tests`.
 The UI parts run only on Windows: the `desktop` workflow builds and publishes everything on `windows-latest`, starts
-the runner and drives the ERP Demo through it with the scenario client. Its artifacts `rpa-desktop-runner` and
-`erp-demo` are self-contained win-x64 builds (no .NET install needed).
+the runner and drives the ERP Demo through it with the scenario client, then builds the Windows package, installs it
+and drives it. Its artifact `rpa-windows-package` holds the package, `rpa-windows-x64.zip`, with its SHA-256 (see
+"Releasing the Windows package"); the artifacts `rpa-desktop-runner` and `erp-demo` are the self-contained win-x64
+builds of the runner and the demo app (no .NET install needed).
+
+## Releasing the Windows package
+
+The maintainers release the Windows package, `rpa-windows-x64.zip`, from the `Desktop release` workflow
+(`.github/workflows/desktop-release.yml`). Pushing a tag `desktop-v<version>`, where `<version>` is the `<Version>` in
+`desktop/Directory.Build.props` (for example `desktop-v0.2.0`), starts it:
+
+1. It checks that the environment `desktop-release` exists and has required reviewers, that the tag names that
+   version, that the tagged commit is on `main`, and that `CHANGELOG.md` has a section `## <version>`, which becomes
+   the release notes. The node's release of the same version number uses the same section. If any check fails,
+   nothing is built. The notes are uploaded as an artifact, and their SHA-256 and the artifact's id are kept for
+   step 4.
+2. It runs the `desktop` workflow, which builds the package, tests it, installs it on `windows-latest` and drives it.
+3. It checks the package it built. It downloads the package by the artifact id the `desktop` workflow reports, not by
+   the artifact's name, so an artifact of the same name uploaded by another job of the run is not taken; the download
+   fails if the archive differs from the digest GitHub recorded for that artifact (when it recorded one). It compares
+   the zip's SHA-256 with the hash the `desktop` workflow computed when it staged the zip (not with the `.sha256` file
+   in the artifact), checks that `rpa-windows-x64.zip.sha256` holds that same hash, and that the `VERSION` file in the
+   zip is the tag's version.
+4. It waits until a required reviewer of the `desktop-release` environment approves the release (see "Before the
+   first release" for what that approval covers). Then it downloads and checks the package again in the same way,
+   downloads the notes by the id from step 1 (not by name) and compares them with the SHA-256 from step 1, checks
+   that the tag still names the commit it built, records a build attestation of the zip and creates the GitHub
+   Release `desktop-v<version>` with `rpa-windows-x64.zip` and `rpa-windows-x64.zip.sha256`. It stops if a release
+   for that tag exists already, a draft included; it does not replace one. The release is not marked as the
+   repository's latest release, which stays the node's.
+
+A manual run (Actions, `Desktop release`, Run workflow, on `main`) is a dry run: it does steps 1 to 3 with the
+version of `desktop/Directory.Build.props` in place of a tag, and never attests or publishes anything.
+
+**Before the first release**, in the repository settings:
+
+- Environments: create the environment `desktop-release`, add required reviewers (the people who approve each
+  release), and add a deployment tag rule `desktop-v*`. GitHub creates an environment that does not exist when a job
+  first names it, with no protection; step 1 stops the workflow while `desktop-release` has no required reviewers.
+- Rules, Rulesets: add a tag ruleset for `desktop-v*` that restricts creating, updating (moving) and deleting such
+  tags, with only the release maintainers allowed to bypass it. The approval of the environment applies to a run of a
+  workflow file that names the environment, and whoever can push a tag also chooses the workflow file of the tagged
+  commit: one that leaves the environment out, or these checks, runs without asking anyone. The ruleset limits who
+  can push such a tag.
+
+Then run the dry run once on `main`.
+
+The package is not code-signed: the zip has no signature, and neither have the runner, the policy tool, the ERP Demo
+or the PowerShell scripts in it (the files it ships from other projects, such as `node.exe` and Chromium, are as those
+projects publish them). What a release has instead is the zip's SHA-256 and a build attestation. Check both before
+you unpack a download, with the release's version in place of `<version>`:
+
+```sh
+gh attestation verify rpa-windows-x64.zip --repo jb-n8n/n8n-nodes-rpa \
+  --signer-workflow jb-n8n/n8n-nodes-rpa/.github/workflows/desktop-release.yml \
+  --source-ref refs/tags/desktop-v<version>
+sha256sum -c rpa-windows-x64.zip.sha256
+```
+
+In PowerShell, compare `(Get-FileHash rpa-windows-x64.zip -Algorithm SHA256).Hash` with the hash in
+`rpa-windows-x64.zip.sha256` (the case differs). The hash shows only that the download matches the file next to it
+on the release page. The attestation shows which workflow, ref and commit of this repository attested the zip; with
+the two flags above, `gh` refuses an attestation made by another workflow or for another ref. It does not show that
+the commit was reviewed, or that the zip is what the source code would build elsewhere.
 
 ## Protocol
 

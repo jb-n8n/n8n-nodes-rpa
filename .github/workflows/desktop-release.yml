@@ -1,0 +1,348 @@
+# Publishes the Windows package (rpa-windows-x64.zip and its SHA-256) as the GitHub Release desktop-v<version> when a
+# desktop-v<version> tag is pushed and a reviewer of the desktop-release environment approves it. The package is the
+# one the desktop workflow builds, installs and drives: this workflow calls desktop.yml and publishes the artifact it
+# uploads. The package is not code-signed; the release carries the zip's SHA-256 and a build attestation, which shows
+# which workflow, ref and commit of this repository attested the file (not that the commit was reviewed, nor that the
+# zip is what the source code would build elsewhere):
+#   gh attestation verify rpa-windows-x64.zip --repo jb-n8n/n8n-nodes-rpa \
+#     --signer-workflow jb-n8n/n8n-nodes-rpa/.github/workflows/desktop-release.yml \
+#     --source-ref refs/tags/desktop-v<version>
+# Five jobs, so third-party code never runs with publish rights (the shape of publish.yml):
+# - environment-check (actions: read only, no checkout): the desktop-release environment exists and has required
+#   reviewers. Without them a pushed tag would publish with nobody approving, so nothing is built until they are set.
+# - check (contents: read only, no environment, no secrets): the ref is the tag desktop-v<version>, where <version> is
+#   the <Version> of desktop/Directory.Build.props, on a commit that is on main. It cuts the version's section out of
+#   CHANGELOG.md for the release notes and uploads them; a missing section fails here, before anything is built. Its
+#   outputs are the notes artifact's id and the notes file's SHA-256, as this job computed it.
+# - desktop (needs environment-check and check; contents: read): the reusable desktop workflow, which builds, tests,
+#   stages, installs and drives the package and uploads it as an artifact. Its outputs are the artifact's name and id
+#   and package-sha256, the zip's SHA-256 as its stage step computed it.
+# - verify (needs check and desktop; no permissions, no environment): checks the outputs' shape, then downloads the
+#   package by the artifact id, not by name: another job of this run could upload an artifact of the same name, with a
+#   .sha256 file that matches its own zip. The download action compares the archive with the digest GitHub recorded
+#   for that artifact at upload, when there is one, and fails the step on a difference. Then it checks the package:
+#   exactly the two files, the zip's SHA-256 equal to package-sha256 (not to the .sha256 file in the artifact), the
+#   .sha256 file exactly '<package-sha256>  rpa-windows-x64.zip', the version in the zip equal to the tag's.
+# - release (needs all four; only for a pushed desktop-v tag; environment desktop-release, so it waits for a reviewer;
+#   contents/id-token/attestations write): no checkout, no repository code, nothing run from the artifact. It downloads
+#   the package by the same id and the notes by the id the check job reports (not by name), checks the package again
+#   as verify does and the notes against the check job's notes-sha256, checks that the tag still names this
+#   run's commit and has no release (a draft included), attests the zip and creates the release desktop-v<version>,
+#   neither a draft nor a prerelease, and not marked latest (the repository's latest release stays the npm package's).
+# Dry run: a manual run (Run workflow, on main) never publishes. Its check uses the version of
+# desktop/Directory.Build.props in place of a tag; the environment check, the build and verify run as for a tag, and
+# release is skipped, so nothing is attested or published.
+# Uses no repository secrets; the environment-check and release jobs use the automatic token. Actions are pinned by
+# full commit SHA.
+name: Desktop release
+
+on:
+  push:
+    tags: ['desktop-v*']
+  workflow_dispatch:
+
+permissions: {}
+
+# Releases run one at a time, and a running release is not cancelled by another run. As in publish.yml, GitHub keeps
+# one waiting run per group: a third tag pushed while one release runs and another waits replaces the waiting one
+# (shown as cancelled; re-run it). Dry runs wait in their own group, so they never replace a waiting release.
+concurrency:
+  group: ${{ github.event_name == 'push' && 'desktop-release' || 'desktop-release-dry-run' }}
+  cancel-in-progress: false
+
+jobs:
+  # The environment's required reviewers are the approval of each release. GitHub creates an environment that a job
+  # names and that does not exist yet, with no protection, and would then run the release job without asking anyone;
+  # an environment without required reviewers would do the same. Reading it needs actions: read (the API's "Get an
+  # environment"), which this job alone gets; it runs no repository code.
+  environment-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    steps:
+      - name: The desktop-release environment has required reviewers
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          settings="$(gh api "repos/$GITHUB_REPOSITORY/environments/desktop-release")" || {
+            echo "::error::the environment desktop-release does not exist or cannot be read; create it with required reviewers and the deployment tag rule desktop-v* (desktop/README.md, Before the first release)"
+            exit 1
+          }
+          reviewers="$(jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length' <<<"$settings")"
+          test "$reviewers" -ge 1 || { echo "::error::the environment desktop-release has no required reviewers, so a release would not wait for approval; add them"; exit 1; }
+          jq -e '.deployment_branch_policy.custom_branch_policies == true' <<<"$settings" >/dev/null || echo "::warning::the environment desktop-release has no deployment tag rule; add desktop-v*"
+          echo "desktop-release: required reviewers set"
+
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+      notes-artifact-id: ${{ steps.notes-upload.outputs.artifact-id }}
+      notes-sha256: ${{ steps.notes.outputs.sha256 }}
+    steps:
+      # Full history, so the main-ancestry check below can see origin/main.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: The tag is desktop-v<version of desktop/Directory.Build.props> and is on main
+        id: tag
+        env:
+          REF: ${{ github.ref }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          mapfile -t versions < <(grep -oE '<Version>[0-9]+\.[0-9]+\.[0-9]+</Version>' desktop/Directory.Build.props || true)
+          test "${#versions[@]}" -eq 1 || { echo "::error::desktop/Directory.Build.props must hold exactly one <Version>major.minor.patch</Version>"; exit 1; }
+          version="${versions[0]//[^0-9.]/}"
+          if [ "$EVENT" != push ]; then
+            echo "Dry run: the version is ${version} (desktop/Directory.Build.props), the ref ${REF} is not checked as a tag"
+          else
+            [[ "$REF" =~ ^refs/tags/desktop-v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::the Windows package is released only from a desktop-v<major>.<minor>.<patch> tag, not from ${REF}"; exit 1; }
+            test "$REF" = "refs/tags/desktop-v${version}" || { echo "::error::tag ${REF#refs/tags/} does not match desktop/Directory.Build.props version ${version}"; exit 1; }
+          fi
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "::error::commit $GITHUB_SHA is not on main; tag a reviewed commit on main"; exit 1; }
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+      # The release notes are the CHANGELOG.md section "## <version> (<date>)", up to the next "## " heading, cut as
+      # publish.yml cuts them. They are cut here because the release job has no checkout. CHANGELOG.md has one section
+      # per version: the node's release of the same number (publish.yml, tag v<version>) uses the same section, so
+      # write it for both, the node and the Windows package. The notes file's SHA-256 is an output of the job: the
+      # release job compares the notes it downloads with it.
+      - name: Release notes from CHANGELOG.md
+        id: notes
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/notes"
+          notes="$RUNNER_TEMP/notes/release-notes.md"
+          awk -v v="$VERSION" '
+            /^## / { if (found) exit; if ($0 == "## " v || index($0, "## " v " ") == 1) { found = 1; next } }
+            found { print }
+          ' CHANGELOG.md > "$notes"
+          grep -q '[^[:space:]]' "$notes" || { echo "::error::CHANGELOG.md has no section for ${VERSION}"; exit 1; }
+          echo "sha256=$(sha256sum "$notes" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        id: notes-upload
+        with:
+          name: desktop-release-notes
+          path: ${{ runner.temp }}/notes/release-notes.md
+          if-no-files-found: error
+          retention-days: 7
+
+  # No secrets are passed: desktop.yml uses none.
+  desktop:
+    needs: [environment-check, check]
+    permissions:
+      contents: read
+    uses: ./.github/workflows/desktop.yml
+
+  verify:
+    needs: [check, desktop]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      # Before the download: with an empty artifact-ids input (and no name) the download action would take every
+      # artifact of the run. Keep identical to the release job's step of the same name.
+      - name: The outputs name the Windows package
+        env:
+          ARTIFACT: ${{ needs.desktop.outputs.package-artifact }}
+          ARTIFACT_ID: ${{ needs.desktop.outputs.package-artifact-id }}
+          PACKAGE_SHA256: ${{ needs.desktop.outputs.package-sha256 }}
+        run: |
+          set -euo pipefail
+          test "$ARTIFACT" = rpa-windows-package || { echo "::error::desktop.yml names the artifact '${ARTIFACT}', not rpa-windows-package"; exit 1; }
+          [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] || { echo "::error::desktop.yml's package-artifact-id is '${ARTIFACT_ID}', not an artifact id"; exit 1; }
+          [[ "$PACKAGE_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::desktop.yml's package-sha256 is '${PACKAGE_SHA256}', not 64 lower-case hex digits"; exit 1; }
+          echo "artifact ${ARTIFACT} (id ${ARTIFACT_ID}), rpa-windows-x64.zip SHA-256 ${PACKAGE_SHA256} (package-sha256)"
+      # By id from this run, not by name. With digest-mismatch: error (the default, written out here) the action fails
+      # the step when the archive's SHA-256 differs from the digest GitHub recorded for the artifact at upload; it
+      # skips that comparison for an artifact with no recorded digest. desktop.yml's package-artifact-digest (the
+      # digest its upload step reported) is not compared: that would need the archive itself or a token that reads the
+      # artifact's record, and both files of the artifact are compared with package-sha256 below. The release job
+      # downloads the same way.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.desktop.outputs.package-artifact-id }}
+          path: ${{ runner.temp }}/package
+          digest-mismatch: error
+      # Only reads the files: the zip's hash, and its VERSION file through unzip -p (the pattern takes either path
+      # separator, as the zip is written by .NET on Windows). Nothing from the artifact runs. The zip and the .sha256
+      # file are compared with package-sha256, the hash desktop.yml computed, not with each other.
+      # Keep identical to the package checks of the release job's step "Check the tag, the package and the notes".
+      - name: Check the package
+        working-directory: ${{ runner.temp }}/package
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+          PACKAGE_SHA256: ${{ needs.desktop.outputs.package-sha256 }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob dotglob
+          files=(*)
+          test "${#files[@]}" -eq 2 || { echo "::error::expected two files in the artifact, found ${#files[@]}"; exit 1; }
+          for f in rpa-windows-x64.zip rpa-windows-x64.zip.sha256; do
+            [ -f "$f" ] && [ ! -L "$f" ] || { echo "::error::the artifact holds no regular file $f"; exit 1; }
+          done
+          actual="$(sha256sum rpa-windows-x64.zip | cut -d' ' -f1)"
+          test "$actual" = "$PACKAGE_SHA256" || { echo "::error::rpa-windows-x64.zip has the SHA-256 $actual, not $PACKAGE_SHA256, the hash desktop.yml computed (package-sha256)"; exit 1; }
+          line="$(cat rpa-windows-x64.zip.sha256)"
+          [[ "$line" =~ ^([0-9a-f]{64})\ \ rpa-windows-x64\.zip$ ]] || { echo "::error::rpa-windows-x64.zip.sha256 is not '<sha-256>  rpa-windows-x64.zip'"; exit 1; }
+          test "${BASH_REMATCH[1]}" = "$PACKAGE_SHA256" || { echo "::error::rpa-windows-x64.zip.sha256 says ${BASH_REMATCH[1]}, not $PACKAGE_SHA256, the hash desktop.yml computed (package-sha256)"; exit 1; }
+          packaged="$(unzip -p rpa-windows-x64.zip 'rpa-windows-x64[/\\]VERSION' | tr -d '\r\n')" || { echo "::error::rpa-windows-x64.zip holds no rpa-windows-x64/VERSION"; exit 1; }
+          test "$packaged" = "$VERSION" || { echo "::error::the package's VERSION is '${packaged}', not ${VERSION}"; exit 1; }
+          echo "rpa-windows-x64.zip ${VERSION}, SHA-256 ${actual}"
+
+  release:
+    needs: [environment-check, check, desktop, verify]
+    # Only a pushed tag publishes: a manual run is a dry run, whatever ref it is started on.
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/desktop-v') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Set on this environment in the repository settings before the first release: required reviewers (each release
+    # waits for one of them to approve it) and a deployment tag rule `desktop-v*`. The environment-check job refuses to
+    # build while it has no required reviewers. The approval applies to a run of a workflow file that names this
+    # environment, and the checks of this file apply to a run of this file: whoever can push a desktop-v tag also
+    # chooses the workflow file of the tagged commit, and one without this environment asks nobody. A tag ruleset
+    # that lets only the release maintainers create, move or delete desktop-v* tags limits who can push such a tag
+    # (desktop/README.md, "Before the first release").
+    environment: desktop-release
+    permissions:
+      contents: write # create the release and upload its assets with GITHUB_TOKEN
+      id-token: write # the OIDC token Sigstore signs the attestation with
+      attestations: write # store the attestation
+    steps:
+      # Keep identical to the verify job's step of the same name.
+      - name: The outputs name the Windows package
+        env:
+          ARTIFACT: ${{ needs.desktop.outputs.package-artifact }}
+          ARTIFACT_ID: ${{ needs.desktop.outputs.package-artifact-id }}
+          PACKAGE_SHA256: ${{ needs.desktop.outputs.package-sha256 }}
+        run: |
+          set -euo pipefail
+          test "$ARTIFACT" = rpa-windows-package || { echo "::error::desktop.yml names the artifact '${ARTIFACT}', not rpa-windows-package"; exit 1; }
+          [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] || { echo "::error::desktop.yml's package-artifact-id is '${ARTIFACT_ID}', not an artifact id"; exit 1; }
+          [[ "$PACKAGE_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::desktop.yml's package-sha256 is '${PACKAGE_SHA256}', not 64 lower-case hex digits"; exit 1; }
+          echo "artifact ${ARTIFACT} (id ${ARTIFACT_ID}), rpa-windows-x64.zip SHA-256 ${PACKAGE_SHA256} (package-sha256)"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.desktop.outputs.package-artifact-id }}
+          path: ${{ runner.temp }}/release
+          digest-mismatch: error
+      # The notes the same way: by the id the check job reported, not by name, after its shape is checked (with an empty
+      # artifact-ids input the action would take every artifact of the run); the file is compared with notes-sha256 in
+      # the next step.
+      - name: The outputs name the release notes
+        env:
+          NOTES_ID: ${{ needs.check.outputs.notes-artifact-id }}
+          NOTES_SHA256: ${{ needs.check.outputs.notes-sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$NOTES_ID" =~ ^[1-9][0-9]*$ ]] || { echo "::error::the check job's notes-artifact-id is '${NOTES_ID}', not an artifact id"; exit 1; }
+          [[ "$NOTES_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::the check job's notes-sha256 is '${NOTES_SHA256}', not 64 lower-case hex digits"; exit 1; }
+          echo "release notes: artifact id ${NOTES_ID}, release-notes.md SHA-256 ${NOTES_SHA256} (notes-sha256)"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.check.outputs.notes-artifact-id }}
+          path: ${{ runner.temp }}/notes
+          digest-mismatch: error
+      # The same checks as the verify job, on the same artifact: this job must not rely on another job's checks alone.
+      # Keep the package checks identical to the verify job's step "Check the package".
+      - name: Check the tag, the package and the notes
+        id: check
+        working-directory: ${{ runner.temp }}/release
+        env:
+          REF: ${{ github.ref }}
+          CHECKED_VERSION: ${{ needs.check.outputs.version }}
+          PACKAGE_SHA256: ${{ needs.desktop.outputs.package-sha256 }}
+          NOTES_SHA256: ${{ needs.check.outputs.notes-sha256 }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob dotglob
+          [[ "$REF" =~ ^refs/tags/desktop-v([0-9]+\.[0-9]+\.[0-9]+)$ ]] || { echo "::error::the Windows package is released only from a desktop-v<major>.<minor>.<patch> tag, not from ${REF}"; exit 1; }
+          version="${BASH_REMATCH[1]}"
+          test "$version" = "$CHECKED_VERSION" || { echo "::error::the tag's version ${version} is not the checked version ${CHECKED_VERSION}"; exit 1; }
+          files=(*)
+          test "${#files[@]}" -eq 2 || { echo "::error::expected two files in the artifact, found ${#files[@]}"; exit 1; }
+          for f in rpa-windows-x64.zip rpa-windows-x64.zip.sha256; do
+            [ -f "$f" ] && [ ! -L "$f" ] || { echo "::error::the artifact holds no regular file $f"; exit 1; }
+          done
+          actual="$(sha256sum rpa-windows-x64.zip | cut -d' ' -f1)"
+          test "$actual" = "$PACKAGE_SHA256" || { echo "::error::rpa-windows-x64.zip has the SHA-256 $actual, not $PACKAGE_SHA256, the hash desktop.yml computed (package-sha256)"; exit 1; }
+          line="$(cat rpa-windows-x64.zip.sha256)"
+          [[ "$line" =~ ^([0-9a-f]{64})\ \ rpa-windows-x64\.zip$ ]] || { echo "::error::rpa-windows-x64.zip.sha256 is not '<sha-256>  rpa-windows-x64.zip'"; exit 1; }
+          test "${BASH_REMATCH[1]}" = "$PACKAGE_SHA256" || { echo "::error::rpa-windows-x64.zip.sha256 says ${BASH_REMATCH[1]}, not $PACKAGE_SHA256, the hash desktop.yml computed (package-sha256)"; exit 1; }
+          packaged="$(unzip -p rpa-windows-x64.zip 'rpa-windows-x64[/\\]VERSION' | tr -d '\r\n')" || { echo "::error::rpa-windows-x64.zip holds no rpa-windows-x64/VERSION"; exit 1; }
+          test "$packaged" = "$version" || { echo "::error::the package's VERSION is '${packaged}', not ${version}"; exit 1; }
+          notes=("$RUNNER_TEMP"/notes/*)
+          test "${#notes[@]}" -eq 1 || { echo "::error::expected one file in the notes artifact, found ${#notes[@]}"; exit 1; }
+          [ -f "$RUNNER_TEMP/notes/release-notes.md" ] && [ ! -L "$RUNNER_TEMP/notes/release-notes.md" ] || { echo "::error::the notes artifact holds no regular file release-notes.md"; exit 1; }
+          notes_sha256="$(sha256sum "$RUNNER_TEMP/notes/release-notes.md" | cut -d' ' -f1)"
+          test "$notes_sha256" = "$NOTES_SHA256" || { echo "::error::release-notes.md has the SHA-256 ${notes_sha256}, not ${NOTES_SHA256}, the hash the check job computed (notes-sha256)"; exit 1; }
+          grep -q '[^[:space:]]' "$RUNNER_TEMP/notes/release-notes.md" || { echo "::error::the release notes are empty"; exit 1; }
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "sha256=${actual}" >> "$GITHUB_OUTPUT"
+      # Before anything is attested. The tag may have been moved while the job waited for approval or before a re-run:
+      # it must still name the commit this run built. A release for the tag, published or draft (a failed run can leave
+      # a draft), is never replaced; an API error fails the step rather than reading as "no release".
+      - name: The tag names this run's commit and has no release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: desktop-v${{ steps.check.outputs.version }}
+        run: |
+          set -euo pipefail
+          tagged="$(gh api "repos/$GITHUB_REPOSITORY/commits/refs/tags/$TAG" --jq .sha)" || { echo "::error::could not read the commit of tag ${TAG}"; exit 1; }
+          test "$tagged" = "$GITHUB_SHA" || { echo "::error::tag ${TAG} now names ${tagged}, not ${GITHUB_SHA}, the commit this run built; start a new run for the tag"; exit 1; }
+          existing="$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[] | select(.tag_name == env.TAG) | "\(.html_url) (draft: \(.draft))"')" || { echo "::error::could not list the releases"; exit 1; }
+          if [ -n "$existing" ]; then
+            echo "::error::a release for ${TAG} exists already and is not replaced (delete it by hand to release again): ${existing//$'\n'/, }"
+            exit 1
+          fi
+      # Storage records need an organization-owned repository and artifact-metadata: write; this posture grants neither.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/release/rpa-windows-x64.zip
+          create-storage-record: false
+      # Not a draft, not a prerelease, and --latest=false: the npm package's release stays the repository's latest.
+      - name: Create the GitHub Release
+        working-directory: ${{ runner.temp }}/release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.check.outputs.version }}
+          SHA256: ${{ steps.check.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          tag="desktop-v${VERSION}"
+          tick='`'
+          fence="${tick}${tick}${tick}"
+          {
+            cat "$RUNNER_TEMP/notes/release-notes.md"
+            echo
+            echo '### Windows package'
+            echo
+            echo "${tick}rpa-windows-x64.zip${tick} holds the RPA runner, the policy tool, the browser host, the ERP Demo app and the installer for Windows x64. It is not code-signed: it comes with its SHA-256 and a build attestation. Check both before you unpack it:"
+            echo
+            echo "${fence}sh"
+            echo "gh attestation verify rpa-windows-x64.zip --repo ${GITHUB_REPOSITORY} \\"
+            echo "  --signer-workflow ${GITHUB_REPOSITORY}/.github/workflows/desktop-release.yml --source-ref refs/tags/${tag}"
+            echo "sha256sum -c rpa-windows-x64.zip.sha256   # ${SHA256}"
+            echo "${fence}"
+            echo
+            echo "In PowerShell, this prints True when the hash matches:"
+            echo
+            echo "${fence}powershell"
+            echo "(Get-FileHash rpa-windows-x64.zip -Algorithm SHA256).Hash -eq '${SHA256}'"
+            echo "${fence}"
+            echo
+            echo "The attestation shows which workflow of this repository attested the zip, from which tag and commit. It does not show that the commit was reviewed, or that the zip is what the source code would build elsewhere."
+            echo
+            echo "Details: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${tag}/desktop/README.md#releasing-the-windows-package"
+          } > "$RUNNER_TEMP/notes/notes.md"
+          gh release create "$tag" rpa-windows-x64.zip rpa-windows-x64.zip.sha256 \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --latest=false \
+            --title "RPA Windows package ${VERSION}" --notes-file "$RUNNER_TEMP/notes/notes.md"
