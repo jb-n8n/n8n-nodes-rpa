@@ -235,7 +235,7 @@ if ($check.Refusal) {
 }
 $package = $check.Package
 
-Import-Module (Join-Path $package 'RpaInstall.psm1') -Force
+Import-Module (Join-Path $package 'RpaInstall.psd1') -Force
 
 $parameters = @{
   User = $User; UserPassword = $UserPassword; RunnerPort = $RunnerPort; BrowserPort = $BrowserPort

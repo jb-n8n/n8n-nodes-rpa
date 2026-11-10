@@ -192,7 +192,7 @@ if ($check.Refusal) {
   Write-Host 'Nothing was changed.'
   exit 1
 }
-Import-Module (Join-Path $check.Package 'RpaInstall.psm1') -Force
+Import-Module (Join-Path $check.Package 'RpaInstall.psd1') -Force
 
 if (-not (Test-RpaAdministrator)) {
   Write-Host 'Run Uninstall-Rpa.ps1 from an administrator PowerShell.'

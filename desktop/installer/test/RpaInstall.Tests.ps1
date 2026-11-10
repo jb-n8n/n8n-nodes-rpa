@@ -1,5 +1,5 @@
-# Pester tests for the Windows installer (desktop/installer). They cover what runs anywhere: the plan the installer
-# makes from its parameters and hand-made facts about the machine (Get-RpaInstallPlan touches nothing), the secret
+# Pester tests for the Windows installer (desktop/installer). They cover what runs anywhere: the plans the installer and
+# the uninstaller make from their parameters and hand-made facts about the machine (they touch nothing), the secret
 # generator, how a user name is read, Show-RpaConnection.ps1 against a made-up install, and that every script still
 # parses as Windows PowerShell 5.1. A few tests need Windows and are skipped elsewhere. The install itself (users,
 # permissions, tasks, firewall) runs only on Windows and is driven end to end by the desktop workflow.
@@ -8,7 +8,10 @@
 
 BeforeAll {
   $script:InstallerDir = Split-Path -Parent $PSScriptRoot
-  Import-Module (Join-Path $script:InstallerDir 'RpaInstall.psm1') -Force
+  Import-Module (Join-Path $script:InstallerDir 'RpaInstall.psd1') -Force
+  # The module is three script files that its manifest loads into one module.
+  $script:ModuleFiles = @('RpaInstall.psd1', 'RpaInstall.Plan.ps1', 'RpaInstall.SignIn.ps1', 'RpaInstall.Machine.ps1')
+  $script:ModuleSource = ($script:ModuleFiles | ForEach-Object { Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir $_) }) -join "`n"
   $script:DataDir = 'C:\ProgramData\RPA Runner'
 
   # Install-Rpa.ps1 -AllowFrom 10.0.0.5 and nothing else.
@@ -1425,7 +1428,7 @@ Describe 'Registry values in install.json' {
 
   # reg.exe gets no data when the data is an empty string (Windows PowerShell 5.1 leaves it out of the command line).
   It 'the module uses reg.exe only to load and unload a registry file' {
-    $source = Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir 'RpaInstall.psm1')
+    $source = $script:ModuleSource
     $uses = @([regex]::Matches($source, "reg\.exe @\('(\w+)'") | ForEach-Object { $_.Groups[1].Value })
     $uses | Should -BeExactly @('load', 'unload')
     $source | Should -Not -Match "'reg(\.exe)?'"
@@ -1496,7 +1499,7 @@ Describe 'New-RpaSecret' {
   }
 
   It 'the module turns no plain text into a SecureString with a command' {
-    $source = Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir 'RpaInstall.psm1')
+    $source = $script:ModuleSource
     $source | Should -Not -Match 'ConvertTo-SecureString'
     $source | Should -Not -Match 'AsPlainText'
   }
@@ -1687,7 +1690,7 @@ Describe 'The installer scripts' {
     $installerDir = Split-Path -Parent $PSScriptRoot
     # What the package ships: the files beside Install-Rpa.ps1 and those in scripts\.
     $scripts = @(Get-ChildItem -LiteralPath $installerDir, (Join-Path $installerDir 'scripts') -File |
-        Where-Object { $_.Extension -eq '.ps1' -or $_.Extension -eq '.psm1' } | ForEach-Object { @{ Name = $_.Name; Path = $_.FullName } })
+        Where-Object { '.ps1', '.psm1', '.psd1' -contains $_.Extension } | ForEach-Object { @{ Name = $_.Name; Path = $_.FullName } })
   }
 
   # Windows PowerShell 5.1 runs them (the PowerShell that ships with Windows), while these tests may run in PowerShell 7.
@@ -1706,9 +1709,26 @@ Describe 'The installer scripts' {
     $newTokens.Count | Should -Be 0
   }
 
-  It 'are all there: the installer, the uninstaller, the module and the four installed scripts' {
-    foreach ($name in 'Install-Rpa.ps1', 'Uninstall-Rpa.ps1', 'RpaInstall.psm1') { Join-Path $script:InstallerDir $name | Should -Exist }
+  It 'are all there: the installer, the uninstaller, the module (a manifest and three files) and the four installed scripts' {
+    foreach ($name in @('Install-Rpa.ps1', 'Uninstall-Rpa.ps1') + $script:ModuleFiles) { Join-Path $script:InstallerDir $name | Should -Exist }
+    # What a package holds beside Install-Rpa.ps1: exactly these.
+    @(Get-ChildItem -LiteralPath $script:InstallerDir -File | ForEach-Object { $_.Name } | Sort-Object) | Should -BeExactly (@('Install-Rpa.ps1', 'Uninstall-Rpa.ps1') + $script:ModuleFiles | Sort-Object)
     foreach ($name in 'start-loop.ps1', 'start-runner.ps1', 'start-browser.ps1', 'Show-RpaConnection.ps1') { Join-Path (Join-Path $script:InstallerDir 'scripts') $name | Should -Exist }
+  }
+
+  It 'the manifest loads the three files into one module and exports what the scripts and these tests call' {
+    $manifest = Import-PowerShellDataFile -LiteralPath (Join-Path $script:InstallerDir 'RpaInstall.psd1')
+    $manifest.NestedModules | Should -BeExactly @('RpaInstall.Plan.ps1', 'RpaInstall.SignIn.ps1', 'RpaInstall.Machine.ps1')
+    $manifest.ContainsKey('RootModule') | Should -BeFalse
+    $module = Get-Module RpaInstall
+    @($module).Count | Should -Be 1
+    @($module.ExportedFunctions.Keys | Sort-Object) | Should -BeExactly @($manifest.FunctionsToExport | Sort-Object)
+    foreach ($name in 'Get-RpaInstallPlan', 'Get-RpaMachineFacts', 'Invoke-RpaInstallPlan', 'Get-RpaUninstallPlan', 'Get-RpaUninstallFacts', 'Invoke-RpaUninstall', 'Get-RpaUninstallSummary', 'Get-RpaLayout', 'Test-RpaAdministrator') {
+      $module.ExportedFunctions.Keys | Should -Contain $name
+    }
+    # A function of one file calls a function of another, and both see the same module variables.
+    InModuleScope RpaInstall { (Get-Command Get-RpaChangeText).Module.Name; (Get-Command Get-RpaPathRefusal).Module.Name; (Get-Command Remove-RpaTree).Module.Name } | Should -BeExactly @('RpaInstall', 'RpaInstall', 'RpaInstall')
+    InModuleScope RpaInstall { $script:TaskPath; $script:Winlogon; $script:RunnerTask } | Should -BeExactly @('\RPA\', 'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon', 'RPA Runner')
   }
 
   It '<Name> holds no loop of its own and runs start-loop.ps1' -ForEach @(@{ Name = 'start-runner.ps1' }, @{ Name = 'start-browser.ps1' }) {
@@ -1728,7 +1748,7 @@ Describe 'The installer scripts' {
   }
 
   It 'the scheduled tasks start Windows PowerShell by its full path' {
-    $source = Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir 'RpaInstall.psm1')
+    $source = $script:ModuleSource
     $source | Should -Not -Match "-Execute\s+'"
     $source | Should -Match '-Execute \(Get-RpaWindowsPowerShell\)'
     $path = InModuleScope RpaInstall { Get-RpaWindowsPowerShell }
@@ -1792,7 +1812,7 @@ Describe 'The installer scripts' {
         $me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
         & icacls.exe $script:Area /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "*$($me):(OI)(CI)F" | Out-Null
         New-Item -ItemType Directory -Path $script:Package, (Join-Path $script:Package 'scripts'), (Join-Path $script:Area 'elsewhere') | Out-Null
-        Copy-Item -LiteralPath (Join-Path $script:InstallerDir 'Install-Rpa.ps1'), (Join-Path $script:InstallerDir 'RpaInstall.psm1') -Destination $script:Package
+        Copy-Item -LiteralPath (@('Install-Rpa.ps1') + $script:ModuleFiles | ForEach-Object { Join-Path $script:InstallerDir $_ }) -Destination $script:Package
         Copy-Item -LiteralPath (Join-Path (Join-Path $script:InstallerDir 'scripts') 'start-loop.ps1') -Destination (Join-Path $script:Package 'scripts')
         $script:Users = (New-Object Security.Principal.SecurityIdentifier 'S-1-5-32-545').Translate([Security.Principal.NTAccount]).Value
       }
@@ -1850,7 +1870,7 @@ Describe 'The installer scripts' {
     It 'Install-Rpa.ps1 judges a package reached through a junction by where it really is' -Skip:($env:OS -ne 'Windows_NT') {
       # <area>\elsewhere\via is a junction to <area>; the installer is started as <area>\elsewhere\via\package\...
       $via = Join-Path (Join-Path $script:Area 'elsewhere') 'via'
-      $file = Join-Path $script:Package 'RpaInstall.psm1'
+      $file = Join-Path $script:Package 'RpaInstall.Plan.ps1'
       & cmd.exe /d /c ('mklink /J "{0}" "{1}"' -f $via, $script:Area) | Out-Null
       try {
         $started = Join-Path (Join-Path $via 'package') 'Install-Rpa.ps1'
@@ -1859,7 +1879,7 @@ Describe 'The installer scripts' {
 
         & icacls.exe $file /grant '*S-1-5-32-545:M' | Out-Null
         $output = @(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $started -RunnerPort 7 -BrowserPort 7 -AllowFromAnyAddress)
-        $output[1] | Should -Match ([regex]::Escape("$($script:Leaf)\package\RpaInstall.psm1 can be changed by $($script:Users). $($script:Unpack)") + '$')
+        $output[1] | Should -Match ([regex]::Escape("$($script:Leaf)\package\RpaInstall.Plan.ps1 can be changed by $($script:Users). $($script:Unpack)") + '$')
         $output[1] | Should -Not -Match 'via'
       } finally {
         & icacls.exe $file /remove '*S-1-5-32-545' | Out-Null
