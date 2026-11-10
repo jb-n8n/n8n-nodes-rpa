@@ -43,10 +43,29 @@ public interface IPolicyFiles
 
     /// <summary>
     /// Opens a file whose path the caller chose (a change file, an application to hash), or returns null when nothing
-    /// has that name. The open does not follow a link in the last name of the path and does not let a pipe's server
-    /// act as the tool; what it found is reported and the tool decides (<see cref="OpenedFile.Regular"/>).
+    /// has that name. The open does not follow a link in the last name of the path and asks Windows to let a pipe's
+    /// server identify the tool's user, not act as that user; what it found is reported and the tool decides
+    /// (<see cref="OpenedFile.Regular"/>).
     /// </summary>
     OpenedFile? Open(string path);
+
+    /// <summary>
+    /// The device a drive letter stands for, as Windows names it: <c>\Device\HarddiskVolume3</c> for a volume,
+    /// <c>\Device\LanmanRedirector\...</c> for a mapped network drive, <c>\??\C:\folder</c> for a letter that
+    /// <c>subst</c> made for a folder. Null when the root is not a drive letter (<c>C:\</c>) or no such letter is
+    /// there. Asking does not open the drive.
+    /// </summary>
+    string? DriveDevice(string root);
+
+    /// <summary>True when Windows gives the drive's type as fixed: not a network, removable or optical drive.</summary>
+    bool FixedDrive(string root);
+
+    /// <summary>
+    /// True when what has this name is a link (a junction, a symbolic link, a mount point or another reparse point),
+    /// read from the name itself without following it, and also when that could not be read. False when it is a
+    /// plain file or folder, or when nothing has the name.
+    /// </summary>
+    bool IsLink(string path);
 }
 
 /// <summary>
@@ -314,16 +333,44 @@ public static class PolicyCommand
 
     /// <summary>
     /// A file whose path the caller chose, opened once, or null when nothing has the name. Whoever started the tool
-    /// may not be an administrator, and the tool opens the file elevated: it is used only when what was opened is a
-    /// regular file on a local fixed drive (not a pipe or a device, a folder, a link, or a file on a network share or
-    /// a removable drive). The refusal names the path as the caller gave it and nothing else.
+    /// may not be an administrator, and the tool opens the file elevated. The path is looked at first
+    /// (<see cref="RefuseUnlessPlain"/>); then the file is opened and used only when what was opened is a regular
+    /// file on a local fixed drive (not a pipe or a device, a folder, a link, or a file on a network share or a
+    /// removable drive), which also covers a path that changed between the look and the open. The refusal names the
+    /// path as the caller gave it and nothing else.
     /// </summary>
     private static OpenedFile? CallerFile(string path, string given, IPolicyFiles files)
     {
+        RefuseUnlessPlain(path, given, files);
         var file = files.Open(path);
         if (file is null || file.Regular) return file;
         file.Dispose();
         throw new RunnerPolicy.InvalidPolicyException($"{given} is not a regular file on a local drive");
+    }
+
+    /// <summary>
+    /// Refuses a path the caller chose from the path alone, before it is opened or written into the policy. Its
+    /// drive must be a letter that is a volume of its own with the drive type "fixed": a mapped network drive, a
+    /// removable drive and a letter that <c>subst</c> made for a folder are refused (the letter's device is asked
+    /// first, which does not open the drive, and the drive type only for a letter that names a device of its own).
+    /// Then each name of the full path is asked about, from the drive downward, and the first one that is a link (a
+    /// junction, a symbolic link, a mount point) is refused: an open would follow such a link to wherever it leads,
+    /// a network share included, and a policy entry under such a path would name whatever the link points to later.
+    /// Nothing is asked about past the first link. The refusal names the path as the caller gave it.
+    /// </summary>
+    private static void RefuseUnlessPlain(string full, string given, IPolicyFiles files)
+    {
+        var root = Path.GetPathRoot(full) ?? "";
+        var plain = files.DriveDevice(root) is { } device && device.StartsWith(@"\Device\", StringComparison.Ordinal) && files.FixedDrive(root);
+        var at = root;
+        foreach (var name in full[root.Length..].Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (!plain) break;
+            // Not Path.Combine: a name with a colon in it would be taken for a path of its own.
+            at = Path.Join(at, name);
+            plain = !files.IsLink(at);
+        }
+        if (!plain) throw new RunnerPolicy.InvalidPolicyException($"{given} is not a regular file on a local drive");
     }
 
     /// <summary>
@@ -333,9 +380,9 @@ public static class PolicyCommand
     /// </summary>
     private static string ChangeFile(string path, IPolicyFiles files)
     {
-        if (RunnerPolicy.IsUncOrDevice(path) || RunnerPolicy.IsUncOrDevice(Path.GetFullPath(path)))
-            throw new RunnerPolicy.InvalidPolicyException("the change file must be on a local drive");
-        using var file = CallerFile(path, path, files) ?? throw new FileNotFoundException($"Change file not found: {path}");
+        var full = RunnerPolicy.IsUncOrDevice(path) ? path : Path.GetFullPath(path);
+        if (RunnerPolicy.IsUncOrDevice(full)) throw new RunnerPolicy.InvalidPolicyException("the change file must be on a local drive");
+        using var file = CallerFile(full, path, files) ?? throw new FileNotFoundException($"Change file not found: {path}");
         if (file.Length > MaxChangeFileBytes) throw new RunnerPolicy.InvalidPolicyException("the change file is larger than 256 KiB");
         var bytes = new byte[MaxChangeFileBytes + 1];
         var read = file.Content.ReadAtLeast(bytes, bytes.Length, throwOnEndOfStream: false);
@@ -348,8 +395,9 @@ public static class PolicyCommand
     /// The change that allows one application: its file name, its full path and, when asked, its hash. Whoever started
     /// the tool chose the path. A UNC or device path (opening one makes the elevated tool sign in to a server, or read
     /// a device) and a short (8.3) name are refused on the text as given, before the tool resolves or opens the path;
-    /// the full path is tested again. The hash is taken from a regular file on a local drive (<see cref="CallerFile"/>),
-    /// read as a stream.
+    /// the full path is tested again. With or without a hash, the path must be on a fixed drive of its own and hold
+    /// no link (<see cref="RefuseUnlessPlain"/>), so the entry is written under the application's real location.
+    /// The hash is taken from a regular file on a local drive (<see cref="CallerFile"/>), read as a stream.
     /// </summary>
     private static string AllowApp(Arguments arguments, IPolicyFiles files)
     {
@@ -364,6 +412,10 @@ public static class PolicyCommand
         {
             using var file = CallerFile(path, target, files) ?? throw new FileNotFoundException($"Application file not found: {target}");
             app["sha256"] = Convert.ToHexString(SHA256.HashData(file.Content));
+        }
+        else
+        {
+            RefuseUnlessPlain(path, target, files);
         }
         return JsonSerializer.Serialize(new Dictionary<string, object> { ["allowedApps"] = new[] { app } });
     }

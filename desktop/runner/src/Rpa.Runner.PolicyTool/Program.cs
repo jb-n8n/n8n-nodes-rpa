@@ -37,6 +37,9 @@ internal sealed class PolicyFiles : IPolicyFiles
     private const int ErrorPathNotFound = 3;
     private const uint GenericRead = 0x80000000;
     private const uint OpenExisting = 3;
+    private const uint DriveTypeFixed = 3;
+    private const uint InvalidFileAttributes = 0xFFFFFFFF;
+    private const uint FileAttributeReparsePoint = 0x400;
 
     // FILE_FLAG_OPEN_REPARSE_POINT (a link is opened as itself), FILE_FLAG_BACKUP_SEMANTICS (a folder can be opened,
     // and is then refused for what it is), SECURITY_SQOS_PRESENT with SECURITY_IDENTIFICATION.
@@ -97,6 +100,23 @@ internal sealed class PolicyFiles : IPolicyFiles
         var final = new string(buffer, 0, (int)length);
         return final.Length > 6 && final.StartsWith(@"\\?\", StringComparison.Ordinal) && char.IsAsciiLetter(final[4]) && final[5] == ':' && final[6] == '\\' &&
                new DriveInfo(final.Substring(4, 3)).DriveType == DriveType.Fixed;
+    }
+
+    public string? DriveDevice(string root)
+    {
+        if (root.Length != 3 || !char.IsAsciiLetter(root[0]) || root[1] != ':' || root[2] != '\\') return null;
+        var device = new char[1024];
+        // The answer is a list of names, each ended by a null; the first is the one in use.
+        return QueryDosDevice(root[..2], device, (uint)device.Length) == 0 ? null : new string(device, 0, Math.Max(0, Array.IndexOf(device, '\0')));
+    }
+
+    public bool FixedDrive(string root) => GetDriveType(root) == DriveTypeFixed;
+
+    public bool IsLink(string path)
+    {
+        var attributes = GetFileAttributes(path.Length < 260 ? path : @"\\?\" + path);
+        if (attributes == InvalidFileAttributes) return Marshal.GetLastPInvokeError() is not (ErrorFileNotFound or ErrorPathNotFound);
+        return (attributes & FileAttributeReparsePoint) != 0;
     }
 
     public IReadOnlyList<string> Problems(string path) => PolicyFileCheck.Problems(path);
@@ -217,6 +237,15 @@ internal sealed class PolicyFiles : IPolicyFiles
 
     [DllImport("kernel32.dll")]
     private static extern int GetFileType(SafeFileHandle file);
+
+    [DllImport("kernel32.dll", EntryPoint = "QueryDosDeviceW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint QueryDosDevice(string device, [Out] char[] target, uint length);
+
+    [DllImport("kernel32.dll", EntryPoint = "GetDriveTypeW", CharSet = CharSet.Unicode)]
+    private static extern uint GetDriveType(string root);
+
+    [DllImport("kernel32.dll", EntryPoint = "GetFileAttributesW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetFileAttributes(string name);
 
     [DllImport("kernel32.dll", EntryPoint = "GetFinalPathNameByHandleW", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern uint GetFinalPathNameByHandle(SafeFileHandle file, [Out] char[] path, uint length, uint flags);

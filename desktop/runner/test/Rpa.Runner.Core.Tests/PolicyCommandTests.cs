@@ -53,6 +53,33 @@ public class PolicyCommandTests
         /// <summary>Every path whose kind was asked for.</summary>
         public List<string> Looked { get; } = [];
 
+        /// <summary>What Windows says about a drive: the device its letter stands for (null: no such letter) and
+        /// whether its type is fixed. A root that is not here is a volume on a fixed drive.</summary>
+        public Dictionary<string, (string? Device, bool Fixed)> Drives { get; } = [];
+
+        /// <summary>The names that are links (or cannot be read).</summary>
+        public HashSet<string> Links { get; } = [];
+
+        /// <summary>Every name that was asked about on the way down a path, in order.</summary>
+        public List<string> Walked { get; } = [];
+
+        /// <summary>Every drive whose type was asked for (asking opens the drive).</summary>
+        public List<string> TypeAsked { get; } = [];
+
+        public string? DriveDevice(string root) => Drives.TryGetValue(root, out var drive) ? drive.Device : @"\Device\HarddiskVolume3";
+
+        public bool FixedDrive(string root)
+        {
+            TypeAsked.Add(root);
+            return !Drives.TryGetValue(root, out var drive) || drive.Fixed;
+        }
+
+        public bool IsLink(string path)
+        {
+            Walked.Add(path);
+            return Links.Contains(path);
+        }
+
         /// <summary>What the runner's start check says about a file; nothing unless a test puts it here.</summary>
         public Dictionary<string, string[]> Untrusted { get; } = [];
 
@@ -379,6 +406,7 @@ public class PolicyCommandTests
             Assert.Equal($"{R(refusal)}\n", tool.Output);
             Assert.Empty(tool.Files.Opened);
             Assert.Empty(tool.Files.Looked);
+            Assert.Empty(tool.Files.Walked);
             Assert.Empty(tool.Files.Writes);
         }
     }
@@ -395,6 +423,7 @@ public class PolicyCommandTests
             Assert.Equal($"{R($"write the full path, not a short (8.3) name: {L(target)}")}\n", tool.Output);
             Assert.Empty(tool.Files.Opened);
             Assert.Empty(tool.Files.Looked);
+            Assert.Empty(tool.Files.Walked);
             Assert.Empty(tool.Files.Writes);
         }
     }
@@ -482,6 +511,101 @@ public class PolicyCommandTests
             Assert.True(stream.Closed);
             Assert.Empty(tool.Files.Writes);
         }
+    }
+
+    private static readonly string DriveRoot = Path.GetPathRoot(Root)!;
+
+    /// <summary>The names on the way from the drive down to the path, the path itself last.</summary>
+    private static List<string> Down(string path)
+    {
+        var names = new List<string>();
+        for (var at = path; at != DriveRoot; at = Path.GetDirectoryName(at)!) names.Insert(0, at);
+        return names;
+    }
+
+    /// <summary>The commands that take a path from the caller, each with the path it is given.</summary>
+    private static (string[] Command, string Path)[] CallerPaths(string folder) =>
+    [
+        (["apply", Path.Combine(folder, "change.json")], Path.Combine(folder, "change.json")),
+        (["allow-app", Path.Combine(folder, "ErpDemo.exe")], Path.Combine(folder, "ErpDemo.exe")),
+        (["allow-app", Path.Combine(folder, "ErpDemo.exe"), "--pin-hash"], Path.Combine(folder, "ErpDemo.exe")),
+    ];
+
+    [Fact]
+    public void A_path_with_a_link_in_it_is_refused_from_the_path_alone()
+    {
+        // A link earlier in the path would be followed by the open itself, to wherever it leads. Each name is asked
+        // about from the drive downward, and nothing is asked or opened past the first link.
+        var folder = Path.Combine(Root, "links", "inner", "deep");
+        foreach (var (command, path) in CallerPaths(folder))
+        {
+            var names = Down(path);
+            Assert.InRange(names.Count, 5, 6);
+            for (var link = 0; link < names.Count; link++)
+            {
+                var tool = new Tool();
+                tool.Files.Text[path] = Change;
+                tool.Files.Links.Add(names[link]);
+                Assert.Equal(1, tool.Run("y\n", [.. command, "--yes", "--policy", PolicyPath]));
+                Assert.Equal($"{R($"{path} is not a regular file on a local drive")}\n", tool.Output);
+                Assert.Equal(names.Take(link + 1), tool.Files.Walked);
+                Assert.Empty(tool.Files.Opened);
+                Assert.Empty(tool.Files.Looked);
+                Assert.Empty(tool.Files.Writes);
+            }
+        }
+    }
+
+    [Fact]
+    public void A_path_on_a_drive_that_is_not_a_fixed_volume_of_its_own_is_refused_from_the_path_alone()
+    {
+        // The device the letter stands for, whether its drive type is fixed, and whether the type is asked at all.
+        (string? Device, bool Fixed, bool Asked)[] drives =
+        [
+            (@"\Device\LanmanRedirector\;Z:0000000000012345\server\share", false, true),  // a mapped network drive
+            (@"\Device\HarddiskVolume9", false, true),                                     // a removable drive
+            (@"\??\C:\Users\bot\apps", true, false),                                       // a letter subst made for a folder
+            (@"\??\UNC\server\share", false, false),                                       // a letter subst made for a share
+            ("", true, false),                                                              // a letter with no device name
+            (null, true, false),                                                            // no such letter
+        ];
+        foreach (var (device, isFixed, asked) in drives)
+        {
+            foreach (var (command, path) in CallerPaths(Path.Combine(Root, "apps")))
+            {
+                var tool = new Tool();
+                tool.Files.Text[path] = Change;
+                tool.Files.Drives[DriveRoot] = (device, isFixed);
+                Assert.Equal(1, tool.Run("y\n", [.. command, "--yes", "--policy", PolicyPath]));
+                Assert.Equal($"{R($"{path} is not a regular file on a local drive")}\n", tool.Output);
+                // The drive is opened for its type only when its letter names a device of its own.
+                Assert.Equal(asked ? [DriveRoot] : [], tool.Files.TypeAsked);
+                Assert.Empty(tool.Files.Walked);
+                Assert.Empty(tool.Files.Opened);
+                Assert.Empty(tool.Files.Writes);
+            }
+        }
+    }
+
+    [Fact]
+    public void A_plain_path_is_asked_about_name_by_name_before_it_is_opened_or_recorded()
+    {
+        var folder = Path.Combine(Root, "ERP Demo");
+        foreach (var (command, path) in CallerPaths(folder))
+        {
+            var tool = new Tool();
+            tool.Files.Text[path] = Change;
+            Assert.Equal(0, tool.Run("", [.. command, "--yes", "--policy", PolicyPath]));
+            Assert.Equal(Down(path), tool.Files.Walked);
+            // The application is opened only for its hash; without --pin-hash its path is recorded unopened.
+            Assert.Equal(command is ["allow-app", _] ? [] : [path], tool.Files.Opened.Select(opened => opened.Path));
+            Assert.Single(tool.Files.Writes);
+        }
+
+        // A path that does not exist yet has no links either: allow-app records it, as before.
+        var absent = new Tool();
+        Assert.Equal(0, absent.Run("", "allow-app", Path.Combine(Root, "Not installed yet", "ErpDemo.exe"), "--yes", "--policy", PolicyPath));
+        Assert.Single(absent.Files.Writes);
     }
 
     [Fact]
@@ -953,6 +1077,7 @@ public class PolicyCommandTests
         Assert.Equal(1, tool.Run("y\n", "apply", path, "--policy", PolicyPath));
         Assert.Equal("the change file must be on a local drive\n", tool.Output);
         Assert.Empty(tool.Files.Opened);
+        Assert.Empty(tool.Files.Walked);
         Assert.Empty(tool.Files.Writes);
     }
 
