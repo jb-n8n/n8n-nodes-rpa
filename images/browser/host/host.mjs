@@ -22,22 +22,33 @@
 // - browser-key.pem and browser-cert.pem: the gate's key and self-signed certificate. Created together at the first
 //   start (the key with mode 0600 where the platform has file modes) and reused after that, so the fingerprint stays
 //   the same. With only one of the two present the host does not start.
+// - browser-temp: the temp folder of the browser server and its browsers (TEMP, TMP and TMPDIR of that process only).
+//   Playwright keeps a session's trace, downloads and browser profile there, and a trace holds what was typed into
+//   pages. The host creates the folder, and empties it at every start before the browser server is started, after the
+//   browser server's processes have ended in a stop, and when the browser server exits on its own. A host that is
+//   ended without a chance to stop leaves what Playwright did not remove itself until the next start. Emptying removes
+//   a link and never what it points at; with browser-temp itself a link or a file the host does not start.
 //
 // Order and stopping:
 // - The browser server starts first; the gate listens only once the browser server has printed its address.
 // - The browser server exits: the gate closes at once and the host exits 1, so whatever started it starts it again.
-// - Ctrl+C (SIGINT), SIGTERM, SIGHUP or Ctrl+Break: the gate closes (open sessions end), the browser server's process
-//   tree is ended, exit 0. On Windows a process is usually ended without a signal; then no code of the host runs, and
-//   the browser server ends by itself because its stdin, a pipe from the host, ends (run-server.mjs).
+// - Ctrl+C (SIGINT), SIGTERM, SIGHUP or Ctrl+Break: the gate closes (open sessions end); the browser server is asked
+//   to exit by ending its stdin, which lets Playwright end its browsers and remove its temp folders; if it has not
+//   exited after a short wait its process tree is ended (taskkill /T /F on Windows; SIGTERM, then SIGKILL elsewhere);
+//   browser-temp is emptied; exit 0. On Windows a process is usually ended without a signal; then no code of the host
+//   runs, and the browser server ends by itself because its stdin, a pipe from the host, ends (run-server.mjs).
 //
 // Environment of the main block: RPA_BROWSER_DATA_DIR (default %ProgramData%\RPA Runner on Windows; no default
 // elsewhere), RPA_BROWSER_PORT (3000), RPA_BROWSER_BIND (0.0.0.0, an IP address), RPA_BROWSER_MAX_SESSIONS (1).
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { closeSync, existsSync, fsyncSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeSync } from 'node:fs';
+import {
+  closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, rmdirSync,
+  unlinkSync, writeSync,
+} from 'node:fs';
 import { request } from 'node:http';
 import { isIP } from 'node:net';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { createSecureContext } from 'node:tls';
 import { fileURLToPath } from 'node:url';
 import { MAX_SESSIONS_LIMIT, MIN_TOKEN_LENGTH, createGate } from '../gate/gate.mjs';
@@ -46,6 +57,9 @@ import { fingerprintOfPem, selfSignedCert } from '../gate/selfsigned.mjs';
 const TOKEN_FILE = 'browser-token';
 const KEY_FILE = 'browser-key.pem';
 const CERT_FILE = 'browser-cert.pem';
+const TEMP_DIR = 'browser-temp';
+/** The variables that name the temp folder: Node and Chromium read TEMP and TMP on Windows, TMPDIR elsewhere. */
+const TEMP_VARIABLES = ['TEMP', 'TMP', 'TMPDIR'];
 const TOKEN_RULE = `${TOKEN_FILE} must hold at least ${MIN_TOKEN_LENGTH} characters of ASCII text without spaces`;
 const NEW_CERTIFICATE_HINT = 'delete both to create a new certificate (the fingerprint changes)';
 const LAUNCHER_FILE = fileURLToPath(new URL('./run-server.mjs', import.meta.url));
@@ -53,10 +67,16 @@ const LAUNCHER_FILE = fileURLToPath(new URL('./run-server.mjs', import.meta.url)
 const START_TIMEOUT_MS = 30_000;
 /** How long the check of the browser server's plain HTTP answer may take. */
 const PLAIN_CHECK_MS = 5000;
-/** On stop: SIGTERM once a second this many times, then SIGKILL (the run-server ignores a SIGTERM that arrives while it closes a browser). */
+/**
+ * The unit of the waits when the browser server is ended. It gets 5 of them to exit after its stdin ended; then, where
+ * signals are used, one after each SIGTERM; and 5 after a kill that cannot be ignored. Emptying browser-temp is tried
+ * for 5 of them.
+ */
+const STOP_WAIT_MS = 1000;
+/** On stop: SIGTERM this many times, then SIGKILL (the run-server ignores a SIGTERM that arrives while it closes a browser). */
 const TERM_ATTEMPTS = 5;
-/** How long to wait for the exit after a kill that cannot be ignored. */
-const EXIT_WAIT_MS = 5000;
+/** How often emptying browser-temp is tried: on Windows a file stays in use for a moment after its process has ended. */
+const EMPTY_ATTEMPTS = 20;
 /** Exit codes with which run-server.mjs says why it did not start the browser server, and the host's line for each. */
 const LAUNCHER_EXITS = new Map([
   [69, 'the browser server cannot limit module loading to the install with this Node; Node 22.15 or later is needed'],
@@ -138,6 +158,60 @@ function certificate(dataDir) {
 }
 
 /**
+ * The temp folder of the browser server in the data directory, created when it is missing. Throws when the name is
+ * taken by a link or a file: the host would empty, and the browsers would write to, whatever a link points at.
+ */
+function browserTempFolder(dataDir) {
+  const folder = resolve(dataDir, TEMP_DIR);
+  let found;
+  try {
+    found = lstatSync(folder);
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw new Error(`cannot use ${TEMP_DIR}: ${err.code ?? 'error'}`);
+  }
+  if (found === undefined) {
+    try {
+      mkdirSync(folder, { mode: 0o700 });
+    } catch (err) {
+      throw new Error(`cannot create ${TEMP_DIR}: ${err.code ?? 'error'}`);
+    }
+  } else if (!found.isDirectory()) {
+    throw new Error(`${TEMP_DIR} must be a folder of its own, not a link or a file; remove it`);
+  }
+  return folder;
+}
+
+/**
+ * Removes everything in a folder. An entry the listing reports as a folder is emptied and removed; anything else is
+ * removed as it is, so a link (a junction too) goes and what it points at stays. A folder that is swapped for a link
+ * between the listing and its removal would be followed; only an account that can write to the folder can do that.
+ */
+function removeContent(folder) {
+  for (const entry of readdirSync(folder, { withFileTypes: true })) {
+    const path = join(folder, entry.name);
+    if (entry.isDirectory()) {
+      removeContent(path);
+      rmdirSync(path);
+    } else {
+      unlinkSync(path);
+    }
+  }
+}
+
+/** Empties the folder, trying again for up to 5 waits. Resolves with undefined, or with the error code of the last try. */
+async function emptied(folder, waitMs) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      removeContent(folder);
+      return undefined;
+    } catch (err) {
+      if (attempt === EMPTY_ATTEMPTS) return err.code ?? 'error';
+    }
+    await new Promise((done) => setTimeout(done, (5 * waitMs) / EMPTY_ATTEMPTS));
+  }
+}
+
+/**
  * Starts Playwright's run-server through run-server.mjs. The path and the port go in two variables of that process's
  * environment, never on its command line. stdin is a pipe the host never writes to: it ends when the host is gone, and
  * the launcher exits then. stdout is a pipe the host reads the address from; stderr is dropped.
@@ -213,48 +287,59 @@ function tellsItsPath(port, path) {
 }
 
 /**
- * Ends the browser server and the processes under it. On Windows a child's kill() ends that one process and the
- * browsers it launched would stay, so the tree is ended with taskkill (by its full path: a bare name would also be
- * looked for in the current directory). Elsewhere the run-server closes its browsers on SIGTERM. `gone` settles when
- * the child has exited and `isGone` says so at once: a process that has exited is never signalled, its id may be
- * another process's by then.
+ * Ends the browser server and the processes under it. First its stdin is ended: run-server.mjs exits then, in the way
+ * that lets Playwright end its browsers and remove their profiles and the traces and downloads of open sessions. If it
+ * has not exited after 5 waits, the tree is ended. On Windows a child's kill() ends that one process and the browsers it
+ * launched would stay, so the tree is ended with taskkill (by its full path: a bare name would also be looked for in
+ * the current directory). Elsewhere the run-server closes its browsers on SIGTERM. `gone` settles when the child has
+ * exited and `isGone` says so at once: a process that has exited is never signalled, its id may be another process's by
+ * then.
  */
-async function endProcessTree(child, gone, isGone) {
+async function endProcessTree(child, gone, isGone, waitMs) {
   if (isGone()) return;
+  if (typeof child.stdin?.end === 'function') {
+    // The pipe may break while it is closed; the process is going away either way.
+    child.stdin.on?.('error', () => {});
+    child.stdin.end();
+    if (await settledWithin(gone, 5 * waitMs)) return;
+  }
   if (process.platform === 'win32' && Number.isInteger(child.pid)) {
     await new Promise((resolve) => {
       const taskkill = spawn(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'taskkill.exe'), ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
       taskkill.once('error', resolve);
       taskkill.once('exit', resolve);
     });
-    if (await settledWithin(gone, EXIT_WAIT_MS)) return;
+    if (await settledWithin(gone, 5 * waitMs)) return;
   }
   for (let attempt = 0; attempt < TERM_ATTEMPTS; attempt += 1) {
     child.kill('SIGTERM');
-    if (await settledWithin(gone, 1000)) return;
+    if (await settledWithin(gone, waitMs)) return;
   }
   child.kill('SIGKILL');
-  await settledWithin(gone, EXIT_WAIT_MS);
+  await settledWithin(gone, 5 * waitMs);
 }
 
 /**
  * Starts the browser server, then the gate with TLS in front of it, and logs the start line.
- * - dataDir holds browser-token and, after the first start, browser-key.pem and browser-cert.pem.
+ * - dataDir holds browser-token and, after the first start, browser-key.pem, browser-cert.pem and browser-temp.
  * - port and bind are where the gate listens. upstreamPort is the browser server's port on 127.0.0.1; 0 lets the
  *   operating system pick one, and the host uses the port the browser server announces either way.
  * - runServer({ port, path, env }) starts the browser server and returns a child-process-like object: stdout (a
- *   stream on which the server prints "Listening on ws://127.0.0.1:<port><path>"), on('exit'), kill(signal) and, for a
- *   real process, pid. env is the host's environment without the variables that hold the token. For tests.
- * - startTimeoutMs is how long the browser server may take to announce its address. For tests.
+ *   stream on which the server prints "Listening on ws://127.0.0.1:<port><path>"), stdin (ended to ask the server to
+ *   exit), on('exit'), kill(signal) and, for a real process, pid. env is the host's environment without the variables
+ *   that hold the token, with browser-temp as the temp folder. For tests.
+ * - warn gets a line when browser-temp could not be emptied after the browser server ended.
+ * - startTimeoutMs is how long the browser server may take to announce its address, and stopWaitMs the unit of the
+ *   waits when it is ended (STOP_WAIT_MS). For tests.
  * Resolves with { port, fingerprint, exited, stop }: the gate's port, the certificate's SHA-256 fingerprint, a promise
  * of the exit code (1 once the browser server has exited on its own, 0 once stop() has finished) and stop(), which
- * closes the gate, ends open sessions and ends the browser server's process tree.
- * Rejects, with nothing left running, when a parameter or a file in dataDir is not usable, the browser server does not
- * come up, it tells its path to a plain request, or the gate cannot listen.
+ * closes the gate, ends open sessions, ends the browser server's process tree and empties browser-temp.
+ * Rejects, with nothing left running, when a parameter or a file in dataDir is not usable, browser-temp cannot be
+ * emptied, the browser server does not come up, it tells its path to a plain request, or the gate cannot listen.
  */
 export async function startHost({
   dataDir, port = 3000, bind = '0.0.0.0', upstreamPort = 0, maxSessions = 1, runServer = runBrowserServer, log = console.log,
-  startTimeoutMs = START_TIMEOUT_MS,
+  warn = (line) => console.error(`RPA browser: ${line}`), startTimeoutMs = START_TIMEOUT_MS, stopWaitMs = STOP_WAIT_MS,
 }) {
   if (typeof dataDir !== 'string' || dataDir === '') throw new Error('dataDir must name the data directory');
   if (!validPort(port)) throw new Error('port must be a whole number from 0 to 65535');
@@ -266,9 +351,17 @@ export async function startHost({
   // The token before the certificate, and both before anything is started: a start that is refused creates nothing.
   const token = readToken(dataDir);
   const { key, cert, fingerprint } = certificate(dataDir);
+  // What an earlier session left (a host that is ended without a chance to stop removes nothing) goes before a new
+  // browser server is started.
+  const browserTemp = browserTempFolder(dataDir);
+  const notEmptied = await emptied(browserTemp, stopWaitMs);
+  if (notEmptied !== undefined) throw new Error(`cannot empty ${TEMP_DIR}: ${notEmptied}`);
 
   const path = `/${randomBytes(16).toString('hex')}`;
-  const env = Object.fromEntries(Object.entries(process.env).filter(([, value]) => !value.includes(token)));
+  // Windows takes the names of variables without regard to case.
+  const sameName = (name) => (process.platform === 'win32' ? name.toUpperCase() : name);
+  const env = Object.fromEntries(Object.entries(process.env).filter(([name, value]) => !value.includes(token) && !TEMP_VARIABLES.includes(sameName(name))));
+  for (const name of TEMP_VARIABLES) env[name] = browserTemp;
   const child = runServer({ port: upstreamPort, path, env });
   let ended;
   let exitCode;
@@ -285,7 +378,12 @@ export async function startHost({
       resolve();
     });
   });
-  const endBrowserServer = () => endProcessTree(child, gone, () => ended !== undefined);
+  const endBrowserServer = () => endProcessTree(child, gone, () => ended !== undefined, stopWaitMs);
+  /** After the browser server's processes have ended: what its sessions kept in browser-temp is removed. */
+  const emptyBrowserTemp = async () => {
+    const code = await emptied(browserTemp, stopWaitMs);
+    if (code !== undefined) warn(`${TEMP_DIR} could not be emptied (${code}); the next start empties it`);
+  };
 
   let upstream;
   try {
@@ -330,12 +428,14 @@ export async function startHost({
   gone.then(async () => {
     if (stopping) return;
     await closeGate();
+    await emptyBrowserTemp();
     finish(1);
   });
   const stop = () => {
     stopping ??= (async () => {
       await closeGate();
       await endBrowserServer();
+      await emptyBrowserTemp();
       finish(0);
     })();
     return stopping;

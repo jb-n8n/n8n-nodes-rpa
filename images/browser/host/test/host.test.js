@@ -9,7 +9,7 @@ import { request as httpsRequest } from 'node:https';
 import { connect, createServer as createTcpServer } from 'node:net';
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -47,14 +47,16 @@ function dataDir(t, token = TOKEN) {
  * A stand-in for the browser server behind the injectable runServer. Each call starts a local server that answers
  * upgrades on the given path with 101 and echoes bytes, and prints the line Playwright's run-server prints once it
  * listens. `announce: false` holds that line back until announce() is called; `revealPath: true` answers GET /json with
- * the path, as Playwright 1.63 does when nothing filters it.
+ * the path, as Playwright 1.63 does when nothing filters it. It exits when its stdin ends unless `exitsOnStdinEnd` is
+ * false, and on a SIGTERM once it has ignored `ignoredTerms` of them; `events` holds what the host did to end it, in
+ * order.
  */
-function fakeBrowserServer({ announce = true, revealPath = false } = {}) {
+function fakeBrowserServer({ announce = true, revealPath = false, exitsOnStdinEnd = true, ignoredTerms = 0 } = {}) {
   const calls = [];
   const runServer = ({ port, path, env }) => {
     const child = new EventEmitter();
     child.stdout = new PassThrough();
-    const call = { port, path, env, child, requests: [], kills: [], exited: false };
+    const call = { port, path, env, child, requests: [], events: [], exited: false };
     calls.push(call);
     const sockets = new Set();
     const server = createServer((req, res) => {
@@ -78,9 +80,16 @@ function fakeBrowserServer({ announce = true, revealPath = false } = {}) {
       child.stdout.end();
       child.emit('exit', code, signal);
     };
+    child.stdin = {
+      end: () => {
+        call.events.push('stdin end');
+        if (exitsOnStdinEnd) setImmediate(() => call.exit(0));
+      },
+    };
     child.kill = (signal = 'SIGTERM') => {
-      call.kills.push(signal);
-      setImmediate(() => call.exit(null, signal));
+      call.events.push(signal);
+      const ignored = signal === 'SIGTERM' && call.events.filter((event) => event === 'SIGTERM').length <= ignoredTerms;
+      if (!ignored) setImmediate(() => call.exit(null, signal));
       return true;
     };
     call.announce = () => child.stdout.write(`Listening on ws://127.0.0.1:${server.address().port}${path}\n`);
@@ -211,7 +220,7 @@ test('the certificate is created once and reused', async (t) => {
   const created = files();
   assert.match(created[0], /^-----BEGIN CERTIFICATE-----/);
   assert.match(created[1], /^-----BEGIN PRIVATE KEY-----/);
-  assert.deepEqual(readdirSync(dir).sort(), ['browser-cert.pem', 'browser-key.pem', 'browser-token'], 'no temporary file is left');
+  assert.deepEqual(readdirSync(dir).sort(), ['browser-cert.pem', 'browser-key.pem', 'browser-temp', 'browser-token'], 'no temporary file is left');
   await first.host.stop();
   const second = await ownHost(t, { dataDir: dir });
   assert.equal(second.host.fingerprint, first.host.fingerprint);
@@ -442,6 +451,155 @@ test('stop() resolves exited with 0', async (t) => {
   await closed;
   assert.equal(call.exited, true, 'the browser server is ended');
   assert.equal(await accepts(host.port), false, 'the gate is closed');
+  assert.deepEqual(call.events, ['stdin end'], 'the browser server is asked to exit through its stdin; it did, so no signal is sent');
+});
+
+test('stop() ends a browser server that does not exit by itself: its stdin first, then SIGTERM, again, then SIGKILL', async (t) => {
+  // Without a process id the host signals through kill() on every platform (with one, Windows ends the tree with taskkill).
+  const start = { stopWaitMs: 20 };
+  const onTerm = await ownHost(t, { fake: fakeBrowserServer({ exitsOnStdinEnd: false }), start });
+  await onTerm.host.stop();
+  assert.deepEqual(onTerm.call.events, ['stdin end', 'SIGTERM']);
+
+  // The run-server ignores a SIGTERM that arrives while it closes a browser.
+  const onSecondTerm = await ownHost(t, { fake: fakeBrowserServer({ exitsOnStdinEnd: false, ignoredTerms: 1 }), start });
+  await onSecondTerm.host.stop();
+  assert.deepEqual(onSecondTerm.call.events, ['stdin end', 'SIGTERM', 'SIGTERM']);
+
+  const onKill = await ownHost(t, { fake: fakeBrowserServer({ exitsOnStdinEnd: false, ignoredTerms: Infinity }), start });
+  const began = Date.now();
+  await onKill.host.stop();
+  assert.deepEqual(onKill.call.events, ['stdin end', 'SIGTERM', 'SIGTERM', 'SIGTERM', 'SIGTERM', 'SIGTERM', 'SIGKILL']);
+  assert.ok(Date.now() - began >= 10 * 20 - 5, 'each step waits before the next');
+  for (const { host, call } of [onTerm, onSecondTerm, onKill]) {
+    assert.equal(await host.exited, 0);
+    assert.equal(call.exited, true);
+  }
+});
+
+// ---- browser-temp: the temp folder of the browser server, where a session's trace and downloads are kept. ----
+
+/** The folder a link in a test points at, with a file that must survive; removed after the test. */
+function folderWithCanary(t) {
+  const folder = mkdtempSync(join(tmpdir(), 'rpa-host-target-'));
+  t.after(() => rmSync(folder, { recursive: true, force: true }));
+  writeFileSync(join(folder, 'canary'), 'still here');
+  return { folder, intact: () => existsSync(join(folder, 'canary')) && readFileSync(join(folder, 'canary'), 'utf8') === 'still here' };
+}
+/** A link to a folder: a junction on Windows (any user may create one there), a symbolic link elsewhere. */
+const linkToFolder = (target, path) => symlinkSync(target, path, 'junction');
+
+test('the browser server gets browser-temp in the data directory as its temp folder', async (t) => {
+  const { call, dir } = await ownHost(t);
+  const temp = join(dir, 'browser-temp');
+  assert.ok(statSync(temp).isDirectory());
+  assert.deepEqual([call.env.TEMP, call.env.TMP, call.env.TMPDIR], [temp, temp, temp]);
+  const names = Object.keys(call.env).map((name) => (WINDOWS ? name.toUpperCase() : name));
+  for (const name of ['TEMP', 'TMP', 'TMPDIR']) assert.equal(names.filter((n) => n === name).length, 1, `${name} is set once`);
+  assert.notEqual(process.env.TMPDIR ?? process.env.TEMP, temp, 'the temp folder of the host itself is not changed');
+  if (!WINDOWS) assert.equal(statSync(temp).mode & 0o777, 0o700);
+});
+
+test('what a session left in browser-temp is removed at the next start, by stop() and when the browser server exits', async (t) => {
+  const dir = dataDir(t);
+  const temp = join(dir, 'browser-temp');
+  /** What a session that was recording a trace leaves when it is cut off. */
+  const leave = () => {
+    mkdirSync(join(temp, 'playwright-artifacts-x', 'traces'), { recursive: true });
+    writeFileSync(join(temp, 'playwright-artifacts-x', 'traces', 'x.trace'), 'typed text');
+    writeFileSync(join(temp, 'download'), 'x');
+  };
+  const first = await ownHost(t, { dataDir: dir });
+  leave();
+  await first.host.stop();
+  assert.deepEqual(readdirSync(temp), [], 'stop() empties it');
+
+  // Left by a host that was ended without a chance to stop: gone before the next browser server is started.
+  leave();
+  const fake = fakeBrowserServer();
+  let seenAtStart;
+  const runServer = (options) => {
+    seenAtStart = readdirSync(temp);
+    return fake.runServer(options);
+  };
+  const second = await ownHost(t, { dataDir: dir, start: { runServer } });
+  assert.deepEqual(seenAtStart, [], 'empty when the browser server is started');
+
+  leave();
+  fake.calls[0].exit(1);
+  assert.equal(await second.host.exited, 1);
+  assert.deepEqual(readdirSync(temp), [], 'emptied when the browser server exits on its own');
+  assert.deepEqual(readdirSync(dir).sort(), ['browser-cert.pem', 'browser-key.pem', 'browser-temp', 'browser-token']);
+});
+
+test('a link inside browser-temp is removed, never what it points at', async (t) => {
+  const dir = dataDir(t);
+  const temp = join(dir, 'browser-temp');
+  const target = folderWithCanary(t);
+  const plant = () => {
+    mkdirSync(join(temp, 'deeper'), { recursive: true });
+    linkToFolder(target.folder, join(temp, 'link'));
+    linkToFolder(target.folder, join(temp, 'deeper', 'link'));
+    // A symbolic link to a file needs a privilege on Windows.
+    if (!WINDOWS) symlinkSync(join(target.folder, 'canary'), join(temp, 'deeper', 'file-link'));
+  };
+  mkdirSync(temp);
+  plant();
+  const { host } = await ownHost(t, { dataDir: dir });
+  assert.deepEqual(readdirSync(temp), [], 'emptied at the start');
+  assert.ok(target.intact(), 'the folder the links pointed at is untouched after the start');
+  plant();
+  await host.stop();
+  assert.deepEqual(readdirSync(temp), [], 'emptied by stop()');
+  assert.ok(target.intact(), 'the folder the links pointed at is untouched after stop()');
+});
+
+test('browser-temp that is a link or a file refuses to start', async (t) => {
+  const fake = fakeBrowserServer();
+  const refused = (dir) => assert.rejects(
+    startHost({ dataDir: dir, port: 0, bind: '127.0.0.1', runServer: fake.runServer, log: () => {} }),
+    { message: 'browser-temp must be a folder of its own, not a link or a file; remove it' },
+  );
+  const linked = dataDir(t);
+  const target = folderWithCanary(t);
+  linkToFolder(target.folder, join(linked, 'browser-temp'));
+  await refused(linked);
+  assert.ok(target.intact(), 'the folder the link points at is untouched');
+
+  const file = dataDir(t);
+  writeFileSync(join(file, 'browser-temp'), 'x');
+  await refused(file);
+  assert.equal(readFileSync(join(file, 'browser-temp'), 'utf8'), 'x');
+  assert.equal(fake.calls.length, 0, 'no browser server is started');
+});
+
+test('browser-temp that cannot be emptied refuses the start; after a stop the host says so', { skip: (WINDOWS || process.getuid() === 0) && 'needs file modes and a user they apply to' }, async (t) => {
+  const dir = dataDir(t);
+  const locked = join(dir, 'browser-temp', 'locked');
+  const lock = () => {
+    mkdirSync(locked, { recursive: true });
+    writeFileSync(join(locked, 'file'), 'x');
+    chmodSync(locked, 0o500);
+  };
+  const fake = fakeBrowserServer();
+  const warnings = [];
+  try {
+    lock();
+    await assert.rejects(
+      startHost({ dataDir: dir, port: 0, bind: '127.0.0.1', runServer: fake.runServer, log: () => {}, stopWaitMs: 20 }),
+      { message: 'cannot empty browser-temp: EACCES' },
+    );
+    assert.equal(fake.calls.length, 0, 'no browser server is started');
+
+    chmodSync(locked, 0o700);
+    const { host } = await ownHost(t, { dataDir: dir, start: { stopWaitMs: 20, warn: (line) => warnings.push(line) } });
+    lock();
+    await host.stop();
+    assert.equal(await host.exited, 0);
+  } finally {
+    if (existsSync(locked)) chmodSync(locked, 0o700);
+  }
+  assert.deepEqual(warnings, ['browser-temp could not be emptied (EACCES); the next start empties it']);
 });
 
 test('a port in use fails with a line naming the port', async (t) => {
@@ -511,7 +669,8 @@ test('stop() ends the whole process tree of the browser server', { skip: !WINDOW
  * What Playwright's cli.js does for `run-server`, as far as the host can tell: listens on --host and --port, prints its
  * address, answers upgrades on --path, tells the path to GET /json and "Running" to every other plain request, and
  * ends with an uncaught error on an upgrade whose target is not a URL path (Playwright 1.63 does, for `*@`). It notes
- * what it was started with in started.json beside itself, and each upgrade that reaches it in upgrades.log. A probe.json beside it asks for more before it listens:
+ * what it was started with in started.json beside itself, each upgrade that reaches it in upgrades.log, and in
+ * exit-handlers-ran.json that it ended in a way that let its exit handlers run (Playwright's remove its temp folders). A probe.json beside it asks for more before it listens:
  * `requires` and `imports` are module names it tries to load (the outcome of each goes into started.json, and so do the
  * folders require() searches for a name).
  */
@@ -519,11 +678,13 @@ const FAKE_CLI = `
 const http = require('node:http');
 const { appendFileSync, existsSync, readFileSync, writeFileSync } = require('node:fs');
 const { join } = require('node:path');
+const { tmpdir } = require('node:os');
 const args = process.argv.slice(2);
 const option = (name) => args[args.indexOf(name) + 1];
 if (args[0] !== 'run-server') process.exit(64);
 const path = option('--path');
 const probe = existsSync(join(__dirname, 'probe.json')) ? JSON.parse(readFileSync(join(__dirname, 'probe.json'), 'utf8')) : {};
+process.on('exit', (code) => writeFileSync(join(__dirname, 'exit-handlers-ran.json'), JSON.stringify({ code })));
 (async () => {
   const loads = {};
   for (const name of probe.requires ?? []) {
@@ -547,7 +708,7 @@ const probe = existsSync(join(__dirname, 'probe.json')) ? JSON.parse(readFileSyn
     const variable = (name) => process.env[name] ?? null;
     const environment = { WS_NO_BUFFER_UTIL: variable('WS_NO_BUFFER_UTIL'), WS_NO_UTF_8_VALIDATE: variable('WS_NO_UTF_8_VALIDATE'), NODE_PATH: variable('NODE_PATH') };
     const searched = require.resolve.paths('a-module-that-is-not-installed');
-    writeFileSync(join(__dirname, 'started.json'), JSON.stringify({ pid: process.pid, args, port: server.address().port, variablesWithThePath, loads, searched, environment }));
+    writeFileSync(join(__dirname, 'started.json'), JSON.stringify({ pid: process.pid, args, port: server.address().port, variablesWithThePath, loads, searched, environment, tmpdir: tmpdir() }));
     console.log('Listening on ws://' + option('--host') + ':' + server.address().port + path);
   });
 })();
@@ -570,7 +731,8 @@ function installedCopy(t, { probe } = {}) {
   if (probe) writeFileSync(join(cliDir, 'probe.json'), JSON.stringify(probe));
   const started = () => JSON.parse(readFileSync(join(cliDir, 'started.json'), 'utf8'));
   const upgrades = () => (existsSync(join(cliDir, 'upgrades.log')) ? readFileSync(join(cliDir, 'upgrades.log'), 'utf8').trim().split('\n') : []);
-  return { base, root, upgrades, hostFile: join(root, 'host', 'host.mjs'), launcherFile: join(root, 'host', 'run-server.mjs'), started };
+  const exitHandlersRan = () => existsSync(join(cliDir, 'exit-handlers-ran.json'));
+  return { base, root, upgrades, exitHandlersRan, hostFile: join(root, 'host', 'host.mjs'), launcherFile: join(root, 'host', 'run-server.mjs'), started };
 }
 
 /** Puts a module `name` into `folder` (a node_modules folder, or one NODE_PATH names). Loading it leaves `ran-<name>` in `base`. */
@@ -615,8 +777,10 @@ test('started the default way, the path is given to the browser server but is no
     assert.ok(!answer.body.includes(path.slice(1)), `${plainPath} does not tell the path`);
   }
 
+  assert.equal(started.tmpdir, join(dir, 'browser-temp'), 'the temp folder of the browser server is browser-temp');
   await host.stop();
-  await until(() => !alive(started.pid), 'the browser server to end');
+  assert.ok(!alive(started.pid), 'the browser server has ended when stop() returns');
+  assert.ok(files.exitHandlersRan(), 'it ended through its stdin, so its exit handlers ran');
 });
 
 test('an upgrade that is not for the path of the browser server is closed before the browser server sees it', async (t) => {
