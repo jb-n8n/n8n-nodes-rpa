@@ -158,9 +158,10 @@ internal sealed class PolicyFiles : IPolicyFiles
     /// <summary>
     /// Copies the policy into the backup folder under a free name and returns that name. The tool creates the folder
     /// for administrators only; a folder that is already there is used only when PolicyCommand.BackupFolderRefusal
-    /// has nothing against it, asked again here because time has passed since the start. The copy is a new file:
-    /// its owner is Administrators and its access rules are the ones it inherits from the backup folder, so it does
-    /// not carry the policy file's rule that lets the runner's user read it.
+    /// has nothing against it, asked again here because time has passed since the start. The copy is a new file,
+    /// created for administrators only like the temporary file; once written, its owner is Administrators and its
+    /// access rules are the ones it inherits from the backup folder. It does not carry the policy file's rule that
+    /// lets the runner's user read it.
     /// </summary>
     private string Backup(string path, DateTimeOffset now)
     {
@@ -168,13 +169,27 @@ internal sealed class PolicyFiles : IPolicyFiles
         if (Kind(folder.FullName) == PathKind.None) folder.Create(AdministratorsOnly(new DirectorySecurity(), InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit));
         if (PolicyCommand.BackupFolderRefusal(path, this) is { } refusal) throw new RunnerPolicy.InvalidPolicyException(refusal);
         var backup = new FileInfo(PolicyCommand.BackupPath(path, now, name => Kind(name) != PathKind.None));
-        var security = new FileSecurity();
-        security.SetOwner(Administrators);
-        using var copy = backup.Create(FileMode.CreateNew, FileSystemRights.Write, FileShare.None, 4096, FileOptions.None, security);
-        using var policy = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-        policy.CopyTo(copy);
-        copy.Flush(flushToDisk: true);
-        return backup.FullName;
+        var created = false;
+        try
+        {
+            using (var copy = backup.Create(FileMode.CreateNew, FileSystemRights.Write, FileShare.None, 4096, FileOptions.None, AdministratorsOnly(new FileSecurity(), InheritanceFlags.None)))
+            {
+                created = true;
+                using var policy = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+                policy.CopyTo(copy);
+                copy.Flush(flushToDisk: true);
+            }
+            var inherited = new FileSecurity();
+            inherited.SetOwner(Administrators);
+            inherited.SetAccessRuleProtection(isProtected: false, preserveInheritance: false);
+            backup.SetAccessControl(inherited);
+            return backup.FullName;
+        }
+        catch
+        {
+            if (created) backup.Delete();
+            throw;
+        }
     }
 
     /// <summary>Owner Administrators; full control for Administrators and SYSTEM; nothing inherited from the folder.</summary>
