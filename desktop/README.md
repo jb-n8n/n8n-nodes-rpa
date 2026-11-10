@@ -389,8 +389,10 @@ dotnet test desktop/runner/test/Rpa.Runner.Core.Tests
 
 No .NET SDK? `docker run --rm -v "$PWD/desktop:/src" -w /src mcr.microsoft.com/dotnet/sdk:8.0 dotnet test runner/test/Rpa.Runner.Core.Tests`.
 The UI parts run only on Windows: the `desktop` workflow builds and publishes everything on `windows-latest`, starts
-the runner and drives the ERP Demo through it with the scenario client. Its artifacts `rpa-desktop-runner` and
-`erp-demo` are self-contained win-x64 builds (no .NET install needed).
+the runner and drives the ERP Demo through it with the scenario client, then builds the Windows package, installs it
+and drives it. Its artifact `rpa-windows-package` holds the package, `rpa-windows-x64.zip`, with its SHA-256 (see
+"Releasing the Windows package"); the artifacts `rpa-desktop-runner` and `erp-demo` are the self-contained win-x64
+builds of the runner and the demo app (no .NET install needed).
 
 ## Releasing the Windows package
 
@@ -413,9 +415,8 @@ The maintainers release the Windows package, `rpa-windows-x64.zip`, from the `De
 4. It waits until a required reviewer of the `desktop-release` environment approves the release (see "Before the
    first release" for what that approval covers). Then it downloads and checks the package again in the same way,
    downloads the notes by the id from step 1 (not by name) and compares them with the SHA-256 from step 1, checks
-   that the tag still names the commit it built, records a
-   build attestation of the zip and creates the GitHub Release `desktop-v<version>` with `rpa-windows-x64.zip` and
-   `rpa-windows-x64.zip.sha256`. It stops if a release for that tag exists already, a draft included; it does not
+   that the tag still names the commit it built, records a build attestation of the zip and creates the GitHub
+   Release `desktop-v<version>` with `rpa-windows-x64.zip` and `rpa-windows-x64.zip.sha256`. It stops if a release for that tag exists already, a draft included; it does not
    replace one. The release is not marked as the repository's latest release, which stays the node's.
 
 A manual run (Actions, `Desktop release`, Run workflow, on `main`) is a dry run: it does steps 1 to 3 with the
