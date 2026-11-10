@@ -20,6 +20,12 @@ Both programs run inside the signed-in Windows session of one user, the **bot us
 in. A Windows service cannot drive a desktop, so the bot user must be signed in, with its desktop unlocked, whenever
 a run should work.
 
+**Who trusts whom.** Treat this machine as part of your n8n: whoever can use the RPA credentials in n8n can act on
+this machine as the bot user, as with the robot machine of other RPA tools. The runner's policy and the write
+declarations in steps are there to keep mistakes and automatic repair away from things you did not intend; they are
+not a barrier against the n8n that holds the tokens (section 3, [Who can reach the ports](#who-can-reach-the-ports)).
+So give the bot user only the access its work needs, and limit who can reach the two ports.
+
 The package was tested on Windows Server 2022. Windows 10, Windows 11 and Windows Server 2019 or 2025 meet the
 installer's requirements but have not been tested end to end.
 
@@ -645,60 +651,22 @@ at the end.
 
 ### Another bot user
 
-Run the installer with another `-User` only to move the install to another bot user. A new local user needs
-`-UserPassword` (or `-AutoSignIn`), which the `powershell.exe -File` form above cannot pass, as it hands every
-parameter to the script as text: start the installer as in [The command](#the-command) (section 3), from the new
-package's `rpa-windows-x64` folder.
+To move the install to another bot user, uninstall with `-RemoveData` (below), then install for the new user as in
+section 3. That is a first install: a new policy (apply your policy changes again, sections 7 and 8), new tokens and
+new certificates (copy both tokens and both fingerprints into the n8n credentials again, section 6), and one of
+`-AllowFrom`, `-AllowFromAnyAddress` and `-NoFirewall` again.
 
-It refuses, before it asks, while automatic sign-in is set up for the earlier user
-(`Automatic sign-in is set up for <earlier user>. Uninstall with -RemoveData first, then install for <new user>.`),
-and while the data directory holds what the earlier user left there, such as its logs, its certificates and export
-folders (`<n> entries in C:\ProgramData\RPA Runner belong to other accounts (the first: ..., owned by <earlier
-user>). Remove the data directory with Uninstall-Rpa.ps1 -RemoveData, or remove those entries, and run the installer
-again.`). After the earlier user has signed in once, its files are there, so expect this refusal first. It names two
-ways out:
-
-- Remove those entries. Sign the earlier user out first: nothing was changed, so its programs still run and write to
-  `logs\`. The installer names the first entry only, and a path the earlier user chose never goes onto a command
-  line: put it into `$entry` as the first block of
-  [Removing an entry the installer names](#removing-an-entry-the-installer-names) (section 11) does, then run
-  `Remove-Item -LiteralPath $entry -Recurse -Force`, and run the installer again for the next one. When it also names
-  a link or a file with more than one name, remove that first, as that section says.
-- Or uninstall with `-RemoveData` (section 9, Uninstall). The next install is then a first install: a new policy, new
-  tokens and new certificates, one of `-AllowFrom`, `-AllowFromAnyAddress` and `-NoFirewall` again, and no lines about
-  new tokens.
-
-When nothing of the earlier user is left, the installer prints these lines and asks you to type `YES` before it
-changes anything (with `-Force` it does not ask, and prints the same lines as warnings):
-
-```text
-<new user> is not the user this install was made for (<earlier user>).
-<earlier user> could read the tokens in the data directory, so both are replaced; the n8n credentials then need the new tokens.
-```
-
-(With `-NoBrowser` the second line is `<earlier user> could read the tokens in the data directory, so the runner token
-is replaced and the browser token removed; the n8n credentials then need the new runner token.`) A first install over
-a data directory that an uninstall kept is a change of user too when it is for another user, or for a user of the
-same name that was removed and created again (Windows counts that as a new account): the same refusal for what the
-earlier user left applies, and the line about the tokens is a warning, without a question.
-
-When it changes the user, the installer removes both tokens before the new user gets its access to the data
-directory, writes new ones, and says at the end:
+The installer can also change the user of an existing install when it is run with another `-User`. It refuses that
+while automatic sign-in is set up for the earlier user or while the data directory still holds files the earlier user
+owns (its logs, certificates and export folders), and its refusal names the same way out as above. When it does change
+the user, it replaces both tokens, because the earlier user could read them, and says so:
 
 ```text
 Both tokens are new: the earlier bot user could read the old ones.
 Update the n8n credentials with the new tokens, which Show-RpaConnection.ps1 -ShowTokens shows.
 ```
 
-(With `-NoBrowser` the first line is `The runner token is new and the browser token is removed: the earlier bot user
-could read them.`) Then copy the new tokens into the RPA Desktop Runner and RPA Browser credentials as in section 6.
-If you removed the earlier user's certificates, the programs make new ones at their first start as the new user:
-copy the two fingerprints again too.
-
-The earlier user stays a Windows user, in Remote Desktop Users if you added it there (section 4), and its profile
-keeps the browser's temporary folder (`AppData\Local\RPA Runner`), which the uninstaller looks for only in the profile
-of the install's bot user. Take it out of the group with `Remove-LocalGroupMember -SID 'S-1-5-32-555' -Member <earlier
-user>`, and remove it with `Remove-LocalUser <earlier user>` when you no longer need it.
+The earlier user stays a Windows user. Remove it with `Remove-LocalUser <earlier user>` when you no longer need it.
 
 ### Uninstall
 
@@ -816,7 +784,7 @@ the form `<code>: <message>`.
 | The installer says `Port 3000 is in use by <process>. Choose another with -RunnerPort or -BrowserPort.` | A port in use: another program listens on that port. | Stop that program, or install with another port (and use that port in the credential and the firewall). |
 | `Browser: not listening` after an install, and `browser.err.log` has `RPA browser: cannot listen on port 3000: EADDRINUSE` | A port in use, taken after the install. | As above. The runner writes an `ERROR cannot start:` line to `runner.out.log` and `runner-<yyyymmdd>.log` when it cannot start, for this or another reason. |
 | `Runner fingerprint: not known yet` | The current `runner.out.log` has no start line: the runner has not started as the bot user, or its latest start failed. | Sign the bot user in; read `runner.out.log` and `start-runner.log`. |
-| The installer says `<path> is a link or junction. Remove it and run the installer again.` or `<path> has more than one name (a hard link). Check what it is, remove it, and run the installer again.` | The installer looks at everything in `C:\ProgramData\RPA Runner` on every run and refuses a link, a junction or a file with a second name there: the access rules it sets would reach another file or folder through it. | Sign the bot user out (with `-AutoSignIn`, uninstall first: section 9), then look at the entry and remove it as in [Removing an entry the installer names](#removing-an-entry-the-installer-names) below, and run the installer again. If it comes back, something running as the bot user puts it there: uninstall (section 9), sign the bot user out, remove the entry, find out what puts it there, and install again. |
+| The installer says `<path> is a link or junction. Remove it and run the installer again.` or `<path> has more than one name (a hard link). Check what it is, remove it, and run the installer again.` | The installer looks at everything in `C:\ProgramData\RPA Runner` on every run and refuses a link, a junction or a file with a second name there. The programs do not make such entries, so something else running as the bot user did. | Find out what made it. Then uninstall, sign the bot user out and uninstall again with `-RemoveData` (section 9), which removes a link as the link itself and not what it points to, and install again as in section 3 (a first install: new policy, tokens and certificates). Do not paste the path into a command: whoever made the entry chose its name. |
 | The installer says `... can be changed by <account>. Unpack the package in a folder only you or administrators can change, and run it from there.` | The package folder, or a folder above it, can be changed by someone other than administrators. | Unpack into a folder made from an administrator PowerShell under `C:\Program Files` (section 2). |
 | The installer says `Run Install-Rpa.ps1 from Windows PowerShell (powershell.exe), not PowerShell 7 (pwsh).` | Wrong PowerShell. | Use Windows PowerShell 5.1 as administrator: as in section 1 before the bot user has signed in, as in section 5 after. |
 | PowerShell says the script `cannot be loaded because running scripts is disabled on this system`, or that it `is not digitally signed` | The execution policy or the downloaded-file mark. | Start the script as `powershell.exe -ExecutionPolicy Bypass -File "<path>"` (section 5), or run `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force` in that window first. For files of a download, `Unblock-File` as in section 2. |
@@ -824,40 +792,3 @@ the form `<code>: <message>`.
 For anything else, the README's [Error codes](../../README.md#error-codes) lists every code a run can fail with.
 Report a problem on [GitHub issues](https://github.com/jb-n8n/n8n-nodes-rpa/issues), without tokens, passwords or
 host names you do not want to share; security issues as [`SECURITY.md`](../../SECURITY.md) describes.
-
-### Removing an entry the installer names
-
-Whoever made the entry chose its name, and PowerShell and cmd both act on some characters in a name (such as `$(`, a
-quote or `%`), so the path goes into a variable as text and never onto a command line. Do this in the administrator
-shell (section 5) while the bot user is signed out and none of its processes is left (`Get-Process -IncludeUserName`
-shows whose each process is): then nothing running as the bot user can put a link in the place of a folder on the way
-between your look and the removal.
-
-Put the path the installer named on the line between `@'` and `'@`, as it is and on its own, and run the lines:
-
-```powershell
-$entry = @'
-<paste the path the installer named, on a line of its own>
-'@
-Get-Item -LiteralPath $entry -Force | Format-List FullName, Attributes, LinkType, Target
-```
-
-PowerShell takes the line between `@'` and `'@` as text and acts on none of its characters; a file name cannot hold a
-line break, so it cannot end that text early. `LinkType` shows the kind of link. When it is empty, or `Get-Item`
-finds nothing, what you looked at is not the entry the installer named (Windows drops a dot or a space at the end of a
-name from a path, for example): remove nothing, and see the last paragraph. Otherwise remove that one name, with the
-line for what `Attributes` shows:
-
-```powershell
-# Attributes has Directory (a junction or a folder symbolic link): removes the link, not what it points to
-[IO.Directory]::Delete($entry)
-# otherwise (a file symbolic link, or one name of a file with several names): removes that name only
-[IO.File]::Delete($entry)
-```
-
-Neither call follows the link or removes what is in a folder. Run the installer again: it looks at the whole data
-directory again and names the next entry, if there is one.
-
-If an entry cannot be removed this way, `Uninstall-Rpa.ps1 -RemoveData` (section 9) removes the whole data directory,
-and a link in it as the link itself, not what it points to. The next install is then a first install, with a new
-policy, new tokens and new certificates.
