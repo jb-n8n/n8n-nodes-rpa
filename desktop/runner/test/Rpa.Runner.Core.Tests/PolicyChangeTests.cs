@@ -13,6 +13,7 @@ public class PolicyChangeTests
 
     private const string NonAscii = @"WARNING: this line holds characters outside plain ASCII, shown as \u escapes";
     private const string HelperWarning = "WARNING: any program at this path counts as part of the app that started it";
+    private const string Spaces = "WARNING: a value in this line has leading, trailing or repeated spaces";
 
     /// <summary>A plain ASCII value as the summary shows it: a JSON string literal.</summary>
     private static string L(string value) => "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
@@ -349,7 +350,8 @@ public class PolicyChangeTests
     [Fact]
     public void Shows_every_value_as_a_JSON_string_literal()
     {
-        // A value cannot read as the tool's own words, as another path or as two arguments.
+        // Values that imitate the tool's own words, hold a quote or hold a space: each is shown inside quotes, with
+        // its own quotes escaped.
         var odd = Path.Combine(Root, "Apps", "x.exe (SHA-256 pinned)");
         var change = $$"""
             { "allowedApps": [{ "exe": "x.exe (SHA-256 pinned)", "path": {{J(odd)}}, "allowedArgs": [["a\" \"b", "", "C:\\Data\\My File.csv"]] }],
@@ -396,6 +398,48 @@ public class PolicyChangeTests
             result.Summary);
         Assert.All(result.Summary, line => Assert.All(line, c => Assert.InRange(c, ' ', '~')));
         Assert.Equal(folder, Assert.Single(RunnerPolicy.Parse(result.Json).AllowedApps).Path);
+    }
+
+    [Fact]
+    public void Warns_under_a_line_whose_value_has_leading_trailing_or_repeated_spaces()
+    {
+        // A space is printable, so it is shown as it is. A value padded to the width of the window puts what follows
+        // the spaces at the start of the next row, where it can look like a line of the tool's.
+        var padded = "btnPost" + new string(' ', 60) + "Allow app \"Harmless.exe\"";
+        var pattern = Path.Combine(Root, "Edge  WebView", "*", "msedgewebview2.exe");
+        var change = $$"""
+            { "writeControls": [{ "exe": "ErpDemo.exe", "automationId": {{J(padded)}} }, { "exe": "ErpDemo.exe", "automationId": " lead" },
+                                { "exe": "ErpDemo.exe", "automationId": "trail " }, { "exe": "ErpDemo.exe", "automationId": "one space" }],
+              "allowedApps": [{ "exe": "ErpDemo.exe", "path": {{J(ErpPath)}}, "allowUserWritable": true,
+                                "allowedArgs": [["--ui", "a  b"], ["plain", "x y"], [" "], ["\u00a0  x"]] }],
+              "helperProcesses": [{ "exe": "msedgewebview2.exe", "pathPattern": {{J(pattern)}} }] }
+            """;
+        var result = PolicyChange.Apply("", change);
+        Assert.Equal(
+            [
+                $"Add write control \"ErpDemo.exe\" / \"btnPost{new string(' ', 60)}Allow app \\\"Harmless.exe\\\"\"",
+                Spaces,
+                "Add write control \"ErpDemo.exe\" / \" lead\"",
+                Spaces,
+                "Add write control \"ErpDemo.exe\" / \"trail \"",
+                Spaces,
+                "Add write control \"ErpDemo.exe\" / \"one space\"",
+                $"Allow app \"ErpDemo.exe\" at {L(ErpPath)}",
+                Writable(ErpPath),
+                "  with arguments: \"--ui\" \"a  b\"",
+                Spaces,
+                "  with arguments: \"plain\" \"x y\"",
+                "  with arguments: \" \"",
+                Spaces,
+                "  with arguments: \"\\u00A0  x\"",
+                NonAscii,
+                Spaces,
+                $"Add helper process \"msedgewebview2.exe\" at {L(pattern)}",
+                Spaces,
+                HelperWarning,
+                Count(apps: 1, helpers: 1, writes: 4),
+            ],
+            result.Summary);
     }
 
     [Fact]

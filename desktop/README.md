@@ -200,14 +200,15 @@ Warnings come directly under the line they belong to (under an app line, before 
 | Warning | When |
 |---|---|
 | `WARNING: this line holds characters outside plain ASCII, shown as \u escapes` | A value in the line has a character other than a printable ASCII one. |
+| `WARNING: a value in this line has leading, trailing or repeated spaces` | A value in the line starts or ends with a space, or has two or more spaces in a row. Spaces are printed as they are, and a long run of them can push the rest of a value onto the next row of the window, where it can look like a line of its own. |
 | `WARNING: "<path>" can be changed by the runner's own user` | The app is, or becomes, `allowUserWritable`. It is printed on every line for such an app. |
 | `WARNING: any program at this path counts as part of the app that started it` | Under every `Add helper process` line. |
 
 Every value from the change is printed as a JSON string literal: in double quotes, with `"` and `\` escaped (so a
 Windows path shows doubled backslashes) and every character outside printable ASCII written as `\uXXXX`. A no-break
-space in `C:\Program Files`, an invisible character or a file named `x.exe (SHA-256 pinned)` shows for what it is, and
-the quotes show where each value starts and ends. Everything else the tool prints (messages, the `show` output, paths)
-has control and format characters written as `\uXXXX` too.
+space in `C:\Program Files` is printed as `\u00A0`, an invisible character as its code, and a file named
+`x.exe (SHA-256 pinned)` inside its quotes; the quotes show where each value starts and ends. Everything else the tool
+prints (messages, the `show` output, paths) has control and format characters written as `\uXXXX` too.
 
 These measures make a misleading change harder to write; they do not replace reading the lines. Read each of them and
 the count line, and answer `n` when anything is unclear. Limits that remain: a summary may be up to 8,000 characters

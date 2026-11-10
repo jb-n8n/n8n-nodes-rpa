@@ -21,8 +21,9 @@ public sealed record PolicyChangeResult(string Json, IReadOnlyList<string> Summa
 /// <c>allowUserWritable</c> can be turned on but not off.
 /// <para>
 /// The summary is all the administrator approves, and a change file may come from a user who is not one. So a change
-/// is small enough to read (limits on entries, arguments and value lengths), every value is shown as a JSON string
-/// literal in plain ASCII, and the lines that widen what may run come last, next to the prompt.
+/// has limits (entries, arguments per list, value lengths; PolicyCommand limits the length of the summary), every
+/// value is shown as a JSON string literal in plain ASCII, and the lines that widen what may run are printed last,
+/// next to the prompt.
 /// </para>
 /// </summary>
 public static class PolicyChange
@@ -32,6 +33,7 @@ public static class PolicyChange
     public const int MaxValueLength = 260;
 
     private const string NonAsciiWarning = @"WARNING: this line holds characters outside plain ASCII, shown as \u escapes";
+    private const string SpacesWarning = "WARNING: a value in this line has leading, trailing or repeated spaces";
     private const string HelperWarning = "WARNING: any program at this path counts as part of the app that started it";
 
     private static readonly string[] ChangeKeys = ["allowedApps", "writeControls", "gatedKeys", "helperProcesses", "clipboardRead"];
@@ -72,6 +74,8 @@ public static class PolicyChange
         {
             lines.Add(string.Format(CultureInfo.InvariantCulture, format, values.Select(Literal).ToArray<object>()));
             if (values.Any(value => value.Any(c => c is < ' ' or > '~'))) lines.Add(NonAsciiWarning);
+            // Spaces are shown as they are; a run of them can push the rest of a value onto the next row.
+            if (values.Any(value => value.StartsWith(' ') || value.EndsWith(' ') || value.Contains("  ", StringComparison.Ordinal))) lines.Add(SpacesWarning);
         }
 
         // Lines that only tighten come first; the lines that widen what may run follow, nearest the prompt.
@@ -165,8 +169,8 @@ public static class PolicyChange
     /// <summary>
     /// A value as the summary shows it: a JSON string literal in plain ASCII. The double quote and the backslash are
     /// escaped and every character outside 0x20 to 0x7E is written as <c>\uXXXX</c>. The quotes mark where a value
-    /// starts and ends (it does not read as the tool's own words or as two values), and a look-alike or invisible
-    /// character shows as its code.
+    /// starts and ends, and a character outside printable ASCII (a look-alike or an invisible one, for example) is
+    /// shown as its code. Spaces are shown as they are.
     /// </summary>
     internal static string Literal(string value)
     {
@@ -277,7 +281,7 @@ public static class PolicyChange
         if (Regex.IsMatch(path, "~[0-9]")) throw Refused($"write the full path, not a short (8.3) name: {Literal(path)}");
     }
 
-    /// <summary>A change must be small enough to read before the prompt: few entries, short argument lists, short values.</summary>
+    /// <summary>The limits on a change: its entries, the arguments in a list and the length of a value.</summary>
     private static void CheckSize(RunnerPolicy change)
     {
         var lists = change.AllowedApps.SelectMany(a => a.AllowedArgs).ToList();

@@ -41,7 +41,7 @@ public interface IPolicyFiles
     /// </summary>
     void WriteWithBackup(string path, string json, DateTimeOffset now, bool existed);
 
-    /// <summary>Opens a file on a disk for reading (never a device or a pipe).</summary>
+    /// <summary>Opens a file for reading. What is not a file on a disk (a device, a pipe) is refused.</summary>
     Stream OpenRead(string path);
 }
 
@@ -79,7 +79,7 @@ public sealed record PolicyConsole(IReadOnlyList<bool>? OtherProcesses, bool Tak
 /// </summary>
 public static class PolicyCommand
 {
-    /// <summary>A change file larger than this is refused unread: its summary would not fit above the prompt.</summary>
+    /// <summary>A change file larger than this is refused unread.</summary>
     public const long MaxChangeFileBytes = 256 * 1024;
 
     /// <summary>
