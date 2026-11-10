@@ -14,7 +14,7 @@ The repository is a pnpm monorepo:
 | `packages/n8n-nodes-rpa` | The community node **RPA**, published to npm as `n8n-nodes-rpa` and attached to each GitHub Release: the node, its five credentials, its workflow templates and the bundled engine. Its runtime dependencies are the engine's plus `redis` (the login breaker and lock shared across queue-mode workers). |
 | `packages/eval` | The seeded heal-rate eval and the acceptance tests. |
 | `sandbox/portal` | A mock site: public fixture pages (`/public/...`), a site behind a login with TOTP that changes on every "release", and attack pages. The Hello world template and the tests use it. |
-| `images/browser` | The `rpa-browser` image: the browser server, the token gate in front of it (`images/browser/gate`) and the supervisor that runs both. The compose stack runs it. |
+| `images/browser` | The `rpa-browser` image: the browser server, the token gate in front of it (`images/browser/gate`) and the supervisor that runs both. The compose stack runs it. The browser host (`images/browser/host`) runs the browser server and the gate in one Node process on a machine without containers; the Windows package ships it. |
 | `deploy/` | The browser service at scale: a Helm chart, Terraform modules and examples, and a script that configures n8n. |
 | `desktop/` | The Windows desktop runner (C#, UI Automation), its policy tool, the Windows installer package and ERP Demo, a sample WinForms app to drive. See [desktop/README.md](desktop/README.md), and [docs/install/windows.md](docs/install/windows.md) to install it. |
 | `docs/` | The Windows install guide, runbooks for the browser service at scale, the SAP look-alike onboarding runbook and the security review. See [Documentation](#documentation). |
