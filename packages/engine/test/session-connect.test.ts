@@ -8,8 +8,8 @@ import { BrowserUnavailableError, NoFreeSessionError, openSession, SESSION_WAIT_
 import { openLaneRuntime, CANCELLED } from '../src/lane/script-lane.js';
 import { runTask } from '../src/lane/task.js';
 import {
-  BROWSER_CERT_NOT_TRUSTED, BROWSER_FINGERPRINT_INVALID, BROWSER_FINGERPRINT_MISMATCH, BROWSER_FINGERPRINT_NEEDS_WSS, browserUnreachable,
-  noFreeBrowserSession, tokenRefused,
+  BROWSER_CERT_NOT_TRUSTED, BROWSER_CERT_NOT_TRUSTED_CDP, BROWSER_FINGERPRINT_INVALID, BROWSER_FINGERPRINT_MISMATCH, BROWSER_FINGERPRINT_NEEDS_WSS,
+  browserUnreachable, noFreeBrowserSession, tokenRefused,
 } from '../src/messages.js';
 import { createMasker } from '../src/secrets/mask.js';
 import type { BrowserEndpoint } from '../src/types.js';
@@ -435,11 +435,17 @@ describe('a wss:// browser server pinned by its certificate fingerprint', () => 
     expect((err as Error).message).toBe(
       "n8n does not trust the browser server's certificate. If the server uses a certificate of its own, put its SHA-256 fingerprint in Certificate Fingerprint (SHA-256) on the RPA Browser credential.",
     );
-    // The same over https:// (a Chrome DevTools Protocol endpoint's discovery address).
-    const cdp = await openSession({ endpoint: { mode: 'cdp', wsUrl: url.replace('wss://', 'https://'), token: TOKEN }, policy, masker }).catch((e: Error) => e);
-    expect(cdp).toBeInstanceOf(BrowserUnavailableError);
-    expect((cdp as Error).message).toBe(BROWSER_CERT_NOT_TRUSTED);
-    // The handshake failed in this process: neither a request nor the token reached the server.
+    // Over https:// (a Chrome DevTools Protocol endpoint's discovery address) and over wss:// in that mode, the message
+    // names no Certificate Fingerprint field: the credential has none in CDP mode.
+    for (const wsUrl of [url.replace('wss://', 'https://'), url]) {
+      const cdp = await openSession({ endpoint: { mode: 'cdp', wsUrl, token: TOKEN }, policy, masker }).catch((e: Error) => e);
+      expect(cdp, wsUrl).toBeInstanceOf(BrowserUnavailableError);
+      expect((cdp as Error).message, wsUrl).toBe(BROWSER_CERT_NOT_TRUSTED_CDP);
+      expect((cdp as Error).message, wsUrl).toBe(
+        "n8n does not trust the browser server's certificate. Use a certificate that n8n's Node.js process trusts, for example one from an authority listed in NODE_EXTRA_CA_CERTS.",
+      );
+    }
+    // Each handshake was with the configured address itself and failed in this process: neither a request nor the token reached the server.
     await expect.poll(() => settled === opened).toBe(true);
     expect(received).toBe(0);
     expect(gate.stats().sessionsTotal).toBe(sessions);
@@ -462,6 +468,19 @@ describe('a wss:// browser server pinned by its certificate fingerprint', () => 
       expect(err, raw).toBeInstanceOf(BrowserUnavailableError);
       expect((err as Error).message, raw).toBe(BROWSER_CERT_NOT_TRUSTED);
     }
+  });
+
+  it('only the first line of the connect error is read for a certificate failure: a 401 whose body names a certificate is a refused token', async () => {
+    const wsUrl = 'wss://browser.example:3000/pw?session=abc';
+    const err = await openSession({
+      endpoint: endpoint(wsUrl), policy, masker,
+      // The server's certificate was accepted and it answered; the lines after the first are its response body.
+      connectServer: async () => {
+        throw new Error('browserType.connect: WebSocket error: wss://browser.example:3000/pw 401 Unauthorized\nself-signed certificate\nCall log:\n  - <ws connecting> wss://browser.example:3000/pw');
+      },
+    }).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(BrowserUnavailableError);
+    expect((err as Error).message).toBe(tokenRefused('wss://browser.example:3000/pw'));
   });
 
   it('a wss:// server that is not reachable, with no fingerprint, is still reported as unreachable', async () => {

@@ -6,8 +6,8 @@ import {
   chromium, type Browser, type BrowserContext, type BrowserContextOptions, type CDPSession, type Page, type Request, type Response as PwResponse,
 } from 'playwright-core';
 import {
-  BLOCKED_REQUEST, BROWSER_CERT_NOT_TRUSTED, BROWSER_FINGERPRINT_NEEDS_WSS, browserUnreachable, browserVersionMismatch, CHROMIUM_MISSING,
-  ENDPOINT_NOT_SECURE,
+  BLOCKED_REQUEST, BROWSER_CERT_NOT_TRUSTED, BROWSER_CERT_NOT_TRUSTED_CDP, BROWSER_FINGERPRINT_NEEDS_WSS, browserUnreachable, browserVersionMismatch,
+  CHROMIUM_MISSING, ENDPOINT_NOT_SECURE,
   noFreeBrowserSession, notHttp, offListSite, privateAddress, tokenRefused,
 } from '../messages.js';
 import { destructiveNavigation } from '../policy/destructive.js';
@@ -350,10 +350,13 @@ function overTls(wsUrl?: string): boolean {
 function connectError(err: unknown, e: BrowserEndpoint): string {
   const raw = err instanceof Error ? err.message : String(err);
   if (e.mode === 'local') return raw.includes("Executable doesn't exist") ? CHROMIUM_MISSING : `could not connect to the browser: ${raw.split('\n')[0]}`;
-  // The TLS handshake failed on the certificate, so no request was sent and the server answered none. Checked first:
-  // the error quotes the names in the presented certificate, and they must not choose one of the messages below. On
-  // the first line only: later lines can hold a response body. The message is fixed text with nothing of the raw error.
-  if (overTls(e.wsUrl) && CERT_NOT_TRUSTED.test(raw.split('\n')[0])) return BROWSER_CERT_NOT_TRUSTED;
+  // A TLS handshake failed on the certificate. When it was the handshake with the configured address itself, no request
+  // and no token was sent. It can also be a later one: the configured server, which did get the request and the token,
+  // redirected to a host whose certificate is not trusted, or, in CDP mode, its discovery answer named such a host.
+  // Checked first: the error quotes the names in the presented certificate, and they must not choose one of the
+  // messages below. On the first line only: later lines can hold a response body. Both messages are fixed text with
+  // nothing of the raw error; the CDP one names no Certificate Fingerprint field, which that mode does not have.
+  if (overTls(e.wsUrl) && CERT_NOT_TRUSTED.test(raw.split('\n')[0])) return e.mode === 'cdp' ? BROWSER_CERT_NOT_TRUSTED_CDP : BROWSER_CERT_NOT_TRUSTED;
   // playwright run-server answers a version mismatch with 428 and a box containing "server version: v1.62".
   const version = /server version: v?(\d+\.\d+(?:\.\d+)?)/i.exec(raw);
   if (version) return browserVersionMismatch(version[1], PLAYWRIGHT_VERSION);

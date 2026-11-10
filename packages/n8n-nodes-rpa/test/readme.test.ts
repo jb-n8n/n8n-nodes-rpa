@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
-  BROWSER_CERT_NOT_TRUSTED, BROWSER_FINGERPRINT_INVALID, BROWSER_FINGERPRINT_MISMATCH, BROWSER_FINGERPRINT_NEEDS_WSS,
+  BROWSER_CERT_NOT_TRUSTED, BROWSER_CERT_NOT_TRUSTED_CDP, BROWSER_FINGERPRINT_INVALID, BROWSER_FINGERPRINT_MISMATCH, BROWSER_FINGERPRINT_NEEDS_WSS,
   IMPORT_EMPTY, IMPORT_NEEDS_SITE_LOGIN, IMPORT_NOT_ADOPTABLE, IMPORT_PROOF_FAILED, IMPORT_REFUSES_WRITES, IMPORT_UNSUPPORTED_TARGET,
 } from 'n8n-rpa-engine';
 import { GUIDANCE } from '../nodes/Playwright/errors.js';
@@ -136,12 +136,15 @@ describe('README', () => {
     for (const text of ['`BROWSER_GATE_TOKEN_FILE`', '`BROWSER_GATE_TLS_KEY_FILE`', '`BROWSER_GATE_TLS_CERT_FILE`', '`BROWSER_GATE_HOST`', '`BROWSER_GATE_METRICS_HOST`',
       'gets no HTTP answer', 'closed 10 s after its handshake', 'at most 256 connections', 'no limit per address', 'a new connection for each check',
       'neither fits TLS mode as shipped', "n8n's Node.js process trusts", '`NODE_EXTRA_CA_CERTS`', "not one from the operating system's certificate store",
+      'which Node.js does not read by default', 'one whose name does not match the address', 'such as a certificate that is not yet valid',
       `\`${BROWSER_CERT_NOT_TRUSTED}\``]) {
       expect(s, text).toContain(text);
     }
     // True with a listen address set too: the sentence names its condition.
     expect(s).not.toContain('Both ports listen on IPv4 and IPv6');
     expect(s).not.toContain("n8n's system trusts");
+    // Node.js has more than one way to trust further authorities: the README names no single flag as the only one.
+    expect(s).not.toContain('--use-system-ca');
   });
 
   it('prints the browser service from the real docker-compose.yml', () => {
@@ -291,9 +294,11 @@ describe('README', () => {
   it('the message table quotes the certificate messages of the RPA Browser credential as the engine says them', () => {
     const s = section('## Error codes');
     // The engine's own constants, so a reworded message fails here until the README quotes the new text.
-    const messages = [BROWSER_CERT_NOT_TRUSTED, BROWSER_FINGERPRINT_MISMATCH, BROWSER_FINGERPRINT_INVALID, BROWSER_FINGERPRINT_NEEDS_WSS];
+    const messages = [BROWSER_CERT_NOT_TRUSTED, BROWSER_CERT_NOT_TRUSTED_CDP, BROWSER_FINGERPRINT_MISMATCH, BROWSER_FINGERPRINT_INVALID, BROWSER_FINGERPRINT_NEEDS_WSS];
     expect(messages.every((m) => typeof m === 'string' && m.length > 20)).toBe(true);
     for (const m of messages) expect(s, m).toContain(`\`browser_unavailable\`: \`${m}\``);
+    // The token was not sent only when the certificate that failed is the configured address's own: both rows say when.
+    expect(s.match(/When the certificate is that of the configured address itself, no request and no token was sent\./g)).toHaveLength(2);
   });
 
   it('maps toema/n8n-playwright verbs to operations and says why there is no JavaScript step', () => {
