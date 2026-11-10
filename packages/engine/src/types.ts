@@ -94,6 +94,8 @@ export interface CodeRequest {
 export type CodeProvider = (req: CodeRequest) => Promise<string>;
 /** How long a run waits for the code provider by default. */
 export const DEFAULT_CODE_TIMEOUT_MS = 120_000;
+/** The longest a browser step's own timeoutMs may be. A desktop step stays capped at 120 000 ms. */
+export const MAX_STEP_TIMEOUT_MS = 300_000;
 export interface SubmitTarget {
   path: string;
   host?: string;

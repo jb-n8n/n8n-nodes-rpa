@@ -1,4 +1,4 @@
-import { DESKTOP_VERBS, STEP_VERBS, type DesktopScript, type DesktopVerb, type Script, type Step, type StepVerb } from '../types.js';
+import { DESKTOP_VERBS, MAX_STEP_TIMEOUT_MS, STEP_VERBS, type DesktopScript, type DesktopVerb, type Script, type Step, type StepVerb } from '../types.js';
 import {
   BROWSER_STEPS_NEED_BROWSER, browserLocatorOnDesktop, browserStepOnDesktop, DESKTOP_STEPS_NEED_RUNNER, desktopLocatorInBrowser, exportDirOnlyInFill,
   FIRST_STEP_GOTO, reservedTemplate, secretFillValue, varInWriteLocator, varNotRendered,
@@ -150,7 +150,7 @@ function checkStep(s: unknown, path: string, issues: string[], nested: boolean) 
   }
   if (s.optional !== undefined && typeof s.optional !== 'boolean') issues.push(`${path}.optional must be a boolean`);
   if (s.checkpoint !== undefined && typeof s.checkpoint !== 'boolean') issues.push(`${path}.checkpoint must be a boolean`);
-  if (s.timeoutMs !== undefined && !isInt(s.timeoutMs, 100, 120_000)) issues.push(`${path}.timeoutMs must be an integer between 100 and 120000`);
+  if (s.timeoutMs !== undefined && !isInt(s.timeoutMs, 100, MAX_STEP_TIMEOUT_MS)) issues.push(`${path}.timeoutMs must be an integer between 100 and ${MAX_STEP_TIMEOUT_MS}`);
   if (s.when !== undefined) {
     if (!isObj(s.when)) issues.push(`${path}.when must be an object`);
     else {

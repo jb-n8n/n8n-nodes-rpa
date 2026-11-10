@@ -1,8 +1,9 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { strFromU8, unzipSync } from 'fflate';
 import { chromium } from 'playwright-core';
 import { startPortal, SANDBOX } from 'n8n-rpa-sandbox/testing.js';
-import { runScriptLane, screenshotMasks, type ScriptLaneInput } from '../src/lane/script-lane.js';
+import { createMasker } from '../src/secrets/mask.js';
+import { MAX_BUDGET_MS, openLaneRuntime, runScriptLane, screenshotMasks, type ScriptLaneInput } from '../src/lane/script-lane.js';
 import { ENDPOINT_NOT_SECURE, nameMismatch, offListSite, privateAddress, UNSIGNED_REQUIRED, UNSIGNED_WRITES } from '../src/messages.js';
 import type { Script, Step } from '../src/types.js';
 import { baselineScript, LOCAL, policyFor, reportScript, SECRETS, SIGN_IN_STEPS, signedLaneInput, TEST_KEY } from './helpers.js';
@@ -187,6 +188,31 @@ describe('runScriptLane', () => {
     s.steps.push({ intent: 'Wait forever', timeoutMs: 20_000, waitFor: { target: { css: '#never' } } } as Step);
     const r = await runScriptLane(input(s, { budgetMs: 4000 }));
     if (!r.ok) expect(r.code).toBe('incomplete'); else throw new Error('expected failure');
+  });
+  it('a run at the 600 s cap ends as incomplete when its budget runs out and closes its session', async () => {
+    const timers: { fn: () => void; ms: number }[] = [];
+    const real = globalThis.setTimeout;
+    const spy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((fn: () => void, ms?: number, ...rest: unknown[]) => {
+      if (typeof ms === 'number' && ms > 590_000) { timers.push({ fn, ms }); return 0 as never; }
+      return real(fn, ms, ...rest);
+    }) as never);
+    let lane: Awaited<ReturnType<typeof openLaneRuntime>> | undefined;
+    try {
+      lane = await openLaneRuntime({ endpoint: LOCAL, policy: publicPolicy(portal), masker: createMasker([]), budgetMs: 999_999_999, trace: false });
+      expect(lane.budget).toBe(MAX_BUDGET_MS);
+      expect(timers).toHaveLength(1);
+      expect(timers[0].ms).toBeGreaterThan(590_000);
+      expect(timers[0].ms).toBeLessThanOrEqual(600_000);
+      expect(lane.override()).toBeNull();
+      timers[0].fn();
+      await vi.waitFor(() => expect(lane!.session.closed).toBe(true));
+      expect(lane.timedOut).toBe(true);
+      expect(lane.session.closeReason).toBe('budget');
+      expect(lane.override('Read')).toEqual({ code: 'incomplete', message: 'run budget of 600000 ms ran out at "Read"' });
+    } finally {
+      spy.mockRestore();
+      await lane?.dispose();
+    }
   });
   it('an off-list redirect is a policy violation, not a budget overrun', async () => {
     const s = baselineScript(portal.url);

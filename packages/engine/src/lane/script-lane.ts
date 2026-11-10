@@ -26,7 +26,7 @@ import { maskedPageText, openStartPage, pageInfo, START_TIMEOUT_MS, startPageFai
 import { checkTrust, type TrustInput } from './trust.js';
 
 export const DEFAULT_BUDGET_MS = 180_000;
-export const MAX_BUDGET_MS = 300_000;
+export const MAX_BUDGET_MS = 600_000;
 export const CANCELLED = 'run cancelled';
 const LIMIT_PREFIX = 'limit: ';
 

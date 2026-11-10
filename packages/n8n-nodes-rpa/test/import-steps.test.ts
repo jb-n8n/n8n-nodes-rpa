@@ -236,7 +236,7 @@ describe('Import Steps: the description', () => {
   it('says that an import can take about twice Max Seconds, which must leave room for a TOTP wait, and only on Import Steps', () => {
     const maxSeconds = optionsFor('importSteps').filter((o) => o.name === 'maxSeconds');
     expect(maxSeconds).toHaveLength(1);
-    expect(maxSeconds[0]).toMatchObject({ default: 180, typeOptions: { minValue: 10, maxValue: 300 } });
+    expect(maxSeconds[0]).toMatchObject({ default: 180, typeOptions: { minValue: 10, maxValue: 600 } });
     expect(maxSeconds[0].description).toContain('so it can take about twice this. On sites with an authenticator code, Max Seconds must leave room for up to a 30 s wait.');
     // Every other operation shows the plain help, without the import sentence.
     for (const op of ['runSteps', 'screenshot', 'download']) {
@@ -427,6 +427,11 @@ describe('Import Steps: execution', () => {
     });
   });
 
+  it('clamps Max Seconds to 600 for an import, as Run Steps does', async () => {
+    const engine = importEngine((input) => proved(input));
+    await run(engine, { params: params({}, { maxSeconds: 999 }) });
+    expect(engine.adoptions[0]).toMatchObject({ budgetMs: 600_000 });
+  });
   it('a non-adoptable draft goes to Data with adopted false and no Repaired Steps', async () => {
     const engine = importEngine(() => adoptFailure('policy_violation', NOT_ADOPTABLE, { adoptable: false, configError: true }));
     const [data, repaired] = await run(engine, { continueOnFail: false });

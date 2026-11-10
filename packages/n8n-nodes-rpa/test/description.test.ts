@@ -164,7 +164,7 @@ describe('Run Steps and Sign Steps fields', () => {
     for (const name of ['deliverUnconfirmed', 'maxActions', 'maxTokens']) expect(option(name).displayOptions?.show).toEqual({ '/operation': ['runSteps'], '/aiRepair': [true] });
     expect(option('maxItems').displayOptions?.show).toEqual({ '/operation': ALL_OPERATIONS }); // every operation, quick ones included
     expect(option('timeout')).toMatchObject({ displayName: 'Timeout (Seconds)', default: 30 });
-    expect(option('maxSeconds')).toMatchObject({ default: 180, typeOptions: { minValue: 10, maxValue: 300 } });
+    expect(option('maxSeconds')).toMatchObject({ default: 180, typeOptions: { minValue: 10, maxValue: 600 } });
     expect(option('viewport')).toMatchObject({ type: 'fixedCollection', default: { size: { width: 1280, height: 800 } } });
     expect(option('allowedHosts').displayName).toBe('Also Allow These Sites');
     expect(option('totalPattern').displayName).toBe('Stated Total Pattern (Regex)');

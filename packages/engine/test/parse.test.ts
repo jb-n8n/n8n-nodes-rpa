@@ -59,6 +59,10 @@ describe('parseScript', () => {
     expect(issuesOf(withStep({ intent: 'x', download: { trigger: { css: 'b' }, maxBytes: -1 } }))[0]).toMatch(/maxBytes/);
     expect(issuesOf(withStep({ intent: 'x', click: { css: 'a' }, timeoutMs: 5 }))[0]).toMatch(/timeoutMs/);
   });
+  it("a browser step's timeoutMs may be up to 300000", () => {
+    expect(issuesOf(withStep({ intent: 'x', click: { css: 'a' }, timeoutMs: 300_000 }))).toEqual([]);
+    expect(issuesOf(withStep({ intent: 'x', click: { css: 'a' }, timeoutMs: 300_001 }))[0]).toMatch(/timeoutMs must be an integer between 100 and 300000/);
+  });
   it('download.check validates', () => {
     const dl = (check: unknown) => withStep({ intent: 'x', download: { trigger: { css: 'b' }, check } });
     expect(issuesOf(dl({ name: '^A', minBytes: 1, columns: ['A'], minRows: 0 }))).toEqual([]);

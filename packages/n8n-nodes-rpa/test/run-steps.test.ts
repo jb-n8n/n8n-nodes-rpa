@@ -153,7 +153,7 @@ describe('Run Steps: trust and engine input', () => {
     expect(engine.calls[0]).toMatchObject({
       trust: { allowUnsignedWrites: true }, vars: { from: '2026-01-01' },
       output: { idPattern: 'SKU-\\d{4}', totalPattern: 'Showing (\\d+) results', requiredFields: ['title', 'price'], emptyPattern: 'No results found' },
-      defaultStepTimeoutMs: 5000, budgetMs: 300_000, viewport: { width: 1024, height: 700 }, saveTrace: 'always',
+      defaultStepTimeoutMs: 5000, budgetMs: 600_000, viewport: { width: 1024, height: 700 }, saveTrace: 'always',
     });
   });
   it('clamps the viewport to the bounds the UI allows: width 320–3840, height 240–2160', () => {

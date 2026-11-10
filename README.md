@@ -160,7 +160,7 @@ Every operation except Sign Steps uses the **RPA Browser** credential, except Ru
 | **Wait Until** | Load | Load, DOM Content Loaded or Network Idle. Network Idle can hang on pages that keep polling. |
 | **Wait for Element** | none | An element waited for (visible) before acting. |
 | **Timeout (Seconds)** | 30 | Per step. |
-| **Max Seconds** | 180 | The whole run; at most 300. |
+| **Max Seconds** | 180 | The whole run; at most 600. A longer run holds its browser session and its Site Login lock for as long as it runs. |
 | **Viewport** | 1280 x 800 | Width (320 to 3840) and height (240 to 2160); values outside are clamped. |
 | **Also Allow These Sites** | empty | Other hosts the page may open or load files from, separated by commas. No wildcards. |
 | **Allow Private Network** | off | Admit addresses on your own network for the allowed sites. Set it directly; an expression is a configuration error. |
@@ -387,7 +387,7 @@ Always true:
 - Pages cannot start shared workers, worker scopes have no WebSocket, and WebRTC, WebSocketStream and WebTransport are unavailable, so every request goes through the checks above. Page script cannot restore them, in any frame or popup. Dedicated workers start through a small `blob:` loader, so a site whose Content Security Policy forbids `blob:` workers cannot start them.
 - Text outputs (text, HTML, title, URL, rows, file names, errors, step logs) pass through a masker that holds every secret of the run (Site Login secrets, the endpoint token, the signing key) in its raw, URL (also form, path and double encoded), JSON, `\u` and `\x`, HTML-entity (also partial escaping, leading zeros and no semicolon), full-width and base64 forms (also inside a longer base64 value, such as basic auth), in any mix. Checks that refuse a value holding a secret decode it first. With a Site Login, a `screenshot` or `pdf` step fails `policy_violation` (`the page shows a credential`) when the page's visible text holds a secret.
 - Traces are saved on failure by default with cookies, authorization headers, storage state, binaries, login bodies and the bodies of allowed writes removed; known secrets are masked (and the TOTP code a `signIn` types), but values you type into forms are not (set Debug Trace to Never for sensitive forms).
-- Limits: 10,000 rows; screenshots 16,384 px tall and 50 MB; downloads 50 MB by default and 200 MB at most; 250 MB of files per item; rendered values 10,000 characters; 100 input items; one run at most 300 seconds. Exceeding a limit fails `incomplete` and names the limit. Text or HTML over 5 MB is cut, not failed, and the output says `truncated: true`.
+- Limits: 10,000 rows; screenshots 16,384 px tall and 50 MB; downloads 50 MB by default and 200 MB at most; 250 MB of files per item; rendered values 10,000 characters; 100 input items; one run at most 600 seconds. Exceeding a limit fails `incomplete` and names the limit. Text or HTML over 5 MB is cut, not failed, and the output says `truncated: true`.
 - Six settings must be set directly on the node and are a configuration error when set with an expression, so item data can never switch them: **Require Signed Steps**, **Allow Private Network**, **Allow Unsigned Writes**, **Deliver Unconfirmed Rows**, Run Steps' **Login Breaker Reset Key**, and Sign Steps' **Approver Allowlist**. If the whole **Options** collection is set with one expression, n8n drops that expression before the node runs: every option reads as its default, so these switches stay off.
 
 Accepted risks:
@@ -468,7 +468,7 @@ Credentials: **RPA Browser** (for browser steps), **RPA Desktop Runner** (for de
 }
 ```
 
-Every step has an `intent` (plain words, shown in logs and errors) and one verb. Optional step fields: `optional`, `when: { visible: <locator> }`, `expect: { url?, heading?, visible? }`, `checkpoint`, `timeoutMs`. A top-level `interrupts` list (`{ target, click }`) dismisses pop-ups whenever they appear.
+Every step has an `intent` (plain words, shown in logs and errors) and one verb. Optional step fields: `optional`, `when: { visible: <locator> }`, `expect: { url?, heading?, visible? }`, `checkpoint`, `timeoutMs` (100 to 300000 milliseconds for a browser step). A top-level `interrupts` list (`{ target, click }`) dismisses pop-ups whenever they appear.
 
 | Verb | Shape |
 |---|---|

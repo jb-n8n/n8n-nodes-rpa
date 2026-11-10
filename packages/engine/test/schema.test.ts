@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest';
 import { importSource } from '../src/import/index.js';
 import type { ImportOptions, ImportSource } from '../src/import/types.js';
 import { parseScript } from '../src/steps/parse.js';
-import { STEP_VERBS } from '../src/types.js';
+import { MAX_STEP_TIMEOUT_MS, STEP_VERBS } from '../src/types.js';
 import { baselineScript, erpScript, ERP_CHECK, fioriScript, reportScript, SAP_VARS, SECRETS, SIGN_IN_STEPS, webguiScript } from './helpers.js';
 
 const ROOT = new URL('../../../', import.meta.url);
@@ -152,6 +152,11 @@ describe('the step-document JSON Schema', () => {
     expect(verbs).toEqual([...STEP_VERBS]);
   });
 
+  it("the schema's step timeoutMs maximum is MAX_STEP_TIMEOUT_MS", () => {
+    const step = (schema.definitions as Record<string, { properties: Record<string, { maximum?: number }> }>).step;
+    expect(step.properties.timeoutMs.maximum).toBe(MAX_STEP_TIMEOUT_MS);
+  });
+
   it('every template, README example and import fixture draft validates against the step schema', () => {
     const helpers = [baselineScript(URL_BASE), reportScript(URL_BASE), webguiScript(URL_BASE), fioriScript(URL_BASE), erpScript(URL_BASE), { startUrl: URL_BASE, steps: SIGN_IN_STEPS }];
     const docs: { at: string; doc: unknown }[] = [
@@ -195,6 +200,7 @@ describe('the step-document JSON Schema', () => {
       ['waitUntil on a click', doc(step({ click: loc, waitUntil: 'load' }))],
       ['a bad waitUntil', doc(step({ goto: `${URL_BASE}/a`, waitUntil: 'idle' }))],
       ['timeoutMs below 100', doc(step({ click: loc, timeoutMs: 50 }))],
+      ['timeoutMs above 300000', doc(step({ click: loc, timeoutMs: 300_001 }))],
       ['a locator with two kinds', doc(step({ click: { role: 'button', css: '#b' } }))],
       ['a locator with no kind', doc(step({ click: { name: 'Go' } }))],
       ['an empty locator value', doc(step({ click: { text: '' } }))],

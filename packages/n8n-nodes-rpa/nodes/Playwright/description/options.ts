@@ -1,4 +1,5 @@
 import type { INodeProperties } from 'n8n-workflow';
+import { MAX_BUDGET_MS } from 'n8n-rpa-engine';
 import { DEFAULT_FILE_TYPES, FILE_TYPES } from './download.js';
 import { locatorProperty } from './locator.js';
 
@@ -150,7 +151,7 @@ export const OPTION_ENTRIES: INodeProperties[] = [
     name: 'maxSeconds',
     type: 'number',
     default: 180,
-    typeOptions: { minValue: 10, maxValue: 300 },
+    typeOptions: { minValue: 10, maxValue: MAX_BUDGET_MS / 1000 },
     description: 'One deadline for the whole run, AI repair and proof included',
     displayOptions: only(BROWSER_OPERATIONS.filter((op) => op !== 'importSteps')),
   },
@@ -160,7 +161,7 @@ export const OPTION_ENTRIES: INodeProperties[] = [
     name: 'maxSeconds',
     type: 'number',
     default: 180,
-    typeOptions: { minValue: 10, maxValue: 300 },
+    typeOptions: { minValue: 10, maxValue: MAX_BUDGET_MS / 1000 },
     description:
       'One deadline for each run, AI repair and proof included. Each imported step list runs once and is then replayed in a fresh browser, so it can take about twice this. On sites with an authenticator code, Max Seconds must leave room for up to a 30 s wait.',
     displayOptions: only(['importSteps']),

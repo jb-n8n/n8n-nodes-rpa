@@ -4,6 +4,10 @@ All notable changes to `n8n-nodes-rpa`, the `rpa-browser` image and the Windows 
 [Semantic Versioning](https://semver.org/); until 1.0, a minor version may change behavior. The node is released with
 `v<version>` tags, the image with `browser-v<version>` tags, the Windows package with `desktop-v<version>` tags.
 
+## Unreleased
+
+- A run may last up to 600 seconds (Max Seconds, was 300), and a browser step's `timeoutMs` may be 100 to 300000 (was 120000). A longer run holds its browser session and its Site Login lock for as long as it runs. A Windows step keeps its 120000 limit.
+
 ## 0.2.0 (2026-11-10)
 
 The node `n8n-nodes-rpa` 0.2.0, the image `ghcr.io/jb-n8n/rpa-browser:0.2.0` (Playwright 1.63.0, the gate settings

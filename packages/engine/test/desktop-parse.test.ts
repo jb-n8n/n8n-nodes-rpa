@@ -45,6 +45,11 @@ describe('desktop step sets: parsing', () => {
     expect(isDesktopDocument({ steps: [] })).toBe(false);
   });
 
+  it("a desktop step's timeoutMs is still capped at 120000", () => {
+    const step = (timeoutMs: number) => desktop([{ intent: 'Wait', waitFor: { target: uia('gridResults', 'DataGrid'), state: 'visible' }, timeoutMs }]);
+    expect(desktopIssues(step(120_000))).toEqual([]);
+    expect(desktopIssues(step(120_001))[0]).toMatch(/timeoutMs must be an integer between 100 and 120000/);
+  });
   it('needs surface "desktop" and an app; refuses startUrl, unknown keys and interrupts', () => {
     expect(desktopIssues({ name: 'x', steps: [] })).toEqual([BROWSER_STEPS_NEED_BROWSER]);
     expect(desktopIssues({ surface: 'mainframe', steps: [] })).toEqual(['surface must be "browser" or "desktop"']);
