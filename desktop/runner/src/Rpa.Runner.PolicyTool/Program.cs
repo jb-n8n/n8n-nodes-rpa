@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Security.Principal;
@@ -8,18 +7,19 @@ using Rpa.Runner.Core.Policy;
 using Rpa.Runner.Windows;
 
 // RPA policy tool: shows a change to the runner's policy file in plain lines, asks, and applies it. Everything it
-// decides is in PolicyCommand; this file gives it the real files, the console question and the runner's restart.
-var existingConsole = false;
+// decides is in PolicyCommand; this file gives it the real files, what Windows says about the console (WindowsConsole)
+// and the runner's restart.
+var console = new PolicyConsole(null, TakesKeys: false);
 try
 {
-    existingConsole = PolicyFiles.StartedFromExistingConsole();
-    return PolicyCommand.Run(args, Console.In, Console.Out, new PolicyFiles(), PolicyFiles.RestartRunner, existingConsole);
+    console = WindowsConsole.Ask();
+    return PolicyCommand.Run(args, Console.In, Console.Out, new PolicyFiles(), PolicyFiles.RestartRunner, console);
 }
 catch (Exception e)
 {
     // The last resort (PolicyCommand.Run handles its own failures): the message, no stack trace.
     PolicyCommand.Print(Console.Out, e.Message);
-    if (!existingConsole)
+    if (console.ClosesWithTheTool)
     {
         PolicyCommand.Print(Console.Out, "Press Enter to close.");
         Console.In.ReadLine();
@@ -109,16 +109,6 @@ internal sealed class PolicyFiles : IPolicyFiles
         security.SetAccessRuleProtection(isProtected: false, preserveInheritance: false);
         file.SetAccessControl(security);
     }
-
-    /// <summary>
-    /// True when another process shares this console: the tool was started from a console that was already there, and
-    /// only an elevated console can start it without the administrator prompt. Alone in its console, or without one,
-    /// it was started through that prompt by a program that is not elevated.
-    /// </summary>
-    public static bool StartedFromExistingConsole() => GetConsoleProcessList(new uint[2], 2) >= 2;
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern uint GetConsoleProcessList(uint[] processList, uint processCount);
 
     /// <summary>Ends the running runner, which reads the policy only at start. Its start script starts it again.</summary>
     public static void RestartRunner()

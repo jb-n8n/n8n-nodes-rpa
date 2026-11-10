@@ -114,6 +114,16 @@ it, and they look different:
   administrator prompt showed only the program's name. Before the window closes the tool prints
   `Press Enter to close.` and waits, so its output can be read.
 
+The test behind this: the tool honours `--yes` and `--policy` only when it shares its console with at least one other
+program and every program attached to that console is elevated. It asks Windows about each one, and a program it
+cannot ask about counts as not elevated. Alone in its console, without a console, or beside a program that is not
+elevated (in a console that an elevation helper shares with a normal shell, for example), it ignores `--yes` and
+refuses `--policy`.
+
+The wait for Enter has its own test: the tool waits only when it is alone in a console window on the desktop of a
+person who is signed in, and reads its input from that window. Started without a console, or where nobody can type
+(a scheduled task, a hidden process, input that comes from a file or a pipe), it does not wait.
+
 ```powershell
 .\RpaPolicy.exe show
 .\RpaPolicy.exe allow-app "C:\Program Files\ERP Demo\ErpDemo.exe" --pin-hash

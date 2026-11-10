@@ -84,15 +84,32 @@ public class PolicyCommandTests
         }
     }
 
+    // The consoles a test can put the tool in. Each entry of the list is one other process attached to the console:
+    // true when it is elevated.
+    private static readonly PolicyConsole Elevated = new([true], TakesKeys: false);
+    private static readonly PolicyConsole OwnWindow = new([], TakesKeys: true);
+    private static readonly PolicyConsole NoConsole = new(null, TakesKeys: false);
+
+    /// <summary>Consoles in which whoever chose the arguments may not be an administrator.</summary>
+    public static TheoryData<bool[]?, bool> OtherConsoles => new()
+    {
+        { [], true },             // alone in a window of its own
+        { [], false },            // alone in a console nobody can type in (a scheduled task)
+        { null, false },          // no console
+        { [false], true },        // one other process, not elevated
+        { [true, false], true },  // an elevated one and one that is not
+        { [false, true, true], false },
+    };
+
     private sealed class Tool
     {
         public FakeFiles Files { get; } = new();
         public int Restarts { get; private set; }
         public string Output { get; private set; } = "";
 
-        /// <summary>False: the tool owns its console (started through the administrator prompt by a program that is
-        /// not elevated).</summary>
-        public bool ExistingConsole { get; set; } = true;
+        /// <summary>The console the tool finds itself in; unless a test says otherwise, one it shares with one other
+        /// process, which is elevated.</summary>
+        public PolicyConsole Console { get; set; } = Elevated;
 
         /// <summary>When set, ending the runner fails with it.</summary>
         public Exception? RestartFailure { get; set; }
@@ -110,7 +127,7 @@ public class PolicyCommandTests
         {
             var output = new StringWriter { NewLine = "\n" };
             var input = new StringReader(typed);
-            var code = PolicyCommand.Run(args, input, output, Files, () => { Restarts++; if (RestartFailure is not null) throw RestartFailure; }, ExistingConsole);
+            var code = PolicyCommand.Run(args, input, output, Files, () => { Restarts++; if (RestartFailure is not null) throw RestartFailure; }, Console);
             Output = output.ToString();
             Unread = input.ReadToEnd();
             return code;
@@ -398,31 +415,68 @@ public class PolicyCommandTests
         Assert.Equal(1, tool.Restarts);
     }
 
-    [Fact]
-    public void Yes_is_ignored_when_the_tool_owns_its_console()
+    [Theory]
+    [MemberData(nameof(OtherConsoles))]
+    public void Yes_is_ignored_unless_every_other_process_in_the_console_is_elevated(bool[]? others, bool takesKeys)
     {
-        // Whoever starts the tool chooses its arguments; the administrator who then approves the Windows prompt sees
-        // only the program's name. So the change is still shown and asked about.
+        // Whoever starts the tool chooses its arguments. When that may be a program that is not elevated, the change
+        // is still shown and asked about.
         var policy = Path.Combine(RunnerOptions.DefaultDataDir(), "policy.json");
-        var tool = new Tool { ExistingConsole = false };
+        var tool = new Tool { Console = new PolicyConsole(others, takesKeys) };
         tool.Files.Text[policy] = Starter;
+        var closing = tool.Console.ClosesWithTheTool ? $"{Closing}\n" : "";
         string[][] commands = [["apply", ChangePath, "--yes"], ["allow-app", ErpPath, "--yes"]];
         var shown = "--yes is ignored: start RpaPolicy from an administrator console to use it\n" +
                     $"Changing the policy at {policy} (0 app(s), 0 helper process pattern(s) today).\n{AllowErp}\n{OneApp}\n{Prompt}";
         foreach (var command in commands)
         {
             Assert.Equal(3, tool.Run("", command));
-            Assert.Equal($"{shown}{Closing}\n", tool.Output);
+            Assert.Equal($"{shown}{closing}", tool.Output);
             Assert.Empty(tool.Files.Writes);
         }
 
         Assert.Equal(0, tool.Run("y\n\n", "apply", ChangePath, "--yes"));
-        Assert.Equal($"{shown}{Updated}\n{Closing}\n", tool.Output);
+        Assert.Equal($"{shown}{Updated}\n{closing}", tool.Output);
         Assert.Equal(policy, Assert.Single(tool.Files.Writes).Path);
     }
 
+    [Theory]
+    [InlineData(new[] { true })]
+    [InlineData(new[] { true, true, true })]
+    public void Yes_and_policy_are_honoured_when_every_other_process_in_the_console_is_elevated(bool[] others)
+    {
+        foreach (var takesKeys in new[] { false, true })
+        {
+            var tool = new Tool { Console = new PolicyConsole(others, takesKeys) };
+            Assert.Equal(0, tool.Run("", "apply", ChangePath, "--yes", "--policy", PolicyPath));
+            Assert.Equal($"{Changing()}\n{AllowErp}\n{OneApp}\n{Updated}\n", tool.Output);
+            Assert.Equal(PolicyPath, Assert.Single(tool.Files.Writes).Path);
+        }
+    }
+
     [Fact]
-    public void A_tool_that_owns_its_console_waits_for_Enter_before_every_exit()
+    public void The_console_decides_the_options_and_the_wait_separately()
+    {
+        // Options: at least one other process, and every one of them elevated.
+        Assert.True(new PolicyConsole([true], false).HonoursOptions);
+        Assert.True(new PolicyConsole([true, true], true).HonoursOptions);
+        Assert.False(new PolicyConsole([], true).HonoursOptions);
+        Assert.False(new PolicyConsole(null, false).HonoursOptions);
+        Assert.False(new PolicyConsole([false], true).HonoursOptions);
+        Assert.False(new PolicyConsole([true, false], false).HonoursOptions);
+        Assert.False(new PolicyConsole([false, true], false).HonoursOptions);
+
+        // The wait: alone in a console someone can type in. Company, elevated or not, means the console is not the tool's.
+        Assert.True(new PolicyConsole([], true).ClosesWithTheTool);
+        Assert.False(new PolicyConsole([], false).ClosesWithTheTool);
+        Assert.False(new PolicyConsole(null, false).ClosesWithTheTool);
+        Assert.False(new PolicyConsole(null, true).ClosesWithTheTool);
+        Assert.False(new PolicyConsole([true], true).ClosesWithTheTool);
+        Assert.False(new PolicyConsole([false], true).ClosesWithTheTool);
+    }
+
+    [Fact]
+    public void A_tool_alone_in_a_window_waits_for_Enter_before_every_exit()
     {
         // Its window closes when it exits, so without the wait nothing it printed could be read.
         var policy = Path.Combine(RunnerOptions.DefaultDataDir(), "policy.json");
@@ -437,7 +491,7 @@ public class PolicyCommandTests
             (0, "y\n\nrest", ["apply", ChangePath]),
             (0, "\nrest", ["apply", ChangePath]),
         };
-        var tool = new Tool { ExistingConsole = false };
+        var tool = new Tool { Console = OwnWindow };
         foreach (var (code, typed, args) in cases)
         {
             Assert.Equal(code, tool.Run(typed, args));
@@ -445,12 +499,25 @@ public class PolicyCommandTests
             Assert.Equal("rest", tool.Unread);
         }
         Assert.Equal(policy, Assert.Single(tool.Files.Writes).Path);
+    }
 
-        // From a console that was already there, nothing is added and nothing more is read.
-        tool = new Tool();
-        Assert.Equal(2, tool.Run("\nrest"));
-        Assert.DoesNotContain(Closing, tool.Output);
-        Assert.Equal("\nrest", tool.Unread);
+    [Fact]
+    public void A_tool_with_no_console_or_with_company_does_not_wait()
+    {
+        // No console (a hidden process), a console nobody can type in (a scheduled task), and consoles other
+        // processes are attached to: nothing is added and nothing more is read, whatever the exit.
+        PolicyConsole[] consoles = [NoConsole, new([], TakesKeys: false), Elevated, new([true], TakesKeys: true), new([false], TakesKeys: true)];
+        foreach (var console in consoles)
+        {
+            var tool = new Tool { Console = console };
+            Assert.Equal(2, tool.Run("\nrest"));
+            Assert.Equal(UsageText, tool.Output);
+            Assert.Equal("\nrest", tool.Unread);
+
+            Assert.Equal(1, tool.Run("\nrest", "apply", Path.Combine(Root, "changes", "missing.json")));
+            Assert.DoesNotContain(Closing, tool.Output);
+            Assert.Equal("\nrest", tool.Unread);
+        }
     }
 
     [Fact]
@@ -485,7 +552,7 @@ public class PolicyCommandTests
     public void An_unexpected_failure_prints_its_message_and_exits_1()
     {
         // A path with a null character makes the framework throw an ArgumentException; any exception ends like this.
-        var tool = new Tool { ExistingConsole = false };
+        var tool = new Tool { Console = OwnWindow };
         Assert.Equal(1, tool.Run("\n", "allow-app", ErpPath + "\0"));
         Assert.DoesNotContain("   at ", tool.Output);
         Assert.DoesNotContain("Exception", tool.Output);
@@ -504,15 +571,16 @@ public class PolicyCommandTests
         Assert.Equal($"Policy file: {PolicyPath}\n{{ \"allowedApps\": [null] }}\n{PolicyPath}: an entry in allowedApps must be an object\n", tool.Output);
     }
 
-    [Fact]
-    public void Policy_option_is_refused_when_the_tool_owns_its_console()
+    [Theory]
+    [MemberData(nameof(OtherConsoles))]
+    public void Policy_option_is_refused_unless_every_other_process_in_the_console_is_elevated(bool[]? others, bool takesKeys)
     {
         string[][] commands = [["apply", ChangePath, "--policy", PolicyPath], ["allow-app", ErpPath, "--policy", PolicyPath, "--yes"], ["show", "--policy", PolicyPath]];
         foreach (var command in commands)
         {
-            var tool = new Tool { ExistingConsole = false };
+            var tool = new Tool { Console = new PolicyConsole(others, takesKeys) };
             Assert.Equal(1, tool.Run("\n", command));
-            Assert.Equal($"--policy needs an administrator console\n{Closing}\n", tool.Output);
+            Assert.Equal($"--policy needs an administrator console\n{(tool.Console.ClosesWithTheTool ? Closing + "\n" : "")}", tool.Output);
             Assert.Empty(tool.Files.Reads);
             Assert.Empty(tool.Files.Writes);
         }

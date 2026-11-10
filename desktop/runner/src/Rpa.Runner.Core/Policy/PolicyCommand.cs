@@ -26,6 +26,30 @@ public interface IPolicyFiles
 }
 
 /// <summary>
+/// What the policy tool finds out about the console it runs in (RpaPolicy.exe asks Windows; the tests give values).
+/// </summary>
+/// <param name="OtherProcesses">One entry for each other process attached to the tool's console: true when that
+/// process is elevated, false when it is not or when that could not be read. Null when the tool has no console.</param>
+/// <param name="TakesKeys">True when the tool reads its input from a console window on the desktop of a person who is
+/// signed in, so that someone can press Enter in it.</param>
+public sealed record PolicyConsole(IReadOnlyList<bool>? OtherProcesses, bool TakesKeys)
+{
+    /// <summary>
+    /// <c>--yes</c> and <c>--policy</c> are honoured only when the tool shares its console with at least one other
+    /// process and every one of them is elevated. Alone in its console, without one, or beside a process that is not
+    /// elevated, the tool may have been given its arguments by a program that is not an administrator's.
+    /// </summary>
+    public bool HonoursOptions => OtherProcesses is { Count: > 0 } && OtherProcesses.All(elevated => elevated);
+
+    /// <summary>
+    /// The tool waits for Enter before it exits only when it is alone in a console someone can type in: that window
+    /// closes with the tool. With no console, or one nobody can type in (a scheduled task, a hidden process), there is
+    /// no wait: its input may never give a line. This decides nothing else.
+    /// </summary>
+    public bool ClosesWithTheTool => OtherProcesses is { Count: 0 } && TakesKeys;
+}
+
+/// <summary>
 /// The policy tool's commands: <c>show</c>, <c>apply</c> and <c>allow-app</c>. A change is shown as plain lines and
 /// written only after a yes (or with <c>--yes</c>). Exit codes: 0 applied or nothing to change, 1 refused or invalid,
 /// 2 usage, 3 declined at the prompt.
@@ -103,24 +127,24 @@ public static class PolicyCommand
     }
 
     /// <summary>
-    /// Runs one command. <paramref name="startedFromExistingConsole"/> is false when the tool owns its console: it was
-    /// started through the Windows administrator prompt by a program that is not elevated, and that program chose the
-    /// arguments, while the administrator saw only the tool's name. Then <c>--yes</c> is ignored and <c>--policy</c>
-    /// is refused, so the change to the runner's own policy is still shown and asked about.
+    /// Runs one command. Whoever starts the tool chooses its arguments, and the Windows administrator prompt shows an
+    /// administrator only the tool's name. So <c>--yes</c> is ignored and <c>--policy</c> is refused unless
+    /// <paramref name="console"/> says the options can be honoured (<see cref="PolicyConsole.HonoursOptions"/>):
+    /// the change to the runner's own policy is then still shown and asked about.
     /// </summary>
-    public static int Run(string[] args, TextReader input, TextWriter output, IPolicyFiles files, Action restartRunner, bool startedFromExistingConsole)
+    public static int Run(string[] args, TextReader input, TextWriter output, IPolicyFiles files, Action restartRunner, PolicyConsole console)
     {
         int code;
         try
         {
-            code = Command(args, input, output, files, restartRunner, startedFromExistingConsole);
+            code = Command(args, input, output, files, restartRunner, console.HonoursOptions);
         }
         catch (Exception e)
         {
             // Refusals and anything unforeseen end the same way: the message, no stack trace, exit 1.
             code = Fail(output, e.Message);
         }
-        if (!startedFromExistingConsole)
+        if (console.ClosesWithTheTool)
         {
             // The tool's own window closes when it exits; without this nothing it printed could be read.
             Print(output, "Press Enter to close.");
@@ -129,7 +153,7 @@ public static class PolicyCommand
         return code;
     }
 
-    private static int Command(string[] args, TextReader input, TextWriter output, IPolicyFiles files, Action restartRunner, bool startedFromExistingConsole)
+    private static int Command(string[] args, TextReader input, TextWriter output, IPolicyFiles files, Action restartRunner, bool honourOptions)
     {
         if (args is ["--help"] or ["-h"] or ["/?"])
         {
@@ -141,7 +165,7 @@ public static class PolicyCommand
             PrintUsage(output);
             return 2;
         }
-        if (!startedFromExistingConsole)
+        if (!honourOptions)
         {
             if (arguments.Policy is not null) return Fail(output, "--policy needs an administrator console");
             if (arguments.Yes)
