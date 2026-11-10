@@ -17,13 +17,14 @@
 #   -RunnerPort    The runner's port (default 8765).   -BrowserPort  The browser's port (default 3000).
 #   -AllowFrom     The addresses that may connect: IP addresses or ranges such as 10.0.0.0/24, normally the n8n host.
 #                  The firewall rules let in these addresses only, for the two programs only, on every network
-#                  (Domain, Private and Public, as Windows names them).
+#                  (Domain, Private and Public, as Windows names them). A range of every address (0.0.0.0/0) is
+#                  refused: that is what -AllowFromAnyAddress is for.
 #   -AllowFromAnyAddress  The firewall rules let in any address instead, on Domain and Private networks only. Where
 #                  the machine's network is Public (most cloud machines and machines outside a domain) that lets
 #                  nothing in, and a first install is refused; then give -AllowFrom, or add -IncludePublicNetwork.
 #   -IncludePublicNetwork  With -AllowFromAnyAddress: the rules apply on Public networks too.
 #   -NoFirewall    Leave Windows Firewall alone. One of -AllowFrom, -AllowFromAnyAddress and -NoFirewall is needed on
-#                  a first install.
+#                  a first install; an upgrade without any of them keeps what the install was made with.
 #   -NoBrowser     Install the runner only.
 #   -AutoSignIn    Have Windows sign the bot user in by itself at every start and keep the desktop unlocked. The
 #                  password is stored on this machine, and several settings change for the whole machine; the installer
@@ -313,6 +314,7 @@ Write-Host ('             A new policy allows no app. Change it with {0}' -f (Jo
 if ($NoBrowser) { Write-Host ('  Task:      \RPA\RPA Runner starts when {0} signs in' -f $User) }
 else { Write-Host ('  Tasks:     \RPA\RPA Runner and \RPA\RPA Browser start when {0} signs in' -f $User) }
 if ($NoFirewall) { Write-Host '  Firewall:  not changed (-NoFirewall)' }
+elseif (-not $plan.AllowFrom) { Write-Host '  Firewall:  not changed (this install was made with -NoFirewall)' }
 else {
   $from = 'any address'
   if ($plan.AllowFrom -notcontains 'any') { $from = $plan.AllowFrom -join ', ' }

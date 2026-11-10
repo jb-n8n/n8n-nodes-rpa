@@ -265,6 +265,18 @@ Describe 'Get-RpaInstallPlan' {
       $plan.Refusals | Should -BeExactly @('-AllowFrom: n8n.example.com is not an IP address or a range such as 10.0.0.0/24.')
     }
 
+    # A range of every address would get round the two switches that stand in front of "any address".
+    It 'refuses <Value>, a range with a prefix of 0, which is every address' -ForEach @(
+      @{ Value = '0.0.0.0/0' }, @{ Value = '::/0' }, @{ Value = '10.0.0.0/0' }, @{ Value = 'fd00::/00' }
+    ) {
+      $parameters = New-TestParameters @{ UserPassword = New-TestPassword; AllowFrom = @('10.0.0.5', $Value) }
+      foreach ($public in $false, $true) {
+        $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts @{ PublicNetwork = $public })
+        $plan.Refusals | Should -BeExactly @("-AllowFrom $Value means every address. Use -AllowFromAnyAddress for that.")
+        $plan.Steps.Count | Should -Be 0
+      }
+    }
+
     It '-AllowFromAnyAddress lets any address in' {
       $parameters = New-TestParameters @{ UserPassword = New-TestPassword; AllowFrom = @(); AllowFromAnyAddress = $true }
       $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts)
@@ -280,8 +292,27 @@ Describe 'Get-RpaInstallPlan' {
       $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ AllowFrom = @() }) -Facts (New-InstalledFacts @{ InstalledAllowFrom = 'any' })
       $plan.AllowFrom | Should -BeExactly @('any')
 
-      # An install made with -NoFirewall recorded nothing, so the upgrade has to say.
+      # An install whose record says nothing about the firewall (an earlier version made it): the upgrade has to say.
       $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ AllowFrom = @() }) -Facts (New-InstalledFacts @{ InstalledAllowFrom = $null })
+      $plan.Refusals | Should -BeExactly @($script:SayWhich)
+    }
+
+    It 'an upgrade without firewall parameters of an install made with -NoFirewall leaves the firewall alone again' {
+      $facts = New-InstalledFacts @{ InstalledAllowFrom = @('none'); PublicNetwork = $true }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ AllowFrom = @() }) -Facts $facts
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Warnings.Count | Should -Be 0
+      $plan.AllowFrom | Should -BeNullOrEmpty
+      @($plan.Steps | Where-Object { $_ -match 'firewall' }).Count | Should -Be 0
+
+      # With addresses the upgrade makes the rules.
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts $facts
+      $plan.Refusals.Count | Should -Be 0
+      $plan.AllowFrom | Should -BeExactly @('10.0.0.5')
+      $plan.Steps | Should -Contain 'add the runner firewall rule'
+
+      # -IncludePublicNetwork alone still does not say who may connect.
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ AllowFrom = @(); IncludePublicNetwork = $true }) -Facts $facts
       $plan.Refusals | Should -BeExactly @($script:SayWhich)
     }
 
@@ -947,11 +978,21 @@ Describe 'install.json' {
     $record.publicNetwork | Should -BeTrue
   }
 
-  It 'records nothing about addresses for an install without firewall rules' {
+  It 'records the word none for an install without firewall rules, and keeps it when an upgrade makes none either' {
     $record = New-TestRecord @{ Steps = @(); AllowFrom = $null; PublicNetwork = $false } $null @{ NoFirewall = $true; NoBrowser = $true }
-    $record.allowFrom | Should -BeNullOrEmpty
+    $record.allowFrom | Should -BeExactly 'none'
+    $record.allowFrom | Should -BeOfType [string]
     $record.publicNetwork | Should -BeFalse
     $record.browser | Should -BeFalse
+
+    $previous = '{ "user": "rpa-runner", "autoSignIn": false, "allowFrom": "none", "publicNetwork": false, "signInChanges": [] }' | ConvertFrom-Json
+    (New-TestRecord @{ Steps = @(); AllowFrom = $null; PublicNetwork = $false } $previous @{ AllowFrom = @() }).allowFrom | Should -BeExactly 'none'
+    # A record of an earlier version that says nothing, upgraded with -NoFirewall.
+    $previous = '{ "user": "rpa-runner", "autoSignIn": false, "allowFrom": null, "signInChanges": [] }' | ConvertFrom-Json
+    (New-TestRecord @{ Steps = @(); AllowFrom = $null; PublicNetwork = $false } $previous @{ NoFirewall = $true }).allowFrom | Should -BeExactly 'none'
+    # An upgrade that makes rules replaces it.
+    $previous = '{ "user": "rpa-runner", "autoSignIn": false, "allowFrom": "none", "publicNetwork": false, "signInChanges": [] }' | ConvertFrom-Json
+    (New-TestRecord @{ Steps = @(); AllowFrom = @('10.0.0.5'); PublicNetwork = $true } $previous).allowFrom | Should -BeExactly @('10.0.0.5')
   }
 }
 

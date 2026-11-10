@@ -126,7 +126,14 @@ function Get-RpaInstallPlan {
   $user = [string]$Parameters.User
   $hasPassword = $null -ne $Parameters.UserPassword
   $browser = -not $Parameters.NoBrowser
+  # powershell -File hands a,b over as one string, so every -AllowFrom value is split at its commas.
+  $given = @($Parameters.AllowFrom | ForEach-Object { ([string]$_).Split(',') } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+  $any = [bool]$Parameters.AllowFromAnyAddress
+  $includePublic = [bool]$Parameters.IncludePublicNetwork
   $firewall = -not $Parameters.NoFirewall
+  # An install made with -NoFirewall stays without rules when an upgrade says nothing about the firewall.
+  $noRulesRecorded = [bool]$Facts.Installed -and (@($Facts.InstalledAllowFrom) -contains 'none')
+  if ($noRulesRecorded -and $given.Count -eq 0 -and -not $any -and -not $includePublic) { $firewall = $false }
   $autoSignIn = [bool]$Parameters.AutoSignIn
   $upgrade = [bool]$Facts.Installed
   $runnerPort = [int]$Parameters.RunnerPort
@@ -190,21 +197,19 @@ function Get-RpaInstallPlan {
     }
 
     if ($firewall) {
-      # powershell -File hands a,b over as one string, so every value is split at its commas.
-      $given = @($Parameters.AllowFrom | ForEach-Object { ([string]$_).Split(',') } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-      $any = [bool]$Parameters.AllowFromAnyAddress
-      $includePublic = [bool]$Parameters.IncludePublicNetwork
       # Rules for given addresses apply on every network: the address list is what limits them. Rules for any address
       # apply on Domain and Private networks, and on Public ones only when that is asked for.
       if ($given.Count -gt 0 -and -not $any) { $allowFrom = $given; $publicNetwork = $true }
       elseif ($any -and $given.Count -eq 0) { $allowFrom = @('any'); $publicNetwork = $includePublic }
-      elseif (-not $any -and $upgrade -and $Facts.InstalledAllowFrom) {
+      elseif (-not $any -and $upgrade -and $Facts.InstalledAllowFrom -and -not $noRulesRecorded) {
         $allowFrom = @($Facts.InstalledAllowFrom)
         $publicNetwork = ($allowFrom -notcontains 'any') -or $includePublic -or [bool]$Facts.InstalledPublicNetwork
       }
       else { $refusals.Add('Say which addresses may connect: -AllowFrom <n8n address>, or -AllowFromAnyAddress, or -NoFirewall.') }
       foreach ($address in $given) {
         if (-not (Test-RpaAddress $address)) { $refusals.Add(('-AllowFrom: {0} is not an IP address or a range such as 10.0.0.0/24.' -f $address)) }
+        # A range of every address would open the ports on every network without the two switches meant for that.
+        elseif ($address -match '/0+$') { $refusals.Add(('-AllowFrom {0} means every address. Use -AllowFromAnyAddress for that.' -f $address)) }
       }
       if ($allowFrom -and -not $publicNetwork -and $Facts.PublicNetwork) {
         if ($upgrade) {
@@ -1127,10 +1132,11 @@ function Add-RpaLeftovers($Existing, [object[]]$Failed, [string]$User, [string]$
 # What install.json holds. autoSignIn says that the installer turned automatic sign-in on, in this run or an earlier
 # one (it is written before the sign-in steps run). allowFrom is what the firewall rules let in (a list of addresses
 # and ranges, or the word any) and publicNetwork whether they also apply on Public networks; a run that makes no rule
-# keeps what an earlier run recorded. signInChanges are the records of what -AutoSignIn changed.
+# keeps what an earlier run recorded, and records the word none when no run has made a rule (-NoFirewall).
+# signInChanges are the records of what -AutoSignIn changed.
 function New-RpaInstallRecord {
   param([string]$Version, [hashtable]$Account, [hashtable]$Parameters, [hashtable]$Plan, $Previous)
-  $allowFrom = $null
+  $allowFrom = 'none'
   $publicNetwork = $false
   if ($Previous -and $Previous.allowFrom) {
     $allowFrom = $Previous.allowFrom
