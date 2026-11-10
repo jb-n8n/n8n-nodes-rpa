@@ -26,9 +26,10 @@
 #                  lists them and asks for YES first, unless -Force is given. Uninstall-Rpa.ps1 puts them back.
 #   -Force         Do not ask, and upgrade even while the runner is running (a run in progress fails).
 #
-# Unpack the package where only you or administrators can change it, for example under your own profile or under
-# C:\Program Files: the installer reads the owner and access rules of the package's files and folders and of the
-# folders above it when it starts, and refuses when someone else could change them.
+# Unpack the package on a local drive where only you or administrators can change it, for example under your own
+# profile or under C:\Program Files: when it starts, the installer finds the real location of the package and reads
+# the owner and access rules of the package's files and folders and of the folders above it, and refuses when someone
+# else could change them. It does not judge this script itself, which is running by then.
 #
 # Programs go to C:\Program Files\RPA Runner, data (policy.json, the tokens, the certificates, logs) to
 # C:\ProgramData\RPA Runner. Running the installer again upgrades: it replaces the programs and keeps the data and the
@@ -63,12 +64,75 @@ if ($PSVersionTable.PSEdition -eq 'Core') {
   exit 1
 }
 
-# Before anything else is loaded from this folder: who may change the package. The installer runs as an
-# administrator, loads its module from here and copies its programs from here. What is checked, as it is when the
-# installer starts: every file and folder of the package (its owner, its access rules, and that it is no link or
-# junction), and each folder above the package up to the drive, for a right to delete, rename or re-permission what is
-# below it. Accepted are Administrators, SYSTEM, Windows' own installer account and the person running this. This
-# script itself is already running when the check starts, so the check says nothing about it.
+# Before anything else is loaded from this folder: where the package really is and who may change it. The installer
+# runs as an administrator, loads its module from the package and copies its programs from it. What is checked, as it
+# is when the installer starts:
+#   - the package is on a local fixed drive (not a network share or drive, not a removable or optical drive);
+#   - its real location, which Windows gives for the opened folder: a subst drive, a junction or a symbolic link on
+#     the way to the package is resolved, and everything after this point uses the real location;
+#   - every file and folder of the package: its owner, its access rules, and that it is no link or junction;
+#   - each folder above the package up to the drive: a right to delete, rename or re-permission what is below it.
+# Accepted are Administrators, SYSTEM, Windows' own installer account and the person running this. This script itself
+# is already running when the check starts, so the check says nothing about it.
+Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Text;
+using Microsoft.Win32.SafeHandles;
+public static class RpaPackagePath {
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  static extern SafeFileHandle CreateFile(string name, uint access, uint share, IntPtr security, uint disposition, uint flags, IntPtr template);
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  static extern uint GetFinalPathNameByHandle(SafeFileHandle file, StringBuilder path, uint length, uint flags);
+  // The path Windows itself gives for an opened folder (\\?\C:\... or \\?\UNC\...), with every link on the way resolved.
+  public static string Final(string folder) {
+    using (SafeFileHandle handle = CreateFile(folder, 0, 7, IntPtr.Zero, 3, 0x02000000, IntPtr.Zero)) {
+      if (handle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
+      StringBuilder buffer = new StringBuilder(1024);
+      uint length = GetFinalPathNameByHandle(handle, buffer, (uint)buffer.Capacity, 0);
+      if (length > buffer.Capacity) {
+        buffer = new StringBuilder((int)length + 1);
+        length = GetFinalPathNameByHandle(handle, buffer, (uint)buffer.Capacity, 0);
+      }
+      if (length == 0 || length > buffer.Capacity) throw new Win32Exception(Marshal.GetLastWin32Error());
+      return buffer.ToString();
+    }
+  }
+}
+'@
+
+# What kind of place a path is on when that is not a local fixed drive, or nothing.
+function Get-PackagePlace([string]$Path) {
+  if ($Path.StartsWith('\\')) { return 'a network share' }
+  switch ((New-Object IO.DriveInfo ([IO.Path]::GetPathRoot($Path))).DriveType) {
+    'Fixed' { return $null }
+    'Network' { return 'a network drive' }
+    'Removable' { return 'a removable drive' }
+    'CDRom' { return 'an optical drive' }
+    'Ram' { return 'a RAM disk' }
+    default { return 'a drive of a kind Windows does not name' }
+  }
+}
+
+# The real location of the folder the installer was started from. Sets $refusal instead when the package is not on a
+# local fixed drive or its location cannot be read.
+$refusal = $null
+$package = $PSScriptRoot
+$notLocal = 'Run the installer from a folder on a local drive. {0} is on {1}.'
+$place = Get-PackagePlace $PSScriptRoot
+if ($place) { $refusal = $notLocal -f $PSScriptRoot, $place }
+else {
+  try { $final = [RpaPackagePath]::Final($PSScriptRoot) } catch { $final = $null }
+  if (-not $final) { $refusal = 'Run the installer from a folder on a local drive. The real location of {0} could not be read.' -f $PSScriptRoot }
+  elseif ($final.StartsWith('\\?\UNC\')) { $refusal = $notLocal -f $PSScriptRoot, 'a network share' }
+  else {
+    $package = $final.Substring(4)
+    $place = Get-PackagePlace $package
+    if ($place) { $refusal = $notLocal -f $PSScriptRoot, $place }
+  }
+}
+
 $packageTrusted = @{}
 foreach ($sid in 'S-1-5-32-544', 'S-1-5-18', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464', 'S-1-3-0',
   [Security.Principal.WindowsIdentity]::GetCurrent().User.Value) { $packageTrusted[$sid] = $true }
@@ -101,9 +165,8 @@ function Get-PackageRefusal([string]$Folder) {
   # On a folder above the package: delete or rename it, delete or rename what is in it, change its rules, take it.
   # (Creating new files or folders there, which Windows lets every user do at the top of a drive, replaces nothing.)
   $replace = 0x40 -bor 0x10000 -bor 0x40000 -bor 0x80000 -bor 0x10000000
-  # \\?\ in front lets Windows take paths over 260 characters; not for a network path.
+  # \\?\ in front lets Windows take paths over 260 characters.
   $long = '\\?\'
-  if ($Folder.StartsWith('\\')) { $long = '' }
 
   $unreadable = 'someone whose access rules cannot be read'
   if ([IO.File]::GetAttributes($Folder) -band [IO.FileAttributes]::ReparsePoint) { return ($link -f $Folder) }
@@ -138,14 +201,14 @@ function Get-PackageRefusal([string]$Folder) {
   }
   $null
 }
-$refusal = Get-PackageRefusal $PSScriptRoot
+if (-not $refusal) { $refusal = Get-PackageRefusal $package }
 if ($refusal) {
   Write-Host $refusal
   Write-Host 'Nothing was changed.'
   exit 1
 }
 
-Import-Module (Join-Path $PSScriptRoot 'RpaInstall.psm1') -Force
+Import-Module (Join-Path $package 'RpaInstall.psm1') -Force
 
 $parameters = @{
   User = $User; UserPassword = $UserPassword; RunnerPort = $RunnerPort; BrowserPort = $BrowserPort
@@ -182,7 +245,7 @@ if ($plan.Steps -contains 'turn on automatic sign-in' -and -not $Force) {
 
 $upgrade = $plan.Steps -contains 'stop running services'
 if ($upgrade) { Write-Host 'Upgrading RPA:' } else { Write-Host 'Installing RPA:' }
-try { Invoke-RpaInstallPlan -Plan $plan -Parameters $parameters -SourceDir $PSScriptRoot }
+try { Invoke-RpaInstallPlan -Plan $plan -Parameters $parameters -SourceDir $package }
 catch {
   Write-Host $_.Exception.Message
   Write-Host 'The install did not finish. Fix the cause and run Install-Rpa.ps1 again with the same parameters.'

@@ -736,6 +736,7 @@ Describe 'The installer scripts' {
     $refusal = $source.IndexOf("'{0} can be changed by {1}. Unpack the package in a folder only you or administrators can change, and run it from there.'")
     $refusal | Should -BeGreaterThan 0
     $source.IndexOf("'{0} is a link or junction. Unpack the package again and run the installer from the new folder.'") | Should -BeGreaterThan 0
+    $source.IndexOf("'Run the installer from a folder on a local drive. {0} is on {1}.'") | Should -BeGreaterThan 0
     $ast = [Management.Automation.Language.Parser]::ParseFile($path, [ref]$null, [ref]$null)
     $loads = @($ast.FindAll({ param($node) $node -is [Management.Automation.Language.CommandAst] -and ($node.GetCommandName() -eq 'Import-Module' -or $node.InvocationOperator -eq 'Dot') }, $true))
     $loads.Count | Should -Be 1
@@ -746,7 +747,8 @@ Describe 'The installer scripts' {
     BeforeAll {
       # A copy of the installer in a folder of its own, under a folder whose access rules the tests set. The runs
       # below can install nothing: both ports are the same, which the plan refuses before any step.
-      $script:Area = Join-Path ([IO.Path]::GetTempPath()) ('rpa-package-' + [guid]::NewGuid().ToString('N'))
+      $script:Leaf = 'rpa-package-' + [guid]::NewGuid().ToString('N')
+      $script:Area = Join-Path ([IO.Path]::GetTempPath()) $script:Leaf
       $script:Package = Join-Path $script:Area 'package'
       $script:Unpack = 'Unpack the package in a folder only you or administrators can change, and run it from there.'
       function Invoke-TestInstaller {
@@ -768,9 +770,11 @@ Describe 'The installer scripts' {
       if (Test-Path -LiteralPath $script:Area) { & cmd.exe /d /c ('rd /s /q "{0}"' -f $script:Area) | Out-Null }
     }
 
+    # The installer names real locations (long names, the case on disk), so the refusals are matched from the test's
+    # own folder on, whatever form the temporary folder's path has.
     It 'Install-Rpa.ps1 runs from a package only administrators, SYSTEM and the person running it can change' -Skip:($env:OS -ne 'Windows_NT') {
       $run = Invoke-TestInstaller
-      ($run.Output -join "`n") | Should -Not -Match 'can be changed by|is a link'
+      ($run.Output -join "`n") | Should -Not -Match 'can be changed by|is a link|local drive'
       $run.Output | Should -Contain '-RunnerPort and -BrowserPort are both 7. Give each its own port.'
       $run.ExitCode | Should -Be 1
     }
@@ -780,7 +784,9 @@ Describe 'The installer scripts' {
       & icacls.exe $file /grant '*S-1-5-32-545:M' | Out-Null
       try {
         $run = Invoke-TestInstaller
-        $run.Output | Should -BeExactly @("$file can be changed by $($script:Users). $($script:Unpack)", 'Nothing was changed.')
+        $run.Output.Count | Should -Be 2
+        $run.Output[0] | Should -Match ([regex]::Escape("$($script:Leaf)\package\scripts\start-loop.ps1 can be changed by $($script:Users). $($script:Unpack)") + '$')
+        $run.Output[1] | Should -BeExactly 'Nothing was changed.'
         $run.ExitCode | Should -Be 1
       } finally { & icacls.exe $file /remove '*S-1-5-32-545' | Out-Null }
     }
@@ -790,7 +796,8 @@ Describe 'The installer scripts' {
       & cmd.exe /d /c ('mklink /J "{0}" "{1}"' -f $junction, (Join-Path $script:Area 'elsewhere')) | Out-Null
       try {
         $run = Invoke-TestInstaller
-        $run.Output | Should -BeExactly @("$junction is a link or junction. Unpack the package again and run the installer from the new folder.", 'Nothing was changed.')
+        $run.Output.Count | Should -Be 2
+        $run.Output[0] | Should -Match ([regex]::Escape("$($script:Leaf)\package\runner is a link or junction. Unpack the package again and run the installer from the new folder.") + '$')
         $run.ExitCode | Should -Be 1
       } finally { & cmd.exe /d /c ('rd "{0}"' -f $junction) | Out-Null }
     }
@@ -799,15 +806,37 @@ Describe 'The installer scripts' {
       & icacls.exe $script:Area /grant '*S-1-5-32-545:(DC)' | Out-Null
       try {
         $run = Invoke-TestInstaller
-        $run.Output | Should -BeExactly @("$($script:Area) can be changed by $($script:Users). $($script:Unpack)", 'Nothing was changed.')
+        $run.Output.Count | Should -Be 2
+        $run.Output[0] | Should -Match ([regex]::Escape("$($script:Leaf) can be changed by $($script:Users). $($script:Unpack)") + '$')
         $run.ExitCode | Should -Be 1
       } finally { & icacls.exe $script:Area /remove '*S-1-5-32-545' | Out-Null }
+    }
+
+    It 'Install-Rpa.ps1 judges a package reached through a junction by where it really is' -Skip:($env:OS -ne 'Windows_NT') {
+      # <area>\elsewhere\via is a junction to <area>; the installer is started as <area>\elsewhere\via\package\...
+      $via = Join-Path (Join-Path $script:Area 'elsewhere') 'via'
+      $file = Join-Path $script:Package 'RpaInstall.psm1'
+      & cmd.exe /d /c ('mklink /J "{0}" "{1}"' -f $via, $script:Area) | Out-Null
+      try {
+        $started = Join-Path (Join-Path $via 'package') 'Install-Rpa.ps1'
+        $output = @(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $started -RunnerPort 7 -BrowserPort 7 -AllowFromAnyAddress)
+        $output | Should -Contain '-RunnerPort and -BrowserPort are both 7. Give each its own port.'
+
+        & icacls.exe $file /grant '*S-1-5-32-545:M' | Out-Null
+        $output = @(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $started -RunnerPort 7 -BrowserPort 7 -AllowFromAnyAddress)
+        $output[0] | Should -Match ([regex]::Escape("$($script:Leaf)\package\RpaInstall.psm1 can be changed by $($script:Users). $($script:Unpack)") + '$')
+        $output[0] | Should -Not -Match 'via'
+      } finally {
+        & icacls.exe $file /remove '*S-1-5-32-545' | Out-Null
+        & cmd.exe /d /c ('rd "{0}"' -f $via) | Out-Null
+      }
     }
 
     It 'Install-Rpa.ps1 refuses a package folder that other users can change' -Skip:($env:OS -ne 'Windows_NT') {
       & icacls.exe $script:Package /grant '*S-1-5-32-545:(OI)(CI)M' | Out-Null
       $run = Invoke-TestInstaller
-      $run.Output | Should -BeExactly @("$($script:Package) can be changed by $($script:Users). $($script:Unpack)", 'Nothing was changed.')
+      $run.Output.Count | Should -Be 2
+      $run.Output[0] | Should -Match ([regex]::Escape("$($script:Leaf)\package can be changed by $($script:Users). $($script:Unpack)") + '$')
       $run.ExitCode | Should -Be 1
     }
   }
