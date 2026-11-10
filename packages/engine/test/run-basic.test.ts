@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { startPortal } from 'n8n-rpa-sandbox/testing.js';
 import { openSession, type Session } from '../src/browser/session.js';
 import type { Page } from 'playwright-core';
-import { offListSite, PASSWORD_FILL_REFUSED_STEPS, SIGNIN_NEEDS_SITE_LOGIN } from '../src/messages.js';
+import { INPUT_CONTAINS_SECRET, offListSite, PASSWORD_FILL_REFUSED_STEPS, SIGNIN_NEEDS_SITE_LOGIN } from '../src/messages.js';
 import { createMasker } from '../src/secrets/mask.js';
 import { runSteps, type StepContext } from '../src/steps/run.js';
 import type { Step } from '../src/types.js';
@@ -189,6 +189,33 @@ describe('runSteps conditions', () => {
       expect(r.ok).toBe(true);
       expect(notes(r)).toEqual([['ok', undefined], ['skipped', 'condition not met']]);
       expect(await session.page.inputValue('#username')).toBe('differs');
+    } finally { await session.close(); }
+  });
+  it('a variable condition is checked before the locators are rendered: a skipped step needs none of its own variables', async () => {
+    const ctx = await ctxFor();
+    try {
+      const r = await runSteps(ctx, [
+        { intent: 'Detail', when: { var: 'dealer', equals: 'other' }, click: { role: 'link', name: '{{var.detail}}' } },
+        fillUser('After', undefined, 'ran'),
+      ]);
+      expect(r.ok).toBe(true);
+      expect(notes(r)).toEqual([['skipped', 'condition not met'], ['ok', undefined]]);
+      // An element condition still renders its locator first: an unset variable there fails as before.
+      const e = await runSteps(ctx, [{ intent: 'Gate', when: { hidden: { text: '{{var.detail}}' } }, click: { css: '#x' } }]);
+      expect(e.ok).toBe(false);
+      if (!e.ok) expect(e.failure.message).toBe('missing input "detail"');
+    } finally { await session.close(); }
+  });
+  it('a variable condition on a variable that holds a secret fill value is refused, never compared', async () => {
+    const ctx = { ...(await ctxFor()), masker: createMasker(['demo-password']), vars: { a: 'Tr0ub4dor-77-x', b: 'Tr0ub4dor-77-x' } };
+    try {
+      const r = await runSteps(ctx, [
+        fillUser('Gate', { var: 'b', equals: 'Tr0ub4dor-77-x' }, 'never'),
+        { intent: 'Type the export password', fill: { field: { css: '#password' }, value: '{{var.a}}', secret: true } },
+      ]);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.failure).toMatchObject({ index: 0, message: INPUT_CONTAINS_SECRET });
+      expect(await session.page.inputValue('#username')).toBe('');
     } finally { await session.close(); }
   });
   it('a variable condition on an unset variable fails the run', async () => {

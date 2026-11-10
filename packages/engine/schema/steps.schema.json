@@ -409,11 +409,12 @@
       },
       "additionalProperties": false,
       "if": {
-        "description": "A paginate whose body holds a submit or a download.",
-        "properties": { "paginate": { "properties": { "each": { "type": "array", "contains": { "anyOf": [{ "required": ["submit"] }, { "required": ["download"] }] } } } } }
+        "type": "object",
+        "description": "A paginate whose body holds a submit or a download writes.",
+        "properties": { "paginate": { "type": "object", "properties": { "each": { "type": "array", "contains": { "type": "object", "anyOf": [{ "required": ["submit"] }, { "required": ["download"] }] } } } } }
       },
       "then": {
-        "description": "Its own when, expect and next hold no {{var.name}}: a run variable never decides whether or how often the write runs.",
+        "description": "Its when is a write step's when (no run variable condition), and its own when, expect and next hold no {{var.name}}: a run variable never decides whether or how often the write runs.",
         "properties": {
           "when": { "$ref": "#/definitions/writeWhen" },
           "expect": { "$ref": "#/definitions/writeExpect" },

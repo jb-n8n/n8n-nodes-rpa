@@ -157,15 +157,25 @@ export async function runSteps(
     let lastError: unknown;
     const timeout = Math.min(step.timeoutMs ?? ctx.defaultTimeoutMs, opts.maxTimeoutMs ?? Infinity);
     let hookLabel: string | undefined;
+    const skipUnmet = async () => {
+      log('skipped', 0, { note: 'condition not met' });
+      if (!opts.nested) await opts.afterStep?.(i);
+    };
     const endHook = async (ok: boolean) => {
       if (hookLabel !== undefined) await hooks?.end(ctx.page, ok, hookLabel).catch(() => undefined);
     };
     try {
+      // A variable condition is checked first, so a skipped step never needs its own locators' variables.
+      const when = step.when;
+      const byVar = when !== undefined && 'var' in when;
+      if (byVar && !(await conditionMet(when, surface, ctx))) {
+        await skipUnmet();
+        continue;
+      }
       // {{var.x}} in a locator is rendered for this run into a copy; the step itself keeps its template.
       const live = renderLocators(step, ctx.vars, ctx.masker);
-      if (live.when && !(await conditionMet(live.when, surface, ctx))) {
-        log('skipped', 0, { note: 'condition not met' });
-        if (!opts.nested) await opts.afterStep?.(i);
+      if (!byVar && live.when && !(await conditionMet(live.when, surface, ctx))) {
+        await skipUnmet();
         continue;
       }
       if (hooks && !opts.nested) {

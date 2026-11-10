@@ -7,7 +7,7 @@ All notable changes to `n8n-nodes-rpa`, the `rpa-browser` image and the Windows 
 ## Unreleased
 
 - A run may last up to 600 seconds (Max Seconds, was 300), and a browser step's `timeoutMs` may be 100 to 300000 (was 120000). A longer run holds its browser session and its Site Login lock for as long as it runs. A Windows run's Max Seconds also rises to 600, while a Windows step keeps its 120000 limit.
-- A browser step's `when` may now also be `{ hidden: <locator> }` (run only when the element does not show) or a run variable compared with literal text, `{ var, equals }` or `{ var, notEquals }`; write the opposite condition on the next step in place of an else. A variable condition is refused on `signIn`, `submit`, `download`, the click that opens a write window, and a variable that a secret `fill` types. Step lists signed before keep their signature and run as before; a list that uses the new forms is refused by 0.2.0.
+- A browser step's `when` may now also be `{ hidden: <locator> }` (run only when the element does not show) or a run variable compared with literal text, `{ var, equals }` or `{ var, notEquals }`; write the opposite condition on the next step in place of an else. A variable condition is refused on `signIn`, `submit`, `download`, a `paginate` that holds a `submit` or `download`, the click that opens a write window, and a variable that a secret `fill` types. Step lists signed before keep their signature and run as before; a list that uses the new forms is refused by 0.2.0.
 
 ## 0.2.0 (2026-11-10)
 

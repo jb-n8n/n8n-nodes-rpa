@@ -342,6 +342,15 @@ describe('step conditions (when)', () => {
     ]) expect(at(step), Object.keys(step)[1]).toEqual(['steps[0].when may not use a variable on a step that signs in or writes']);
     const nested = { intent: 'P', paginate: { next: { text: 'N' }, until: 'absent', max: 2, each: [{ intent: 'D', download: { trigger: { text: 'x' } }, when: W }] } };
     expect(at(nested)).toEqual(['steps[0].paginate.each[0].when may not use a variable on a step that signs in or writes']);
+    // A paginate holding a write writes too: a variable condition on it would decide whether its body's write runs.
+    const pg = (when: unknown, ...each: unknown[]) => ({ intent: 'P', when, paginate: { next: { text: 'N' }, until: 'absent', max: 1, each } });
+    const sub = { intent: 'S', submit: { path: '/x', button: { css: '#b' } } };
+    const dl = { intent: 'D', download: { trigger: { text: 'x' } } };
+    const read = { intent: 'R', extract: { scope: { css: 'main' }, idPattern: 'N' } };
+    expect(at(pg(W, read, sub))).toEqual(['steps[0].when may not use a variable on a step that signs in or writes']);
+    expect(at(pg(W, dl))).toEqual(['steps[0].when may not use a variable on a step that signs in or writes']);
+    expect(at(pg(W, read, { intent: 'C', click: { css: '#c' } }))).toEqual([]);
+    for (const when of [{ visible: { css: '#more' } }, { hidden: { css: '#busy' } }]) expect(at(pg(when, sub, dl)), JSON.stringify(when)).toEqual([]);
     // The element forms stay allowed there, with a fixed locator.
     expect(at({ intent: 'In', signIn: si, when: { hidden: { css: '#signed-in' } } })).toEqual([]);
     expect(at({ intent: 'S', submit: { path: '/x', button: { css: '#b' } }, when: { hidden: { text: '{{var.who}}' } } })).toEqual([varInWriteLocator('steps[0].when.hidden.text')]);

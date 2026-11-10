@@ -491,8 +491,7 @@ Every step has an `intent` (plain words, shown in logs and errors) and one verb.
 
 A locator is an object: `{ "text": "Sign in" }`, `{ "label": "Email address" }`, `{ "role": "button", "name": "Submit" }`, `{ "testId": "submit-button" }` or `{ "css": "table.results" }`, with optional `exact`, `within`, `frame` and `fallbacks` (other locators tried in order).
 
-
-**Conditions.** `when` runs a step only when its condition holds; otherwise the step is skipped, the log notes `condition not met`, and the run goes on. It takes exactly one of `{ "visible": <locator> }` (the element shows), `{ "hidden": <locator> }` (it does not show), `{ "var": "<name>", "equals": "<text>" }` or `{ "var": "<name>", "notEquals": "<text>" }` (the run variable's value, compared as text: case and spaces count). An element condition looks once, without waiting: put a `waitFor` before it when the page is still loading. The text is literal and may not hold `{{`. A variable that is not set fails the step (`missing input "<name>"`). There is no else: write the opposite condition on the next step.
+**Conditions.** `when` runs a step only when its condition holds; otherwise the step is skipped, the log notes `condition not met`, and the run goes on. It takes exactly one of `{ "visible": <locator> }` (the element shows), `{ "hidden": <locator> }` (it does not show), `{ "var": "<name>", "equals": "<text>" }` or `{ "var": "<name>", "notEquals": "<text>" }` (the run variable's value, compared as text: case and spaces count). An element condition looks once, without waiting: put a `waitFor` before it when the page is still loading. The text is literal and may not hold `{{`. A variable that is not set fails the step with `missing input "<name>"`: the run fails, unless the step is `optional`; then it is skipped with that note, like any failure of an optional step. A variable condition is checked before the step's locators are rendered, so a skipped step needs none of its own variables. There is no else: write the opposite condition on the next step.
 
 ```json
 {
@@ -504,7 +503,7 @@ A locator is an object: `{ "text": "Sign in" }`, `{ "label": "Email address" }`,
 }
 ```
 
-A run variable never decides whether a write runs: a variable condition is refused on `signIn`, `submit` and `download` steps and on the click that opens a write window, and on a variable that a secret `fill` types. Those steps may still use `visible` or `hidden` with a fixed locator. Only element conditions keep a step in the sign-in block (the gated steps right after `signIn`). Desktop step sets take `when: { "visible": <locator> }` only.
+A run variable never decides whether a write runs: a variable condition is refused on `signIn`, `submit` and `download` steps, on a `paginate` whose `each` holds a `submit` or `download`, and on the click that opens a write window, and on a variable that a secret `fill` types. Those steps may still use `visible` or `hidden` with a fixed locator. Only element conditions keep a step in the sign-in block (the gated steps right after `signIn`). Desktop step sets take `when: { "visible": <locator> }` only.
 
 **Two-page sign-in.** For a site that asks for the username on one page and the password on the next (identity-first sign-ins such as Microsoft Entra's), `signIn.next` is the button between them: the step types the username, clicks `next` and types the password only when the password field shows on a listed login page, so a rejected username stops the run before the password is typed: `login_failed` when the site sends the username page back; an inline error on the same page times out as drift (and AI repair is not attempted once the username was typed). A "Stay signed in?" prompt after it is an ordinary `click` step with `when`.
 

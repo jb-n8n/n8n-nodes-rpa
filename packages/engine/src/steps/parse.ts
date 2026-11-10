@@ -137,6 +137,16 @@ const VAR_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const WHEN_FORMS = ['visible', 'hidden', 'var'] as const;
 
 /**
+ * Whether running the step may sign in or write: its own verb does, or it is a paginate whose body holds a write
+ * (skipping the paginate skips that write too).
+ */
+function writesWhenRun(s: Obj, verb: StepVerb): boolean {
+  if (BROWSER_WRITE_VERBS.includes(verb)) return true;
+  const each = verb === 'paginate' && isObj(s.paginate) ? s.paginate.each : undefined;
+  return Array.isArray(each) && each.some((e) => isObj(e) && BROWSER_WRITE_VERBS.some((w) => Object.hasOwn(e, w)));
+}
+
+/**
  * A step's `when`: exactly one of `{ visible }`, `{ hidden }` (a locator each) or `{ var, equals | notEquals }` (a run
  * variable against literal text). `writes`: the step signs in or writes, so a variable may not decide whether it runs.
  */
@@ -195,7 +205,7 @@ function checkStep(s: unknown, path: string, issues: string[], nested: boolean) 
   if (s.checkpoint !== undefined && typeof s.checkpoint !== 'boolean') issues.push(`${path}.checkpoint must be a boolean`);
   if (s.timeoutMs !== undefined && !isInt(s.timeoutMs, 100, MAX_STEP_TIMEOUT_MS)) issues.push(`${path}.timeoutMs must be an integer between 100 and ${MAX_STEP_TIMEOUT_MS}`);
   const verb = known[0] as StepVerb;
-  if (s.when !== undefined) checkWhen(s.when, path, BROWSER_WRITE_VERBS.includes(verb), issues);
+  if (s.when !== undefined) checkWhen(s.when, path, writesWhenRun(s, verb), issues);
   if (s.expect !== undefined) {
     if (!isObj(s.expect)) issues.push(`${path}.expect must be an object`);
     else {
