@@ -13,7 +13,8 @@
 #   The package is uploaded as the artifact rpa-windows-package.
 # Uses no repository secrets. Actions are pinned by full commit SHA. What the job downloads besides them: the .NET
 # packages (NuGet), and for the package Node.js (checked against a SHA-256 written in Stage.ps1), Playwright (npm ci
-# against the lockfile in images/browser/server) and Chromium (Playwright's installer).
+# against the lockfile in images/browser/server) and Chromium (Playwright's installer; the list of the files it
+# installed is checked against a SHA-256 written in Stage.ps1).
 name: desktop
 
 on:
@@ -240,7 +241,7 @@ jobs:
         run: node --test "images/browser/host/test/*.test.js" "images/browser/gate/test/*.test.js"
 
       # Downloads Node (checked against the SHA-256 in the script), Playwright (npm ci, checked against the lockfile)
-      # and Chromium (Playwright's installer).
+      # and Chromium (Playwright's installer; the list of its files checked against the SHA-256 in the script).
       - name: Stage the Windows package
         timeout-minutes: 15
         shell: powershell
@@ -292,6 +293,20 @@ jobs:
             Assert (($found | Get-NetFirewallApplicationFilter).Program -eq $rule.Program) "firewall rule $($rule.Name) is for $($rule.Program)"
             Assert (($found | Get-NetFirewallAddressFilter).RemoteAddress -eq '127.0.0.1' -and ($found | Get-NetFirewallPortFilter).LocalPort -eq $rule.Port) "firewall rule $($rule.Name) is for port $($rule.Port) from 127.0.0.1"
           }
+
+          # The browser files as installed are the files Stage.ps1 listed in browser\ms-playwright.sha256 and checked
+          # against the SHA-256 in the script: no file more or less, and each with the listed SHA-256.
+          $listFile = "$install\browser\ms-playwright.sha256"
+          Assert ((Get-FileHash -LiteralPath $listFile).Hash -eq (Get-FileHash -LiteralPath "$package\browser\ms-playwright.sha256").Hash) 'the installed browser\ms-playwright.sha256 is the one in the package'
+          $listed = @{}
+          foreach ($line in [IO.File]::ReadAllLines($listFile)) {
+            if ($line -notmatch '^([0-9a-f]{64})  (\S.*)$') { throw "FAILED: browser\ms-playwright.sha256 holds the line '$line'" }
+            $listed[$Matches[2]] = $Matches[1]
+          }
+          $root = "$install\browser\ms-playwright"
+          $present = @(Get-ChildItem -LiteralPath $root -Recurse -File -Force | ForEach-Object { $_.FullName.Substring($root.Length + 1).Replace('\', '/') })
+          $differ = @($present | Where-Object { -not $listed.ContainsKey($_) -or (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root $_)).Hash.ToLowerInvariant() -ne $listed[$_] })
+          Assert ($listed.Count -gt 0 -and $present.Count -eq $listed.Count -and $differ.Count -eq 0) "the $($present.Count) installed browser files are the $($listed.Count) files of browser\ms-playwright.sha256, each with its SHA-256 ($($differ.Count) not listed or different: $(($differ | Select-Object -First 5) -join ', '))"
 
           # Who may do what with the files the bot user must not change: the owner is Administrators, nothing is
           # inherited, nobody but SYSTEM and Administrators may write, and the bot user may read.
