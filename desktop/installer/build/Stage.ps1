@@ -137,7 +137,7 @@ foreach ($name in 'NODE_OPTIONS', 'PLAYWRIGHT_DOWNLOAD_HOST', 'PLAYWRIGHT_CHROMI
 $server = Join-Path $work 'server'
 Copy-Named (Join-Path $browserSource 'server') @('package.json', 'package-lock.json') $server
 $npm = Join-Path $nodeDir 'node_modules\npm\bin\npm-cli.js'
-Invoke-Tool 'npm ci' $node @($npm, 'ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', '--cache', (Join-Path $work 'npm-cache')) $server
+Invoke-Tool 'npm ci' $node @($npm, 'ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', '--no-update-notifier', '--cache', (Join-Path $work 'npm-cache')) $server
 # The command shims in .bin start whatever "node" is found along PATH; the host does not use them.
 $shims = Join-Path $server 'node_modules\.bin'
 if (Test-Path -LiteralPath $shims) { [IO.Directory]::Delete($shims, $true) }
