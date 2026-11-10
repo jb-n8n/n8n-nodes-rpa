@@ -1,9 +1,6 @@
 # The installer's module, third of three files (RpaInstall.psd1 loads them into one module): what looks at and changes
 # the machine, for Windows PowerShell 5.1. The facts the two plans judge, the data directory, the firewall rules, the
 # scheduled tasks, the steps of an install, and the uninstall. Everything here runs on Windows only.
-#
-# The scheduled task settings and the access rules of the data directory come from the AWS test bed's first-boot
-# script (deploy/terraform/modules/aws-ec2-desktop-runner/setup.ps1.tftpl).
 
 $script:RunnerTask = 'RPA Runner'
 $script:BrowserTask = 'RPA Browser'
@@ -20,8 +17,8 @@ $script:KnownSteps = @(
   'remove the browser task', 'write install.json', 'store sign-in password', 'turn on automatic sign-in',
   'keep the desktop unlocked', 'start tasks')
 
-# Where things are: the same paths as the test bed. Program Files keeps its default permissions (users read and run,
-# only administrators change), so the bot user cannot replace what it runs.
+# Where things are. Program Files keeps its default permissions (users read and run, only administrators change), so
+# the bot user cannot replace what it runs.
 function Get-RpaLayout {
   $installDir = Join-Path $env:ProgramFiles 'RPA Runner'
   $dataDir = Join-Path $env:ProgramData 'RPA Runner'
@@ -309,7 +306,7 @@ function Get-RpaMachineFacts {
   $facts
 }
 
-# The full path of a tool that ships with Windows (icacls, reg, powercfg, robocopy, cmd). The installer runs as an
+# The full path of a tool that ships with Windows (icacls, reg, powercfg, robocopy). The installer runs as an
 # administrator, so it does not look these up along PATH, where a folder other users can write to may come first.
 function Get-RpaSystemTool([string]$Name) {
   Join-Path ([Environment]::SystemDirectory) $Name
@@ -410,8 +407,8 @@ function Copy-RpaProgramFiles([string]$SourceDir, [string]$InstallDir) {
   }
 }
 
-# The compiled helpers: the LSA secret Windows itself reads the automatic sign-in password from (Store is the test
-# bed's; Remove passes no data, which deletes the secret), a password check, the local groups of a user, the creation
+# The compiled helpers: the LSA secret Windows itself reads the automatic sign-in password from (Store writes it;
+# Remove passes no data, which deletes the secret), a password check, the local groups of a user, the creation
 # of a user's profile, the account a process runs as, the number of names a file has, the creation of a file that
 # follows no link, and the removal of a folder tree through handles (RpaTree, used by Remove-RpaTree). A password
 # goes in as a SecureString and is turned into plain text only in unmanaged memory that is wiped afterwards.
@@ -887,8 +884,7 @@ function Remove-RpaUser([hashtable]$Account, [string]$Sid) {
 #   a file         SYSTEM and Administrators in full; the bot user may read (policy.json and the tokens)
 #   backups        SYSTEM and Administrators in full and nobody else (policy-backups\, which the policy tool uses);
 #                  the same for a file only administrators may read (the list the uninstaller leaves)
-# The first three give the same rights as the test bed's icacls commands. Administrators own all of them: the runner refuses a
-# policy whose file or folder anyone else owns.
+# Administrators own all of them: the runner refuses a policy whose file or folder anyone else owns.
 function Get-RpaAccessRules([string]$Kind, [string]$Sid) {
   switch ($Kind) {
     'directory' { 'D:PAI(A;OICIIO;FA;;;CO)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;{0})(A;;DCLC;;;{0})' -f $Sid }

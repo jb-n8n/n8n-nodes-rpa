@@ -6,9 +6,6 @@
 # a tool's command line, and quotes in the data would need escaping). install.json keeps a value as its type (REG_SZ,
 # REG_DWORD, ...) and its data: a string as it is (also an empty one), a number in decimal, a list of strings as a
 # list, bytes as hex pairs.
-#
-# The stored sign-in password and the registry values come from the AWS test bed's first-boot script
-# (deploy/terraform/modules/aws-ec2-desktop-runner/setup.ps1.tftpl).
 
 $script:Winlogon = 'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
 # Where a user's registry is loaded for a moment when that user is not signed in.

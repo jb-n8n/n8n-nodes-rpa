@@ -14,9 +14,10 @@
 # files in the data directory and change what is in logs\. So the installer refuses a link or junction where it expects
 # the data directory, logs\, policy-backups\, policy.json or a token, refuses one of those that someone other than
 # Administrators or SYSTEM owns (logs\ it takes over instead) and a file of those names that has a second name (a
-# hard link), passes /L to every icacls call, and deletes folders with rd, which does not enter a junction. A data
-# directory that is there when the user of the install is new to it (a first install, another -User) is used only
-# when everything in it belongs to Administrators, to SYSTEM or to that user, which must have been there already.
+# hard link), passes /L to every icacls call, and removes folders through handles (Remove-RpaTree), which removes a
+# link or junction inside as the link itself and does not enter it. A data directory that is there when the user of
+# the install is new to it (a first install, another -User) is used only when everything in it belongs to
+# Administrators, to SYSTEM or to that user, which must have been there already.
 #
 # Secrets: New-RpaSecret returns a new secret to its caller. No other function returns one in plain text, and none
 # prints or logs one. A token is made inside the function that writes its file, and a generated password inside the
