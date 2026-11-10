@@ -1141,6 +1141,22 @@ Describe 'What the uninstaller could not put back' {
       Should -Throw -ExpectedMessage '*uninstall-leftovers.json is there already and is not a list that Administrators or SYSTEM own; it was left as it is*'
   }
 
+  It 'removes the program files and leaves <What> in the install directory' -Skip:($env:OS -ne 'Windows_NT') -ForEach @(
+    @{ What = 'the list alone'; Make = { param($file) Set-Content -LiteralPath $file -Value '{ "notPutBack": [] }' }; Left = @('uninstall-leftovers.json') }
+    @{ What = 'a folder that stands in the place of the list'; Make = { param($file) New-Item -ItemType Directory -Path $file | Out-Null }; Left = @('uninstall-leftovers.json') }
+    @{ What = 'nothing, and no directory, when there is no list'; Make = { param($file) }; Left = @() }
+  ) {
+    $dir = Join-Path $TestDrive ('programs-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $dir, (Join-Path $dir 'runner') | Out-Null
+    Set-Content -LiteralPath (Join-Path $dir 'install.json') -Value '{}'
+    Set-Content -LiteralPath (Join-Path (Join-Path $dir 'runner') 'RpaRunner.exe') -Value 'x'
+    $layout = @{ InstallDir = $dir; LeftoversFile = (Join-Path $dir 'uninstall-leftovers.json') }
+    & $Make $layout.LeftoversFile
+    InModuleScope RpaInstall -Parameters @{ Layout = $layout } { Remove-RpaProgramFiles $Layout }
+    if ($Left.Count -eq 0) { $dir | Should -Not -Exist }
+    else { @(Get-ChildItem -LiteralPath $dir -Force | ForEach-Object { $_.Name }) | Should -BeExactly $Left }
+  }
+
   # A record of a user's own registry, when that user's profile is gone: there is nothing to put it back into.
   It 'skips a setting in the registry of a user whose profile is no longer on the machine, with a line that says so' {
     Mock -ModuleName RpaInstall Test-RpaUserRegistry { $false }

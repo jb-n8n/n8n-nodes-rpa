@@ -1745,7 +1745,7 @@ function Resume-RpaServices {
 }
 
 # Removes the install directory. A list of what an uninstall could not put back stays, alone in the directory, for
-# the next install to read.
+# the next install to read (and so does anything else that stands in the list's place).
 function Remove-RpaProgramFiles([hashtable]$Layout) {
   # A folder that is someone's current directory cannot be removed, and the uninstaller may be run from inside it.
   if ((Get-Location).ProviderPath.StartsWith($Layout.InstallDir, [StringComparison]::OrdinalIgnoreCase)) { Set-Location -LiteralPath $env:SystemRoot }
@@ -1755,8 +1755,9 @@ function Remove-RpaProgramFiles([hashtable]$Layout) {
     return
   }
   foreach ($item in Get-ChildItem -LiteralPath $Layout.InstallDir -Force) {
-    if ($item.PSIsContainer) { Remove-RpaTree $item.FullName }
-    elseif ($item.FullName -ne $Layout.LeftoversFile) { Remove-Item -LiteralPath $item.FullName -Force }
+    # Also when something else stands in the list's place: it is left as it is.
+    if ($item.FullName -eq $Layout.LeftoversFile) { continue }
+    if ($item.PSIsContainer) { Remove-RpaTree $item.FullName } else { Remove-Item -LiteralPath $item.FullName -Force }
   }
 }
 
