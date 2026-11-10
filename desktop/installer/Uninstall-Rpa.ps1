@@ -10,11 +10,14 @@
 # uninstall-leftovers.json in the data directory, a file only administrators can read or change.
 #
 # It keeps the data directory, C:\ProgramData\RPA Runner (the policy, the tokens, the certificates, logs), unless
-# -RemoveData is given. A later install keeps the policy and the tokens it finds there, and refuses a data directory
-# that holds anything owned by someone other than Administrators or SYSTEM (the bot user's logs, certificates and
-# exports), naming it, so that you check and remove those first. -RemoveData is refused while the bot user is signed
-# in: sign it out first (where automatic sign-in is on, run without -RemoveData first, then sign the bot user out and
-# run Uninstall-Rpa.ps1 -RemoveData from the unpacked package). It never removes a Windows user.
+# -RemoveData is given. A later install for the same bot user takes the kept directory over when everything in it
+# belongs to Administrators, to SYSTEM or to that user, and keeps the policy, the tokens and the certificates. An
+# install for another user refuses what the first user left there (logs, certificates, exports), and so does an
+# install for a user of the same name that was removed and created again.
+#
+# -RemoveData is refused while the bot user is signed in: sign it out first (where automatic sign-in is on, run
+# without -RemoveData first, then sign the bot user out and run Uninstall-Rpa.ps1 -RemoveData from the unpacked
+# package). The uninstaller never removes a Windows user.
 #
 # Run from an unpacked package instead of the install directory, it first checks who can change that package, as
 # Install-Rpa.ps1 does.
@@ -228,7 +231,14 @@ if ($result.HadChanges) {
 if ($result.DataRemoved) { Write-Host ('  Removed:   {0}' -f $result.Layout.DataDir) }
 elseif (Test-Path -LiteralPath $result.Layout.DataDir) {
   Write-Host ('  Kept:      {0} (remove it with -RemoveData)' -f $result.Layout.DataDir)
-  Write-Host '             A later install uses it only when everything in it belongs to Administrators or SYSTEM: it'
-  Write-Host '             names what the bot user left there (logs, certificates, exports) for you to check and remove.'
+  if ($result.User) {
+    Write-Host ('             A later install for {0} takes it over when everything in it belongs to Administrators,' -f $result.User)
+    Write-Host ('             SYSTEM or {0}, and keeps the policy, the tokens and the certificates. An install for another' -f $result.User)
+    Write-Host ('             user refuses what {0} left there, and so does one for a user of that name that was' -f $result.User)
+    Write-Host '             removed and created again.'
+  } else {
+    Write-Host '             A later install takes it over when everything in it belongs to Administrators, SYSTEM or the'
+    Write-Host '             user it installs for, and that user was there before.'
+  }
 }
 if ($result.User) { Write-Host ('  Kept:      the Windows user {0}' -f $result.User) }

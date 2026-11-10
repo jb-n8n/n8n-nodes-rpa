@@ -44,10 +44,11 @@ BeforeAll {
       PortsInUse = @{}; Installed = $false; RunnerRunning = $false
       InstalledRunnerPort = $null; InstalledBrowserPort = $null; InstalledBrowser = $false
       InstalledAllowFrom = $null; InstalledPublicNetwork = $false
-      InstalledAutoSignInForUser = $false; InstalledAutoSignInUser = $null
+      InstalledAutoSignInForUser = $false; InstalledAutoSignInUser = $null; InstalledUser = $null; InstalledForUser = $false
+      UserSid = $null
       DataDir = $script:DataDir; LogDir = "$($script:DataDir)\logs"; PolicyBackupsDir = "$($script:DataDir)\policy-backups"
       DataDirState = New-PathState 'missing'; LogDirState = New-PathState 'missing'; PolicyBackupsState = New-PathState 'missing'
-      DataDirForeign = $null
+      DataDirEntries = $null
       DataFiles = @{ 'policy.json' = New-PathState 'missing'; 'token' = New-PathState 'missing'; 'browser-token' = New-PathState 'missing' }
       TaskFolderOwner = $null; PublicNetwork = $false
     }
@@ -58,13 +59,26 @@ BeforeAll {
   # The same machine after Install-Rpa.ps1 -AllowFrom 10.0.0.5 -UserPassword ... ran on it.
   function New-InstalledFacts([hashtable]$Change = @{}) {
     $facts = New-TestFacts @{
-      Installed = $true; UserExists = $true
+      Installed = $true; UserExists = $true; UserSid = $script:BotSid; InstalledUser = 'rpa-runner'; InstalledForUser = $true
       InstalledRunnerPort = 8765; InstalledBrowserPort = 3000; InstalledBrowser = $true; InstalledAllowFrom = @('10.0.0.5')
       DataDirState = New-PathState 'ours'; LogDirState = New-PathState 'ours'; PolicyBackupsState = New-PathState 'ours'
       DataFiles = @{ 'policy.json' = New-PathState 'ours'; 'token' = New-PathState 'ours'; 'browser-token' = New-PathState 'ours' }
     }
     foreach ($key in $Change.Keys) { $facts[$key] = $Change[$key] }
     $facts
+  }
+
+  # What Get-RpaMachineFacts says about everything else in a data directory that is there already: the first link or
+  # file with a second name, and, by owner, what does not belong to Administrators or SYSTEM (outside and inside
+  # policy-backups\).
+  $script:BotSid = 'S-1-5-21-1-2-3-1001'
+  function New-DataEntries([hashtable]$Change = @{}) {
+    $entries = @{ Link = $null; Owners = @(); Backups = @(); Accounts = @{} }
+    foreach ($key in $Change.Keys) { $entries[$key] = $Change[$key] }
+    $entries
+  }
+  function New-OwnerEntry([string]$Sid, [string]$Name, [int]$Number, [string]$First, [int]$Order) {
+    @{ Sid = $Sid; Name = $Name; Number = $Number; First = "$($script:DataDir)\$First"; Order = $Order }
   }
 
   # Stands for a -UserPassword value. The plan only looks at whether one was given, so it is empty: no secret here.
@@ -163,8 +177,8 @@ Describe 'Get-RpaInstallPlan' {
     }
 
     It 'refuses an upgrade for another user while automatic sign-in is set up for the first one' {
-      $facts = New-InstalledFacts @{ InstalledAutoSignInUser = 'rpa-runner' }
-      $text = 'Automatic sign-in is set up for rpa-runner. Uninstall first, then install for bot2.'
+      $facts = New-InstalledFacts @{ InstalledAutoSignInUser = 'rpa-runner'; InstalledForUser = $false }
+      $text = 'Automatic sign-in is set up for rpa-runner. Uninstall with -RemoveData first, then install for bot2.'
       $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ User = 'bot2' }) -Facts $facts
       $plan.Refusals | Should -BeExactly @($text)
       $plan.Steps.Count | Should -Be 0
@@ -433,23 +447,97 @@ Describe 'Get-RpaInstallPlan' {
       (Get-RpaInstallPlan -Parameters $script:Parameters -Facts $facts).Refusals | Should -BeExactly @($text)
     }
 
-    It 'on a first install, refuses a data directory that holds something <Why>' -ForEach @(
-      @{ Why = 'someone else owns'; Entry = @{ Path = 'C:\ProgramData\RPA Runner\browser-key.pem'; IsLink = $false; Links = 1; Owner = 'BOT-PC\mallory' }
-        Text = 'C:\ProgramData\RPA Runner\browser-key.pem exists and is owned by BOT-PC\mallory. Check what is in the data directory, remove it, and run the installer again.' }
-      @{ Why = 'that is a link or junction'; Entry = @{ Path = 'C:\ProgramData\RPA Runner\exports'; IsLink = $true; Links = 1; Owner = 'BUILTIN\Administrators' }
+    It 'on a first install, refuses a data directory that holds <Why>' -ForEach @(
+      @{ Why = 'a link or junction'; Link = @{ Path = 'C:\ProgramData\RPA Runner\exports'; IsLink = $true; Links = 1 }
         Text = 'C:\ProgramData\RPA Runner\exports is a link or junction. Remove it and run the installer again.' }
-      @{ Why = 'that has a second name'; Entry = @{ Path = 'C:\ProgramData\RPA Runner\logs\runner.out.log'; IsLink = $false; Links = 2; Owner = 'BUILTIN\Administrators' }
+      @{ Why = 'a file with a second name'; Link = @{ Path = 'C:\ProgramData\RPA Runner\logs\runner.out.log'; IsLink = $false; Links = 2 }
         Text = 'C:\ProgramData\RPA Runner\logs\runner.out.log has more than one name (a hard link). Check what it is, remove it, and run the installer again.' }
     ) {
-      $facts = New-TestFacts @{ DataDirState = New-PathState 'ours'; DataDirForeign = $Entry }
+      # Also when everything in it belongs to the user of this run.
+      $entries = New-DataEntries @{ Link = $Link; Owners = @(New-OwnerEntry $script:BotSid 'BOT-PC\rpa-runner' 4 'exports' 1) }
+      $facts = New-TestFacts @{ UserExists = $true; UserSid = $script:BotSid; DataDirState = New-PathState 'ours'; DataDirEntries = $entries }
       $plan = Get-RpaInstallPlan -Parameters $script:Parameters -Facts $facts
       $plan.Refusals | Should -BeExactly @($Text)
       $plan.Steps.Count | Should -Be 0
     }
 
-    It 'on an upgrade, does not judge what the bot user keeps in the data directory' {
-      $entry = @{ Path = 'C:\ProgramData\RPA Runner\browser-key.pem'; IsLink = $false; Links = 1; Owner = 'BOT-PC\rpa-runner' }
-      (Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-InstalledFacts @{ DataDirForeign = $entry })).Refusals.Count | Should -Be 0
+    # What an uninstall kept: the bot user's logs, certificates and exports are its own.
+    It 'a first install for a user that exists takes a data directory in which everything belongs to Administrators, SYSTEM or that user' {
+      $files = @{ 'policy.json' = New-PathState 'ours'; 'token' = New-PathState 'ours'; 'browser-token' = New-PathState 'ours' }
+      $entries = New-DataEntries @{ Owners = @(New-OwnerEntry $script:BotSid 'BOT-PC\rpa-runner' 12 'exports' 1) }
+      $facts = New-TestFacts @{
+        UserExists = $true; UserSid = $script:BotSid; DataDirEntries = $entries; DataFiles = $files
+        DataDirState = New-PathState 'ours'; LogDirState = New-PathState 'ours'; PolicyBackupsState = New-PathState 'ours'
+      }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts $facts
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Questions.Count | Should -Be 0
+      foreach ($step in 'write policy', 'write token', 'write browser-token', 'create user') { $plan.Steps | Should -Not -Contain $step }
+      $plan.Steps | Should -Contain 'protect the data directory'
+    }
+
+    It 'refuses once, with their number and the first of them, what belongs to other accounts' {
+      $entries = New-DataEntries @{ Owners = @(
+          (New-OwnerEntry $script:BotSid 'BOT-PC\rpa-runner' 12 'exports' 1)
+          (New-OwnerEntry 'S-1-5-21-1-2-3-1002' 'BOT-PC\mallory' 2 'browser-key.pem' 7)
+          (New-OwnerEntry 'S-1-5-21-1-2-3-1003' 'BOT-PC\bot2' 1 'logs\old.log' 3)
+        ) }
+      $facts = New-TestFacts @{ UserExists = $true; UserSid = $script:BotSid; DataDirState = New-PathState 'ours'; DataDirEntries = $entries }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts $facts
+      $plan.Refusals | Should -BeExactly @('3 entries in C:\ProgramData\RPA Runner belong to other accounts (the first: C:\ProgramData\RPA Runner\logs\old.log, owned by BOT-PC\bot2). Remove the data directory with Uninstall-Rpa.ps1 -RemoveData, or remove those entries, and run the installer again.')
+      $plan.Steps.Count | Should -Be 0
+    }
+
+    It 'says it in the singular for one entry' {
+      $entries = New-DataEntries @{ Owners = @(New-OwnerEntry 'S-1-5-21-1-2-3-1002' 'BOT-PC\mallory' 1 'browser-key.pem' 7) }
+      $facts = New-TestFacts @{ UserExists = $true; UserSid = $script:BotSid; DataDirState = New-PathState 'ours'; DataDirEntries = $entries }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts $facts
+      $plan.Refusals | Should -BeExactly @('1 entry in C:\ProgramData\RPA Runner belongs to another account (C:\ProgramData\RPA Runner\browser-key.pem, owned by BOT-PC\mallory). Remove the data directory with Uninstall-Rpa.ps1 -RemoveData, or remove that entry, and run the installer again.')
+    }
+
+    # An account of the same name made earlier has another SID; and a user this run creates did not exist when the
+    # entries were made.
+    It 'when this run creates the user, nothing in the data directory is its own' {
+      $entries = New-DataEntries @{ Owners = @(New-OwnerEntry 'S-1-5-21-1-2-3-1001' 'S-1-5-21-1-2-3-1001' 9 'exports' 1) }
+      $facts = New-TestFacts @{ DataDirState = New-PathState 'ours'; DataDirEntries = $entries }
+      $plan = Get-RpaInstallPlan -Parameters $script:Parameters -Facts $facts
+      $plan.Refusals | Should -BeExactly @('9 entries in C:\ProgramData\RPA Runner belong to other accounts (the first: C:\ProgramData\RPA Runner\exports, owned by S-1-5-21-1-2-3-1001). Remove the data directory with Uninstall-Rpa.ps1 -RemoveData, or remove those entries, and run the installer again.')
+      $plan.Steps.Count | Should -Be 0
+    }
+
+    It 'counts everything in policy-backups that Administrators or SYSTEM do not own, also what belongs to the user of this run' {
+      $entries = New-DataEntries @{
+        Owners  = @(New-OwnerEntry $script:BotSid 'BOT-PC\rpa-runner' 12 'exports' 1)
+        Backups = @(New-OwnerEntry $script:BotSid 'BOT-PC\rpa-runner' 2 'policy-backups\policy-1.json' 5)
+      }
+      $facts = New-TestFacts @{ UserExists = $true; UserSid = $script:BotSid; DataDirState = New-PathState 'ours'; DataDirEntries = $entries }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts $facts
+      $plan.Refusals | Should -BeExactly @('2 entries in C:\ProgramData\RPA Runner belong to other accounts (the first: C:\ProgramData\RPA Runner\policy-backups\policy-1.json, owned by BOT-PC\rpa-runner). Remove the data directory with Uninstall-Rpa.ps1 -RemoveData, or remove those entries, and run the installer again.')
+    }
+
+    It 'on an upgrade for the same user, does not judge what is in the data directory' {
+      $entries = New-DataEntries @{
+        Link   = @{ Path = 'C:\ProgramData\RPA Runner\exports\x'; IsLink = $true; Links = 1 }
+        Owners = @((New-OwnerEntry $script:BotSid 'BOT-PC\rpa-runner' 12 'exports' 1), (New-OwnerEntry 'S-1-5-21-1-2-3-1002' 'BOT-PC\mallory' 2 'browser-key.pem' 7))
+      }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-InstalledFacts @{ DataDirEntries = $entries })
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Questions.Count | Should -Be 0
+    }
+
+    It 'on an upgrade for another user, what the user before left there belongs to another account' {
+      $entries = New-DataEntries @{ Owners = @((New-OwnerEntry $script:BotSid 'BOT-PC\rpa-runner' 12 'exports' 1), (New-OwnerEntry 'S-1-5-21-1-2-3-1003' 'BOT-PC\bot2' 1 'logs\x.log' 2)) }
+      $facts = New-InstalledFacts @{ InstalledForUser = $false; UserSid = 'S-1-5-21-1-2-3-1003'; DataDirEntries = $entries }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ User = 'bot2' }) -Facts $facts
+      $plan.Refusals | Should -BeExactly @('12 entries in C:\ProgramData\RPA Runner belong to other accounts (the first: C:\ProgramData\RPA Runner\exports, owned by BOT-PC\rpa-runner). Remove the data directory with Uninstall-Rpa.ps1 -RemoveData, or remove those entries, and run the installer again.')
+      $plan.Steps.Count | Should -Be 0
+    }
+
+    It 'on an upgrade that creates the user again, what the removed user left there belongs to another account' {
+      $entries = New-DataEntries @{ Owners = @(New-OwnerEntry $script:BotSid $script:BotSid 12 'exports' 1) }
+      $facts = New-InstalledFacts @{ UserExists = $false; UserSid = $null; DataDirEntries = $entries }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ UserPassword = New-TestPassword }) -Facts $facts
+      $plan.Refusals | Should -BeExactly @("12 entries in C:\ProgramData\RPA Runner belong to other accounts (the first: C:\ProgramData\RPA Runner\exports, owned by $($script:BotSid)). Remove the data directory with Uninstall-Rpa.ps1 -RemoveData, or remove those entries, and run the installer again.")
     }
 
     It 'refuses a policy-backups folder that is a link, or that someone else owns, on a first install and on an upgrade' {
@@ -479,6 +567,41 @@ Describe 'Get-RpaInstallPlan' {
       $plan = Get-RpaInstallPlan -Parameters $script:Parameters -Facts (New-TestFacts @{ TaskFolderOwner = 'BOT-PC\mallory' })
       $plan.Refusals | Should -BeExactly @('The scheduled task folder \RPA\ exists and is owned by BOT-PC\mallory. Check what is in it, remove it, and run the installer again.')
       $plan.Steps.Count | Should -Be 0
+    }
+  }
+
+  Context 'an upgrade with another -User' {
+    BeforeAll { $script:NotTheUser = 'bot2 is not the user this install was made for (rpa-runner).' }
+
+    It 'says so and has it confirmed: a question without -Force, a warning with it' {
+      $facts = New-InstalledFacts @{ InstalledForUser = $false; UserSid = 'S-1-5-21-1-2-3-1003' }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ User = 'bot2' }) -Facts $facts
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Questions | Should -BeExactly @($script:NotTheUser)
+      $plan.Warnings.Count | Should -Be 0
+      $plan.Steps | Should -Not -Contain 'create user'
+
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ User = 'bot2'; Force = $true }) -Facts $facts
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Questions.Count | Should -Be 0
+      $plan.Warnings | Should -BeExactly @($script:NotTheUser)
+    }
+
+    # A mistyped name: the user does not exist and would be created.
+    It 'says so before it creates a user of that name' {
+      $facts = New-InstalledFacts @{ InstalledForUser = $false; UserExists = $false; UserSid = $null }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ User = 'bot2'; UserPassword = New-TestPassword }) -Facts $facts
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Questions | Should -BeExactly @($script:NotTheUser)
+      $plan.Steps | Should -Contain 'create user'
+    }
+
+    It 'asks nothing for the user of the install, on a first install, or when the recorded user is created again' {
+      (Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-InstalledFacts)).Questions.Count | Should -Be 0
+      (Get-RpaInstallPlan -Parameters (New-TestParameters @{ UserPassword = New-TestPassword }) -Facts (New-TestFacts)).Questions.Count | Should -Be 0
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ UserPassword = New-TestPassword }) -Facts (New-InstalledFacts @{ UserExists = $false; UserSid = $null })
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Questions.Count | Should -Be 0
     }
   }
 

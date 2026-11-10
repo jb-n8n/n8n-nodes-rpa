@@ -28,7 +28,8 @@
 #   -AutoSignIn    Have Windows sign the bot user in by itself at every start and keep the desktop unlocked. The
 #                  password is stored on this machine, and several settings change for the whole machine; the installer
 #                  lists them and asks for YES first, unless -Force is given. Uninstall-Rpa.ps1 puts them back.
-#   -Force         Do not ask, and upgrade even while the runner is running (a run in progress fails).
+#   -Force         Do not ask (about -AutoSignIn, or about another -User than the one of the install), and upgrade
+#                  even while the runner is running (a run in progress fails).
 #
 # Unpack the package on a local drive where only you or administrators can change it, for example under your own
 # profile or under C:\Program Files: when it starts, the installer finds the real location of the package and reads
@@ -37,13 +38,17 @@
 #
 # Programs go to C:\Program Files\RPA Runner, data (policy.json, the tokens, the certificates, logs) to
 # C:\ProgramData\RPA Runner. A data directory that is there before the first install (for example one an uninstall
-# kept) is used only when everything in it belongs to Administrators or SYSTEM; the installer names the first thing
-# that does not, for you to check and remove. Running the installer again upgrades: it replaces the programs and keeps
-# the data and the user; give it the same -User, ports and -NoBrowser as before (another -User is refused while
-# automatic sign-in is set up for the first one). It keeps the firewall addresses and networks of the
-# earlier run when none are given, and automatic sign-in that an earlier run turned on (then -AutoSignIn needs no -UserPassword; give
-# one to store a changed password). Without a user of its own making, -AutoSignIn needs -UserPassword: a password the
-# installer generated is stored for Windows and known to nobody. The installer prints no secret.
+# kept) is used when everything in it belongs to Administrators, to SYSTEM or to the bot user of this install, and
+# that user was there before this run: an install for the same user keeps the policy, the tokens and the certificates.
+# Otherwise the installer says how many entries belong to other accounts and names the first, and refuses.
+# Running the installer again upgrades: it replaces the programs and keeps the data and the user; give it the same
+# -User, ports and -NoBrowser as before. Another -User than the one of the install is named and asked about first
+# (unless -Force is given), and is refused while automatic sign-in is set up for the first user or while the data
+# directory holds what the first user left there. An upgrade keeps the firewall addresses and networks of the earlier
+# run when none are given, and automatic sign-in that an earlier run turned on (then -AutoSignIn needs no
+# -UserPassword; give one to store a changed password). Without a user of its own making, -AutoSignIn needs
+# -UserPassword: a password the installer generated is stored for Windows and known to nobody. The installer prints
+# no secret.
 # Exit codes: 0 installed, 1 refused or failed, 3 declined at the question.
 [CmdletBinding()]
 param(
@@ -240,7 +245,18 @@ if ($plan.Refusals.Count -gt 0) {
   exit 1
 }
 
-if ($plan.Steps -contains 'turn on automatic sign-in' -and -not $Force) {
+# What the installer has confirmed before it changes anything: another -User than the one the install was made for,
+# and what -AutoSignIn means. One answer covers both.
+$askSignIn = ($plan.Steps -contains 'turn on automatic sign-in') -and -not $Force
+if ($plan.Questions.Count -gt 0 -or $askSignIn) {
+  foreach ($question in $plan.Questions) { Write-Host $question }
+  if ($plan.Questions.Count -gt 0) {
+    if ($plan.Steps -contains 'create user') { Write-Host ('  There is no Windows user {0}: continuing creates it.' -f $User) }
+    Write-Host ("  Continuing makes {0} the bot user of this install: the scheduled tasks then run as {0}, and {0} gets the" -f $User)
+    Write-Host "  bot user's access to the data directory."
+  }
+}
+if ($askSignIn) {
   Write-Host '-AutoSignIn changes how this machine works:'
   Write-Host ('  - The password of {0} is stored on this machine, where Windows keeps a password for automatic sign-in.' -f $User)
   Write-Host '    An administrator of this machine can read it.'
@@ -252,6 +268,8 @@ if ($plan.Steps -contains 'turn on automatic sign-in' -and -not $Force) {
   Write-Host ("  - Anyone who can reach this machine's screen or console can use the desktop of {0}." -f $User)
   Write-Host '  Uninstall-Rpa.ps1 puts these settings back to what they were. It cannot bring back a password that was'
   Write-Host '  stored for automatic sign-in before.'
+}
+if ($plan.Questions.Count -gt 0 -or $askSignIn) {
   $answer = ''
   try { $answer = Read-Host 'Type YES to continue' } catch { $answer = '' }
   if ($answer -cne 'YES') {
