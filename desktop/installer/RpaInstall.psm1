@@ -569,7 +569,8 @@ function Invoke-RpaNative([string]$Exe, [string[]]$Arguments) {
   $tool = Get-RpaSystemTool $Exe
   $output = @(& $tool @Arguments 2>&1)
   if ($LASTEXITCODE -ne 0) {
-    $said = (@($output | ForEach-Object { "$_".Trim() } | Where-Object { $_ }) -join ' ')
+    # An empty line a tool writes to its error stream arrives as an error record that shows only its type's name.
+    $said = (@($output | ForEach-Object { "$_".Trim() } | Where-Object { $_ -and $_ -ne 'System.Management.Automation.RemoteException' }) -join ' ')
     throw ('{0} {1} failed with exit code {2}: {3}' -f $Exe, $Arguments[0], $LASTEXITCODE, $said)
   }
 }
@@ -1527,7 +1528,7 @@ function Invoke-RpaUninstall {
   $install = Read-RpaInstallFile $layout.InstallFile
   $result = @{
     User = $null; AutoSignIn = $false; SignInKept = $false; HadChanges = $false; NotRestored = @()
-    LeftoversFile = $null; LeftoversProblem = $null; Layout = $layout
+    LeftoversFile = $null; LeftoversProblem = $null; DataRemoved = $false; Layout = $layout
   }
   if ($install) {
     $result.User = [string]$install.user
@@ -1577,6 +1578,7 @@ function Invoke-RpaUninstall {
     # Looked at again: the plan saw who was signed in before the steps above ran.
     $signedIn = @(Get-RpaSignedInUsers $layout $install)
     if ($signedIn.Count -gt 0) { throw ('{0} is signed in. Sign {0} out, then run Uninstall-Rpa.ps1 -RemoveData again.' -f $signedIn[0]) }
+    $result.DataRemoved = (Get-RpaPathState $layout.DataDir).Exists
     Remove-RpaTree $layout.DataDir
   }
   $result

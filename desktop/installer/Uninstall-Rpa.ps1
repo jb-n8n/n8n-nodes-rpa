@@ -225,7 +225,7 @@ if ($result.HadChanges) {
     else { Write-Host ('  This list could not be kept in {0}: {1}' -f $result.Layout.DataDir, $result.LeftoversProblem) }
   }
 }
-if ($RemoveData) { Write-Host ('  Removed:   {0}' -f $result.Layout.DataDir) }
+if ($result.DataRemoved) { Write-Host ('  Removed:   {0}' -f $result.Layout.DataDir) }
 elseif (Test-Path -LiteralPath $result.Layout.DataDir) {
   Write-Host ('  Kept:      {0} (remove it with -RemoveData)' -f $result.Layout.DataDir)
   Write-Host '             A later install uses it only when everything in it belongs to Administrators or SYSTEM: it'
