@@ -1,6 +1,6 @@
 // desktop-testbed.sh against fake terraform, aws, curl and pbcopy on PATH: the state stays outside the repository, up
-// opens the test bed only to the given (or detected) CIDRs, stop/start/status/fingerprint/install-runner call the right
-// AWS APIs, and the Administrator password never reaches the output unless asked for.
+// opens the test bed only to the given (or detected) CIDRs, stop/start/status/fingerprint/install call the right AWS
+// APIs, no URL query string reaches the output, and the Administrator password never does unless asked for.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -14,6 +14,7 @@ const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 const INSTANCE = 'i-0123456789abcdef0';
 const SECRET = 'AdminPw-ZYXWVUTSRQPONMLKJIHGFEDCBA-0123';
 const FINGERPRINT = Array.from({ length: 32 }, (_, i) => (i * 7 + 16).toString(16).toUpperCase().padStart(2, '0')).join(':');
+const BROWSER_FINGERPRINT = Array.from({ length: 32 }, (_, i) => (i * 5 + 32).toString(16).toUpperCase().padStart(2, '0')).join(':');
 const SECRET_ARN = 'arn:aws:secretsmanager:us-west-2:123456789012:secret:rpa-desktop-testbed-admin-password-MnOpQr';
 
 // Each fake appends one line per call to calls.log: the tool, then its arguments, separated by \x1f.
@@ -25,6 +26,7 @@ if [ "$1" = output ]; then
     instance_id) printf '%s' "${INSTANCE}" ;;
     region) printf 'us-west-2' ;;
     runner_url) printf 'wss://203.0.113.50:8765/rpa/v1' ;;
+    browser_url) printf 'wss://203.0.113.50:3000' ;;
     admin_password_secret_arn) printf '%s' "${SECRET_ARN}" ;;
     *) exit 1 ;;
   esac
@@ -122,17 +124,17 @@ test('up opens the test bed to this machine\'s IP /32 and keeps state, working d
   } finally { t.done(); }
 });
 
-test('up takes TESTBED_ALLOWED_CIDRS and the runner artifact, and refuses the whole internet', () => {
+test('up takes TESTBED_ALLOWED_CIDRS and the package, and refuses the whole internet and a package URL without its hash', () => {
   const t = setup();
   try {
     let r = t.run(['up'], {
       AWS_REGION: 'eu-west-1', TESTBED_ALLOWED_CIDRS: '203.0.113.7/32, 2001:db8::/48',
-      TESTBED_RUNNER_ARTIFACT_URL: 'https://example.com/r.zip', TESTBED_RUNNER_ARTIFACT_SHA256: 'ab'.repeat(32),
+      TESTBED_PACKAGE_URL: 'https://example.com/rpa-windows-x64.zip', TESTBED_PACKAGE_SHA256: 'ab'.repeat(32),
     });
     assert.equal(r.code, 0, r.out);
     assert.deepEqual(JSON.parse(readFileSync(join(t.state, 'testbed.tfvars.json'), 'utf8')), {
       aws_region: 'eu-west-1', allowed_cidrs: ['203.0.113.7/32', '2001:db8::/48'],
-      runner_artifact_url: 'https://example.com/r.zip', runner_artifact_sha256: 'ab'.repeat(32),
+      package_url: 'https://example.com/rpa-windows-x64.zip', package_sha256: 'ab'.repeat(32),
     });
     assert.ok(!t.calls().some((c) => c[0] === 'curl'), 'no IP lookup when CIDRs are given');
     for (const bad of ['0.0.0.0/0', '203.0.113.7/32,::/0', '0.0.0.0/1', '3.0.0.0/8', '2001:db8::/32', '203.0.113.7']) {
@@ -141,6 +143,16 @@ test('up takes TESTBED_ALLOWED_CIDRS and the runner artifact, and refuses the wh
         r = u.run(['up'], { AWS_REGION: 'us-west-2', TESTBED_ALLOWED_CIDRS: bad });
         assert.equal(r.code, 1, bad);
         assert.ok(!u.calls().some((c) => c[0] === 'terraform'), `${bad}: terraform never runs`);
+      } finally { u.done(); }
+    }
+    const url = 'https://bucket.s3.amazonaws.com/rpa-windows-x64.zip?X-Amz-Signature=deadbeef';
+    for (const env of [{ TESTBED_PACKAGE_URL: url }, { TESTBED_PACKAGE_SHA256: 'ab'.repeat(32) }, { TESTBED_PACKAGE_URL: url, TESTBED_PACKAGE_SHA256: 'abc' }, { TESTBED_PACKAGE_URL: 'http://example.com/p.zip', TESTBED_PACKAGE_SHA256: 'ab'.repeat(32) }]) {
+      const u = setup();
+      try {
+        r = u.run(['up'], { AWS_REGION: 'us-west-2', TESTBED_ALLOWED_CIDRS: '203.0.113.7/32', ...env });
+        assert.equal(r.code, 1, JSON.stringify(env));
+        assert.ok(!r.out.includes('X-Amz-Signature'), 'the query string is not echoed');
+        assert.ok(!u.calls().some((c) => c[0] === 'terraform'), 'terraform never runs');
       } finally { u.done(); }
     }
   } finally { t.done(); }
@@ -175,26 +187,33 @@ test('status shows state, URL and SSM, and needs a brought-up test bed', () => {
     r = t.run(['status']);
     assert.equal(r.code, 0, r.out);
     assert.match(r.stdout, new RegExp(`instance ${INSTANCE} \\(us-west-2\\): running`));
-    assert.match(r.stdout, /wss:\/\/203\.0\.113\.50:8765\/rpa\/v1/);
+    assert.match(r.stdout, /runner URL wss:\/\/203\.0\.113\.50:8765\/rpa\/v1/);
+    assert.match(r.stdout, /browser URL wss:\/\/203\.0\.113\.50:3000$/m);
     assert.match(r.stdout, /SSM: Online/);
   } finally { t.done(); }
 });
 
-test('fingerprint reads the runner log through SSM Run Command', () => {
+test('fingerprint runs Show-RpaConnection.ps1', () => {
   const t = setup();
   try {
     t.brought();
-    let r = t.run(['fingerprint'], { FAKE_SSM_OUTPUT: FINGERPRINT });
+    // What Show-RpaConnection.ps1 prints, with Windows line ends; only its two fingerprint lines are passed on.
+    const shown = ['Runner URL: wss://10.90.0.10:8765/rpa/v1', `Runner fingerprint: ${FINGERPRINT}`, 'Browser URL: wss://10.90.0.10:3000', `Browser fingerprint: ${BROWSER_FINGERPRINT}`, 'Browser fingerprint: \x1b[2Jnot a fingerprint'].join('\r\n');
+    let r = t.run(['fingerprint'], { FAKE_SSM_OUTPUT: shown });
     assert.equal(r.code, 0, r.out);
-    assert.equal(r.stdout.trim(), FINGERPRINT);
+    assert.equal(r.stdout, `Runner fingerprint: ${FINGERPRINT}\nBrowser fingerprint: ${BROWSER_FINGERPRINT}\n`);
     const send = t.calls().find((c) => c.includes('send-command'));
     assert.ok(send.includes('AWS-RunPowerShellScript') && send.includes(INSTANCE));
     const params = JSON.parse(send[send.indexOf('--parameters') + 1]);
-    assert.equal(params.commands[0].split(' | ')[0], 'Get-ChildItem -Path "$env:ProgramData\\RPA Runner\\logs\\*.log" -File');
-    assert.ok(params.commands[0].includes("-Pattern '([0-9A-F]{2}:){31}[0-9A-F]{2}'"));
-    r = t.run(['fingerprint'], { FAKE_SSM_OUTPUT: '' });
+    assert.deepEqual(params.commands, ["& 'C:\\Program Files\\RPA Runner\\scripts\\Show-RpaConnection.ps1'"], 'never with -ShowTokens');
+    r = t.run(['fingerprint'], { FAKE_SSM_OUTPUT: `Runner fingerprint: ${FINGERPRINT}\r\nBrowser fingerprint: not known yet\r\nBrowser: not listening: see C:\\ProgramData\\RPA Runner\\logs\\browser.err.log` });
     assert.equal(r.code, 1);
-    assert.match(r.stderr, /no fingerprint in the runner's log yet/);
+    assert.equal(r.stdout, `Runner fingerprint: ${FINGERPRINT}\nBrowser fingerprint: not known yet\n`);
+    assert.match(r.stderr, /a fingerprint is not known yet/);
+    r = t.run(['fingerprint'], { FAKE_SSM_OUTPUT: 'RPA is not installed here: C:\\Program Files\\RPA Runner\\install.json is missing. Run Install-Rpa.ps1 from the unpacked package.' });
+    assert.equal(r.code, 1);
+    assert.equal(r.stdout, '');
+    assert.match(r.stderr, /Show-RpaConnection\.ps1 printed no fingerprint/);
     r = t.run(['fingerprint'], { FAKE_SSM_STATUS: 'Failed' });
     assert.equal(r.code, 1);
     assert.match(r.stderr, /ended Failed/);
@@ -217,21 +236,33 @@ test('rdp-password copies the Administrator password to the clipboard and prints
   } finally { t.done(); }
 });
 
-test('install-runner sends install-runner.ps1 over SSM and refuses a bad URL or hash', () => {
+test('install sends the package URL and hash over SSM and refuses a bad URL or a missing hash', () => {
   const t = setup();
   try {
     t.brought();
-    const url = 'https://bucket.s3.amazonaws.com/rpa-desktop-runner.zip?X-Amz-Signature=deadbeef';
-    let r = t.run(['install-runner', url, 'CD'.repeat(32)], { FAKE_SSM_OUTPUT: 'installed rpa-desktop-runner.exe' });
+    const url = 'https://bucket.s3.amazonaws.com/rpa-windows-x64.zip?X-Amz-Expires=3600&X-Amz-Signature=deadbeef';
+    let r = t.run(['install', url, 'CD'.repeat(32)], { FAKE_SSM_OUTPUT: 'installed' });
     assert.equal(r.code, 0, r.out);
-    assert.ok(!r.out.includes('X-Amz-Signature'), 'the query string is not echoed');
+    assert.ok(!r.out.includes('X-Amz-'), 'the query string is not echoed');
+    assert.match(r.stdout, /installing the package from https:\/\/bucket\.s3\.amazonaws\.com\/rpa-windows-x64\.zip \(/);
     const send = t.calls().find((c) => c.includes('send-command'));
     const params = JSON.parse(send[send.indexOf('--parameters') + 1]);
-    assert.equal(params.commands[0], `& 'C:\\Program Files\\RPA Runner\\install-runner.ps1' -Url '${url}' -Sha256 '${'CD'.repeat(32)}'`);
-    for (const args of [['install-runner'], ['install-runner', 'http://example.com/r.zip'], ['install-runner', "https://example.com/a'b.zip"], ['install-runner', 'https://example.com/r.zip', 'abc']]) {
+    assert.deepEqual(params.commands, [`& 'C:\\Program Files\\RPA Test Bed\\install-package.ps1' -Url '${url}' -Sha256 '${'CD'.repeat(32)}'`]);
+    const sent = t.calls().length;
+    const sha = 'ab'.repeat(32);
+    for (const args of [
+      ['install'], ['install', url], ['install', url, 'abc'], ['install', url, `${sha}'; calc; '`],
+      ['install', 'http://example.com/p.zip', sha], ["install", "https://example.com/a'b.zip", sha], ['install', 'https://example.com/a b.zip', sha],
+      ['install', 'https://example.com/a`b.zip', sha], ['install', 'https://example.com/a"b.zip', sha], ['install', 'https://example.com/a\u2019;calc;\u2019.zip', sha],
+      ['install', 'https://example.com/p.zip?sig=secret-part\nrm', sha],
+    ]) {
       r = t.run(args);
       assert.equal(r.code, 1, args.join(' '));
+      assert.ok(!r.out.includes('secret-part'), 'a refused URL is not echoed with its query string');
     }
+    assert.ok(!t.calls().slice(sent).some((c) => c.includes('send-command')), 'nothing is sent for a refused URL or hash');
+    r = t.run(['install-runner', url, sha]);
+    assert.equal(r.code, 2, 'install-runner is gone');
   } finally { t.done(); }
 });
 
