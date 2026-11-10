@@ -408,7 +408,8 @@ The maintainers release the Windows package, `rpa-windows-x64.zip`, from the `De
    the zip's SHA-256 with the hash the `desktop` workflow computed when it staged the zip (not with the `.sha256` file
    in the artifact), checks that `rpa-windows-x64.zip.sha256` holds that same hash, and that the `VERSION` file in the
    zip is the tag's version.
-4. It waits until a required reviewer of the `desktop-release` environment approves the release. Then it downloads
+4. It waits until a required reviewer of the `desktop-release` environment approves the release (see "Before the
+   first release" for what that approval covers). Then it downloads
    and checks the package again in the same way, checks that the tag still names the commit it built, records a
    build attestation of the zip and creates the GitHub Release `desktop-v<version>` with `rpa-windows-x64.zip` and
    `rpa-windows-x64.zip.sha256`. It stops if a release for that tag exists already, a draft included; it does not
@@ -417,10 +418,18 @@ The maintainers release the Windows package, `rpa-windows-x64.zip`, from the `De
 A manual run (Actions, `Desktop release`, Run workflow, on `main`) is a dry run: it does steps 1 to 3 with the
 version of `desktop/Directory.Build.props` in place of a tag, and never attests or publishes anything.
 
-**Before the first release**, in the repository settings (Environments): create the environment `desktop-release`,
-add required reviewers (the people who approve each release), and add a deployment tag rule `desktop-v*`. GitHub
-creates an environment that does not exist when a job first names it, with no protection; step 1 stops the workflow
-while `desktop-release` has no required reviewers. Then run the dry run once on `main`.
+**Before the first release**, in the repository settings:
+
+- Environments: create the environment `desktop-release`, add required reviewers (the people who approve each
+  release), and add a deployment tag rule `desktop-v*`. GitHub creates an environment that does not exist when a job
+  first names it, with no protection; step 1 stops the workflow while `desktop-release` has no required reviewers.
+- Rules, Rulesets: add a tag ruleset for `desktop-v*` that restricts creating, updating (moving) and deleting such
+  tags, with only the release maintainers allowed to bypass it. The approval of the environment applies to a run of a
+  workflow file that names the environment, and whoever can push a tag also chooses the workflow file of the tagged
+  commit: one that leaves the environment out, or these checks, runs without asking anyone. The ruleset limits who
+  can push such a tag.
+
+Then run the dry run once on `main`.
 
 The package is not code-signed: the zip has no signature, and neither have the runner, the policy tool, the ERP Demo
 or the PowerShell scripts in it (the files it ships from other projects, such as `node.exe` and Chromium, are as those

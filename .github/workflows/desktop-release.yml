@@ -198,8 +198,11 @@ jobs:
     timeout-minutes: 15
     # Set on this environment in the repository settings before the first release: required reviewers (each release
     # waits for one of them to approve it) and a deployment tag rule `desktop-v*`. The environment-check job refuses to
-    # build while it has no required reviewers. That approval, not the checks in this file, is what stops a release
-    # from a tag nobody approved: whoever can push a tag also chooses the workflow file the tag's commit holds.
+    # build while it has no required reviewers. The approval applies to a run of a workflow file that names this
+    # environment, and the checks of this file apply to a run of this file: whoever can push a desktop-v tag also
+    # chooses the workflow file of the tagged commit, and one without this environment asks nobody. A tag ruleset
+    # that lets only the release maintainers create, move or delete desktop-v* tags limits who can push such a tag
+    # (desktop/README.md, "Before the first release").
     environment: desktop-release
     permissions:
       contents: write # create the release and upload its assets with GITHUB_TOKEN
