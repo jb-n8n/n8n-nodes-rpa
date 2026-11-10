@@ -2012,6 +2012,14 @@ Describe 'The installer scripts' {
     $blocks[1] | Should -BeExactly $blocks[0]
   }
 
+  # An upgrade keeps the policy file; only a run that wrote it may call it new.
+  It 'Install-Rpa.ps1 says that the policy allows no app only when this run wrote it' {
+    $source = Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir 'Install-Rpa.ps1')
+    $source | Should -Match ([regex]::Escape("if (`$plan.Steps -contains 'write policy') { Write-Host ('             It is new and allows no app. Change it with {0}' -f `$policyTool) }"))
+    $source | Should -Match ([regex]::Escape("else { Write-Host ('             It was there already and is kept as it is. Change it with {0}' -f `$policyTool) }"))
+    $source | Should -Not -Match 'A new policy allows no app'
+  }
+
   It 'says that it is checking before it reads the files of a package' {
     $source = Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir 'Install-Rpa.ps1')
     $said = $source.IndexOf("Write-Host `"Checking the package's files...`"")

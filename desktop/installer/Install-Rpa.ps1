@@ -314,7 +314,9 @@ Write-Host 'RPA is installed.'
 Write-Host ('  Programs:  {0}' -f $layout.InstallDir)
 Write-Host ('  Data:      {0} (policy.json, the tokens, the certificates, logs)' -f $layout.DataDir)
 Write-Host ('  Policy:    {0}' -f (Join-Path $layout.DataDir 'policy.json'))
-Write-Host ('             A new policy allows no app. Change it with {0}' -f (Join-Path (Join-Path $layout.InstallDir 'runner') 'RpaPolicy.exe'))
+$policyTool = Join-Path (Join-Path $layout.InstallDir 'runner') 'RpaPolicy.exe'
+if ($plan.Steps -contains 'write policy') { Write-Host ('             It is new and allows no app. Change it with {0}' -f $policyTool) }
+else { Write-Host ('             It was there already and is kept as it is. Change it with {0}' -f $policyTool) }
 if ($NoBrowser) { Write-Host ('  Task:      \RPA\RPA Runner starts when {0} signs in' -f $User) }
 else { Write-Host ('  Tasks:     \RPA\RPA Runner and \RPA\RPA Browser start when {0} signs in' -f $User) }
 if ($NoFirewall) { Write-Host '  Firewall:  not changed (-NoFirewall)' }
