@@ -1140,7 +1140,8 @@ Describe 'What the browser left in the local application data of the bot user' {
       $results[0].Path | Should -BeExactly $script:Temp
       $results[0].Name | Should -BeExactly 'rpa-runner'
       $results[0].Removed | Should -BeTrue
-      Should -Invoke -ModuleName RpaInstall Remove-RpaTree -Times 1 -Exactly -ParameterFilter { $Path -eq $script:Temp }
+      # The folders from the profile folder down are held open while the tree is removed.
+      Should -Invoke -ModuleName RpaInstall Remove-RpaTree -Times 1 -Exactly -ParameterFilter { $Path -eq $script:Temp -and $From -eq $script:Folders[0] }
       # Who else may change each of the four folders, asked about the bot user.
       foreach ($folder in $script:Folders) {
         Should -Invoke -ModuleName RpaInstall Get-RpaOtherWriters -Times 1 -Exactly -ParameterFilter { $Path -eq $folder -and $Sid -eq 'S-1-5-21-1-2-3-1001' }
@@ -1294,6 +1295,189 @@ Describe 'What the browser left in the local application data of the bot user' {
     $accounts = @(InModuleScope RpaInstall -Parameters @{ Dir = $dir; Install = $install } { Get-RpaDataAccounts @{ DataDir = $Dir } $Install (Get-RpaDataEntries $Dir) })
     @($accounts | Where-Object { $_.Sid -eq $me.User.Value })[0].Bot | Should -BeTrue
     @($accounts | Where-Object { $_.Sid -eq 'S-1-5-32-546' })[0].Bot | Should -BeFalse
+  }
+}
+
+# The installer removes, as an administrator, trees that other accounts may write into (the bot user's temp folder,
+# the data directory). Remove-RpaTree holds the folders from -From down to the one it removes open without delete
+# sharing, opens each entry without following a link, and deletes through handles.
+Describe 'Remove-RpaTree' {
+  BeforeAll {
+    $script:Cmd = Join-Path ([Environment]::SystemDirectory) 'cmd.exe'
+    function Invoke-RemoveTree([string]$Path, [string]$From, [scriptblock]$BeforeOpen) {
+      InModuleScope RpaInstall -Parameters @{ Path = $Path; From = $From; BeforeOpen = $BeforeOpen } { Remove-RpaTree $Path $From $BeforeOpen }
+    }
+    function New-Folder([string]$Path) { [void][IO.Directory]::CreateDirectory('\\?\' + $Path); $Path }
+    function New-TestBase([string]$Name) { New-Folder (Join-Path $TestDrive ($Name + '-' + [guid]::NewGuid().ToString('N'))) }
+    # A folder outside the tree with files in it, which nothing may delete.
+    function New-Victim([string]$Path) {
+      New-Folder (Join-Path $Path 'sub') | Out-Null
+      Set-Content -LiteralPath (Join-Path $Path 'a.txt') -Value 'a'
+      Set-Content -LiteralPath (Join-Path (Join-Path $Path 'sub') 'b.txt') -Value 'b'
+      $Path
+    }
+    # Every file under a folder with its content, in one text.
+    function Get-Contents([string]$Path) {
+      @(Get-ChildItem -LiteralPath $Path -Recurse -Force -File | Sort-Object FullName | ForEach-Object { '{0}={1}' -f $_.FullName.Substring($Path.Length), (Get-Content -Raw -LiteralPath $_.FullName).Trim() }) -join ';'
+    }
+    function Get-Failure([scriptblock]$Script) { try { & $Script; $null } catch { $_.Exception.Message } }
+  }
+
+  It 'refuses a folder that is not inside the folder to hold from' {
+    { Invoke-RemoveTree (Join-Path $TestDrive 'a') (Join-Path $TestDrive 'b') $null } | Should -Throw -ExpectedMessage ('{0} is not inside {1}.' -f (Join-Path $TestDrive 'a'), (Join-Path $TestDrive 'b'))
+  }
+
+  It 'on Windows: removes a junction, a folder symbolic link and a file symbolic link in the tree as links, and what they point at keeps every file' -Skip:($env:OS -ne 'Windows_NT') {
+    $base = New-TestBase 'links'
+    $victim = New-Victim (Join-Path $base 'victim')
+    $root = New-Folder (Join-Path $base 'root')
+    New-Folder (Join-Path $root 'sub\deeper') | Out-Null
+    Set-Content -LiteralPath (Join-Path $root 'sub\deeper\trace.zip') -Value 'x'
+    $links = @((Join-Path $root 'sub\junction'), (Join-Path $root 'folder-link'), (Join-Path $root 'file-link'))
+    & $script:Cmd /d /c ('mklink /J "{0}" "{1}"' -f $links[0], $victim) | Out-Null
+    & $script:Cmd /d /c ('mklink /D "{0}" "{1}"' -f $links[1], $victim) | Out-Null
+    & $script:Cmd /d /c ('mklink "{0}" "{1}"' -f $links[2], (Join-Path $victim 'a.txt')) | Out-Null
+    foreach ($link in $links) { [bool]((Get-Item -LiteralPath $link -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) | Should -BeTrue }
+    $before = Get-Contents $victim
+    $before | Should -BeExactly '\a.txt=a;\sub\b.txt=b'
+    Invoke-RemoveTree $root $root $null
+    $root | Should -Not -Exist
+    Get-Contents $victim | Should -BeExactly $before
+  }
+
+  It 'on Windows: a folder and a file swapped for links between the listing and their opening are removed as links; what the links point at keeps every file' -Skip:($env:OS -ne 'Windows_NT') {
+    $base = New-TestBase 'swap'
+    $victim = New-Victim (Join-Path $base 'victim')
+    $root = New-Folder (Join-Path $base 'root')
+    New-Folder (Join-Path $root 'swap') | Out-Null
+    Set-Content -LiteralPath (Join-Path $root 'swap\inside.txt') -Value 'x'
+    Set-Content -LiteralPath (Join-Path $root 'swap-file.txt') -Value 'x'
+    $before = Get-Contents $victim
+    $cmd = $script:Cmd
+    $swapped = @{}
+    # Runs between the listing of a folder and the opening of each entry: another process (cmd) deletes the entry and
+    # puts a link to the victim in its place. Moving the entry aside instead is refused: a rename inside a folder that
+    # is held with delete access cannot open that folder for the new name.
+    $hook = {
+      param($entry)
+      $name = Split-Path -Leaf $entry
+      if ($name -eq 'swap') {
+        $said = (& $cmd /d /c ('ren "{0}" swap-moved' -f $entry) 2>&1 | ForEach-Object { "$_" }) -join ' '
+        $swapped['rename'] = 'exit {0}: {1}' -f $LASTEXITCODE, $said.Trim()
+        & $cmd /d /c ('rd /s /q "{0}" && mklink /J "{0}" "{1}"' -f $entry, $victim) 2>&1 | Out-Null
+        $swapped[$name] = $LASTEXITCODE
+      } elseif ($name -eq 'swap-file.txt') {
+        & $cmd /d /c ('del /f /q "{0}" && mklink "{0}" "{1}"' -f $entry, (Join-Path $victim 'a.txt')) 2>&1 | Out-Null
+        $swapped[$name] = $LASTEXITCODE
+      }
+    }.GetNewClosure()
+    Invoke-RemoveTree $root $root $hook
+    $swapped['rename'] | Should -BeExactly 'exit 1: The process cannot access the file because it is being used by another process.'
+    $swapped['swap'] | Should -Be 0
+    $swapped['swap-file.txt'] | Should -Be 0
+    $root | Should -Not -Exist
+    Get-Contents $victim | Should -BeExactly $before
+  }
+
+  It 'on Windows: while the tree is removed another process can rename neither the folder removed nor a folder held above it, and afterwards it can' -Skip:($env:OS -ne 'Windows_NT') {
+    $base = New-TestBase 'held'
+    $top = New-Folder (Join-Path $base 'top')
+    $root = New-Folder (Join-Path $top 'middle\root')
+    Set-Content -LiteralPath (Join-Path $root 'file.txt') -Value 'x'
+    $cmd = $script:Cmd
+    $renames = [ordered]@{}
+    $hook = {
+      param($entry)
+      if ($renames.Count -gt 0) { return }
+      foreach ($folder in $root, (Split-Path $root), $top) {
+        $said = (& $cmd /d /c ('ren "{0}" renamed' -f $folder) 2>&1 | ForEach-Object { "$_" }) -join ' '
+        $renames[$folder] = 'exit {0}: {1}' -f $LASTEXITCODE, $said.Trim()
+      }
+    }.GetNewClosure()
+    Invoke-RemoveTree $root $top $hook
+    $renames.Count | Should -Be 3
+    foreach ($folder in @($renames.Keys)) { $renames[$folder] | Should -BeExactly 'exit 1: The process cannot access the file because it is being used by another process.' }
+    $root | Should -Not -Exist
+    & $cmd /d /c ('ren "{0}" renamed' -f (Split-Path $root)) | Out-Null
+    $LASTEXITCODE | Should -Be 0
+    & $cmd /d /c ('ren "{0}" renamed' -f $top) | Out-Null
+    $LASTEXITCODE | Should -Be 0
+  }
+
+  It 'on Windows: stops with the text when another process holds <What> with delete access, and removes nothing through it' -Skip:($env:OS -ne 'Windows_NT') -ForEach @(
+    @{ What = 'a folder in the tree'; Inside = $true }
+    @{ What = 'a folder held above the one removed'; Inside = $false }
+  ) {
+    $base = New-TestBase 'busy'
+    $top = New-Folder (Join-Path $base 'top')
+    $root = New-Folder (Join-Path $top 'way\root')
+    New-Folder (Join-Path $root 'busy') | Out-Null
+    Set-Content -LiteralPath (Join-Path $root 'busy\inside.txt') -Value 'x'
+    Set-Content -LiteralPath (Join-Path $root 'other.txt') -Value 'x'
+    if ($Inside) { $held = Join-Path $root 'busy' } else { $held = Split-Path $root }
+    # Another Windows PowerShell opens the folder with delete access and every kind of sharing, as a process that
+    # means to rename it would, and holds it until told to stop.
+    $holder = Join-Path $base 'hold.ps1'
+    Set-Content -LiteralPath $holder -Value @'
+param([string]$Folder, [string]$Signal)
+Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; using Microsoft.Win32.SafeHandles; public static class RpaTestHold { [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] public static extern SafeFileHandle CreateFile(string name, uint access, uint share, IntPtr security, uint disposition, uint flags, IntPtr template); }'
+$handle = [RpaTestHold]::CreateFile('\\?\' + $Folder, 0x10001, 7, [IntPtr]::Zero, 3, 0x02200000, [IntPtr]::Zero)
+if ($handle.IsInvalid) { exit 2 }
+Set-Content -LiteralPath "$Signal.ready" -Value 'x'
+while (-not (Test-Path -LiteralPath "$Signal.stop")) { Start-Sleep -Milliseconds 100 }
+$handle.Dispose()
+'@
+    $signal = Join-Path $base 'signal'
+    $powershell = Join-Path $PSHOME 'powershell.exe'
+    $process = Start-Process -FilePath $powershell -WindowStyle Hidden -PassThru -ArgumentList ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" "{1}" "{2}"' -f $holder, $held, $signal)
+    try {
+      for ($i = 0; $i -lt 300 -and -not (Test-Path -LiteralPath "$signal.ready") -and -not $process.HasExited; $i++) { Start-Sleep -Milliseconds 100 }
+      "$signal.ready" | Should -Exist
+      $failure = Get-Failure { Invoke-RemoveTree $root $top $null }
+    } finally {
+      Set-Content -LiteralPath "$signal.stop" -Value 'x'
+      if (-not $process.WaitForExit(30000)) { Stop-Process -Id $process.Id -Force }
+    }
+    $busy = 'The process cannot access the file because it is being used by another process'
+    if ($Inside) {
+      $failure | Should -BeExactly ('Could not remove {0} ({1}). Close what is using it and run this again.' -f $held, $busy)
+      Join-Path $root 'busy\inside.txt' | Should -Exist
+      # The rest of the tree went in the same pass.
+      Join-Path $root 'other.txt' | Should -Not -Exist
+    } else {
+      $failure | Should -BeExactly ('Could not remove {0}: {1} could not be opened ({2}). Close what is using it and run this again.' -f $root, $held, $busy)
+      # Nothing was deleted.
+      Join-Path $root 'busy\inside.txt' | Should -Exist
+      Join-Path $root 'other.txt' | Should -Exist
+    }
+  }
+
+  It 'on Windows: removes <What>' -Skip:($env:OS -ne 'Windows_NT') -ForEach @(
+    @{ What = 'a read-only file'; Make = { param($root) $file = Join-Path $root 'read-only.txt'; Set-Content -LiteralPath $file -Value 'x'; (Get-Item -LiteralPath $file).Attributes = 'ReadOnly' } }
+    @{ What = 'a hidden file'; Make = { param($root) $file = Join-Path $root 'hidden.txt'; Set-Content -LiteralPath $file -Value 'x'; (Get-Item -LiteralPath $file).Attributes = 'Hidden' } }
+    @{ What = 'a read-only folder with a file in it'; Make = { param($root) $folder = New-Item -ItemType Directory -Path (Join-Path $root 'folder'); Set-Content -LiteralPath (Join-Path $folder.FullName 'file.txt') -Value 'x'; $folder.Attributes = $folder.Attributes -bor [IO.FileAttributes]::ReadOnly } }
+    @{ What = 'a hidden folder with a read-only file in it'; Make = { param($root) $folder = New-Item -ItemType Directory -Path (Join-Path $root 'hidden'); $file = Join-Path $folder.FullName 'file.txt'; Set-Content -LiteralPath $file -Value 'x'; (Get-Item -LiteralPath $file).Attributes = 'ReadOnly, Hidden'; $folder.Attributes = $folder.Attributes -bor [IO.FileAttributes]::Hidden } }
+    @{ What = 'a path longer than 260 characters'; Make = { param($root) $long = $root; while ($long.Length -le 300) { $long = Join-Path $long ('x' * 40) }; [void][IO.Directory]::CreateDirectory('\\?\' + $long); [IO.File]::WriteAllText('\\?\' + (Join-Path $long 'deep.txt'), 'x') } }
+    @{ What = 'an empty tree'; Make = { param($root) } }
+  ) {
+    $root = New-TestBase 'kinds'
+    & $Make $root
+    Invoke-RemoveTree $root $root $null
+    [IO.Directory]::Exists('\\?\' + $root) | Should -BeFalse
+  }
+
+  It 'on Windows: leaves a folder more than 128 folders below the one removed, names it, and removes the rest' -Skip:($env:OS -ne 'Windows_NT') {
+    $root = New-TestBase 'deep'
+    $deep = $root
+    for ($i = 1; $i -le 129; $i++) { $deep = Join-Path $deep 'd' }
+    New-Folder $deep | Out-Null
+    Set-Content -LiteralPath (Join-Path $root 'other.txt') -Value 'x'
+    try {
+      $failure = Get-Failure { Invoke-RemoveTree $root $root $null }
+      $failure | Should -BeExactly ('Could not remove {0} (it is more than 128 folders below {1}). Close what is using it and run this again.' -f $deep, $root)
+      [IO.Directory]::Exists('\\?\' + $deep) | Should -BeTrue
+      Join-Path $root 'other.txt' | Should -Not -Exist
+    } finally { & $script:Cmd /d /c ('rd /s /q "\\?\{0}"' -f $root) | Out-Null }
   }
 }
 

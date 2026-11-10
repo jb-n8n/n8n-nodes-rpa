@@ -355,18 +355,32 @@ function Stop-RpaServices([string]$InstallDir) {
   throw ('Could not stop {0}.' -f (($running | ForEach-Object { $_.Name } | Sort-Object -Unique) -join ', '))
 }
 
-# Deletes a folder and everything in it with cmd's rd, which removes a link or junction inside without entering it
-# (Remove-Item in Windows PowerShell 5.1 enters it and deletes what it points at). The \\?\ form lets rd reach paths
-# longer than 260 characters. A folder that is itself a link is refused. rd reports success also when it left
-# something behind, so the result is checked.
-function Remove-RpaTree([string]$Path) {
-  $state = Get-RpaPathState $Path
-  if (-not $state.Exists) { return }
-  if ($state.IsLink) { throw ('{0} is a link or junction. Remove it and run this again.' -f $Path) }
-  # What rd writes about a file it could not delete must not end this function; the check below decides.
-  $ErrorActionPreference = 'Continue'
-  & (Get-RpaSystemTool 'cmd.exe') /d /c ('rd /s /q "\\?\{0}"' -f $Path) 2>&1 | Out-Null
-  if ((Get-RpaPathState $Path).Exists) { throw ('Could not remove {0}. Close what is using it and run this again.' -f $Path) }
+# Deletes the folder -Path and everything in it, through handles (RpaTree): the folders from -From (an existing folder
+# above -Path, or -Path itself when not given) down to -Path are held open without delete sharing until the end, so
+# that they cannot be renamed or replaced meanwhile; each entry is opened inside the folder that holds it, never by
+# a path; a link or junction inside is removed as the link itself and not entered. Paths of any length. -From is the
+# highest folder that someone other than an administrator may change (the bot user's profile folder for its temp
+# folder); its own path is not checked here. Nothing when -Path is not there. A folder on the way that is a link,
+# or that cannot be held open, ends the removal before anything is deleted. What cannot be opened or deleted is left
+# and the rest removed, in one pass; then the text names the first entry left. -BeforeOpen is for tests only: it
+# runs between the listing of a folder and the opening of each entry, with that entry's path.
+function Remove-RpaTree([string]$Path, [string]$From, [scriptblock]$BeforeOpen) {
+  $Path = $Path.TrimEnd('\')
+  if ($From) { $From = $From.TrimEnd('\') } else { $From = $Path }
+  if ($Path -ne $From -and -not $Path.StartsWith($From + '\', [StringComparison]::OrdinalIgnoreCase)) { throw ('{0} is not inside {1}.' -f $Path, $From) }
+  $below = @()
+  if ($Path.Length -gt $From.Length) { $below = @($Path.Substring($From.Length + 1).Split('\')) }
+  Add-RpaNativeTypes
+  $hook = $null
+  if ($BeforeOpen) { $hook = [Action[string]]$BeforeOpen }
+  $outcome = [RpaTree]::Remove($From, [string[]]$below, $hook)
+  $again = 'Close what is using it and run this again.'
+  if ($outcome.Missing) { return }
+  if ($outcome.Link) { throw ('{0} is a link or junction. Remove it and run this again.' -f $outcome.Link) }
+  if ($outcome.NotFolder) { throw ('Could not remove {0}: {1} is not a folder. Check it and run this again.' -f $Path, $outcome.NotFolder) }
+  if ($outcome.Unheld -eq $Path) { throw ('Could not remove {0} ({1}). {2}' -f $Path, $outcome.Reason, $again) }
+  if ($outcome.Unheld) { throw ('Could not remove {0}: {1} could not be opened ({2}). {3}' -f $Path, $outcome.Unheld, $outcome.Reason, $again) }
+  if ($outcome.Left.Count -gt 0) { throw ('Could not remove {0} ({1}). {2}' -f $outcome.Left[0].Path, $outcome.Left[0].Reason, $again) }
 }
 
 # Replaces each file and folder of the package in the install directory. install.json is not in the package, so an
@@ -389,7 +403,8 @@ function Copy-RpaProgramFiles([string]$SourceDir, [string]$InstallDir) {
 
 # The compiled helpers: the LSA secret Windows itself reads the automatic sign-in password from (Store is the test
 # bed's; Remove passes no data, which deletes the secret), a password check, the local groups of a user, the creation
-# of a user's profile, the account a process runs as, the number of names a file has, and the creation of a file that follows no link. A password
+# of a user's profile, the account a process runs as, the number of names a file has, the creation of a file that
+# follows no link, and the removal of a folder tree through handles (RpaTree, used by Remove-RpaTree). A password
 # goes in as a SecureString and is turned into plain text only in unmanaged memory that is wiped afterwards.
 function Add-RpaNativeTypes {
   if ('RpaLsaSecret' -as [type]) { return }
@@ -448,6 +463,233 @@ public static class RpaFiles {
       if (!GetFileInformationByHandle(handle, out information)) throw new Win32Exception(Marshal.GetLastWin32Error());
       return (int)information.NumberOfLinks;
     }
+  }
+}
+// What RpaTree.Remove did: Missing when the folder (or one held above it) is not there; else the first folder held
+// that is a link (Link) or no folder (NotFolder), or could not be opened (Unheld, Reason), in which case nothing was
+// deleted; else what was left (Left: path and reason, deepest first), empty when everything went.
+public sealed class RpaTreeEntry {
+  public string Path;
+  public string Reason;
+}
+public sealed class RpaTreeOutcome {
+  public bool Missing;
+  public string Link;
+  public string NotFolder;
+  public string Unheld;
+  public string Reason;
+  public System.Collections.Generic.List<RpaTreeEntry> Left = new System.Collections.Generic.List<RpaTreeEntry>();
+}
+// Removes a folder tree through handles. The folders from the top one down to the one removed are opened one inside
+// the other, without following a link, with list access and without delete sharing, and stay open until the end:
+// while they are held, no one can rename, move or replace them. Each entry of a held folder is opened by its name
+// inside that folder's handle (never by a path), the same way and with delete access; its attributes are read from
+// the handle. A link (junction, symbolic link, mount point) is deleted as the link itself and never entered; a
+// folder is walked while it is held, then deleted; a file is deleted. What cannot be opened or deleted, a folder not
+// empty at the end, and a folder more than MaxDepth below the one removed are left, and the walk goes on.
+public static class RpaTree {
+  public const int MaxDepth = 128;
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  static extern SafeFileHandle CreateFile(string name, uint access, uint share, IntPtr security, uint disposition, uint flags, IntPtr template);
+  [StructLayout(LayoutKind.Sequential)]
+  struct UnicodeString { public ushort Length; public ushort MaximumLength; public IntPtr Buffer; }
+  [StructLayout(LayoutKind.Sequential)]
+  struct ObjectAttributes { public int Length; public IntPtr RootDirectory; public IntPtr ObjectName; public uint Attributes; public IntPtr SecurityDescriptor; public IntPtr SecurityQualityOfService; }
+  [StructLayout(LayoutKind.Sequential)]
+  struct IoStatusBlock { public IntPtr Status; public IntPtr Information; }
+  [StructLayout(LayoutKind.Sequential)]
+  struct BasicInfo { public long Created; public long Accessed; public long Written; public long Changed; public uint Attributes; }
+  [DllImport("ntdll.dll")]
+  static extern int NtCreateFile(out IntPtr handle, uint access, ref ObjectAttributes attributes, out IoStatusBlock status, IntPtr allocationSize, uint fileAttributes, uint share, uint disposition, uint options, IntPtr eaBuffer, uint eaLength);
+  [DllImport("ntdll.dll")] static extern int RtlNtStatusToDosError(int status);
+  [DllImport("kernel32.dll", SetLastError = true, EntryPoint = "GetFileInformationByHandleEx")]
+  static extern bool GetBasicInfo(SafeFileHandle file, int infoClass, out BasicInfo info, uint size);
+  [DllImport("kernel32.dll", SetLastError = true, EntryPoint = "GetFileInformationByHandleEx")]
+  static extern bool GetDirectoryInfo(SafeFileHandle file, int infoClass, IntPtr buffer, uint size);
+  [DllImport("kernel32.dll", SetLastError = true, EntryPoint = "SetFileInformationByHandle")]
+  static extern bool SetBasicInfo(SafeFileHandle file, int infoClass, ref BasicInfo info, uint size);
+  [DllImport("kernel32.dll", SetLastError = true, EntryPoint = "SetFileInformationByHandle")]
+  static extern bool SetFlags(SafeFileHandle file, int infoClass, ref uint flags, uint size);
+  [DllImport("kernel32.dll", SetLastError = true, EntryPoint = "SetFileInformationByHandle")]
+  static extern bool SetFlag(SafeFileHandle file, int infoClass, ref byte flag, uint size);
+  const uint ListDirectory = 0x1, ReadAttributes = 0x80, WriteAttributes = 0x100, Delete = 0x10000, Synchronize = 0x100000;
+  // Read and write sharing only: a handle held here keeps everyone else from opening the entry with delete access,
+  // which a rename, a move and a delete need.
+  const uint ShareReadWrite = 0x1 | 0x2;
+  const uint BackupSemantics = 0x02000000, OpenReparsePoint = 0x00200000;
+  // NtCreateFile: open an existing entry, without following a link, for backup (any kind of entry), synchronous.
+  const uint FileOpen = 1, OpenReparsePointOption = 0x00200000, OpenForBackupIntent = 0x4000, SynchronousIo = 0x20;
+  const uint CaseInsensitive = 0x40;
+  const uint ReadOnly = 0x1, Directory = 0x10, ReparsePoint = 0x400;
+  // The attributes a file's basic information may set; FILE_ATTRIBUTE_NORMAL when none is left.
+  const uint Settable = 0x2 | 0x4 | 0x20 | 0x100 | 0x1000 | 0x2000, Normal = 0x80;
+  const int FileBasicInfo = 0, FileDispositionInfo = 4, FileFullDirectoryInfo = 14, FileFullDirectoryRestartInfo = 15, FileDispositionInfoEx = 21;
+  const int NotFound = 2, PathNotFound = 3, NoMoreFiles = 18;
+
+  // top: the highest folder to hold, by its full path; below: the names from there down to the folder to remove (none
+  // when it is top). beforeOpen, for tests only: called with an entry's path between the listing and its opening.
+  public static RpaTreeOutcome Remove(string top, string[] below, Action<string> beforeOpen) {
+    RpaTreeOutcome outcome = new RpaTreeOutcome();
+    System.Collections.Generic.List<SafeFileHandle> held = new System.Collections.Generic.List<SafeFileHandle>();
+    try {
+      string path = top;
+      for (int i = 0; i <= below.Length; i++) {
+        bool last = i == below.Length;
+        uint access = ListDirectory | ReadAttributes | Synchronize;
+        if (last) access |= WriteAttributes | Delete;
+        SafeFileHandle handle;
+        int error;
+        if (i == 0) {
+          handle = CreateFile(@"\\?\" + top, access, ShareReadWrite, IntPtr.Zero, 3, BackupSemantics | OpenReparsePoint, IntPtr.Zero);
+          error = 0;
+          if (handle.IsInvalid) { error = Marshal.GetLastWin32Error(); handle.Dispose(); }
+        } else {
+          path = path + "\\" + below[i - 1];
+          error = OpenInside(held[i - 1], below[i - 1], access, out handle);
+        }
+        if (error == NotFound || error == PathNotFound) { outcome.Missing = true; return outcome; }
+        if (error != 0) { outcome.Unheld = path; outcome.Reason = Message(error); return outcome; }
+        held.Add(handle);
+        uint attributes;
+        error = Attributes(handle, out attributes);
+        if (error != 0) { outcome.Unheld = path; outcome.Reason = Message(error); return outcome; }
+        if ((attributes & ReparsePoint) != 0) { outcome.Link = path; return outcome; }
+        if ((attributes & Directory) == 0) { outcome.NotFolder = path; return outcome; }
+        if (last) {
+          Walk(handle, path, 0, path, outcome.Left, beforeOpen);
+          string problem = DeleteThrough(handle, attributes);
+          if (problem != null) Leave(outcome.Left, path, problem);
+        }
+      }
+      return outcome;
+    } finally {
+      for (int i = held.Count - 1; i >= 0; i--) held[i].Dispose();
+    }
+  }
+
+  static void Walk(SafeFileHandle folder, string path, int depth, string root, System.Collections.Generic.List<RpaTreeEntry> left, Action<string> beforeOpen) {
+    System.Collections.Generic.List<string> names;
+    int error = List(folder, out names);
+    if (error != 0) { Leave(left, path, Message(error)); return; }
+    foreach (string name in names) {
+      string entry = path + "\\" + name;
+      if (beforeOpen != null) beforeOpen(entry);
+      SafeFileHandle handle;
+      error = OpenInside(folder, name, ListDirectory | ReadAttributes | WriteAttributes | Delete | Synchronize, out handle);
+      if (error != 0) { Leave(left, entry, Message(error)); continue; }
+      using (handle) {
+        uint attributes;
+        error = Attributes(handle, out attributes);
+        if (error != 0) { Leave(left, entry, Message(error)); continue; }
+        if ((attributes & Directory) != 0 && (attributes & ReparsePoint) == 0) {
+          if (depth + 1 > MaxDepth) { Leave(left, entry, "it is more than " + MaxDepth + " folders below " + root); continue; }
+          Walk(handle, entry, depth + 1, root, left, beforeOpen);
+        }
+        string problem = DeleteThrough(handle, attributes);
+        if (problem != null) Leave(left, entry, problem);
+      }
+    }
+  }
+
+  // Opens the entry name inside the folder held by parent; 0 or the Windows error code.
+  static int OpenInside(SafeFileHandle parent, string name, uint access, out SafeFileHandle handle) {
+    handle = null;
+    UnicodeString text = new UnicodeString();
+    text.Buffer = Marshal.StringToHGlobalUni(name);
+    text.Length = (ushort)(name.Length * 2);
+    text.MaximumLength = (ushort)(name.Length * 2);
+    IntPtr textPointer = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(UnicodeString)));
+    bool added = false;
+    try {
+      Marshal.StructureToPtr(text, textPointer, false);
+      parent.DangerousAddRef(ref added);
+      ObjectAttributes attributes = new ObjectAttributes();
+      attributes.Length = Marshal.SizeOf(typeof(ObjectAttributes));
+      attributes.RootDirectory = parent.DangerousGetHandle();
+      attributes.ObjectName = textPointer;
+      attributes.Attributes = CaseInsensitive;
+      IntPtr raw;
+      IoStatusBlock status;
+      int result = NtCreateFile(out raw, access, ref attributes, out status, IntPtr.Zero, 0, ShareReadWrite, FileOpen, OpenReparsePointOption | OpenForBackupIntent | SynchronousIo, IntPtr.Zero, 0);
+      if (result < 0) return RtlNtStatusToDosError(result);
+      handle = new SafeFileHandle(raw, true);
+      return 0;
+    } finally {
+      if (added) parent.DangerousRelease();
+      Marshal.FreeHGlobal(textPointer);
+      Marshal.FreeHGlobal(text.Buffer);
+    }
+  }
+
+  static int Attributes(SafeFileHandle handle, out uint attributes) {
+    BasicInfo info;
+    attributes = 0;
+    if (!GetBasicInfo(handle, FileBasicInfo, out info, (uint)Marshal.SizeOf(typeof(BasicInfo)))) return Marshal.GetLastWin32Error();
+    attributes = info.Attributes;
+    return 0;
+  }
+
+  // The names in a held folder, read from its handle.
+  static int List(SafeFileHandle folder, out System.Collections.Generic.List<string> names) {
+    names = new System.Collections.Generic.List<string>();
+    const int size = 65536;
+    IntPtr buffer = Marshal.AllocHGlobal(size);
+    try {
+      int infoClass = FileFullDirectoryRestartInfo;
+      while (true) {
+        if (!GetDirectoryInfo(folder, infoClass, buffer, size)) {
+          int error = Marshal.GetLastWin32Error();
+          return error == NoMoreFiles ? 0 : error;
+        }
+        infoClass = FileFullDirectoryInfo;
+        int offset = 0;
+        while (true) {
+          // FILE_FULL_DIR_INFO: NextEntryOffset at 0, FileNameLength (bytes) at 60, FileName at 68.
+          int next = Marshal.ReadInt32(buffer, offset);
+          int length = Marshal.ReadInt32(buffer, offset + 60);
+          string name = Marshal.PtrToStringUni(new IntPtr(buffer.ToInt64() + offset + 68), length / 2);
+          if (name != "." && name != "..") names.Add(name);
+          if (next == 0) break;
+          offset += next;
+        }
+      }
+    } finally {
+      Marshal.FreeHGlobal(buffer);
+    }
+  }
+
+  // Deletes the entry held by handle when its last handle closes: a read-only attribute is cleared first, then the
+  // entry is marked for deletion, with POSIX semantics where the file system has them (the name goes when this handle
+  // closes, also while another program has the entry open). Nothing when that worked, else why not.
+  static string DeleteThrough(SafeFileHandle handle, uint attributes) {
+    if ((attributes & ReadOnly) != 0) {
+      BasicInfo info = new BasicInfo();
+      info.Attributes = attributes & Settable;
+      if (info.Attributes == 0) info.Attributes = Normal;
+      if (!SetBasicInfo(handle, FileBasicInfo, ref info, (uint)Marshal.SizeOf(typeof(BasicInfo)))) return Message(Marshal.GetLastWin32Error());
+    }
+    // FILE_DISPOSITION_FLAG_DELETE | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS
+    uint flags = 0x1 | 0x2;
+    if (SetFlags(handle, FileDispositionInfoEx, ref flags, 4)) return null;
+    int error = Marshal.GetLastWin32Error();
+    // A file system without the extended form: invalid function, not supported, invalid parameter.
+    if (error == 1 || error == 50 || error == 87) {
+      byte delete = 1;
+      if (SetFlag(handle, FileDispositionInfo, ref delete, 1)) return null;
+      error = Marshal.GetLastWin32Error();
+    }
+    return Message(error);
+  }
+
+  static void Leave(System.Collections.Generic.List<RpaTreeEntry> left, string path, string reason) {
+    RpaTreeEntry entry = new RpaTreeEntry();
+    entry.Path = path;
+    entry.Reason = reason;
+    left.Add(entry);
+  }
+
+  static string Message(int error) {
+    return new Win32Exception(error).Message.TrimEnd('.', ' ', '\r', '\n');
   }
 }
 public static class RpaLsaSecret {
@@ -1132,12 +1374,14 @@ function Get-RpaOtherWriters([string]$Path, [string]$Sid) {
 #   - when, directly before the removal, the profile folder, AppData, Local or RPA Runner is a link or junction or is
 #     no folder: nothing is removed where a link points;
 #   - when, in that same last look, anyone other than that account, Administrators and SYSTEM owns one of the four
-#     folders or may change it (the bot user can give another account that right): a process of that account could
-#     put a link in the place of a folder between the look and the removal. With neither of these, nothing but an
-#     administrator can change the folders while the tree is removed;
-#   - when it cannot be read or removed.
-# The tree is removed with Remove-RpaTree, which does not enter a link inside it. Returns, for each folder found,
-# Path, Name (the account), Removed and Why (sentences for the person, when it was left).
+#     folders or has an access rule on the folder itself that lets them change it (the bot user can give another
+#     account that right). This look is an early refusal with a clear reason; it reads neither rules that apply only
+#     to what is inside a folder nor conditional rules, and it says nothing about handles opened earlier;
+#   - when it cannot be read or removed: Remove-RpaTree holds the four folders open without delete sharing while the
+#     tree is removed, so that they cannot be renamed or replaced meanwhile, and removes a link inside the tree as the
+#     link itself, without entering it. A folder another process holds, or an entry it cannot open or delete, is left.
+# Returns, for each folder found, Path, Name (the account), Removed and Why (sentences for the person, when it was
+# left).
 function Remove-RpaBrowserTemp([object[]]$Accounts, [string[]]$RunningSids, [object[]]$UnknownProcesses) {
   $results = @()
   $unknown = @($UnknownProcesses | Where-Object { $_ })
@@ -1171,7 +1415,7 @@ function Remove-RpaBrowserTemp([object[]]$Accounts, [string[]]$RunningSids, [obj
           }
         }
         if (-not $result.Why) {
-          Remove-RpaTree $result.Path
+          Remove-RpaTree $result.Path -From $userFolder
           $result.Removed = $true
         }
       }
