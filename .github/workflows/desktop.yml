@@ -1,10 +1,19 @@
-# The Windows desktop runner and the ERP Demo app (desktop/): the runner core's unit tests on Linux, then on
-# windows-latest (which has an interactive, unlocked desktop) a UI Automation spike, a build and self-contained win-x64
-# publish of the runner and the demo app (v1 and v2) plus a release zip, and the protocol scenario: the published
-# runner started with a policy and a random token, and a test client driving the demo app through it end to end (sign
-# in, search, read, export to the run's export dir, retrieve the file, end the run) plus the refusals (401, busy,
-# policy, not found, not unique, lease expiry). Uses no repository secrets.
-# Actions are pinned by full commit SHA.
+# The Windows desktop runner, the ERP Demo app and the Windows package (desktop/, and the browser host the package
+# ships from images/browser/): the runner core's unit tests on Linux, then on windows-latest (which has an
+# interactive, unlocked desktop):
+# - a UI Automation spike, a build and self-contained win-x64 publish of the runner, the policy tool and the demo app
+#   (v1 and v2) plus a release zip, and the protocol scenario: the published runner started with a policy and a
+#   random token, and a test client driving the demo app through it end to end (sign in, search, read, export to the
+#   run's export dir, retrieve the file, end the run) plus the refusals (401, busy, policy, not found, not unique,
+#   lease expiry);
+# - the Windows package: the installer's tests, the browser host's and the gate's tests, the package staged by
+#   desktop/installer/build/Stage.ps1, then installed from its zip for a new standard user, the policy changed with
+#   the installed policy tool, the installed runner and browser started and driven (the same scenario; a browser
+#   session with a window through a tunnel that checks the certificate's fingerprint), an upgrade, and the uninstall.
+#   The package is uploaded as the artifact rpa-windows-package.
+# Uses no repository secrets. Actions are pinned by full commit SHA. What the job downloads besides them: the .NET
+# packages (NuGet), and for the package Node.js (checked against a SHA-256 written in Stage.ps1), Playwright (npm ci
+# against the lockfile in images/browser/server) and Chromium (Playwright's installer).
 name: desktop
 
 on:
@@ -12,13 +21,25 @@ on:
     branches: [main]
     paths:
       - "desktop/**"
+      - "images/browser/gate/**"
+      - "images/browser/host/**"
+      - "images/browser/server/**"
       - ".github/workflows/desktop.yml"
   push:
     branches: [main]
     paths:
       - "desktop/**"
+      - "images/browser/gate/**"
+      - "images/browser/host/**"
+      - "images/browser/server/**"
       - ".github/workflows/desktop.yml"
   workflow_dispatch:
+  # For a workflow that needs the package: it calls this one and downloads the artifact the output names.
+  workflow_call:
+    outputs:
+      package-artifact:
+        description: The name of the artifact that holds rpa-windows-x64.zip and rpa-windows-x64.zip.sha256
+        value: ${{ jobs.windows.outputs.package-artifact }}
 
 permissions: {}
 
@@ -53,9 +74,12 @@ jobs:
 
   windows:
     runs-on: windows-latest
-    timeout-minutes: 40
+    timeout-minutes: 75
     permissions:
       contents: read
+    outputs:
+      # The name the step "Upload the Windows package" uses.
+      package-artifact: rpa-windows-package
     defaults:
       run:
         shell: pwsh
@@ -101,7 +125,7 @@ jobs:
         timeout-minutes: 10
         run: dotnet test desktop/runner/test/Rpa.Runner.Core.Tests -c Release --no-build
 
-      - name: Publish the runner and the demo app (self-contained win-x64, single file)
+      - name: Publish the runner, the policy tool and the demo app (self-contained win-x64, single file)
         timeout-minutes: 10
         run: |
           $common = @('-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '-p:PublishSingleFile=true',
@@ -109,6 +133,10 @@ jobs:
           dotnet publish desktop/runner/src/Rpa.Runner @common -o "$env:OUT\rpa-desktop-runner"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           Copy-Item desktop/runner/policy.example.json, desktop/README.md "$env:OUT\rpa-desktop-runner\"
+          # The policy tool is published on Windows: its manifest, which asks for administrator rights, is embedded
+          # only there.
+          dotnet publish desktop/runner/src/Rpa.Runner.PolicyTool -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o "$env:OUT\rpa-policy-tool"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           foreach ($ui in 'v1', 'v2') {
             dotnet publish desktop/erp-demo @common "-p:ErpDemoUi=$ui" -o "$env:OUT\erp-demo\$ui"
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
@@ -183,6 +211,335 @@ jobs:
             out/scenario
           retention-days: 14
           if-no-files-found: ignore
+
+      # ---- The Windows package: the installer's own tests, then the package is staged, installed and driven. ----
+      # Windows PowerShell 5.1 (shell: powershell) runs the installer, the uninstaller and their tests: it is the
+      # PowerShell the installer is written for.
+      - name: Installer tests (Pester, Windows PowerShell 5.1)
+        timeout-minutes: 10
+        shell: powershell
+        run: |
+          # The Windows-only tests run the installer from a temporary folder, and the installer refuses a package in
+          # a folder other users could change. So the tests get a temporary folder only administrators can change.
+          New-Item -ItemType Directory -Force C:\rpa-ci\temp | Out-Null
+          & "$env:SystemRoot\System32\icacls.exe" C:\rpa-ci /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
+          if ($LASTEXITCODE) { throw 'icacls failed' }
+          $env:TEMP = 'C:\rpa-ci\temp'; $env:TMP = 'C:\rpa-ci\temp'
+          Import-Module Pester -MinimumVersion 5.0
+          Write-Host "Windows PowerShell $($PSVersionTable.PSVersion), Pester $((Get-Module Pester).Version)"
+          Invoke-Pester desktop/installer/test -CI
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.23.4
+      # Quoted globs: Node 22 does not run a folder given to --test.
+      - name: Browser host and gate tests (the Node version the package ships)
+        timeout-minutes: 5
+        run: node --test "images/browser/host/test/*.test.js" "images/browser/gate/test/*.test.js"
+
+      # Downloads Node (checked against the SHA-256 in the script), Playwright (npm ci, checked against the lockfile)
+      # and Chromium (Playwright's installer).
+      - name: Stage the Windows package
+        timeout-minutes: 15
+        shell: powershell
+        run: |
+          & desktop\installer\build\Stage.ps1 -Out "$env:OUT\package" -RunnerDir "$env:OUT\rpa-desktop-runner" -PolicyToolDir "$env:OUT\rpa-policy-tool" -ErpDemoDir "$env:OUT\erp-demo"
+          Get-Content "$env:OUT\package\rpa-windows-x64.zip.sha256"
+
+      # The account of this job is an administrator, so it cannot be the bot user: the installer creates a standard
+      # local user, with a random password that is made here and never printed. The package is unpacked where only
+      # administrators can change it. 127.0.0.1 stands for the n8n host.
+      - name: Install the package (a first install for a new standard user)
+        timeout-minutes: 10
+        shell: powershell
+        run: |
+          function Assert([bool]$ok, [string]$what) { if (-not $ok) { throw "FAILED: $what" }; Write-Host "ok: $what" }
+          $install = Join-Path $env:ProgramFiles 'RPA Runner'
+          $data = Join-Path $env:ProgramData 'RPA Runner'
+          # What the first scenario left at the default location: the installer starts from a machine without it.
+          if (Test-Path -LiteralPath $data) { Remove-Item -LiteralPath $data -Recurse -Force }
+          New-Item -ItemType Directory -Force C:\rpa-ci\package | Out-Null
+          Expand-Archive -LiteralPath "$env:OUT\package\rpa-windows-x64.zip" -DestinationPath C:\rpa-ci\package
+          $package = 'C:\rpa-ci\package\rpa-windows-x64'
+
+          $bytes = New-Object byte[] 24
+          $random = [Security.Cryptography.RandomNumberGenerator]::Create()
+          try { $random.GetBytes($bytes) } finally { $random.Dispose() }
+          $password = New-Object Security.SecureString
+          foreach ($char in ('Aa1-' + [Convert]::ToBase64String($bytes)).ToCharArray()) { $password.AppendChar($char) }
+          $password.MakeReadOnly()
+
+          $global:LASTEXITCODE = 0
+          & "$package\Install-Rpa.ps1" -User rpa-ci-bot -UserPassword $password -AllowFrom 127.0.0.1 -Force
+          Assert ($LASTEXITCODE -eq 0) "Install-Rpa.ps1 exits 0 (it was $LASTEXITCODE)"
+
+          $bot = (New-Object Security.Principal.NTAccount("$env:COMPUTERNAME\rpa-ci-bot")).Translate([Security.Principal.SecurityIdentifier]).Value
+          $groups = @(([ADSI]"WinNT://$env:COMPUTERNAME/rpa-ci-bot,user").Groups() | ForEach-Object { $_.GetType().InvokeMember('Name', 'GetProperty', $null, $_, $null) })
+          $users = ((New-Object Security.Principal.SecurityIdentifier 'S-1-5-32-545').Translate([Security.Principal.NTAccount]).Value -split '\\')[-1]
+          Assert (($groups -join ',') -eq $users) "rpa-ci-bot is a standard user: a member of $users and of no other local group ($($groups -join ','))"
+
+          foreach ($name in 'RPA Runner', 'RPA Browser') {
+            $task = Get-ScheduledTask -TaskPath '\RPA\' -TaskName $name
+            Assert ($task.Principal.UserId -eq 'rpa-ci-bot' -and $task.Principal.LogonType -eq 'Interactive' -and $task.Principal.RunLevel -eq 'Limited') "task $name runs as rpa-ci-bot, in its session, not elevated"
+            $trigger = @($task.Triggers)
+            Assert ($trigger.Count -eq 1 -and $trigger[0].CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' -and $trigger[0].UserId -eq "$env:COMPUTERNAME\rpa-ci-bot") "task $name starts when rpa-ci-bot signs in"
+          }
+          foreach ($rule in @{ Name = 'RPA-Runner-In'; Port = '8765'; Program = "$install\runner\RpaRunner.exe" }, @{ Name = 'RPA-Browser-In'; Port = '3000'; Program = "$install\browser\node.exe" }) {
+            $found = Get-NetFirewallRule -Name $rule.Name
+            Assert ($found.Enabled -eq 'True' -and $found.Direction -eq 'Inbound' -and $found.Action -eq 'Allow') "firewall rule $($rule.Name) lets connections in"
+            Assert (($found | Get-NetFirewallApplicationFilter).Program -eq $rule.Program) "firewall rule $($rule.Name) is for $($rule.Program)"
+            Assert (($found | Get-NetFirewallAddressFilter).RemoteAddress -eq '127.0.0.1' -and ($found | Get-NetFirewallPortFilter).LocalPort -eq $rule.Port) "firewall rule $($rule.Name) is for port $($rule.Port) from 127.0.0.1"
+          }
+
+          # Who may do what with the files the bot user must not change: the owner is Administrators, nothing is
+          # inherited, nobody but SYSTEM and Administrators may write, and the bot user may read.
+          $administrators = 'S-1-5-18', 'S-1-5-32-544'
+          # Write or append data, write attributes, delete, delete what is inside, change the rules, take ownership.
+          $write = 0x2 -bor 0x4 -bor 0x10 -bor 0x40 -bor 0x100 -bor 0x10000 -bor 0x40000 -bor 0x80000
+          foreach ($name in 'policy.json', 'token', 'browser-token') {
+            $acl = Get-Acl -LiteralPath (Join-Path $data $name)
+            $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
+            Assert ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -eq 'S-1-5-32-544' -and $acl.AreAccessRulesProtected) "$name is owned by Administrators and inherits no rule"
+            $writers = @($rules | Where-Object { $_.AccessControlType -eq 'Allow' -and $administrators -notcontains $_.IdentityReference.Value -and ([int]$_.FileSystemRights -band $write) })
+            Assert ($writers.Count -eq 0) "no rule of $name lets anyone but SYSTEM and Administrators write"
+            $readers = @($rules | Where-Object { $_.AccessControlType -eq 'Allow' -and $_.IdentityReference.Value -eq $bot -and ([int]$_.FileSystemRights -band 0x1) })
+            Assert ($readers.Count -eq 1) "rpa-ci-bot may read $name"
+          }
+          $acl = Get-Acl -LiteralPath (Join-Path $data 'policy-backups')
+          $others = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) | Where-Object { $administrators -notcontains $_.IdentityReference.Value })
+          Assert ($acl.AreAccessRulesProtected -and $others.Count -eq 0 -and $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -eq 'S-1-5-32-544') 'policy-backups is there, and only SYSTEM and Administrators have access'
+
+          $record = Get-Content -Raw -LiteralPath "$install\install.json" -Encoding UTF8 | ConvertFrom-Json
+          $version = (Get-Content -LiteralPath "$package\VERSION" -TotalCount 1).Trim()
+          Assert ($record.version -eq $version -and $record.user -eq 'rpa-ci-bot' -and $record.runnerPort -eq 8765 -and $record.browserPort -eq 3000) "install.json records version $version, the user and the ports"
+          Assert ($record.browser -eq $true -and $record.autoSignIn -eq $false -and (@($record.allowFrom) -join ',') -eq '127.0.0.1' -and $record.publicNetwork -eq $true -and @($record.signInChanges).Count -eq 0) 'install.json records the browser, no automatic sign-in and who may connect'
+          Assert ((Get-Content -Raw -LiteralPath "$data\policy.json") -match '"allowedApps":\s*\[\s*\]') 'the new policy allows no app'
+
+      # The policy tool honours --yes only when every other process attached to its console is elevated; the shell of
+      # this step is. The letter n on its input would decline if the tool asked after all.
+      - name: Change the policy with the installed RpaPolicy.exe
+        timeout-minutes: 5
+        shell: powershell
+        run: |
+          function Assert([bool]$ok, [string]$what) { if (-not $ok) { throw "FAILED: $what" }; Write-Host "ok: $what" }
+          $data = Join-Path $env:ProgramData 'RPA Runner'
+          $tool = Join-Path $env:ProgramFiles 'RPA Runner\runner\RpaPolicy.exe'
+          $policy = Join-Path $data 'policy.json'
+
+          # The manifest embedded in the published program (resource type 24, id 1), read through Windows itself.
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class EmbeddedManifest {
+            [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern IntPtr LoadLibraryEx(string file, IntPtr reserved, uint flags);
+            [DllImport("kernel32.dll")] static extern IntPtr FindResource(IntPtr module, IntPtr name, IntPtr type);
+            [DllImport("kernel32.dll")] static extern IntPtr LoadResource(IntPtr module, IntPtr resource);
+            [DllImport("kernel32.dll")] static extern uint SizeofResource(IntPtr module, IntPtr resource);
+            [DllImport("kernel32.dll")] static extern IntPtr LockResource(IntPtr data);
+            [DllImport("kernel32.dll")] static extern bool FreeLibrary(IntPtr module);
+            public static string Read(string file) {
+              IntPtr module = LoadLibraryEx(file, IntPtr.Zero, 0x2 | 0x20);
+              if (module == IntPtr.Zero) return "";
+              try {
+                IntPtr resource = FindResource(module, (IntPtr)1, (IntPtr)24);
+                if (resource == IntPtr.Zero) return "";
+                byte[] bytes = new byte[SizeofResource(module, resource)];
+                Marshal.Copy(LockResource(LoadResource(module, resource)), bytes, 0, bytes.Length);
+                return System.Text.Encoding.UTF8.GetString(bytes);
+              } finally { FreeLibrary(module); }
+            }
+          }
+          '@
+          Assert ([EmbeddedManifest]::Read($tool) -match '<requestedExecutionLevel[^>]*level="requireAdministrator"') 'RpaPolicy.exe asks for administrator rights (its embedded manifest)'
+
+          function Get-Rules([string]$path) {
+            $acl = Get-Acl -LiteralPath $path
+            $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) | ForEach-Object { '{0}:{1}:{2}:{3}' -f $_.AccessControlType, $_.IdentityReference.Value, [int]$_.FileSystemRights, $_.IsInherited } | Sort-Object)
+            'owner {0}; protected {1}; {2}' -f $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value, $acl.AreAccessRulesProtected, ($rules -join ' ')
+          }
+          $before = Get-Rules $policy
+          $output = @('n' | & $tool apply (Join-Path $env:GITHUB_WORKSPACE 'desktop\installer\test\e2e-policy-change.json') --yes)
+          $code = $LASTEXITCODE
+          $output | ForEach-Object { Write-Host "  | $_" }
+          Assert ($code -eq 0 -and $output -contains 'Policy updated. The runner restarts within 10 seconds and uses the new policy.') "RpaPolicy.exe apply --yes exits 0 and says that the policy is updated (exit code $code)"
+          Assert (($output -join "`n") -notmatch '--yes is ignored|Apply these changes') 'the tool honoured --yes and did not ask'
+
+          Assert ((Get-Rules $policy) -eq $before -and $before.StartsWith('owner S-1-5-32-544; protected True;')) 'policy.json has the owner and the access rules it had before (owner Administrators, nothing inherited)'
+          $bot = (New-Object Security.Principal.NTAccount("$env:COMPUTERNAME\rpa-ci-bot")).Translate([Security.Principal.SecurityIdentifier]).Value
+          Assert ($before -match "Allow:${bot}:\d+:False") 'the rule that lets rpa-ci-bot read policy.json is still there'
+          Assert (@(Get-ChildItem -LiteralPath $data -Filter 'policy.json.*.tmp' -Force).Count -eq 0) 'no policy.json.*.tmp is left'
+          $backups = @(Get-ChildItem -LiteralPath (Join-Path $data 'policy-backups') -Filter 'policy.json.*.bak')
+          Assert ($backups.Count -eq 1 -and (Get-Content -Raw -LiteralPath $backups[0].FullName) -match '"allowedApps":\s*\[\s*\]') 'policy-backups holds the policy as it was before'
+          $new = Get-Content -Raw -LiteralPath $policy | ConvertFrom-Json
+          Assert (@($new.allowedApps).Count -eq 2 -and @($new.writeControls).Count -eq 1 -and @($new.gatedKeys).Count -eq 2 -and $new.clipboardRead -eq $true) 'policy.json holds the two demo apps, the write control, the gated keys and clipboard read'
+
+      # The logon tasks do not start on this machine: nobody signs in as rpa-ci-bot. The two start scripts are
+      # started by hand, as the account of this job (an administrator, which the access rules let read the tokens),
+      # in this job's desktop session. One step for the programs and their clients: Windows ends a step's child
+      # processes when the step ends.
+      - name: Start the installed runner and browser and drive them (protocol scenario, browser smoke)
+        timeout-minutes: 15
+        shell: powershell
+        run: |
+          function Assert([bool]$ok, [string]$what) { if (-not $ok) { throw "FAILED: $what" }; Write-Host "ok: $what" }
+          $install = Join-Path $env:ProgramFiles 'RPA Runner'
+          $data = Join-Path $env:ProgramData 'RPA Runner'
+          $powershell = Join-Path $PSHOME 'powershell.exe'
+          foreach ($name in 'token', 'browser-token') { Write-Host "::add-mask::$(([IO.File]::ReadAllText((Join-Path $data $name))).Trim())" }
+
+          foreach ($script in 'start-runner.ps1', 'start-browser.ps1') {
+            Start-Process -FilePath $powershell -WindowStyle Hidden -ArgumentList ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}"' -f (Join-Path $install "scripts\$script"))
+          }
+          $runnerLine = $null; $browserLine = $null
+          for ($i = 0; $i -lt 240 -and -not ($runnerLine -and $browserLine); $i++) {
+            Start-Sleep -Milliseconds 500
+            $runnerLine = Get-Content "$data\logs\runner.out.log" -ErrorAction SilentlyContinue | Select-String 'RPA runner listening on wss://0\.0\.0\.0:8765/rpa/v1, fingerprint (?:[0-9A-F]{2}:){31}[0-9A-F]{2}$' | Select-Object -First 1
+            $browserLine = Get-Content "$data\logs\browser.out.log" -ErrorAction SilentlyContinue | Select-String '^RPA browser listening on wss://0\.0\.0\.0:3000, fingerprint (?:[0-9A-F]{2}:){31}[0-9A-F]{2}$' | Select-Object -First 1
+          }
+          Get-Content "$data\logs\start-runner.log", "$data\logs\runner.out.log", "$data\logs\runner.err.log", "$data\logs\start-browser.log", "$data\logs\browser.out.log", "$data\logs\browser.err.log" -ErrorAction SilentlyContinue
+          Assert ([bool]$runnerLine) "the runner's start line is in runner.out.log"
+          Assert ([bool]$browserLine) "the browser host's start line is in browser.out.log"
+          Assert ([bool](Get-Content "$data\logs\runner.out.log" | Select-String 'policy loaded: 2 allowed app\(s\), 1 write control\(s\), 2 gated key\(s\)')) 'the runner started with the changed policy'
+
+          $shown = @(& $powershell -NoProfile -ExecutionPolicy Bypass -File "$install\scripts\Show-RpaConnection.ps1")
+          $shown | ForEach-Object { Write-Host "  | $_" }
+          $runner = @($shown | Where-Object { $_ -match '^Runner fingerprint: ((?:[0-9A-F]{2}:){31}[0-9A-F]{2})$' } | ForEach-Object { $Matches[1] })
+          $browser = @($shown | Where-Object { $_ -match '^Browser fingerprint: ((?:[0-9A-F]{2}:){31}[0-9A-F]{2})$' } | ForEach-Object { $Matches[1] })
+          Assert ($runner.Count -eq 1 -and $browser.Count -eq 1) 'Show-RpaConnection.ps1 prints two fingerprints of 32 hex pairs'
+          Assert ($runnerLine.Line.EndsWith($runner[0]) -and $browserLine.Line.EndsWith($browser[0])) 'they are the fingerprints of the two start lines'
+          $text = $shown -join "`n"
+          foreach ($name in 'token', 'browser-token') { Assert (-not $text.Contains(([IO.File]::ReadAllText((Join-Path $data $name))).Trim())) "the output of Show-RpaConnection.ps1 does not hold what is in $name" }
+          Assert ($text -notmatch 'not listening') 'both programs are listening'
+
+          # The scenario of the step above, now against the installed runner, the installed demo apps and the policy
+          # the policy tool wrote.
+          $env:RPA_RUNNER_TOKEN = ([IO.File]::ReadAllText((Join-Path $data 'token'))).Trim()
+          dotnet desktop/runner/test/Rpa.Runner.Scenario/bin/Release/net8.0/Rpa.Runner.Scenario.dll `
+            --url wss://127.0.0.1:8765/rpa/v1 --fingerprint $runner[0] `
+            --app "$install\erp-demo\v1\ErpDemo.exe" --app-v2 "$install\erp-demo\v2\ErpDemo.exe" --out "$env:OUT\install-scenario"
+          $code = $LASTEXITCODE
+          $env:RPA_RUNNER_TOKEN = $null
+          Assert ($code -eq 0) "the protocol scenario passes against the installed runner (exit code $code)"
+
+          # The browser: through the fingerprint-checking tunnel, with a window ({"headless":false}). While the page
+          # is held open, what this desktop shows of it is written to the log.
+          $smoke = Start-Process -FilePath "$install\browser\node.exe" -PassThru -WindowStyle Hidden -RedirectStandardOutput "$env:OUT\logs\browser-smoke.log" -RedirectStandardError "$env:OUT\logs\browser-smoke.err.log" `
+            -ArgumentList ('"{0}" --fingerprint {1} --hold-ms 8000' -f (Join-Path $env:GITHUB_WORKSPACE 'desktop\installer\test\browser-smoke.mjs'), $browser[0])
+          $null = $smoke.Handle
+          for ($i = 0; $i -lt 400 -and -not $smoke.HasExited -and -not (Get-Content "$env:OUT\logs\browser-smoke.log" -ErrorAction SilentlyContinue | Select-String 'holding the page open'); $i++) { Start-Sleep -Milliseconds 300 }
+          $chrome = @(Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | Where-Object { $_.ExecutablePath -like "$install\*" })
+          Write-Host "while the page is open: $($chrome.Count) chrome.exe processes from the install, in session $(($chrome | ForEach-Object { $_.SessionId } | Sort-Object -Unique) -join ','); with --no-sandbox on the command line: $(@($chrome | Where-Object { $_.CommandLine -match '--no-sandbox' }).Count)"
+          Get-Process chrome -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | ForEach-Object { Write-Host "  chrome.exe $($_.Id) has a window titled '$($_.MainWindowTitle)'" }
+          $smoke.WaitForExit(120000) | Out-Null
+          Get-Content "$env:OUT\logs\browser-smoke.log", "$env:OUT\logs\browser-smoke.err.log" -ErrorAction SilentlyContinue
+          Assert ($smoke.HasExited -and $smoke.ExitCode -eq 0) 'the browser smoke test passes'
+          Assert ($chrome.Count -gt 0 -and @($chrome | Where-Object { $_.CommandLine -match '--no-sandbox' }).Count -eq 0) 'the browser ran from the install, without --no-sandbox'
+
+      # Running the installer again upgrades: the programs are replaced; the tokens, the policy and the certificates
+      # stay, and an upgrade without firewall parameters keeps who may connect.
+      - name: Upgrade (the installer run again)
+        timeout-minutes: 10
+        shell: powershell
+        run: |
+          function Assert([bool]$ok, [string]$what) { if (-not $ok) { throw "FAILED: $what" }; Write-Host "ok: $what" }
+          $install = Join-Path $env:ProgramFiles 'RPA Runner'
+          $data = Join-Path $env:ProgramData 'RPA Runner'
+          $powershell = Join-Path $PSHOME 'powershell.exe'
+          # The SHA-256 of the two tokens and the policy, the two fingerprints, and who may connect.
+          function Get-State {
+            $state = [ordered]@{}
+            foreach ($name in 'token', 'browser-token', 'policy.json') { $state[$name] = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $data $name)).Hash }
+            foreach ($line in @(& $powershell -NoProfile -ExecutionPolicy Bypass -File "$install\scripts\Show-RpaConnection.ps1")) { if ($line -match '^(Runner|Browser) fingerprint: ((?:[0-9A-F]{2}:){31}[0-9A-F]{2})$') { $state[$Matches[1]] = $Matches[2] } }
+            $state['allowFrom'] = @((Get-Content -Raw -LiteralPath "$install\install.json" | ConvertFrom-Json).allowFrom) -join ','
+            $state['firewall'] = @(Get-NetFirewallRule -Name 'RPA-Runner-In', 'RPA-Browser-In' | ForEach-Object { ($_ | Get-NetFirewallAddressFilter).RemoteAddress }) -join ','
+            $state
+          }
+          $before = Get-State
+          Assert ($before.Count -eq 7 -and $before['firewall'] -eq '127.0.0.1,127.0.0.1') 'before the upgrade: two tokens, the policy, two fingerprints, and rules for 127.0.0.1'
+
+          $global:LASTEXITCODE = 0
+          & 'C:\rpa-ci\package\rpa-windows-x64\Install-Rpa.ps1' -User rpa-ci-bot -Force
+          Assert ($LASTEXITCODE -eq 0) "Install-Rpa.ps1 exits 0 on the upgrade (it was $LASTEXITCODE)"
+
+          # Both programs once more, so that the fingerprints are those of a start after the upgrade. A start script
+          # notes each start in start-<name>.log and keeps the output of the run before in <name>.out.1.log.
+          function Get-Starts([string]$name) { @(Get-Content "$data\logs\start-$name.log" -ErrorAction SilentlyContinue | Select-String ' starting C:').Count }
+          function Test-Listening([string]$name) { [bool](Get-Content "$data\logs\$name.out.log" -ErrorAction SilentlyContinue | Select-String "RPA $name listening on") }
+          $starts = @{ runner = Get-Starts 'runner'; browser = Get-Starts 'browser' }
+          foreach ($script in 'start-runner.ps1', 'start-browser.ps1') {
+            Start-Process -FilePath $powershell -WindowStyle Hidden -ArgumentList ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}"' -f (Join-Path $install "scripts\$script"))
+          }
+          $started = $false
+          for ($i = 0; $i -lt 240 -and -not $started; $i++) {
+            Start-Sleep -Milliseconds 500
+            $started = (Get-Starts 'runner') -gt $starts.runner -and (Get-Starts 'browser') -gt $starts.browser -and (Test-Listening 'runner') -and (Test-Listening 'browser')
+          }
+          Assert $started 'both programs start again after the upgrade'
+          $after = Get-State
+          foreach ($name in $before.Keys) { Assert ($after[$name] -eq $before[$name]) "unchanged by the upgrade: $name" }
+
+      # Uninstall keeps the data directory; -RemoveData, run from the unpacked package afterwards, removes it. No
+      # process of rpa-ci-bot is running (the programs of the steps above ran as this job's account and ended with
+      # their step), which -RemoveData asks for.
+      - name: Uninstall, then remove the data
+        timeout-minutes: 10
+        shell: powershell
+        run: |
+          function Assert([bool]$ok, [string]$what) { if (-not $ok) { throw "FAILED: $what" }; Write-Host "ok: $what" }
+          $install = Join-Path $env:ProgramFiles 'RPA Runner'
+          $data = Join-Path $env:ProgramData 'RPA Runner'
+          New-Item -ItemType Directory -Force "$env:OUT\install-logs" | Out-Null
+          Copy-Item "$data\logs\*" "$env:OUT\install-logs\" -ErrorAction SilentlyContinue
+
+          $global:LASTEXITCODE = 0
+          & "$install\Uninstall-Rpa.ps1"
+          Assert ($LASTEXITCODE -eq 0) "Uninstall-Rpa.ps1 exits 0 (it was $LASTEXITCODE)"
+          Assert (@(Get-ScheduledTask -TaskPath '\RPA\' -ErrorAction SilentlyContinue).Count -eq 0) 'the two tasks are gone'
+          Assert (@(Get-NetFirewallRule -Name 'RPA-*' -ErrorAction SilentlyContinue).Count -eq 0) 'the two firewall rules are gone'
+          Assert (-not (Test-Path -LiteralPath $install)) 'the install directory is gone'
+          Assert ((Test-Path -LiteralPath "$data\policy.json") -and (Test-Path -LiteralPath "$data\token") -and (Test-Path -LiteralPath "$data\browser-token")) 'the data directory is kept, with the policy and the tokens'
+          Assert ([bool](Get-LocalUser -Name rpa-ci-bot -ErrorAction SilentlyContinue)) 'the Windows user is kept'
+
+          # Who owns what the programs made there: -RemoveData is refused while such an account has a process running.
+          Get-ChildItem -LiteralPath $data -Force | ForEach-Object { Write-Host ('  {0} is owned by {1}' -f $_.Name, (Get-Acl -LiteralPath $_.FullName).Owner) }
+          $global:LASTEXITCODE = 0
+          & 'C:\rpa-ci\package\rpa-windows-x64\Uninstall-Rpa.ps1' -RemoveData
+          Assert ($LASTEXITCODE -eq 0) "Uninstall-Rpa.ps1 -RemoveData, from the unpacked package, exits 0 (it was $LASTEXITCODE)"
+          Assert (-not (Test-Path -LiteralPath $data)) 'the data directory is gone'
+
+      - name: Collect the installed programs' logs
+        if: always()
+        timeout-minutes: 2
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force "$env:OUT\install-logs" | Out-Null
+          Copy-Item (Join-Path $env:ProgramData 'RPA Runner\logs\*') "$env:OUT\install-logs\" -ErrorAction SilentlyContinue
+          Get-ChildItem "$env:OUT\install-logs" -ErrorAction SilentlyContinue | ForEach-Object { '{0} {1}' -f $_.Name, $_.Length }
+          $global:LASTEXITCODE = 0
+
+      - name: Upload the installed programs' logs and the scenario's snapshots (failure)
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: desktop-install-logs
+          path: |
+            out/install-logs
+            out/install-scenario
+            out/logs/browser-smoke*.log
+          retention-days: 14
+          if-no-files-found: ignore
+
+      # The package that was installed above, as a zip with its SHA-256.
+      - name: Upload the Windows package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rpa-windows-package
+          path: |
+            out/package/rpa-windows-x64.zip
+            out/package/rpa-windows-x64.zip.sha256
+          retention-days: 30
+          if-no-files-found: error
+          compression-level: 0
 
       # One zip with the runner and both demo builds, and its SHA-256, for publishing as a release asset (Actions
       # artifacts need a GitHub token to download; release assets do not). Nothing is published here.
