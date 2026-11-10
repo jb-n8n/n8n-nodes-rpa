@@ -491,12 +491,13 @@ public sealed class RpaTreeOutcome {
 }
 // Removes a folder tree through handles. The folders from the top one down to the one removed are opened one inside
 // the other, without following a link, with list access and without delete sharing, and stay open until the end:
-// while they are held, Windows refuses another open of them with delete access, which a rename or a move needs, and
-// a rename of a folder above an open one. Each entry of a held folder is opened by its name inside that folder's
-// handle (not by a path), the same way and with delete access; its attributes are read from the handle. A link
-// (junction, symbolic link, mount point) is deleted as the link itself and not entered; a
-// folder is walked while it is held, then deleted; a file is deleted. What cannot be opened or deleted, a folder not
-// empty at the end, and a folder more than MaxDepth below the one removed are left, and the walk goes on.
+// while they are held, Windows refuses another open of them with delete access, which a rename or a move needs (on
+// Windows Server 2022 it also refused a rename of a folder above an open one; the removal does not rely on that).
+// Each entry of a held folder is opened by its name inside that folder's handle (not by a path), the same way and
+// with delete access; its attributes are read from the handle. A link (junction, symbolic link, mount point) is
+// deleted as the link itself and not entered; a folder is walked while it is held, then deleted; a file is deleted.
+// What cannot be opened or deleted, a folder not empty at the end, and a folder more than MaxDepth below the one
+// removed are left, and the walk goes on.
 public static class RpaTree {
   public const int MaxDepth = 128;
   [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]

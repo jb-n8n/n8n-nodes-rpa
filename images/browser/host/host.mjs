@@ -35,8 +35,8 @@
 //
 // browser-temp, the temp folder of the browser server and its browsers (TEMP, TMP and TMPDIR of that process only):
 // - Playwright keeps a session's trace, downloads and browser profile there, and a trace holds what was typed into
-//   pages. So the folder is one that only the account of the host can use, without relying on how the data directory
-//   was set up:
+//   pages. So the folder is in a place meant for the account of the host alone (administrators can still read it),
+//   chosen without relying on how the data directory was set up:
 //   - On Windows: %LOCALAPPDATA%\RPA Runner\browser-temp, in the profile of the account the host runs as (a profile
 //     is for its user only unless someone changed that). Without LOCALAPPDATA the host does not start; it uses no
 //     other place.
@@ -47,7 +47,9 @@
 // - The host creates the folder, and empties it at every start before the browser server is started, after the browser
 //   server's processes have ended in a stop, and when the browser server exits on its own. A host that is ended
 //   without a chance to stop leaves what Playwright did not remove itself until the next start. Emptying removes a
-//   link (a junction too) and never what it points at.
+//   link it finds (a junction too) as the link itself, without entering it. It looks at each folder with lstat just
+//   before it lists it, so a folder that the account of the host swaps for a link after that look is listed through
+//   the link.
 // - One host per data directory and, on Windows, per account: a second one would empty the first one's folder.
 //
 // Order and stopping:
@@ -280,7 +282,8 @@ function browserTempFolder(dataDir) {
 /**
  * Removes an entry that is not a folder of its own: a file, or a link, which goes while what it points at stays. unlink
  * does not take a directory, and for Windows a junction is one; Node's unlink takes only those it can read as a link.
- * rmdir removes such a junction itself and never what is behind it (on a folder with content it fails).
+ * rmdir removes such a junction itself, not what is behind it; a folder with content in its place makes it fail, and an
+ * empty folder there is removed.
  */
 function removeEntry(path) {
   try {
@@ -471,7 +474,9 @@ export async function startHost({
   if (!Number.isInteger(maxSessions) || maxSessions < 1 || maxSessions > MAX_SESSIONS_LIMIT) {
     throw new Error(`maxSessions must be a whole number from 1 to ${MAX_SESSIONS_LIMIT}`);
   }
-  // The token before the certificate, and both before anything is started: a start that is refused creates nothing.
+  // The token before the certificate, and both before anything is started. A start refused for the token creates
+  // nothing; one refused later (for browser-temp, for example) may leave a new certificate pair, which the next start
+  // uses.
   const token = readToken(dataDir);
   const { key, cert, fingerprint } = certificate(dataDir);
   // What an earlier session left (a host that is ended without a chance to stop removes nothing) goes before a new

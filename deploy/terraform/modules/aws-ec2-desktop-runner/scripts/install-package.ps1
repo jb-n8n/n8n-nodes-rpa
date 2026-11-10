@@ -58,7 +58,7 @@ function Remove-Work([string]$path) {
 
 # The outbound rule that blocks the instance metadata address for the bot user, by its SID, so that neither the two
 # programs nor an app they drive reach the instance role through it. A rule of that name is changed in place to name
-# the user of this install, so there is no moment without it. (The first boot also adds a rule for every member of
+# the user of this install, not removed and added again. (The first boot also adds a rule for every member of
 # Users.)
 function Set-MetadataBlock([string]$user) {
   $account = $user

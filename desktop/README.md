@@ -302,8 +302,9 @@ path that looks right is the program you mean.
   replace it`. Such a file may have been put there by a user who is not an administrator.
 - **Writing.** The tool writes the new policy to a temporary file beside the policy
   (`policy.json.<32 hex digits>.tmp`, created for Administrators and SYSTEM only) and swaps it in in one step. It
-  replaces the policy file only while the file still holds what the tool read at its start: it compares before it
-  creates anything, and again, with the backup copy, directly before the swap. When the file changed in between
+  compares the policy file with what it read at its start before it creates anything, and again, with the backup
+  copy, directly before the swap, and does not swap when the file differs; a change made between that last comparison
+  and the swap is not seen. When the file changed in between
   (another administrator edited it while you read the summary), the tool prints
   `the policy file changed while this change was being applied; nothing was written` and exits 1. Run the command
   again to see the change against the policy as it is now. When there was no policy file at the start, the new one
