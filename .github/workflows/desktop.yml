@@ -162,7 +162,8 @@ jobs:
           }
           Get-ChildItem -Recurse $env:OUT -Include *.exe, *.dll | ForEach-Object { '{0} {1:N1} MB' -f $_.FullName, ($_.Length / 1MB) }
 
-      # One step for the runner and the client: Windows ends a step's child processes when the step ends. The policy
+      # One step for the runner and the client: the step starts the runner, runs the scenario against it and ends the
+      # runner in its finally block (a process a step starts goes on running after the step otherwise). The policy
       # sits at the contract's default location; the token is fresh, random and masked. allowUserWritable: the
       # workspace belongs to the runner's own (admin) user, which a real install must avoid.
       - name: Start the runner and run the protocol scenario (drives the ERP Demo through the runner)
