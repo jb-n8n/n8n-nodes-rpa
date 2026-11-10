@@ -1,6 +1,6 @@
 import { NodeOperationError, type INodeExecutionData } from 'n8n-workflow';
-import { MAX_BUDGET_MS, type OutputSpec, type SaveTrace } from 'n8n-rpa-engine';
-import { ConfigError, CREDENTIALS } from '../config.js';
+import type { OutputSpec, SaveTrace } from 'n8n-rpa-engine';
+import { ConfigError, CREDENTIALS, MAX_SECONDS } from '../config.js';
 import type { NodeContext } from '../context.js';
 import type { Engine } from '../engine.js';
 import { configErrorItem } from '../output.js';
@@ -111,7 +111,7 @@ export function readCommonOptions(ctx: NodeContext, i: number): CommonOptions {
   const trace = asString(opt('saveTrace'), 'onFailure');
   return {
     timeoutMs: Math.round(clamp(asNumber(opt('timeout'), 30), 1, 300) * 1000),
-    maxSeconds: clamp(asNumber(opt('maxSeconds'), 180), 10, MAX_BUDGET_MS / 1000),
+    maxSeconds: clamp(asNumber(opt('maxSeconds'), 180), 10, MAX_SECONDS),
     viewport: { width: dimension(size, 'width', 1280), height: dimension(size, 'height', 800) },
     allowedHosts: asString(opt('allowedHosts')).split(/[\s,]+/).filter(Boolean),
     allowPrivateNetwork: literalBoolean(ctx, i, 'options.allowPrivateNetwork', 'Allow Private Network', false),

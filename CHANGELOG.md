@@ -6,7 +6,7 @@ All notable changes to `n8n-nodes-rpa`, the `rpa-browser` image and the Windows 
 
 ## Unreleased
 
-- A run may last up to 600 seconds (Max Seconds, was 300), and a browser step's `timeoutMs` may be 100 to 300000 (was 120000). A longer run holds its browser session and its Site Login lock for as long as it runs. A Windows step keeps its 120000 limit.
+- A run may last up to 600 seconds (Max Seconds, was 300), and a browser step's `timeoutMs` may be 100 to 300000 (was 120000). A longer run holds its browser session and its Site Login lock for as long as it runs. A Windows run's Max Seconds also rises to 600, while a Windows step keeps its 120000 limit.
 
 ## 0.2.0 (2026-11-10)
 

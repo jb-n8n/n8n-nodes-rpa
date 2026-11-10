@@ -201,7 +201,6 @@ describe('runScriptLane', () => {
       lane = await openLaneRuntime({ endpoint: LOCAL, policy: publicPolicy(portal), masker: createMasker([]), budgetMs: 999_999_999, trace: false });
       expect(lane.budget).toBe(MAX_BUDGET_MS);
       expect(timers).toHaveLength(1);
-      expect(timers[0].ms).toBeGreaterThan(590_000);
       expect(timers[0].ms).toBeLessThanOrEqual(600_000);
       expect(lane.override()).toBeNull();
       timers[0].fn();

@@ -8,6 +8,9 @@ export const CREDENTIALS = {
   desktopRunner: 'rpaDesktopRunnerApi',
 } as const;
 
+/** The most Max Seconds may be, in seconds. A test pins it to the engine's MAX_BUDGET_MS; the node must not import the engine at load time. */
+export const MAX_SECONDS = 600;
+
 /** The reference compose stack's browser server (the compose service `browser`). */
 export const DEFAULT_ENDPOINT_URL = 'ws://browser:3000/';
 

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { NodeHelpers, NodeOperationError, type IDataObject, type INodeExecutionData } from 'n8n-workflow';
-import { isEmptySteps, proposalDigest, scriptHash, type Proposal, type Script } from 'n8n-rpa-engine';
-import { ConfigError } from '../nodes/Playwright/config.js';
+import { isEmptySteps, MAX_BUDGET_MS, proposalDigest, scriptHash, type Proposal, type Script } from 'n8n-rpa-engine';
+import { ConfigError, MAX_SECONDS } from '../nodes/Playwright/config.js';
 import { memoryGuardStore, type GuardStore } from '../nodes/Playwright/guard-store.js';
 import { BREAKER_KEY, resetGuardsForTests, siteLoginKey } from '../nodes/Playwright/guard.js';
 import { executeRunSteps, parseStepsParam, readRunStepsParams } from '../nodes/Playwright/operations/runSteps.js';
@@ -155,6 +155,9 @@ describe('Run Steps: trust and engine input', () => {
       output: { idPattern: 'SKU-\\d{4}', totalPattern: 'Showing (\\d+) results', requiredFields: ['title', 'price'], emptyPattern: 'No results found' },
       defaultStepTimeoutMs: 5000, budgetMs: 600_000, viewport: { width: 1024, height: 700 }, saveTrace: 'always',
     });
+  });
+  it("Max Seconds' limit equals the engine's run budget cap", () => {
+    expect(MAX_SECONDS * 1000).toBe(MAX_BUDGET_MS);
   });
   it('clamps the viewport to the bounds the UI allows: width 320–3840, height 240–2160', () => {
     const viewport = (size: Record<string, unknown>) => readRunStepsParams(ctx({ params: params({}, { viewport: { size } }) }), 0).common.viewport;
