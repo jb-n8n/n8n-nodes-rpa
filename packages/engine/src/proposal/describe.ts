@@ -1,5 +1,6 @@
 import { canonicalize } from '../sign.js';
 import type { DownloadTemplate } from '../steps/file-check.js';
+import { SECRET_FILL_VALUE } from '../secrets/render.js';
 import { verbOf } from '../steps/parse.js';
 import type { Interrupt, Locator, Step, StepWhen, SubmitTarget } from '../types.js';
 
@@ -60,12 +61,14 @@ function stepAction(step: Step): string {
   let s: string;
   if ('goto' in step) s = `go to ${q(step.goto)}`;
   else if ('signIn' in step) {
-    const { username, next, password, submit, totp } = step.signIn;
+    const { username, next, password, submit, totp, changePassword } = step.signIn;
+    const newPasswordVar = changePassword ? SECRET_FILL_VALUE.exec(changePassword.value)?.[1] : undefined;
     s = `sign in with ${reviewLocator(username)}, ${next ? `next ${reviewLocator(next)}, ` : ''}${reviewLocator(password)}, submit ${reviewLocator(submit)}`
       + (totp
         ? `${totp.via ? `, then click ${totp.via.map(reviewLocator).join(', then ')} if shown` : ''}, code in ${reviewLocator(totp.field)}`
           + `${totp.check ? `, tick ${totp.check.map(reviewLocator).join(', ')}` : ''}, submit ${reviewLocator(totp.submit)}`
-        : '');
+        : '')
+      + (changePassword ? `; if the site asks for a new password, set it from variable ${token(newPasswordVar ?? changePassword.value)}` : '');
   } else if ('click' in step) s = `${step.modifiers ? `${step.modifiers.map(token).join('+')}+` : ''}click ${reviewLocator(step.click)}`;
   else if ('fill' in step) s = `fill ${reviewLocator(step.fill.field)} with ${q(step.fill.value)}`;
   else if ('select' in step) s = `select ${q([step.select.value].flat().join(', '))} in ${reviewLocator(step.select.field)}`;

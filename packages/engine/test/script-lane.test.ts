@@ -10,6 +10,7 @@ import { APPROVER, baselineScript, LOCAL, policyFor, reportScript, SECRETS, SIGN
 import { verifyScript } from '../src/sign.js';
 import { parseScript } from '../src/steps/parse.js';
 import { describeStep } from '../src/proposal/describe.js';
+import { secretFillVariables } from '../src/secrets/secret-fills.js';
 import { notReachedNetworkIdle, tooManyRows } from '../src/messages.js';
 import { publicPolicy } from './helpers.js';
 import { bound } from './timing.js';
@@ -593,6 +594,11 @@ describe('a step list signed before this change verifies and runs', () => {
       ['Read the notices', 'ok', undefined],
     ]);
     expect(sorted(r.rows.map((x) => x.id))).toEqual(sorted(SANDBOX.bulletins));
+    // signIn.changePassword: a sign-in without it reports no new password.
+    expect(r).not.toHaveProperty('passwordChanged');
+  });
+  it('changePassword: a list without it has no secret variable, so its conditions stay allowed', () => {
+    expect(secretFillVariables(signedBefore('http://127.0.0.1:9999').steps)).toEqual(new Set());
   });
   it('press, hover and click modifiers: the list parses to the same steps, and every step keeps its approval text', () => {
     const doc = signedBefore('http://127.0.0.1:9999');

@@ -12,10 +12,29 @@ export function secretFillValues(masker: Masker): Set<string> {
   return known;
 }
 
-/** The value template of every fill.secret step, nested paginate steps included. */
+/**
+ * The value a secret template types (a fill.secret's, or signIn.changePassword's): `template` is exactly one {{var.name}}
+ * (the caller checked) and `name` is that variable. Never a Site Login credential (renderVars refuses it); a value the
+ * masker already holds as a secret fill value (registerSecretFills) is taken as is. Added to the masker before it returns,
+ * so before anything types it.
+ */
+export function renderSecretValue(name: string, template: string, vars: Record<string, string>, masker: Masker): string {
+  const known = secretFillValues(masker);
+  const raw = Object.hasOwn(vars, name) ? vars[name] : undefined;
+  const value = typeof raw === 'string' && known.has(raw) ? raw : renderVars(template, vars, masker);
+  masker.add([value]);
+  known.add(value);
+  return value;
+}
+
+/**
+ * The value template of every fill.secret step, nested paginate steps included, and of signIn.changePassword: the new
+ * password is a secret fill's variable too (masked from run start, never tested by a condition).
+ */
 function secretFillTemplates(steps: readonly Step[], out: string[] = []): string[] {
   for (const step of steps) {
     if ('fill' in step && step.fill.secret === true && typeof step.fill.value === 'string') out.push(step.fill.value);
+    if ('signIn' in step && typeof step.signIn?.changePassword?.value === 'string') out.push(step.signIn.changePassword.value);
     if ('paginate' in step && Array.isArray(step.paginate.each)) secretFillTemplates(step.paginate.each, out);
   }
   return out;

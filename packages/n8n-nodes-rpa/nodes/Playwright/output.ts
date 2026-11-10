@@ -35,6 +35,8 @@ interface RunFacts {
   verified?: boolean;
   /** Both lanes always carry it (it also keeps this interface from being a weak type). */
   submitted: boolean;
+  /** The sign-in set a new password (signIn.changePassword). */
+  passwordChanged?: true;
 }
 
 /** Run Steps Data item: page facts, identity, lane, the step log, and rows/files/blocked writes when present. */
@@ -76,6 +78,7 @@ export async function dataItem(
     ...(files.length ? { files } : {}),
     ...(blocked.length ? { blockedRequests: blocked.map((b) => ({ ...b })) } : {}),
     ...(f.submitted ? { submitted: true } : {}),
+    ...(f.passwordChanged ? { passwordChanged: true } : {}),
   };
   return { json, ...(Object.keys(binary).length ? { binary } : {}) };
 }
@@ -174,6 +177,7 @@ export async function failureItem(
     llmTokens: full?.tokens ?? 0,
     log: full ? (plain(full.log) as unknown as IDataObject[]) : [],
     submitted: full?.submitted === true,
+    ...(full?.passwordChanged ? { passwordChanged: true as const } : {}),
   };
   return { json: errorJson(`${f.code}: ${f.message}`, f.message, d), pairedItem: paired, ...(binary ? { binary } : {}) };
 }

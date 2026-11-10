@@ -429,3 +429,61 @@ describe('press, hover and modifier clicks', () => {
     expect(desk({ intent: 'x', hover: { css: '#a' } })).toEqual([expect.stringContaining('hover')]);
   });
 });
+
+describe('signIn.changePassword', () => {
+  const at = (step: unknown) => issuesOf(withStep(step));
+  const CP = {
+    detect: { role: 'heading', name: 'Change your password' },
+    current: { label: 'Current password' },
+    new: [{ label: 'New password' }, { label: 'Confirm new password' }],
+    submit: { role: 'button', name: 'Change password' },
+    value: '{{var.newPassword}}',
+  };
+  const si = (changePassword: unknown) => ({
+    intent: 'Sign in',
+    signIn: { username: { label: 'U' }, password: { label: 'Password' }, submit: { role: 'button', name: 'Go' }, changePassword },
+  });
+  const VALUE = 'steps[0].signIn.changePassword.value must be exactly one {{var.name}} template (nothing before or after it)';
+  it('parses with one or two new-password fields, spaces inside the template included', () => {
+    expect(at(si(CP))).toEqual([]);
+    expect(at(si({ ...CP, new: [{ label: 'New password' }], value: '{{ var.pw }}' }))).toEqual([]);
+    expect(parseScript(withStep(si(CP))).steps[0]).toEqual(si(CP));
+  });
+  it('refuses a missing value, a literal, text around the template and two variables', () => {
+    const { value: _value, ...noValue } = CP;
+    expect(at(si(noValue))).toEqual([VALUE]);
+    for (const value of ['Literal-Pass-2026', 'x{{var.pw}}', '{{var.pw}}{{var.other}}', '{{secret.password}}', '{{$exportDir}}', 7]) {
+      expect(at(si({ ...CP, value })), String(value)).toEqual([VALUE]);
+    }
+  });
+  it('refuses no, three or no-locator new fields, a missing locator, a frame, and an unknown key', () => {
+    for (const fields of [[], [CP.current, CP.current, CP.current], CP.current, undefined]) {
+      expect(at(si({ ...CP, new: fields })), JSON.stringify(fields)).toEqual(['steps[0].signIn.changePassword.new must be an array of 1 or 2 locators']);
+    }
+    const { detect: _detect, ...noDetect } = CP;
+    expect(at(si(noDetect))).toEqual(['steps[0].signIn.changePassword.detect must be a locator object']);
+    expect(at(si({ ...CP, current: { label: 'Current password', frame: 'iframe' } }))).toEqual(['steps[0].signIn.changePassword.current cannot use frame']);
+    expect(at(si({ ...CP, confirm: { label: 'Confirm' } }))).toEqual(['steps[0].signIn.changePassword has unknown key "confirm"']);
+    expect(at(si('yes'))).toEqual(['steps[0].signIn.changePassword must be an object']);
+  });
+  it('refuses a run variable in any of its locators', () => {
+    const V = { role: 'button', name: '{{var.who}}' };
+    for (const [k, over] of [['detect', { detect: V }], ['current', { current: V }], ['new[1]', { new: [CP.new[0], V] }], ['submit', { submit: V }]] as const) {
+      expect(at(si({ ...CP, ...over })), k).toEqual([varInWriteLocator(`steps[0].signIn.changePassword.${k}.name`)]);
+    }
+  });
+  it('is refused outside signIn', () => {
+    expect(at({ intent: 'x', changePassword: CP })).toEqual([expect.stringMatching(/^steps\[0\] must have exactly one action/)]);
+    expect(at({ intent: 'x', click: { css: '#a' }, changePassword: CP })).toEqual(['steps[0] has unknown key "changePassword"']);
+    expect(at({ intent: 'x', fill: { field: { label: 'P' }, value: '{{var.pw}}', secret: true, changePassword: CP } })).toEqual(['steps[0].fill has unknown key "changePassword"']);
+    expect(at({ ...si(undefined), signIn: { ...si(undefined).signIn, totp: { field: { label: 'C' }, submit: { text: 'ok' }, changePassword: CP } } }))
+      .toEqual(['steps[0].signIn.totp has unknown key "changePassword"']);
+  });
+  it('a variable condition on the new-password variable is refused', () => {
+    const doc = (...steps: unknown[]) => ({ ...baselineScript(URL0), steps });
+    const when = (w: unknown) => ({ intent: 'Maybe', click: { css: '#a' }, when: w });
+    expect(issuesOf(doc(si(CP), when({ var: 'newPassword', equals: 'x' })))).toEqual(['steps[1].when may not test a variable that a secret fill types']);
+    expect(issuesOf(doc(si({ ...CP, value: '{{ var.pw }}' }), when({ var: 'pw', notEquals: '' })))).toEqual(['steps[1].when may not test a variable that a secret fill types']);
+    expect(issuesOf(doc(si(CP), when({ var: 'mode', equals: 'x' })))).toEqual([]);
+  });
+});

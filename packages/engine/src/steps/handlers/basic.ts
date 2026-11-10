@@ -1,7 +1,7 @@
 import type { BrowserContext, Locator as PwLocator, Request } from 'playwright-core';
 import { formPostsElsewhere, notHttp, offListSite, PASSWORD_FILL_REFUSED, PASSWORD_FILL_REFUSED_STEPS, secretFillValue, UNSIGNED_SECRET_FILL } from '../../messages.js';
 import { renderVars, SECRET_FILL_VALUE } from '../../secrets/render.js';
-import { secretFillValues } from '../../secrets/secret-fills.js';
+import { renderSecretValue } from '../../secrets/secret-fills.js';
 import type { RunState, Step } from '../../types.js';
 import { PolicyError } from '../errors.js';
 import { formTarget as formTargetInPage, type FormTarget } from '../form-target.js';
@@ -208,12 +208,7 @@ function renderSecretFill(ctx: StepContext, template: string): string {
   }
   const m = SECRET_FILL_VALUE.exec(template);
   if (!m) throw new Error(secretFillValue('fill.value'));
-  const known = secretFillValues(ctx.masker);
-  const raw = Object.hasOwn(ctx.vars, m[1]) ? ctx.vars[m[1]] : undefined;
-  const value = typeof raw === 'string' && known.has(raw) ? raw : renderVars(template, ctx.vars, ctx.masker);
-  ctx.masker.add([value]);
-  known.add(value);
-  return value;
+  return renderSecretValue(m[1], template, ctx.vars, ctx.masker);
 }
 
 const fill: Handler = async (ctx, step, _state, timeout) => {

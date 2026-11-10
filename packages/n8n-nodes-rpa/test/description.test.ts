@@ -323,6 +323,7 @@ describe('wording and guidance', () => {
       policy_violation: 'The steps or the page tried something not allowed: an unlisted or private site, a write, a password field, or a secret outside sign-in. The run stopped.',
       locked_out: 'An earlier login failed and the breaker is open. Check the account, then change Options → Login Breaker Reset Key.',
       busy: 'Another run using this Site Login or desktop runner is in progress. This run was skipped.',
+      password_change_failed: 'The site did not take the new password: its change-password page still showed after the sign-in step submitted it. The login breaker stays closed. Check the site\'s password rules and the run variable that holds the new password.',
       runner_unavailable: 'The desktop runner could not be reached, refused the token or the certificate, its Windows session is locked or signed out, or the app is not installed where the runner\'s policy says. Check the RPA Desktop Runner credential and the runner machine.',
     });
   });

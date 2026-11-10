@@ -15,6 +15,7 @@ export const GUIDANCE: Record<ErrorCode, string> = {
   policy_violation: 'The steps or the page tried something not allowed: an unlisted or private site, a write, a password field, or a secret outside sign-in. The run stopped.',
   locked_out: 'An earlier login failed and the breaker is open. Check the account, then change Options → Login Breaker Reset Key.',
   busy: 'Another run using this Site Login or desktop runner is in progress. This run was skipped.',
+  password_change_failed: 'The site did not take the new password: its change-password page still showed after the sign-in step submitted it. The login breaker stays closed. Check the site\'s password rules and the run variable that holds the new password.',
   runner_unavailable: 'The desktop runner could not be reached, refused the token or the certificate, its Windows session is locked or signed out, or the app is not installed where the runner\'s policy says. Check the RPA Desktop Runner credential and the runner machine.',
 };
 
@@ -43,6 +44,8 @@ export interface FailureDetails extends IDataObject {
   llmTokens: number;
   log: IDataObject[];
   submitted: boolean;
+  /** Present (true) when the sign-in set a new password before the run failed: the workflow must store it. */
+  passwordChanged?: true;
 }
 
 /** A failed run as a NodeOperationError: message `<code>: <message>`, its GUIDANCE text as description. */
@@ -52,6 +55,7 @@ export function stepsRunError(node: INode, d: FailureDetails, itemIndex: number)
   error.message = message;
   Object.assign(error.context, {
     code: d.code, name: d.name, version: d.version, hash: d.hash, lane: d.lane, stepIntent: d.stepIntent, traceRef: d.traceRef, submitted: d.submitted,
+    ...(d.passwordChanged ? { passwordChanged: true } : {}),
   });
   return error;
 }

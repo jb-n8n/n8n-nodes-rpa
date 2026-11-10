@@ -148,6 +148,8 @@ export async function agentLane(input: TaskInput, original: RepairInput, h: Hand
   const wrote = h.prior.submitted || session.writesSent > 0;
   if (result.ok && result.lane === 'agent') result = { ...result, submitted: wrote };
   else if (!result.ok && wrote) result = { ...result, submitted: true };
+  // A new password the script lane's sign-in set before the drift is in use now: the workflow must learn it either way.
+  if (h.prior.passwordChanged) result = { ...result, passwordChanged: true };
   return finishLane(input, h.runtime, result, released);
 }
 

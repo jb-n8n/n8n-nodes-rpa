@@ -86,6 +86,23 @@ export interface SignInSpec {
     /** Checkboxes ticked after the code is typed and before its submit (e.g. "Trust this browser"). Each must be on the page. */
     check?: Locator[];
   };
+  /**
+   * A site that forces a new password at sign-in: once the sign-in (and its code) is done, when `detect` shows, the
+   * step types the Site Login password into `current`, the variable's value into each `new` field, and clicks `submit`.
+   * The change page must be a declared login page. `value` follows the rule of a secret fill: exactly one {{var.name}},
+   * masked from the start of the run, signed steps only. No variable is allowed in the locators.
+   */
+  changePassword?: ChangePasswordSpec;
+}
+
+/** signIn.changePassword: the change page's marker, its fields and button, and the variable that holds the new password. */
+export interface ChangePasswordSpec {
+  detect: Locator;
+  current: Locator;
+  /** One or two fields (the new password and its confirmation). */
+  new: Locator[];
+  submit: Locator;
+  value: string;
 }
 
 /** What a run tells the code provider when it asks for a one-time code. */
@@ -310,6 +327,8 @@ export interface RunState {
   attributeFields: string[];
   /** True once a write left the browser: a window POST, a submit click or a download through a form. */
   submitted: boolean;
+  /** True once signIn.changePassword submitted the change form and the change page went away. */
+  passwordChanged?: boolean;
   /**
    * Set when the top-level download step `index` clicked its trigger (no `via`) but no download came: the click still
    * happened (it may have opened a format dialog). A repair that resumes from that step replays the click (compile
@@ -335,6 +354,8 @@ export type ErrorCode =
   | 'login_failed' | 'account_locked' | 'auth_blocked' | 'site_down' | 'browser_unavailable'
   | 'drift_detected' | 'not_found' | 'incomplete' | 'script_untrusted' | 'policy_violation'
   | 'locked_out' | 'busy'
+  /** signIn.changePassword submitted a new password and the site still showed its change page. */
+  | 'password_change_failed'
   /** Desktop runs: the desktop runner could not be reached, refused the token or certificate, or its desktop is locked or signed out. */
   | 'runner_unavailable';
 

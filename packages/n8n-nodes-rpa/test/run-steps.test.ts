@@ -919,3 +919,37 @@ describe('Run Steps: downloads refuse a CDP browser connection', () => {
     expect(engine.calls).toHaveLength(1);
   });
 });
+
+describe('a forced password change (signIn.changePassword)', () => {
+  const CHANGE_FAILED = 'Sign in: detected:password_change_failed';
+  it('the Data item says passwordChanged when the sign-in set a new password, and nothing otherwise', async () => {
+    const [changed] = await executeRunSteps(ctx(), fakeEngine(() => scriptOk({ passwordChanged: true })));
+    expect(changed[0].json.passwordChanged).toBe(true);
+    const [plain] = await executeRunSteps(ctx(), fakeEngine(() => scriptOk()));
+    expect(plain[0].json).not.toHaveProperty('passwordChanged');
+    const [agent] = await executeRunSteps(ctx({ model: STUB_MODEL, params: repairParams() }), fakeEngine(() => agentOk({ passwordChanged: true })));
+    expect(agent[0].json.passwordChanged).toBe(true);
+  });
+  it('a run that fails after the change says passwordChanged in the error item and on the thrown error', async () => {
+    const drift = 'Read the items: No element found';
+    const engine = fakeEngine(() => taskFail('drift_detected', drift, { passwordChanged: true }));
+    const [data] = await executeRunSteps(ctx({ continueOnFail: true }), engine);
+    expect(details(data[0])).toMatchObject({ code: 'drift_detected', passwordChanged: true });
+    const err = await executeRunSteps(ctx(), engine).catch((e: unknown) => e);
+    expect((err as NodeOperationError).context).toMatchObject({ code: 'drift_detected', passwordChanged: true });
+    const [other] = await executeRunSteps(ctx({ continueOnFail: true }), fakeEngine(() => taskFail('drift_detected', drift)));
+    expect(details(other[0])).not.toHaveProperty('passwordChanged');
+  });
+  it('password_change_failed does not open the login breaker: the next items still sign in', async () => {
+    const engine = fakeEngine(() => taskFail('password_change_failed', CHANGE_FAILED));
+    const h = ctx({ items: many(3), continueOnFail: true });
+    const [data] = await executeRunSteps(h, engine);
+    expect(engine.calls).toHaveLength(3);
+    expect(data.map(errorOf)).toEqual(Array(3).fill(`password_change_failed: ${CHANGE_FAILED}`));
+    expect(h.staticData[BREAKER_KEY]).toBeUndefined();
+    const err = await executeRunSteps(ctx(), engine).catch((e: unknown) => e);
+    expect((err as NodeOperationError).description).toBe(
+      'password_change_failed: The site did not take the new password: its change-password page still showed after the sign-in step submitted it. The login breaker stays closed. Check the site\'s password rules and the run variable that holds the new password.',
+    );
+  });
+});

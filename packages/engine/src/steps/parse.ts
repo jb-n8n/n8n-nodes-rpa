@@ -186,6 +186,23 @@ function checkWhenSecrets(steps: Step[], secret: Set<string>, issues: string[], 
   });
 }
 
+/**
+ * signIn.changePassword: `{ detect, current, new: 1 or 2 locators, submit, value }`. `value` follows the rule of a secret
+ * fill (exactly one {{var.name}}, nothing around it). Its locators are checked for variables with the rest of signIn
+ * (checkBrowserWriteLocators). Returns the object when it is one, for the caller's frame check.
+ */
+function checkChangePassword(v: unknown, p: string, issues: string[]): Obj | undefined {
+  if (!isObj(v)) { issues.push(`${p} must be an object`); return undefined; }
+  checkKeys(v, ['detect', 'current', 'new', 'submit', 'value'], p, issues);
+  checkLocator(v.detect, `${p}.detect`, issues);
+  checkLocator(v.current, `${p}.current`, issues);
+  if (!Array.isArray(v.new) || v.new.length < 1 || v.new.length > 2) issues.push(`${p}.new must be an array of 1 or 2 locators`);
+  else v.new.forEach((loc, i) => checkLocator(loc, `${p}.new[${i}]`, issues));
+  checkLocator(v.submit, `${p}.submit`, issues);
+  if (typeof v.value !== 'string' || !SECRET_FILL_VALUE.test(v.value)) issues.push(`${p}.value must be exactly one {{var.name}} template (nothing before or after it)`);
+  return v;
+}
+
 function checkSteps(steps: unknown, path: string, issues: string[], nested: boolean) {
   if (!Array.isArray(steps) || steps.length === 0) { issues.push(`${path} must be a non-empty array`); return; }
   if (steps.length > 200) issues.push(`${path} has more than 200 steps`);
@@ -249,7 +266,7 @@ function checkStep(s: unknown, path: string, issues: string[], nested: boolean) 
     case 'signIn':
       if (!isObj(v)) { issues.push(`${p} must be an object`); break; }
       if (nested) issues.push(`${p}: signIn is not allowed inside paginate`);
-      checkKeys(v, ['username', 'next', 'password', 'submit', 'totp'], p, issues);
+      checkKeys(v, ['username', 'next', 'password', 'submit', 'totp', 'changePassword'], p, issues);
       checkLocator(v.username, `${p}.username`, issues);
       if (v.next !== undefined) checkLocator(v.next, `${p}.next`, issues);
       checkLocator(v.password, `${p}.password`, issues);
@@ -269,9 +286,13 @@ function checkStep(s: unknown, path: string, issues: string[], nested: boolean) 
           }
         }
       }
+      const change = v.changePassword === undefined ? undefined : checkChangePassword(v.changePassword, `${p}.changePassword`, issues);
       const totp = isObj(v.totp) ? v.totp : undefined;
       const lists = (key: 'via' | 'check'): [string, unknown][] => (Array.isArray(totp?.[key]) ? (totp[key] as unknown[]).map((loc, i) => [`totp.${key}[${i}]`, loc]) : []);
-      for (const [k, loc] of [['username', v.username], ['next', v.next], ['password', v.password], ['submit', v.submit], ['totp.field', totp?.field], ['totp.submit', totp?.submit], ...lists('via'), ...lists('check')] as [string, unknown][]) {
+      const changeLocators: [string, unknown][] = change
+        ? [['changePassword.detect', change.detect], ['changePassword.current', change.current], ...(Array.isArray(change.new) ? change.new.map((loc, i): [string, unknown] => [`changePassword.new[${i}]`, loc]) : []), ['changePassword.submit', change.submit]]
+        : [];
+      for (const [k, loc] of [['username', v.username], ['next', v.next], ['password', v.password], ['submit', v.submit], ['totp.field', totp?.field], ['totp.submit', totp?.submit], ...lists('via'), ...lists('check'), ...changeLocators] as [string, unknown][]) {
         if (isObj(loc) && loc.frame !== undefined) issues.push(`${p}.${k} cannot use frame`);
       }
       break;

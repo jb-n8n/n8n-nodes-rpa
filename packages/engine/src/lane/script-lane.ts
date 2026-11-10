@@ -75,6 +75,8 @@ export type LaneSuccess = {
   writes: RequestRecord[];
   /** True once a write left the browser: any non-safe request the session let through, except declared login POSTs. */
   submitted: boolean;
+  /** True when signIn.changePassword set a new password in this run (the site took it); absent otherwise. */
+  passwordChanged?: true;
   durationMs: number; trace?: Buffer;
 };
 export type LaneFailure = {
@@ -85,6 +87,8 @@ export type LaneFailure = {
   lastCheckpoint?: number; credentialsSubmitted?: boolean; trace?: Buffer;
   /** True once a write left the browser (any non-safe request the session let through, except declared login POSTs); absent otherwise. */
   submitted?: boolean;
+  /** True when signIn.changePassword set a new password before the run failed; absent otherwise. */
+  passwordChanged?: true;
 };
 /**
  * Result of a script-lane run. On success: extracted rows or downloaded files, the masked step log and the
@@ -126,6 +130,9 @@ export function clampBudget(budgetMs?: number): number {
   const requested = typeof budgetMs === 'number' && Number.isFinite(budgetMs) ? budgetMs : DEFAULT_BUDGET_MS;
   return Math.min(Math.max(requested, 1000), MAX_BUDGET_MS);
 }
+
+/** `passwordChanged: true` for a result when signIn.changePassword set a new password in the run, else nothing. */
+const changed = (s: RunState): { passwordChanged?: true } => (s.passwordChanged ? { passwordChanged: true } : {});
 
 export function laneFailure(t0: number, masker: Masker, code: ErrorCode, message: string, extra: Partial<LaneFailure> = {}): LaneFailure {
   const { violations = [], blockedRequests = [], ...rest } = extra;
@@ -290,7 +297,7 @@ async function executeScript(
     const base = {
       failure, violations: session.violations, log: maskLog(res.state.log, masker), screenshot,
       lastCheckpoint: res.state.lastCheckpoint, credentialsSubmitted: res.state.credentialsSubmitted,
-      ...(wrote(res.state) ? { submitted: true } : {}),
+      ...(wrote(res.state) ? { submitted: true } : {}), ...changed(res.state),
     };
     const o = runtime.override(res.failure.intent, res.failure.message.startsWith(DETECTED_PREFIX));
     if (o) {
@@ -308,7 +315,7 @@ async function executeScript(
   const tail = {
     violations: session.violations, log: maskLog(res.state.log, masker),
     lastCheckpoint: res.state.lastCheckpoint, credentialsSubmitted: res.state.credentialsSubmitted,
-    ...(wrote(res.state) ? { submitted: true } : {}),
+    ...(wrote(res.state) ? { submitted: true } : {}), ...changed(res.state),
   };
   const o = runtime.override();
   if (o) return { result: fail(o.code, o.message, tail), ...keep };
@@ -336,7 +343,7 @@ async function executeScript(
       blockedRequests: maskRequests(session.blockedRequests, masker),
       page, verified, confirmed,
       writes: (session.writeWindow?.posts ?? []).map((p) => ({ method: p.method, host: masker.mask(p.host), path: masker.mask(p.path) })),
-      submitted: wrote(res.state),
+      submitted: wrote(res.state), ...changed(res.state),
       durationMs: Date.now() - t0,
     },
     ...keep,
@@ -411,7 +418,7 @@ export async function startScriptLane(
     const wrote = !!live.state?.submitted || runtime.session.writesSent > 0;
     const extra = {
       violations: runtime.session.violations, blockedRequests: runtime.session.blockedRequests, version, hash,
-      ...(wrote ? { submitted: true } : {}),
+      ...(wrote ? { submitted: true } : {}), ...(live.state ? changed(live.state) : {}),
     };
     run = { result: o ? laneFailure(t0, masker, o.code, o.code === 'policy_violation' ? message : o.message, extra) : laneFailure(t0, masker, 'incomplete', message, extra) };
   }

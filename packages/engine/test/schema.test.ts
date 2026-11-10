@@ -102,7 +102,8 @@ const EVERY_FIELD = {
   interrupts: [{ target: { css: '#cookie', within: { role: 'dialog' } }, click: { role: 'button', name: 'OK', exact: true } }],
   steps: [
     { intent: 'Open', goto: `${URL_BASE}/start`, waitUntil: 'networkidle', timeoutMs: 100, checkpoint: false, optional: false },
-    { intent: 'Sign in', signIn: { username: { label: 'User' }, next: { role: 'button', name: 'Next' }, password: { label: 'Password' }, submit: { role: 'button', name: 'Go' }, totp: { field: { label: 'Code' }, submit: { text: 'Verify' } } } },
+    { intent: 'Sign in', signIn: { username: { label: 'User' }, next: { role: 'button', name: 'Next' }, password: { label: 'Password' }, submit: { role: 'button', name: 'Go' }, totp: { field: { label: 'Code' }, submit: { text: 'Verify' } },
+      changePassword: { detect: { role: 'heading', name: 'Change your password' }, current: { label: 'Current password' }, new: [{ label: 'New password' }, { label: 'Confirm' }], submit: { role: 'button', name: 'Change' }, value: '{{ var.newPassword }}' } } },
     { intent: 'Click', click: { role: 'link', name: '', exact: false, frame: 'iframe#a', within: { testId: 'nav', within: { css: 'body' } }, fallbacks: [{ css: '#a' }, { text: 'A', exact: true }, { label: 'L' }, { testId: 't' }, { role: 'tab', within: { css: 'nav' } }] }, when: { visible: { css: '#c', fallbacks: [{ css: '#d' }] } }, expect: { url: '/next', heading: 'Next', visible: { text: 'Done' } } },
     { intent: 'Fill', fill: { field: { label: 'Name' }, value: '' } },
     { intent: 'Select', select: { field: { label: 'Kind' }, value: '{{var.kind}}' } },
@@ -283,6 +284,21 @@ describe('the step-document JSON Schema', () => {
         ['totp.via', { username: loc, password: loc, submit: loc, totp: { field: loc, submit: loc, via: [loc, V_ROLE] } }],
         ['totp.check', { username: loc, password: loc, submit: loc, totp: { field: loc, submit: loc, check: [V_TEXT] } }],
       ].map(([k, signIn]) => [`a {{var.*}} in signIn.${k as string}`, doc(step({ signIn }))] as [string, unknown]),
+      ...((cp) => [
+        ['a changePassword without a value', { detect: loc, current: loc, new: [loc], submit: loc }],
+        ['a changePassword with a literal value', { ...cp, value: 'Literal-Pass-2026' }],
+        ['a changePassword with two variables', { ...cp, value: '{{var.a}}{{var.b}}' }],
+        ['a changePassword with three new fields', { ...cp, new: [loc, loc, loc] }],
+        ['a changePassword with no new field', { ...cp, new: [] }],
+        ['a changePassword with an unknown key', { ...cp, confirm: loc }],
+        ['a changePassword locator in a frame', { ...cp, current: { label: 'Current', frame: 'iframe' } }],
+        ['a {{var.*}} in changePassword.detect', { ...cp, detect: V_TEXT }],
+        ['a {{var.*}} in changePassword.new', { ...cp, new: [loc, V_ROLE] }],
+        ['a {{var.*}} in changePassword.submit', { ...cp, submit: { css: '#go', within: V_ROLE } }],
+      ].map(([what, changePassword]) => [what, doc(step({ signIn: { username: loc, password: loc, submit: loc, changePassword } }))] as [string, unknown]))(
+        { detect: loc, current: loc, new: [loc], submit: loc, value: '{{var.pw}}' }),
+      ['a changePassword outside signIn', doc(step({ click: loc, changePassword: { detect: loc, current: loc, new: [loc], submit: loc, value: '{{var.pw}}' } }))],
+      ['a changePassword inside totp', doc(step({ signIn: { username: loc, password: loc, submit: loc, totp: { field: loc, submit: loc, changePassword: { detect: loc, current: loc, new: [loc], submit: loc, value: '{{var.pw}}' } } } }))],
       ['a {{var.*}} in a submit button', doc(step({ submit: { button: V_ROLE, path: '/save' } }))],
       ['a {{var.*}} in a submit path', doc(step({ submit: { button: loc, path: '/save/{{var.id}}' } }))],
       ['a {{var.*}} in a download trigger', doc(step({ download: { trigger: V_TEXT } }))],
@@ -363,6 +379,7 @@ describe('the step-document JSON Schema', () => {
       ['a {{$...}} template', doc({ intent: 'x', fill: { field: loc, value: '{{$now}}' } })],
       // 7. a when variable condition may not test a variable that a secret fill types (a rule across steps)
       ['a condition on a secret fill variable', doc({ intent: 'x', fill: { field: loc, value: '{{var.pw}}', secret: true } }, { intent: 'y', click: loc, when: { var: 'pw', equals: 'x' } })],
+      ['a condition on the new-password variable', doc({ intent: 'x', signIn: { username: loc, password: loc, submit: loc, changePassword: { detect: loc, current: loc, new: [loc], submit: loc, value: '{{var.pw}}' } } }, { intent: 'y', click: loc, when: { var: 'pw', equals: 'x' } })],
     ];
     for (const [what, d] of gaps) {
       expect(parses(d), `parseScript accepts ${what}`).toBe(false);

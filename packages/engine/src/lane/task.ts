@@ -119,6 +119,8 @@ export interface AgentLaneSuccess {
   transcript: ChatMessage[];
   /** True once a write left the browser in this run. Repair is refused after a write, so false in practice. */
   submitted: boolean;
+  /** True when the script lane's signIn.changePassword set a new password before the drift; absent otherwise. */
+  passwordChanged?: true;
   trace?: Buffer;
 }
 export type TaskFailure = LaneFailure & {

@@ -310,20 +310,23 @@ async function runStepsItem(ctx: NodeContext, engine: Engine, i: number, deps: R
 
   const id = stepsIdentity(engine, p.steps, p.name);
   /**
-   * A failure item. `ran` is what the engine run did (lane, write): if attaching the screenshot or trace fails, the
-   * item is rebuilt without them and still says what the run did, so `submitted` stays true after a write.
+   * A failure item. `ran` is what the engine run did (lane, write, a new password): if attaching the screenshot or trace
+   * fails, the item is rebuilt without them and still says what the run did, so `submitted` stays true after a write and
+   * `passwordChanged` after a password change.
    */
   const failure = async (
-    f: Extract<TaskResult, { ok: false }> | { code: ErrorCode; message: string }, ran?: { lane: string; submitted?: boolean },
+    f: Extract<TaskResult, { ok: false }> | { code: ErrorCode; message: string }, ran?: { lane: string; submitted?: boolean; passwordChanged?: true },
   ): Promise<ItemOutcome> => {
     let item: INodeExecutionData;
     try {
       item = await failureItem(ctx, f, id, paired);
     } catch {
       item = await failureItem(ctx, { code: f.code, message: f.message }, id, paired);
-      ran = ran ?? ('ok' in f ? { lane: f.lane, submitted: f.submitted } : undefined);
+      ran = ran ?? ('ok' in f ? { lane: f.lane, submitted: f.submitted, passwordChanged: f.passwordChanged } : undefined);
     }
-    if (ran) Object.assign(item.json.details as IDataObject, { lane: ran.lane, submitted: ran.submitted === true });
+    if (ran) {
+      Object.assign(item.json.details as IDataObject, { lane: ran.lane, submitted: ran.submitted === true }, ran.passwordChanged ? { passwordChanged: true } : {});
+    }
     return { kind: 'error', item, error: stepsRunError(node, item.json.details as FailureDetails, i) };
   };
 
@@ -418,8 +421,12 @@ async function runStepsItem(ctx: NodeContext, engine: Engine, i: number, deps: R
     return { kind: 'ok', data, ...(repaired ? { repaired } : {}) };
   } catch (error) {
     // The run finished but its output could not be built (for example the binary store failed). Report a runtime
-    // failure that keeps what the run did: `submitted` must stay true after a write, so nobody re-runs it blindly.
-    return failure({ code: 'incomplete', message: `the run finished but its output could not be built: ${errorMessage(error)}` }, { lane: r.lane, submitted: r.submitted });
+    // failure that keeps what the run did: `submitted` must stay true after a write, so nobody re-runs it blindly, and
+    // `passwordChanged` after a new password, so the workflow still stores it.
+    return failure(
+      { code: 'incomplete', message: `the run finished but its output could not be built: ${errorMessage(error)}` },
+      { lane: r.lane, submitted: r.submitted, ...(r.passwordChanged ? { passwordChanged: true as const } : {}) },
+    );
   }
 }
 

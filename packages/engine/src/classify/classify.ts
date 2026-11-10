@@ -42,6 +42,7 @@ export function toErrorCode(c: FailureClass): ErrorCode {
  * (only before login is confirmed), runaway pagination or rejected downloads (incomplete), network errors;
  * anything else is drift (the page no longer matches the script). A rejected sign-in (`detected:login_failed`) on a
  * page with lockout text, before login is confirmed, is account_locked: the account needs unlocking, not a new password.
+ * A new password the site did not take (`detected:password_change_failed`) is password_change_failed, whatever the page says.
  */
 export function classifyFailure(f: FailureFacts): FailureClass {
   if (f.violations.some((v) => v.fatal)) return 'policy_violation';
@@ -52,6 +53,7 @@ export function classifyFailure(f: FailureFacts): FailureClass {
   if (msg.startsWith(`${DETECTED_PREFIX}login_failed`)) return lockedText ? 'account_locked' : 'login_failed';
   if (msg.startsWith(`${DETECTED_PREFIX}account_locked`)) return 'account_locked';
   if (msg.startsWith(`${DETECTED_PREFIX}mfa_`)) return 'auth_blocked';
+  if (msg.startsWith(`${DETECTED_PREFIX}password_change_failed`)) return 'password_change_failed';
   if (lockedText) return 'account_locked';
   if (INCOMPLETE_PREFIXES.some((p) => msg.startsWith(p))) return 'incomplete';
   if (NETWORK.test(msg)) return 'site_down';

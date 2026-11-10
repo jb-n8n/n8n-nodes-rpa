@@ -212,7 +212,9 @@ export function validateScript(script: Script, ctx: PolicyContext): PolicyResult
     const verb = verbOf(step);
     const where = `step "${step.intent}"`;
 
-    for (const { value } of allStrings(step)) {
+    for (const { path, value } of allStrings(step)) {
+      // The one template a signIn may hold: changePassword.value, exactly one {{var.name}} (parseScript checks its form).
+      if (verb === 'signIn' && path === 'signIn.changePassword.value') continue;
       let templateMatch: RegExpExecArray | null;
       TEMPLATE_REGEX.lastIndex = 0;
       while ((templateMatch = TEMPLATE_REGEX.exec(value)) !== null) {

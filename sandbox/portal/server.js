@@ -43,6 +43,8 @@ export const USERNAME = 'summit-ops';
 const PAGE_SIZE = 4;
 /** How long the sign-in POST takes to answer with the slowLogin test hook on. */
 const SLOW_LOGIN_MS = 1500;
+/** A new password on the change-password page: at least this long (checked in the page) and with a digit (checked here). */
+const NEW_PASSWORD_MIN = 12;
 
 // ---- state ----
 export const CONTROLS = {
@@ -59,6 +61,8 @@ export const BASELINE = {
   nav: 'top', label: 'Recalls & Stop-Sales', parent: 'service', render: 'table',
   interrupts: [], paginate: false, mfa: 'none', content: 'present', seed: null, acknowledgements: 0,
   widgetPosts: 0, logins: 0, locked: false, slowLogin: false, attacks: false, deletes: 0, erp: 'baseline', erpDecoy: false,
+  // Test hook: the next sign-in lands on the change-password page. `password` is the one it set (null: PORTAL_PASSWORD).
+  forcePasswordChange: false, password: null,
 };
 
 let state = loadState();
@@ -92,6 +96,8 @@ export function applyChange(change) {
   if (change.locked !== undefined) next.locked = change.locked === true || change.locked === 'true' || change.locked === 'on';
   // Test hook: a slow site. The sign-in POST answers after SLOW_LOGIN_MS, so the browser stays on the login page that long.
   if (change.slowLogin !== undefined) next.slowLogin = change.slowLogin === true || change.slowLogin === 'true' || change.slowLogin === 'on';
+  // Test hook: the password has expired, so the next sign-in must set a new one on the change-password page.
+  if (change.forcePasswordChange !== undefined) next.forcePasswordChange = change.forcePasswordChange === true || change.forcePasswordChange === 'true' || change.forcePasswordChange === 'on';
   next.seed = change.seed ?? null;
   state = next;
   sessions.clear(); // a portal release signs everyone out
@@ -164,6 +170,9 @@ function parseCookies(req) {
 }
 const sessionCookie = (sid) => `sid_${BRAND}=${sid}; Path=/; HttpOnly; SameSite=Lax`;
 const afterAuth = () => (state.interrupts.includes('survey') ? 'survey' : 'ok');
+/** After the password (and the code): the change-password page while the password has expired, else afterAuth. */
+const afterSignIn = () => (state.forcePasswordChange ? 'change-password' : afterAuth());
+const currentPassword = () => state.password ?? PORTAL_PASSWORD;
 
 // ---- tiny response helpers ----
 function send(res, status, body, headers = {}) {
@@ -343,18 +352,21 @@ async function portalRoute(req, res, rest, url) {
     const f = await readBody(req);
     if (st.slowLogin) await new Promise((resolve) => setTimeout(resolve, SLOW_LOGIN_MS));
     if (st.locked) return redirect(res, `/${BRAND}/login?locked=1`);
-    if (!(safeEqual(f.username || '', USERNAME) && safeEqual(f.password || '', PORTAL_PASSWORD))) return redirect(res, `/${BRAND}/login?error=1`);
-    const stage = st.mfa === 'totp' ? 'mfa-totp' : st.mfa === 'sms' ? 'mfa-sms' : afterAuth();
+    if (!(safeEqual(f.username || '', USERNAME) && safeEqual(f.password || '', currentPassword()))) return redirect(res, `/${BRAND}/login?error=1`);
+    const stage = st.mfa === 'totp' ? 'mfa-totp' : st.mfa === 'sms' ? 'mfa-sms' : afterSignIn();
     const returnTo = safeNext(f.next);
     const sid = newSession(stage, returnTo);
-    const next = { ok: 'home', survey: 'survey', 'mfa-totp': 'mfa', 'mfa-sms': 'verify-phone' }[stage];
+    const next = { ok: 'home', survey: 'survey', 'mfa-totp': 'mfa', 'mfa-sms': 'verify-phone', 'change-password': 'change-password' }[stage];
     return redirect(res, stage === 'ok' && returnTo ? returnTo : `/${BRAND}/${next}`, { 'Set-Cookie': sessionCookie(sid) });
   }
   if (rest === '/mfa') {
     if (!s || s.stage !== 'mfa-totp') return redirect(res, `/${BRAND}/login`);
     if (req.method === 'POST') {
       const f = await readBody(req);
-      if (verifyTotp(TOTP_SECRET, f.code || '')) { s.stage = afterAuth(); return redirect(res, s.stage === 'ok' ? landing(s) : `/${BRAND}/survey`); }
+      if (verifyTotp(TOTP_SECRET, f.code || '')) {
+        s.stage = afterSignIn();
+        return redirect(res, s.stage === 'ok' ? landing(s) : `/${BRAND}/${s.stage === 'survey' ? 'survey' : 'change-password'}`);
+      }
       return redirect(res, `/${BRAND}/mfa?error=1`);
     }
     const err = url.searchParams.get('error') ? '<p class="error" id="otp-error">That code is not valid. Try again.</p>' : '';
@@ -362,6 +374,36 @@ async function portalRoute(req, res, rest, url) {
       <p>Enter the 6-digit code from your authenticator app.</p>
       <form method="post" action="/${BRAND}/mfa"><label for="otp">Authentication code</label><input id="otp" name="code" inputmode="numeric" maxlength="6" autocomplete="one-time-code">
       <button id="verify" type="submit">Verify</button></form>`, 'mfa-totp'));
+  }
+  // The password has expired (forcePasswordChange): the current password, a new one twice. The page refuses a new password
+  // shorter than NEW_PASSWORD_MIN without posting (the typed values stay); the server refuses one without a digit, or
+  // that does not match its confirmation, and sends the page back empty.
+  if (rest === '/change-password') {
+    if (!s || s.stage !== 'change-password') return redirect(res, `/${BRAND}/login`);
+    if (req.method === 'POST') {
+      const f = await readBody(req);
+      const next = f.new || '';
+      const ok = safeEqual(f.current || '', currentPassword()) && next === (f.confirm || '') && next.length >= NEW_PASSWORD_MIN && /[0-9]/.test(next)
+        && next !== currentPassword();
+      if (!ok) return redirect(res, `/${BRAND}/change-password?error=1`);
+      state.password = next;
+      state.forcePasswordChange = false;
+      saveState();
+      s.stage = afterAuth();
+      return redirect(res, s.stage === 'ok' ? landing(s) : `/${BRAND}/survey`);
+    }
+    const err = url.searchParams.get('error') ? '<p class="error" id="change-error">The new password does not meet the rules. Try again.</p>' : '';
+    return send(res, 200, authPage('Change your password', `<h3>Change your password</h3>${err}
+      <p>Your password has expired. Choose a new one of at least ${NEW_PASSWORD_MIN} characters, with a digit.</p>
+      <p class="error" id="too-short" hidden>The new password is too short.</p>
+      <form id="change-form" method="post" action="/${BRAND}/change-password">
+        <label for="current-password">Current password</label><input id="current-password" name="current" type="password" autocomplete="current-password">
+        <label for="new-password">New password</label><input id="new-password" name="new" type="password" autocomplete="new-password">
+        <label for="confirm-password">Confirm new password</label><input id="confirm-password" name="confirm" type="password" autocomplete="new-password">
+        <button id="change-password" type="submit">Change password</button></form>
+      <script>document.getElementById('change-form').addEventListener('submit', (e) => {
+        if (document.getElementById('new-password').value.length < ${NEW_PASSWORD_MIN}) { e.preventDefault(); document.getElementById('too-short').hidden = false; }
+      });</script>`, 'change-password'));
   }
   if (rest === '/verify-phone') {
     if (!s || s.stage !== 'mfa-sms') return redirect(res, `/${BRAND}/login`);

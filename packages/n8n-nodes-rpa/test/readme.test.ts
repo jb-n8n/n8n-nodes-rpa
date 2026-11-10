@@ -245,7 +245,7 @@ describe('README', () => {
 
   it('lists the Run Steps Data fields, durationMs and llmTokens included', () => {
     const s = section('## Run Steps reference');
-    expect(s).toContain('{ url, title, status, name, version, hash, lane, confirmed, llmCalls, durationMs, llmTokens, log, rows?, files?, blockedRequests?, submitted? }');
+    expect(s).toContain('{ url, title, status, name, version, hash, lane, confirmed, llmCalls, durationMs, llmTokens, log, rows?, files?, blockedRequests?, submitted?, passwordChanged? }');
   });
 
   it('states the AI Repair limits: data feeds only, refused after a write, one repair per execution for every Run Steps node', () => {
@@ -286,7 +286,7 @@ describe('README', () => {
   it('explains every error code and prints every golden message', () => {
     const s = section('## Error codes');
     for (const code of Object.keys(GUIDANCE)) expect(s, code).toContain(`| \`${code}\` |`);
-    expect(Object.keys(GUIDANCE)).toHaveLength(13);
+    expect(Object.keys(GUIDANCE)).toHaveLength(14);
     for (const m of GOLDEN_MESSAGES) expect(s, m).toContain(m);
     for (const text of ['configError: true', 'details', 'output 2', '`llmTokens`']) expect(s, text).toContain(text);
   });
@@ -404,7 +404,7 @@ describe('README', () => {
 
   it('documents signIn.next in the Run Steps reference and both login pages in the safety model', () => {
     const ref = section('## Run Steps reference');
-    expect(ref).toContain('| `signIn` | `{ username, next?, password, submit, totp? }` needs a Site Login; `totp` is `{ field, submit, source?, via?, check? }` |');
+    expect(ref).toContain('| `signIn` | `{ username, next?, password, submit, totp?, changePassword? }` needs a Site Login; `totp` is `{ field, submit, source?, via?, check? }`; `changePassword` is `{ detect, current, new, submit, value }` (see **When a site forces a new password**) |');
     const at = ref.slice(ref.indexOf('**Two-page sign-in.**'));
     for (const text of ['`signIn.next` is the button between them', 'only when the password field shows on a listed login page',
       'a rejected username stops the run before the password is typed', 'an ordinary `click` step with `when`',
