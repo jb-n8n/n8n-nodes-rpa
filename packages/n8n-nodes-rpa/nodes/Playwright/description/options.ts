@@ -275,7 +275,7 @@ export const OPTION_ENTRIES: INodeProperties[] = [
     type: 'boolean',
     default: false,
     noDataExpression: true,
-    description: `Whether unsigned steps may submit a form or download through a form. Steps that sign in must always be signed. ${LITERAL}`,
+    description: `Whether unsigned steps may sign in, submit a form or download through a form. With this on, whoever can set the steps drives the Site Login and, on a login page that copies typed values into the page, can read its password out through step outcomes. Turn it on only when everyone who can set the steps is trusted with that credential. ${LITERAL}`,
     displayOptions: only(['runSteps']),
   },
   {

@@ -1,6 +1,5 @@
 import {
-  nameMismatch, SIGNATURE_INVALID, SIGNATURE_WITHOUT_KEY, startSiteMismatch, UNSIGNED_REQUIRED, UNSIGNED_SECRET_FILL, UNSIGNED_SIGN_IN, UNSIGNED_WRITES,
-  versionMismatch,
+  nameMismatch, SIGNATURE_INVALID, SIGNATURE_WITHOUT_KEY, startSiteMismatch, UNSIGNED_REQUIRED, UNSIGNED_SECRET_FILL, UNSIGNED_WRITES, versionMismatch,
 } from '../messages.js';
 import { flattenSteps } from '../policy/validate.js';
 import { startHostOf, verifyScript } from '../sign.js';
@@ -16,13 +15,8 @@ export interface TrustInput {
   approvedBy?: string;
   /** The Step Signing key. */
   key?: string;
-  /** Options → Allow Unsigned Writes. It never covers signIn. */
+  /** Options → Allow Unsigned Writes. */
   allowUnsignedWrites?: boolean;
-  /**
-   * Unsigned steps may sign in. Set only by Import Steps' draft mode (lane/draft.ts), whose runs never write and deliver
-   * nothing; Run Steps never sets it, so a step list from the workflow that signs in always needs a valid signature.
-   */
-  allowUnsignedSignIn?: boolean;
   /** Values the signed steps must match: Options → Name, Expected Version, and the attached Site Login credential id. */
   expect?: { name?: string; version?: number; siteLoginId?: string };
 }
@@ -47,18 +41,13 @@ export function hasSignature(t: TrustInput): boolean {
 }
 
 /**
- * Intents of the steps unsigned steps may not contain, inside paginate too: signIn (never, see checkTrust), and submit
- * and download with `via` (unless Allow Unsigned Writes is on).
+ * Intents of the steps unsigned steps may not contain unless Allow Unsigned Writes is on, inside paginate too: signIn,
+ * submit and download with `via`.
  */
 export function unsignedWrites(steps: Step[]): string[] {
   return flattenSteps(steps)
     .filter((s) => 'signIn' in s || 'submit' in s || ('download' in s && s.download.via !== undefined))
     .map((s) => s.intent);
-}
-
-/** Whether any step, paginate bodies included, is a signIn. */
-function hasSignIn(steps: Step[]): boolean {
-  return flattenSteps(steps).some((s) => 'signIn' in s);
 }
 
 /** Whether any step, paginate bodies included, is a fill with `secret: true`. */
@@ -79,9 +68,7 @@ function tryParse(raw: unknown, defaultStartUrl: string): Script | undefined {
 /**
  * The trust gate. It runs before the browser opens, in this order: first-run exemption; a present signature is
  * always verified (no key → SIGNATURE_WITHOUT_KEY; invalid → UNSIGNED_REQUIRED when required, else SIGNATURE_INVALID);
- * absent and required → UNSIGNED_REQUIRED; a fill with secret in unsigned steps → UNSIGNED_SECRET_FILL; a signIn in
- * unsigned steps → UNSIGNED_SIGN_IN (only draft mode's allowUnsignedSignIn admits it); unsigned writes without Allow
- * Unsigned Writes → UNSIGNED_WRITES; signed
+ * absent and required → UNSIGNED_REQUIRED; a fill with secret in unsigned steps → UNSIGNED_SECRET_FILL; unsigned writes without Allow Unsigned Writes → UNSIGNED_WRITES; signed
  * steps must then match Expected Name, Expected Version and the run's start site. A document that does not parse
  * passes the gate when nothing else refuses it, and the shape check reports it as policy_violation.
  */
@@ -104,9 +91,6 @@ export function checkTrust(raw: unknown, trust: TrustInput, ctx: { policy: Porta
   if (!script) return { ok: true, signed: false };
   // Stricter than the unsigned-writes switch: a secret fill is never run from unsigned steps.
   if (hasSecretFill(script.steps)) return refuse(UNSIGNED_SECRET_FILL);
-  // Stricter than the unsigned-writes switch too: whoever supplies unsigned steps must not drive the Site Login. A signIn
-  // whose submit posts nothing leaves the password in the field, and later steps' `when` conditions can test its value.
-  if (!trust.allowUnsignedSignIn && hasSignIn(script.steps)) return refuse(UNSIGNED_SIGN_IN);
   if (!trust.allowUnsignedWrites && unsignedWrites(script.steps).length > 0) return refuse(UNSIGNED_WRITES);
   return { ok: true, signed: false };
 }

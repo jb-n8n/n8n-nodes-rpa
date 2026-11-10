@@ -9,7 +9,7 @@ import { buildProposal, proposalDigest } from '../src/proposal/proposal.js';
 import { createMasker } from '../src/secrets/mask.js';
 import { scriptHash } from '../src/sign.js';
 import { CANCELLED } from '../src/lane/script-lane.js';
-import { IMPORT_EMPTY, IMPORT_NOT_ADOPTABLE, ROWS_WITHHELD, IMPORT_PROOF_FAILED, IMPORT_REFUSES_WRITES, REPAIR_NEEDS_ID_AND_EXTRACT, UNSIGNED_REQUIRED, UNSIGNED_SIGN_IN } from '../src/messages.js';
+import { IMPORT_EMPTY, IMPORT_NOT_ADOPTABLE, ROWS_WITHHELD, IMPORT_PROOF_FAILED, IMPORT_REFUSES_WRITES, REPAIR_NEEDS_ID_AND_EXTRACT, UNSIGNED_REQUIRED, UNSIGNED_WRITES } from '../src/messages.js';
 import type { PortalPolicy, Script, Step } from '../src/types.js';
 import { fakeModel } from './fake-model.js';
 import { ERP_CHECK, LOCAL, policyFor, SECRETS, TEST_KEY } from './helpers.js';
@@ -177,12 +177,12 @@ describe('draft mode', () => {
     const r = await runDraft(taskInput(fileDraft()));
     expect(r.ok).toBe(true);
     const [seen] = lane.seen;
-    expect(seen.trust).toEqual({ required: false, allowUnsignedWrites: true, allowUnsignedSignIn: true });
+    expect(seen.trust).toEqual({ required: false, allowUnsignedWrites: true });
     // The gate the lane runs admits the sign-in under that trust...
     expect(checkTrust(seen.script, seen.trust, { policy: seen.policy, firstRun: false })).toEqual({ ok: true, signed: false });
     // ...and the same document outside draft mode, unsigned, is refused before the browser as before.
     const plain = await runTask(taskInput(fileDraft()));
-    expect(plain).toMatchObject({ ok: false, code: 'script_untrusted', message: UNSIGNED_SIGN_IN });
+    expect(plain).toMatchObject({ ok: false, code: 'script_untrusted', message: UNSIGNED_WRITES });
     expect(sessions).toEqual([]);
   });
 
@@ -215,10 +215,10 @@ describe('draft mode', () => {
     // DraftTaskInput has no trust; one smuggled in from untyped code is not read.
     const r = await runDraft({ ...taskInput(fileDraft()), trust: bogus } as never);
     expect(r.ok).toBe(true);
-    expect(lane.seen[0].trust).toEqual({ required: false, allowUnsignedWrites: true, allowUnsignedSignIn: true });
+    expect(lane.seen[0].trust).toEqual({ required: false, allowUnsignedWrites: true });
     // runTask has no draft mode: whatever `draft` holds, the document meets the ordinary gate with the caller's trust.
     for (const draft of [true, 'true', 1, {}, [true]]) {
-      expect(await runTask({ ...taskInput(fileDraft()), draft } as never)).toMatchObject({ ok: false, code: 'script_untrusted', message: UNSIGNED_SIGN_IN });
+      expect(await runTask({ ...taskInput(fileDraft()), draft } as never)).toMatchObject({ ok: false, code: 'script_untrusted', message: UNSIGNED_WRITES });
       expect(await runTask({ ...taskInput(fileDraft(), { trust: bogus }), draft } as never)).toMatchObject({ ok: false, code: 'script_untrusted', message: UNSIGNED_REQUIRED });
     }
     expect(lane.seen.filter((s) => s.trust.allowUnsignedWrites === true)).toHaveLength(1);

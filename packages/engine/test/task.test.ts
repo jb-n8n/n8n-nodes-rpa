@@ -13,7 +13,7 @@ import { signScript } from '../src/sign.js';
 import {
   FIRST_RUN_NEEDS_NAME, FIRST_RUN_NEEDS_TARGET, NO_STEPS_NO_REPAIR, REPAIR_ALREADY_RAN, REPAIR_DOWNLOAD_NEEDS_CHECK, REPAIR_NEEDS_ID_AND_EXTRACT,
   FILE_NOT_DELIVERABLE, FILE_WITHHELD, REPAIR_NO_CAPTURES, REPAIR_ONE_DOWNLOAD, REPAIR_REFUSED_WRITES, ROWS_WITHHELD,
-  UNSIGNED_REQUIRED, UNSIGNED_SIGN_IN,
+  UNSIGNED_REQUIRED, UNSIGNED_WRITES,
 } from '../src/messages.js';
 import type { BrowserEndpoint, Script, Step } from '../src/types.js';
 import { clickNamed, done, fakeModel, refByName, use, type FakeTurn } from './fake-model.js';
@@ -571,8 +571,7 @@ describe('runTask', () => {
       const model = fakeModel(HEAL());
       const { startUrl: _start, ...rest } = withFields();
       const doc = { ...rest, steps: [{ intent: 'Open the sign-in page', goto: '/acme/login' }, ...rest.steps] };
-      // A document with no start of its own cannot be signed; its sign-in runs unsigned only under draft mode's trust.
-      const r = await runTask(task({ model, script: doc, trust: { required: false, allowUnsignedWrites: true, allowUnsignedSignIn: true } }));
+      const r = await runTask(task({ model, script: doc, trust: { required: false, allowUnsignedWrites: true } }));
       if (r.ok) throw new Error('expected drift');
       expect(r).toMatchObject({ code: 'drift_detected', lane: 'script' });
       expect(r.message.endsWith(` (${FIELDS_UNSUPPORTED})`)).toBe(true);
@@ -664,7 +663,7 @@ describe('runTask', () => {
     expect(r).toMatchObject({ ok: false, code: 'script_untrusted', lane: 'script', message: UNSIGNED_REQUIRED });
     if (!r.ok) expect(r.durationMs).toBeLessThan(bound(500));
     const unsigned = await runTask(task({ model, endpoint: neverOpened, trust: { required: false } }));
-    expect(unsigned).toMatchObject({ ok: false, code: 'script_untrusted', lane: 'script', message: UNSIGNED_SIGN_IN });
+    expect(unsigned).toMatchObject({ ok: false, code: 'script_untrusted', lane: 'script', message: UNSIGNED_WRITES });
     expect(model.invocations).toHaveLength(0);
   });
   it('a first run is exempt from the trust gate', async () => {

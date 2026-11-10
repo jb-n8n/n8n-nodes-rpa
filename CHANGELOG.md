@@ -89,9 +89,8 @@ Microsoft's terms say about unattended automation on Windows (not legal advice).
   after `signIn` submitted it, the step fails with `login_failed` (`account_locked` when the page says the account is
   locked) and the login breaker opens. In 0.1.0 a hand-written sign-in passed, and the run failed later as drift (with
   AI Repair on, the model then tried to repair it).
-- **A step list that signs in must be signed**, whatever **Allow Unsigned Writes** says: Run Steps refuses unsigned
-  steps with `signIn` as `script_untrusted` before the browser opens. In 0.1.0 Allow Unsigned Writes let unsigned steps
-  sign in, and whoever wrote them could test the typed password on a page that copies it into the page.
+- **The Allow Unsigned Writes option and the README now state what the switch hands over**: unsigned steps may sign in,
+  so whoever can set the steps drives the Site Login.
 - **A `paginate` whose body holds a `submit` or a `download` takes no `{{var.name}}` in its own `when`, `expect` or
   `next`**: they decide whether and how often the write runs. Run Steps and the schema refuse it when the steps are read.
 - **Import Steps drops a recorded password from fields named in other languages**, not only English: Kennwort,

@@ -33,9 +33,7 @@ export const SIGNATURE_INVALID =
   'The signature is not valid for these steps: it does not match their name, version, start site, Site Login or approver.';
 export const SIGNATURE_WITHOUT_KEY = 'a signature is present but no Step Signing credential is attached';
 export const UNSIGNED_WRITES =
-  'Unsigned steps cannot submit a form or download through a form. Sign them with Sign Steps, or turn on Options → Allow Unsigned Writes.';
-export const UNSIGNED_SIGN_IN =
-  'Unsigned steps cannot sign in: a step list with signIn must be signed. Sign it with Sign Steps or through an approval; Allow Unsigned Writes does not cover it.';
+  'Unsigned steps cannot sign in, submit a form or download through a form. Sign them with Sign Steps, or turn on Options → Allow Unsigned Writes.';
 export const UNSIGNED_SECRET_FILL =
   'Unsigned steps cannot type a secret into a password field (fill with secret: true). Sign them with Sign Steps; Allow Unsigned Writes does not cover it.';
 export const nameMismatch = (signed: string, expected: string) => `the signed steps are named "${signed}", not "${expected}"`;

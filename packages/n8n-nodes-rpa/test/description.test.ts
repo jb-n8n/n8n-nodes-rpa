@@ -189,6 +189,11 @@ describe('Run Steps and Sign Steps fields', () => {
     for (const name of ['allowPrivateNetwork', 'allowUnsignedWrites', 'deliverUnconfirmed', 'breakerResetKey']) expect(option(name).noDataExpression, name).toBe(true);
     expect(option('breakerResetKey').description).toMatch(/not an expression/);
   });
+  it('Allow Unsigned Writes says what it hands over', () => {
+    expect(option('allowUnsignedWrites').description).toBe(
+      'Whether unsigned steps may sign in, submit a form or download through a form. With this on, whoever can set the steps drives the Site Login and, on a login page that copies typed values into the page, can read its password out through step outcomes. Turn it on only when everyone who can set the steps is trusted with that credential. Must be set directly, not with an expression.',
+    );
+  });
   it('the option shapes are the ones readRunStepsParams reads (if this fails, align operations/runSteps.ts with the description)', () => {
     const params = {
       operation: 'runSteps', steps: '[{"intent":"Open the page","goto":"https://example.com/"}]', startUrl: 'https://example.com/', requireSignedSteps: false,

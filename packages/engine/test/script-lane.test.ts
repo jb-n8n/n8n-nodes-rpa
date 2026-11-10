@@ -3,7 +3,7 @@ import { strFromU8, unzipSync } from 'fflate';
 import { chromium } from 'playwright-core';
 import { startPortal, SANDBOX } from 'n8n-rpa-sandbox/testing.js';
 import { runScriptLane, screenshotMasks, type ScriptLaneInput } from '../src/lane/script-lane.js';
-import { ENDPOINT_NOT_SECURE, nameMismatch, offListSite, privateAddress, UNSIGNED_REQUIRED, UNSIGNED_SIGN_IN } from '../src/messages.js';
+import { ENDPOINT_NOT_SECURE, nameMismatch, offListSite, privateAddress, UNSIGNED_REQUIRED, UNSIGNED_WRITES } from '../src/messages.js';
 import type { Script, Step } from '../src/types.js';
 import { baselineScript, LOCAL, policyFor, reportScript, SECRETS, SIGN_IN_STEPS, signedLaneInput, TEST_KEY } from './helpers.js';
 import { notReachedNetworkIdle, tooManyRows } from '../src/messages.js';
@@ -288,22 +288,17 @@ describe('trust gate at the lane', () => {
     expect(r).toMatchObject({ code: 'script_untrusted', message: UNSIGNED_REQUIRED });
     expect(r.durationMs).toBeLessThan(bound(500));
   });
-  it('unsigned steps that sign in are refused before the browser, even with Allow Unsigned Writes on; signed they run', async () => {
+  it('unsigned steps that sign in need Allow Unsigned Writes', async () => {
     const unsigned = await runScriptLane(input(baselineScript(portal.url), { endpoint: NEVER_OPENED, trust: { required: false } }));
-    expect(unsigned).toMatchObject({ ok: false, code: 'script_untrusted', message: UNSIGNED_SIGN_IN });
-    const switchOn = await runScriptLane(input(baselineScript(portal.url), { endpoint: NEVER_OPENED, trust: { required: false, allowUnsignedWrites: true } }));
-    expect(switchOn).toMatchObject({ ok: false, code: 'script_untrusted', message: UNSIGNED_SIGN_IN });
-    expect(portal.state().logins).toBe(0);
-    // The same steps signed, with the same two switches: they sign in and run.
-    const signedInput = input(baselineScript(portal.url));
-    const signed = await runScriptLane({ ...signedInput, trust: { ...signedInput.trust, required: false, allowUnsignedWrites: true } });
-    expect(signed).toMatchObject({ ok: true, lane: 'script', version: 1 });
+    expect(unsigned).toMatchObject({ ok: false, code: 'script_untrusted', message: UNSIGNED_WRITES });
+    const allowed = await runScriptLane(input(baselineScript(portal.url), { trust: { required: false, allowUnsignedWrites: true } }));
+    expect(allowed).toMatchObject({ ok: true, lane: 'script', version: 1 });
   });
   it('unsigned writes are refused when the start page comes from the default start URL', async () => {
     const { startUrl: _start, ...rest } = baselineScript(portal.url);
     const relative = { ...rest, steps: [{ intent: 'Open the sign-in page', goto: '/acme/login' }, ...rest.steps] };
-    const r = await runScriptLane(input(baselineScript(portal.url), { script: relative, endpoint: NEVER_OPENED, trust: { required: false, allowUnsignedWrites: true } }));
-    expect(r).toMatchObject({ ok: false, code: 'script_untrusted', message: UNSIGNED_SIGN_IN });
+    const r = await runScriptLane(input(baselineScript(portal.url), { script: relative, endpoint: NEVER_OPENED, trust: { required: false } }));
+    expect(r).toMatchObject({ ok: false, code: 'script_untrusted', message: UNSIGNED_WRITES });
   });
   it('{} passes the gate when unsigned and fails the shape check as policy_violation', async () => {
     const r = await runScriptLane({ ...input(baselineScript(portal.url)), script: {}, endpoint: NEVER_OPENED, trust: { required: false } });
