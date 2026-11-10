@@ -17,6 +17,8 @@ public static class PolicyFileCheck
     private const FileSystemRights FolderRights = FileSystemRights.DeleteSubdirectoriesAndFiles | FileSystemRights.Delete |
         FileSystemRights.ChangePermissions | FileSystemRights.TakeOwnership;
 
+    private const FileSystemRights CreateRights = FileSystemRights.CreateFiles | FileSystemRights.CreateDirectories;
+
     public static IReadOnlyList<string> Problems(string path)
     {
         var trusted = Trusted();
@@ -34,16 +36,46 @@ public static class PolicyFileCheck
         return problems;
     }
 
+    /// <summary>
+    /// The policy tool's test of its backup folder, which administrators alone must be able to change or fill: the
+    /// folder test of <see cref="Problems"/>, and also a rule that lets anyone else create files or folders in it
+    /// (the runner's start check does not look at that right, and the policy's own folder may grant it).
+    /// <paramref name="what"/> names the folder in the problems.
+    /// </summary>
+    public static IReadOnlyList<string> FolderProblems(string folder, string what)
+    {
+        var problems = new List<string>();
+        try
+        {
+            var acl = new DirectoryInfo(folder).GetAccessControl();
+            var trusted = Trusted();
+            Check(acl, FolderRights, what, trusted, problems);
+            foreach (var sid in Others(acl, CreateRights, trusted)) problems.Add($"{Name(sid)} can create files or folders in {what}");
+        }
+        catch (Exception e) when (e is UnauthorizedAccessException or IOException or PrivilegeNotHeldException)
+        {
+            problems.Add($"cannot read the permissions of {what} ({e.GetType().Name})");
+        }
+        return problems;
+    }
+
     private static void Check(FileSystemSecurity acl, FileSystemRights rights, string what, HashSet<SecurityIdentifier> trusted, List<string> problems)
     {
         if (acl.GetOwner(typeof(SecurityIdentifier)) is SecurityIdentifier owner && !trusted.Contains(owner))
             problems.Add($"{Name(owner)} owns {what}");
+        foreach (var sid in Others(acl, rights, trusted)) problems.Add($"{Name(sid)} can change or replace {what}");
+    }
+
+    /// <summary>Whoever an allow rule that applies to the object itself gives any of the rights, the trusted left out
+    /// (one entry for each such rule).</summary>
+    private static IEnumerable<SecurityIdentifier> Others(FileSystemSecurity acl, FileSystemRights rights, HashSet<SecurityIdentifier> trusted)
+    {
         foreach (FileSystemAccessRule rule in acl.GetAccessRules(true, true, typeof(SecurityIdentifier)))
         {
             if (rule.AccessControlType != AccessControlType.Allow || (rule.FileSystemRights & rights) == 0) continue;
             if (rule.PropagationFlags.HasFlag(PropagationFlags.InheritOnly)) continue;
             var sid = (SecurityIdentifier)rule.IdentityReference;
-            if (!trusted.Contains(sid)) problems.Add($"{Name(sid)} can change or replace {what}");
+            if (!trusted.Contains(sid)) yield return sid;
         }
     }
 

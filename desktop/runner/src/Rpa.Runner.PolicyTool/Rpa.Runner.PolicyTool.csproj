@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The policy tool, RpaPolicy.exe: shows and applies changes to the runner's policy file. Its manifest asks for
+       administrator rights. The commands themselves are in Rpa.Runner.Core (PolicyCommand, PolicyChange). The
+       runner's own start check of the policy file (PolicyFileCheck) is compiled in from Rpa.Runner.Windows, so the
+       tool does not carry that project's UI Automation libraries. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <AssemblyName>RpaPolicy</AssemblyName>
+    <RootNamespace>Rpa.Runner.PolicyTool</RootNamespace>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- The tool runs elevated: a DOTNET_STARTUP_HOOKS variable must not load code into it. -->
+    <StartupHookSupport>false</StartupHookSupport>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Rpa.Runner.Core\Rpa.Runner.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\Rpa.Runner.Windows\PolicyFileCheck.cs" Link="PolicyFileCheck.cs" />
+  </ItemGroup>
+</Project>
