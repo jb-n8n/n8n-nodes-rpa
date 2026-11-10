@@ -897,6 +897,23 @@ public class PolicyChangeTests
         Assert.Equal(at.Order(), at);
     }
 
+    /// <summary>The sample output in desktop/README.md ("Changing the policy") is in the rows the tool prints.</summary>
+    [Fact]
+    public void The_sample_output_in_the_README_is_wrapped_as_the_tool_wraps_it()
+    {
+        var folder = new DirectoryInfo(AppContext.BaseDirectory);
+        while (folder is not null && !File.Exists(Path.Combine(folder.FullName, "Rpa.Desktop.sln"))) folder = folder.Parent;
+        Assert.NotNull(folder);
+        var readme = File.ReadAllLines(Path.Combine(folder.FullName, "README.md"));
+        var first = Array.FindIndex(readme, l => l.StartsWith("# Allow app \"ErpDemo.exe\" at ", StringComparison.Ordinal));
+        var count = Array.FindIndex(readme, l => l.StartsWith("# This change: 1 app(s) allowed or updated", StringComparison.Ordinal));
+        Assert.True(first > 0 && count > first, "the sample is in the README");
+        var shown = readme[first..count].Select(l => l[2..].TrimEnd()).ToArray();
+
+        const string line = """Allow app "ErpDemo.exe" at "C:\\Program Files\\ERP Demo\\ErpDemo.exe" (SHA-256 pinned 3A7F5C1E9B2D4F60718293A4B5C6D7E8F90A1B2C3D4E5F60718293A4B5C6D7E8)""";
+        Assert.Equal(PolicyChange.Rows(line).Select(row => row.TrimEnd()), shown);
+    }
+
     [Fact]
     public void Leaves_out_what_an_entry_does_not_set()
     {

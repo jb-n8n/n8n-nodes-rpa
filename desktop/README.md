@@ -131,9 +131,9 @@ run whether a user is signed in or not), or with input that comes from a file or
 .\RpaPolicy.exe show
 .\RpaPolicy.exe allow-app "C:\Program Files\ERP Demo\ErpDemo.exe" --pin-hash
 # Changing the policy at C:\ProgramData\RPA Runner\policy.json (0 app(s), 0 helper process pattern(s) today).
-# Allow app "ErpDemo.exe" at "C:\\Program Files\\ERP Demo\\ErpDemo.exe" (SHA-2
-#         56 pinned 3A7F5C1E9B2D4F60718293A4B5C6D7E8F90A1B2C3D4E5F60718293A4B5
-#         C6D7E8)
+# Allow app "ErpDemo.exe" at "C:\\Program Files\\ERP Demo\\ErpDemo.exe"
+#         (SHA-256 pinned
+#         3A7F5C1E9B2D4F60718293A4B5C6D7E8F90A1B2C3D4E5F60718293A4B5C6D7E8)
 # This change: 1 app(s) allowed or updated, 0 helper process pattern(s), 0 write control(s), 0 gated key(s).
 # Apply these changes? [y/N] y
 # Policy updated. The runner restarts within 10 seconds and uses the new policy.
