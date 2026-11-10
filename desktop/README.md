@@ -154,7 +154,8 @@ person who is signed in, and reads its input from that window. Started without a
   another device, and a file on a network share or a removable drive are refused:
   `<path> is not a regular file on a local drive`. A link in an earlier part of the path is found only after the
   open, from the final path of what was opened: when it leads to a network share, the tool has contacted that share
-  by then, and reads nothing from it.
+  by then, and reads nothing from it. A link earlier in the path that stays on a local fixed drive is followed, and
+  `allow-app` writes the path as you gave it into the policy.
 - Every command takes `--policy <path>` (default `%ProgramData%\RPA Runner\policy.json`). `apply` and `allow-app` take
   `--yes`, which writes without asking. Both options work only from an administrator console.
 

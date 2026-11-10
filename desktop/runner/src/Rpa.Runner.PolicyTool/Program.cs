@@ -52,11 +52,11 @@ internal sealed class PolicyFiles : IPolicyFiles
 
     /// <summary>
     /// Opens a file whose path the caller chose, and says what the handle is before anything is read. The caller may
-    /// not be an administrator, and this open runs elevated, so:
-    /// the open asks for identification only (a pipe's server can learn who opened it but cannot act as that user);
-    /// a link in the last name of the path is opened as the link, not followed; and the final path of what was opened
-    /// is asked from the handle, which shows a network share reached through a link earlier in the path (that open
-    /// has reached the share by then; nothing is read from it). The content is read through this same handle.
+    /// not be an administrator, and this open runs elevated. So the open asks for identification only (a pipe's
+    /// server can learn who opened it but cannot act as that user), a link in the last name of the path is opened as
+    /// the link and not followed, and the final path of what was opened is asked from the handle, which shows a
+    /// network share reached through a link earlier in the path (the open has reached the share by then; nothing is
+    /// read from it). The content is read through this same handle.
     /// </summary>
     public OpenedFile? Open(string path)
     {
