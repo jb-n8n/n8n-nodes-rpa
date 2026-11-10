@@ -30,7 +30,9 @@
 # folder, and says why, when one of the profile folder, AppData, Local and RPA Runner is a link or a junction or no
 # folder, is owned by or may be changed by an account other than that user, Administrators and SYSTEM, or is held
 # open by another process. It holds these four folders open while it removes the tree, and removes a link or
-# junction inside the tree as the link itself, without entering it.
+# junction inside the tree as the link itself, without entering it. Everything that is in the folder when it is
+# removed goes, whoever put it there, also a folder that another account moved into it; the same holds for the data
+# directory with -RemoveData.
 #
 # Run from an unpacked package instead of the install directory, it first checks who can change that package, as
 # Install-Rpa.ps1 does.
