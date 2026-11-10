@@ -391,13 +391,17 @@ The maintainers release the Windows package, `rpa-windows-x64.zip`, from the `De
    the release notes. The node's release of the same version number uses the same section. If any check fails,
    nothing is built.
 2. It runs the `desktop` workflow, which builds the package, tests it, installs it on `windows-latest` and drives it.
-3. It checks the package it built: the zip's SHA-256 matches `rpa-windows-x64.zip.sha256` beside it, and the
-   `VERSION` file in the zip is the tag's version.
-4. It waits until a required reviewer of the `desktop-release` environment approves the release. Then it checks the
-   package again, checks that the tag still names the commit it built, records a build attestation of the zip and
-   creates the GitHub Release `desktop-v<version>` with `rpa-windows-x64.zip` and `rpa-windows-x64.zip.sha256`. It
-   stops if a release for that tag exists already, a draft included; it does not replace one. The release is not
-   marked as the repository's latest release, which stays the node's.
+3. It checks the package it built. It downloads the package by the artifact id the `desktop` workflow reports, not by
+   the artifact's name, so an artifact of the same name uploaded by another job of the run is not taken; the download
+   fails if the archive differs from the digest GitHub recorded for that artifact (when it recorded one). It compares
+   the zip's SHA-256 with the hash the `desktop` workflow computed when it staged the zip (not with the `.sha256` file
+   in the artifact), checks that `rpa-windows-x64.zip.sha256` holds that same hash, and that the `VERSION` file in the
+   zip is the tag's version.
+4. It waits until a required reviewer of the `desktop-release` environment approves the release. Then it downloads
+   and checks the package again in the same way, checks that the tag still names the commit it built, records a
+   build attestation of the zip and creates the GitHub Release `desktop-v<version>` with `rpa-windows-x64.zip` and
+   `rpa-windows-x64.zip.sha256`. It stops if a release for that tag exists already, a draft included; it does not
+   replace one. The release is not marked as the repository's latest release, which stays the node's.
 
 A manual run (Actions, `Desktop release`, Run workflow, on `main`) is a dry run: it does steps 1 to 3 with the
 version of `desktop/Directory.Build.props` in place of a tag, and never attests or publishes anything.
