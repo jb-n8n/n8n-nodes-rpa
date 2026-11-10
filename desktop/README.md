@@ -36,7 +36,11 @@ never tokens, typed values or file contents.
 The runner refuses to start without a policy file (default `<data dir>\policy.json`), and refuses when anyone but
 administrators could change or replace it (its owner, its access rules, or its folder's). Prepare the data directory
 as an administrator: the runner leaves an existing directory's permissions alone and creates only new files and the
-`logs\` and `exports\` folders in it (those get an ACL for the runner's user, SYSTEM and Administrators). See [`runner/policy.example.json`](runner/policy.example.json):
+`logs\` and `exports\` folders in it (those get an ACL for the runner's user, SYSTEM and Administrators). See
+[`runner/policy.example.json`](runner/policy.example.json), which the package also holds as
+`runner\policy.example.json`. It is an example of a whole policy file, not a change file for `RpaPolicy.exe apply`
+(a change may not hold `maxFileBytes`, so the tool refuses it), and its app path is not where the package installs
+the ERP Demo. The keys:
 
 - `allowedApps`: the only executables `app.launch` starts. `exe` is the file name a step set names; `path` (required)
   pins the absolute local path that runs (UNC and device paths are refused). Optional: `sha256` pins the file's hash;
@@ -416,8 +420,9 @@ The maintainers release the Windows package, `rpa-windows-x64.zip`, from the `De
    first release" for what that approval covers). Then it downloads and checks the package again in the same way,
    downloads the notes by the id from step 1 (not by name) and compares them with the SHA-256 from step 1, checks
    that the tag still names the commit it built, records a build attestation of the zip and creates the GitHub
-   Release `desktop-v<version>` with `rpa-windows-x64.zip` and `rpa-windows-x64.zip.sha256`. It stops if a release for that tag exists already, a draft included; it does not
-   replace one. The release is not marked as the repository's latest release, which stays the node's.
+   Release `desktop-v<version>` with `rpa-windows-x64.zip` and `rpa-windows-x64.zip.sha256`. It stops if a release
+   for that tag exists already, a draft included; it does not replace one. The release is not marked as the
+   repository's latest release, which stays the node's.
 
 A manual run (Actions, `Desktop release`, Run workflow, on `main`) is a dry run: it does steps 1 to 3 with the
 version of `desktop/Directory.Build.props` in place of a tag, and never attests or publishes anything.
