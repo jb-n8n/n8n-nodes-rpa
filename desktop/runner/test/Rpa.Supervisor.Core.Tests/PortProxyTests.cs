@@ -122,6 +122,39 @@ public sealed class PortProxyTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_client_that_connects_and_closes_with_a_reset_does_not_stop_the_listener()
+    {
+        // A scanner or a TCP health check does this.
+        var setup = Start(TimeProvider.System);
+        var target = Target(setup.TargetPort);
+        for (var i = 0; i < 3; i++)
+        {
+            using var reset = new TcpClient { LingerState = new LingerOption(true, 0) };
+            await reset.ConnectAsync(IPAddress.Loopback, setup.ListenPort).WaitAsync(Patience);
+            reset.Close();
+        }
+        await Task.Delay(100);
+
+        var client = await Connect(setup.ListenPort);
+        await client.GetStream().WriteAsync("ping"u8.ToArray());
+
+        // A reset that came after the accept is served like any connection and ends at once: skip those.
+        for (var i = 0; i < 4; i++)
+        {
+            var inner = await Accept(target);
+            try
+            {
+                Assert.Equal("ping", Encoding.ASCII.GetString(await Read(inner, 4)));
+                return;
+            }
+            catch (Exception e) when (e is EndOfStreamException or IOException)
+            {
+            }
+        }
+        Assert.Fail("the connection after the resets was not served");
+    }
+
+    [Fact]
     public async Task Both_directions_are_passed_and_closing_one_side_closes_the_other()
     {
         var setup = Start(TimeProvider.System);

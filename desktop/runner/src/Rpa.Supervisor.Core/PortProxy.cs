@@ -7,7 +7,8 @@ namespace Rpa.Supervisor.Core;
 /// Listens on each of ListenAddresses for each PortMap. For each connection it holds the session, waits for
 /// EnsureAsync and then for something to listen on 127.0.0.1 at the map's target port (together at most ReadySeconds),
 /// and passes bytes both ways without reading them. Bytes the client sends while it waits stay in the socket and are
-/// passed on in order. A connection ends when both sides have ended; the end of one side is passed on to the other.
+/// passed on in order. When the client ends its side, the end is passed on and the target's answer still flows back;
+/// when the target ends, the connection ends.
 /// TLS, tokens and the protocol stay between n8n and the runner or browser host.
 /// </summary>
 public sealed class PortProxy(SessionManager manager, SupervisorOptions options, ISupervisorLog log)
@@ -69,7 +70,16 @@ public sealed class PortProxy(SessionManager manager, SupervisorOptions options,
                 }
                 continue;
             }
-            client.NoDelay = true;
+            try
+            {
+                client.NoDelay = true;
+            }
+            catch (SocketException)
+            {
+                // The client reset the connection before it was accepted (a scanner or a TCP health check).
+                client.Dispose();
+                continue;
+            }
 
             if (Interlocked.Increment(ref _waiting) > MaxWaiting)
             {

@@ -278,6 +278,45 @@ public sealed class SessionManagerTests : IDisposable
         Assert.Equal(11u, Assert.Single(_sessions.ForUser(Bot)).Id);
     }
 
+    // Fails the next attempt with Timeout after the given sessions appeared while it ran. The attempt takes longer
+    // than the spacing between attempts, so the next check follows at once.
+    private async Task<SessionException> FailAttemptWhile(SessionManager manager, params SessionInfo[] appearing)
+    {
+        _host.Gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _host.AttemptDuration = TimeSpan.FromSeconds(3);
+        _host.Outcomes.Enqueue(SessionFailure.Timeout);
+        var ensure = manager.EnsureAsync(CancellationToken.None);
+        foreach (var session in appearing) _sessions.Add(session);
+        _host.Gate.SetResult();
+        return await Fails(() => ensure.WaitAsync(TimeSpan.FromSeconds(5)));
+    }
+
+    [Fact]
+    public async Task A_Disconnected_session_that_began_before_the_attempt_is_not_signed_out()
+    {
+        var manager = Manager();
+
+        var e = await FailAttemptWhile(manager, new SessionInfo(50, Bot, SessionState.Disconnected, _time.GetUtcNow().AddMinutes(-1)));
+
+        Assert.Equal(SessionFailure.UserSignedIn, e.Reason);
+        Assert.Empty(_sessions.SignOuts);
+        Assert.Single(_sessions.ForUser(Bot));
+    }
+
+    [Fact]
+    public async Task When_the_user_has_two_sessions_after_a_failed_attempt_neither_is_signed_out()
+    {
+        var manager = Manager();
+        var now = _time.GetUtcNow();
+
+        var e = await FailAttemptWhile(manager, new SessionInfo(50, Bot, SessionState.Disconnected, now),
+            new SessionInfo(51, Bot, SessionState.Disconnected, now));
+
+        Assert.Equal(SessionFailure.UserSignedIn, e.Reason);
+        Assert.Empty(_sessions.SignOuts);
+        Assert.Equal(2, _sessions.ForUser(Bot).Count);
+    }
+
     [Theory]
     [InlineData(SessionFailure.Timeout)]
     [InlineData(SessionFailure.WrongPassword)]
