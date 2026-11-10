@@ -979,28 +979,35 @@ function Invoke-RpaInstallPlan {
 # install.json names, whoever the data directory's access rules name besides SYSTEM and Administrators (install.json
 # is gone after an uninstall that kept the data), and whoever owns anything in the data directory. -Entries is what
 # Get-RpaDataEntries returned for the data directory, or nothing when it is not there or is a link.
+# Bot marks the bot user: the user install.json names, or, without that record, the accounts the access rules name.
 function Get-RpaDataAccounts([hashtable]$Layout, $Install, $Entries) {
   $accounts = [ordered]@{}
+  $bots = @{}
   if ($Install -and $Install.user) {
     $account = Get-RpaAccount -User ([string]$Install.user) -ComputerName $env:COMPUTERNAME
     # A recorded user that is no longer there has no SID to look for; what it owns is found below.
-    try { $accounts[(Get-RpaSid $account)] = $account.Display } catch { }
+    try {
+      $sid = Get-RpaSid $account
+      $accounts[$sid] = $account.Display
+      $bots[$sid] = $true
+    } catch { }
   }
   if ($Entries) {
-    $sids = @()
+    $named = @()
     $security = [IO.Directory]::GetAccessControl($Layout.DataDir, 'Access')
     foreach ($rule in $security.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
-      if ($rule.AccessControlType -eq 'Allow') { $sids += $rule.IdentityReference.Value }
+      if ($rule.AccessControlType -eq 'Allow') { $named += $rule.IdentityReference.Value }
     }
-    $sids += @($Entries.Accounts.Keys)
-    foreach ($sid in $sids) {
+    $recorded = $bots.Count -gt 0
+    foreach ($sid in ($named + @($Entries.Accounts.Keys))) {
       # S-1-3-0 is "whoever creates it", not an account.
       if ($accounts.Contains($sid) -or $script:TrustedOwners -contains $sid -or $sid -eq 'S-1-3-0') { continue }
       $name = Get-RpaAccountName (New-Object Security.Principal.SecurityIdentifier $sid)
       $accounts[$sid] = (Get-RpaAccount -User $name -ComputerName $env:COMPUTERNAME).Display
+      if (-not $recorded -and $named -contains $sid) { $bots[$sid] = $true }
     }
   }
-  @($accounts.Keys | ForEach-Object { @{ Sid = $_; Name = $accounts[$_] } })
+  @($accounts.Keys | ForEach-Object { @{ Sid = $_; Name = $accounts[$_]; Bot = [bool]$bots[$_] } })
 }
 
 # The accounts the running processes belong to: their SIDs (Sids), read from each process's own token, which also
@@ -1078,12 +1085,73 @@ function Remove-RpaProgramFiles([hashtable]$Layout) {
   }
 }
 
+# The profile folder Windows records for an account, by its SID, or nothing when the account has no profile on this
+# machine (it has never signed in here).
+function Get-RpaProfileFolder([string]$Sid) {
+  $key = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\' + $Sid)
+  if (-not $key) { return $null }
+  try { $folder = [string]$key.GetValue('ProfileImagePath') } finally { $key.Dispose() }
+  if (-not $folder -or -not [IO.Path]::IsPathRooted($folder)) { return $null }
+  $folder.TrimEnd('\')
+}
+
+# Removes what the browser host keeps in the local application data of the bot user: the folder RPA Runner there,
+# which holds browser-temp, the temp folder of the browser server. A host that was ended without a chance to stop
+# leaves a session's trace in it, with what was typed into pages, until its next start. -Accounts, -RunningSids and
+# -UnknownProcesses are what Get-RpaUninstallFacts returned; only an account marked Bot is looked at. The profile is
+# found by the account's SID, and the local application data is taken to be AppData\Local in it, where Windows
+# puts it. The folder is left as it is, with the reason:
+#   - while a process of that account is running, or one whose account cannot be read: the host may be using the
+#     folder, and the account could put a link in the place of a folder while the tree is removed;
+#   - when the profile folder, AppData, Local or RPA Runner is a link or junction, or is no folder: they belong to
+#     the bot user, and nothing is removed where a link points;
+#   - when it cannot be read or removed.
+# The tree is removed with Remove-RpaTree, which does not enter a link inside it. Returns, for each folder found,
+# Path, Name (the account), Removed and Why (a sentence for the person, when it was left).
+function Remove-RpaBrowserTemp([object[]]$Accounts, [string[]]$RunningSids, [object[]]$UnknownProcesses) {
+  $results = @()
+  $unknown = @($UnknownProcesses | Where-Object { $_ })
+  foreach ($account in @($Accounts | Where-Object { $_ -and $_.Bot })) {
+    $userFolder = Get-RpaProfileFolder $account.Sid
+    if (-not $userFolder) { continue }
+    $folders = @($userFolder)
+    foreach ($part in 'AppData', 'Local', 'RPA Runner') { $folders += Join-Path $folders[-1] $part }
+    $result = @{ Path = $folders[-1]; Name = $account.Name; Removed = $false; Why = '' }
+    $missing = $false
+    try {
+      foreach ($folder in $folders) {
+        $state = Get-RpaPathState $folder
+        if (-not $state.Exists) { $missing = $true; break }
+        if ($state.IsLink -or -not $state.IsFolder) {
+          $result.Why = '{0} is a link or junction, so nothing was removed there. Check it and remove the folder.' -f $folder
+          break
+        }
+      }
+      if ($missing) { continue }
+      if (-not $result.Why) {
+        if (@($RunningSids) -contains $account.Sid) {
+          $result.Why = '{0} is signed in. Sign {0} out, then run Uninstall-Rpa.ps1 again from the unpacked package, or remove the folder.' -f $account.Name
+        } elseif ($unknown.Count -gt 0) {
+          $result.Why = 'The owner of {0} cannot be read; it may be a process of {1}. End it, then run Uninstall-Rpa.ps1 again from the unpacked package, or remove the folder.' -f $unknown[0], $account.Name
+        } else {
+          Remove-RpaTree $result.Path
+          $result.Removed = $true
+        }
+      }
+    } catch { $result.Why = $_.Exception.GetBaseException().Message }
+    $results += $result
+  }
+  $results
+}
+
 # What Uninstall-Rpa.ps1 does: removes the tasks, the firewall rules and the install directory, and puts back what
 # -AutoSignIn changed, from the records in install.json. The data directory goes only with -RemoveData; the Windows
 # user is never removed. -Plan is what Get-RpaUninstallPlan returned.
 # Every refusal comes before anything is removed. With -RemoveData the data directory goes first, directly after a
 # second look at who has a process running (the plan looked before the programs were stopped); when that look
 # refuses, the tasks are switched on and started again, and the error that is thrown has Refused in its Data.
+# What the browser left in the bot user's local application data goes when that user has no process running; it is
+# looked for before the data directory goes, whose access rules name the bot user when install.json is gone.
 # Each setting that cannot be put back is printed when that happens and listed at once in uninstall-leftovers.json
 # in the install directory, which then stays with that one file. Returns what the uninstaller reports.
 function Invoke-RpaUninstall {
@@ -1098,7 +1166,7 @@ function Invoke-RpaUninstall {
   $install = Read-RpaInstallFile $layout.InstallFile
   $result = @{
     User = $null; UserKept = $false; AutoSignIn = $false; SignInKept = $false; SignInFailed = $false; HadChanges = $false; NotRestored = @()
-    LeftoversFile = $null; LeftoversProblem = $null; DataRemoved = $false; DataKept = $false; Layout = $layout
+    LeftoversFile = $null; LeftoversProblem = $null; DataRemoved = $false; DataKept = $false; BrowserTemp = @(); Layout = $layout
   }
   if ($install) {
     $result.User = [string]$install.user
@@ -1109,14 +1177,22 @@ function Invoke-RpaUninstall {
 
   Write-Host '  stop running services'
   Stop-RpaServices $layout.InstallDir
+  # Who has a process running now that the programs are stopped.
+  $facts = Get-RpaUninstallFacts
   if ($RemoveData) {
-    $late = Get-RpaUninstallPlan -Parameters @{ RemoveData = $true } -Facts (Get-RpaUninstallFacts)
+    $late = Get-RpaUninstallPlan -Parameters @{ RemoveData = $true } -Facts $facts
     if ($late.Refusals.Count -gt 0) {
       Resume-RpaServices
       $refused = New-Object InvalidOperationException ($late.Refusals -join "`n")
       $refused.Data['Refused'] = $true
       throw $refused
     }
+  }
+  $result.BrowserTemp = @(Remove-RpaBrowserTemp $facts.Accounts $facts.RunningSids $facts.UnknownProcesses)
+  foreach ($entry in $result.BrowserTemp) {
+    if ($entry.Removed) { Write-Host ("  remove the browser's temp folder of {0}" -f $entry.Name) }
+  }
+  if ($RemoveData) {
     Write-Host '  remove the data directory'
     $result.DataRemoved = (Get-RpaPathState $layout.DataDir).Exists
     Remove-RpaTree $layout.DataDir
@@ -1181,6 +1257,14 @@ function Get-RpaUninstallSummary([hashtable]$Result) {
         $lines += '  a file only administrators can read or change. The next install reads it, so that a later uninstall'
         $lines += '  tries these settings again.'
       } else { $lines += '  This list could not be kept in {0}: {1}' -f $Result.Layout.LeftoversFile, $Result.LeftoversProblem }
+    }
+  }
+  foreach ($entry in @($Result.BrowserTemp | Where-Object { $_ })) {
+    if ($entry.Removed) { $lines += "  Removed:   {0} (the browser's temp folder of {1})" -f $entry.Path, $entry.Name }
+    else {
+      $lines += "  Kept:      {0} (the browser's temp folder of {1}; it can hold" -f $entry.Path, $entry.Name
+      $lines += '             what was typed into pages).'
+      $lines += '             {0}' -f $entry.Why
     }
   }
   if ($Result.DataRemoved) { $lines += '  Removed:   {0}' -f $Result.Layout.DataDir }

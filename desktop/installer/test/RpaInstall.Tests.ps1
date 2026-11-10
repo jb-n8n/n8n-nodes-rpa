@@ -1058,6 +1058,7 @@ Describe 'Invoke-RpaUninstall' {
     Mock -ModuleName RpaInstall Remove-RpaTree { }
     Mock -ModuleName RpaInstall Unregister-RpaTask { }
     Mock -ModuleName RpaInstall Remove-RpaProgramFiles { }
+    Mock -ModuleName RpaInstall Remove-RpaBrowserTemp { }
     Mock -ModuleName RpaInstall Get-RpaUninstallFacts {
       @{ DataDir = 'C:\ProgramData\RPA Runner'; DataDirState = @{ Exists = $true; IsLink = $false }; Accounts = @(@{ Sid = 'S-1-5-21-1-2-3-1001'; Name = 'rpa-runner' }); RunningSids = @('S-1-5-21-1-2-3-1001'); UnknownProcesses = @(); AutoSignInSid = $null }
     }
@@ -1070,6 +1071,149 @@ Describe 'Invoke-RpaUninstall' {
     Should -Invoke -ModuleName RpaInstall Remove-RpaTree -Times 0 -Exactly
     Should -Invoke -ModuleName RpaInstall Unregister-RpaTask -Times 0 -Exactly
     Should -Invoke -ModuleName RpaInstall Remove-RpaProgramFiles -Times 0 -Exactly
+    Should -Invoke -ModuleName RpaInstall Remove-RpaBrowserTemp -Times 0 -Exactly
+  }
+}
+
+# The browser host keeps the browser server's temp folder in the bot user's local application data
+# (%LOCALAPPDATA%\RPA Runner\browser-temp). A host that was ended without a chance to stop leaves a session's trace
+# there, with what was typed into pages.
+Describe 'What the browser left in the local application data of the bot user' {
+  BeforeAll {
+    $script:Bot = @{ Sid = $script:BotSid; Name = 'rpa-runner'; Bot = $true }
+    # Stands for C:\Users\rpa-runner; a path that Join-Path takes on every platform.
+    $script:Folders = @(Join-Path $TestDrive 'rpa-runner')
+    $env:RPA_TEST_PROFILE = $script:Folders[0]
+    foreach ($part in 'AppData', 'Local', 'RPA Runner') { $script:Folders += Join-Path $script:Folders[-1] $part }
+    $script:Temp = $script:Folders[-1]
+    function Invoke-RemoveBrowserTemp([object[]]$Accounts, [string[]]$RunningSids = @(), [object[]]$UnknownProcesses = @()) {
+      # The comma keeps a list of one entry a list.
+      , @(InModuleScope RpaInstall -Parameters @{ Accounts = $Accounts; RunningSids = $RunningSids; UnknownProcesses = $UnknownProcesses } {
+          Remove-RpaBrowserTemp $Accounts $RunningSids $UnknownProcesses
+        })
+    }
+  }
+  AfterAll { $env:RPA_TEST_PROFILE = $null }
+
+  Context 'what is removed and what is left' {
+    BeforeEach {
+      $env:RPA_TEST_LINK = ''
+      $env:RPA_TEST_MISSING = ''
+      Mock -ModuleName RpaInstall Get-RpaProfileFolder { if ($Sid -eq 'S-1-5-21-1-2-3-1001') { $env:RPA_TEST_PROFILE } }
+      Mock -ModuleName RpaInstall Get-RpaPathState {
+        @{ Exists = ($Path -ne $env:RPA_TEST_MISSING); IsLink = ($Path -eq $env:RPA_TEST_LINK); IsFolder = $true; Links = 1; OwnerTrusted = $false; Owner = 'BOT-PC\rpa-runner' }
+      }
+      Mock -ModuleName RpaInstall Remove-RpaTree { }
+    }
+    AfterEach { $env:RPA_TEST_LINK = $null; $env:RPA_TEST_MISSING = $null }
+
+    It 'removes RPA Runner in the local application data of the profile Windows records for the bot user' {
+      $results = Invoke-RemoveBrowserTemp @($script:Bot) @('S-1-5-18')
+      $results.Count | Should -Be 1
+      $results[0].Path | Should -BeExactly $script:Temp
+      $results[0].Name | Should -BeExactly 'rpa-runner'
+      $results[0].Removed | Should -BeTrue
+      Should -Invoke -ModuleName RpaInstall Remove-RpaTree -Times 1 -Exactly -ParameterFilter { $Path -eq $script:Temp }
+    }
+
+    It 'leaves it while a process of the bot user is running, and says so' {
+      $results = Invoke-RemoveBrowserTemp @($script:Bot) @('S-1-5-18', $script:BotSid)
+      $results[0].Removed | Should -BeFalse
+      $results[0].Why | Should -BeExactly 'rpa-runner is signed in. Sign rpa-runner out, then run Uninstall-Rpa.ps1 again from the unpacked package, or remove the folder.'
+      Should -Invoke -ModuleName RpaInstall Remove-RpaTree -Times 0 -Exactly
+    }
+
+    It 'leaves it while a process is running whose owner cannot be read' {
+      $results = Invoke-RemoveBrowserTemp @($script:Bot) @('S-1-5-18') @('powershell (process 5184)')
+      $results[0].Removed | Should -BeFalse
+      $results[0].Why | Should -BeExactly 'The owner of powershell (process 5184) cannot be read; it may be a process of rpa-runner. End it, then run Uninstall-Rpa.ps1 again from the unpacked package, or remove the folder.'
+      Should -Invoke -ModuleName RpaInstall Remove-RpaTree -Times 0 -Exactly
+    }
+
+    # The folders belong to the bot user, which can put a link in the place of any of them.
+    It 'removes nothing when folder <Index> on the way is a link or junction, and names it' -ForEach @(@{ Index = 0 }, @{ Index = 1 }, @{ Index = 2 }, @{ Index = 3 }) {
+      $env:RPA_TEST_LINK = $script:Folders[$Index]
+      $results = Invoke-RemoveBrowserTemp @($script:Bot)
+      $results[0].Removed | Should -BeFalse
+      $results[0].Why | Should -BeExactly ('{0} is a link or junction, so nothing was removed there. Check it and remove the folder.' -f $script:Folders[$Index])
+      Should -Invoke -ModuleName RpaInstall Remove-RpaTree -Times 0 -Exactly
+    }
+
+    It 'says so when the folder could not be removed' {
+      Mock -ModuleName RpaInstall Remove-RpaTree { throw ('Could not remove {0}. Close what is using it and run this again.' -f $Path) }
+      $results = Invoke-RemoveBrowserTemp @($script:Bot)
+      $results[0].Removed | Should -BeFalse
+      $results[0].Why | Should -BeExactly ('Could not remove {0}. Close what is using it and run this again.' -f $script:Temp)
+    }
+
+    It 'does nothing for <Case>' -ForEach @(
+      @{ Case = 'an account that is not the bot user'; Accounts = @(@{ Sid = 'S-1-5-21-1-2-3-1001'; Name = 'rpa-runner'; Bot = $false }); Missing = -1 }
+      @{ Case = 'a bot user without a profile on this machine'; Accounts = @(@{ Sid = 'S-1-5-21-1-2-3-1002'; Name = 'bot2'; Bot = $true }); Missing = -1 }
+      @{ Case = 'a profile without the folder'; Accounts = @(@{ Sid = 'S-1-5-21-1-2-3-1001'; Name = 'rpa-runner'; Bot = $true }); Missing = 3 }
+      @{ Case = 'no account'; Accounts = @(); Missing = -1 }
+    ) {
+      if ($Missing -ge 0) { $env:RPA_TEST_MISSING = $script:Folders[$Missing] }
+      (Invoke-RemoveBrowserTemp $Accounts).Count | Should -Be 0
+      Should -Invoke -ModuleName RpaInstall Remove-RpaTree -Times 0 -Exactly
+    }
+  }
+
+  It 'on Windows: removes the folder with a junction in it and not what the junction points at; with a junction on the way, removes nothing' -Skip:($env:OS -ne 'Windows_NT') {
+    $root = Join-Path $TestDrive ('profile-' + [guid]::NewGuid().ToString('N'))
+    $userFolder = Join-Path $root 'bot'
+    $local = Join-Path (Join-Path $userFolder 'AppData') 'Local'
+    $temp = Join-Path (Join-Path $local 'RPA Runner') 'browser-temp'
+    $elsewhere = Join-Path $root 'elsewhere'
+    New-Item -ItemType Directory -Path $temp, (Join-Path $elsewhere 'RPA Runner') | Out-Null
+    Set-Content -LiteralPath (Join-Path $temp 'trace.zip') -Value 'x'
+    Set-Content -LiteralPath (Join-Path $elsewhere 'canary.txt') -Value 'x'
+    Set-Content -LiteralPath (Join-Path (Join-Path $elsewhere 'RPA Runner') 'canary.txt') -Value 'x'
+    $cmd = Join-Path ([Environment]::SystemDirectory) 'cmd.exe'
+    & $cmd /d /c ('mklink /J "{0}" "{1}"' -f (Join-Path $temp 'link'), $elsewhere) | Out-Null
+    Mock -ModuleName RpaInstall Get-RpaProfileFolder { $env:RPA_TEST_PROFILE }
+    $before = $env:RPA_TEST_PROFILE
+    $env:RPA_TEST_PROFILE = $userFolder
+    try {
+      $results = Invoke-RemoveBrowserTemp @($script:Bot)
+      $results[0].Removed | Should -BeTrue
+      Join-Path $local 'RPA Runner' | Should -Not -Exist
+      $local | Should -Exist
+      Join-Path $elsewhere 'canary.txt' | Should -Exist
+
+      # Local application data that is a junction to another place which holds a folder named RPA Runner.
+      & $cmd /d /c ('rd "{0}"' -f $local) | Out-Null
+      & $cmd /d /c ('mklink /J "{0}" "{1}"' -f $local, $elsewhere) | Out-Null
+      $results = Invoke-RemoveBrowserTemp @($script:Bot)
+      $results[0].Removed | Should -BeFalse
+      $results[0].Why | Should -BeExactly ('{0} is a link or junction, so nothing was removed there. Check it and remove the folder.' -f $local)
+      Join-Path (Join-Path $elsewhere 'RPA Runner') 'canary.txt' | Should -Exist
+    } finally {
+      $env:RPA_TEST_PROFILE = $before
+      & $cmd /d /c ('rd "{0}"' -f $local) 2>$null | Out-Null
+    }
+  }
+
+  It 'on Windows: finds the profile folder of an account by its SID, and none for an account without one' -Skip:($env:OS -ne 'Windows_NT') {
+    $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    InModuleScope RpaInstall -Parameters @{ Sid = $sid } { Get-RpaProfileFolder $Sid } | Should -Be $env:USERPROFILE.TrimEnd('\')
+    InModuleScope RpaInstall { Get-RpaProfileFolder 'S-1-5-21-1-2-3-1001' } | Should -BeNullOrEmpty
+  }
+
+  # After an uninstall that kept the data directory install.json is gone; the directory's access rules still name
+  # the bot user.
+  It 'on Windows: the bot user is the recorded user, or without a record whoever the access rules of the data directory name' -Skip:($env:OS -ne 'Windows_NT') {
+    $dir = Join-Path $TestDrive ('data-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $dir | Out-Null
+    # Guests stands for the bot user of an earlier install.
+    & (Join-Path ([Environment]::SystemDirectory) 'icacls.exe') $dir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-546:(OI)(CI)RX' | Out-Null
+    $accounts = @(InModuleScope RpaInstall -Parameters @{ Dir = $dir } { Get-RpaDataAccounts @{ DataDir = $Dir } $null (Get-RpaDataEntries $Dir) })
+    @($accounts | Where-Object { $_.Sid -eq 'S-1-5-32-546' })[0].Bot | Should -BeTrue
+
+    $me = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $install = New-Object psobject -Property @{ user = $me.Name }
+    $accounts = @(InModuleScope RpaInstall -Parameters @{ Dir = $dir; Install = $install } { Get-RpaDataAccounts @{ DataDir = $Dir } $Install (Get-RpaDataEntries $Dir) })
+    @($accounts | Where-Object { $_.Sid -eq $me.User.Value })[0].Bot | Should -BeTrue
+    @($accounts | Where-Object { $_.Sid -eq 'S-1-5-32-546' })[0].Bot | Should -BeFalse
   }
 }
 
@@ -1078,7 +1222,7 @@ Describe 'What the uninstaller reports' {
     function New-UninstallResult([hashtable]$Change = @{}) {
       $result = @{
         User = 'rpa-runner'; UserKept = $true; AutoSignIn = $true; SignInKept = $false; SignInFailed = $false; HadChanges = $true; NotRestored = @()
-        LeftoversFile = $null; LeftoversProblem = $null; DataRemoved = $false; DataKept = $true
+        LeftoversFile = $null; LeftoversProblem = $null; DataRemoved = $false; DataKept = $true; BrowserTemp = @()
         Layout = @{ InstallDir = 'C:\Program Files\RPA Runner'; DataDir = $script:DataDir; LeftoversFile = 'C:\Program Files\RPA Runner\uninstall-leftovers.json' }
       }
       foreach ($key in $Change.Keys) { $result[$key] = $Change[$key] }
@@ -1136,6 +1280,22 @@ Describe 'What the uninstaller reports' {
     $lines = Get-Summary (New-UninstallResult @{ AutoSignIn = $false; HadChanges = $false; DataRemoved = $true; DataKept = $false })
     $lines | Should -Contain '  Removed:   C:\ProgramData\RPA Runner'
     ($lines -join "`n") | Should -Not -Match 'A later install'
+  }
+
+  It 'names the temp folder of the browser that it removed from the profile of the bot user' {
+    $temp = @{ Path = 'C:\Users\rpa-runner\AppData\Local\RPA Runner'; Name = 'rpa-runner'; Removed = $true; Why = '' }
+    $lines = Get-Summary (New-UninstallResult @{ AutoSignIn = $false; HadChanges = $false; BrowserTemp = @($temp) })
+    $lines | Should -Contain "  Removed:   C:\Users\rpa-runner\AppData\Local\RPA Runner (the browser's temp folder of rpa-runner)"
+    ($lines -join "`n") | Should -Not -Match 'typed into pages'
+  }
+
+  It 'says why it left that folder, what it can hold and what to do' {
+    $why = 'rpa-runner is signed in. Sign rpa-runner out, then run Uninstall-Rpa.ps1 again from the unpacked package, or remove the folder.'
+    $temp = @{ Path = 'C:\Users\rpa-runner\AppData\Local\RPA Runner'; Name = 'rpa-runner'; Removed = $false; Why = $why }
+    $lines = Get-Summary (New-UninstallResult @{ AutoSignIn = $false; HadChanges = $false; BrowserTemp = @($temp) })
+    $lines | Should -Contain "  Kept:      C:\Users\rpa-runner\AppData\Local\RPA Runner (the browser's temp folder of rpa-runner; it can hold"
+    $lines | Should -Contain '             what was typed into pages).'
+    $lines | Should -Contain "             $why"
   }
 
   It 'does not say that it kept a Windows user that is no longer there' {
