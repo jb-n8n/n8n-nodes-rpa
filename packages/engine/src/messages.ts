@@ -36,7 +36,10 @@ export const UNSIGNED_WRITES =
   'Unsigned steps cannot sign in, submit a form or download through a form. Sign them with Sign Steps, or turn on Options → Allow Unsigned Writes.';
 export const UNSIGNED_SECRET_FILL =
   'Unsigned steps cannot type a secret into a password field (fill with secret: true). Sign them with Sign Steps; Allow Unsigned Writes does not cover it.';
-/** A signIn with changePassword in steps that are not signed (an import's draft run): refused before anything is typed. */
+/**
+ * A signIn with changePassword in unsigned steps: refused at the trust gate before the browser opens, whatever Allow
+ * Unsigned Writes says, and by the step itself before anything is typed.
+ */
 export const UNSIGNED_CHANGE_PASSWORD = 'Unsigned steps cannot set a new password (signIn.changePassword). Sign them with Sign Steps.';
 export const nameMismatch = (signed: string, expected: string) => `the signed steps are named "${signed}", not "${expected}"`;
 export const versionMismatch = (signed: number, expected: number) => `the signed steps are version ${signed}, but Expected Version is ${expected}`;

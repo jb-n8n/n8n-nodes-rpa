@@ -202,12 +202,20 @@ describe('signIn.changePassword', () => {
     expect(portal.state().logins).toBe(0);
   });
 
-  it('the trust gate refuses unsigned steps with changePassword before the browser opens, as it refuses a secret fill', () => {
+  it('the trust gate refuses unsigned steps with changePassword before the browser opens, as it refuses a secret fill, whatever Allow Unsigned Writes says', async () => {
     const unsigned = script();
-    for (const allowUnsignedSignIn of [false, true]) {
-      expect(checkTrust(unsigned, { required: false, allowUnsignedWrites: true, allowUnsignedSignIn }, { policy: policy(), firstRun: false }))
+    for (const allowUnsignedWrites of [false, true]) {
+      expect(checkTrust(unsigned, { required: false, allowUnsignedWrites }, { policy: policy(), firstRun: false }))
         .toEqual({ ok: false, code: 'script_untrusted', message: UNSIGNED_CHANGE_PASSWORD });
     }
+    // The same sign-in without changePassword passes the gate with Allow Unsigned Writes on.
+    const { changePassword: _change, ...plain } = (SIGN_IN as Extract<Step, { signIn: unknown }>).signIn;
+    const plainDoc: Script = { ...unsigned, steps: [{ intent: 'Sign in', signIn: plain }, SIGNED_IN] };
+    expect(checkTrust(plainDoc, { required: false, allowUnsignedWrites: true }, { policy: policy(), firstRun: false })).toEqual({ ok: true, signed: false });
+    // At the lane, with Require Signed Steps off and Allow Unsigned Writes on: refused before the browser opens.
+    const lane = await runScriptLane(input(unsigned, { endpoint: { mode: 'playwright', wsUrl: 'ws://browser.invalid:1/' }, trust: { required: false, allowUnsignedWrites: true } }));
+    expect(lane).toMatchObject({ ok: false, code: 'script_untrusted', message: UNSIGNED_CHANGE_PASSWORD });
+    expect(portal.state().logins).toBe(0);
   });
 
   it('a password change that stopped after its fields were typed is not handed to AI repair', async () => {
