@@ -1,12 +1,14 @@
-# A Windows Server 2022 test bed for the RPA desktop runner on EC2: a VM in a small VPC of its own, open only to the
-# CIDRs you list, with the user rpa-runner signed in on the console and the runner started at its logon.
+# A Windows Server 2022 test bed for the RPA desktop runner and the RPA browser on EC2: a VM in a small VPC of its own,
+# open only to the CIDRs you list. With package_url and package_sha256 the first boot installs the RPA Windows package
+# with its own installer: the user rpa-runner signs in on the console and both programs start at its logon. Without
+# them the VM comes up with nothing of the product installed.
 #
-# deploy/scripts/desktop-testbed.sh drives this example (up, stop, start, status, fingerprint, rdp-password,
-# install-runner, down) and keeps its state in a directory you choose outside the repository. By hand: terraform init
+# deploy/scripts/desktop-testbed.sh drives this example (up, stop, start, status, fingerprint, rdp-password, install,
+# down) and keeps its state in a directory you choose outside the repository. By hand: terraform init
 # -backend-config=path=<state dir>/terraform.tfstate, then terraform apply -var 'allowed_cidrs=["<your IP>/32"]'.
 #
 # Cost: while running, the instance (t3.large with the Windows licence) and its public IPv4 address; while stopped,
-# only the 50 GiB gp3 volume and the three secrets. Stop it when idle, destroy it when done.
+# only the 50 GiB gp3 volume and the four secrets. Stop it when idle, destroy it when done.
 terraform {
   required_version = ">= 1.11"
 
@@ -33,6 +35,6 @@ module "desktop_runner" {
   instance_type = var.instance_type
   elastic_ip    = var.elastic_ip
 
-  runner_artifact_url    = var.runner_artifact_url
-  runner_artifact_sha256 = var.runner_artifact_sha256
+  package_url    = var.package_url
+  package_sha256 = var.package_sha256
 }

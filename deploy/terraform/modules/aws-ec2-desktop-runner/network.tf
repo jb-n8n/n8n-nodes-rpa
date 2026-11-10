@@ -4,8 +4,9 @@
 # default, a minimal VPC of its own: one public subnet, an internet gateway and a default route. The zone is the first
 # (by name) that offers instance_type, unless availability_zone names one.
 #
-# Ingress: the runner port, and RDP when enable_rdp, each from allowed_cidrs only (variables.tf refuses the internet).
-# Egress: HTTPS and HTTP, which is what SSM, Secrets Manager, the runner download and Windows Update need. Amazon DNS,
+# Ingress: the runner port, the browser port, and RDP when enable_rdp, each from allowed_cidrs only (variables.tf
+# refuses the internet). Both ports are open with or without a package, so that an install made by hand is reachable.
+# Egress: HTTPS and HTTP, which is what SSM, Secrets Manager, the package download and Windows Update need. Amazon DNS,
 # NTP and Windows activation use link-local addresses that security groups don't filter.
 
 locals {
@@ -28,13 +29,13 @@ locals {
   )
 
   ingress_ports = merge(
-    { runner = var.runner_port },
+    { runner = var.runner_port, browser = var.browser_port },
     var.enable_rdp ? { rdp = 3389 } : {},
   )
   # One rule per port and CIDR, keyed "<port name> <cidr>" (both known at plan).
   ingress = merge([
     for name, port in local.ingress_ports : {
-      for cidr in var.allowed_cidrs : "${name} ${cidr}" => { port = port, cidr = cidr }
+      for cidr in var.allowed_cidrs : "${name} ${cidr}" => { name = name, port = port, cidr = cidr }
     }
   ]...)
 }
@@ -134,7 +135,7 @@ resource "aws_route_table_association" "public" {
 
 resource "aws_security_group" "this" {
   name_prefix = "${var.name}-"
-  description = "RPA desktop runner test bed: runner port and RDP from allowed CIDRs only"
+  description = "RPA desktop test bed: runner port, browser port and RDP from allowed CIDRs only"
   vpc_id      = local.vpc_id
   tags        = merge(local.tags, { Name = var.name })
 
@@ -147,7 +148,7 @@ resource "aws_vpc_security_group_ingress_rule" "allowed" {
   for_each = local.ingress
 
   security_group_id = aws_security_group.this.id
-  description       = each.value.port == 3389 ? "RDP" : "RPA desktop runner"
+  description       = { runner = "RPA desktop runner", browser = "RPA browser", rdp = "RDP" }[each.value.name]
   ip_protocol       = "tcp"
   from_port         = each.value.port
   to_port           = each.value.port
@@ -160,7 +161,7 @@ resource "aws_vpc_security_group_egress_rule" "web" {
   for_each = toset(["80", "443"])
 
   security_group_id = aws_security_group.this.id
-  description       = "SSM, Secrets Manager, runner download, Windows Update"
+  description       = "SSM, Secrets Manager, package download, Windows Update"
   ip_protocol       = "tcp"
   from_port         = tonumber(each.key)
   to_port           = tonumber(each.key)

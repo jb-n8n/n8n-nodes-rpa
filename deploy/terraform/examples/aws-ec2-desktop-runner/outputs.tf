@@ -18,9 +18,19 @@ output "runner_url" {
   value       = module.desktop_runner.runner_url
 }
 
+output "browser_url" {
+  description = "The browser's URL for the RPA Browser credential (at apply time; desktop-testbed.sh status shows the current one)."
+  value       = module.desktop_runner.browser_url
+}
+
 output "runner_token_secret_arn" {
   description = "ARN of the secret with the runner's bearer token (never the token itself)."
   value       = module.desktop_runner.runner_token_secret_arn
+}
+
+output "browser_token_secret_arn" {
+  description = "ARN of the secret with the browser's bearer token (never the token itself)."
+  value       = module.desktop_runner.browser_token_secret_arn
 }
 
 output "runner_user_password_secret_arn" {
@@ -34,6 +44,6 @@ output "admin_password_secret_arn" {
 }
 
 output "fingerprint_command" {
-  description = "AWS CLI command that prints the runner certificate's fingerprint (or desktop-testbed.sh fingerprint)."
+  description = "AWS CLI command that prints the runner's and the browser's certificate fingerprints (or desktop-testbed.sh fingerprint)."
   value       = module.desktop_runner.fingerprint_command
 }
