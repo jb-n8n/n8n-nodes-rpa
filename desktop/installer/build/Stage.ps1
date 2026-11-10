@@ -69,7 +69,8 @@ function Copy-Named([string]$From, [string[]]$Names, [string]$To) {
 function Invoke-Tool([string]$What, [string]$Exe, [string[]]$Arguments, [string]$WorkingDirectory) {
   Push-Location -LiteralPath $WorkingDirectory
   $ErrorActionPreference = 'Continue'
-  try { & $Exe @Arguments 2>&1 | ForEach-Object { "$_" } | Out-Host } finally { Pop-Location }
+  # Without the progress bars of Playwright's installer.
+  try { & $Exe @Arguments 2>&1 | ForEach-Object { "$_" } | Where-Object { $_ -notmatch '^\|' } | Out-Host } finally { Pop-Location }
   if ($LASTEXITCODE -ne 0) { throw ('{0} failed with exit code {1}.' -f $What, $LASTEXITCODE) }
 }
 
