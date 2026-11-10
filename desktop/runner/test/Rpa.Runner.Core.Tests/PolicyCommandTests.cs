@@ -42,8 +42,13 @@ public class PolicyCommandTests
         public List<(string Path, string Json, DateTimeOffset Now, bool Existed)> Writes { get; } = [];
         public List<string> Reads { get; } = [];
 
-        /// <summary>The streams handed out for hashing, by path.</summary>
+        /// <summary>Every open of a file whose path the caller chose (a change file, an application), with the
+        /// stream that was handed out.</summary>
         public List<(string Path, OneWayStream Stream)> Opened { get; } = [];
+
+        /// <summary>What a test says the open of a path finds (a pipe, a folder, a link, a network drive). A path
+        /// that is not here opens as a regular file on a local drive.</summary>
+        public Dictionary<string, (bool DiskFile, bool Folder, bool Link, bool LocalFixedDrive)> Found { get; } = [];
 
         /// <summary>Every path whose kind was asked for.</summary>
         public List<string> Looked { get; } = [];
@@ -88,8 +93,7 @@ public class PolicyCommandTests
         /// <summary>A size to report in place of the text's own (a file that grows after its size was read).</summary>
         public Dictionary<string, long> Sizes { get; } = [];
 
-        public long? Length(string path) =>
-            Sizes.TryGetValue(path, out var size) ? size : Text.TryGetValue(path, out var text) ? Encoding.UTF8.GetByteCount(text) : null;
+        public long? Length(string path) => Text.TryGetValue(path, out var text) ? Encoding.UTF8.GetByteCount(text) : null;
 
         /// <summary>
         /// As RpaPolicy.exe does: an existing policy's text goes to the name PolicyCommand.BackupPath gives; a new
@@ -106,12 +110,14 @@ public class PolicyCommandTests
             if (UntrustedAfterWrite.Length > 0) Untrusted[path] = UntrustedAfterWrite;
         }
 
-        public Stream OpenRead(string path)
+        public OpenedFile? Open(string path)
         {
-            if (!Bytes.TryGetValue(path, out var bytes)) throw new FileNotFoundException($"Could not find file '{path}'.");
-            var stream = new OneWayStream(bytes);
+            var bytes = Bytes.TryGetValue(path, out var binary) ? binary : Text.TryGetValue(path, out var text) ? Encoding.UTF8.GetBytes(text) : null;
+            if (bytes is null && !Folders.Contains(path) && !Found.ContainsKey(path)) return null;
+            var stream = new OneWayStream(bytes ?? []);
             Opened.Add((path, stream));
-            return stream;
+            var found = Found.TryGetValue(path, out var odd) ? odd : (DiskFile: true, Folder: Folders.Contains(path), Link: false, LocalFixedDrive: true);
+            return new OpenedFile(found.DiskFile, found.Folder, found.Link, found.LocalFixedDrive, Sizes.TryGetValue(path, out var size) ? size : stream.Size, stream);
         }
     }
 
@@ -120,6 +126,8 @@ public class PolicyCommandTests
     {
         private int _at;
 
+        public int Size => bytes.Length;
+        public int BytesRead => _at;
         public int LargestRead { get; private set; }
         public bool Closed { get; private set; }
 
@@ -392,17 +400,6 @@ public class PolicyCommandTests
     }
 
     [Fact]
-    public void Allow_app_pin_hash_needs_a_regular_file()
-    {
-        var tool = new Tool();
-        tool.Files.Folders.Add(ErpPath);
-        Assert.Equal(1, tool.Run("y\n", "allow-app", ErpPath, "--pin-hash", "--policy", PolicyPath));
-        Assert.Equal($"{ErpPath} is not a regular file\n", tool.Output);
-        Assert.Empty(tool.Files.Opened);
-        Assert.Empty(tool.Files.Writes);
-    }
-
-    [Fact]
     public void A_missing_change_file_exits_1_and_names_it()
     {
         var tool = new Tool();
@@ -418,19 +415,87 @@ public class PolicyCommandTests
         var tool = new Tool();
         tool.Files.Text[ChangePath] = Change + new string(' ', 256 * 1024 - Change.Length);
         Assert.Equal(3, tool.Run("n\n", "apply", ChangePath, "--policy", PolicyPath));
-        Assert.Contains(ChangePath, tool.Files.Reads);
+        Assert.Equal(256 * 1024, Assert.Single(tool.Files.Opened).Stream.BytesRead);
 
-        tool.Files.Reads.Clear();
+        tool.Files.Opened.Clear();
         tool.Files.Text[ChangePath] += " ";
         Assert.Equal(1, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
         Assert.Equal("the change file is larger than 256 KiB\n", tool.Output);
-        Assert.DoesNotContain(ChangePath, tool.Files.Reads);
+        var (_, unread) = Assert.Single(tool.Files.Opened);
+        Assert.Equal(0, unread.BytesRead);
+        Assert.True(unread.Closed);
 
-        // A file that grew between the size check and the read is refused as well.
+        // A file that says it is small and gives more is refused as well, after one byte more than the limit.
+        tool.Files.Opened.Clear();
         tool.Files.Sizes[ChangePath] = 100;
         Assert.Equal(1, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
         Assert.Equal("the change file is larger than 256 KiB\n", tool.Output);
+        Assert.Equal(256 * 1024 + 1, Assert.Single(tool.Files.Opened).Stream.BytesRead);
         Assert.Empty(tool.Files.Writes);
+    }
+
+    [Fact]
+    public void A_change_file_is_opened_once_and_read_in_the_encoding_its_first_bytes_name()
+    {
+        // As Windows PowerShell writes files: UTF-16 with a byte order mark (Out-File), UTF-8 with one (Set-Content).
+        Encoding[] encodings = [new UTF8Encoding(false), new UTF8Encoding(true), new UnicodeEncoding(false, true), new UnicodeEncoding(true, true)];
+        foreach (var encoding in encodings)
+        {
+            var tool = new Tool();
+            tool.Files.Text.Remove(ChangePath);
+            tool.Files.Bytes[ChangePath] = [.. encoding.GetPreamble(), .. encoding.GetBytes(Change)];
+            Assert.Equal(3, tool.Run("n\n", "apply", ChangePath, "--policy", PolicyPath));
+            Assert.Equal($"{Changing()}\n{AllowErp}\n{OneApp}\n{Prompt}", tool.Output);
+            var (path, stream) = Assert.Single(tool.Files.Opened);
+            Assert.Equal(ChangePath, path);
+            Assert.True(stream.Closed);
+        }
+    }
+
+    /// <summary>What the open of a path the caller chose can find that is not a regular file on a local drive.</summary>
+    public static TheoryData<bool, bool, bool, bool> NotRegular => new()
+    {
+        // disk file, folder, link, local fixed drive
+        { false, false, false, false },  // a pipe or a device
+        { true, true, false, true },     // a folder
+        { true, false, true, true },     // a link (the last name of the path)
+        { true, false, false, false },   // a file on a network share or a removable drive, or behind a link earlier in the path
+        { true, true, true, false },     // a junction
+    };
+
+    [Theory]
+    [MemberData(nameof(NotRegular))]
+    public void A_file_the_caller_chose_is_read_only_when_it_is_a_regular_file_on_a_local_drive(bool diskFile, bool folder, bool link, bool localFixedDrive)
+    {
+        // The paths come from whoever started the tool. What was opened is looked at before a byte is read.
+        string[][] commands = [["apply", ChangePath], ["allow-app", ErpPath, "--pin-hash"]];
+        foreach (var command in commands)
+        {
+            var tool = new Tool();
+            tool.Files.Bytes[ErpPath] = [1, 2, 3];
+            tool.Files.Found[command[1]] = (diskFile, folder, link, localFixedDrive);
+            Assert.Equal(1, tool.Run("y\n", [.. command, "--yes", "--policy", PolicyPath]));
+            Assert.Equal($"{command[1]} is not a regular file on a local drive\n", tool.Output);
+            var (path, stream) = Assert.Single(tool.Files.Opened);
+            Assert.Equal(command[1], path);
+            Assert.Equal(0, stream.BytesRead);
+            Assert.True(stream.Closed);
+            Assert.Empty(tool.Files.Writes);
+        }
+    }
+
+    [Fact]
+    public void The_refusal_of_a_file_names_the_path_as_the_caller_gave_it_with_control_characters_escaped()
+    {
+        var odd = Path.Combine(Root, "ERP\u0007 Demo", "ErpDemo.exe");
+        var tool = new Tool();
+        tool.Files.Found[odd] = (false, false, false, false);
+        Assert.Equal(1, tool.Run("y\n", "allow-app", odd, "--pin-hash", "--policy", PolicyPath));
+        Assert.Equal($"{odd.Replace("\u0007", "\\u0007")} is not a regular file on a local drive\n", tool.Output);
+
+        tool.Files.Found[odd] = (true, false, true, true);
+        Assert.Equal(1, tool.Run("y\n", "apply", odd, "--policy", PolicyPath));
+        Assert.Equal($"{odd.Replace("\u0007", "\\u0007")} is not a regular file on a local drive\n", tool.Output);
     }
 
     [Fact]
@@ -871,6 +936,7 @@ public class PolicyCommandTests
             Assert.Equal(1, tool.Run("\n", command));
             Assert.Equal($"--policy needs an administrator console\n{(tool.Console.ClosesWithTheTool ? Closing + "\n" : "")}", tool.Output);
             Assert.Empty(tool.Files.Reads);
+            Assert.Empty(tool.Files.Opened);
             Assert.Empty(tool.Files.Writes);
         }
     }
@@ -886,7 +952,7 @@ public class PolicyCommandTests
         tool.Files.Text[path] = Change;
         Assert.Equal(1, tool.Run("y\n", "apply", path, "--policy", PolicyPath));
         Assert.Equal("the change file must be on a local drive\n", tool.Output);
-        Assert.Empty(tool.Files.Reads);
+        Assert.Empty(tool.Files.Opened);
         Assert.Empty(tool.Files.Writes);
     }
 

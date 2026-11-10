@@ -143,10 +143,18 @@ person who is signed in, and reads its input from that window. Started without a
   updated). An app the policy already has keeps its allowed argument lists, and its pin unless `--pin-hash` gives a
   new one. The path must be a local one: a UNC or device path (`\\server\share\...`, `\\.\...`) and a short (8.3) name
   are refused before the tool opens anything, with the messages a change file gets for such a path. `--pin-hash`
-  needs a file (`Application file not found: <path>`, `<path> is not a regular file`) and reads it as a stream.
+  reads the file as a stream (`Application file not found: <path>` when there is none).
 - `apply <change.json>` adds what a change file lists. A change file is a JSON object with any of `allowedApps`,
   `writeControls`, `gatedKeys`, `helperProcesses` and `clipboardRead`, written as in the policy file. It must be on a
-  local drive (`the change file must be on a local drive` otherwise).
+  local drive (`the change file must be on a local drive` for a UNC or device path).
+- The change file and the application file are paths chosen by whoever started the tool, and the tool opens them with
+  administrator rights. It opens each one once, without following a link in the last name of the path and in a way
+  that lets a named pipe's server identify the tool's user but not act as that user, and reads it only when what it
+  opened is a regular file on a local fixed drive. A folder, a link (a symbolic link or a junction), a pipe or
+  another device, and a file on a network share or a removable drive are refused:
+  `<path> is not a regular file on a local drive`. A link in an earlier part of the path is found only after the
+  open, from the final path of what was opened: when it leads to a network share, the tool has contacted that share
+  by then, and reads nothing from it.
 - Every command takes `--policy <path>` (default `%ProgramData%\RPA Runner\policy.json`). `apply` and `allow-app` take
   `--yes`, which writes without asking. Both options work only from an administrator console.
 

@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security.AccessControl;
@@ -32,6 +33,14 @@ catch (Exception e)
 internal sealed class PolicyFiles : IPolicyFiles
 {
     private const int FileTypeDisk = 1;
+    private const int ErrorFileNotFound = 2;
+    private const int ErrorPathNotFound = 3;
+    private const uint GenericRead = 0x80000000;
+    private const uint OpenExisting = 3;
+
+    // FILE_FLAG_OPEN_REPARSE_POINT (a link is opened as itself), FILE_FLAG_BACKUP_SEMANTICS (a folder can be opened,
+    // and is then refused for what it is), SECURITY_SQOS_PRESENT with SECURITY_IDENTIFICATION.
+    private const uint OpenFlags = 0x00200000 | 0x02000000 | 0x00100000 | 0x00010000;
 
     private static readonly SecurityIdentifier Administrators = new(WellKnownSidType.BuiltinAdministratorsSid, null);
 
@@ -41,13 +50,53 @@ internal sealed class PolicyFiles : IPolicyFiles
 
     public PathKind Kind(string path) => Directory.Exists(path) ? PathKind.Folder : File.Exists(path) ? PathKind.File : PathKind.None;
 
-    /// <summary>The file as a stream. What was opened must be a file on a disk: a name can also open a device.</summary>
-    public Stream OpenRead(string path)
+    /// <summary>
+    /// Opens a file whose path the caller chose, and says what the handle is before anything is read. The caller may
+    /// not be an administrator, and this open runs elevated, so:
+    /// the open asks for identification only (a pipe's server can learn who opened it but cannot act as that user);
+    /// a link in the last name of the path is opened as the link, not followed; and the final path of what was opened
+    /// is asked from the handle, which shows a network share reached through a link earlier in the path (that open
+    /// has reached the share by then; nothing is read from it). The content is read through this same handle.
+    /// </summary>
+    public OpenedFile? Open(string path)
     {
-        var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-        if (GetFileType(stream.SafeFileHandle) == FileTypeDisk) return stream;
-        stream.Dispose();
-        throw new IOException($"{path} is not a regular file");
+        var full = Path.GetFullPath(path);
+        var handle = CreateFile(full.Length < 260 ? full : @"\\?\" + full, GenericRead, (uint)FileShare.Read, 0, OpenExisting, OpenFlags, 0);
+        if (handle.IsInvalid)
+        {
+            var error = Marshal.GetLastPInvokeError();
+            handle.Dispose();
+            if (error is ErrorFileNotFound or ErrorPathNotFound) return null;
+            throw new IOException($"{path}: {new Win32Exception(error).Message}");
+        }
+        var diskFile = GetFileType(handle) == FileTypeDisk;
+        var attributes = diskFile ? File.GetAttributes(handle) : default;
+        var found = new OpenedFile(diskFile, attributes.HasFlag(FileAttributes.Directory), attributes.HasFlag(FileAttributes.ReparsePoint),
+            diskFile && OnLocalFixedDrive(handle), 0, Stream.Null);
+        if (!found.Regular)
+        {
+            handle.Dispose();
+            return found;
+        }
+        var content = new FileStream(handle, FileAccess.Read);
+        return found with { Length = content.Length, Content = content };
+    }
+
+    /// <summary>True when the handle's final path is on a drive letter whose drive is a fixed local one: not a
+    /// network share (a path that starts with \\?\UNC\) and not a network, removable or optical drive.</summary>
+    private static bool OnLocalFixedDrive(SafeFileHandle file)
+    {
+        var buffer = new char[512];
+        var length = GetFinalPathNameByHandle(file, buffer, (uint)buffer.Length, 0);
+        if (length > buffer.Length)
+        {
+            buffer = new char[length];
+            length = GetFinalPathNameByHandle(file, buffer, (uint)buffer.Length, 0);
+        }
+        if (length == 0 || length > buffer.Length) return false;
+        var final = new string(buffer, 0, (int)length);
+        return final.Length > 6 && final.StartsWith(@"\\?\", StringComparison.Ordinal) && char.IsAsciiLetter(final[4]) && final[5] == ':' && final[6] == '\\' &&
+               new DriveInfo(final.Substring(4, 3)).DriveType == DriveType.Fixed;
     }
 
     public IReadOnlyList<string> Problems(string path) => PolicyFileCheck.Problems(path);
@@ -148,8 +197,14 @@ internal sealed class PolicyFiles : IPolicyFiles
         file.SetAccessControl(security);
     }
 
+    [DllImport("kernel32.dll", EntryPoint = "CreateFileW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeFileHandle CreateFile(string name, uint access, uint share, nint security, uint creation, uint flags, nint template);
+
     [DllImport("kernel32.dll")]
     private static extern int GetFileType(SafeFileHandle file);
+
+    [DllImport("kernel32.dll", EntryPoint = "GetFinalPathNameByHandleW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetFinalPathNameByHandle(SafeFileHandle file, [Out] char[] path, uint length, uint flags);
 
     /// <summary>Ends the running runner, which reads the policy only at start. Its start script starts it again.</summary>
     public static void RestartRunner()

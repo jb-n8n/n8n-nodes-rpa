@@ -41,8 +41,29 @@ public interface IPolicyFiles
     /// </summary>
     void WriteWithBackup(string path, string json, DateTimeOffset now, bool existed);
 
-    /// <summary>Opens a file for reading. What is not a file on a disk (a device, a pipe) is refused.</summary>
-    Stream OpenRead(string path);
+    /// <summary>
+    /// Opens a file whose path the caller chose (a change file, an application to hash), or returns null when nothing
+    /// has that name. The open does not follow a link in the last name of the path and does not let a pipe's server
+    /// act as the tool; what it found is reported and the tool decides (<see cref="OpenedFile.Regular"/>).
+    /// </summary>
+    OpenedFile? Open(string path);
+}
+
+/// <summary>
+/// What an open of a caller-chosen path found. The tool reads <paramref name="Content"/> (through the handle that
+/// was opened, not by opening the path again) only when the file is <see cref="Regular"/>.
+/// </summary>
+/// <param name="DiskFile">The handle is a file on a disk, not a pipe, a device or a console.</param>
+/// <param name="Folder">It is a folder.</param>
+/// <param name="Link">It is a link (a symbolic link or a junction), opened as the link itself.</param>
+/// <param name="LocalFixedDrive">The final path of what was opened is on a local fixed drive: not on a network
+/// share and not on a removable drive, also not through a link in an earlier part of the path.</param>
+/// <param name="Length">Its size in bytes.</param>
+public sealed record OpenedFile(bool DiskFile, bool Folder, bool Link, bool LocalFixedDrive, long Length, Stream Content) : IDisposable
+{
+    public bool Regular => DiskFile && !Folder && !Link && LocalFixedDrive;
+
+    public void Dispose() => Content.Dispose();
 }
 
 /// <summary>No policy file existed when the tool checked, and something has its name at the write.</summary>
@@ -280,24 +301,44 @@ public static class PolicyCommand
         return files.Read(path);
     }
 
-    /// <summary>The change file's text, from a local drive only. The size is checked before the file is read.</summary>
+    /// <summary>
+    /// A file whose path the caller chose, opened once, or null when nothing has the name. Whoever started the tool
+    /// may not be an administrator, and the tool opens the file elevated: it is used only when what was opened is a
+    /// regular file on a local fixed drive (not a pipe or a device, a folder, a link, or a file on a network share or
+    /// a removable drive). The refusal names the path as the caller gave it and nothing else.
+    /// </summary>
+    private static OpenedFile? CallerFile(string path, string given, IPolicyFiles files)
+    {
+        var file = files.Open(path);
+        if (file is null || file.Regular) return file;
+        file.Dispose();
+        throw new RunnerPolicy.InvalidPolicyException($"{given} is not a regular file on a local drive");
+    }
+
+    /// <summary>
+    /// The change file's text. A UNC or device path is refused on its text, before anything is opened. The size is
+    /// checked before the file is read, and no more than the limit is read whatever the size says. The text is read
+    /// as UTF-8 unless the file starts with the byte order mark of another encoding.
+    /// </summary>
     private static string ChangeFile(string path, IPolicyFiles files)
     {
         if (RunnerPolicy.IsUncOrDevice(path) || RunnerPolicy.IsUncOrDevice(Path.GetFullPath(path)))
             throw new RunnerPolicy.InvalidPolicyException("the change file must be on a local drive");
-        if (files.Length(path) is not { } length) throw new FileNotFoundException($"Change file not found: {path}");
-        if (length > MaxChangeFileBytes) throw new RunnerPolicy.InvalidPolicyException("the change file is larger than 256 KiB");
-        var text = files.Read(path) ?? throw new FileNotFoundException($"Change file not found: {path}");
-        // The file may have grown since its size was read; text never has more characters than the file has bytes.
-        if (text.Length > MaxChangeFileBytes) throw new RunnerPolicy.InvalidPolicyException("the change file is larger than 256 KiB");
-        return text;
+        using var file = CallerFile(path, path, files) ?? throw new FileNotFoundException($"Change file not found: {path}");
+        if (file.Length > MaxChangeFileBytes) throw new RunnerPolicy.InvalidPolicyException("the change file is larger than 256 KiB");
+        var bytes = new byte[MaxChangeFileBytes + 1];
+        var read = file.Content.ReadAtLeast(bytes, bytes.Length, throwOnEndOfStream: false);
+        if (read > MaxChangeFileBytes) throw new RunnerPolicy.InvalidPolicyException("the change file is larger than 256 KiB");
+        using var reader = new StreamReader(new MemoryStream(bytes, 0, read), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        return reader.ReadToEnd();
     }
 
     /// <summary>
     /// The change that allows one application: its file name, its full path and, when asked, its hash. Whoever started
     /// the tool chose the path. A UNC or device path (opening one makes the elevated tool sign in to a server, or read
     /// a device) and a short (8.3) name are refused on the text as given, before the tool resolves or opens the path;
-    /// the full path is tested again. The hash is taken from a file, not a folder, read as a stream.
+    /// the full path is tested again. The hash is taken from a regular file on a local drive (<see cref="CallerFile"/>),
+    /// read as a stream.
     /// </summary>
     private static string AllowApp(Arguments arguments, IPolicyFiles files)
     {
@@ -310,13 +351,8 @@ public static class PolicyCommand
         var app = new Dictionary<string, string> { ["exe"] = Path.GetFileName(path), ["path"] = path };
         if (arguments.PinHash)
         {
-            switch (files.Kind(path))
-            {
-                case PathKind.None: throw new FileNotFoundException($"Application file not found: {path}");
-                case PathKind.Folder: throw new RunnerPolicy.InvalidPolicyException($"{path} is not a regular file");
-            }
-            using var file = files.OpenRead(path);
-            app["sha256"] = Convert.ToHexString(SHA256.HashData(file));
+            using var file = CallerFile(path, target, files) ?? throw new FileNotFoundException($"Application file not found: {target}");
+            app["sha256"] = Convert.ToHexString(SHA256.HashData(file.Content));
         }
         return JsonSerializer.Serialize(new Dictionary<string, object> { ["allowedApps"] = new[] { app } });
     }
