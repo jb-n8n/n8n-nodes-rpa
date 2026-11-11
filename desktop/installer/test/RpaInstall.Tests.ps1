@@ -4416,7 +4416,7 @@ Describe 'The Start menu shortcut' {
     $run = New-ShortcutRun 'missing'
     $env:RPA_TEST_INSTALLFILE = $run.Layout.InstallFile
     Invoke-ShortcutStep $run | Should -BeNullOrEmpty
-    $env:RPA_TEST_MADE | Should -BeExactly ''
+    "$env:RPA_TEST_MADE" | Should -BeExactly ''
     @($run.Install.signInChanges).Count | Should -Be 0
     $run.Layout.InstallFile | Should -Not -Exist
   }
@@ -4428,7 +4428,7 @@ Describe 'The Start menu shortcut' {
     $said = @(Invoke-ShortcutStep $run)
     $said.Count | Should -Be 1
     $said[0] | Should -BeExactly ('  left: {0}, which this installer did not make' -f $script:Lnk)
-    $env:RPA_TEST_MADE | Should -BeExactly ''
+    "$env:RPA_TEST_MADE" | Should -BeExactly ''
     (Get-Content -Raw -LiteralPath $script:Lnk).Trim() | Should -BeExactly 'somebody else'
     @($run.Install.signInChanges).Count | Should -Be 0
   }
