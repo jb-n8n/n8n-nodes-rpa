@@ -123,8 +123,10 @@ function Get-RpaUnattendedNotice([string]$User, [int]$RunnerPort, [int]$BrowserP
   if ($BrowserPort) { $lines += '    at port {0} and {1}.' -f ($RunnerPort + $script:InnerPortOffset), ($BrowserPort + $script:InnerPortOffset) }
   $lines += '  - {0} is added to the group Remote Desktop Users, unless it is a member already.' -f $User
   if ($Steps -contains 'turn on Remote Desktop') {
-    $lines += '  - Remote Desktop is turned on (it is off now). No firewall rule for Remote Desktop is turned on: the RPA Supervisor'
-    $lines += '    connects from this machine to itself.'
+    $lines += '  - Remote Desktop is turned on (it is off now). The installer turns on no firewall rule for Remote Desktop: the RPA'
+    $lines += '    Supervisor connects from this machine to itself. Where a firewall rule that is on already, or a firewall that'
+    $lines += '    is off, lets connections to port 3389 in, Remote Desktop can then be reached from the network.'
+    $lines += '    Uninstall-Rpa.ps1 turns it off again.'
   }
   if ($Steps -contains "store the bot user's password for the supervisor") {
     $lines += '  - The password of {0} is stored on this machine for the RPA Supervisor. An administrator of this machine' -f $User
@@ -143,7 +145,7 @@ function Get-RpaUnattendedNotice([string]$User, [int]$RunnerPort, [int]$BrowserP
 
 # Decides what an install does. -Parameters holds Install-Rpa.ps1's parameters (User, UserPassword, RunnerPort,
 # BrowserPort, NoBrowser, NoFirewall, AllowFrom, AllowFromAnyAddress, IncludePublicNetwork, AutoSignIn, Unattended,
-# IdleSeconds, Force); -Facts is what Get-RpaMachineFacts returns. With a refusal there are no steps: the installer
+# IdleSeconds, IdleSecondsGiven, Force); -Facts is what Get-RpaMachineFacts returns. With a refusal there are no steps: the installer
 # changes nothing. Questions are what the installer has confirmed with YES before the first step (with -Force they are
 # warnings). AllowFrom in the result is what the firewall rules let in: addresses and ranges, or the one word any, or
 # nothing without rules; PublicNetwork says whether the rules also apply on networks Windows treats as Public. Notice
@@ -172,8 +174,8 @@ function Get-RpaInstallPlan {
   $browserPort = [int]$Parameters.BrowserPort
   # An install that an earlier run made with -Unattended.
   $wasUnattended = $upgrade -and [string]$Facts.InstalledMode -eq 'unattended'
-  # The password an earlier run with -Unattended stored for this same user stays.
-  $secretKept = $unattended -and $wasUnattended -and [bool]$Facts.InstalledForUser -and [bool]$Facts.UserExists
+  # The password an earlier run with -Unattended stored for this same user stays, while install.json records it.
+  $secretKept = $unattended -and $wasUnattended -and [bool]$Facts.InstalledForUser -and [bool]$Facts.UserExists -and [bool]$Facts.InstalledSupervisorSecret
   # A local user that does not exist is created, on a first install and on an upgrade (someone removed it since).
   $createUser = -not $Facts.UserExists -and -not $Facts.UserIsDomain
   # Automatic sign-in that an earlier run turned on for this same user stays as it is.
@@ -261,6 +263,7 @@ function Get-RpaInstallPlan {
       $refusals.Add(('Give -UserPassword for the new user {0}, or use -AutoSignIn to have a random password stored for automatic sign-in.' -f $user))
     }
 
+    if ($Parameters.IdleSecondsGiven -and -not $unattended) { $refusals.Add('-IdleSeconds is for -Unattended only.') }
     if ($unattended) {
       # Not tested on a desktop edition, which also allows one interactive session at a time.
       if (-not $Facts.IsServer) {
@@ -404,8 +407,9 @@ function Get-RpaInstallPlan {
     if ($browser) { $steps.Add('register the browser task') } elseif ($upgrade) { $steps.Add('remove the browser task') }
     $steps.Add('write install.json')
     # An install without -Unattended over one with it: the service, the stored password, the group membership and
-    # Remote Desktop go back to what they were, from the records in install.json.
-    if ($wasUnattended -and -not $unattended) { $steps.Add('put back what -Unattended changed') }
+    # Remote Desktop go back to what they were, from the records in install.json; also when a run before tried that
+    # and could not put everything back.
+    if ($upgrade -and $Facts.InstalledUnattendedChanges -and -not $unattended) { $steps.Add('put back what -Unattended changed') }
     if ($autoSignIn) {
       if (-not $signInKept) { foreach ($step in $script:SignInSteps) { $steps.Add($step) } }
       elseif ($hasPassword) { $steps.Add('store sign-in password') }
@@ -454,7 +458,10 @@ function Get-RpaUninstallPlan {
     }
     foreach ($account in @($Facts.Accounts)) {
       if (-not $account -or @($Facts.RunningSids) -notcontains $account.Sid) { continue }
-      $refusals.Add(('{0} is signed in. Sign {0} out, then run Uninstall-Rpa.ps1 -RemoveData again.' -f $account.Name))
+      # With -Unattended the RPA Supervisor's session of the bot user goes when the service stops.
+      if ($Facts.Unattended -and $account.Bot) {
+        $refusals.Add(("{0} is signed in. Stop the RPA Supervisor, which signs its session of {0} out (Stop-Service 'RPA Supervisor'), sign out any other session of {0}, then run Uninstall-Rpa.ps1 -RemoveData again." -f $account.Name))
+      } else { $refusals.Add(('{0} is signed in. Sign {0} out, then run Uninstall-Rpa.ps1 -RemoveData again.' -f $account.Name)) }
       if ($Facts.AutoSignInSid -and $Facts.AutoSignInSid -eq $account.Sid) {
         $refusals.Add(('Automatic sign-in is on for {0}, and Windows signs it in again after a sign-out. Run Uninstall-Rpa.ps1 without -RemoveData first, which turns that off; then sign {0} out and run Uninstall-Rpa.ps1 -RemoveData from the unpacked package.' -f $account.Name))
       }

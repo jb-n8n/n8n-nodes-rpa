@@ -54,7 +54,7 @@ BeforeAll {
       DataDirEntries = $null
       DataFiles = @{ 'policy.json' = New-PathState 'missing'; 'token' = New-PathState 'missing'; 'browser-token' = New-PathState 'missing' }
       TaskFolderOwner = $null; PublicNetwork = $false
-      IsServer = $true; RemoteDesktopDenied = $false; InstalledMode = $null
+      IsServer = $true; RemoteDesktopDenied = $false; InstalledMode = $null; InstalledSupervisorSecret = $false; InstalledUnattendedChanges = $false
       SupervisorDir = "$($script:DataDir)\supervisor"; SupervisorDirState = New-PathState 'missing'
     }
     foreach ($key in $Change.Keys) { $facts[$key] = $Change[$key] }
@@ -96,7 +96,7 @@ BeforeAll {
 
   # The same machine after Install-Rpa.ps1 -Unattended -AllowFrom 10.0.0.5 ran on it.
   function New-UnattendedFacts([hashtable]$Change = @{}) {
-    $facts = New-InstalledFacts @{ InstalledMode = 'unattended'; SupervisorDirState = New-PathState 'ours' }
+    $facts = New-InstalledFacts @{ InstalledMode = 'unattended'; InstalledSupervisorSecret = $true; InstalledUnattendedChanges = $true; SupervisorDirState = New-PathState 'ours' }
     foreach ($key in $Change.Keys) { $facts[$key] = $Change[$key] }
     $facts
   }
@@ -1057,6 +1057,15 @@ Describe 'Get-RpaInstallPlan' {
       $plan.Steps[-1] | Should -BeExactly 'start tasks'
       $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true; UserPassword = New-TestPassword }) -Facts (New-UnattendedFacts)
       $plan.Steps | Should -Contain "store the bot user's password for the supervisor"
+      # A failed run before took the stored password away again: it is not kept.
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true }) -Facts (New-UnattendedFacts @{ InstalledSupervisorSecret = $false })
+      $plan.Refusals | Should -BeExactly @('-Unattended for the existing user rpa-runner needs -UserPassword: the RPA Supervisor signs rpa-runner in with it. A password the installer generated earlier is not known to anyone: set a new password for rpa-runner and pass it, or remove rpa-runner so the installer creates it again.')
+    }
+
+    It 'refuses -IdleSeconds without -Unattended' {
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ UserPassword = New-TestPassword; IdleSeconds = 60; IdleSecondsGiven = $true }) -Facts (New-TestFacts)
+      $plan.Refusals | Should -BeExactly @('-IdleSeconds is for -Unattended only.')
+      (Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true; IdleSeconds = 60; IdleSecondsGiven = $true }) -Facts (New-TestFacts)).Refusals.Count | Should -Be 0
     }
 
     It 'without -Unattended over an unattended install puts back what -Unattended changed, after install.json is written' {
@@ -1067,6 +1076,8 @@ Describe 'Get-RpaInstallPlan' {
       [array]::IndexOf($plan.Steps, 'put back what -Unattended changed') | Should -Be ([array]::IndexOf($plan.Steps, 'write install.json') + 1)
       # A signed-in install has nothing of that to put back.
       (Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-InstalledFacts)).Steps | Should -Not -Contain 'put back what -Unattended changed'
+      # A run before that could not put everything back left mode signedIn and some records: the next run tries again.
+      (Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-UnattendedFacts @{ InstalledMode = 'signedIn' })).Steps | Should -Contain 'put back what -Unattended changed'
     }
 
     It 'refuses a port that is too high for the port behind the supervisor, two ports that would meet, and an inner port in use' {
@@ -1107,8 +1118,10 @@ Describe 'Get-RpaInstallPlan' {
         '    and signs it out again 15 s after the last connection. The runner and the browser listen on 127.0.0.1 only,'
         '    at port 18765 and 13000.'
         '  - rpa-runner is added to the group Remote Desktop Users, unless it is a member already.'
-        '  - Remote Desktop is turned on (it is off now). No firewall rule for Remote Desktop is turned on: the RPA Supervisor'
-        '    connects from this machine to itself.'
+        '  - Remote Desktop is turned on (it is off now). The installer turns on no firewall rule for Remote Desktop: the RPA'
+        '    Supervisor connects from this machine to itself. Where a firewall rule that is on already, or a firewall that'
+        '    is off, lets connections to port 3389 in, Remote Desktop can then be reached from the network.'
+        '    Uninstall-Rpa.ps1 turns it off again.'
         '  - The password of rpa-runner is stored on this machine for the RPA Supervisor. An administrator of this machine'
         '    can read it.'
         '  - The firewall rules for port 8765 and 3000 let connections in to the RPA Supervisor instead of the runner and the'
@@ -1400,6 +1413,12 @@ Describe 'Get-RpaUninstallPlan' {
       $owners.Sids | Should -Contain ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)
       $owners.Sids | Should -Contain 'S-1-5-18'
     }
+  }
+
+  It 'names the RPA Supervisor when its session of the bot user is still there' {
+    $facts = New-UninstallFacts @{ Accounts = @(@{ Sid = $script:BotSid; Name = 'rpa-runner'; Bot = $true }); RunningSids = @($script:BotSid); Unattended = $true }
+    $plan = Get-RpaUninstallPlan -Parameters @{ RemoveData = $true } -Facts $facts
+    $plan.Refusals | Should -BeExactly @("rpa-runner is signed in. Stop the RPA Supervisor, which signs its session of rpa-runner out (Stop-Service 'RPA Supervisor'), sign out any other session of rpa-runner, then run Uninstall-Rpa.ps1 -RemoveData again.")
   }
 
   It 'says how to get there when Windows signs the bot user in again by itself' {
@@ -2383,6 +2402,28 @@ Describe 'A failed install' {
   }
 }
 
+Describe 'A failed switch to -Unattended' {
+  # A signed-in install, run again with -Unattended: install.json says unattended by the time a later step fails.
+  It 'puts install.json back to the mode it had, without the fields of the RPA Supervisor' {
+    Mock -ModuleName RpaInstall Restore-RpaSignInChanges { @() }
+    $file = Join-Path $TestDrive 'switch.json'
+    $before = '{ "version": "0.2.0", "user": "rpa-runner", "runnerPort": 8765, "browserPort": 3000, "browser": true, "autoSignIn": false, "allowFrom": ["10.0.0.5"], "publicNetwork": true, "signInChanges": [] }' | ConvertFrom-Json
+    $secret = New-Object psobject -Property ([ordered]@{ kind = 'secret'; key = 'L$RpaRunnerBotPassword'; name = '' })
+    $run = @{
+      Layout = @{ InstallFile = $file }; Account = @{ Display = 'rpa-runner'; Name = 'rpa-runner' }; Sid = 'S-1-5-21-1-2-3-1001'
+      Upgrade = $true; AutoSignInBefore = $false; Before = $before; NewChanges = @($secret); CreatedUser = $false; WroteInstallFile = $true
+      Install = [ordered]@{ version = '0.3.0'; user = 'rpa-runner'; runnerPort = 8765; browserPort = $null; browser = $false; autoSignIn = $false; mode = 'unattended'
+        idleSeconds = 15; runnerInnerPort = 18765; listenAddresses = @('0.0.0.0'); signInChanges = @($secret) }
+    }
+    $null = InModuleScope RpaInstall -Parameters @{ Run = $run } { Undo-RpaFailedRun $Run 6>$null }
+    $kept = Get-Content -Raw -LiteralPath $file | ConvertFrom-Json
+    $kept.mode | Should -BeExactly 'signedIn'
+    $kept.browserPort | Should -Be 3000
+    foreach ($field in 'idleSeconds', 'runnerInnerPort', 'browserInnerPort', 'listenAddresses') { $kept.PSObject.Properties.Name | Should -Not -Contain $field }
+    @($kept.signInChanges).Count | Should -Be 0
+  }
+}
+
 Describe 'What -Unattended changed, put back' {
   BeforeAll {
     # The records an install with -Unattended leaves in install.json, in the order its steps make them: the bot user put
@@ -2458,15 +2499,69 @@ Describe 'What -Unattended changed, put back' {
     Mock -ModuleName RpaInstall Unregister-RpaTask { }
     Mock -ModuleName RpaInstall Remove-NetFirewallRule { }
     Mock -ModuleName RpaInstall Remove-RpaProgramFiles { }
+    Mock -ModuleName RpaInstall Remove-RpaSupervisor { }
+    Mock -ModuleName RpaInstall Remove-RpaLsaSecret { }
     $env:RPA_TEST_ORDER = ''
     Mock -ModuleName RpaInstall Restore-RpaSignInChange { $env:RPA_TEST_ORDER += '{0};' -f $Change.kind }
     try {
       $result = Invoke-RpaUninstall -Plan @{ Refusals = @() } 6>$null
       $env:RPA_TEST_ORDER | Should -BeExactly 'firewall;firewall;service;secret;registry;group;'
+      # And by their names, whatever install.json records.
+      Should -Invoke -ModuleName RpaInstall Remove-RpaSupervisor -Times 1 -Exactly
+      Should -Invoke -ModuleName RpaInstall Remove-RpaLsaSecret -Times 1 -Exactly -ParameterFilter { $Name -eq 'L$RpaRunnerBotPassword' }
     } finally { $env:RPA_TEST_ORDER = $null; $env:RPA_TEST_FILE = $null; $env:COMPUTERNAME = $computer }
     $lines = @(InModuleScope RpaInstall -Parameters @{ Result = $result } { Get-RpaUninstallSummary $Result })
     $lines | Should -Contain '  The settings -Unattended changed are back to what they were before.'
+    $lines | Should -Contain '  Remote Desktop is off again, as it was before -Unattended turned it on.'
     ($lines -join "`n") | Should -Not -Match 'Automatic sign-in'
+  }
+
+  It 'Uninstall-Rpa.ps1 removes the service and the stored password by their names also without install.json' {
+    $env:RPA_TEST_FILE = Join-Path $TestDrive 'missing-install.json'
+    Mock -ModuleName RpaInstall Get-RpaLayout { @{ InstallDir = 'C:\Program Files\RPA Runner'; InstallFile = $env:RPA_TEST_FILE; DataDir = "$($env:RPA_TEST_FILE).data"; LeftoversFile = "$($env:RPA_TEST_FILE).list" } }
+    Mock -ModuleName RpaInstall Stop-RpaServices { }
+    Mock -ModuleName RpaInstall Get-RpaUninstallFacts { @{ Accounts = @(); RunningSids = @(); UnknownProcesses = @() } }
+    Mock -ModuleName RpaInstall Remove-RpaBrowserTemp { }
+    Mock -ModuleName RpaInstall Unregister-RpaTask { }
+    Mock -ModuleName RpaInstall Remove-NetFirewallRule { }
+    Mock -ModuleName RpaInstall Remove-RpaProgramFiles { }
+    Mock -ModuleName RpaInstall Remove-RpaSupervisor { }
+    Mock -ModuleName RpaInstall Remove-RpaLsaSecret { }
+    try { $result = Invoke-RpaUninstall -Plan @{ Refusals = @() } 6>$null } finally { $env:RPA_TEST_FILE = $null }
+    Should -Invoke -ModuleName RpaInstall Remove-RpaSupervisor -Times 1 -Exactly
+    Should -Invoke -ModuleName RpaInstall Remove-RpaLsaSecret -Times 1 -Exactly -ParameterFilter { $Name -eq 'L$RpaRunnerBotPassword' }
+    $result.HadChanges | Should -BeFalse
+  }
+
+  It 'takes an earlier bot user out of Remote Desktop Users when this installer put it there, and drops its record' {
+    Mock -ModuleName RpaInstall Remove-RpaGroupMember { }
+    $file = Join-Path $TestDrive 'change-of-user.json'
+    $changes = @(New-UnattendedChanges)
+    $run = @{ Layout = @{ InstallFile = $file }; Sid = 'S-1-5-21-1-2-3-1002'; Install = [ordered]@{ version = '0.0.0'; user = 'bot2'; mode = 'unattended'; signInChanges = $changes } }
+    InModuleScope RpaInstall -Parameters @{ Run = $run } { Remove-RpaEarlierRemoteDesktopUsers $Run }
+    Should -Invoke -ModuleName RpaInstall Remove-RpaGroupMember -Times 1 -Exactly -ParameterFilter { $Group -eq 'S-1-5-32-555' -and $Member -eq 'S-1-5-21-1-2-3-1001' }
+    $kept = Get-Content -Raw -LiteralPath $file | ConvertFrom-Json
+    @($kept.signInChanges | Where-Object { $_.kind -eq 'group' }).Count | Should -Be 0
+    @($kept.signInChanges).Count | Should -Be 5
+    # The same user: nothing to take out.
+    $run = @{ Layout = @{ InstallFile = $file }; Sid = 'S-1-5-21-1-2-3-1001'; Install = [ordered]@{ version = '0.0.0'; signInChanges = @(New-UnattendedChanges) } }
+    InModuleScope RpaInstall -Parameters @{ Run = $run } { Remove-RpaEarlierRemoteDesktopUsers $Run }
+    Should -Invoke -ModuleName RpaInstall Remove-RpaGroupMember -Times 1 -Exactly
+  }
+
+  It 'the wait for the first sign-in only warns, also when the connection helper cannot be loaded' {
+    Mock -ModuleName RpaInstall Add-RpaProbeType { throw 'Unable to find type [RpaProbe].' }
+    $run = @{ Account = @{ Display = 'rpa-runner' }; Layout = @{ SupervisorDir = (Join-Path $TestDrive 'no-supervisor') } }
+    $warnings = @(InModuleScope RpaInstall -Parameters @{ Run = $run } { Wait-RpaFirstSignIn $Run 8765 6>$null 3>&1 })
+    $warnings.Count | Should -Be 1
+    "$($warnings[0])" | Should -BeLike 'The runner did not answer through the RPA Supervisor within * s (Unable to find type `[RpaProbe`].).*'
+  }
+
+  It 'the connection helper is compiled on its own, so that a window with the helpers of an earlier installer gets it' {
+    InModuleScope RpaInstall {
+      (Get-Command Add-RpaNativeTypes).Definition | Should -Not -Match 'RpaProbe'
+      (Get-Command Add-RpaProbeType).Definition | Should -Match "if \('RpaProbe' -as \[type\]\) \{ return \}"
+    }
   }
 }
 
@@ -2832,6 +2927,41 @@ Describe 'Show-RpaConnection.ps1' {
       @(& $script:ShowScript) | Should -Contain "Supervisor's last failure: none recorded"
       Remove-Item -LiteralPath $script:StateFile
       @(& $script:ShowScript) | Should -Contain "Supervisor's last failure: none recorded"
+    }
+
+    # As for the bot user, or a window that is not run as administrator: the file is there and cannot be read.
+    It 'says that the state file can be read by administrators only when it cannot read it, and goes on' {
+      Set-Content -LiteralPath $script:StateFile -Value (@{ lastFailure = 'Timeout: made up.' } | ConvertTo-Json)
+      if ($env:OS -eq 'Windows_NT') { & icacls.exe $script:StateFile /inheritance:r | Out-Null } else { & chmod 000 $script:StateFile }
+      try {
+        $output = @(& $script:ShowScript)
+        $output | Should -Contain "Supervisor's last failure: $($script:StateFile) can be read by administrators only; run this from an administrator PowerShell."
+        $output | Should -Contain "Supervisor log: $(Join-Path $script:SupervisorDir 'supervisor.log')"
+        ($output -join "`n") | Should -Not -Match 'none recorded|made up'
+      } finally {
+        if ($env:OS -eq 'Windows_NT') { & icacls.exe $script:StateFile /reset | Out-Null } else { & chmod 644 $script:StateFile }
+        Remove-Item -LiteralPath $script:StateFile -Force
+      }
+    }
+
+    # A blocked supervisor still shows as running. The service is made up here: a function of the name the script calls
+    # stands in for the cmdlet, with this test's own process as the service's.
+    It 'says that sign-ins are blocked when the last failure of the running service says so, and not for one from before its start' {
+      $blocked = 'WrongPassword: Windows refused the password of rpa-runner. No further sign-in is tried until the RPA Supervisor service is restarted.'
+      Set-Content -LiteralPath $script:StateFile -Value (@{ lastFailure = $blocked } | ConvertTo-Json)
+      function global:Get-CimInstance { [pscustomobject]@{ State = 'Running'; ProcessId = $PID } }
+      try {
+        $output = @(& $script:ShowScript)
+        $output | Should -Contain 'Supervisor: running'
+        $output | Should -Contain "Supervisor's last failure: $blocked"
+        $output | Should -Contain "Supervisor: sign-ins are blocked until the service is restarted. Store the right password with Install-Rpa.ps1 -Unattended -UserPassword, which restarts it, or fix the cause and run: Restart-Service 'RPA Supervisor'"
+        # Written before the service started: that block ended with the restart.
+        (Get-Item -LiteralPath $script:StateFile).LastWriteTime = (Get-Process -Id $PID).StartTime.AddMinutes(-1)
+        ((@(& $script:ShowScript)) -join "`n") | Should -Not -Match 'sign-ins are blocked'
+      } finally {
+        Remove-Item -LiteralPath function:\Get-CimInstance
+        Remove-Item -LiteralPath $script:StateFile -Force
+      }
     }
   }
 }

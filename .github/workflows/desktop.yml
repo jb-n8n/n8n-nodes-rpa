@@ -86,6 +86,9 @@ jobs:
       - name: Core unit tests
         timeout-minutes: 10
         run: dotnet test desktop/runner/test/Rpa.Runner.Core.Tests -c Release --no-build --logger "console;verbosity=normal"
+      - name: Supervisor core unit tests
+        timeout-minutes: 10
+        run: dotnet test desktop/runner/test/Rpa.Supervisor.Core.Tests -c Release --no-build --logger "console;verbosity=normal"
 
   windows:
     runs-on: windows-latest
@@ -142,7 +145,10 @@ jobs:
 
       - name: Core unit tests (Windows)
         timeout-minutes: 10
-        run: dotnet test desktop/runner/test/Rpa.Runner.Core.Tests -c Release --no-build
+        run: |
+          dotnet test desktop/runner/test/Rpa.Runner.Core.Tests -c Release --no-build
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          dotnet test desktop/runner/test/Rpa.Supervisor.Core.Tests -c Release --no-build
 
       - name: Publish the runner, the supervisor, the policy tool and the demo app (self-contained win-x64, single file)
         timeout-minutes: 10
@@ -644,7 +650,11 @@ jobs:
       # the public port, which signs the bot user in; the session is there after the scenario and gone after the idle
       # time. The scenario client runs in this job's session, not in the bot user's, so its copy to the clipboard
       # cannot reach the run's app (RPA_SCENARIO_OTHER_SESSION leaves that one check out).
+      # continue-on-error: a loopback Remote Desktop sign-in has not been seen on a hosted runner yet, and a refusal
+      # there must not keep the package from being uploaded. Its result shows on the step; the check is made on a real
+      # Windows Server in any case.
       - name: Run the scenario through the RPA Supervisor (a session is made, and signed out after the idle time)
+        continue-on-error: true
         timeout-minutes: 12
         shell: powershell
         run: |
@@ -710,6 +720,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force "$env:OUT\install-logs" | Out-Null
           Copy-Item (Join-Path $env:ProgramData 'RPA Runner\logs\*') "$env:OUT\install-logs\" -ErrorAction SilentlyContinue
+          Copy-Item (Join-Path $env:ProgramData 'RPA Runner\supervisor\*') "$env:OUT\install-logs\" -ErrorAction SilentlyContinue
           Get-ChildItem "$env:OUT\install-logs" -ErrorAction SilentlyContinue | ForEach-Object { '{0} {1}' -f $_.Name, $_.Length }
           $global:LASTEXITCODE = 0
 

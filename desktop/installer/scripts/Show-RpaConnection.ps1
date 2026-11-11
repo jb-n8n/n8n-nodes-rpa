@@ -124,20 +124,27 @@ if ($install.mode -eq 'unattended') {
   elseif ($sessions.Count -eq 0) { Write-Output ('Sessions of {0}: none' -f $user) }
   else { foreach ($session in $sessions) { Write-Output ('Session of {0}: {1}' -f $user, $session) } }
 
+  # Only SYSTEM and administrators can open the supervisor's folder: a file that is not there (no failure yet) is told
+  # from one that this account may not read.
   $failure = $null
-  if (-not (Test-Path -LiteralPath $stateFile)) { Write-Output "Supervisor's last failure: none recorded" }
-  else {
-    try {
-      $failure = [string](Get-Content -Raw -LiteralPath $stateFile -ErrorAction Stop | ConvertFrom-Json).lastFailure
-      if ($failure) { Write-Output "Supervisor's last failure: $failure" } else { Write-Output "Supervisor's last failure: none recorded" }
-    } catch { Write-Output ("Supervisor's last failure: {0} could not be read; run this from an administrator PowerShell." -f $stateFile) }
+  try {
+    $failure = [string]([IO.File]::ReadAllText($stateFile) | ConvertFrom-Json).lastFailure
+    if ($failure) { Write-Output "Supervisor's last failure: $failure" } else { Write-Output "Supervisor's last failure: none recorded" }
+  } catch {
+    # The exception and those inside it: the call's own comes wrapped, and may wrap the system's reason in turn.
+    $chain = @()
+    for ($e = $_.Exception; $e; $e = $e.InnerException) { $chain += $e }
+    $cause = $chain[-1]
+    if (@($chain | Where-Object { $_ -is [IO.FileNotFoundException] -or $_ -is [IO.DirectoryNotFoundException] }).Count -gt 0) { Write-Output "Supervisor's last failure: none recorded" }
+    elseif (@($chain | Where-Object { $_ -is [UnauthorizedAccessException] }).Count -gt 0) { Write-Output ("Supervisor's last failure: {0} can be read by administrators only; run this from an administrator PowerShell." -f $stateFile) }
+    else { Write-Output ("Supervisor's last failure: {0} could not be read: {1}" -f $stateFile, $cause.Message) }
   }
   # After a wrong or expired password the supervisor tries no sign-in until it starts again, and still shows as
   # running. The failure is from this run of the service when the file was written after the service started.
   if ($failure -and $failure.Contains('No further sign-in is tried until the RPA Supervisor service is restarted.') -and $service -and $service.State -eq 'Running') {
     $started = $null
     try { $started = (Get-Process -Id $service.ProcessId -ErrorAction Stop).StartTime } catch { }
-    if (-not $started -or (Get-Item -LiteralPath $stateFile).LastWriteTime -ge $started) {
+    if (-not $started -or [IO.File]::GetLastWriteTime($stateFile) -ge $started) {
       Write-Output "Supervisor: sign-ins are blocked until the service is restarted. Store the right password with Install-Rpa.ps1 -Unattended -UserPassword, which restarts it, or fix the cause and run: Restart-Service 'RPA Supervisor'"
     }
   }

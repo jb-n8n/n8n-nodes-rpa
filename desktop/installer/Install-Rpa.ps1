@@ -265,7 +265,7 @@ $parameters = @{
   User = $User; UserPassword = $UserPassword; RunnerPort = $RunnerPort; BrowserPort = $BrowserPort
   AllowFrom = $AllowFrom; AllowFromAnyAddress = [bool]$AllowFromAnyAddress; IncludePublicNetwork = [bool]$IncludePublicNetwork
   NoBrowser = [bool]$NoBrowser; NoFirewall = [bool]$NoFirewall; AutoSignIn = [bool]$AutoSignIn; Unattended = [bool]$Unattended
-  IdleSeconds = $IdleSeconds; Force = [bool]$Force
+  IdleSeconds = $IdleSeconds; IdleSecondsGiven = $PSBoundParameters.ContainsKey('IdleSeconds'); Force = [bool]$Force
 }
 $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (Get-RpaMachineFacts -Parameters $parameters)
 foreach ($warning in $plan.Warnings) { Write-Warning $warning }

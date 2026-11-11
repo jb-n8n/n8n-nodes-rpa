@@ -200,8 +200,8 @@ The parameters:
 | `-NoFirewall` | Leaves Windows Firewall alone; you open the ports yourself. |
 | `-NoBrowser` | Installs the runner only. With the browser installed, whoever holds the browser token and can reach its port acts as the bot user through the browser, and the runner's policy does not limit that ([Who can reach the ports](#who-can-reach-the-ports)). With `-NoBrowser`, leave out the RPA Browser steps of section 6. |
 | `-AutoSignIn` | Windows signs the bot user in by itself at every start and keeps the desktop unlocked (section 4). |
-| `-Unattended` | Windows Server only: the service RPA Supervisor signs the bot user in for each run and out again afterwards (section 4, [Running with nobody signed in](#running-with-nobody-signed-in)). Not with `-AutoSignIn`. |
-| `-IdleSeconds <n>` | With `-Unattended`: how long the bot user stays signed in after the last connection. Default 15, 0 to 86400. |
+| `-Unattended` | Windows Server only: the service RPA Supervisor signs the bot user in for each run and out again afterwards (section 4, [Running with nobody signed in](#running-with-nobody-signed-in)). Not with `-AutoSignIn`; the bot user must be a local user. |
+| `-IdleSeconds <n>` | With `-Unattended`: how long the bot user stays signed in after the last connection. Default 15, 0 to 86400. Refused without `-Unattended`. |
 | `-Force` | Does not ask (about `-AutoSignIn`, `-Unattended`, or another `-User` than the one of the install), and upgrades even while the runner is running (a run in progress fails). |
 
 A first install needs exactly one of `-AllowFrom`, `-AllowFromAnyAddress` and `-NoFirewall`.
@@ -406,6 +406,7 @@ runner, and the n8n credentials stay the same. When no connection has been open 
 signs the bot user out again. Between runs nobody is signed in.
 
 The installer refuses `-Unattended` on Windows 10 and 11, where it was not tested, and together with `-AutoSignIn`.
+The bot user must be a local user of this machine: a domain user (`DOMAIN\name`) is refused.
 
 **The command.** For a new bot user (the installer gives it a random password and stores it for the supervisor only):
 
@@ -425,7 +426,8 @@ and asks you to type `YES` (not with `-Force`). To store a new password later, r
 - **Remote Desktop**: turned on when it is off, with the registry value `fDenyTSConnections` alone. The installer
   turns on no firewall rule for Remote Desktop, because the supervisor connects from this machine to itself (turning
   Remote Desktop on in Settings would also turn those rules on). Where Remote Desktop is on already, its rules stay
-  as they are.
+  as they are. Once it is on, Remote Desktop can be reached from the network wherever a firewall rule that is on
+  already, or a firewall that is off, lets connections to port 3389 in: check that before you install.
 - **The bot user's password** is stored in the LSA secret `L$RpaRunnerBotPassword`. SYSTEM and administrators can
   read it, and so can anyone who can read this machine's disk, a backup or a snapshot of it. The installer does not
   put it on a command line, in a log or in a file.
@@ -445,7 +447,8 @@ run would wait for it otherwise. It prints how long that took. When the runner d
 warning with the supervisor's last failure, and the install is complete all the same.
 
 `Uninstall-Rpa.ps1` stops and removes the service, removes the stored password, takes the bot user out of Remote
-Desktop Users when the installer put it there, and turns Remote Desktop off again when the installer turned it on.
+Desktop Users when the installer put it there, and turns Remote Desktop off again when the installer turned it on
+(it says so at its end: an administrator who has started to use Remote Desktop since loses it).
 An install without `-Unattended` over one with it does the same.
 
 **What the machine needs.**
@@ -508,7 +511,7 @@ and the run fails with `runner_unavailable` (or the browser's connection error).
 | The first run after a restart takes about 20 s before it starts | The first sign-in after a restart is slow. | Nothing. |
 | A run ends with its connection closed, or with `desktop_unavailable`, in the middle | The supervisor or its Remote Desktop connection ended during the run. Windows starts the supervisor again a minute after it fails. The next connection signs the session that was left out first and makes a new one. | Run it again, and read `supervisor.log` for why it ended. |
 | The bot user is signed in while no run is going on | Anything that connects to the runner's or the browser's port makes the supervisor sign the bot user in: a health check or a port scanner too. | Point health checks elsewhere (for example at the service's state), and limit who can reach the ports (`-AllowFrom`). |
-| `Supervisor: the service RPA Supervisor is stopped` | It was stopped, or it did not start. | `Start-Service 'RPA Supervisor'`. When it stops again, the reason is in `supervisor.log`, or in the Application event log, source `RPA Supervisor`, when its folder is missing or not its own. |
+| `Supervisor: the service RPA Supervisor is stopped` | It was stopped, or it did not start. It depends on the Remote Desktop service: stopping or restarting that service (`Restart-Service TermService -Force`) stops the supervisor too, and it stays stopped until it is started. | `Start-Service 'RPA Supervisor'`. When it stops again, the reason is in `supervisor.log`, or in the Application event log, source `RPA Supervisor`, when its folder is missing or not its own. |
 
 Behind the supervisor, the runner's own log names every caller as `127.0.0.1`: every connection reaches the runner
 through the supervisor. The supervisor's log has the address of each connection it refused.
@@ -523,7 +526,8 @@ rights for this):
 powershell.exe -ExecutionPolicy Bypass -File "C:\Program Files\RPA Runner\scripts\Show-RpaConnection.ps1"
 ```
 
-or run the same line in the administrator shell of section 5. You should see:
+or run the same line in the administrator shell of section 5 (with `-Unattended`, run it there: the bot user cannot read
+the supervisor's folder). You should see:
 
 ```text
 Runner URL: wss://10.0.0.20:8765/rpa/v1

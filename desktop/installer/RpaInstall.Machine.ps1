@@ -231,6 +231,8 @@ function Get-RpaMachineFacts {
     IsServer                   = $false
     RemoteDesktopDenied        = $false
     InstalledMode              = $null
+    InstalledSupervisorSecret  = $false
+    InstalledUnattendedChanges = $false
     SupervisorDir              = $layout.SupervisorDir
     SupervisorDirState         = $null
   }
@@ -255,6 +257,11 @@ function Get-RpaMachineFacts {
     if ($install.autoSignIn -eq $true) { $facts.InstalledAutoSignInUser = [string]$install.user }
     $facts.InstalledAutoSignInForUser = ($install.autoSignIn -eq $true) -and $facts.InstalledForUser
     $facts.InstalledMode = [string]$install.mode
+    # What install.json records of -Unattended: the stored password (a failed run may have removed it again), and
+    # anything an install without -Unattended has to put back (also after a first attempt failed).
+    $records = @($install.signInChanges | Where-Object { $_ -and (Test-RpaUnattendedChange $_) })
+    $facts.InstalledSupervisorSecret = [bool]($records | Where-Object { $_.kind -eq 'secret' })
+    $facts.InstalledUnattendedChanges = $records.Count -gt 0
   }
   # A product type of 1 is a desktop edition (Windows 10 or 11); 2 and 3 are Windows Server.
   $facts.IsServer = (Get-CimInstance -ClassName Win32_OperatingSystem).ProductType -ne 1
@@ -439,9 +446,9 @@ function Copy-RpaProgramFiles([string]$SourceDir, [string]$InstallDir) {
 # The compiled helpers: LSA secrets, such as the one Windows itself reads the automatic sign-in password from and the
 # one the RPA Supervisor reads the bot user's password from (Store writes one; Remove passes no data, which deletes
 # it), a password check, the local groups of a user, the creation of a user's profile, the account a process runs as,
-# the number of names a file has, the creation of a file that follows no link, the removal of a folder tree through
-# handles (RpaTree, used by Remove-RpaTree), and the installer's one connection through the RPA Supervisor (RpaProbe).
-# A password goes in as a SecureString and is turned into plain text only in unmanaged memory that is wiped afterwards.
+# the number of names a file has, the creation of a file that follows no link, and the removal of a folder tree through
+# handles (RpaTree, used by Remove-RpaTree). A password goes in as a SecureString and is turned into plain text only in
+# unmanaged memory that is wiped afterwards.
 function Add-RpaNativeTypes {
   if ('RpaLsaSecret' -as [type]) { return }
   Add-Type -TypeDefinition @'
@@ -874,6 +881,15 @@ public static class RpaAccounts {
     if (result != 0 && result != ProfileExists) Marshal.ThrowExceptionForHR(result);
   }
 }
+'@
+}
+
+# The installer's one connection through the RPA Supervisor (RpaProbe), compiled on its own: a PowerShell window that
+# loaded the compiled helpers of an earlier installer has the other types already, without this one.
+function Add-RpaProbeType {
+  if ('RpaProbe' -as [type]) { return }
+  Add-Type -TypeDefinition @'
+using System;
 // The installer's one connection through the RPA Supervisor: to the runner's port on 127.0.0.1, a TLS handshake that
 // takes any certificate (the runner's is its own; nothing is sent after the handshake, and the connection is closed).
 // Null when it finished within the time, else why not.
@@ -900,7 +916,8 @@ public static class RpaProbe {
 }
 
 # A standard local user (member of Users only) whose password never expires. Without -UserPassword the password is
-# random, is made here and is only ever stored for automatic sign-in (the plan refuses a new user with neither).
+# random, is made here and is stored only for automatic sign-in or for the RPA Supervisor (the plan refuses a new user
+# with none of the three).
 # Returns the password as a SecureString for that step.
 function New-RpaUser([hashtable]$Account, [Security.SecureString]$Password) {
   if (-not $Password) {
@@ -1196,6 +1213,18 @@ function Add-RpaRemoteDesktopUser([hashtable]$Run) {
   Add-LocalGroupMember -SID $script:RemoteDesktopUsers -Member $Run.Sid
 }
 
+# On a change of bot user: takes an earlier bot user out of Remote Desktop Users when this installer put it there (its
+# record is in install.json), and drops that record.
+function Remove-RpaEarlierRemoteDesktopUsers([hashtable]$Run) {
+  $earlier = @($Run.Install.signInChanges | Where-Object { $_ -and $_.kind -eq 'group' -and [string]$_.key -eq $script:RemoteDesktopUsers -and [string]$_.name -ne $Run.Sid })
+  foreach ($record in $earlier) {
+    Remove-RpaGroupMember $script:RemoteDesktopUsers ([string]$record.name)
+    $id = Get-RpaChangeId $record
+    $Run.Install.signInChanges = @($Run.Install.signInChanges | Where-Object { (Get-RpaChangeId $_) -ne $id })
+    Save-RpaInstallFile $Run
+  }
+}
+
 # Takes a member out of a local group, both named by SID. One that is not in it (any more) is no error: Windows takes a
 # user that is removed out of its groups.
 function Remove-RpaGroupMember([string]$Group, [string]$Member) {
@@ -1262,21 +1291,28 @@ function Remove-RpaSupervisor {
 # how long it took. Not answered is a warning with the supervisor's last failure, not a failed install: a later
 # connection can still work. The supervisor signs the bot user out again after the idle time.
 function Wait-RpaFirstSignIn([hashtable]$Run, [int]$Port) {
-  Add-RpaNativeTypes
-  Write-Host ('    waiting for the first sign-in of {0} through the RPA Supervisor (up to {1} s)' -f $Run.Account.Display, $script:FirstSignInSeconds)
-  $watch = [Diagnostics.Stopwatch]::StartNew()
-  $problem = [RpaProbe]::Handshake($Port, $script:FirstSignInSeconds * 1000)
-  $seconds = [int]$watch.Elapsed.TotalSeconds
-  if (-not $problem) {
-    Write-Host ('    {0} was signed in, and the runner answered after {1} s' -f $Run.Account.Display, $seconds)
-    return
-  }
-  $text = 'The runner did not answer through the RPA Supervisor within {0} s ({1}).' -f $seconds, $problem
+  # Whatever fails here is said in a warning; it does not fail the install.
   try {
-    $failure = (Get-Content -Raw -LiteralPath (Join-Path $Run.Layout.SupervisorDir 'supervisor-state.json') -ErrorAction Stop | ConvertFrom-Json).lastFailure
-    if ($failure) { $text += " The supervisor's last failure: $failure" }
-  } catch { }
-  Write-Warning ('{0} A later connection can still work; see Show-RpaConnection.ps1 and {1}.' -f $text, (Join-Path $Run.Layout.SupervisorDir 'supervisor.log'))
+    Write-Host ('    waiting for the first sign-in of {0} through the RPA Supervisor (up to {1} s)' -f $Run.Account.Display, $script:FirstSignInSeconds)
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    try {
+      Add-RpaProbeType
+      $problem = [RpaProbe]::Handshake($Port, $script:FirstSignInSeconds * 1000)
+    } catch { $problem = $_.Exception.GetBaseException().Message }
+    $seconds = [int]$watch.Elapsed.TotalSeconds
+    if (-not $problem) {
+      Write-Host ('    {0} was signed in, and the runner answered after {1} s' -f $Run.Account.Display, $seconds)
+      return
+    }
+    $text = 'The runner did not answer through the RPA Supervisor within {0} s ({1}).' -f $seconds, $problem
+    try {
+      $failure = (Get-Content -Raw -LiteralPath (Join-Path $Run.Layout.SupervisorDir 'supervisor-state.json') -ErrorAction Stop | ConvertFrom-Json).lastFailure
+      if ($failure) { $text += " The supervisor's last failure: $failure" }
+    } catch { }
+    Write-Warning ('{0} A later connection can still work; see Show-RpaConnection.ps1 and {1}.' -f $text, (Join-Path $Run.Layout.SupervisorDir 'supervisor.log'))
+  } catch {
+    Write-Warning ('The first sign-in through the RPA Supervisor could not be checked: {0} A later connection can still work; see Show-RpaConnection.ps1.' -f $_.Exception.GetBaseException().Message)
+  }
 }
 
 # Points a firewall rule of the installer at another program; nothing when the rule is not there. Who may connect
@@ -1329,9 +1365,23 @@ function Undo-RpaUnattended([hashtable]$Run) {
   if ($failed.Count -gt 0) { throw ('Could not put back: {0}' -f (@($failed | ForEach-Object { $_.Text }) -join '; ')) }
 }
 
+# On a failed upgrade: install.json's mode, the RPA Supervisor's fields and the browser port go back to what the
+# record before this run said (an older record without a mode was signed in), so that the start scripts do not move
+# the runner and the browser behind a supervisor that the undo removed.
+function Restore-RpaModeBefore([hashtable]$Run) {
+  $before = $Run.Before
+  if (-not $before) { return }
+  foreach ($field in 'browserPort', 'mode', 'idleSeconds', 'runnerInnerPort', 'browserInnerPort', 'listenAddresses') {
+    $property = $before.PSObject.Properties[$field]
+    if ($property) { $Run.Install[$field] = $property.Value }
+    elseif ($field -eq 'mode') { $Run.Install[$field] = 'signedIn' }
+    elseif ($Run.Install.Contains($field)) { $Run.Install.Remove($field) }
+  }
+}
+
 # After a failed step: puts back the sign-in changes this run made and removes a user this run created, so that the
 # installer can be run again with the same parameters. A first install that got as far as install.json loses it again;
-# an upgrade keeps it, without this run's sign-in records.
+# an upgrade keeps it, without this run's sign-in records and with the mode it had before.
 # When a change cannot be put back, nothing more is removed: install.json stays and keeps the records of what could
 # not be put back (and says that automatic sign-in is not on), so that Uninstall-Rpa.ps1 and a later run still know
 # what was there before; and a user this run created stays, because those records and what is left in Windows name it.
@@ -1348,6 +1398,7 @@ function Undo-RpaFailedRun([hashtable]$Run) {
     $leftIds = @($failed | Where-Object { $_.Change } | ForEach-Object { Get-RpaChangeId $_.Change })
     $Run.Install.signInChanges = @($Run.Install.signInChanges | Where-Object { $id = Get-RpaChangeId $_; ($newIds -notcontains $id) -or ($leftIds -contains $id) })
     $Run.Install.autoSignIn = $Run.AutoSignInBefore
+    Restore-RpaModeBefore $Run
     Save-RpaInstallFile $Run
     if ($Run.CreatedUser) {
       Write-Host ('  undo: the user {0}, which this run created, is kept' -f $Run.Account.Display)
@@ -1359,6 +1410,7 @@ function Undo-RpaFailedRun([hashtable]$Run) {
     if ($Run.Upgrade) {
       $Run.Install.signInChanges = @($Run.Install.signInChanges | Where-Object { $newIds -notcontains (Get-RpaChangeId $_) })
       $Run.Install.autoSignIn = $Run.AutoSignInBefore
+      Restore-RpaModeBefore $Run
       Save-RpaInstallFile $Run
     } else {
       Remove-Item -LiteralPath $Run.Layout.InstallFile -Force -ErrorAction SilentlyContinue
@@ -1416,6 +1468,8 @@ function Invoke-RpaInstallPlan {
     Password         = $Parameters.UserPassword
     Upgrade          = [bool]$previous
     AutoSignInBefore = [bool]($previous -and $previous.autoSignIn -eq $true)
+    # The record before this run, for the mode a failed upgrade goes back to.
+    Before           = $previous
     Install          = $null
     NewChanges       = @()
     CreatedUser      = $false
@@ -1465,7 +1519,10 @@ function Invoke-RpaInstallPlan {
         'store sign-in password' { Set-RpaSignInPassword $run }
         'turn on automatic sign-in' { Enable-RpaAutoSignIn $run }
         'keep the desktop unlocked' { Set-RpaDesktopUnlocked $run }
-        'allow the bot user to sign in through Remote Desktop' { Add-RpaRemoteDesktopUser $run }
+        'allow the bot user to sign in through Remote Desktop' {
+          Remove-RpaEarlierRemoteDesktopUsers $run
+          Add-RpaRemoteDesktopUser $run
+        }
         'turn on Remote Desktop' { Enable-RpaRemoteDesktop $run }
         "store the bot user's password for the supervisor" { Set-RpaSupervisorPassword $run }
         'register the supervisor service' {
@@ -1560,6 +1617,8 @@ function Get-RpaUninstallFacts {
     RunningSids       = @()
     UnknownProcesses  = @()
     AutoSignInSid     = $null
+    # The RPA Supervisor signs the bot user in on an install with -Unattended; stopping it signs that session out.
+    Unattended        = [bool]($install -and $install.mode -eq 'unattended')
   }
   if ($entries) { $facts.DataDirUnreadable = $entries.Unreadable }
   if ($facts.Accounts.Count -gt 0) {
@@ -1723,12 +1782,13 @@ function Invoke-RpaUninstall {
   $result = @{
     User = $null; UserKept = $false; AutoSignIn = $false; SignInKept = $false; SignInFailed = $false; HadChanges = $false; NotRestored = @()
     LeftoversFile = $null; LeftoversProblem = $null; DataRemoved = $false; DataKept = $false; BrowserTemp = @(); Layout = $layout
-    Switch = '-AutoSignIn'
+    Switch = '-AutoSignIn'; RemoteDesktopOff = $false
   }
   if ($install) {
     $result.User = [string]$install.user
     $result.AutoSignIn = $install.autoSignIn -eq $true
-    if ($install.mode -eq 'unattended') { $result.Switch = '-Unattended' }
+    # Records of -Unattended are there also after an install without it could not put them all back.
+    if ($install.mode -eq 'unattended' -or @($install.signInChanges | Where-Object { $_ -and (Test-RpaUnattendedChange $_) }).Count -gt 0) { $result.Switch = '-Unattended' }
     # The uninstaller removes no Windows user; whether the recorded one is still there is for the closing text.
     try { $null = Get-RpaSid (Get-RpaAccount -User $result.User -ComputerName $env:COMPUTERNAME); $result.UserKept = $true } catch { }
   }
@@ -1776,6 +1836,9 @@ function Invoke-RpaUninstall {
     $failed = @(Restore-RpaSignInChanges @($install.signInChanges) $result.SignInKept)
     $result.NotRestored = @($failed | ForEach-Object { $_.Text })
     $result.SignInFailed = [bool]($failed | Where-Object { $_.Change -and (($_.Change.kind -eq 'secret' -and [string]$_.Change.key -eq $script:AutoSignInSecret) -or [string]$_.Change.key -eq $script:Winlogon) })
+    # Remote Desktop was off before -Unattended turned it on, and is off again now: an administrator may use it since.
+    $remoteDesktop = @($install.signInChanges | Where-Object { $_ -and $_.kind -eq 'registry' -and [string]$_.key -eq $script:TerminalServer -and $_.name -eq 'fDenyTSConnections' })
+    $result.RemoteDesktopOff = $remoteDesktop.Count -gt 0 -and -not ($failed | Where-Object { $_.Change -and [string]$_.Change.key -eq $script:TerminalServer })
     # install.json goes with the program files, so the record of what was not put back is written now, before
     # anything else can stop the run.
     if ($failed.Count -gt 0) {
@@ -1788,6 +1851,10 @@ function Invoke-RpaUninstall {
       }
     }
   }
+  # The RPA Supervisor's service, its event source and the stored password by their names too: also when install.json
+  # is gone or does not record them. Nothing when they are not there.
+  Remove-RpaSupervisor
+  Remove-RpaLsaSecret $script:SupervisorSecret
   Write-Host '  remove the program files'
   Remove-RpaProgramFiles $layout
   $result.DataKept = (Get-RpaPathState $layout.DataDir).Exists
@@ -1806,6 +1873,7 @@ function Get-RpaUninstallSummary([hashtable]$Result) {
     elseif ($Result.SignInFailed) { $lines += '  Automatic sign-in of {0} could not be turned off completely: see the list below.' -f $Result.User }
     else { $lines += '  Automatic sign-in of {0} is off and the stored password is removed.' -f $Result.User }
   }
+  if ($Result.RemoteDesktopOff) { $lines += '  Remote Desktop is off again, as it was before -Unattended turned it on.' }
   if ($Result.HadChanges) {
     if ($failed.Count -eq 0) {
       if ($Result.SignInKept) { $lines += '  The other settings {0} changed are back to what they were before.' -f $switch }
