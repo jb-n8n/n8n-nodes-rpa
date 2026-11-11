@@ -47,8 +47,11 @@
 #                  L$RpaRunnerBotPassword), registers the service and points the firewall rules at it. It lists these
 #                  and asks for YES first, unless -Force is given. For an existing user it needs -UserPassword (tried
 #                  against the account first); a user it creates gets a random password. It then signs the bot user in
-#                  once, which makes the user's profile. An upgrade keeps unattended mode and its idle time without
-#                  -Unattended; Uninstall-Rpa.ps1, and an install with -Unattended:$false, put these back.
+#                  once, which makes the user's profile. Over an install with automatic sign-in for the same user it
+#                  needs no -UserPassword: it keeps the password stored for automatic sign-in (tried first), turns
+#                  automatic sign-in off and signs the bot user out. An upgrade keeps unattended mode and its idle
+#                  time without -Unattended; Uninstall-Rpa.ps1, and an install with -Unattended:$false, put these
+#                  back.
 #   -Force         Do not ask (about -AutoSignIn, -Unattended, or another -User than the one of the install), and
 #                  upgrade even while the runner is running (a run in progress fails).
 #
@@ -320,6 +323,8 @@ catch {
   $userKept = $_.Exception.Data['UserKept']
   if ($notPutBack.Count -eq 0) {
     Write-Host 'The install did not finish. Fix the cause and run Install-Rpa.ps1 again with the same parameters.'
+    # A move from automatic sign-in that had signed the bot user out: automatic sign-in is back, for the next start.
+    if ($_.Exception.Data['SignedOut']) { Write-Host ('  {0} stays signed out until this machine starts again, when Windows signs it in, or until someone signs in as {0}.' -f $User) }
   } else {
     # The undo could not put everything back, so it removed nothing more. What is left, and what to do about it.
     Write-Host 'The install did not finish, and the settings listed above could not be put back.'

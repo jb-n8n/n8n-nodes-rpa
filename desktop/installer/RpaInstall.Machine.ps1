@@ -23,8 +23,10 @@ $script:KnownSteps = @(
   'write policy', 'write token', 'write browser-token', 'add the runner firewall rule', 'add the browser firewall rule',
   'remove the browser firewall rule', 'register the runner task', 'register the browser task',
   'remove the browser task', 'write install.json', 'put back what -Unattended changed', 'store sign-in password',
-  'turn on automatic sign-in', 'keep the desktop unlocked', 'allow the bot user to sign in through Remote Desktop',
-  'turn on Remote Desktop', "store the bot user's password for the supervisor", 'register the supervisor service',
+  'keep the supervisor password for automatic sign-in', 'turn on automatic sign-in', 'keep the desktop unlocked',
+  'keep the automatic sign-in password for the supervisor',
+  'turn off automatic sign-in', 'allow the bot user to sign in through Remote Desktop', 'turn on Remote Desktop',
+  "store the bot user's password for the supervisor", 'sign the bot user out', 'register the supervisor service',
   'point the firewall rules at the supervisor', 'start tasks')
 
 # Where things are. Program Files keeps its default permissions (users read and run, only administrators change), so
@@ -186,6 +188,22 @@ function Get-RpaDataEntries([string]$DataDir) {
   $result
 }
 
+# Tries a password read from an LSA secret (a SecureString, or nothing) against the account, and disposes of it: State
+# is missing, wrong (Windows' "the user name or password is incorrect", 1326) or ok, and Problem says why it could not
+# be checked otherwise. 1385 means the password is right and only this kind of logon is not allowed.
+function Test-RpaStoredPassword($Stored, [hashtable]$Account) {
+  if (-not $Stored) { return @{ State = 'missing'; Problem = $null } }
+  try {
+    $domain = '.'
+    if ($Account.IsDomain) { $domain = $Account.Domain }
+    $code = [RpaAccounts]::CheckPassword($domain, $Account.Name, $Stored)
+  } finally { $Stored.Dispose() }
+  if ($code -eq 1326) { return @{ State = 'wrong'; Problem = $null } }
+  $problem = $null
+  if ($code -ne 0 -and $code -ne 1385) { $problem = (New-Object ComponentModel.Win32Exception $code).Message }
+  @{ State = 'ok'; Problem = $problem }
+}
+
 # The facts Get-RpaInstallPlan judges. Changes nothing.
 function Get-RpaMachineFacts {
   param([Parameter(Mandatory = $true)][hashtable]$Parameters)
@@ -234,6 +252,10 @@ function Get-RpaMachineFacts {
     InstalledMode              = $null
     InstalledSupervisorSecret  = $false
     InstalledIdleSeconds       = $null
+    AutoSignInPassword         = $null
+    AutoSignInPasswordProblem  = $null
+    SupervisorPassword         = $null
+    SupervisorPasswordProblem  = $null
     RemoteDesktopPort          = $null
     InstalledUnattendedChanges = $false
     SupervisorDir              = $layout.SupervisorDir
@@ -315,6 +337,21 @@ function Get-RpaMachineFacts {
       $code = [RpaAccounts]::CheckPassword($domain, $account.Name, $Parameters.UserPassword)
       if ($code -eq 1326) { $facts.UserPasswordWrong = $true }
       elseif ($code -ne 0 -and $code -ne 1385) { $facts.UserPasswordProblem = (New-Object ComponentModel.Win32Exception $code).Message }
+    }
+    # Moving an install with automatic sign-in for this user to -Unattended without -UserPassword: the password stored
+    # for automatic sign-in is read into memory and tried the same way; only the outcome is kept here.
+    $moving = ($Parameters.Unattended -or $keepsUnattended) -and $install -and $install.autoSignIn -eq $true -and $facts.InstalledForUser
+    if ($moving -and -not $Parameters.UserPassword) {
+      $checked = Test-RpaStoredPassword (Read-RpaAutoSignInPassword) $account
+      $facts.AutoSignInPassword = $checked.State
+      $facts.AutoSignInPasswordProblem = $checked.Problem
+    }
+    # The way back, -Unattended:$false -AutoSignIn without -UserPassword: the same for the password the supervisor has.
+    $back = $Parameters.AutoSignIn -and -not $Parameters.Unattended -and $facts.InstalledSupervisorSecret -and $facts.InstalledForUser
+    if ($back -and -not $Parameters.UserPassword) {
+      $checked = Test-RpaStoredPassword (Read-RpaSupervisorPassword) $account
+      $facts.SupervisorPassword = $checked.State
+      $facts.SupervisorPasswordProblem = $checked.Problem
     }
   }
 
@@ -925,6 +962,115 @@ public static class RpaProbe {
 '@
 }
 
+# What moving from automatic sign-in to -Unattended needs, compiled on its own (a PowerShell window that loaded the
+# helpers of an earlier installer has the other types already): reading an LSA secret into a SecureString (RpaLsaRead),
+# and the Windows sessions of a user and their sign-out (RpaSessions).
+function Add-RpaMoveTypes {
+  if ('RpaSessions' -as [type]) { return }
+  Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Security;
+public static class RpaLsaRead {
+  [StructLayout(LayoutKind.Sequential)]
+  struct UnicodeString { public ushort Length; public ushort MaximumLength; public IntPtr Buffer; }
+  [StructLayout(LayoutKind.Sequential)]
+  struct ObjectAttributes { public int Length; public IntPtr RootDirectory; public IntPtr ObjectName; public uint Attributes; public IntPtr SecurityDescriptor; public IntPtr SecurityQualityOfService; }
+  [DllImport("advapi32.dll")] static extern uint LsaOpenPolicy(IntPtr systemName, ref ObjectAttributes attributes, uint access, out IntPtr policy);
+  [DllImport("advapi32.dll")] static extern uint LsaRetrievePrivateData(IntPtr policy, ref UnicodeString key, out IntPtr data);
+  [DllImport("advapi32.dll")] static extern uint LsaFreeMemory(IntPtr buffer);
+  [DllImport("advapi32.dll")] static extern uint LsaClose(IntPtr policy);
+  [DllImport("advapi32.dll")] static extern int LsaNtStatusToWinError(uint status);
+  const uint PolicyGetPrivateInformation = 0x4;
+  const uint StatusObjectNameNotFound = 0xC0000034;
+  // The secret as a read-only SecureString, without a NUL at its end; null when it is missing or empty. The plain
+  // text exists only in the memory LSA returns, which is wiped before it is freed.
+  public static SecureString Read(string key) {
+    ObjectAttributes attributes = new ObjectAttributes();
+    attributes.Length = Marshal.SizeOf(typeof(ObjectAttributes));
+    IntPtr policy;
+    uint status = LsaOpenPolicy(IntPtr.Zero, ref attributes, PolicyGetPrivateInformation, out policy);
+    if (status != 0) throw new Win32Exception(LsaNtStatusToWinError(status));
+    UnicodeString k = new UnicodeString();
+    k.Buffer = Marshal.StringToHGlobalUni(key);
+    k.Length = (ushort)(key.Length * 2);
+    k.MaximumLength = (ushort)(key.Length * 2 + 2);
+    IntPtr data = IntPtr.Zero;
+    try {
+      status = LsaRetrievePrivateData(policy, ref k, out data);
+      if (status == StatusObjectNameNotFound) return null;
+      if (status != 0) throw new Win32Exception(LsaNtStatusToWinError(status));
+      if (data == IntPtr.Zero) return null;
+      UnicodeString value = (UnicodeString)Marshal.PtrToStructure(data, typeof(UnicodeString));
+      if (value.Buffer == IntPtr.Zero) return null;
+      int count = value.Length / 2;
+      while (count > 0 && Marshal.ReadInt16(value.Buffer, (count - 1) * 2) == 0) count--;
+      SecureString secret = new SecureString();
+      for (int i = 0; i < count; i++) secret.AppendChar((char)Marshal.ReadInt16(value.Buffer, i * 2));
+      Marshal.Copy(new byte[value.Length], 0, value.Buffer, value.Length);
+      secret.MakeReadOnly();
+      if (secret.Length == 0) { secret.Dispose(); return null; }
+      return secret;
+    } finally {
+      if (data != IntPtr.Zero) LsaFreeMemory(data);
+      Marshal.FreeHGlobal(k.Buffer);
+      LsaClose(policy);
+    }
+  }
+}
+public static class RpaSessions {
+  [StructLayout(LayoutKind.Sequential)]
+  struct SessionInfo { public int SessionId; public IntPtr WinStationName; public int State; }
+  [DllImport("wtsapi32.dll", SetLastError = true)] static extern bool WTSEnumerateSessions(IntPtr server, int reserved, int version, out IntPtr info, out int count);
+  [DllImport("wtsapi32.dll", SetLastError = true, EntryPoint = "WTSQuerySessionInformationW")] static extern bool WTSQuerySessionInformation(IntPtr server, int session, int infoClass, out IntPtr buffer, out int bytes);
+  [DllImport("wtsapi32.dll")] static extern void WTSFreeMemory(IntPtr memory);
+  [DllImport("wtsapi32.dll", SetLastError = true)] static extern bool WTSLogoffSession(IntPtr server, int session, bool wait);
+  const int UserName = 5, DomainName = 7;
+  // The ids of the sessions in which domain\user is signed in, in any state.
+  public static int[] OfUser(string domain, string user) {
+    IntPtr info;
+    int count;
+    if (!WTSEnumerateSessions(IntPtr.Zero, 0, 1, out info, out count)) throw new Win32Exception(Marshal.GetLastWin32Error());
+    List<int> ids = new List<int>();
+    try {
+      int size = Marshal.SizeOf(typeof(SessionInfo));
+      for (int i = 0; i < count; i++) {
+        SessionInfo session = (SessionInfo)Marshal.PtrToStructure(new IntPtr(info.ToInt64() + i * size), typeof(SessionInfo));
+        if (string.Equals(Query(session.SessionId, UserName), user, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(Query(session.SessionId, DomainName), domain, StringComparison.OrdinalIgnoreCase)) ids.Add(session.SessionId);
+      }
+    } finally {
+      WTSFreeMemory(info);
+    }
+    return ids.ToArray();
+  }
+  static string Query(int session, int infoClass) {
+    IntPtr buffer;
+    int bytes;
+    if (!WTSQuerySessionInformation(IntPtr.Zero, session, infoClass, out buffer, out bytes)) return "";
+    try { return Marshal.PtrToStringUni(buffer) ?? ""; } finally { WTSFreeMemory(buffer); }
+  }
+  // Signs a session out and returns when it is gone.
+  public static void SignOut(int session) {
+    if (!WTSLogoffSession(IntPtr.Zero, session, true)) throw new Win32Exception(Marshal.GetLastWin32Error());
+  }
+}
+'@
+}
+
+# Signs every session of the bot user out (the console session automatic sign-in made, and any other), so that the
+# RPA Supervisor, which refuses runs while a session it did not make is there, can sign it in for each run. Programs
+# in those sessions end the way they end at any sign-out.
+function Close-RpaBotSessions([hashtable]$Run) {
+  Add-RpaMoveTypes
+  foreach ($id in @([RpaSessions]::OfUser($Run.Account.Domain, $Run.Account.Name))) {
+    Write-Host ('    sign out session {0}' -f $id)
+    [RpaSessions]::SignOut($id)
+  }
+}
+
 # A standard local user (member of Users only) whose password never expires. Without -UserPassword the password is
 # random, is made here and is stored only for automatic sign-in or for the RPA Supervisor (the plan refuses a new user
 # with none of the three).
@@ -1391,11 +1537,14 @@ function Undo-RpaUnattended([hashtable]$Run) {
 # On a failed upgrade: install.json's mode, the RPA Supervisor's fields and the browser port go back to what the
 # record before this run said (an older record without a mode was signed in), so that the start scripts do not move
 # the runner and the browser behind a supervisor that the undo removed.
-# Only when this run wrote unattended over a record that was not: a failed run with -Unattended:$false over an unattended
-# install keeps the signed-in mode it wrote, because what the supervisor needs may be gone by then.
+# Not when the mode is the same, and not when a run with -Unattended:$false over an unattended install failed after it
+# began to put back what -Unattended changed: what the supervisor needs may be gone by then.
 function Restore-RpaModeBefore([hashtable]$Run) {
   $before = $Run.Before
-  if (-not $before -or $Run.Install.mode -ne 'unattended' -or [string]$before.mode -eq 'unattended') { return }
+  if (-not $before) { return }
+  $had = [string]$before.mode
+  if (-not $had) { $had = 'signedIn' }
+  if ([string]$Run.Install.mode -eq $had -or ($had -eq 'unattended' -and $Run.UnattendedPutBack)) { return }
   foreach ($field in 'browserPort', 'mode', 'idleSeconds', 'runnerInnerPort', 'browserInnerPort', 'listenAddresses') {
     $property = $before.PSObject.Properties[$field]
     if ($property) { $Run.Install[$field] = $property.Value }
@@ -1413,12 +1562,20 @@ function Restore-RpaModeBefore([hashtable]$Run) {
 # Returns the lines that name what could not be put back (NotPutBack) and the user that was kept (UserKept).
 function Undo-RpaFailedRun([hashtable]$Run) {
   $failed = @()
-  if (@($Run.NewChanges).Count -gt 0) {
+  # A failure while what -Unattended changed was being put back keeps what this run set up before (automatic sign-in
+  # with its password): the supervisor may be gone already, and the records of what is left stay for the next run.
+  $keepNew = [bool]$Run.UnattendedPutBack
+  if ($keepNew -and @($Run.NewChanges).Count -gt 0) {
+    Write-Host '  undo: the settings this run changed stay, because what -Unattended changed was being put back'
+  } elseif (@($Run.NewChanges).Count -gt 0) {
     Write-Host '  undo: put back the settings this run changed'
     $failed = @(Restore-RpaSignInChanges $Run.NewChanges $false)
   }
+  $newIds = @()
+  if (-not $keepNew) { $newIds = @($Run.NewChanges | ForEach-Object { Get-RpaChangeId $_ }) }
+  # A run that moved from automatic sign-in turns it on again, with the password it kept in memory.
+  if ($Run.AutoSignInTurnedOff) { $failed += @(Enable-RpaAutoSignInAgain $Run) }
   $result = @{ NotPutBack = @($failed | ForEach-Object { $_.Text }); UserKept = $null }
-  $newIds = @($Run.NewChanges | ForEach-Object { Get-RpaChangeId $_ })
   if ($failed.Count -gt 0) {
     $leftIds = @($failed | Where-Object { $_.Change } | ForEach-Object { Get-RpaChangeId $_.Change })
     $Run.Install.signInChanges = @($Run.Install.signInChanges | Where-Object { $id = Get-RpaChangeId $_; ($newIds -notcontains $id) -or ($leftIds -contains $id) })
@@ -1434,7 +1591,7 @@ function Undo-RpaFailedRun([hashtable]$Run) {
   if ($Run.WroteInstallFile) {
     if ($Run.Upgrade) {
       $Run.Install.signInChanges = @($Run.Install.signInChanges | Where-Object { $newIds -notcontains (Get-RpaChangeId $_) })
-      $Run.Install.autoSignIn = $Run.AutoSignInBefore
+      if (-not $keepNew) { $Run.Install.autoSignIn = $Run.AutoSignInBefore }
       Restore-RpaModeBefore $Run
       Save-RpaInstallFile $Run
     } else {
@@ -1513,7 +1670,10 @@ function Invoke-RpaInstallPlan {
     Write-Host ('  {0}' -f $step)
     try {
       switch ($step) {
-        'stop running services' { Stop-RpaServices $layout.InstallDir }
+        'stop running services' {
+          $run.Stopped = $true
+          Stop-RpaServices $layout.InstallDir
+        }
         'copy program files' { Copy-RpaProgramFiles $source $layout.InstallDir }
         'create user' {
           $run.Password = New-RpaUser $account $run.Password
@@ -1540,7 +1700,12 @@ function Invoke-RpaInstallPlan {
           Save-RpaInstallFile $run
           $run.WroteInstallFile = $true
         }
-        'put back what -Unattended changed' { Undo-RpaUnattended $run }
+        'put back what -Unattended changed' {
+          # From here on a failure leaves what this run set up (automatic sign-in) in place: the supervisor may be gone.
+          $run.UnattendedPutBack = $true
+          Undo-RpaUnattended $run
+        }
+        'keep the supervisor password for automatic sign-in' { Copy-RpaSupervisorPassword $run }
         'store sign-in password' { Set-RpaSignInPassword $run }
         'turn on automatic sign-in' { Enable-RpaAutoSignIn $run }
         'keep the desktop unlocked' { Set-RpaDesktopUnlocked $run }
@@ -1550,6 +1715,12 @@ function Invoke-RpaInstallPlan {
         }
         'turn on Remote Desktop' { Enable-RpaRemoteDesktop $run }
         "store the bot user's password for the supervisor" { Set-RpaSupervisorPassword $run }
+        'keep the automatic sign-in password for the supervisor' { Copy-RpaAutoSignInPassword $run }
+        'turn off automatic sign-in' { Disable-RpaAutoSignIn $run }
+        'sign the bot user out' {
+          $run.SignedOut = $true
+          Close-RpaBotSessions $run
+        }
         'register the supervisor service' {
           Register-RpaSupervisor $run
           Wait-RpaFirstSignIn $run $runnerPort
@@ -1560,8 +1731,10 @@ function Invoke-RpaInstallPlan {
     } catch {
       $failure = New-Object InvalidOperationException ('The step "{0}" failed: {1}' -f $step, $_.Exception.Message)
       $undone = Undo-RpaFailedRun $run
+      if ($run.Stopped) { Resume-RpaAfterFailedRun $run }
       $failure.Data['NotPutBack'] = [string[]]@($undone.NotPutBack)
       $failure.Data['UserKept'] = $undone.UserKept
+      $failure.Data['SignedOut'] = [bool]$run.SignedOut
       throw $failure
     }
   }
@@ -1657,12 +1830,31 @@ function Get-RpaUninstallFacts {
   $facts
 }
 
-# Switches the two tasks on again and starts them, and the RPA Supervisor when its service runs this install's program,
-# after a stop that is not followed by an upgrade or a removal.
-function Resume-RpaServices {
+# Switches the two tasks on again (the stop switched them off).
+function Enable-RpaTasks {
   foreach ($name in $script:RunnerTask, $script:BrowserTask) {
     Get-ScheduledTask -TaskPath $script:TaskPath -TaskName $name -ErrorAction SilentlyContinue | Enable-ScheduledTask | Out-Null
   }
+}
+
+# After the undo of a failed upgrade: 'stop running services' switched the tasks off and stopped the RPA Supervisor, and
+# nothing else starts them again. The tasks are switched on and started (where the bot user is signed in its programs
+# run again), and the supervisor when install.json still says unattended and its service runs this install's program.
+# What does not start is one line in the output, not a second error.
+function Resume-RpaAfterFailedRun([hashtable]$Run) {
+  $mode = ''
+  if ($Run.Install) { $mode = [string]$Run.Install.mode } elseif ($Run.Before) { $mode = [string]$Run.Before.mode }
+  try { Enable-RpaTasks } catch { Write-Host ('  undo: could not switch the scheduled tasks on again: {0}' -f $_.Exception.Message) }
+  Start-RpaTasks
+  if ($mode -eq 'unattended' -and (Get-RpaServicePath $script:SupervisorService) -ieq (Get-RpaSupervisorPath $Run.Layout.InstallDir)) {
+    try { Start-Service -Name $script:SupervisorService } catch { Write-Host ('  undo: could not start the service {0} again: {1}' -f $script:SupervisorService, $_.Exception.Message) }
+  }
+}
+
+# Switches the two tasks on again and starts them, and the RPA Supervisor when its service runs this install's program,
+# after a stop that is not followed by an upgrade or a removal.
+function Resume-RpaServices {
+  Enable-RpaTasks
   Start-RpaTasks
   if ((Get-RpaServicePath $script:SupervisorService) -ieq (Get-RpaSupervisorPath (Get-RpaLayout).InstallDir)) { Start-Service -Name $script:SupervisorService }
 }
