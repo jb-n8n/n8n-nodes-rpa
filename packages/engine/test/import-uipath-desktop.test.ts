@@ -372,9 +372,9 @@ describe('approving and signing an imported desktop draft', () => {
     expect(reasons(sign(based, [], proposalDigest(based)))).toContain('desktop steps have no repair yet, so a desktop proposal must be a first version (no base version) that shows every step');
     const proven = { ...p, evidence: { ...p.evidence, count: 12 } };
     expect(reasons(sign(proven, [], proposalDigest(proven)))).toContain('desktop steps are not replayed at import, so their evidence must be empty (no rows, no file)');
-    expect(reasons(sign(p, [1]))).toEqual(['Write Steps: step 1 is a waitFor step, which cannot be a write (only click, fill, select, check and key steps can)']);
+    expect(reasons(sign(p, [1]))).toEqual(['Write Steps: step 1 is a waitFor step, which cannot be a write (only click, doubleClick, fill, select, check and key steps can)']);
     expect(reasons(sign(p, [18]))).toEqual(['Write Steps: there is no step 18 (the steps are numbered 1 to 17)']);
-    expect(reasons(sign(p, [17]))).toEqual(['Write Steps: step 17 is a expectFile step, which cannot be a write (only click, fill, select, check and key steps can)']);
+    expect(reasons(sign(p, [17]))).toEqual(['Write Steps: step 17 is a expectFile step, which cannot be a write (only click, doubleClick, fill, select, check and key steps can)']);
   });
 
   it('refuses reviewed steps that already mark a write, and shows every signed field in the change list', () => {

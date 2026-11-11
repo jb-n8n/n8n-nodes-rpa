@@ -75,7 +75,7 @@ describe('desktop clipboard reads: the step format', () => {
     expect(read({ as: 'code' })).toEqual(['steps[0].read needs either a target or clipboard: true, not both']);
     expect(read({ clipboard: true })).toEqual(['steps[0].read.as must be a name of letters, digits and underscores (at most 64)']);
     expect(read({ clipboard: true, as: 'code', window: { exe: AUTH_EXE } })).toEqual(['steps[0].read has unknown key "window"']);
-    expect(read({ clipboard: true, as: 'code' }, { write: true })).toEqual(['steps[0].write is only allowed on click, fill, select, check and key steps']);
+    expect(read({ clipboard: true, as: 'code' }, { write: true })).toEqual(['steps[0].write is only allowed on click, doubleClick, fill, select, check and key steps']);
     // Its name shares the read names: one name, one value.
     expect(issuesOf(doc([{ intent: 'Read', read: { target, as: 'code' } }, READ]))).toEqual(['steps[1].read.as "code" is already used by an earlier read step']);
   });

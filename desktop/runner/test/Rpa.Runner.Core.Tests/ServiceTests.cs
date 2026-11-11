@@ -238,6 +238,25 @@ public sealed class ServiceTests : IDisposable
     }
 
     [Fact]
+    public void A_double_click_is_gated_as_a_click_is()
+    {
+        // The write gate keys on the control, never on the action: a double click on a declared write control, on a
+        // child of one, or landing on one, needs write: true exactly as a click does.
+        var w = _h.BeginWithApp();
+        var e = _h.Err("act", Act(Id("btnPost"), "doubleClick"), RpcErrors.PolicyRefusedCode);
+        Assert.Contains("write: true", e["message"]!.GetValue<string>());
+        _h.Err("act", Act(Id("lblPostCaption"), "doubleClick"), RpcErrors.PolicyRefusedCode);
+        _h.Desktop.InputReceiver = w.Find("btnPost");
+        _h.Err("act", Act(Id("btnSignIn"), "doubleClick"), RpcErrors.PolicyRefusedCode);
+        Assert.Empty(_h.Desktop.Performed);
+        _h.Ok("act", Act(Id("btnSignIn"), "doubleClick", new { write = true }));
+        _h.Desktop.InputReceiver = null;
+        _h.Ok("act", Act(Id("btnPost"), "doubleClick", new { write = true }));
+        Assert.Equal([ActionKind.DoubleClick, ActionKind.DoubleClick], _h.Desktop.Performed.Select(o => o.Action));
+        Assert.Equal("btnPost", _h.Desktop.Performed[^1].Element.AutomationId);
+    }
+
+    [Fact]
     public void A_child_of_a_write_control_counts_as_the_write_control()
     {
         _h.BeginWithApp();

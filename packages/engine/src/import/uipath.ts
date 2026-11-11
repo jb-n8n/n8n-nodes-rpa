@@ -1211,8 +1211,8 @@ class Walker {
       const modifiers = (this.lit(el, 'KeyModifiers', ctx) ?? '').toLowerCase();
       if (button && !/left/.test(button)) return skip('untranslated', `a ${button.replace(/^btn_/, '')}-button click is not a desktop step (desktop steps click with the left button): rebuild this step by hand`);
       if (modifiers && modifiers !== 'none') return skip('untranslated', `a click with ${modifiers} held down is not a desktop step: rebuild this step by hand`);
-      if (name === 'DoubleClick' || (this.lit(el, 'ClickType', ctx) ?? '').toLowerCase().includes('double')) this.add(at, 'converted', label || displayName, 'a double click became a click: desktop steps click once');
-      return [item({ at, kind: 'click', target, label })];
+      const double = name === 'DoubleClick' || (this.lit(el, 'ClickType', ctx) ?? '').toLowerCase().includes('double');
+      return [item({ at, kind: 'click', target, label, ...(double ? { double: true as const } : {}) })];
     }
     if (isCheck) {
       const action = (this.lit(el, 'Action', ctx) ?? 'Check').toLowerCase();

@@ -45,12 +45,13 @@ function locatorWords(loc: DesktopLocator): string {
 }
 
 /**
- * Whether a desktop step looks like a write the owner should consider declaring: a click whose control or intent
- * reads like save, post, submit (and similar), or a key that can press a default button or save. A hint for the
- * reviewer, never a decision: nothing here sets `write`, and the runner's own policy is the floor.
+ * Whether a desktop step looks like a write the owner should consider declaring: a click or double click whose control
+ * or intent reads like save, post, submit (and similar), or a key that can press a default button or save. A hint for
+ * the reviewer, never a decision: nothing here sets `write`, and the runner's own policy is the floor.
  */
 export function looksLikeWrite(step: DesktopStep): boolean {
   if ('click' in step) return WRITE_WORDS.test(words(step.intent)) || WRITE_WORDS.test(locatorWords(step.click));
+  if ('doubleClick' in step) return WRITE_WORDS.test(words(step.intent)) || WRITE_WORDS.test(locatorWords(step.doubleClick));
   if ('key' in step) return WRITE_KEYS.has(step.key.key);
   return false;
 }
@@ -86,6 +87,7 @@ export function reviewDesktopLocator(loc: DesktopLocator): string {
 function desktopAction(step: DesktopStep): string {
   let s: string;
   if ('click' in step) s = `click ${reviewDesktopLocator(step.click)}`;
+  else if ('doubleClick' in step) s = `double-click ${reviewDesktopLocator(step.doubleClick)}`;
   else if ('fill' in step) s = `type ${q(step.fill.value)} into ${reviewDesktopLocator(step.fill.field)}`;
   else if ('select' in step) s = `select ${q(step.select.option)} in ${reviewDesktopLocator(step.select.field)}`;
   else if ('check' in step) s = `${step.check.checked === false ? 'uncheck' : 'check'} ${reviewDesktopLocator(step.check.field)}`;
@@ -167,7 +169,7 @@ export function desktopProposal(script: DesktopScript, mask: (s: string) => stri
 
 export const WRITE_STEPS_INVALID = 'Write Steps must list step numbers, such as 7, 9';
 export const writeStepOutOfRange = (n: number, count: number) => `Write Steps: there is no step ${n} (the steps are numbered 1 to ${count})`;
-export const writeStepNotAllowed = (n: number, verb: string) => `Write Steps: step ${n} is a ${verb} step, which cannot be a write (only click, fill, select, check and key steps can)`;
+export const writeStepNotAllowed = (n: number, verb: string) => `Write Steps: step ${n} is a ${verb} step, which cannot be a write (only click, doubleClick, fill, select, check and key steps can)`;
 export const DESKTOP_FLAGS_INCOMPLETE = 'the safety flags do not list the app, the returned files, the clipboard reads, the declared writes and the candidate writes the steps have';
 export const DESKTOP_CHANGES_MISMATCH = 'the change list does not show every step of the steps, in order, as added';
 export const DESKTOP_NEEDS_FIRST_VERSION = 'desktop steps have no repair yet, so a desktop proposal must be a first version (no base version) that shows every step';

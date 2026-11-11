@@ -3,7 +3,7 @@
 // three cannot drift apart. A leaf module: no imports.
 
 /** Verbs that act on the app: only these may be declared writes (`write: true`). */
-export const DESKTOP_WRITE_VERBS: ReadonlySet<string> = new Set(['click', 'fill', 'select', 'check', 'key']);
+export const DESKTOP_WRITE_VERBS: ReadonlySet<string> = new Set(['click', 'doubleClick', 'fill', 'select', 'check', 'key']);
 
 /** A read step's `as`: the name its text goes by in the run outputs (Data `values`). */
 export const READ_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;

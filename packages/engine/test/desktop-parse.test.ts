@@ -93,7 +93,7 @@ describe('desktop step sets: parsing', () => {
     expect(desktopIssues(desktop([{ intent: 'x', click: { uia: { path: [{ name: 'a' }], window: {} } } }]))).toEqual(['steps[0].click.uia.window needs at least one of exe, title, titlePattern, automationId, className']);
     expect(desktopIssues(desktop([{ intent: 'x', click: { uia: { path: [{ name: 'a' }], window: { titlePattern: '(' } } } }]))).toEqual(['steps[0].click.uia.window.titlePattern is not a valid regex']);
     expect(desktopIssues(desktop([{ intent: 'x', click: { ...uia('a'), fallbacks: [{ ...uia('b'), fallbacks: [] }] } }]))).toEqual(['steps[0].click.fallbacks[0] has nested fallbacks']);
-    expect(desktopIssues(desktop([{ intent: 'x', read: { target: uia('a'), as: 'count' }, write: true }]))).toEqual(['steps[0].write is only allowed on click, fill, select, check and key steps']);
+    expect(desktopIssues(desktop([{ intent: 'x', read: { target: uia('a'), as: 'count' }, write: true }]))).toEqual(['steps[0].write is only allowed on click, doubleClick, fill, select, check and key steps']);
     expect(desktopIssues(desktop([{ intent: 'x', key: { key: 'Ctrl+Alt+Delete+X' } }]))).toEqual(['steps[0].key.key must be a key chord such as Enter, Tab, Ctrl+S or F5 (modifiers in the order Ctrl, Alt, Shift; letters uppercase)']);
     expect(desktopIssues(desktop([{ intent: 'x', read: { target: uia('a'), as: 'not a name' } }]))[0]).toMatch(/^steps\[0\]\.read\.as must be a name/);
     expect(desktopIssues(desktop([{ intent: 'x', click: uia('a'), extra: 1 }]))).toEqual(['steps[0] has unknown key "extra"']);

@@ -412,13 +412,15 @@ export interface DesktopStepBase {
   timeoutMs?: number;
   /**
    * The owner declares this step a write (signed with the steps): the runner then accepts it on a declared write
-   * control or a gated key. Only on click, fill, select, check and key.
+   * control or a gated key. Only on click, doubleClick, fill, select, check and key.
    */
   write?: boolean;
 }
 export type DesktopStep = DesktopStepBase &
   (
     | { click: DesktopLocator }
+    /** A double click on the element (the runner action doubleClick): a list row that opens on a double click. */
+    | { doubleClick: DesktopLocator }
     /** `value` may hold {{$exportDir}}, the run's export directory, filled in by the runner. */
     | { fill: { field: DesktopLocator; value: string } }
     | { select: { field: DesktopLocator; option: string } }
@@ -437,7 +439,7 @@ export type DesktopStep = DesktopStepBase &
 /** A desktop read: an element's text, or the clipboard's (see DesktopStep). */
 export type DesktopRead = { target: DesktopLocator; as: string } | { clipboard: true; as: string };
 
-export const DESKTOP_VERBS = ['click', 'fill', 'select', 'check', 'waitFor', 'read', 'key', 'expectFile'] as const;
+export const DESKTOP_VERBS = ['click', 'doubleClick', 'fill', 'select', 'check', 'waitFor', 'read', 'key', 'expectFile'] as const;
 export type DesktopVerb = (typeof DESKTOP_VERBS)[number];
 
 export interface DesktopScript {

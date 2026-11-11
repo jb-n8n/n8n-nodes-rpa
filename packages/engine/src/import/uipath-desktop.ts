@@ -18,7 +18,8 @@ export type DesktopEvent =
   | { at: string; kind: 'launch'; exe: string; args?: string[]; window?: WindowSel; label: string }
   /** A window scope begins (Attach Window, Use Application): the next step first waits for its window. */
   | { at: string; kind: 'scope'; window?: WindowSel; label: string }
-  | { at: string; kind: 'click'; target: UiaTarget; label: string }
+  /** `double`: a double click (a doubleClick step). */
+  | { at: string; kind: 'click'; target: UiaTarget; label: string; double?: true }
   /** `exportFile`: the value is a save path rewritten to the run's export folder; an expectFile step follows the next click. */
   | { at: string; kind: 'fill'; target: UiaTarget; label: string; value: string; exportFile?: string }
   | { at: string; kind: 'select'; target: UiaTarget; label: string; option: string }
@@ -139,7 +140,7 @@ export function buildDesktopDraft(seq: DesktopSequence, report: ImportReport, o:
     const name = shown(cleanLabel(e.label) || targetName(target) || 'the element');
     switch (e.kind) {
       case 'click':
-        push({ intent: `Click ${name}`, click: desktopLocator(e.target) }, e.at);
+        push(e.double ? { intent: `Double-click ${name}`, doubleClick: desktopLocator(e.target) } : { intent: `Click ${name}`, click: desktopLocator(e.target) }, e.at);
         flushFile();
         break;
       case 'fill':

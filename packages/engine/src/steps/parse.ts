@@ -643,7 +643,7 @@ function checkDesktopStep(s: unknown, path: string, issues: string[]) {
   if (s.timeoutMs !== undefined && !isInt(s.timeoutMs, 100, 120_000)) issues.push(`${path}.timeoutMs must be an integer between 100 and 120000`);
   if (s.write !== undefined) {
     if (typeof s.write !== 'boolean') issues.push(`${path}.write must be a boolean`);
-    else if (s.write && !DESKTOP_WRITE_VERBS.has(verb)) issues.push(`${path}.write is only allowed on click, fill, select, check and key steps`);
+    else if (s.write && !DESKTOP_WRITE_VERBS.has(verb)) issues.push(`${path}.write is only allowed on click, doubleClick, fill, select, check and key steps`);
   }
   if (s.when !== undefined) {
     if (!isObj(s.when)) issues.push(`${path}.when must be an object`);
@@ -664,6 +664,7 @@ function checkDesktopStep(s: unknown, path: string, issues: string[]) {
   const p = `${path}.${verb}`;
   switch (verb) {
     case 'click':
+    case 'doubleClick':
       checkDesktopLocator(v, p, issues);
       break;
     case 'fill':

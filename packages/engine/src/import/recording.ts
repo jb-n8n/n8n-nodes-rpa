@@ -19,14 +19,14 @@
 //
 //   launch   "exe" (app.exe), "args" (optional, app.args), "window" (optional): the app started and showed this window
 //   scope    "window" (optional): another window came up; the next step first waits for it
-//   click    "target"
+//   click    "target", "double" (optional: a double click)
 //   fill     "target", "value", "exportFile" (optional), "secret" (optional)
 //   select   "target", "option"
 //   check    "target", "checked" (true or false)
 //   key      "target" (optional), "chord" (the canonical spelling, modifiers in the order Ctrl, Alt, Shift: "Ctrl+S")
 //   read     "target", "as"
 //
-// and an event with "target" may have "positional": true. "secret" and "positional" are only ever true.
+// and an event with "target" may have "positional": true. "secret", "double" and "positional" are only ever true.
 //
 //   target     { "window": <window> (optional), "path": [<condition>, ...] }   (1 to 20 conditions, outermost first)
 //   window     { "exe", "title", "titlePattern", "automationId", "className" }  (each optional, one line, 1 to 500
@@ -90,7 +90,7 @@ const POSITIONAL = 'the step finds its element by a row position, not by what th
 const EVENT_KEYS = new Map<string, readonly string[]>([
   ['launch', ['exe', 'args', 'window']],
   ['scope', ['window']],
-  ['click', ['target', 'positional']],
+  ['click', ['target', 'double', 'positional']],
   ['fill', ['target', 'value', 'exportFile', 'secret', 'positional']],
   ['select', ['target', 'option', 'positional']],
   ['check', ['target', 'checked', 'positional']],
@@ -201,6 +201,7 @@ function recordingIssues(rec: Json): string[] {
     if (keys.includes('target') && (e.kind !== 'key' || e.target !== undefined)) target(e.target, `${at}.target`);
     if (keys.includes('window') && e.window !== undefined) window(e.window, `${at}.window`);
     if (e.positional !== undefined && e.positional !== true) issues.push(`${at}.positional must be true when it is there`);
+    if (e.double !== undefined && e.double !== true) issues.push(`${at}.double must be true when it is there`);
     switch (e.kind) {
       case 'launch': {
         exe(e.exe, `${at}.exe`);

@@ -103,6 +103,11 @@ const click: Handler = async (ctx, step, state, timeout) => {
   return (await actOn(ctx, s, s.click, 'click', state, timeout)).candidate;
 };
 
+const doubleClick: Handler = async (ctx, step, state, timeout) => {
+  const s = step as unknown as D<'doubleClick'>;
+  return (await actOn(ctx, s, s.doubleClick, 'doubleClick', state, timeout)).candidate;
+};
+
 const fill: Handler = async (ctx, step, state, timeout) => {
   const s = step as unknown as D<'fill'>;
   const segments = fillSegments(ctx, s.fill.value);
@@ -176,6 +181,6 @@ const expectFile: Handler = async (ctx, step, state, timeout) => {
 };
 
 registerHandlers('desktop', {
-  click: recorded(click), fill: recorded(fill), select: recorded(select), check: recorded(check), key: recorded(key),
+  click: recorded(click), doubleClick: recorded(doubleClick), fill: recorded(fill), select: recorded(select), check: recorded(check), key: recorded(key),
   waitFor: recorded(waitFor), read: recorded(read), expectFile: recorded(expectFile),
 });
