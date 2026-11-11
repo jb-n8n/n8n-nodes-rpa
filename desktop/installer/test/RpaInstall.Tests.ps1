@@ -1324,7 +1324,7 @@ Describe 'Invoke-RpaInstallPlan' {
   # A package that was unpacked only in part would install, and then point the user to a tool that is not there.
   Context 'the files a package must hold' {
     BeforeAll {
-      $script:Needed = @('VERSION', 'runner\RpaRunner.exe', 'runner\RpaPolicy.exe', 'runner\RpaSupervisor.exe', 'scripts\start-loop.ps1', 'scripts\start-runner.ps1', 'scripts\Show-RpaConnection.ps1')
+      $script:Needed = @('VERSION', 'runner\RpaRunner.exe', 'runner\RpaPolicy.exe', 'runner\RpaSupervisor.exe', 'recorder\RpaRecorder.exe', 'scripts\start-loop.ps1', 'scripts\start-runner.ps1', 'scripts\Show-RpaConnection.ps1')
       $script:BrowserNeeded = @('browser\node.exe', 'browser\host\host.mjs', 'browser\host\run-server.mjs', 'browser\gate\gate.mjs', 'browser\node_modules\playwright\cli.js', 'scripts\start-browser.ps1')
       # Invoke-RpaInstallPlan reads these; elsewhere than on Windows they are not set.
       $script:Places = @{ ProgramFiles = $env:ProgramFiles; ProgramData = $env:ProgramData; ComputerName = $env:COMPUTERNAME }
@@ -1345,7 +1345,7 @@ Describe 'Invoke-RpaInstallPlan' {
     AfterAll { $env:ProgramFiles = $script:Places.ProgramFiles; $env:ProgramData = $script:Places.ProgramData; $env:COMPUTERNAME = $script:Places.ComputerName }
 
     It 'refuses a package without <Name> before the first step' -ForEach @(
-      @{ Name = 'runner\RpaPolicy.exe' }, @{ Name = 'runner\RpaSupervisor.exe' }, @{ Name = 'browser\host\run-server.mjs' }, @{ Name = 'browser\gate\gate.mjs' }, @{ Name = 'browser\node_modules\playwright\cli.js' }
+      @{ Name = 'runner\RpaPolicy.exe' }, @{ Name = 'runner\RpaSupervisor.exe' }, @{ Name = 'recorder\RpaRecorder.exe' }, @{ Name = 'browser\host\run-server.mjs' }, @{ Name = 'browser\gate\gate.mjs' }, @{ Name = 'browser\node_modules\playwright\cli.js' }
     ) {
       $package = New-TestPackage @($Name)
       Mock -ModuleName RpaInstall Copy-RpaProgramFiles { }
@@ -1511,7 +1511,7 @@ Describe 'Invoke-RpaUninstall' {
   # A package that was unpacked only in part would install, and then point the user to a tool that is not there.
   Context 'the files a package must hold' {
     BeforeAll {
-      $script:Needed = @('VERSION', 'runner\RpaRunner.exe', 'runner\RpaPolicy.exe', 'runner\RpaSupervisor.exe', 'scripts\start-loop.ps1', 'scripts\start-runner.ps1', 'scripts\Show-RpaConnection.ps1')
+      $script:Needed = @('VERSION', 'runner\RpaRunner.exe', 'runner\RpaPolicy.exe', 'runner\RpaSupervisor.exe', 'recorder\RpaRecorder.exe', 'scripts\start-loop.ps1', 'scripts\start-runner.ps1', 'scripts\Show-RpaConnection.ps1')
       $script:BrowserNeeded = @('browser\node.exe', 'browser\host\host.mjs', 'browser\host\run-server.mjs', 'browser\gate\gate.mjs', 'browser\node_modules\playwright\cli.js', 'scripts\start-browser.ps1')
       # Invoke-RpaInstallPlan reads these; elsewhere than on Windows they are not set.
       $script:Places = @{ ProgramFiles = $env:ProgramFiles; ProgramData = $env:ProgramData; ComputerName = $env:COMPUTERNAME }
@@ -1532,7 +1532,7 @@ Describe 'Invoke-RpaUninstall' {
     AfterAll { $env:ProgramFiles = $script:Places.ProgramFiles; $env:ProgramData = $script:Places.ProgramData; $env:COMPUTERNAME = $script:Places.ComputerName }
 
     It 'refuses a package without <Name> before the first step' -ForEach @(
-      @{ Name = 'runner\RpaPolicy.exe' }, @{ Name = 'runner\RpaSupervisor.exe' }, @{ Name = 'browser\host\run-server.mjs' }, @{ Name = 'browser\gate\gate.mjs' }, @{ Name = 'browser\node_modules\playwright\cli.js' }
+      @{ Name = 'runner\RpaPolicy.exe' }, @{ Name = 'runner\RpaSupervisor.exe' }, @{ Name = 'recorder\RpaRecorder.exe' }, @{ Name = 'browser\host\run-server.mjs' }, @{ Name = 'browser\gate\gate.mjs' }, @{ Name = 'browser\node_modules\playwright\cli.js' }
     ) {
       $package = New-TestPackage @($Name)
       Mock -ModuleName RpaInstall Copy-RpaProgramFiles { }

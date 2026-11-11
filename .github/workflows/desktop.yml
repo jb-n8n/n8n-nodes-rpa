@@ -307,7 +307,7 @@ jobs:
         timeout-minutes: 15
         shell: powershell
         run: |
-          & desktop\installer\build\Stage.ps1 -Out "$env:OUT\package" -RunnerDir "$env:OUT\rpa-desktop-runner" -PolicyToolDir "$env:OUT\rpa-policy-tool" -ErpDemoDir "$env:OUT\erp-demo"
+          & desktop\installer\build\Stage.ps1 -Out "$env:OUT\package" -RunnerDir "$env:OUT\rpa-desktop-runner" -PolicyToolDir "$env:OUT\rpa-policy-tool" -RecorderDir "$env:OUT\rpa-recorder" -ErpDemoDir "$env:OUT\erp-demo"
           $zip = "$env:OUT\package\rpa-windows-x64.zip"
           $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()
           if ([IO.File]::ReadAllText("$zip.sha256") -ne "$hash  rpa-windows-x64.zip") { throw "rpa-windows-x64.zip.sha256 does not name the zip's SHA-256 $hash" }

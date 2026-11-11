@@ -2,7 +2,7 @@
 # The desktop workflow (.github/workflows/desktop.yml) runs it, and it can be run by hand on a Windows machine with
 # Windows PowerShell 5.1 or PowerShell 7, from a checkout of this repository:
 #
-#   .\Stage.ps1 -Out <dir> -RunnerDir <dir> -PolicyToolDir <dir> -ErpDemoDir <dir>
+#   .\Stage.ps1 -Out <dir> -RunnerDir <dir> -PolicyToolDir <dir> -RecorderDir <dir> -ErpDemoDir <dir>
 #
 #   -Out            where the package goes: <Out>\rpa-windows-x64\ (the tree below), <Out>\rpa-windows-x64.zip and
 #                   <Out>\rpa-windows-x64.zip.sha256. What is there under those three names is replaced.
@@ -11,16 +11,18 @@
 #   -PolicyToolDir  the folder with the published RpaPolicy.exe (dotnet publish
 #                   desktop/runner/src/Rpa.Runner.PolicyTool, on Windows: its administrator manifest is embedded
 #                   only there)
+#   -RecorderDir    the folder with the published RpaRecorder.exe (dotnet publish desktop/recorder/src/Rpa.Recorder)
 #   -ErpDemoDir     the folder with the published demo app, v1\ErpDemo.exe and v2\ErpDemo.exe
-#   Publish the runner, the supervisor and the policy tool as single files without
+#   Publish the runner, the supervisor, the policy tool and the recorder as single files without
 #   IncludeNativeLibrariesForSelfExtract: such a program would unpack native libraries to the temp folder of whoever
 #   starts it, at every start, and load them from there. Without it the publish leaves those libraries beside the
-#   program, and this script copies every .dll it finds there into runner\ with the program.
+#   program, and this script copies every .dll it finds there into the program's folder with the program.
 #
 #   rpa-windows-x64\
 #     Install-Rpa.ps1  Uninstall-Rpa.ps1  RpaInstall.psd1  RpaInstall.Plan.ps1  RpaInstall.SignIn.ps1
 #     RpaInstall.Machine.ps1  LICENSE  VERSION
 #     runner\    RpaRunner.exe  RpaSupervisor.exe  RpaPolicy.exe  *.dll (their native libraries)  policy.example.json
+#     recorder\  RpaRecorder.exe  *.dll (its native libraries)
 #     browser\   node.exe  LICENSE-node.txt  host\{host.mjs,run-server.mjs}  gate\{gate.mjs,ecs.mjs,selfsigned.mjs}
 #                node_modules\ (playwright)  ms-playwright\ (Chromium)  ms-playwright.sha256
 #     scripts\   start-loop.ps1  start-runner.ps1  start-browser.ps1  Show-RpaConnection.ps1
@@ -46,6 +48,7 @@ param(
   [Parameter(Mandatory = $true)][string]$Out,
   [Parameter(Mandatory = $true)][string]$RunnerDir,
   [Parameter(Mandatory = $true)][string]$PolicyToolDir,
+  [Parameter(Mandatory = $true)][string]$RecorderDir,
   [Parameter(Mandatory = $true)][string]$ErpDemoDir
 )
 $ErrorActionPreference = 'Stop'
@@ -147,12 +150,13 @@ function Get-FileList([string]$Root) {
   $list.ToString()
 }
 
-foreach ($needed in @((Join-Path $RunnerDir 'RpaRunner.exe'), (Join-Path $RunnerDir 'RpaSupervisor.exe'), (Join-Path $PolicyToolDir 'RpaPolicy.exe'),
+foreach ($needed in @((Join-Path $RunnerDir 'RpaRunner.exe'), (Join-Path $RunnerDir 'RpaSupervisor.exe'), (Join-Path $PolicyToolDir 'RpaPolicy.exe'), (Join-Path $RecorderDir 'RpaRecorder.exe'),
     (Join-Path $ErpDemoDir 'v1\ErpDemo.exe'), (Join-Path $ErpDemoDir 'v2\ErpDemo.exe'))) {
   if (-not (Test-Path -LiteralPath $needed -PathType Leaf)) { throw ('{0} is missing. Publish it first.' -f $needed) }
 }
 $RunnerDir = (Resolve-Path -LiteralPath $RunnerDir).ProviderPath
 $PolicyToolDir = (Resolve-Path -LiteralPath $PolicyToolDir).ProviderPath
+$RecorderDir = (Resolve-Path -LiteralPath $RecorderDir).ProviderPath
 $ErpDemoDir = (Resolve-Path -LiteralPath $ErpDemoDir).ProviderPath
 
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
@@ -173,10 +177,11 @@ if ($properties -notmatch '<Version>(\d+\.\d+\.\d+)</Version>') { throw 'desktop
 $version = $Matches[1]
 [IO.File]::WriteAllText((Join-Path $stage 'VERSION'), $version + "`r`n", [Text.Encoding]::ASCII)
 
-Write-Host 'The runner, the supervisor, the policy tool and the demo app'
+Write-Host 'The runner, the supervisor, the policy tool, the recorder and the demo app'
 Copy-Program $RunnerDir 'RpaRunner.exe' (Join-Path $stage 'runner')
 Copy-Program $RunnerDir 'RpaSupervisor.exe' (Join-Path $stage 'runner')
 Copy-Program $PolicyToolDir 'RpaPolicy.exe' (Join-Path $stage 'runner')
+Copy-Program $RecorderDir 'RpaRecorder.exe' (Join-Path $stage 'recorder')
 Copy-Named (Join-Path $repo 'desktop\runner') @('policy.example.json') (Join-Path $stage 'runner')
 foreach ($ui in 'v1', 'v2') {
   $target = Join-Path (Join-Path $stage 'erp-demo') $ui

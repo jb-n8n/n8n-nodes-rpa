@@ -14,6 +14,8 @@ What you get on the Windows machine:
 - **The RPA browser**: a Chromium browser behind a token gate with its own certificate. n8n drives it like any
   browser server, and it listens on `wss://<machine>:3000`. It opens its windows on the bot user's desktop.
 - **The policy tool** (`RpaPolicy.exe`), with which an administrator decides which apps the runner may start.
+- **The RPA recorder** (`RpaRecorder.exe`, in the package's `recorder\` folder), with which a person records a flow in
+  a Windows app instead of writing its steps (section 12).
 - **The ERP Demo**, a small sample app, for the sample flow.
 
 Both programs run inside the signed-in Windows session of one user, the **bot user**, and start when that user signs
@@ -45,6 +47,7 @@ on GitHub's `windows-latest` runner (Windows Server 2025 in November 2026). Wind
 9. [Upgrade and uninstall](#9-upgrade-and-uninstall)
 10. [Changing the tokens and the certificates](#10-changing-the-tokens-and-the-certificates)
 11. [When something fails](#11-when-something-fails)
+12. [Recording a flow](#12-recording-a-flow)
 
 ## 1. Before you start
 
@@ -913,7 +916,8 @@ runner reads the policy only when it starts: after editing by hand, end `RpaRunn
 with `RpaPolicy.exe show`. [`desktop/README.md`](../../desktop/README.md#changing-the-policy) describes every field
 and every message of the tool.
 
-Your app's steps come from **Import Steps** (a UiPath project with desktop activities) or are written by hand; the
+Your app's steps come from **Import Steps** (a recording made with the RPA recorder, section 12, or a UiPath project
+with desktop activities) or are written by hand; the
 README's [Desktop runs](../../README.md#desktop-runs) section describes them, and how a UI Automation inspector shows
 the parts of a control's locator.
 
@@ -1092,3 +1096,114 @@ supervisor's log is `C:\ProgramData\RPA Runner\supervisor\supervisor.log`, and s
 For anything else, the README's [Error codes](../../README.md#error-codes) lists every code a run can fail with.
 Report a problem on [GitHub issues](https://github.com/jb-n8n/n8n-nodes-rpa/issues), without tokens, passwords or
 host names you do not want to share; security issues as [`SECURITY.md`](../../SECURITY.md) describes.
+
+## 12. Recording a flow
+
+`RpaRecorder.exe` watches a person work in a Windows app and saves what they did as a recording file. n8n's **Import
+Steps** turns that file into desktop steps, which go to approval like any other imported steps. The recorder only
+watches: it sends no input to the app, starts nothing but the program you choose, and changes no policy. It writes a
+policy change file, and an administrator applies it.
+
+**What was tried, and what was not.** The recorder was written for standard Windows apps, and it has been tried on
+WinForms and Win32 apps. It has not been tried on WPF apps, on apps that show their content in WebView2, or on apps
+that draw their own controls: they may record nothing, or steps that do not find their controls later. To record a
+website, use the Chrome recorder or the Playwright recorder instead (README, [Import Steps](../../README.md#import-steps)).
+If something below differs on your machine, report it as a problem (section 11, last lines).
+
+### What it records, and what it does not
+
+- **Recorded:** a left click, a double click (one step), the text of a field, read when the person leaves the field, a
+  choice in a drop-down list, a check box as the state it is set to (by a click or by Space), Space on a button,
+  Enter, Tab, Escape, the function keys, and Ctrl or Alt shortcuts.
+- **Not recorded:** a right click and its menu (unless an item of the menu is then clicked with the left button), the
+  mouse wheel, dragging, and a shortcut of Ctrl+Alt with a letter or digit. Windows treats Ctrl+Alt as AltGr on many
+  keyboards, where those keys type characters that may be part of a password, so the recorder never records them as
+  keys. Add such a step by hand in a step document.
+- **Only the app you record.** Input in other programs is not recorded, and their fields are never read. The bar says
+  so once, as `Input in other programs is not recorded.`
+- **A password is never saved.** The recorder never reads the value of a password field: its step types a run
+  variable marked secret, which you supply when you run the steps. A field the recorder cannot tell is a password box
+  (an app that draws its own) must be marked secret by you before you save (step 5 below). Keys typed into a field
+  are not logged or counted. Do not put a password into the program's arguments either: the arguments are saved in
+  the recording and in the policy change file. The bar says so when you start a program.
+- **A grid cell is found by its row position.** The step's locator says, for example, `Vendor Row 1`, so a later run
+  acts on whatever is in that row then. The bar adds `(found by its row position: check it)` to such a step.
+- **An app that runs as administrator** can only be recorded by a recorder started as administrator; otherwise the bar
+  says `This window belongs to a program that runs as administrator. The recorder cannot see inside it: start the
+  recorder as administrator to record it.` Section 5 says why to avoid "Run as administrator" on the bot user's desktop;
+  record such an app from an administrator's own session where you can.
+
+### Record a flow
+
+1. **Sign in to the machine as the bot user,** with the desktop unlocked, at a time when no run is scheduled on it:
+   the recorder, the app and the runner would share one desktop. With `-Unattended` (section 4), runs are refused
+   while anyone is signed in as the bot user, at the console or over Remote Desktop, so no run can start meanwhile;
+   sign the bot user out when you are done. Make sure the app can be started by this user and that it opens in a
+   state you can start from again (the signed-out state, a fresh document).
+2. **Start the recorder.** Run `C:\Program Files\RPA Runner\recorder\RpaRecorder.exe`. A small window, **RPA
+   Recorder**, stays on top. Choose **Start a program...** and pick the app's `.exe`, then type its arguments if it
+   needs any (leave the box empty otherwise), or choose **Record an open window...** to record an app that is already
+   running. A program that shows no window within 30 seconds is reported as `The program did not show a window within 30
+   seconds.`
+3. **Do the work in the app,** as you want the bot to do it, once and without detours. The bar lists each step as a
+   sentence (`Click Sign in`, `Type "clerk" into User name`, `Choose Net 30 in Payment terms`). **Pause** stops the
+   recording and **Resume** starts it again, for something you do not want in the flow. **F9** reads a value: point at
+   a field or a label in the app and press F9; the recorder asks for the run output name, and adds a step that reads
+   that element on each run. F9 does not reach the app.
+4. **Correct what went wrong.** Select a step on the bar and choose **Delete**: the step goes, with what was folded into
+   it. The saved file is what the list on the bar shows. A step
+   that ends in `[check this step]` was recorded while the app was slow to describe its control (the bar then says
+   `The application took longer than 200 ms to describe "<step>", so the step was recorded as it was then. Check it,
+   and delete it if it is wrong.`): look at it, and delete it and record it again if it is wrong. If the bar says
+   `The recorder missed input: Windows stopped passing it on ...`, check the last steps and record again what is
+   missing; the recorder listens again by then.
+5. **Mark values.** Select a typed value or a chosen list item that should differ on each run, such as a date or a company code, choose
+   **Mark as variable...** and name the run variable; the step then uses `{{var.<name>}}` and the recorded value is
+   removed. Select the typing of a password or any other secret and choose **Mark as secret...**: the step types a
+   secret run variable, and the typed value is removed from the recording. Mark a field you are not sure about
+   as secret: removing the value costs you one variable, and a value that stays in the file is in your n8n.
+6. **Stop and save.** Choose **Stop**, type a name in **Name of the recording**, choose **Save...** and pick a folder. It
+   writes two files there: `<name>.rpa-recording.json` and `<name>.policy-change.json` (characters Windows does not
+   allow in a file name become `_`). It asks before it replaces files of the same names. The recorder applies no policy
+   itself.
+7. **Sign the bot user out** if this machine runs with `-Unattended`, and give the desktop back to whoever uses it.
+
+### Allow the app, then import the recording
+
+8. **An administrator applies the policy change.** The change file allows the app you recorded: its path and the SHA-256
+   of that file, and the arguments you gave. It lists no write controls and no gated keys; declaring writes happens in
+   approval (step 10). Copy `<name>.policy-change.json` to a folder only administrators can change, read it, and in the
+   administrator shell (section 5) run:
+
+   ```powershell
+   & 'C:\Program Files\RPA Runner\runner\RpaPolicy.exe' apply '<path to the copied file>'
+   ```
+
+   The tool shows what the change does and asks, as in section 7. Check the path and the hash: they say which file the
+   runner will start. Give the path as the app's real location on a local drive (section 8 says what the tool refuses).
+9. **Import the recording.** In n8n, open the **Import a bot** form of the template **RPA: 5 Import a bot**, upload
+   `<name>.rpa-recording.json`, choose the source **RPA recording** and a name. Or use an RPA node with
+   **Import Steps**, the source **RPA Recording** and the same name. Start URL, AI Repair, Goal and ID Pattern do
+   not apply to a recording, and the node does not show them for it. Desktop steps are not replayed at import. They
+   go to approval as recorded, and the importer refuses a file it cannot accept (too large, more than 200 steps, an
+   `index` in a locator, an unknown key, a secret-marked field that still has a value) with a reason, and imports
+   nothing.
+10. **Approve and declare the writes.** In **RPA: 3 Approve steps**, read every step. Answer the form with **Decision**
+    and **Write steps**: the numbers of the steps that save, post or submit. Sign Steps marks those and no others. The
+    runner refuses a write only on the controls and keys its policy lists, so list the controls and keys of the app in a
+    change file as in section 8 before you rely on that.
+11. **Run.** Supply the run variables in **Options → Variables**: the ones you marked as variables, and the secret ones
+    from a secret source (an n8n external secret, or a node that reads your vault), never as text in a workflow.
+    Then run as in section 7, with the bot user signed in and its desktop unlocked.
+
+### When something fails
+
+| What you see | What it means | What to do |
+|---|---|---|
+| The bar's list stays empty while you work in the app | The recorder may not see the app: it runs as administrator and the recorder does not, or it is of a kind that was not tried (WPF, WebView2, one that draws its own controls). | Read the notices at the bottom of the bar. Start the recorder as administrator for an administrator's app. For the other kinds, write the steps by hand. |
+| A step says `(found by its row position: check it)` | The app gives a grid cell no stable name, so the locator names it by its row. | Check that the row is the same on each run, or replace the step by hand. |
+| `Give the recording a name first.` | **Save...** needs a name. | Type one in **Name of the recording**. |
+| **Save...** stays grey | It is available after **Stop**. | Choose **Stop**. |
+| Import Steps refuses the file with a reason | The file is not a recording this version accepts, or it was changed. | Read the reason. Record again if the file was damaged. A secret-marked field that still holds a value was edited by hand: mark it again in the recorder. |
+| `RpaPolicy.exe` refuses the change file | The tool checks the file before it asks (section 8 and [`desktop/README.md`](../../desktop/README.md#changing-the-policy)). | Read its message. A path that is not on a local drive, or a short (8.3) name, is refused. |
+| The run says `policy_violation: ... is not in the runner's allowedApps`, or the hash differs | The app was updated since the recording, or the change was not applied. | Apply the policy change (step 8) again for the updated file. |

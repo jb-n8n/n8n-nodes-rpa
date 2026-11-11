@@ -18,8 +18,12 @@ browser session at a time: a second browser run that starts while one is open wa
 | `runner/test/Rpa.Runner.Core.Tests` | Unit tests of the core with a fake desktop (run anywhere). |
 | `runner/test/Rpa.Supervisor.Core.Tests` | Unit tests of the supervisor's core with fake sessions (run anywhere). |
 | `runner/test/Rpa.Runner.Scenario` | The protocol test client CI runs against the real runner and the ERP Demo on Windows. |
+| `recorder/src/Rpa.Recorder.Core` | The platform-neutral part of the recorder (net8.0): the session that turns input into steps, the locator and secret rules, the recording file and the policy change file. |
+| `recorder/src/Rpa.Recorder` | The recorder, `RpaRecorder.exe` (net8.0-windows): a bar that stays on top, and the hooks and UI Automation that watch the app. It saves a recording file for Import Steps; see [Recording a flow](../docs/install/windows.md#12-recording-a-flow). |
+| `recorder/test/Rpa.Recorder.Core.Tests` | Unit tests of the recorder's core with fakes (run anywhere). |
+| `recorder/test/Rpa.Recorder.Scenario` | The recorder scenario CI runs on Windows: a stand-in for a person drives the ERP Demo while `RpaRecorder.exe` records it, and the file is compared with a golden one. |
 | `erp-demo` | ERP Demo: a small "legacy ERP" WinForms app with a v1 and a v2 UI. |
-| `installer` | The Windows package: `Install-Rpa.ps1`, `Uninstall-Rpa.ps1` and their module, the start scripts and `Show-RpaConnection.ps1` (`scripts/`), the script that stages the zip (`build/Stage.ps1`) and the Pester tests. |
+| `installer` | The Windows package: `Install-Rpa.ps1`, `Uninstall-Rpa.ps1` and their module (the package also holds the recorder, in `recorder\`), the start scripts and `Show-RpaConnection.ps1` (`scripts/`), the script that stages the zip (`build/Stage.ps1`) and the Pester tests. |
 
 ## Running the runner
 
@@ -457,13 +461,14 @@ clipboard. The data is fixed, so tests can assert exact rows. v2 is the same app
 ```sh
 dotnet build desktop/Rpa.Desktop.sln              # the Windows projects compile on Linux and macOS too
 dotnet test desktop/runner/test/Rpa.Runner.Core.Tests
+dotnet test desktop/recorder/test/Rpa.Recorder.Core.Tests
 ```
 
 No .NET SDK? `docker run --rm -v "$PWD/desktop:/src" -w /src mcr.microsoft.com/dotnet/sdk:8.0 dotnet test runner/test/Rpa.Runner.Core.Tests`.
 The UI parts run only on Windows: the `desktop` workflow builds and publishes everything on `windows-latest` (Windows
 Server 2025 in November 2026), starts
 
-the runner and drives the ERP Demo through it with the scenario client, then builds the Windows package, installs it
+the runner and drives the ERP Demo through it with the scenario client, records the same flow with `RpaRecorder.exe`, then builds the Windows package, installs it
 and drives it, and installs it again with `-Unattended` and drives it through the RPA Supervisor. Its artifact `rpa-windows-package` holds the package, `rpa-windows-x64.zip`, with its SHA-256 (see
 "Releasing the Windows package"); the artifacts `rpa-desktop-runner` and `erp-demo` are the self-contained win-x64
 builds of the runner and the demo app (no .NET install needed).

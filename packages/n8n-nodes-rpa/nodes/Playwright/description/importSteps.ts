@@ -2,6 +2,8 @@ import type { INodeProperties } from 'n8n-workflow';
 import { expectedFileProperty } from './runSteps.js';
 
 const importSteps = { show: { operation: ['importSteps'] } };
+// What does nothing for an RPA recording: its desktop steps are not replayed, so there is no site, no repair and no rows.
+const importStepsNotRecording = { show: { operation: ['importSteps'] }, hide: { source: ['recording'] } };
 
 export const IMPORT_NOTICE =
   'Imported steps make no form submissions or writes; Requests That Only Read still pass. Each step list runs once and is replayed in a fresh browser, so allow about twice Options → Max Seconds per step list. On sites with an authenticator code, the import needs either the TOTP Secret in the Site Login or Options → One-Time Code Workflow, and Max Seconds must leave room for up to a 30 s wait. What passes comes out on Repaired Steps for approval and Sign Steps. Desktop steps (from a UiPath project, a step document or an RPA recording) are not replayed: they go to approval as written.';
@@ -84,7 +86,7 @@ export const importStepsProperties: INodeProperties[] = [
     placeholder: 'https://example.com/account',
     description:
       "The site the imported steps may visit, and where they start. Leave empty to use the first page the recording opens. With a Site Login, it must be one of the credential's Sites the Browser May Open.",
-    displayOptions: importSteps,
+    displayOptions: importStepsNotRecording,
   },
   {
     displayName: 'AI Repair',
@@ -93,7 +95,7 @@ export const importStepsProperties: INodeProperties[] = [
     default: true,
     description:
       'Whether a connected chat model repairs the imported steps when the page no longer matches the recording. Without a model, or with this off, steps that no longer match fail with the step that drifted.',
-    displayOptions: importSteps,
+    displayOptions: importStepsNotRecording,
   },
   {
     displayName: 'Goal',
@@ -103,7 +105,7 @@ export const importStepsProperties: INodeProperties[] = [
     default: '',
     placeholder: 'Download the line items of last month as CSV',
     description: 'What the steps are for, in plain words. The chat model uses it only when it repairs them. Empty means: do what the imported steps do.',
-    displayOptions: { show: { operation: ['importSteps'], aiRepair: [true] } },
+    displayOptions: { show: { operation: ['importSteps'], aiRepair: [true] }, hide: { source: ['recording'] } },
   },
   {
     displayName: 'ID Pattern (Regex)',
@@ -114,7 +116,7 @@ export const importStepsProperties: INodeProperties[] = [
     description:
       'A regular expression that matches the ID every record has, such as INV-\\d{4} for INV-0417. Required when the imported steps read rows: the replay checks the rows by it. Leave empty for steps that download a file.',
     hint: 'Not sure? Paste one real ID into regex101.com and describe its shape: digits \\d, letters [A-Z], repeats {4}.',
-    displayOptions: importSteps,
+    displayOptions: importStepsNotRecording,
   },
   expectedFileProperty(
     // A step document's download steps carry their own checks; a recording's Save dialog gives its expectFile step.

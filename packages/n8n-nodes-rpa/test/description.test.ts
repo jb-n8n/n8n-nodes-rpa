@@ -133,6 +133,22 @@ describe('Run Steps and Sign Steps fields', () => {
     expect(UNSIGNED_NOTICE).toBe('Unsigned steps run as written. Only turn this off for steps you typed here.');
     expect(field('steps')).toMatchObject({ displayName: 'Steps (JSON)', type: 'json', default: '' });
   });
+  it('Import Steps hides Start URL, AI Repair, Goal and ID Pattern for an RPA Recording only', () => {
+    const field = (name: string) => {
+      const p = d.properties.find((x) => x.name === name && x.displayOptions?.show?.operation?.includes('importSteps'));
+      if (!p) throw new Error(`no Import Steps property "${name}"`);
+      return p;
+    };
+    const importOnly = { show: { operation: ['importSteps'] } };
+    const notRecording = { show: { operation: ['importSteps'] }, hide: { source: ['recording'] } };
+    expect(field('startUrl').displayOptions).toEqual(notRecording);
+    expect(field('aiRepair').displayOptions).toEqual(notRecording);
+    expect(field('idPattern').displayOptions).toEqual(notRecording);
+    expect(field('goal').displayOptions).toEqual({ show: { operation: ['importSteps'], aiRepair: [true] }, hide: { source: ['recording'] } });
+    // What every other field of the operation shows is as before: the source, the name and the notice for all sources.
+    expect(field('source').displayOptions).toEqual(importOnly);
+    expect(field('stepsName').displayOptions).toEqual(importOnly);
+  });
   it('Expected File shows only with AI Repair and lists the six file types', () => {
     const f = field('expectedFile');
     expect(f).toMatchObject({ displayName: 'Expected File (First Version)', type: 'fixedCollection', displayOptions: { show: { operation: ['runSteps'], aiRepair: [true] } } });
