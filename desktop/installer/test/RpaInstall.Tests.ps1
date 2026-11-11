@@ -4095,6 +4095,22 @@ Describe 'Get-Rpa.ps1' {
     foreach ($bad in '', 'abc  rpa-windows-x64.zip', ('{0}0  rpa-windows-x64.zip' -f ('ab' * 32)), ('  {0}' -f ('ab' * 32)), ('g' * 64)) { Get-RpaPublishedHash $bad | Should -BeNullOrEmpty }
   }
 
+  # The last check before the installer starts, on the unpacked folder first, then on each folder above it. Both cases
+  # here are refused at the folder itself, whatever the folders above the temporary folder allow.
+  It 'on Windows: refuses an unpacked folder that other users can change, and one that is a junction' -Skip:($env:OS -ne 'Windows_NT') {
+    $folder = Join-Path $script:GetRoot ('unpacked-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $folder | Out-Null
+    & icacls.exe $folder /grant '*S-1-5-32-545:(OI)(CI)M' | Out-Null
+    $users = (New-Object Security.Principal.SecurityIdentifier 'S-1-5-32-545').Translate([Security.Principal.NTAccount]).Value
+    Get-RpaFolderRefusal $folder | Should -BeExactly ('{0} can be changed by {1}, so the installer is not started from it. Give that folder the access rules of C:\Program Files.' -f $folder, $users)
+    $link = Join-Path $script:GetRoot ('link-' + [guid]::NewGuid().ToString('N'))
+    $cmd = Join-Path ([Environment]::SystemDirectory) 'cmd.exe'
+    & $cmd /d /c ('mklink /J "{0}" "{1}"' -f $link, $folder) | Out-Null
+    try {
+      Get-RpaFolderRefusal $link | Should -BeExactly ('{0} is a link or junction, so the installer is not started from it.' -f $link)
+    } finally { & $cmd /d /c ('rd "{0}"' -f $link) | Out-Null }
+  }
+
   Context 'the unpack' {
     It 'unpacks a zip whose SHA-256 is the one beside it into <root>\<version>, and says which version' {
       $zip = New-TestZip 'rpa-windows-x64.zip'
