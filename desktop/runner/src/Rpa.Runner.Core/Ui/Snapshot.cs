@@ -1,18 +1,11 @@
 using System.Text.Json.Serialization;
-using System.Text.RegularExpressions;
 
 namespace Rpa.Runner.Core.Ui;
 
-/// <summary>Which values the runner never returns: password fields and fields with credential-like names.</summary>
+/// <summary>Which values the runner never returns: password fields and fields with credential-like names (the names
+/// are in CredentialNames.cs, which the recorder compiles too).</summary>
 public static partial class Redaction
 {
-    [GeneratedRegex(
-        @"password|passwort|passwd|passcode|passphrase|\bpass\b|pwd|kennwort|contrase|mot\s*de\s*passe|secret|token|credential|api[\s_-]?key|\bpin\b|\botp\b|one[\s-]?time|\b2fa\b|\bmfa\b|\bcvv\b|\bcvc\b|security\s*code",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
-    private static partial Regex CredentialLike();
-
-    public static bool IsCredentialLike(string? text) => !string.IsNullOrEmpty(text) && CredentialLike().IsMatch(text);
-
     /// <summary>True when an element's value must not leave the runner.</summary>
     public static bool HidesValue(IUiNode node) =>
         node.IsPassword || IsCredentialLike(node.Name) || IsCredentialLike(node.AutomationId);
