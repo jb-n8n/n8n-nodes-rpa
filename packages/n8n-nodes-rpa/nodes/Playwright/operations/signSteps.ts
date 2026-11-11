@@ -190,7 +190,7 @@ function safetyFlagsProblem(engine: Engine, script: Script, p: ParsedProposal, n
   let expected: string[];
   try {
     expected = fullSafetyFlags(engine, script, notReplayed
-      ? { unverifiedCount: true, fieldsDropped: false, notReplayed: true }
+      ? { unverifiedCount: false, fieldsDropped: false, notReplayed: true }
       : { unverifiedCount: p.evidence.total === null && !p.evidence.file, fieldsDropped: p.safetyFlags.includes(engine.EXTRACT_FIELDS_DROPPED) });
   } catch (error) {
     return errorMessage(error);
@@ -425,6 +425,9 @@ function signDesktop(
     evidence: p.evidence, changes: p.changes, safetyFlags: p.safetyFlags, screenshots: {}, ...leftOutOf(p),
   } as unknown as DesktopProposal;
   if (shownTextChanged(engine, proposal, p.shownText)) return c.refuse([SHOWN_TEXT_CHANGED]);
+  // Desktop steps are reviewed as written, so the change list the approver read must be there (shownTextChanged skips a
+  // missing one, which older browser items need).
+  if (typeof p.shownText.changeList !== 'string' || p.shownText.changeList === '') return c.refuse([SHOWN_TEXT_CHANGED]);
   let expected: string[] | undefined;
   try {
     expected = engine.desktopSafetyFlags(engine.parseDesktopScript(p.steps));

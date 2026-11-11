@@ -105,12 +105,12 @@ export async function repairedStepsItem(ctx: NodeContext, engine: Engine, p: Pro
  * The JSON of a Repaired steps item. The safety flags are the full list (fullSafetyFlags: every host, submission and
  * download, not only the new ones the engine flags), and the digest is computed over that list. Sign Steps recomputes
  * the same list and refuses an item that carries another one. `notReplayed`: browser steps that go to approval without
- * a replay (engine notReplayedProposal): nothing was counted, the flags also name each secret fill and password change,
+ * a replay (engine notReplayedProposal): no page was read, so there is no count-unverified flag, the flags also name each secret fill and password change,
  * and the evidence line is NOT_REPLAYED_EVIDENCE_LINE.
  */
 export function repairedStepsJson(engine: Engine, proposal: Proposal, attachmentNames = '', o: { notReplayed?: boolean } = {}): IDataObject {
   const safetyFlags = fullSafetyFlags(engine, engine.parseScript(proposal.steps), o.notReplayed
-    ? { unverifiedCount: true, fieldsDropped: false, notReplayed: true }
+    ? { unverifiedCount: false, fieldsDropped: false, notReplayed: true }
     : { unverifiedCount: proposal.safetyFlags.includes(engine.UNVERIFIED_COUNT_FLAG), fieldsDropped: proposal.safetyFlags.includes(engine.EXTRACT_FIELDS_DROPPED) });
   const p: Proposal = withLeftOut({ ...proposal, safetyFlags });
   return {

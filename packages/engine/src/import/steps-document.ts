@@ -12,7 +12,7 @@ import type { ImportOptions, ImportReport, ImportResult } from './types.js';
 import { desktopDraftOf } from './uipath-desktop.js';
 
 /** A step document larger than this is refused before it is parsed, as a Chrome recording is. */
-export const MAX_STEPS_DOCUMENT_BYTES = MAX_CHROME_BYTES;
+const MAX_STEPS_DOCUMENT_BYTES = MAX_CHROME_BYTES;
 
 const WHAT = 'Step document';
 const TOO_LARGE = 'the step document is larger than 5 MiB, so it was not read';

@@ -9,7 +9,7 @@ import { SECRET_FILL_VALUE } from '../secrets/render.js';
 import { scriptHash } from '../sign.js';
 import { parseScript } from '../steps/parse.js';
 import type { Script, Step } from '../types.js';
-import { stepChanges, UNVERIFIED_COUNT_FLAG, type Proposal } from './proposal.js';
+import { stepChanges, type Proposal } from './proposal.js';
 
 /**
  * Whether the steps need approval as written: a submit, a download through a form (draftWrites, paginate bodies
@@ -24,28 +24,28 @@ export function needsApprovalAsWritten(steps: Step[]): boolean {
 const variableOf = (value: string): string => `{{var.${SECRET_FILL_VALUE.exec(value)?.[1] ?? ''}}}`;
 
 /**
- * One flag per secret fill and per password change, which the full safety flags do not name: the step number (1-based,
- * counted as the change list lists the steps, a paginate's own steps after it) and the run variable it types, by name.
+ * One flag per run variable that a secret fill types or a password change sets, which the full safety flags do not name:
+ * the variable by name, never a value. No step number: the browser change list does not number its steps. The same
+ * flag is listed once.
  */
 export function notReplayedFlags(script: Script): string[] {
-  const flags: string[] = [];
-  flattenSteps(script.steps).forEach((s, i) => {
-    const n = i + 1;
-    if ('fill' in s && s.fill.secret === true) flags.push(`secret fill: step ${n} types the run variable ${variableOf(s.fill.value)}`);
-    if ('signIn' in s && s.signIn.changePassword) flags.push(`password change: step ${n} sets a new password from the run variable ${variableOf(s.signIn.changePassword.value)}`);
-  });
-  return flags;
+  const flags = new Set<string>();
+  for (const s of flattenSteps(script.steps)) {
+    if ('fill' in s && s.fill.secret === true) flags.add(`secret fill: a step types the run variable ${variableOf(s.fill.value)}`);
+    if ('signIn' in s && s.signIn.changePassword) flags.add(`password change: a step sets a new password from the run variable ${variableOf(s.signIn.changePassword.value)}`);
+  }
+  return [...flags];
 }
 
 /**
  * The reviewable proposal of browser steps that were not run: version 1 with no base, empty evidence (as a desktop
- * proposal's), every step listed as added, and the safety flags of a first approval, the count-unverified flag (nothing
- * was counted) and notReplayedFlags. Every description and flag goes through `mask`.
+ * proposal's), every step listed as added, and the safety flags of a first approval and notReplayedFlags. No page was
+ * read, so there is no count-unverified flag. Every description and flag goes through `mask`.
  */
 export function notReplayedProposal(script: Script, mask: (s: string) => string = (s) => s): Proposal {
   const steps = parseScript(script);
   const policy = { startUrl: steps.startUrl, navHosts: [], subresourceHosts: [], login: [], allowedSubmits: [] };
-  const flags = [...validateScript(steps, { policy, mode: 'proposal' }).safetyFlags, UNVERIFIED_COUNT_FLAG, ...notReplayedFlags(steps)];
+  const flags = [...validateScript(steps, { policy, mode: 'proposal' }).safetyFlags, ...notReplayedFlags(steps)];
   return {
     name: steps.name ?? '',
     baseVersion: null,

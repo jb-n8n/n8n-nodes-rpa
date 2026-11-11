@@ -94,7 +94,8 @@ describe('a step document as an import source: the import run', () => {
       expect(p.evidence).toEqual({ count: 0, total: null, diff: { missing: [], extra: [] } });
       expect(p.changes).toEqual(stepChanges(undefined, script));
       expect(p.changes.every((c) => c.was === null)).toBe(true);
-      expect(p.safetyFlags).toContain(UNVERIFIED_COUNT_FLAG);
+      // No page was read, so there is no count to call unverified.
+      expect(p.safetyFlags).not.toContain(UNVERIFIED_COUNT_FLAG);
       expect(p.safetyFlags).toContain('new form submission: POST ' + portal.host + '/acme/reports/export');
     }
     // A list without any of the four kinds is run and replayed, as every import is.
@@ -110,8 +111,8 @@ describe('a step document as an import source: the import run', () => {
     } } }, ...erp.steps.slice(1)] };
     const secretFill = { ...erp, steps: [...erp.steps.slice(0, -1), { intent: 'Type the export password', fill: { field: { label: 'Export password' }, value: '{{var.exportPassword}}', secret: true } }, erp.steps.at(-1)] };
     const flags: [object, string[]][] = [
-      [changePassword, ['password change: step 1 sets a new password from the run variable {{var.newPassword}}']],
-      [secretFill, [`secret fill: step ${erp.steps.length} types the run variable {{var.exportPassword}}`]],
+      [changePassword, ['password change: a step sets a new password from the run variable {{var.newPassword}}']],
+      [secretFill, ['secret fill: a step types the run variable {{var.exportPassword}}']],
     ];
     for (const [doc, expected] of flags) {
       const script = importSource('steps', json(doc), opts).drafts[0].script;
@@ -119,11 +120,12 @@ describe('a step document as an import source: the import run', () => {
       expect(notReplayedFlags(script)).toEqual(expected);
       expect(notReplayedProposal(script).safetyFlags).toEqual(expect.arrayContaining(expected));
     }
-    // Numbered as the change list shows the steps: a step inside paginate counts after the paginate step itself.
+    // No step number (the browser change list shows none), also inside paginate; the same variable typed twice is one flag.
     const nested = { ...erp, steps: [...erp.steps.slice(0, 2), { intent: 'Each page', paginate: { next: { text: 'Next page' }, until: 'absent', max: 2, each: [
       { intent: 'Type the export password', fill: { field: { label: 'Export password' }, value: '{{var.exportPassword}}', secret: true } },
+      { intent: 'Type it again', fill: { field: { label: 'Repeat password' }, value: '{{ var.exportPassword }}', secret: true } },
     ] } }] };
-    expect(notReplayedFlags(importSource('steps', json(nested), opts).drafts[0].script)).toEqual(['secret fill: step 4 types the run variable {{var.exportPassword}}']);
+    expect(notReplayedFlags(importSource('steps', json(nested), opts).drafts[0].script)).toEqual(['secret fill: a step types the run variable {{var.exportPassword}}']);
   });
 });
 

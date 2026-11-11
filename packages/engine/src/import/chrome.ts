@@ -47,9 +47,9 @@ const COUNTED = {
   chain: ['Shadow DOM or frame selector chains', 'a selector chain through shadow DOM is not imported: each step keeps its other selectors'],
 } as const;
 type Counted = keyof typeof COUNTED;
-/** A Map, so a step type such as `constructor` or `__proto__` is never mistaken for one of these. */
 /** The counted kinds whose absence changes nothing the bot does: each step scrolls and focuses itself, keeps its other selectors. A hover can open a menu, so it is not one. */
 const NOT_NEEDED = new Set<Counted>(['viewport', 'scroll', 'keyUp', 'focus', 'xpath', 'pierce', 'puppeteer', 'chain']);
+/** A Map, so a step type such as `constructor` or `__proto__` is never mistaken for one of these. */
 const SILENT = new Map<string, Counted>([['setViewport', 'viewport'], ['scroll', 'scroll'], ['hover', 'hover'], ['keyUp', 'keyUp']]);
 
 type Json = Record<string, unknown>;

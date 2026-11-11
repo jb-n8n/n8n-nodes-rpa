@@ -370,7 +370,8 @@ describe('README', () => {
       'A `signature` and `approvedBy` beside the steps are not imported', 'with the safety flags computed from the steps',
       // Steps the import cannot run go to approval as written, and the approver is told so.
       'is not run and not replayed, not even its steps before the first of those', 'so a document Sign Steps would refuse is refused here with that reason',
-      'goes to approval as written, marked not replayed', '`secret fill: step 3 types the run variable {{var.exportPassword}}`', 'needs no RPA Browser credential',
+      'goes to approval as written, marked not replayed', '`secret fill: a step types the run variable {{var.exportPassword}}`', 'No page was read, so there is no `count unverified` flag',
+      'Once approved, an import becomes the version that runs under its name, also when a higher version was active', 'needs no RPA Browser credential',
       "the Site Login's **Forms It May Submit** and **Pages Where the Password May Be Typed**, and each declared target matched against the request the page really sends",
       'declare the `submit`, or the `download` with `via`, in a step document and import that',
       // What an import left out reaches the approval and is bound to it.
@@ -383,6 +384,8 @@ describe('README', () => {
     expect(operation('Sign Steps')).toContain('Steps you wrote yourself get a Repaired steps item, and so approval and a signature, through [Import Steps](#import-steps) with **Source** **Step Document (JSON)**');
     expect(section('## Run Steps reference')).toContain('To have steps you wrote approved and signed, import them with Import Steps → **Step Document (JSON)**');
     expect(section('## Run Steps reference')).toContain('steps that submit a form, download through a form, type a secret or change a password go to approval there as written, marked not replayed');
+    // A changed TOTP Secret changes the breaker's fingerprint, so it gets one try too.
+    expect(readme).toContain("Adding, replacing or removing the Site Login's TOTP Secret also counts as a changed login and gets one try");
     for (const text of [
       '`Not replayed: these browser steps were never run by the import, because they submit a form, download through a form, type a secret or change a password. Check every step, each form\'s target and each download before you approve.`',
       'its steps have at least one of those four, it is a first version (no base version) and its change list shows every step, in order', 'a `download` in it needs no file evidence',

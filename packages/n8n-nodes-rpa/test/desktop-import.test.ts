@@ -145,11 +145,14 @@ describe('approving imported desktop steps: Sign Steps with Write Steps', () => 
     expect(String((await sign(edited)).error)).toContain('the evidence, change list or safety line changed after it was reviewed');
     const { safetyLine: _s, ...noSafetyLine } = item;
     expect(String((await sign(noSafetyLine)).error)).toContain('the evidence, change list or safety line changed after it was reviewed');
-    // A typed value changed, with the lines that would show it left out: the engine's hash check refuses it.
+    // A typed value changed, the item's lines left as they were: the engine's hash check refuses it.
     const steps = structuredClone(item.steps) as { steps: { fill?: { value: string } }[] };
     steps.steps[1].fill!.value = 'someone-else';
-    const { evidenceLine: _e, changeList: _c, ...bare } = { ...item, steps } as IDataObject;
+    const { evidenceLine: _e, ...bare } = { ...item, steps } as IDataObject;
     expect(String((await sign(bare)).error)).toContain('the steps do not match the hash that was reviewed');
+    // Desktop steps are reviewed as written: without the change list the approver read, the item is refused.
+    const { changeList: _c, ...noChangeList } = item;
+    expect(String((await sign(noChangeList)).error)).toContain('the evidence, change list or safety line changed after it was reviewed');
     const browserItem = { ...item, steps: { name: 'erp-1', version: 1, startUrl: 'https://example.com/', steps: [{ intent: 'Open', goto: 'https://example.com/' }] } };
     expect(String((await sign(browserItem, { writeSteps: '1' })).error)).toContain('Write Steps applies to desktop steps only: clear it for browser steps.');
     expect(await sign(item, { approved: false, writeSteps: '16' })).toMatchObject({ status: 'rejected', hash: item.hash, steps: '' });

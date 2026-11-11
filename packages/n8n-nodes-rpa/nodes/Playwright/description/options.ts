@@ -313,7 +313,7 @@ export const OPTION_ENTRIES: INodeProperties[] = [
     default: '',
     placeholder: "e.g. 4nQkZp2r8XyT1bLm (from the workflow's address, after /workflow/)",
     description:
-      'ID of the published workflow that supplies the sign-in code when the steps\' sign-in takes its code from a workflow ("source": "workflow"). It starts with an Execute Workflow Trigger, receives requestedAt and must return exactly one item with a code field of 6 to 10 digits. Publish it before the first run. In Import Steps, setting it makes the imported sign-in take its code from this workflow, even when the Site Login has a TOTP Secret; the approved steps then need the same workflow here in Run Steps.',
+      'ID of the published workflow that supplies the sign-in code when the steps\' sign-in takes its code from a workflow ("source": "workflow"). It starts with an Execute Workflow Trigger, receives requestedAt and must return exactly one item with a code field of 6 to 10 digits. Publish it before the first run. In Import Steps, setting it makes a recorded sign-in take its code from this workflow, even when the Site Login has a TOTP Secret; a step document keeps its own sign-in, so in a step document also set "source": "workflow" in its totp. The approved steps then need the same workflow here in Run Steps.',
     displayOptions: only(['runSteps', 'importSteps']),
   },
   {
@@ -332,7 +332,7 @@ export const OPTION_ENTRIES: INodeProperties[] = [
     default: '',
     noDataExpression: true,
     description:
-      "Only used with a Site Login. A failed login stops all further logins with that credential until its username or password is corrected, which gets one try. When the login was right and something else was wrong, or after the account is unlocked, change this value (for example to today's date) to allow the next login. Type the value, not an expression: it is the same for every item, and a login that fails stays blocked for the rest of the execution.",
+      "Only used with a Site Login. A failed login stops all further logins with that credential until its username, password or TOTP Secret changes, which gets one try (a breaker that opened in 0.2.0 or earlier still needs this key). When the login was right and something else was wrong, or after the account is unlocked, change this value (for example to today's date) to allow the next login. Type the value, not an expression: it is the same for every item, and a login that fails stays blocked for the rest of the execution.",
     displayOptions: only(['runSteps', 'importSteps']),
   },
   {

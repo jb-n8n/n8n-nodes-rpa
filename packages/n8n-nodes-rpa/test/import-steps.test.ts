@@ -648,7 +648,7 @@ describe('Import Steps: execution', () => {
       expect(error).toBeInstanceOf(NodeOperationError);
       expect((error as NodeOperationError).message).toBe(`auth_blocked: ${message}`);
       expect((error as NodeOperationError).description).toBe(
-        'auth_blocked: The site asked for a one-time code and the RPA Site Login has no TOTP Secret. Put the authenticator\'s seed in the Site Login, or take the code from a workflow: set Options → One-Time Code Workflow (in Run Steps, also set "source": "workflow" in the sign-in step).',
+        'auth_blocked: The site asked for a one-time code and the RPA Site Login has no TOTP Secret. Put the authenticator\'s seed in the Site Login, or take the code from a workflow: set Options → One-Time Code Workflow (in Run Steps or in a step document, also set "source": "workflow" in the sign-in step).',
       );
       expect(engine.adoptions[0]).not.toHaveProperty('codeProvider');
     });
@@ -1137,15 +1137,14 @@ describe('Import Steps: a step document', () => {
       const { data, repaired } = await notReplayed({ startUrl: START, steps: [SIGN_IN, OPEN, fill, SUBMIT] });
       const item = repaired[0].json;
       expect(item.safetyFlags).toEqual([
-        `form submission: POST ${SITE.host}/acme/reports/export`, `host: ${SITE.host}`, 'count unverified: the page that was read states no total',
-        'secret fill: step 3 types the run variable {{var.exportPassword}}',
+        `form submission: POST ${SITE.host}/acme/reports/export`, `host: ${SITE.host}`, 'secret fill: a step types the run variable {{var.exportPassword}}',
       ]);
       expect(item.safetyLine).toBe((item.safetyFlags as string[]).join('; '));
       expect(repaired[0].json.digest).toBe(real.proposalDigest({ ...(item as unknown as real.Proposal) }));
       expect(JSON.stringify([data, repaired])).not.toContain(EXPORT_PW);
       const password = DOCS['a signIn with changePassword'];
       const changed = await notReplayed(password);
-      expect(changed.repaired[0].json.safetyFlags).toContain('password change: step 1 sets a new password from the run variable {{var.newPassword}}');
+      expect(changed.repaired[0].json.safetyFlags).toContain('password change: a step sets a new password from the run variable {{var.newPassword}}');
       expect(JSON.stringify(changed.repaired)).not.toContain(NEW_PW);
     });
 
@@ -1158,6 +1157,12 @@ describe('Import Steps: a step document', () => {
       const reason = 'step "Send the export": POST forms.other.net/send is not an allowed submission';
       expect(data[0].json.error).toBe(`policy_violation: ${reason}`);
       expect(details(data[0]).drafts).toEqual([expect.objectContaining({ adopted: false, code: 'policy_violation', reason })]);
+      // Nothing ran, and the guidance says so.
+      const thrown = await run(watched(), { params: docParams(doc, {}, { variables }), items: textItem, continueOnFail: false }).catch((e: unknown) => e);
+      expect(thrown).toBeInstanceOf(NodeOperationError);
+      expect((thrown as NodeOperationError).description).toBe(
+        'policy_violation: The steps were checked against the rules that Sign Steps and Run Steps apply, and were not run: the first line says which rule they break. Correct the step document, or the Site Login\'s settings, and import it again.',
+      );
       // Sign Steps, given the same steps for approval, refuses them with the same reason.
       const script = real.parseScript({ ...doc, name: 'sap-export', version: 1 });
       const item = repairedStepsJson(engine, real.notReplayedProposal(script), '', { notReplayed: true });

@@ -57,6 +57,9 @@ export const DESKTOP_FOR_APPROVAL =
 /** A browser step document on Data that goes to approval without a run or a replay (it writes or types a secret). */
 export const WRITES_FOR_APPROVAL =
   "These browser steps are not replayed at import, because they submit a form, download through a form, type a secret or change a password: they go to approval as written. Review every step, each form's target and each download, and supply the variables in Run steps.";
+/** The guidance for a step document that goes to approval as written and fails the check Sign Steps will make: nothing ran. */
+export const CHECKED_NOT_RUN =
+  "The steps were checked against the rules that Sign Steps and Run Steps apply, and were not run: the first line says which rule they break. Correct the step document, or the Site Login's settings, and import it again.";
 /** A UiPath project with browser sequences, imported without an RPA Browser credential (its desktop sequences need none). */
 export const IMPORT_BROWSER_NEEDED = 'The project has browser steps: attach an RPA Browser credential to replay them.';
 
@@ -144,7 +147,7 @@ type DraftOutcome =
   | { draft: Draft; kind: 'adopted'; proposal: Proposal }
   | { draft: Draft; kind: 'forApproval'; review: IDataObject }
   | { draft: Draft; kind: 'notAdoptable'; code?: ErrorCode; reason: string }
-  | { draft: Draft; kind: 'failed'; code?: ErrorCode; reason: string; captures?: Captures };
+  | { draft: Draft; kind: 'failed'; code?: ErrorCode; reason: string; captures?: Captures; guidance?: string };
 
 /** A failed draft's failure screenshot and trace (Debug Trace not Never); the node scrubs the trace again before it is attached. */
 interface Captures { screenshot?: Buffer; trace?: Buffer }
@@ -373,7 +376,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
     const what = `${first.code ? `${first.code}: ` : ''}${mask(first.reason)}`;
     const message = outcomes.length === 1 ? what : NONE_ADOPTED(outcomes.length, `${first.draft.name}: ${what}`);
     const error = new NodeOperationError(node, message, {
-      itemIndex: i, description: first.code ? `${first.code}: ${guidanceFor(first.code, first.reason)}` : 'Nothing was adopted. The reasons are in details.drafts.',
+      itemIndex: i, description: first.code ? `${first.code}: ${first.guidance ?? guidanceFor(first.code, first.reason)}` : 'Nothing was adopted. The reasons are in details.drafts.',
     });
     error.message = message;
     Object.assign(error.context, { code: first.code ?? null, name: p.name });
@@ -406,14 +409,14 @@ function forApproval(
   // The Data entry says why (STEPS_WITHHELD); there is no other reason.
   if (containsSecret(draft.script)) return { draft, kind: 'notAdoptable', reason: '' };
   const policy = signingPolicy(engine, draft.script, siteLogin);
-  if (!policy.ok) return { draft, kind: 'failed', code: 'policy_violation', reason: policy.reason };
+  if (!policy.ok) return { draft, kind: 'failed', code: 'policy_violation', reason: policy.reason, guidance: CHECKED_NOT_RUN };
   const checked = engine.validateScript(draft.script, { policy: policy.policy, ...(siteLogin ? { secrets: siteLogin.secrets } : {}), mode: 'load' });
-  if (!checked.ok) return { draft, kind: 'failed', code: 'policy_violation', reason: checked.violations.join('; ') };
+  if (!checked.ok) return { draft, kind: 'failed', code: 'policy_violation', reason: checked.violations.join('; '), guidance: CHECKED_NOT_RUN };
   try {
     const proposal = engine.notReplayedProposal(draft.script, mask);
     return { draft, kind: 'forApproval', review: repairedStepsJson(engine, leftOut.length ? { ...proposal, leftOut } : proposal, '', { notReplayed: true }) };
   } catch (error) {
-    return { draft, kind: 'failed', code: 'policy_violation', reason: errorMessage(error) };
+    return { draft, kind: 'failed', code: 'policy_violation', reason: errorMessage(error), guidance: CHECKED_NOT_RUN };
   }
 }
 

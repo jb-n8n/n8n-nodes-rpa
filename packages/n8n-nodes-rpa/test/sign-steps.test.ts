@@ -3,7 +3,7 @@ import { NodeOperationError, type IDataObject, type INodeExecutionData } from 'n
 import { describeInterrupt, describeStep, proposalDigest, scriptHash, verifyScript, type Proposal, type Script } from 'n8n-rpa-engine';
 import { changeList, evidenceLine, fullSafetyFlags, safetyLine } from '../nodes/Playwright/format.js';
 import { CHANGE_LIST_MISMATCH, executeSignSteps, parseRepairedSteps, READ_POSTS_NOT_LISTED } from '../nodes/Playwright/operations/signSteps.js';
-import { repairedStepsItem, repairedStepsJson } from '../nodes/Playwright/output.js';
+import { desktopRepairedStepsJson, repairedStepsItem, repairedStepsJson } from '../nodes/Playwright/output.js';
 import { rejectedRecord, signedRecord, STEPS_TABLE_COLUMNS } from '../nodes/Playwright/rows.js';
 import { fakeEngine } from './fake-engine.js';
 import { harness, type HarnessOptions } from './harness.js';
@@ -167,8 +167,7 @@ describe('Sign Steps: browser steps not replayed', () => {
     const item = notReplayedItem(WRITES);
     expect(item).toMatchObject({ evidenceLine: NOT_REPLAYED, evidence: { count: 0, total: null, diff: { missing: [], extra: [] } } });
     expect(item.safetyFlags).toEqual([
-      'form submission: POST example.com/send', 'download step', 'host: example.com', 'count unverified: the page that was read states no total',
-      'secret fill: step 2 types the run variable {{var.exportPassword}}',
+      'form submission: POST example.com/send', 'download step', 'host: example.com', 'secret fill: a step types the run variable {{var.exportPassword}}',
     ]);
     const rec = only(await sign(item)).json;
     expect(rec.status, String(rec.message)).toBe('active');
@@ -230,6 +229,15 @@ describe('Sign Steps: browser steps not replayed', () => {
     const { changeList: _old, ...older } = repairedItem(STEPS);
     expect(only(await sign(older)).json.status).toBe('active');
   });
+  it('Sign Steps refuses a desktop item whose shown change list was removed', async () => {
+    const desktop = engine.desktopProposal(engine.parseDesktopScript({
+      surface: 'desktop', name: 'orders', version: 1, app: { exe: 'ErpDemo.exe' }, steps: [{ intent: 'Click Save', click: { uia: { path: [{ controlType: 'Button', automationId: 'btnSave' }] } } }],
+    }));
+    const item = desktopRepairedStepsJson(engine, desktop);
+    expect(only(await sign(item, { params: params({ writeSteps: '1' }) })).json.status).toBe('active');
+    const { changeList: _shown, ...without } = item;
+    for (const removed of [without, { ...without, changeList: '' }]) expect(only(await sign(removed, { params: params({ writeSteps: '1' }) })).json.message).toBe(SHOWN);
+  });
   it('an item proven in a browser with a download still needs its file evidence', async () => {
     const download: Script = { ...STEPS, steps: [STEPS.steps[0], { intent: 'Get the file', download: { trigger: { role: 'button', name: 'Export' }, check: { name: '^items' } } }] };
     const e = only(await sign(craftedItem(download, ['download step', 'host: example.com', 'count unverified: the page that was read states no total'], { count: 0, total: null, diff: { missing: [], extra: [] } }))).json;
@@ -279,12 +287,12 @@ describe('Sign Steps: what an import left out', () => {
   });
 
   it('an item without a leftOut field signs as before', async () => {
-    // Items made by the code before this change, written out: a replayed repair, a not-replayed import, a desktop import.
+    // Items made by the code before this change, written out: a replayed repair and a desktop import.
     const replayed = JSON.parse(String.raw`{"name":"items","baseVersion":1,"version":2,"steps":{"name":"items","version":2,"startUrl":"https://example.com/list","steps":[{"intent":"Open the list","goto":"https://example.com/list"},{"intent":"Read the items","extract":{"scope":{"css":"main"},"idPattern":"SKU-\\d{4}"}}]},"hash":"a709c30b4469213549d1321946c47f412d9f0af76164a5fe96b0e0f207735179","digest":"1bedf8c84c9c8a0806399a13f2880413c37274f0a32938bc18dfbaf4f403e56f","evidence":{"count":3,"total":3,"diff":{"missing":[],"extra":[]}},"changes":[{"was":"Read the list (extract rows from css \"main\")","now":"Read the items (extract rows from css \"main\", ID pattern SKU-\\d{4})"}],"safetyFlags":["host: example.com"],"evidenceLine":"Proven in a fresh browser: 3 of 3 rows","changeList":"Changed: Read the list (extract rows from css \"main\") -> Read the items (extract rows from css \"main\", ID pattern SKU-\\d{4})","safetyLine":"host: example.com","attachmentNames":""}`) as IDataObject;
-    const notReplayed = JSON.parse(String.raw`{"name":"contact","baseVersion":null,"version":1,"steps":{"name":"contact","version":1,"startUrl":"https://example.com/form","steps":[{"intent":"Type the name","fill":{"field":{"label":"Name"},"value":"{{var.name}}"}},{"intent":"Send","submit":{"path":"/send","button":{"role":"button","name":"Send"}}}]},"hash":"2882750148bb4f8175de89c07945bd9fdb08b8c84ae91ec5e63852fb22418289","digest":"136b819028f48c4d5a9f6ac02138c0d70bfd6eed4d18a6d79bb45b3e219cb61a","evidence":{"count":0,"total":null,"diff":{"missing":[],"extra":[]}},"changes":[{"was":null,"now":"Type the name (fill label \"Name\" with \"{{var.name}}\")"},{"was":null,"now":"Send (submit with role \"button\" name \"Send\" to POST the start site/send)"}],"safetyFlags":["form submission: POST example.com/send","host: example.com","count unverified: the page that was read states no total"],"evidenceLine":"Not replayed: these browser steps were never run by the import, because they submit a form, download through a form, type a secret or change a password. Check every step, each form's target and each download before you approve.","changeList":"Added: Type the name (fill label \"Name\" with \"{{var.name}}\")\nAdded: Send (submit with role \"button\" name \"Send\" to POST the start site/send)","safetyLine":"form submission: POST example.com/send; host: example.com; count unverified: the page that was read states no total","attachmentNames":""}`) as IDataObject;
     const desktop = JSON.parse(String.raw`{"name":"orders","baseVersion":null,"version":1,"steps":{"surface":"desktop","name":"orders","version":1,"app":{"exe":"ErpDemo.exe"},"steps":[{"intent":"Click Save","click":{"uia":{"path":[{"controlType":"Button","automationId":"btnSave"}]}}}]},"hash":"4eece7e6baa3a46b93062e38880109c14319aca7067668c4b98e4f648dccc8aa","digest":"b01b27a6a552e208e373d9f9e457e44cfe99b674b83572921fc46da62e6a2534","evidence":{"count":0,"total":null,"diff":{"missing":[],"extra":[]}},"changes":[{"was":null,"now":"Click Save (click \"Button\" id \"btnSave\")"}],"safetyFlags":["desktop app: \"ErpDemo.exe\"","candidate write: step 1 (Click Save) may save, post or submit: list 1 in Write Steps if it does (the desktop runner refuses a write only on the controls and keys its policy lists, so leaving a step unlisted does not stop it from saving unless its control is in the runner policy)"],"evidenceLine":"Not replayed: desktop steps imported from UiPath are reviewed as written (there is no desktop proof yet). Check every step, and list in Write Steps the steps that save, post or submit.","changeList":"Step 1: Click Save (click \"Button\" id \"btnSave\")","safetyLine":"desktop app: \"ErpDemo.exe\"; candidate write: step 1 (Click Save) may save, post or submit: list 1 in Write Steps if it does (the desktop runner refuses a write only on the controls and keys its policy lists, so leaving a step unlisted does not stop it from saving unless its control is in the runner policy)","attachmentNames":""}`) as IDataObject;
     expect(only(await sign(replayed)).json.status).toBe('active');
-    expect(only(await sign(notReplayed)).json.status).toBe('active');
+    // A not-replayed item made then no longer signs: its flags carried "count unverified", which such items no longer
+    // carry (no page was read). No such item was released.
     const rec = only(await sign(desktop, { params: params({ writeSteps: '1' }) })).json;
     expect(rec.status, String(rec.message)).toBe('active');
   });

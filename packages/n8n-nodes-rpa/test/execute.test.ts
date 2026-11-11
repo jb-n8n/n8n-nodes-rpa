@@ -231,6 +231,16 @@ describe('a corrected login after login_failed', () => {
     expect(await record()).toBeUndefined();
     expect(later.h.staticData[BREAKER_KEY]).toEqual({});
   });
+  it('changing only the TOTP Secret gives one try', async () => {
+    // The fingerprint is keyed with the TOTP Secret, so adding, replacing or removing it counts as a changed login.
+    const withSeed = { ...LOGIN, totpSecret: 'JBSWY3DPEHPK3PXP' };
+    for (const [before, after] of [[withSeed, { ...LOGIN, totpSecret: 'KRSXG5CTMVRXEZLU' }], [withSeed, LOGIN], [LOGIN, withSeed]] as const) {
+      resetGuardsForTests();
+      await run(withLogin(before), failed('login_failed'));
+      expect(await run(withLogin(before))).toMatchObject({ r: { kind: 'blocked', code: 'locked_out' }, logins: 0 });
+      expect(await run(withLogin(after))).toMatchObject({ r: { kind: 'ran', tripped: false }, logins: 1 });
+    }
+  });
   it('a record from before this change stays locked_out until the reset key changes', async () => {
     await tripBreaker(memoryGuardStore(), {}, GUARD.key, { code: 'login_failed', resetKey: '', message: 'rejected' });
     expect(await run(withLogin({ ...LOGIN, password: 'second-pass-2' }))).toMatchObject({ r: { kind: 'blocked', code: 'locked_out' }, logins: 0 });

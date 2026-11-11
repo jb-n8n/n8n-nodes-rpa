@@ -19,7 +19,7 @@
     },
     {
       "parameters": {
-        "content": "### Set once (green)\nRun **RPA: 1 Create tables (run once)** and import **RPA: 3 Approve steps** first, then pick credentials:\n- **Import a bot**: a Basic Auth credential, the user name and password people type to open the form. Create one with **Credential → + Create new credential → Basic Auth** on the node.\n- **RPA Browser**: Import steps (a UiPath project or a step document with only desktop steps needs none)\n- **RPA Site Login**: Import steps, when the bot signs in. Use the same one on **Sign steps** in workflow 3: the signature binds it.\n- **Chat model**: your model provider. It repairs a draft that no longer matches the site.\n\nIn **Approve steps**, choose **RPA: 3 Approve steps**. For a site on your own network (the sandbox), turn on **Options → Allow Private Network** in **Import steps**. A step document with `{{var.name}}` values needs each one under **Options → Variables** in **Import steps**: the import runs the steps with those values.\n\nKeep **Authentication** on: an anonymous form could start logins with the attached Site Login (login breaker trips) and spend on the chat model.",
+        "content": "### Set once (green)\nRun **RPA: 1 Create tables (run once)** and import **RPA: 3 Approve steps** first, then pick credentials:\n- **Import a bot**: a Basic Auth credential, the user name and password people type to open the form. Create one with **Credential → + Create new credential → Basic Auth** on the node.\n- **RPA Browser**: Import steps (a UiPath project or a step document with only desktop steps needs none, nor does a step document that goes to approval not replayed: nothing of it runs)\n- **RPA Site Login**: Import steps, when the bot signs in. Use the same one on **Sign steps** in workflow 3: the signature binds it.\n- **Chat model**: your model provider. It repairs a draft that no longer matches the site.\n\nIn **Approve steps**, choose **RPA: 3 Approve steps**. For a site on your own network (the sandbox), turn on **Options → Allow Private Network** in **Import steps**. A step document with `{{var.name}}` values needs each one under **Options → Variables** in **Import steps**: the import runs the steps with those values.\n\nKeep **Authentication** on: an anonymous form could start logins with the attached Site Login (login breaker trips) and spend on the chat model.",
         "height": 440,
         "width": 480,
         "color": 4
@@ -53,7 +53,7 @@
       "parameters": {
         "authentication": "basicAuth",
         "formTitle": "Import a bot",
-        "formDescription": "Upload a Chrome Recorder export (JSON), Playwright code (JavaScript or TypeScript), a UiPath project (ZIP or XAML) or a step document you wrote (JSON). The steps are replayed in a fresh browser and sent for approval. Nothing runs on a schedule until a person approves it.",
+        "formDescription": "Upload a Chrome Recorder export (JSON), Playwright code (JavaScript or TypeScript), a UiPath project (ZIP or XAML) or a step document you wrote (JSON). The steps are replayed in a fresh browser and sent for approval; a step document that submits a form, downloads through a form, types a secret or changes a password is not run at all and goes to approval marked not replayed. Nothing runs on a schedule until a person approves it.",
         "formFields": {
           "values": [
             {

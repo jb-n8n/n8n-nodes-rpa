@@ -156,9 +156,13 @@ describe('Run Steps routes by the steps\' surface', () => {
 describe('desktop steps elsewhere in the node', () => {
   it('Sign Steps refuses desktop steps that were not reviewed as they are (a crafted digest, a base version)', async () => {
     const { executeSignSteps } = await import('../nodes/Playwright/operations/signSteps.js');
-    // The safety flags and line are the recomputed ones (Sign Steps checks those first); the digest and the change list are not.
+    // The safety flags and line, and the shown change list, are the recomputed ones (Sign Steps checks those first); the
+    // digest and the change list itself are not.
     const safetyFlags = engine.desktopSafetyFlags(engine.parseDesktopScript(DESKTOP_STEPS));
-    const item = { name: 'erp-orders', baseVersion: 1, version: 2, steps: DESKTOP_STEPS, hash: engine.scriptHash(DESKTOP_STEPS), digest: 'd'.repeat(64), safetyFlags, changes: [], evidence: { count: 0, total: null, diff: { missing: [], extra: [] } }, safetyLine: safetyFlags.join('; ') };
+    const item = {
+      name: 'erp-orders', baseVersion: 1, version: 2, steps: DESKTOP_STEPS, hash: engine.scriptHash(DESKTOP_STEPS), digest: 'd'.repeat(64), safetyFlags, changes: [],
+      evidence: { count: 0, total: null, diff: { missing: [], extra: [] } }, safetyLine: safetyFlags.join('; '), changeList: 'No step changes',
+    };
     const p = { operation: 'signSteps', approved: true, approverId: APPROVER, approverAllowlist: APPROVER };
     const out = await executeSignSteps(harness({ params: p, items: [{ json: item }], credentials: { playwrightScriptSigningApi: { secretKey: KEY } }, continueOnFail: true }), engine);
     const error = String(out[0][0].json.error);

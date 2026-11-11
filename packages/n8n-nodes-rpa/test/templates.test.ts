@@ -53,6 +53,8 @@ const USE_CASE_WORDS = /\b(portal|recall|notice|dealer)s?\b/i;
 /** n8n sticky colours (design-system tokens --sticky--color--background--variant-N): 4 green, 2 gold (n8n's nearest to orange), 7 grey. */
 const COLOUR = { green: 4, gold: 2, grey: 7 } as const;
 const SETTINGS_NAME = "$('Settings').item.json.name";
+/** Template 3's Supersede filter: up to the approved version, or every version for a first version (no base). */
+const SUPERSEDE_UP_TO = "={{ $('Repaired steps received').item.json.baseVersion === null ? 2147483647 : $('Repaired steps received').item.json.version }}";
 const AI_REPAIR = "={{ $('Get pending').all().filter(i => i.json.hash && DateTime.fromISO(i.json.expiresAt) > $now).length === 0 }}";
 const EXPIRES_AT = "={{ $now.plus({ hours: $('Settings').item.json.approvalTimeoutHours }).toISO() }}";
 const APPROVER = 'approver@example.com';
@@ -426,10 +428,17 @@ describe('3-approve-steps.json', () => {
     expect(n.filters?.conditions).toEqual([
       { keyName: 'name', condition: 'eq', keyValue: `={{ ${SETTINGS_NAME} }}` },
       { keyName: 'status', condition: 'eq', keyValue: 'active' },
-      { keyName: 'version', condition: 'lte', keyValue: "={{ $('Repaired steps received').item.json.version }}" },
+      { keyName: 'version', condition: 'lte', keyValue: SUPERSEDE_UP_TO },
       { keyName: 'id', condition: 'neq', keyValue: '={{ $json.id }}' },
     ]);
     expect(n.columns?.value).toEqual({ status: 'superseded' });
+    // An approved first version (an import, always version 1) replaces whatever runs under its name, also a higher version;
+    // a repair (with a base version) supersedes its version and lower ones, so a higher version approved meanwhile stays.
+    const upTo = (received: IDataObject) => evaluate(SUPERSEDE_UP_TO, { $: (name: string) => { expect(name).toBe('Repaired steps received'); return { item: { json: received } }; } });
+    expect(upTo({ baseVersion: null, version: 1 })).toBe(2147483647);
+    expect(upTo({ baseVersion: 2, version: 3 })).toBe(3);
+    expect(byName(t, 'Supersede older versions').notes).toContain('An approved first version (an import) replaces every other active row of its name');
+    expect(sticky(t, 'About this workflow').content).toContain('An approved import becomes the version that runs under its name, also when a higher version was active.');
   });
   it('Email signed steps confirms what was signed, naming the steps signed as writes for desktop steps (I2)', () => {
     const p = byName(t, 'Email signed steps').parameters as { operation: string; toEmail: string; subject: string; text: string; emailFormat: string };
@@ -984,13 +993,16 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(sticky(t, 'About this workflow').color).toBe(COLOUR.grey);
     expect(sticky(t, 'Set once').color).toBe(COLOUR.green);
     expect(sticky(t, 'Why approval').color).toBe(COLOUR.grey);
+    const form = (byName(t, 'Import a bot').parameters as { formDescription?: string }).formDescription ?? '';
+    expect(form).toContain('a step document that submits a form, downloads through a form, types a secret or changes a password is not run at all and goes to approval marked not replayed');
     const about = sticky(t, 'About this workflow').content;
     for (const s of ['Chrome Recorder', 'Playwright code', 'UiPath', 'RPA: 3 Approve steps', 'RPA: 2 Data feed', 'each step list gets its own approval',
       '**step document**', 'this is how hand-written steps get approved and signed']) expect(about, s).toContain(s);
     const set = sticky(t, 'Set once').content;
     for (const s of ['**Import a bot**: a Basic Auth credential', '**RPA Browser**: Import steps', '**RPA Site Login**', '**Chat model**', 'RPA: 3 Approve steps',
       '**Options → Allow Private Network**', 'Keep **Authentication** on', 'login breaker', 'chat model',
-      'A step document with `{{var.name}}` values needs each one under **Options → Variables** in **Import steps**']) {
+      'A step document with `{{var.name}}` values needs each one under **Options → Variables** in **Import steps**',
+      'nor does a step document that goes to approval not replayed: nothing of it runs']) {
       expect(set, s).toContain(s);
     }
     const why = sticky(t, 'Why approval').content;
