@@ -81,7 +81,7 @@ by another name or address than the one in the line (a NAT, a tunnel), run the c
 
 1. In n8n, create a workflow, **⋯ → Import from File**, and pick `packages/n8n-nodes-rpa/templates/5-import-a-bot.json`
    (**RPA: 5 Import a bot**).
-2. Follow its green **Set once** note, leaving out what is only for browser bots:
+2. Follow its green **Set once** note. A desktop bot needs lines 1 to 3 and 6:
    - On **Import a bot**, create a **Basic Auth** credential (a user name and password of your choice). The form asks
      for it.
    - On **Sign steps**, create an **RPA Step Signing** credential: a key of 32 or more random characters from your
@@ -89,7 +89,7 @@ by another name or address than the one in the line (a NAT, a tunnel), run the c
    - On **Sign steps**, type your email address in **Approver Allowlist**. It is recorded as the approver.
 3. Click **Publish**, then open the form: on **Import a bot**, copy the production URL and open it in your browser.
 4. Upload the recording, give the steps a name such as `erp-line-items`, and submit.
-5. The next page, **Review and approve**, lists the steps by number. Grey steps are the ones the import added (a wait
+5. The next page, **Review and approve**, lists the steps by number. Steps in italics are the ones the import added (a wait
    for each window, and one for the file the bot returns). Under **Which of these steps save, send or submit?**, keep
    **Click Save** ticked, and untick a step that does not save or send. Choose **Approve and sign**, then **Submit**.
 6. The last page says `Approved and signed: erp-line-items v1 is now the version that runs under that name.` Your
