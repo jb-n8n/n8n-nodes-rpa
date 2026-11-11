@@ -4,7 +4,9 @@ import { checkUrl, ConfigError, CREDENTIALS, policyFor, readPostLabelLocal, sign
 import type { NodeContext } from '../context.js';
 import type { Engine } from '../engine.js';
 import { configNodeError, errorJson } from '../errors.js';
-import { changeList, DESKTOP_EVIDENCE_LINES, evidenceLine, fullSafetyFlags, hasDownloadStep, isDesktopProposal, isFileDocument, safetyLine } from '../format.js';
+import {
+  changeList, DESKTOP_EVIDENCE_LINES, evidenceLine, fullSafetyFlags, hasDownloadStep, isDesktopProposal, isFileDocument, NOT_REPLAYED_EVIDENCE_LINE, safetyLine,
+} from '../format.js';
 import { configErrorItem } from '../output.js';
 import { rejectedRecord, signedRecord, type StepsRecord } from '../rows.js';
 import { asBoolean, asString, checkMaxItems, credentialId, errorMessage, isObject, literalRaw, SITE_LOGIN_NO_ID, splitList } from './common.js';
@@ -21,6 +23,13 @@ export const READ_POSTS_NOT_LISTED = 'the evidence lists read-only requests this
 export const FILE_EVIDENCE_MISMATCH = 'the Repaired steps item has file evidence that does not match its steps';
 export const EVIDENCE_MALFORMED = 'the Repaired steps item has malformed evidence';
 export const CHANGE_LIST_MISMATCH = 'the change list names a step or pop-up handler that is not in the steps';
+export const NOT_REPLAYED_EVIDENCE_INVALID = 'the steps were not replayed, so their evidence must be empty (no rows, no total, no file, no read-only requests)';
+export const NOT_REPLAYED_NEEDS_WRITE =
+  'the evidence line says the steps were not replayed, but they have no submit, download through a form, secret fill or password change: steps without those are replayed at import, so they cannot be signed as not replayed';
+export const NOT_REPLAYED_NEEDS_FIRST_VERSION = 'steps that were not replayed must be a first version (no base version) that shows every step';
+export const NOT_REPLAYED_CHANGES_MISMATCH = 'the change list does not show every step of the steps, in order, as added';
+export const PROVEN_FIRST_VERSION_WRITES =
+  'the evidence line says the steps were proven in a fresh browser, but a first version that submits a form, downloads through a form, types a secret or changes a password is never replayed: it must carry the not-replayed evidence line';
 /** The engine's STEPS_HASH_MISMATCH wording (the engine is loaded lazily, so its constants are not imported here). */
 export const HASH_MISMATCH = 'the steps do not match the hash that was reviewed';
 /** Site Login secrets shorter than this are not looked for in records (the engine's MIN_SECRET_LEN_FOR_LITERAL_CHECK). */
@@ -84,6 +93,8 @@ function shownTextChanged(engine: Engine, p: Proposal | DesktopProposal, shown: 
     if (value === undefined) continue;
     // A desktop item's evidence line names where its steps came from, which the evidence does not record: any of them passes.
     if (name === 'evidenceLine' && isDesktopProposal(p) && typeof value === 'string' && DESKTOP_EVIDENCE_LINES.includes(value)) continue;
+    // Browser steps that were not replayed: signOne checks the conditions under which this line may stand.
+    if (name === 'evidenceLine' && !isDesktopProposal(p) && value === NOT_REPLAYED_EVIDENCE_LINE) continue;
     let expected: string | undefined;
     try {
       expected = format(p);
@@ -114,8 +125,11 @@ type PolicyResult = { ok: true; policy: PortalPolicy } | { ok: false; reason: st
  * The policy the run will use: the Site Login's when attached. Otherwise it is derived from the
  * steps: the normalised start host plus the hosts of the steps' absolute gotos. Those hosts all
  * appear as safety flags the reviewer saw. The run's own policy re-validates the steps at load.
+ * A declared submit or download through a form is judged by the rule Run Steps applies with the same credentials
+ * (engine effectivePolicy): with a Site Login, only the forms it lists; without one, the declared targets on those hosts.
+ * Import Steps checks steps it does not run against this same policy.
  */
-function signingPolicy(script: Script, siteLogin: SiteLogin | undefined): PolicyResult {
+export function signingPolicy(engine: Pick<Engine, 'effectivePolicy'>, script: Script, siteLogin: SiteLogin | undefined): PolicyResult {
   let result: PolicyResult;
   try {
     if (siteLogin) {
@@ -123,7 +137,10 @@ function signingPolicy(script: Script, siteLogin: SiteLogin | undefined): Policy
     } else {
       const start = checkUrl(script.startUrl);
       const others = [...new Set(absoluteGotoHosts(script.steps).filter((h) => h !== start.host))];
-      result = { ok: true, policy: policyFor({ url: start.href, allowedHosts: others, allowPrivateNetwork: false, operation: 'signSteps' }) };
+      const policy = policyFor({ url: start.href, allowedHosts: others, allowPrivateNetwork: false, operation: 'signSteps' });
+      // As Run Steps without a Site Login: signed steps, no secrets, the declared targets on a navigation host.
+      const { allowedSubmits } = engine.effectivePolicy({ ...policy, submitsFromSteps: true }, script, { signed: true, hasSecrets: false });
+      result = { ok: true, policy: { ...policy, allowedSubmits } };
     }
   } catch (error) {
     result = { ok: false, reason: errorMessage(error) };
@@ -150,10 +167,12 @@ function refusal(ctx: NodeContext, i: number, reasons: string[], name: string | 
  * from the item. The item's flags must be the same set, and its safety line the formatting of the recomputed list.
  * Returns the refusal reason, or undefined.
  */
-function safetyFlagsProblem(engine: Engine, script: Script, p: ParsedProposal): string | undefined {
+function safetyFlagsProblem(engine: Engine, script: Script, p: ParsedProposal, notReplayed: boolean): string | undefined {
   let expected: string[];
   try {
-    expected = fullSafetyFlags(engine, script, { unverifiedCount: p.evidence.total === null && !p.evidence.file, fieldsDropped: p.safetyFlags.includes(engine.EXTRACT_FIELDS_DROPPED) });
+    expected = fullSafetyFlags(engine, script, notReplayed
+      ? { unverifiedCount: true, fieldsDropped: false, notReplayed: true }
+      : { unverifiedCount: p.evidence.total === null && !p.evidence.file, fieldsDropped: p.safetyFlags.includes(engine.EXTRACT_FIELDS_DROPPED) });
   } catch (error) {
     return errorMessage(error);
   }
@@ -191,6 +210,11 @@ function malformedEvidence(e: unknown): boolean {
   return !(wholeOrNull(e.count, false) && wholeOrNull(e.total, true) && isObject(e.diff) && strings(e.diff.missing) && strings(e.diff.extra));
 }
 
+/** Not-replayed evidence is exactly empty: no rows, no total, no file, no read-only requests, an empty diff. */
+function notReplayedEvidenceProblem(e: Proposal['evidence']): boolean {
+  return e.count !== 0 || e.total !== null || e.file !== undefined || e.readPosts !== undefined || e.diff.missing.length !== 0 || e.diff.extra.length !== 0;
+}
+
 /** Whether a download check can tell the right file from the wrong one: it sets `name` or `columns` (the engine's rule). */
 const namesFile = (check: unknown): boolean => isObject(check) && (check.name !== undefined || check.columns !== undefined);
 
@@ -223,6 +247,14 @@ function fileEvidenceProblem(p: ParsedProposal): boolean {
   } catch {
     return false;
   }
+}
+
+/** True when the item's change list is exactly `expected`: the same entries, in order. Entries are untrusted. */
+function changesExactly(changes: readonly unknown[], expected: IntentChange[]): boolean {
+  return changes.length === expected.length && changes.every((c, i) => {
+    const e = c as { was?: unknown; now?: unknown } | null;
+    return e !== null && typeof e === 'object' && e.was === expected[i].was && e.now === expected[i].now;
+  });
 }
 
 /** True when `hash` is the hash of `steps`. Steps the engine cannot hash (missing, undefined inside) never match. */
@@ -295,9 +327,14 @@ async function signOne(ctx: NodeContext, engine: Engine, i: number, json: IDataO
     name: p.name, baseVersion: p.baseVersion, version: p.version, steps: p.steps as Script, hash: p.hash,
     evidence: p.evidence, changes: p.changes, safetyFlags: p.safetyFlags, screenshots: {},
   };
+  // Browser steps that went to approval without a replay (a step document that writes or types a secret).
+  const notReplayed = p.shownText.evidenceLine === NOT_REPLAYED_EVIDENCE_LINE;
   if (malformedEvidence(p.evidence)) return refuse([EVIDENCE_MALFORMED]);
+  // Nothing ran, so there is nothing to show: any count, total, file or read-only request refuses the item.
+  if (notReplayed && notReplayedEvidenceProblem(p.evidence)) return refuse([NOT_REPLAYED_EVIDENCE_INVALID]);
   if (readPostsProblem(p.evidence.readPosts, siteLogin)) return refuse([READ_POSTS_NOT_LISTED]);
-  if (fileEvidenceProblem(p)) return refuse([FILE_EVIDENCE_MISMATCH]);
+  // A download that was never run has no file evidence: the evidence line tells the approver the file was never seen.
+  if (!notReplayed && fileEvidenceProblem(p)) return refuse([FILE_EVIDENCE_MISMATCH]);
   if (shownTextChanged(engine, proposal, p.shownText)) return refuse([SHOWN_TEXT_CHANGED]);
   // Parsed once for the checks below; engine.signSteps parses the steps it signs itself.
   let script: Script;
@@ -306,13 +343,27 @@ async function signOne(ctx: NodeContext, engine: Engine, i: number, json: IDataO
   } catch (error) {
     return refuse([errorMessage(error)]);
   }
-  const flags = safetyFlagsProblem(engine, script, p);
+  const asWritten = engine.needsApprovalAsWritten(script.steps);
+  if (notReplayed) {
+    // A list the import could have replayed cannot be signed as not replayed, and only a first version is reviewed whole.
+    if (!asWritten) return refuse([NOT_REPLAYED_NEEDS_WRITE]);
+    if (p.baseVersion !== null) return refuse([NOT_REPLAYED_NEEDS_FIRST_VERSION]);
+  } else if (asWritten && p.baseVersion === null) {
+    // No first version that writes or types a secret is ever replayed, so it never carries a proven line.
+    return refuse([PROVEN_FIRST_VERSION_WRITES]);
+  }
+  const flags = safetyFlagsProblem(engine, script, p, notReplayed);
   if (flags) return refuse([flags]);
   // Sign Steps has no base steps, so it cannot recompute the change list: every entry that says what a step or pop-up
   // handler is now must describe one the steps have, masked as Run Steps masks them. Reported with the engine's
-  // reasons (an edited step fails the hash check first), never instead of them.
-  const changes = engine.changeListMatches(script, p.changes, (s) => masker.mask(s)) ? undefined : CHANGE_LIST_MISMATCH;
-  const policy = signingPolicy(script, siteLogin);
+  // reasons (an edited step fails the hash check first), never instead of them. Steps that were not replayed are a
+  // first version, so their change list must be exactly every step, in order, as added (as for desktop steps).
+  // The exact list is masked as the import masks it: Site Login secrets of 4 characters or more (steps that hold one are
+  // refused as a record anyway), so a short username such as "jo" does not refuse a step that reads "Open the job list".
+  const changes = notReplayed
+    ? (changesExactly(p.changes, engine.stepChanges(undefined, script, (s) => recordMasker.mask(s))) ? undefined : NOT_REPLAYED_CHANGES_MISMATCH)
+    : (engine.changeListMatches(script, p.changes, (s) => masker.mask(s)) ? undefined : CHANGE_LIST_MISMATCH);
+  const policy = signingPolicy(engine, script, siteLogin);
   if (!policy.ok) return refuse([policy.reason]);
   // signSteps returns refusals, but signScript inside it throws for inputs it can never sign (an empty key or
   // approver, or one that spans lines). Those become refusals too, never a raw throw under continue-on-fail.

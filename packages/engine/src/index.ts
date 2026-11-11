@@ -50,6 +50,8 @@ export {
   type Lease, type RunnerAddress, type RunnerEndpoint,
 } from './desktop/client.js';
 export * from './desktop/protocol.js';
+// Browser steps that go to approval without a replay (a step document that writes or types a secret).
+export { needsApprovalAsWritten, notReplayedFlags, notReplayedProposal } from './proposal/not-replayed.js';
 // Desktop drafts (UiPath desktop imports): their review, the owner's write declarations at approval, and signing.
 export {
   declareWrites, describeDesktopStep, DESKTOP_CHANGES_MISMATCH, DESKTOP_EVIDENCE_INVALID, DESKTOP_FLAGS_INCOMPLETE, DESKTOP_NEEDS_FIRST_VERSION, DESKTOP_WRITES_PRESET, desktopProposal, desktopSafetyFlags,

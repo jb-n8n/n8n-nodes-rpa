@@ -1058,22 +1058,103 @@ describe('Import Steps: a step document', () => {
     expect(engine.adoptions).toHaveLength(0);
   });
 
-  it("a secret fill's variable is never put into the report or the output", async () => {
+  describe('steps the import cannot run go to approval marked not replayed', () => {
+    // Golden strings are written out here on purpose.
+    const NOT_REPLAYED = 'Not replayed: these browser steps were never run by the import, because they submit a form, download through a form, type a secret or change a password. Check every step, each form\'s target and each download before you approve.';
+    const FOR_APPROVAL = 'These browser steps are not replayed at import, because they submit a form, download through a form, type a secret or change a password: they go to approval as written. Review every step, each form\'s target and each download, and supply the variables in Run steps.';
     const EXPORT_PW = 'Zip-9f3k-2xq';
-    const doc = {
-      startUrl: `${SITE.url}/acme/login`, steps: [
-        { intent: 'Type the export password', fill: { field: { label: 'Export password' }, value: '{{var.exportPassword}}', secret: true } },
-        { intent: 'Export', download: { trigger: { role: 'button', name: 'Export' }, check: { name: '^LINEITEMS_' } } },
-      ],
+    const NEW_PW = 'Next-pw-7731';
+    const START = `${SITE.url}/acme/login`;
+    const SIGN_IN = { intent: 'Sign in', signIn: { username: { label: 'Dealer user ID' }, password: { label: 'Password' }, submit: { role: 'button', name: 'Sign in' } } };
+    const OPEN = { intent: 'Open the report', goto: '/acme/reports' };
+    const SUBMIT = { intent: 'Send the export', submit: { path: '/acme/reports/export', button: { role: 'button', name: 'Export CSV' } } };
+    const DOCS = {
+      'a download with via': { startUrl: START, steps: [SIGN_IN, OPEN, { intent: 'Export', download: { trigger: { role: 'button', name: 'Export CSV' }, via: { path: '/acme/reports/export' }, mime: ['text/csv'] } }] },
+      'a secret fill': { startUrl: START, steps: [SIGN_IN, OPEN, { intent: 'Type the export password', fill: { field: { label: 'Export password' }, value: '{{var.exportPassword}}', secret: true } }] },
+      'a signIn with changePassword': { startUrl: START, steps: [{ ...SIGN_IN, signIn: { ...SIGN_IN.signIn, changePassword: {
+        detect: { role: 'heading', name: 'Change your password' }, new: [{ label: 'New password', exact: true }], submit: { role: 'button', name: 'Change password' }, value: '{{var.newPassword}}',
+      } } }, OPEN] },
     };
-    // The real adoption, pointed at a browser that is not there: the unsigned import run refuses the secret fill first.
-    const engine = importEngine((input) => real.adoptDraft({ ...input, endpoint: { mode: 'playwright', wsUrl: 'ws://127.0.0.1:9/' } }));
-    const variables = { values: [...VARIABLES.values, { name: 'exportPassword', value: EXPORT_PW }] };
-    const [data, repaired] = await run(engine, { params: docParams(doc, {}, { variables }), items: textItem });
-    expect(engine.adoptions[0].vars).toMatchObject({ exportPassword: EXPORT_PW });
-    expect(repaired).toEqual([]);
-    expect(data[0].json.error).toBe('script_untrusted: Unsigned steps cannot type a secret into a password field (fill with secret: true). Sign them with Sign Steps; Allow Unsigned Writes does not cover it.');
-    expect(JSON.stringify(data)).toContain('{{var.exportPassword}}');
-    expect(JSON.stringify([data, repaired])).not.toContain(EXPORT_PW);
+    const variables = { values: [...VARIABLES.values, { name: 'exportPassword', value: EXPORT_PW }, { name: 'newPassword', value: NEW_PW }] };
+    /** An engine whose adoption and browser sessions are counted, so a test can show that nothing ran. */
+    const watched = () => {
+      const engine = importEngine(() => { throw new Error('steps that go to approval as written are never adopted'); });
+      const sessions: unknown[] = [];
+      return Object.assign(engine, { sessions, openSession: async (...args: unknown[]) => { sessions.push(args); throw new Error('no browser may open'); } });
+    };
+    const notReplayed = async (doc: object, credentials: Record<string, IDataObject> = CREDS) => {
+      const engine = watched();
+      const [data, repaired] = await run(engine, { params: docParams(doc, {}, { variables }), items: textItem, credentials });
+      return { engine, data, repaired };
+    };
+
+    it('a step document with a submit goes to approval not replayed, and no browser is opened', async () => {
+      const { engine, data, repaired } = await notReplayed({ startUrl: START, steps: [SIGN_IN, OPEN, SUBMIT] });
+      expect(data[0].json.error, JSON.stringify(data[0].json).slice(0, 800)).toBeUndefined();
+      expect(engine.adoptions).toHaveLength(0);
+      expect(engine.sessions).toHaveLength(0);
+      expect(drafts(data[0])).toEqual([{ name: 'sap-export', steps: expect.objectContaining({ steps: [SIGN_IN, OPEN, SUBMIT] }), adopted: false, forApproval: true, reason: FOR_APPROVAL }]);
+      expect(repaired).toHaveLength(1);
+      const item = repaired[0];
+      expect(item.binary).toBeUndefined();
+      expect(item.json).toMatchObject({
+        name: 'sap-export', baseVersion: null, version: 1, evidence: { count: 0, total: null, diff: { missing: [], extra: [] } }, evidenceLine: NOT_REPLAYED, attachmentNames: '',
+      });
+      expect((item.json.changes as IDataObject[]).map((c) => c.was)).toEqual([null, null, null]);
+      // Approved, Sign Steps signs it.
+      const record = await sign(engine, item.json);
+      expect(record, JSON.stringify(record).slice(0, 800)).toMatchObject({ name: 'sap-export', version: 1, status: 'active' });
+      // Nothing is run, so no RPA Browser credential is needed.
+      const without = await notReplayed({ startUrl: START, steps: [SIGN_IN, OPEN, SUBMIT] }, { playwrightSiteLoginApi: siteLoginData(SITE) });
+      expect(without.data[0].json.error).toBeUndefined();
+      expect(without.repaired).toHaveLength(1);
+    });
+
+    it.each(Object.entries(DOCS))('the same for %s', async (_kind, doc) => {
+      const { engine, data, repaired } = await notReplayed(doc);
+      expect(data[0].json.error, JSON.stringify(data[0].json).slice(0, 800)).toBeUndefined();
+      expect(engine.adoptions).toHaveLength(0);
+      expect(engine.sessions).toHaveLength(0);
+      expect(drafts(data[0])).toEqual([expect.objectContaining({ adopted: false, forApproval: true, reason: FOR_APPROVAL })]);
+      expect(repaired).toHaveLength(1);
+      expect(repaired[0].json.evidenceLine).toBe(NOT_REPLAYED);
+      // The import no longer says to sign them with Sign Steps: Sign Steps takes this item.
+      expect(JSON.stringify(data)).not.toContain('script_untrusted');
+      expect((await sign(engine, repaired[0].json)).status).toBe('active');
+      expect(JSON.stringify([data, repaired])).not.toContain(EXPORT_PW);
+      expect(JSON.stringify([data, repaired])).not.toContain(NEW_PW);
+    });
+
+    it("its safety flags name the form's method, host and path, and the secret fill's variable name, never a value", async () => {
+      const fill = DOCS['a secret fill'].steps[2];
+      const { data, repaired } = await notReplayed({ startUrl: START, steps: [SIGN_IN, OPEN, fill, SUBMIT] });
+      const item = repaired[0].json;
+      expect(item.safetyFlags).toEqual([
+        `form submission: POST ${SITE.host}/acme/reports/export`, `host: ${SITE.host}`, 'count unverified: the page that was read states no total',
+        'secret fill: step 3 types the run variable {{var.exportPassword}}',
+      ]);
+      expect(item.safetyLine).toBe((item.safetyFlags as string[]).join('; '));
+      expect(repaired[0].json.digest).toBe(real.proposalDigest({ ...(item as unknown as real.Proposal) }));
+      expect(JSON.stringify([data, repaired])).not.toContain(EXPORT_PW);
+      const password = DOCS['a signIn with changePassword'];
+      const changed = await notReplayed(password);
+      expect(changed.repaired[0].json.safetyFlags).toContain('password change: step 1 sets a new password from the run variable {{var.newPassword}}');
+      expect(JSON.stringify(changed.repaired)).not.toContain(NEW_PW);
+    });
+
+    it('a document Sign Steps would refuse (a submit to a host that is not allowed) is refused at import with that reason', async () => {
+      const elsewhere = { ...SUBMIT, submit: { ...SUBMIT.submit, host: 'forms.other.net', path: '/send' } };
+      const doc = { startUrl: START, steps: [SIGN_IN, OPEN, elsewhere] };
+      const { engine, data, repaired } = await notReplayed(doc);
+      expect(repaired).toEqual([]);
+      expect(engine.sessions).toHaveLength(0);
+      const reason = 'step "Send the export": POST forms.other.net/send is not an allowed submission';
+      expect(data[0].json.error).toBe(`policy_violation: ${reason}`);
+      expect(details(data[0]).drafts).toEqual([expect.objectContaining({ adopted: false, code: 'policy_violation', reason })]);
+      // Sign Steps, given the same steps for approval, refuses them with the same reason.
+      const script = real.parseScript({ ...doc, name: 'sap-export', version: 1 });
+      const item = repairedStepsJson(engine, real.notReplayedProposal(script), '', { notReplayed: true });
+      expect(String((await sign(engine, item)).error)).toContain(reason);
+    });
   });
 });

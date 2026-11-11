@@ -7,6 +7,7 @@ export type Engine = Pick<
   | 'DOWNLOAD_NEEDS_BROWSER_SERVER' | 'importSource' | 'adoptDraft' | 'scrubTrace'
   | 'runDesktopTask' | 'probeRunner' | 'isDesktopDocument' | 'runnerConnected'
   | 'desktopProposal' | 'desktopSafetyFlags' | 'signDesktopSteps' | 'parseWriteSteps' | 'parseDesktopScript'
+  | 'needsApprovalAsWritten' | 'notReplayedFlags' | 'notReplayedProposal' | 'stepChanges' | 'effectivePolicy'
 >;
 
 let cached: Promise<Engine> | undefined;

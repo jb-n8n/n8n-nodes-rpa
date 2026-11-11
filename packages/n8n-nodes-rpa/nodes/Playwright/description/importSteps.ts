@@ -21,7 +21,8 @@ export const importStepsProperties: INodeProperties[] = [
       {
         name: 'Step Document (JSON)',
         value: 'steps',
-        description: 'Steps you wrote, as Run Steps takes them: a browser step document or a desktop step set. This is how hand-written steps get approved and signed.',
+        description:
+          'Steps you wrote, as Run Steps takes them: a browser step document or a desktop step set. This is how hand-written steps get approved and signed. Browser steps that submit a form, download through a form, type a secret or change a password are not run: they go to approval marked not replayed.',
       },
     ],
     description: 'What the file holds',

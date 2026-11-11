@@ -4,7 +4,7 @@ import type { NodeContext } from './context.js';
 import type { Compiled, LaneSuccess } from './operations/quick/shared.js';
 import type { Engine } from './engine.js';
 import { errorJson, type FailureDetails } from './errors.js';
-import { changeList, DESKTOP_EVIDENCE_LINE, evidenceLine, fullSafetyFlags, safetyLine } from './format.js';
+import { changeList, DESKTOP_EVIDENCE_LINE, evidenceLine, fullSafetyFlags, NOT_REPLAYED_EVIDENCE_LINE, safetyLine } from './format.js';
 
 /** A file-name-safe form of a name (lowercase, dashes), 'rpa' when nothing is left. */
 export const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'rpa';
@@ -104,12 +104,14 @@ export async function repairedStepsItem(ctx: NodeContext, engine: Engine, p: Pro
 /**
  * The JSON of a Repaired steps item. The safety flags are the full list (fullSafetyFlags: every host, submission and
  * download, not only the new ones the engine flags), and the digest is computed over that list. Sign Steps recomputes
- * the same list and refuses an item that carries another one.
+ * the same list and refuses an item that carries another one. `notReplayed`: browser steps that go to approval without
+ * a replay (engine notReplayedProposal): nothing was counted, the flags also name each secret fill and password change,
+ * and the evidence line is NOT_REPLAYED_EVIDENCE_LINE.
  */
-export function repairedStepsJson(engine: Engine, proposal: Proposal, attachmentNames = ''): IDataObject {
-  const safetyFlags = fullSafetyFlags(engine, engine.parseScript(proposal.steps), {
-    unverifiedCount: proposal.safetyFlags.includes(engine.UNVERIFIED_COUNT_FLAG), fieldsDropped: proposal.safetyFlags.includes(engine.EXTRACT_FIELDS_DROPPED),
-  });
+export function repairedStepsJson(engine: Engine, proposal: Proposal, attachmentNames = '', o: { notReplayed?: boolean } = {}): IDataObject {
+  const safetyFlags = fullSafetyFlags(engine, engine.parseScript(proposal.steps), o.notReplayed
+    ? { unverifiedCount: true, fieldsDropped: false, notReplayed: true }
+    : { unverifiedCount: proposal.safetyFlags.includes(engine.UNVERIFIED_COUNT_FLAG), fieldsDropped: proposal.safetyFlags.includes(engine.EXTRACT_FIELDS_DROPPED) });
   const p: Proposal = { ...proposal, safetyFlags };
   return {
     name: p.name,
@@ -124,7 +126,7 @@ export function repairedStepsJson(engine: Engine, proposal: Proposal, attachment
     },
     changes: p.changes.map((c) => ({ was: c.was, now: c.now })),
     safetyFlags: [...safetyFlags],
-    evidenceLine: evidenceLine(p, engine),
+    evidenceLine: o.notReplayed ? NOT_REPLAYED_EVIDENCE_LINE : evidenceLine(p, engine),
     changeList: changeList(p),
     safetyLine: safetyLine(p),
     attachmentNames,

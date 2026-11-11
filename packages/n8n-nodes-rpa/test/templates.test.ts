@@ -362,6 +362,9 @@ describe('2-data-feed.json', () => {
   });
 });
 
+/** The evidence line of browser steps that go to approval without a replay (format.ts), written out. */
+const NOT_REPLAYED_LINE = 'Not replayed: these browser steps were never run by the import, because they submit a form, download through a form, type a secret or change a password. Check every step, each form\'s target and each download before you approve.';
+
 describe('3-approve-steps.json', () => {
   const t = load('3-approve-steps.json');
   const conditions = (name: string) => table(byName(t, name)).filters?.conditions ?? [];
@@ -582,6 +585,15 @@ describe('template 3 approval email', () => {
     expect(out.indexOf('Hash:')).toBeLessThan(out.indexOf('Review digest:'));
   });
 
+  it('never says that browser steps that were not replayed ran: the labels follow the evidence line', () => {
+    const notReplayed = { ...item, evidenceLine: NOT_REPLAYED_LINE, changeList: 'Added: Send the form (submit POST /send)' };
+    const shown = render(message, { $: (name: string) => ({ item: { json: name === 'Settings' ? { approvalTimeoutHours: 72 } : notReplayed } }) });
+    expect(shown).toContain(`Evidence: ${NOT_REPLAYED_LINE.replace(/'/g, '&#39;')}`);
+    expect(shown).toContain('What changed (as written; these steps were never run):\nAdded: Send the form');
+    expect(shown).not.toContain('as reported by the run');
+    expect(shown).not.toContain('Proven');
+  });
+
   it('numbers the two emails of a request, so the order survives an inbox that lists the newest first', () => {
     const t = load('3-approve-steps.json');
     expect(String(byName(t, 'Email repaired steps').parameters.subject)).toMatch(/^=1 of 2, review: steps v\{\{ \$json\.version \}\} for /);
@@ -624,6 +636,13 @@ describe('template 3 review email', () => {
   it('shows the safety flags before any page- or model-derived text', () => {
     expect(out.indexOf('Safety flags')).toBeLessThan(out.indexOf('Evidence'));
     expect(out.indexOf('Safety flags')).toBeLessThan(out.indexOf('What changed'));
+  });
+
+  it('never says that browser steps that were not replayed ran: the labels follow the evidence line', () => {
+    const shown = render(html, { $json: { ...hostile, evidenceLine: NOT_REPLAYED_LINE } });
+    expect(shown).toContain(`<b>Evidence:</b> ${NOT_REPLAYED_LINE.replace(/'/g, '&#39;')}`);
+    expect(shown).toContain('<b>What changed (as written; these steps were never run):</b><br>step 2 now clicks');
+    expect(shown).not.toContain('as reported by the run');
   });
 
   it('says the evidence and the change list are as reported by the run (Sign Steps recomputes only the safety flags)', () => {
@@ -867,6 +886,12 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(items.filter((i) => i.kind === 'secret')).toHaveLength(3);
     expect(message).toContain('Imported: 9 steps; 1 not translated, 3 removed as secrets.');
     expect(message).toContain('0 of 1 step lists passed the replay and are waiting for approval in RPA: 3 Approve steps.');
+    // A step document that writes goes to approval without a replay, and the page says so.
+    const notReplayed = { report: { steps: 3, items: [] }, drafts: [{ name: 'line-item-export', adopted: false, forApproval: true }] };
+    const written = render(shown.completionMessage, { $json: notReplayed });
+    expect(written).toContain('0 of 0 step lists passed the replay');
+    expect(written).toContain(' 1 browser step lists are waiting there too, not replayed because they submit a form, download through a form, type a secret or change a password: check every step, the target of each form and each download.');
+    expect(written).not.toContain('desktop step lists');
     const ifParams = byName(t, 'Workflow file?').parameters as { conditions: { conditions: { leftValue: string; operator: unknown }[] } };
     expect(ifParams.conditions.conditions).toEqual([expect.objectContaining({ operator: { type: 'boolean', operation: 'true', singleValue: true } })]);
     expect(evaluate(ifParams.conditions.conditions[0].leftValue, { $json: data[0].json })).toBe(false);

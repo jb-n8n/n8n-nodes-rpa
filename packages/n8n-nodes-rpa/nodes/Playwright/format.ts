@@ -3,7 +3,8 @@ import type { Engine } from './engine.js';
 
 /**
  * Every host, form submission, download and pop-up handler (interrupt) the steps have, then
- * the two flags only the run knows: extract-fields-dropped (needs the base steps) and count unverified (the page states no total).
+ * the two flags only the run knows: extract-fields-dropped (needs the base steps) and count unverified (the page states no total),
+ * then, for steps that went to approval without a replay (`notReplayed`), one flag per secret fill and password change.
  *
  * The engine flags only what is new compared with the base steps ("new host: …"). Sign Steps has no base, so both
  * Run Steps and Sign Steps list everything, from the steps alone: validateScript against an empty baseline (proposal
@@ -11,14 +12,15 @@ import type { Engine } from './engine.js';
  * it. `script` is the parsed steps (engine parseScript).
  */
 export function fullSafetyFlags(
-  engine: Pick<Engine, 'validateScript' | 'UNVERIFIED_COUNT_FLAG' | 'EXTRACT_FIELDS_DROPPED'>,
+  engine: Pick<Engine, 'validateScript' | 'UNVERIFIED_COUNT_FLAG' | 'EXTRACT_FIELDS_DROPPED' | 'notReplayedFlags'>,
   script: Script,
-  known: { unverifiedCount: boolean; fieldsDropped: boolean },
+  known: { unverifiedCount: boolean; fieldsDropped: boolean; notReplayed?: boolean },
 ): string[] {
   const policy: PortalPolicy = { startUrl: script.startUrl, navHosts: [], subresourceHosts: [], login: [], allowedSubmits: [] };
   const flags = engine.validateScript(script, { policy, mode: 'proposal' }).safetyFlags.map((f) => f.replace(/^new /, ''));
   if (known.fieldsDropped) flags.push(engine.EXTRACT_FIELDS_DROPPED);
   if (known.unverifiedCount) flags.push(engine.UNVERIFIED_COUNT_FLAG);
+  if (known.notReplayed) flags.push(...engine.notReplayedFlags(script));
   return flags;
 }
 
@@ -74,6 +76,13 @@ export const DESKTOP_EVIDENCE_LINE =
 /** The same for desktop steps from a step document (Import Steps → Step Document (JSON)). */
 export const DESKTOP_DOCUMENT_EVIDENCE_LINE =
   'Not replayed: desktop steps from a step document are reviewed as written (there is no desktop proof yet). Check every step, and list in Write Steps the steps that save, post or submit.';
+/**
+ * The evidence line of browser steps from a step document that go to approval without a replay (Import Steps never runs
+ * steps that submit a form, download through a form, type a secret or change a password). Sign Steps accepts it only on
+ * a first version with empty evidence whose steps have one of those.
+ */
+export const NOT_REPLAYED_EVIDENCE_LINE =
+  "Not replayed: these browser steps were never run by the import, because they submit a form, download through a form, type a secret or change a password. Check every step, each form's target and each download before you approve.";
 /**
  * Every evidence line a desktop Repaired steps item may carry, one per import source that gives desktop steps. The
  * evidence does not say where the steps came from, so Sign Steps accepts any of these on a desktop item.

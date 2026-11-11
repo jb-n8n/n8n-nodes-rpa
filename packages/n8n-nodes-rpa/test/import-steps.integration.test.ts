@@ -88,6 +88,44 @@ describe('Import Steps against the sandbox (real engine)', () => {
     expect((result[0].json.files as IDataObject[]).map((f) => f.fileName)).toEqual([SEPTEMBER]);
   }, 180_000);
 
+  it('Sign Steps signs a not-replayed browser item, and the signed list loads and runs in Run Steps', async () => {
+    // A hand-written list that submits the sandbox's contact form. No Site Login: Run Steps then allows a declared target
+    // on a site the steps may open, here the start site.
+    const posts = async () => ((await (await fetch(`${portal.url}/public/api/counters`)).json()) as { posts: unknown[] }).posts;
+    const doc = { startUrl: `${portal.url}/public/form`, steps: [
+      { intent: 'Type the name', fill: { field: { label: 'Name' }, value: '{{var.name}}' } },
+      { intent: 'Send', submit: { path: '/public/form/submit', button: { role: 'button', name: 'Send' } } },
+    ] };
+    const signing = { playwrightScriptSigningApi: { secretKey: SIGNING_KEY } };
+    const params = {
+      ...importParams, source: 'steps', inputFrom: 'text', sourceText: JSON.stringify(doc), stepsName: 'contact', expectedFile: {},
+      options: { allowPrivateNetwork: true, saveTrace: 'never' },
+    };
+    // Nothing runs, so no RPA Browser credential is attached.
+    const [data, repaired] = await executeImportSteps(nodeContext({
+      params, rawParameters: params, items: [{ json: {} }], credentials: signing, continueOnFail: true,
+    }), engine, { executionsMode: 'regular' });
+    expect(data[0].json.error, JSON.stringify(data[0].json).slice(0, 1500)).toBeUndefined();
+    expect(repaired).toHaveLength(1);
+    expect(String(repaired[0].json.evidenceLine)).toMatch(/^Not replayed: these browser steps were never run by the import/);
+    expect(await posts()).toEqual([]);
+
+    const signParams = signStepsParams();
+    const [signed] = await executeSignSteps(nodeContext({ params: signParams, rawParameters: signParams, items: [{ json: repaired[0].json }], credentials: signing, continueOnFail: true }), engine);
+    const record = signed[0].json;
+    expect(record, JSON.stringify(record).slice(0, 1500)).toMatchObject({ name: 'contact', version: 1, status: 'active' });
+
+    // Signed steps required, the same credentials (no Site Login): the list loads and its submit goes out.
+    const run = runStepsParams(record, { startUrl: `${portal.url}/public/form` }, {
+      name: 'contact', idPattern: '', totalPattern: '', variables: { values: [{ name: 'name', value: 'Ada Lovelace' }] }, timeout: 5,
+    });
+    const [result] = await executeRunSteps(nodeContext({
+      params: run, rawParameters: run, credentials: { playwrightBrowserApi: { mode: 'local', headless: true }, ...signing }, continueOnFail: true,
+    }), engine);
+    expect(result[0].json, JSON.stringify(result[0].json).slice(0, 1500)).toMatchObject({ lane: 'script', version: 1, submitted: true });
+    expect(await posts()).toEqual([{ path: '/public/form/submit', name: 'Ada Lovelace' }]);
+  }, 180_000);
+
   it('the code is in neither the report, the Data output nor the generated workflow', async () => {
     // The UiPath project recorded against the light web GUI: a sign-in with an authentication code, then the export.
     const root = fileURLToPath(new URL('../../engine/test/fixtures/import/uipath-sap-light/', import.meta.url));

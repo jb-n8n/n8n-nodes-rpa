@@ -128,6 +128,113 @@ describe('Sign Steps: approve', () => {
   });
 });
 
+describe('Sign Steps: a submit is judged as Run Steps judges it', () => {
+  const SEND = { intent: 'Send the form', submit: { path: '/send', button: { role: 'button', name: 'Send' } } } as const;
+  const SAME_HOST: Script = { ...STEPS, steps: [...STEPS.steps, SEND] };
+  it('without a Site Login, a declared submit on a host the steps open is signed, as Run Steps allows it there', async () => {
+    const rec = only(await sign(repairedItem(SAME_HOST))).json;
+    expect(rec.status, String(rec.message)).toBe('active');
+    // A host the steps never open stays refused (Run Steps allows a declared target only on a navigation host).
+    const off: Script = { ...STEPS, steps: [...STEPS.steps, { ...SEND, submit: { ...SEND.submit, host: 'forms.other.net' } }] };
+    expect(only(await sign(repairedItem(off))).json.message).toContain('POST forms.other.net/send is not an allowed submission');
+  });
+  it("with a Site Login, a submit is signed only when the Site Login's Forms It May Submit lists it", async () => {
+    const withLogin = (allowedSubmits: string) => ({
+      credentials: { ...SIGNING, playwrightSiteLoginApi: { ...SITE_LOGIN, allowedSubmits } }, credentialIds: { playwrightSiteLoginApi: 'site-a' },
+    });
+    expect(only(await sign(repairedItem(SAME_HOST), withLogin('POST example.com/send'))).json.status).toBe('active');
+    expect(only(await sign(repairedItem(SAME_HOST), withLogin(''))).json.message).toContain('POST example.com/send is not an allowed submission');
+  });
+});
+
+describe('Sign Steps: browser steps not replayed', () => {
+  const NOT_REPLAYED = 'Not replayed: these browser steps were never run by the import, because they submit a form, download through a form, type a secret or change a password. Check every step, each form\'s target and each download before you approve.';
+  const SHOWN = 'Sign Steps refused: the evidence, change list or safety line changed after it was reviewed';
+  const WRITES: Script = {
+    name: 'items', version: 1, startUrl: 'https://example.com/list',
+    steps: [
+      { intent: 'Open the list', goto: 'https://example.com/list' },
+      { intent: 'Type the export password', fill: { field: { label: 'Export password' }, value: '{{var.exportPassword}}', secret: true } },
+      { intent: 'Send the form', submit: { path: '/send', button: { role: 'button', name: 'Send' } } },
+      { intent: 'Get the file', download: { trigger: { role: 'button', name: 'Export' }, check: { name: '^items' } } },
+    ],
+  };
+  /** A not-replayed item as Import Steps emits it, with `over` applied to the proposal before the item is built (so the digest matches). */
+  const notReplayedItem = (steps: Script, over: Partial<Proposal> = {}): IDataObject =>
+    repairedStepsJson(engine, { ...engine.notReplayedProposal(steps), ...over }, '', { notReplayed: true });
+
+  it('signs a not-replayed item: its download needs no file evidence, and the flags name the secret fill', async () => {
+    const item = notReplayedItem(WRITES);
+    expect(item).toMatchObject({ evidenceLine: NOT_REPLAYED, evidence: { count: 0, total: null, diff: { missing: [], extra: [] } } });
+    expect(item.safetyFlags).toEqual([
+      'form submission: POST example.com/send', 'download step', 'host: example.com', 'count unverified: the page that was read states no total',
+      'secret fill: step 2 types the run variable {{var.exportPassword}}',
+    ]);
+    const rec = only(await sign(item)).json;
+    expect(rec.status, String(rec.message)).toBe('active');
+    expect(verifyScript(JSON.parse(rec.steps as string), KEY, { approvedBy: APPROVER, signature: rec.signature as string })).toBe(true);
+  });
+  it('with a Site Login, a not-replayed item signs when its forms are listed, and a short Site Login value does not refuse a step that contains it', async () => {
+    const steps: Script = { ...WRITES, steps: [{ intent: 'Open the job list', goto: 'https://example.com/list' }, ...WRITES.steps.slice(1)] };
+    const rec = only(await sign(notReplayedItem(steps), {
+      credentials: { ...SIGNING, playwrightSiteLoginApi: { ...SITE_LOGIN, username: 'jo', allowedSubmits: 'POST example.com/send' } }, credentialIds: { playwrightSiteLoginApi: 'site-a' },
+    })).json;
+    expect(rec.status, String(rec.message)).toBe('active');
+  });
+  it('Sign Steps refuses the not-replayed line on a list without a write or a secret', async () => {
+    const e = only(await sign(notReplayedItem({ ...STEPS, version: 1 }))).json;
+    expect(e.message).toBe('Sign Steps refused: the evidence line says the steps were not replayed, but they have no submit, download through a form, secret fill or password change: steps without those are replayed at import, so they cannot be signed as not replayed');
+  });
+  it('Sign Steps refuses a not-replayed item that carries evidence', async () => {
+    const empty = { count: 0, total: null, diff: { missing: [], extra: [] } };
+    const file = { fileName: 'items.csv', mimeType: 'text/csv', bytes: 20, columns: null, rows: 1 };
+    for (const evidence of [{ ...empty, count: 3 }, { ...empty, total: 3 }, { ...empty, file }, { ...empty, readPosts: ['POST example.com/search'] }, { ...empty, diff: { missing: ['SKU-0001'], extra: [] } }]) {
+      const e = only(await sign(notReplayedItem(WRITES, { evidence }))).json;
+      expect(e.message, JSON.stringify(evidence)).toBe('Sign Steps refused: the steps were not replayed, so their evidence must be empty (no rows, no total, no file, no read-only requests)');
+    }
+  });
+  it('Sign Steps refuses a not-replayed item that is not a first version', async () => {
+    const e = only(await sign(notReplayedItem(WRITES, { baseVersion: 0 }))).json;
+    expect(e.message).toBe('Sign Steps refused: steps that were not replayed must be a first version (no base version) that shows every step');
+  });
+  it('Sign Steps refuses a not-replayed item whose evidence line, flags, change list or steps were edited', async () => {
+    const item = notReplayedItem(WRITES);
+    // Any other line: without the not-replayed line the download needs file evidence, and a list without one shows its own line.
+    expect(only(await sign({ ...item, evidenceLine: 'Not replayed.' })).json.message).toBe('Sign Steps refused: the Repaired steps item has file evidence that does not match its steps');
+    const noFile = notReplayedItem({ ...WRITES, steps: WRITES.steps.slice(0, -1) });
+    expect(only(await sign({ ...noFile, evidenceLine: 'Not replayed.' })).json.message).toBe(SHOWN);
+    // The line a proven item would show: the steps were never replayed, so it is refused for steps that write.
+    const proven = only(await sign({ ...noFile, evidenceLine: 'Proven in a fresh browser: 0 rows (the page states no total)' })).json;
+    expect(proven.message).toBe('Sign Steps refused: the evidence line says the steps were proven in a fresh browser, but a first version that submits a form, downloads through a form, types a secret or changes a password is never replayed: it must carry the not-replayed evidence line');
+    // Without the secret fill's flag (digest recomputed), or with a flag added.
+    const flags = (item.safetyFlags as string[]).filter((f) => !f.startsWith('secret fill'));
+    expect(only(await sign({ ...item, safetyFlags: flags, safetyLine: flags.join('; '), digest: proposalDigest({ ...engine.notReplayedProposal(WRITES), safetyFlags: flags }) })).json.message)
+      .toBe('Sign Steps refused: the safety flags do not list every host, form submission, download and pop-up handler the steps have');
+    const more = [...(item.safetyFlags as string[]), 'extract-fields-dropped'];
+    expect(only(await sign({ ...item, safetyFlags: more, safetyLine: more.join('; '), digest: proposalDigest({ ...engine.notReplayedProposal(WRITES), safetyFlags: more }) })).json.message)
+      .toContain('the safety flags do not list every host');
+    // A change list that leaves out the submit (digest recomputed): the approver would not see that step.
+    const changes = engine.notReplayedProposal(WRITES).changes.filter((c) => !String(c.now).startsWith('Send the form'));
+    const hidden = notReplayedItem(WRITES, { changes });
+    expect(only(await sign(hidden)).json.message).toBe('Sign Steps refused: the change list does not show every step of the steps, in order, as added');
+    // Steps edited after review, the hash recomputed.
+    const edited: Script = { ...WRITES, steps: WRITES.steps.map((st) => ('submit' in st ? { ...st, submit: { ...st.submit, path: '/delete-all' } } : st)) };
+    const e = only(await sign({ ...item, steps: JSON.parse(JSON.stringify(edited)) as IDataObject, hash: scriptHash(edited) })).json;
+    expect(e.message).toMatch(/^Sign Steps refused: /);
+    expect(e.status).toBeUndefined();
+  });
+  it('an item proven in a browser with a download still needs its file evidence', async () => {
+    const download: Script = { ...STEPS, steps: [STEPS.steps[0], { intent: 'Get the file', download: { trigger: { role: 'button', name: 'Export' }, check: { name: '^items' } } }] };
+    const e = only(await sign(craftedItem(download, ['download step', 'host: example.com', 'count unverified: the page that was read states no total'], { count: 0, total: null, diff: { missing: [], extra: [] } }))).json;
+    expect(e.message).toBe('Sign Steps refused: the Repaired steps item has file evidence that does not match its steps');
+  });
+  it('an item made before this change still signs', async () => {
+    // A Repaired steps item as Run Steps emitted it before browser steps could go to approval not replayed, written out.
+    const item = JSON.parse(String.raw`{"name":"items","baseVersion":1,"version":2,"steps":{"name":"items","version":2,"startUrl":"https://example.com/list","steps":[{"intent":"Open the list","goto":"https://example.com/list"},{"intent":"Read the items","extract":{"scope":{"css":"main"},"idPattern":"SKU-\\d{4}"}}]},"hash":"a709c30b4469213549d1321946c47f412d9f0af76164a5fe96b0e0f207735179","digest":"1bedf8c84c9c8a0806399a13f2880413c37274f0a32938bc18dfbaf4f403e56f","evidence":{"count":3,"total":3,"diff":{"missing":[],"extra":[]}},"changes":[{"was":"Read the list (extract rows from css \"main\")","now":"Read the items (extract rows from css \"main\", ID pattern SKU-\\d{4})"}],"safetyFlags":["host: example.com"],"evidenceLine":"Proven in a fresh browser: 3 of 3 rows","changeList":"Changed: Read the list (extract rows from css \"main\") -> Read the items (extract rows from css \"main\", ID pattern SKU-\\d{4})","safetyLine":"host: example.com","attachmentNames":""}`) as IDataObject;
+    expect(only(await sign(item)).json.status).toBe('active');
+  });
+});
+
 describe('Sign Steps: refusals', () => {
   it('an item without a digest is refused (a Repaired steps item from Run Steps always carries one)', async () => {
     const { digest: _digest, ...noDigest } = repairedItem(STEPS);

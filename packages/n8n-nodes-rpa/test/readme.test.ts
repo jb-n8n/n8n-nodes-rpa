@@ -367,12 +367,23 @@ describe('README', () => {
       '`<name>.workflow.json`', '`application/json`', '**Import from file**', '**Sign Steps** take it unchanged', 'No Step Signing key',
       // A step document: steps written by hand, as data, through the import's own rules.
       '**Step Document (JSON)**', '**Step documents.**', 'nothing in it is evaluated', 'refused with the parser\'s message', '`missing input "<name>"`',
-      'A `signature` and `approvedBy` beside the steps are not imported', 'with the safety flags computed from the steps', 'such steps cannot be approved through an import',
+      'A `signature` and `approvedBy` beside the steps are not imported', 'with the safety flags computed from the steps',
+      // Steps the import cannot run go to approval as written, and the approver is told so.
+      'is not run and not replayed, not even its steps before the first of those', 'so a document Sign Steps would refuse is refused here with that reason',
+      'goes to approval as written, marked not replayed', '`secret fill: step 3 types the run variable {{var.exportPassword}}`', 'needs no RPA Browser credential',
+      "the Site Login's **Forms It May Submit** and **Pages Where the Password May Be Typed**, and each declared target matched against the request the page really sends",
+      'declare the `submit`, or the `download` with `via`, in a step document and import that',
       '`Not replayed: desktop steps from a step document are reviewed as written', '**Step document**: the steps you wrote for Run Steps',
     ]) expect(s, text).toContain(text);
     // Where Sign Steps and unsigned steps are described, the README says how hand-written steps get approved and signed.
     expect(operation('Sign Steps')).toContain('Steps you wrote yourself get a Repaired steps item, and so approval and a signature, through [Import Steps](#import-steps) with **Source** **Step Document (JSON)**');
     expect(section('## Run Steps reference')).toContain('To have steps you wrote approved and signed, import them with Import Steps → **Step Document (JSON)**');
+    expect(section('## Run Steps reference')).toContain('steps that submit a form, download through a form, type a secret or change a password go to approval there as written, marked not replayed');
+    for (const text of [
+      '`Not replayed: these browser steps were never run by the import, because they submit a form, download through a form, type a secret or change a password. Check every step, each form\'s target and each download before you approve.`',
+      'its steps have at least one of those four, it is a first version (no base version) and its change list shows every step, in order', 'a `download` in it needs no file evidence',
+      'A declared `submit` or `download` through a form is judged as Run Steps judges it with the same credentials',
+    ]) expect(operation('Sign Steps'), text).toContain(text);
     const row = section('## Safety model').split('\n').find((l) => l.startsWith('| Import Steps |')) ?? '';
     for (const text of ['refused before the browser opens', 'never delivered', 'never imported']) expect(row, text).toContain(text);
   });

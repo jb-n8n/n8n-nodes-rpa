@@ -57,7 +57,7 @@ export function hasSecretFill(steps: Step[]): boolean {
 }
 
 /** Whether a signIn sets a new password (signIn.changePassword): like a secret fill, only signed steps may. */
-function hasChangePassword(steps: Step[]): boolean {
+export function hasChangePassword(steps: Step[]): boolean {
   return flattenSteps(steps).some((s) => 'signIn' in s && s.signIn.changePassword !== undefined);
 }
 

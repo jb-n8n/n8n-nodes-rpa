@@ -11,7 +11,7 @@ import { DESKTOP_DOCUMENT_EVIDENCE_LINE, DESKTOP_EVIDENCE_LINE } from '../format
 import { isQueueMode, openGuardStore, QUEUE_NEEDS_REDIS, type GuardStoreDeps } from '../guard-store.js';
 import { workflowFile } from '../import/workflow.js';
 import { lazyChatModel } from '../model.js';
-import { configErrorItem, desktopRepairedStepsJson, repairedStepsItem, slug } from '../output.js';
+import { configErrorItem, desktopRepairedStepsJson, repairedStepsItem, repairedStepsJson, slug } from '../output.js';
 import {
   asBoolean, asString, BROWSER_CREDENTIAL_NEEDED, browserCredentials, checkMaxItems, credentialId, errorMessage, field, hasDownloadStep, literalString, readCommonOptions,
   refuseCdpDownload, regexOption, SITE_LOGIN_NO_ID, type CommonOptions,
@@ -19,6 +19,7 @@ import {
 import {
   codeSettingsFor, codeWorkflowOptions, expectedDownload, NO_MODEL, noteRepairRan, repairAlreadyRan, siteLoginGuard, variablesOption,
 } from './runSteps.js';
+import { signingPolicy } from './signSteps.js';
 
 /** The largest file or text Import Steps reads. The importers apply their own, smaller limits. */
 export const MAX_IMPORT_BYTES = 20 * 1024 * 1024;
@@ -53,6 +54,9 @@ export const STEPS_WITHHELD = 'The steps are not shown: they contain a value of 
 /** A desktop draft on Data: it goes to approval as imported, without a replay. */
 export const DESKTOP_FOR_APPROVAL =
   'Desktop steps are not replayed at import (there is no desktop proof yet): they go to approval as imported. Review every step, supply the variables in Run steps, and list the steps that save, post or submit in Write Steps when you approve.';
+/** A browser step document on Data that goes to approval without a run or a replay (it writes or types a secret). */
+export const WRITES_FOR_APPROVAL =
+  "These browser steps are not replayed at import, because they submit a form, download through a form, type a secret or change a password: they go to approval as written. Review every step, each form's target and each download, and supply the variables in Run steps.";
 /** A UiPath project with browser sequences, imported without an RPA Browser credential (its desktop sequences need none). */
 export const IMPORT_BROWSER_NEEDED = 'The project has browser steps: attach an RPA Browser credential to replay them.';
 
@@ -138,6 +142,7 @@ async function readSource(ctx: NodeContext, i: number, p: ImportParams): Promise
 /** What became of one draft. `code` is the engine's error code when the engine refused or failed it. */
 type DraftOutcome =
   | { draft: Draft; kind: 'adopted'; proposal: Proposal }
+  | { draft: Draft; kind: 'forApproval'; review: IDataObject }
   | { draft: Draft; kind: 'notAdoptable'; code?: ErrorCode; reason: string }
   | { draft: Draft; kind: 'failed'; code?: ErrorCode; reason: string; captures?: Captures };
 
@@ -267,12 +272,18 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
     return failed;
   }
 
-  if (imported.drafts.length > 0 && !endpoint) {
+  // A browser step document that writes or types a secret is never run: it goes to approval as written.
+  const asWritten = p.source === 'steps' ? imported.drafts.filter((d) => engine.needsApprovalAsWritten(d.script.steps)) : [];
+  const toAdopt = imported.drafts.filter((d) => !asWritten.includes(d));
+  if (toAdopt.length > 0 && !endpoint) {
     const failed = configError(p.source === 'uipath' ? IMPORT_BROWSER_NEEDED : BROWSER_CREDENTIAL_NEEDED, p.name, { report, ...(workflow ? { workflowName: workflow.name } : {}) });
     if (workflow && failed.kind === 'error') failed.item.binary = { ...workflow.binary };
     return failed;
   }
-  const outcomes = endpoint ? await adoptAll(ctx, engine, i, deps, { p, endpoint, siteLogin, siteLoginId, fixedPolicy, drafts: imported.drafts, masker, textMasker }) : [];
+  const outcomes: DraftOutcome[] = [
+    ...asWritten.map((draft) => forApproval(engine, draft, siteLogin, containsSecret, mask)),
+    ...(endpoint && toAdopt.length ? await adoptAll(ctx, engine, i, deps, { p, endpoint, siteLogin, siteLoginId, fixedPolicy, drafts: toAdopt, masker, textMasker }) : []),
+  ];
   const failed = outcomes.filter((o): o is Extract<DraftOutcome, { kind: 'failed' }> => o.kind === 'failed');
   // Desktop drafts are never replayed: each one that carries no Site Login value goes to approval as imported.
   const desktopOut = desktopDrafts.map((d) => {
@@ -300,9 +311,9 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
     };
     return { entry, review };
   });
-  const forApproval = desktopOut.filter((o) => o.review !== undefined).length;
+  const waiting = desktopOut.filter((o) => o.review !== undefined).length + outcomes.filter((o) => o.kind === 'forApproval').length;
   // Every draft failed (a draft that cannot be adopted is a result, not a failure): the error output, with the report.
-  const allFailed = outcomes.length > 0 && failed.length === outcomes.length && forApproval === 0;
+  const allFailed = outcomes.length > 0 && failed.length === outcomes.length && waiting === 0;
   // Failure captures (Debug Trace not Never): on the error item the first failure's are `screenshot` and `trace`, as on a
   // Run Steps failure item; every other failed draft's trace is `trace-<n>`, n its index in `drafts`.
   const captures: IBinaryKeyData = {};
@@ -324,13 +335,14 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
   }
   const entries: IDataObject[] = outcomes.map((o, k) => {
     const withheld = containsSecret(o.draft.script);
-    const reason = o.kind !== 'adopted' ? mask(o.reason) : undefined;
+    const reason = o.kind === 'forApproval' ? WRITES_FOR_APPROVAL : o.kind !== 'adopted' ? mask(o.reason) : undefined;
     const why = withheld ? (reason ? `${reason} ${STEPS_WITHHELD}` : STEPS_WITHHELD) : reason;
     return {
       name: o.draft.name,
       steps: withheld ? null : (plain(o.draft.script) as unknown as IDataObject),
       adopted: o.kind === 'adopted',
-      ...(o.kind !== 'adopted' && o.code ? { code: o.code } : {}),
+      ...(o.kind === 'forApproval' ? { forApproval: true } : {}),
+      ...((o.kind === 'notAdoptable' || o.kind === 'failed') && o.code ? { code: o.code } : {}),
       ...(why !== undefined ? { reason: why } : {}),
       ...(traceRefs.has(k) ? { traceRef: traceRefs.get(k) } : {}),
     };
@@ -360,9 +372,32 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
   const repaired: INodeExecutionData[] = [];
   for (const o of outcomes) {
     if (o.kind === 'adopted') repaired.push({ ...(await repairedStepsItem(ctx, engine, o.proposal)), pairedItem: paired });
+    if (o.kind === 'forApproval') repaired.push({ json: o.review, pairedItem: paired });
   }
   for (const o of desktopOut) if (o.review) repaired.push({ json: o.review, pairedItem: paired });
   return { kind: 'ok', data: { json: fields, pairedItem: paired, ...binaryField }, repaired };
+}
+
+/**
+ * A browser draft that goes to approval as written, without a run or a replay: nothing is run, not even its read-only
+ * steps. It is checked as Sign Steps will check it, against the same policy (signingPolicy, validateScript in load mode),
+ * so a document Sign Steps would refuse is refused here, with that reason. Steps that carry a Site Login value are
+ * withheld and not offered for approval, as a desktop draft's are.
+ */
+function forApproval(
+  engine: Engine, draft: Draft, siteLogin: SiteLogin | undefined, containsSecret: (v: unknown) => boolean, mask: (s: string) => string,
+): DraftOutcome {
+  // The Data entry says why (STEPS_WITHHELD); there is no other reason.
+  if (containsSecret(draft.script)) return { draft, kind: 'notAdoptable', reason: '' };
+  const policy = signingPolicy(engine, draft.script, siteLogin);
+  if (!policy.ok) return { draft, kind: 'failed', code: 'policy_violation', reason: policy.reason };
+  const checked = engine.validateScript(draft.script, { policy: policy.policy, ...(siteLogin ? { secrets: siteLogin.secrets } : {}), mode: 'load' });
+  if (!checked.ok) return { draft, kind: 'failed', code: 'policy_violation', reason: checked.violations.join('; ') };
+  try {
+    return { draft, kind: 'forApproval', review: repairedStepsJson(engine, engine.notReplayedProposal(draft.script, mask), '', { notReplayed: true }) };
+  } catch (error) {
+    return { draft, kind: 'failed', code: 'policy_violation', reason: errorMessage(error) };
+  }
 }
 
 /**

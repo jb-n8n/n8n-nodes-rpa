@@ -3,11 +3,12 @@ import { startPortal, SANDBOX } from 'n8n-rpa-sandbox/testing.js';
 import { adoptDraft } from '../src/import/adopt.js';
 import { importSource } from '../src/import/index.js';
 import { runScriptLane } from '../src/lane/script-lane.js';
-import { IMPORT_REFUSES_WRITES, UNSIGNED_CHANGE_PASSWORD, UNSIGNED_SECRET_FILL } from '../src/messages.js';
-import { signSteps } from '../src/proposal/proposal.js';
+import { needsApprovalAsWritten, notReplayedFlags, notReplayedProposal } from '../src/proposal/not-replayed.js';
+import { signSteps, stepChanges, UNVERIFIED_COUNT_FLAG } from '../src/proposal/proposal.js';
+import { scriptHash } from '../src/sign.js';
 import { parseDesktopScript } from '../src/steps/parse.js';
 import type { Script } from '../src/types.js';
-import { APPROVER, erpScript, LOCAL, reportScript, SAP_VARS, sapPolicy, SECRETS, TEST_KEY } from './helpers.js';
+import { APPROVER, erpScript, LOCAL, reportScript, SAP_VARS, sapPolicy, SECRETS, TEST_KEY, webguiScript } from './helpers.js';
 
 let portal: Awaited<ReturnType<typeof startPortal>>;
 beforeAll(async () => { portal = await startPortal(); });
@@ -71,37 +72,57 @@ describe('a step document as an import source: the import run', () => {
     expect(adopted.ok ? '' : adopted.message).toContain('missing input "company"');
   }, 120_000);
 
-  it("a document with a submit runs no write in the import's own run", async () => {
+  it('a document with a submit or a download through a form, also inside paginate, needs approval as written: it is never run', () => {
+    const erp = erpScript(portal.url);
     const submit = {
-      ...erpScript(portal.url),
-      steps: [...erpScript(portal.url).steps.slice(0, 3), { intent: 'Send the form', submit: { path: '/acme/reports/export', button: { role: 'button', name: 'Export CSV' } } }],
+      ...erp, steps: [...erp.steps.slice(0, 3), { intent: 'Send the form', submit: { path: '/acme/reports/export', button: { role: 'button', name: 'Export CSV' } } }],
     };
-    // A download through a form post is a write too.
-    for (const doc of [submit, reportScript(portal.url)]) {
+    const report = reportScript(portal.url);
+    const exportStep = report.steps.at(-1)!;
+    const paginated = {
+      ...report, steps: [...report.steps.slice(0, -1), { intent: 'Export every page', paginate: { next: { text: 'Next page' }, until: 'absent', max: 3, each: [exportStep] } }],
+    };
+    for (const doc of [submit, report, paginated]) {
       const r = importSource('steps', json(doc), opts);
       expect(r.drafts).toHaveLength(1);
-      const adopted = await adoptDraft({ draft: r.drafts[0].script, policy: sapPolicy(portal), secrets: SECRETS, endpoint: LOCAL, vars: SAP_VARS, defaultStepTimeoutMs: 3000 });
-      // Refused before a browser opens: no step ran.
-      expect(adopted).toMatchObject({ ok: false, code: 'policy_violation', message: IMPORT_REFUSES_WRITES, configError: true, log: [] });
+      const script = r.drafts[0].script;
+      expect(needsApprovalAsWritten(script.steps)).toBe(true);
+      // The review of steps nobody ran: version 1, no base, empty evidence, every step listed as added.
+      const p = notReplayedProposal(script);
+      expect(p).toMatchObject({ name: 'line-item-export', baseVersion: null, version: 1, steps: script, hash: scriptHash(script), screenshots: {} });
+      expect(p.evidence).toEqual({ count: 0, total: null, diff: { missing: [], extra: [] } });
+      expect(p.changes).toEqual(stepChanges(undefined, script));
+      expect(p.changes.every((c) => c.was === null)).toBe(true);
+      expect(p.safetyFlags).toContain(UNVERIFIED_COUNT_FLAG);
+      expect(p.safetyFlags).toContain('new form submission: POST ' + portal.host + '/acme/reports/export');
     }
+    // A list without any of the four kinds is run and replayed, as every import is.
+    expect(needsApprovalAsWritten(erp.steps)).toBe(false);
+    expect(needsApprovalAsWritten(webguiScript(portal.url).steps)).toBe(false);
   });
 
-  it('a secret fill or a changePassword is refused before the import run opens a browser: the run is unsigned', async () => {
+  it('a secret fill or a changePassword needs approval as written too, and its flags name the variable, never a value', () => {
     const erp = erpScript(portal.url);
     const signIn = erp.steps[0] as Extract<Script['steps'][number], { signIn: unknown }>;
     const changePassword = { ...erp, steps: [{ ...signIn, signIn: { ...signIn.signIn, changePassword: {
-      detect: { role: 'heading', name: 'Change your password' }, new: [{ label: 'New password', exact: true }], submit: { role: 'button', name: 'Change password' }, value: '{{var.newPassword}}',
+      detect: { role: 'heading', name: 'Change your password' }, new: [{ label: 'New password', exact: true }], submit: { role: 'button', name: 'Change password' }, value: '{{ var.newPassword }}',
     } } }, ...erp.steps.slice(1)] };
     const secretFill = { ...erp, steps: [...erp.steps.slice(0, -1), { intent: 'Type the export password', fill: { field: { label: 'Export password' }, value: '{{var.exportPassword}}', secret: true } }, erp.steps.at(-1)] };
-    const vars = { ...SAP_VARS, newPassword: 'Next-pw-7731', exportPassword: 'Zip-9f3k-2xq' };
-    for (const [doc, message] of [[changePassword, UNSIGNED_CHANGE_PASSWORD], [secretFill, UNSIGNED_SECRET_FILL]] as const) {
-      const r = importSource('steps', json(doc), opts);
-      expect(r.drafts).toHaveLength(1);
-      const adopted = await adoptDraft({ draft: r.drafts[0].script, policy: sapPolicy(portal), secrets: SECRETS, endpoint: LOCAL, vars, defaultStepTimeoutMs: 3000 });
-      expect(adopted).toMatchObject({ ok: false, code: 'script_untrusted', message, log: [] });
-      expect(json(adopted)).not.toContain(vars.newPassword);
-      expect(json(adopted)).not.toContain(vars.exportPassword);
+    const flags: [object, string[]][] = [
+      [changePassword, ['password change: step 1 sets a new password from the run variable {{var.newPassword}}']],
+      [secretFill, [`secret fill: step ${erp.steps.length} types the run variable {{var.exportPassword}}`]],
+    ];
+    for (const [doc, expected] of flags) {
+      const script = importSource('steps', json(doc), opts).drafts[0].script;
+      expect(needsApprovalAsWritten(script.steps)).toBe(true);
+      expect(notReplayedFlags(script)).toEqual(expected);
+      expect(notReplayedProposal(script).safetyFlags).toEqual(expect.arrayContaining(expected));
     }
+    // Numbered as the change list shows the steps: a step inside paginate counts after the paginate step itself.
+    const nested = { ...erp, steps: [...erp.steps.slice(0, 2), { intent: 'Each page', paginate: { next: { text: 'Next page' }, until: 'absent', max: 2, each: [
+      { intent: 'Type the export password', fill: { field: { label: 'Export password' }, value: '{{var.exportPassword}}', secret: true } },
+    ] } }] };
+    expect(notReplayedFlags(importSource('steps', json(nested), opts).drafts[0].script)).toEqual(['secret fill: step 4 types the run variable {{var.exportPassword}}']);
   });
 });
 
