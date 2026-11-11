@@ -394,6 +394,14 @@ path that looks right is the program you mean.
   from the folder, not the policy file's (which let the runner's user read the policy). The tool does not delete a
   backup it has made, so a change that failed or was stopped after this step leaves a backup of a policy that did
   not change.
+- **Copies of change files.** `apply` reads the change file once and copies it as a new file into `policy-changes\`
+  beside the policy, as `<change file's name>.<yyyyMMdd-HHmmss>.json` (`-2`, `-3` and so on when that name is
+  taken), then shows and applies that copy, so a change file that changes after the copy changes nothing. The tool
+  creates the folder for Administrators and SYSTEM only, and stops when it is a link or someone other than an
+  administrator owns it, can change it or can create files or folders in it:
+  `the change folder cannot be trusted: <problem>; an administrator must check and remove it`. Each copy stays, as a
+  record of what the tool was given; the tool does not delete copies, so remove old ones by hand when you no longer
+  need them.
 - **When writing fails.** The tool exits 1 and does not restart the runner. A failure before the swap (the
   temporary file or the backup could not be written) leaves the policy file untouched:
   `Writing the policy failed: <reason>. The runner keeps running with the policy it has.` After a swap that failed,
