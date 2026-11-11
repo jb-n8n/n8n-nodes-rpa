@@ -56,6 +56,9 @@ public class StepListTests
         Assert.Equal("It finds its element by its row position, so on a later run it acts on whatever is in that row. Check it.", rows[5].Tip);
         Assert.Null(rows[0].Tip);
         Assert.Null(rows[6].Tip);
+        // A screen reader says the number, the sentence and the mark.
+        Assert.Equal("5. Choose the variable company_code in Company code (Variable)", StepRows.Spoken(rows[4]));
+        Assert.Equal("7. Click Search", StepRows.Spoken(rows[6]));
     }
 
     [Fact]
