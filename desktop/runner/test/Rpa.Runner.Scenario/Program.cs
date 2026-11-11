@@ -174,13 +174,20 @@ internal sealed class Scenario(Uri url, string token, string fingerprint, string
                 var text = await ReadClipboardAfterCopy();
                 Expect(text == detail1, $"the copied detail comes back as it is (got {text.Length} characters)");
                 // Another application (Windows PowerShell's Set-Clipboard, which opens no window) copies a secret while
-                // the run's window keeps the foreground: it owns the clipboard (or nobody does once it exited).
-                SetClipboard("hunter2 988 374");
-                var e = await ExpectError(-32003, () => Call("clipboard.read", new { runId = _runId }));
-                Observe($"another application's copy: {e.RunnerMessage}");
-                Expect(e.RunnerMessage.Contains("owns it", StringComparison.Ordinal) || e.RunnerMessage.Contains("no window owns the clipboard", StringComparison.Ordinal),
-                    "refused because a process outside the run (or no window) owns the clipboard");
-                Expect(!e.RunnerMessage.Contains("hunter2", StringComparison.Ordinal), "the refusal carries no clipboard text");
+                // the run's window keeps the foreground: it owns the clipboard (or nobody does once it exited). A client
+                // in another session than the runner's (RPA_SCENARIO_OTHER_SESSION=1, as behind the RPA Supervisor)
+                // cannot copy into the runner's session, so that check is left out there.
+                if (Environment.GetEnvironmentVariable("RPA_SCENARIO_OTHER_SESSION") == "1")
+                    Observe("another application's copy: not checked, the client runs in another session than the runner");
+                else
+                {
+                    SetClipboard("hunter2 988 374");
+                    var e = await ExpectError(-32003, () => Call("clipboard.read", new { runId = _runId }));
+                    Observe($"another application's copy: {e.RunnerMessage}");
+                    Expect(e.RunnerMessage.Contains("owns it", StringComparison.Ordinal) || e.RunnerMessage.Contains("no window owns the clipboard", StringComparison.Ordinal),
+                        "refused because a process outside the run (or no window) owns the clipboard");
+                    Expect(!e.RunnerMessage.Contains("hunter2", StringComparison.Ordinal), "the refusal carries no clipboard text");
+                }
                 // An act that copies nothing: the clipboard has not changed since the run's last act.
                 await Read(TW(MainTitle, new { automationId = "txtDetail" }));
                 await ExpectError(-32003, () => Call("clipboard.read", new { runId = _runId }));

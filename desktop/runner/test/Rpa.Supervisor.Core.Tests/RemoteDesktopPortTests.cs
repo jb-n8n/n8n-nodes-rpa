@@ -9,9 +9,11 @@ public sealed class RemoteDesktopPortTests
     }
 
     [Fact]
-    public void No_listener_at_all_is_not_a_problem_of_this_check()
+    public void No_listener_at_all_says_that_Remote_Desktop_is_off_or_still_starting()
     {
-        Assert.Null(RemoteDesktopPort.Problem(true, 1200, []));
+        // A machine with Remote Desktop turned off has the service running and nothing on the port.
+        Assert.Equal("Nothing listens on the Remote Desktop port 3389: Remote Desktop is turned off, or its service is still starting",
+            RemoteDesktopPort.Problem(true, 1200, []));
     }
 
     [Theory]

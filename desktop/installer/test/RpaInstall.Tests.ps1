@@ -19,7 +19,7 @@ BeforeAll {
     $parameters = @{
       User = 'rpa-runner'; UserPassword = $null; RunnerPort = 8765; BrowserPort = 3000
       AllowFrom = @('10.0.0.5'); AllowFromAnyAddress = $false; IncludePublicNetwork = $false
-      NoBrowser = $false; NoFirewall = $false; AutoSignIn = $false; Force = $false
+      NoBrowser = $false; NoFirewall = $false; AutoSignIn = $false; Unattended = $false; IdleSeconds = 15; Force = $false
     }
     foreach ($key in $Change.Keys) { $parameters[$key] = $Change[$key] }
     $parameters
@@ -54,6 +54,8 @@ BeforeAll {
       DataDirEntries = $null
       DataFiles = @{ 'policy.json' = New-PathState 'missing'; 'token' = New-PathState 'missing'; 'browser-token' = New-PathState 'missing' }
       TaskFolderOwner = $null; PublicNetwork = $false
+      IsServer = $true; RemoteDesktopDenied = $false; InstalledMode = $null
+      SupervisorDir = "$($script:DataDir)\supervisor"; SupervisorDirState = New-PathState 'missing'
     }
     foreach ($key in $Change.Keys) { $facts[$key] = $Change[$key] }
     $facts
@@ -88,6 +90,24 @@ BeforeAll {
   function New-TestPassword { New-Object Security.SecureString }
 
   $script:SignInSteps = @('store sign-in password', 'turn on automatic sign-in', 'keep the desktop unlocked')
+  $script:UnattendedSteps = @(
+    'allow the bot user to sign in through Remote Desktop', 'turn on Remote Desktop', "store the bot user's password for the supervisor",
+    'register the supervisor service', 'point the firewall rules at the supervisor')
+
+  # The same machine after Install-Rpa.ps1 -Unattended -AllowFrom 10.0.0.5 ran on it.
+  function New-UnattendedFacts([hashtable]$Change = @{}) {
+    $facts = New-InstalledFacts @{ InstalledMode = 'unattended'; SupervisorDirState = New-PathState 'ours' }
+    foreach ($key in $Change.Keys) { $facts[$key] = $Change[$key] }
+    $facts
+  }
+
+  # A password made at run time, as a SecureString, and its text, to look for in what the installer prints and writes.
+  function New-MadeUpPassword {
+    $text = 'made-up-' + [guid]::NewGuid().ToString('N')
+    $secure = New-Object Security.SecureString
+    foreach ($char in $text.ToCharArray()) { $secure.AppendChar($char) }
+    @{ Text = $text; Secure = $secure }
+  }
 }
 
 Describe 'Get-RpaInstallPlan' {
@@ -950,6 +970,165 @@ Describe 'Get-RpaInstallPlan' {
       @($plan.Steps | Where-Object { $script:SignInSteps -contains $_ }) | Should -BeExactly @('store sign-in password')
     }
   }
+
+  Context '-Unattended' {
+    It 'adds the five steps in order after install.json is written, and none of the automatic sign-in steps' {
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true }) -Facts (New-TestFacts @{ RemoteDesktopDenied = $true })
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Steps | Should -BeExactly @(
+        'copy program files'
+        'create user'
+        'protect the data directory'
+        'write policy'
+        'write token'
+        'write browser-token'
+        'add the runner firewall rule'
+        'add the browser firewall rule'
+        'register the runner task'
+        'register the browser task'
+        'write install.json'
+        'allow the bot user to sign in through Remote Desktop'
+        'turn on Remote Desktop'
+        "store the bot user's password for the supervisor"
+        'register the supervisor service'
+        'point the firewall rules at the supervisor'
+      )
+      foreach ($step in $script:SignInSteps) { $plan.Steps | Should -Not -Contain $step }
+    }
+
+    It 'turns Remote Desktop on only when it is off, and points no firewall rule anywhere with -NoFirewall' {
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true }) -Facts (New-TestFacts)
+      $plan.Steps | Should -Not -Contain 'turn on Remote Desktop'
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true; NoFirewall = $true; AllowFrom = @() }) -Facts (New-TestFacts @{ RemoteDesktopDenied = $true })
+      $plan.Refusals.Count | Should -Be 0
+      @($plan.Steps | Where-Object { $script:UnattendedSteps -contains $_ }) | Should -BeExactly $script:UnattendedSteps[0..3]
+    }
+
+    It 'every step it lists is a step the installer has' {
+      $plans = @(
+        (Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true }) -Facts (New-TestFacts @{ RemoteDesktopDenied = $true }))
+        (Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-UnattendedFacts))
+      )
+      $known = InModuleScope RpaInstall { $script:KnownSteps }
+      foreach ($plan in $plans) { foreach ($step in $plan.Steps) { $known | Should -Contain $step } }
+    }
+
+    It 'refuses -Unattended with -AutoSignIn before anything changes' {
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true; AutoSignIn = $true }) -Facts (New-TestFacts)
+      $plan.Refusals | Should -BeExactly @('-Unattended and -AutoSignIn cannot be used together: -AutoSignIn keeps the bot user signed in, -Unattended signs it in only for the runs. Choose one.')
+      $plan.Steps.Count | Should -Be 0
+    }
+
+    It 'refuses -Unattended on a desktop edition of Windows, and says that it was not tested there' {
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true }) -Facts (New-TestFacts @{ IsServer = $false })
+      $plan.Refusals | Should -BeExactly @('-Unattended is for Windows Server 2019 or later. It was not tested on Windows 10 or 11, so the installer does not set it up there. Install without -Unattended, and have the bot user signed in (-AutoSignIn, or by hand).')
+      $plan.Steps.Count | Should -Be 0
+      # Without -Unattended a desktop edition is fine.
+      (Get-RpaInstallPlan -Parameters (New-TestParameters @{ UserPassword = New-TestPassword }) -Facts (New-TestFacts @{ IsServer = $false })).Refusals.Count | Should -Be 0
+    }
+
+    It 'refuses a domain user: the RPA Supervisor signs in a local user of this machine' {
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true; User = 'CORP\svc-rpa' }) -Facts (New-TestFacts @{ UserIsDomain = $true; UserExists = $true })
+      $plan.Refusals | Should -BeExactly @('-Unattended needs a local user of this machine as the bot user; CORP\svc-rpa is a domain user.')
+    }
+
+    It 'refuses it over an install that turned automatic sign-in on' {
+      $facts = New-InstalledFacts @{ InstalledAutoSignInUser = 'rpa-runner'; InstalledAutoSignInForUser = $true }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true; UserPassword = New-TestPassword }) -Facts $facts
+      $plan.Refusals | Should -BeExactly @('Automatic sign-in is set up for rpa-runner, and with -Unattended nobody may be signed in by Windows itself. Run Uninstall-Rpa.ps1 first, which turns automatic sign-in off, then install with -Unattended.')
+    }
+
+    It 'makes a random password for a user it creates, and needs -UserPassword for an existing user' {
+      (Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true }) -Facts (New-TestFacts)).Refusals.Count | Should -Be 0
+
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true }) -Facts (New-TestFacts @{ UserExists = $true })
+      $plan.Refusals | Should -BeExactly @('-Unattended for the existing user rpa-runner needs -UserPassword: the RPA Supervisor signs rpa-runner in with it. A password the installer generated earlier is not known to anyone: set a new password for rpa-runner and pass it, or remove rpa-runner so the installer creates it again.')
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true; UserPassword = New-TestPassword }) -Facts (New-TestFacts @{ UserExists = $true; UserPasswordWrong = $true })
+      $plan.Refusals | Should -BeExactly @('The password given for rpa-runner is not correct.')
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true; UserPassword = New-TestPassword }) -Facts (New-TestFacts @{ UserExists = $true })
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Steps | Should -Contain "store the bot user's password for the supervisor"
+    }
+
+    It 'on an upgrade of an unattended install keeps the stored password unless -UserPassword is given' {
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true }) -Facts (New-UnattendedFacts)
+      $plan.Refusals.Count | Should -Be 0
+      @($plan.Steps | Where-Object { $script:UnattendedSteps -contains $_ }) | Should -BeExactly @($script:UnattendedSteps[0], $script:UnattendedSteps[3], $script:UnattendedSteps[4])
+      $plan.Steps[-1] | Should -BeExactly 'start tasks'
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true; UserPassword = New-TestPassword }) -Facts (New-UnattendedFacts)
+      $plan.Steps | Should -Contain "store the bot user's password for the supervisor"
+    }
+
+    It 'without -Unattended over an unattended install puts back what -Unattended changed, after install.json is written' {
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-UnattendedFacts)
+      $plan.Refusals.Count | Should -Be 0
+      foreach ($step in $script:UnattendedSteps) { $plan.Steps | Should -Not -Contain $step }
+      $plan.Steps | Should -Contain 'put back what -Unattended changed'
+      [array]::IndexOf($plan.Steps, 'put back what -Unattended changed') | Should -Be ([array]::IndexOf($plan.Steps, 'write install.json') + 1)
+      # A signed-in install has nothing of that to put back.
+      (Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-InstalledFacts)).Steps | Should -Not -Contain 'put back what -Unattended changed'
+    }
+
+    It 'refuses a port that is too high for the port behind the supervisor, two ports that would meet, and an inner port in use' {
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true; RunnerPort = 60000 }) -Facts (New-TestFacts)
+      $plan.Refusals | Should -BeExactly @('-RunnerPort 60000 is too high for -Unattended: the runner then listens on port 60000 + 10000 on 127.0.0.1, so the highest is 55535.')
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true; BrowserPort = 55536 }) -Facts (New-TestFacts)
+      $plan.Refusals | Should -BeExactly @('-BrowserPort 55536 is too high for -Unattended: the browser then listens on port 55536 + 10000 on 127.0.0.1, so the highest is 55535.')
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true; RunnerPort = 8000; BrowserPort = 18000 }) -Facts (New-TestFacts)
+      $plan.Refusals | Should -BeExactly @('-RunnerPort 8000 and -BrowserPort 18000 do not work together with -Unattended: the runner and the browser then also listen on 18000 and 28000, and all four ports must differ.')
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true }) -Facts (New-TestFacts @{ PortsInUse = @{ 18765 = 'httpd' } })
+      $plan.Refusals | Should -BeExactly @('Port 18765 is in use by httpd. With -Unattended the runner and the browser listen on their port + 10000 on 127.0.0.1; choose another -RunnerPort or -BrowserPort.')
+      # The installed runner and browser hold those ports on an upgrade of an unattended install.
+      (Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true }) -Facts (New-UnattendedFacts @{ PortsInUse = @{ 18765 = 'RpaRunner'; 13000 = 'node' } })).Refusals.Count | Should -Be 0
+    }
+
+    It 'refuses a supervisor folder that is a link or that someone other than Administrators or SYSTEM owns' {
+      $folder = "$($script:DataDir)\supervisor"
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true }) -Facts (New-TestFacts @{ SupervisorDirState = New-PathState 'link' })
+      $plan.Refusals | Should -BeExactly @("$folder is a link or junction. Remove it and run the installer again.")
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true }) -Facts (New-TestFacts @{ SupervisorDirState = New-PathState 'theirs' })
+      $plan.Refusals | Should -BeExactly @("$folder exists and is owned by BOT-PC\mallory. Check what is in it, remove it, and run the installer again.")
+      # Without -Unattended the folder is not used.
+      (Get-RpaInstallPlan -Parameters (New-TestParameters @{ UserPassword = New-TestPassword }) -Facts (New-TestFacts @{ SupervisorDirState = New-PathState 'theirs' })).Refusals.Count | Should -Be 0
+    }
+
+    It "warns that an expiring password stops the supervisor's sign-ins" {
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true; UserPassword = New-TestPassword }) -Facts (New-TestFacts @{ UserExists = $true; UserPasswordExpires = $true })
+      $plan.Warnings | Should -BeExactly @("rpa-runner's password expires; when it does, the RPA Supervisor cannot sign rpa-runner in until a new one is stored with Install-Rpa.ps1 -Unattended -UserPassword.")
+    }
+
+    It 'shows what it changes before anything changes, the first time only, and never the password' {
+      $password = New-MadeUpPassword
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true; UserPassword = $password.Secure }) -Facts (New-TestFacts @{ UserExists = $true; RemoteDesktopDenied = $true })
+      $plan.Notice | Should -BeExactly @(
+        '-Unattended changes how this machine works:'
+        '  - The service RPA Supervisor (RpaSupervisor.exe, running as SYSTEM, started with Windows) listens on port 8765 and 3000.'
+        '    When n8n connects, it signs rpa-runner in through a Remote Desktop connection from this machine to itself,'
+        '    and signs it out again 15 s after the last connection. The runner and the browser listen on 127.0.0.1 only,'
+        '    at port 18765 and 13000.'
+        '  - rpa-runner is added to the group Remote Desktop Users, unless it is a member already.'
+        '  - Remote Desktop is turned on (it is off now). No firewall rule for Remote Desktop is turned on: the RPA Supervisor'
+        '    connects from this machine to itself.'
+        '  - The password of rpa-runner is stored on this machine for the RPA Supervisor. An administrator of this machine'
+        '    can read it.'
+        '  - The firewall rules for port 8765 and 3000 let connections in to the RPA Supervisor instead of the runner and the'
+        '    browser.'
+        '  - While someone is signed in as rpa-runner, at the console or over Remote Desktop, runs are refused.'
+        '  Uninstall-Rpa.ps1 puts these settings back to what they were.'
+      )
+      ($plan.Notice -join "`n").Contains($password.Text) | Should -BeFalse
+      ($plan.Steps -join "`n").Contains($password.Text) | Should -BeFalse
+      # An upgrade of an unattended install has said it all before; a signed-in install says nothing of it.
+      @((Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true }) -Facts (New-UnattendedFacts)).Notice).Count | Should -Be 0
+      @((Get-RpaInstallPlan -Parameters (New-TestParameters @{ UserPassword = New-TestPassword }) -Facts (New-TestFacts)).Notice).Count | Should -Be 0
+    }
+
+    It 'with -NoBrowser names only the runner port' {
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true; NoBrowser = $true }) -Facts (New-TestFacts)
+      $plan.Notice[1] | Should -BeExactly '  - The service RPA Supervisor (RpaSupervisor.exe, running as SYSTEM, started with Windows) listens on port 8765.'
+      $plan.Notice[3] | Should -BeExactly '    and signs it out again 15 s after the last connection. The runner listens on 127.0.0.1 only, at port 18765.'
+    }
+  }
 }
 
 Describe 'Remove-RpaOldTokens' {
@@ -1092,7 +1271,7 @@ Describe 'Invoke-RpaInstallPlan' {
   # A package that was unpacked only in part would install, and then point the user to a tool that is not there.
   Context 'the files a package must hold' {
     BeforeAll {
-      $script:Needed = @('VERSION', 'runner\RpaRunner.exe', 'runner\RpaPolicy.exe', 'scripts\start-loop.ps1', 'scripts\start-runner.ps1', 'scripts\Show-RpaConnection.ps1')
+      $script:Needed = @('VERSION', 'runner\RpaRunner.exe', 'runner\RpaPolicy.exe', 'runner\RpaSupervisor.exe', 'scripts\start-loop.ps1', 'scripts\start-runner.ps1', 'scripts\Show-RpaConnection.ps1')
       $script:BrowserNeeded = @('browser\node.exe', 'browser\host\host.mjs', 'browser\host\run-server.mjs', 'browser\gate\gate.mjs', 'browser\node_modules\playwright\cli.js', 'scripts\start-browser.ps1')
       # Invoke-RpaInstallPlan reads these; elsewhere than on Windows they are not set.
       $script:Places = @{ ProgramFiles = $env:ProgramFiles; ProgramData = $env:ProgramData; ComputerName = $env:COMPUTERNAME }
@@ -1113,7 +1292,7 @@ Describe 'Invoke-RpaInstallPlan' {
     AfterAll { $env:ProgramFiles = $script:Places.ProgramFiles; $env:ProgramData = $script:Places.ProgramData; $env:COMPUTERNAME = $script:Places.ComputerName }
 
     It 'refuses a package without <Name> before the first step' -ForEach @(
-      @{ Name = 'runner\RpaPolicy.exe' }, @{ Name = 'browser\host\run-server.mjs' }, @{ Name = 'browser\gate\gate.mjs' }, @{ Name = 'browser\node_modules\playwright\cli.js' }
+      @{ Name = 'runner\RpaPolicy.exe' }, @{ Name = 'runner\RpaSupervisor.exe' }, @{ Name = 'browser\host\run-server.mjs' }, @{ Name = 'browser\gate\gate.mjs' }, @{ Name = 'browser\node_modules\playwright\cli.js' }
     ) {
       $package = New-TestPackage @($Name)
       Mock -ModuleName RpaInstall Copy-RpaProgramFiles { }
@@ -1273,7 +1452,7 @@ Describe 'Invoke-RpaUninstall' {
   # A package that was unpacked only in part would install, and then point the user to a tool that is not there.
   Context 'the files a package must hold' {
     BeforeAll {
-      $script:Needed = @('VERSION', 'runner\RpaRunner.exe', 'runner\RpaPolicy.exe', 'scripts\start-loop.ps1', 'scripts\start-runner.ps1', 'scripts\Show-RpaConnection.ps1')
+      $script:Needed = @('VERSION', 'runner\RpaRunner.exe', 'runner\RpaPolicy.exe', 'runner\RpaSupervisor.exe', 'scripts\start-loop.ps1', 'scripts\start-runner.ps1', 'scripts\Show-RpaConnection.ps1')
       $script:BrowserNeeded = @('browser\node.exe', 'browser\host\host.mjs', 'browser\host\run-server.mjs', 'browser\gate\gate.mjs', 'browser\node_modules\playwright\cli.js', 'scripts\start-browser.ps1')
       # Invoke-RpaInstallPlan reads these; elsewhere than on Windows they are not set.
       $script:Places = @{ ProgramFiles = $env:ProgramFiles; ProgramData = $env:ProgramData; ComputerName = $env:COMPUTERNAME }
@@ -1294,7 +1473,7 @@ Describe 'Invoke-RpaUninstall' {
     AfterAll { $env:ProgramFiles = $script:Places.ProgramFiles; $env:ProgramData = $script:Places.ProgramData; $env:COMPUTERNAME = $script:Places.ComputerName }
 
     It 'refuses a package without <Name> before the first step' -ForEach @(
-      @{ Name = 'runner\RpaPolicy.exe' }, @{ Name = 'browser\host\run-server.mjs' }, @{ Name = 'browser\gate\gate.mjs' }, @{ Name = 'browser\node_modules\playwright\cli.js' }
+      @{ Name = 'runner\RpaPolicy.exe' }, @{ Name = 'runner\RpaSupervisor.exe' }, @{ Name = 'browser\host\run-server.mjs' }, @{ Name = 'browser\gate\gate.mjs' }, @{ Name = 'browser\node_modules\playwright\cli.js' }
     ) {
       $package = New-TestPackage @($Name)
       Mock -ModuleName RpaInstall Copy-RpaProgramFiles { }
@@ -1924,6 +2103,11 @@ Describe 'What the uninstaller could not put back' {
     @{ Change = @{ kind = 'task'; key = '\Microsoft\Windows\Server Manager\'; name = 'ServerManager' }; Text = 'scheduled task \Microsoft\Windows\Server Manager\ServerManager (it was enabled)' }
     @{ Change = @{ kind = 'power'; key = 'SUB_VIDEO'; name = 'VIDEOIDLE'; value = '600' }; Text = 'power timeout SUB_VIDEO VIDEOIDLE (it was 600 seconds)' }
     @{ Change = @{ kind = 'secret'; key = 'DefaultPassword'; name = '' }; Text = 'the password stored for automatic sign-in (it is still stored)' }
+    @{ Change = @{ kind = 'secret'; key = 'L$RpaRunnerBotPassword'; name = '' }; Text = "the bot user's password stored for the RPA Supervisor (it is still stored)" }
+    @{ Change = @{ kind = 'group'; key = 'S-1-5-32-555'; name = 'S-1-5-21-1-2-3-1001'; value = 'rpa-runner' }; Text = 'the membership of rpa-runner in Remote Desktop Users (it was not a member)' }
+    @{ Change = @{ kind = 'service'; key = 'RPA Supervisor'; name = '' }; Text = 'the service RPA Supervisor (it was not there)' }
+    @{ Change = @{ kind = 'firewall'; key = 'RPA-Runner-In'; name = '' }; Text = 'firewall rule RPA-Runner-In (it was for the runner)' }
+    @{ Change = @{ kind = 'firewall'; key = 'RPA-Browser-In'; name = '' }; Text = 'firewall rule RPA-Browser-In (it was for the browser)' }
   ) {
     $record = New-Object psobject -Property $Change
     InModuleScope RpaInstall -Parameters @{ Record = $record } { Get-RpaChangeText $Record } | Should -BeExactly $Text
@@ -2067,7 +2251,8 @@ Describe 'install.json' {
   It 'holds these fields, in this order' {
     $plan = @{ Steps = @('write install.json'); AllowFrom = @('10.0.0.5', '10.1.0.0/16'); PublicNetwork = $true }
     $record = New-TestRecord $plan $null
-    @($record.Keys) | Should -BeExactly @('version', 'user', 'runnerPort', 'browserPort', 'browser', 'autoSignIn', 'allowFrom', 'publicNetwork', 'signInChanges')
+    @($record.Keys) | Should -BeExactly @('version', 'user', 'runnerPort', 'browserPort', 'browser', 'autoSignIn', 'allowFrom', 'publicNetwork', 'mode', 'signInChanges')
+    $record.mode | Should -BeExactly 'signedIn'
     $record.version | Should -BeExactly '0.2.0'
     $record.user | Should -BeExactly 'rpa-runner'
     $record.runnerPort | Should -Be 8765
@@ -2113,6 +2298,35 @@ Describe 'install.json' {
     # An upgrade that makes rules replaces it.
     $previous = '{ "user": "rpa-runner", "autoSignIn": false, "allowFrom": "none", "publicNetwork": false, "signInChanges": [] }' | ConvertFrom-Json
     (New-TestRecord @{ Steps = @(); AllowFrom = @('10.0.0.5'); PublicNetwork = $true } $previous).allowFrom | Should -BeExactly @('10.0.0.5')
+  }
+
+  # The names RPA Supervisor reads (desktop/runner/src/Rpa.Supervisor.Core/InstallFile.cs).
+  It 'with -Unattended holds what the RPA Supervisor reads: the mode, the plain user name, the ports behind it, the idle time and where it listens' {
+    $plan = @{ Steps = @('write install.json'); AllowFrom = @('10.0.0.5'); PublicNetwork = $true }
+    $record = New-TestRecord $plan $null @{ Unattended = $true; IdleSeconds = 30; User = '.\rpa-runner' }
+    @($record.Keys) | Should -BeExactly @('version', 'user', 'runnerPort', 'browserPort', 'browser', 'autoSignIn', 'allowFrom', 'publicNetwork', 'mode', 'idleSeconds', 'runnerInnerPort', 'browserInnerPort', 'listenAddresses', 'signInChanges')
+    $record.mode | Should -BeExactly 'unattended'
+    $record.user | Should -BeExactly 'rpa-runner'
+    $record.idleSeconds | Should -Be 30
+    $record.runnerInnerPort | Should -Be 18765
+    $record.browserInnerPort | Should -Be 13000
+    $json = $record | ConvertTo-Json -Depth 5 | ConvertFrom-Json
+    @($json.listenAddresses) | Should -BeExactly @('0.0.0.0')
+    $json.listenAddresses.GetType().IsArray | Should -BeTrue
+  }
+
+  It 'with -Unattended -NoBrowser has no browser port, so that the RPA Supervisor passes on the runner port only' {
+    $record = New-TestRecord @{ Steps = @(); AllowFrom = @('10.0.0.5'); PublicNetwork = $true } $null @{ Unattended = $true; NoBrowser = $true }
+    $record.browserPort | Should -BeNullOrEmpty
+    $record.Contains('browserInnerPort') | Should -BeFalse
+    $record.runnerInnerPort | Should -Be 18765
+  }
+
+  It 'never holds the password' {
+    $password = New-MadeUpPassword
+    $plan = @{ Steps = @('write install.json', "store the bot user's password for the supervisor"); AllowFrom = @('10.0.0.5'); PublicNetwork = $true }
+    $record = New-TestRecord $plan $null @{ Unattended = $true; UserPassword = $password.Secure }
+    ($record | ConvertTo-Json -Depth 5).Contains($password.Text) | Should -BeFalse
   }
 }
 
@@ -2166,6 +2380,93 @@ Describe 'A failed install' {
     $kept.signInChanges[0].name | Should -BeExactly 'A'
     $kept.signInChanges[0].existed | Should -BeTrue
     $kept.signInChanges[0].value | Should -BeExactly ''
+  }
+}
+
+Describe 'What -Unattended changed, put back' {
+  BeforeAll {
+    # The records an install with -Unattended leaves in install.json, in the order its steps make them: the bot user put
+    # into Remote Desktop Users, Remote Desktop turned on (it was off), the password stored, the service, the two rules.
+    function New-UnattendedChanges {
+      @(
+        [ordered]@{ kind = 'group'; key = 'S-1-5-32-555'; name = 'S-1-5-21-1-2-3-1001'; value = 'rpa-runner' }
+        [ordered]@{ kind = 'registry'; key = 'HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server'; name = 'fDenyTSConnections'; existed = $true; type = 'REG_DWORD'; value = '1' }
+        [ordered]@{ kind = 'secret'; key = 'L$RpaRunnerBotPassword'; name = '' }
+        [ordered]@{ kind = 'service'; key = 'RPA Supervisor'; name = '' }
+        [ordered]@{ kind = 'firewall'; key = 'RPA-Runner-In'; name = '' }
+        [ordered]@{ kind = 'firewall'; key = 'RPA-Browser-In'; name = '' }
+      ) | ForEach-Object { New-Object psobject -Property $_ }
+    }
+  }
+
+  It 'puts back <What>' -ForEach @(
+    @{ What = 'the service and its event source'; Change = @{ kind = 'service'; key = 'RPA Supervisor'; name = '' }; Command = 'Remove-RpaSupervisor'; Filter = { $true } }
+    @{ What = "the bot user's stored password"; Change = @{ kind = 'secret'; key = 'L$RpaRunnerBotPassword'; name = '' }; Command = 'Remove-RpaLsaSecret'; Filter = { $Name -eq 'L$RpaRunnerBotPassword' } }
+    @{ What = 'the membership in Remote Desktop Users'; Change = @{ kind = 'group'; key = 'S-1-5-32-555'; name = 'S-1-5-21-1-2-3-1001'; value = 'rpa-runner' }; Command = 'Remove-RpaGroupMember'; Filter = { $Group -eq 'S-1-5-32-555' -and $Member -eq 'S-1-5-21-1-2-3-1001' } }
+    @{ What = 'Remote Desktop as it was found'; Change = @{ kind = 'registry'; key = 'HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server'; name = 'fDenyTSConnections'; existed = $true; type = 'REG_DWORD'; value = '1' }; Command = 'Set-RpaRegistryValue'; Filter = { $Name -eq 'fDenyTSConnections' -and $Type -eq 'REG_DWORD' -and $Value -eq '1' } }
+    @{ What = 'the runner firewall rule'; Change = @{ kind = 'firewall'; key = 'RPA-Runner-In'; name = '' }; Command = 'Set-RpaFirewallRuleProgram'; Filter = { $Name -eq 'RPA-Runner-In' -and $Program -like '*runner?RpaRunner.exe' } }
+    @{ What = 'the browser firewall rule'; Change = @{ kind = 'firewall'; key = 'RPA-Browser-In'; name = '' }; Command = 'Set-RpaFirewallRuleProgram'; Filter = { $Name -eq 'RPA-Browser-In' -and $Program -like '*browser?node.exe' } }
+  ) {
+    Mock -ModuleName RpaInstall $Command { }
+    # A folder that Join-Path takes on every platform.
+    $env:RPA_TEST_INSTALL = Join-Path $TestDrive 'RPA Runner'
+    Mock -ModuleName RpaInstall Get-RpaLayout { @{ InstallDir = $env:RPA_TEST_INSTALL } }
+    $record = New-Object psobject -Property $Change
+    try { InModuleScope RpaInstall -Parameters @{ Record = $record } { Restore-RpaSignInChange $Record } }
+    finally { $env:RPA_TEST_INSTALL = $null }
+    Should -Invoke -ModuleName RpaInstall $Command -Times 1 -Exactly -ParameterFilter $Filter
+  }
+
+  # An install without -Unattended over one with it.
+  It 'removes the service, the password and the group membership, puts Remote Desktop back, last first, and keeps the other records' {
+    $env:RPA_TEST_ORDER = ''
+    Mock -ModuleName RpaInstall Restore-RpaSignInChange { $env:RPA_TEST_ORDER += '{0}:{1};' -f $Change.kind, $Change.key }
+    $file = Join-Path $TestDrive 'reverse.json'
+    $other = New-Object psobject -Property ([ordered]@{ kind = 'registry'; key = 'HKLM\SOFTWARE\Example'; name = 'A'; existed = $false })
+    $run = @{ Layout = @{ InstallFile = $file }; Install = [ordered]@{ version = '0.0.0'; user = 'rpa-runner'; mode = 'signedIn'; signInChanges = @($other) + @(New-UnattendedChanges) } }
+    try {
+      InModuleScope RpaInstall -Parameters @{ Run = $run } { Undo-RpaUnattended $Run 6>$null }
+      $env:RPA_TEST_ORDER | Should -BeExactly 'firewall:RPA-Browser-In;firewall:RPA-Runner-In;service:RPA Supervisor;secret:L$RpaRunnerBotPassword;registry:HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server;group:S-1-5-32-555;'
+    } finally { $env:RPA_TEST_ORDER = $null }
+    $kept = Get-Content -Raw -LiteralPath $file | ConvertFrom-Json
+    @($kept.signInChanges).Count | Should -Be 1
+    $kept.signInChanges[0].key | Should -BeExactly 'HKLM\SOFTWARE\Example'
+  }
+
+  It 'keeps the record of what it could not put back, and fails the step with it' {
+    Mock -ModuleName RpaInstall Restore-RpaSignInChange { if ($Change.kind -eq 'service') { throw 'Access is denied.' } }
+    $file = Join-Path $TestDrive 'reverse-failed.json'
+    $run = @{ Layout = @{ InstallFile = $file }; Install = [ordered]@{ version = '0.0.0'; user = 'rpa-runner'; mode = 'signedIn'; signInChanges = @(New-UnattendedChanges) } }
+    { InModuleScope RpaInstall -Parameters @{ Run = $run } { Undo-RpaUnattended $Run 6>$null } } |
+      Should -Throw -ExpectedMessage 'Could not put back: the service RPA Supervisor (it was not there): Access is denied.'
+    $kept = Get-Content -Raw -LiteralPath $file | ConvertFrom-Json
+    @($kept.signInChanges | ForEach-Object { $_.kind }) | Should -BeExactly @('service')
+  }
+
+  It 'Uninstall-Rpa.ps1 puts back the same, and says that it was -Unattended that changed them' {
+    if (-not (Get-Command Remove-NetFirewallRule -ErrorAction SilentlyContinue)) { function global:Remove-NetFirewallRule { [CmdletBinding()] param([string[]]$Name) } }
+    $computer = $env:COMPUTERNAME
+    if (-not $computer) { $env:COMPUTERNAME = 'BOT-PC' }
+    $file = Join-Path $TestDrive 'unattended-install.json'
+    [ordered]@{ version = '0.0.0'; user = 'rpa-runner'; autoSignIn = $false; mode = 'unattended'; signInChanges = @(New-UnattendedChanges) } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $file
+    $env:RPA_TEST_FILE = $file
+    Mock -ModuleName RpaInstall Get-RpaLayout { @{ InstallDir = 'C:\Program Files\RPA Runner'; InstallFile = $env:RPA_TEST_FILE; DataDir = "$($env:RPA_TEST_FILE).data"; LeftoversFile = "$($env:RPA_TEST_FILE).list" } }
+    Mock -ModuleName RpaInstall Get-RpaSid { 'S-1-5-21-1-2-3-1001' }
+    Mock -ModuleName RpaInstall Stop-RpaServices { }
+    Mock -ModuleName RpaInstall Get-RpaUninstallFacts { @{ Accounts = @(); RunningSids = @(); UnknownProcesses = @() } }
+    Mock -ModuleName RpaInstall Remove-RpaBrowserTemp { }
+    Mock -ModuleName RpaInstall Unregister-RpaTask { }
+    Mock -ModuleName RpaInstall Remove-NetFirewallRule { }
+    Mock -ModuleName RpaInstall Remove-RpaProgramFiles { }
+    $env:RPA_TEST_ORDER = ''
+    Mock -ModuleName RpaInstall Restore-RpaSignInChange { $env:RPA_TEST_ORDER += '{0};' -f $Change.kind }
+    try {
+      $result = Invoke-RpaUninstall -Plan @{ Refusals = @() } 6>$null
+      $env:RPA_TEST_ORDER | Should -BeExactly 'firewall;firewall;service;secret;registry;group;'
+    } finally { $env:RPA_TEST_ORDER = $null; $env:RPA_TEST_FILE = $null; $env:COMPUTERNAME = $computer }
+    $lines = @(InModuleScope RpaInstall -Parameters @{ Result = $result } { Get-RpaUninstallSummary $Result })
+    $lines | Should -Contain '  The settings -Unattended changed are back to what they were before.'
+    ($lines -join "`n") | Should -Not -Match 'Automatic sign-in'
   }
 }
 
@@ -2487,6 +2788,87 @@ Describe 'Show-RpaConnection.ps1' {
     } finally {
       Set-Content -LiteralPath $file -Value $script:BrowserToken -NoNewline
     }
+  }
+
+  It 'in the signed-in mode says nothing of a mode or a supervisor' {
+    ($script:Output -join "`n") | Should -Not -Match 'Mode:|Supervisor'
+  }
+
+  # The RPA Supervisor is not registered where these tests run (it is registered only by an install with -Unattended).
+  Context 'in unattended mode' {
+    BeforeAll {
+      $script:SupervisorDir = Join-Path $script:MadeUpData 'supervisor'
+      $script:StateFile = Join-Path $script:SupervisorDir 'supervisor-state.json'
+      $file = Join-Path $script:MadeUpInstall 'install.json'
+      $install = $script:InstallJson | ConvertFrom-Json
+      $install | Add-Member -NotePropertyName mode -NotePropertyValue 'unattended'
+      $install | Add-Member -NotePropertyName idleSeconds -NotePropertyValue 15
+      Set-Content -LiteralPath $file -Value ($install | ConvertTo-Json) -Encoding UTF8
+      New-Item -ItemType Directory -Force -Path $script:SupervisorDir | Out-Null
+    }
+    AfterAll {
+      Set-Content -LiteralPath (Join-Path $script:MadeUpInstall 'install.json') -Value $script:InstallJson -Encoding UTF8
+      Remove-Item -LiteralPath $script:SupervisorDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It "says the mode, whether the service runs, the bot user's sessions, the last failure and where the log is, and no token" {
+      $failure = 'UserSignedIn: rpa-runner is signed in in a session the RPA Supervisor did not create (session 2); the connection is refused.'
+      Set-Content -LiteralPath $script:StateFile -Value (@{ sessionId = $null; logonTime = $null; lastFailure = $failure } | ConvertTo-Json)
+      $output = @(& $script:ShowScript)
+      $output | Should -Contain 'Mode: unattended. The RPA Supervisor signs rpa-runner in when n8n connects, and out 15 s after the last connection.'
+      $output | Should -Contain "Supervisor: the service RPA Supervisor is not registered. Run Install-Rpa.ps1 -Unattended again."
+      @($output | Where-Object { $_ -like 'Sessions of rpa-runner: *' -or $_ -like 'Session of rpa-runner: *' }).Count | Should -BeGreaterThan 0
+      $output | Should -Contain "Supervisor's last failure: $failure"
+      $output | Should -Contain "Supervisor log: $(Join-Path $script:SupervisorDir 'supervisor.log')"
+      # What n8n needs stays as in the signed-in mode: the public ports, which the supervisor listens on.
+      $output | Should -Contain "Runner fingerprint: $($script:RunnerFingerprint)"
+      $text = $output -join "`n"
+      $text.Contains($script:RunnerToken) | Should -BeFalse
+      $text.Contains($script:BrowserToken) | Should -BeFalse
+    }
+
+    It 'says when no failure is recorded' {
+      Set-Content -LiteralPath $script:StateFile -Value (@{ sessionId = 3; logonTime = '2026-11-10T10:00:00+00:00'; lastFailure = $null } | ConvertTo-Json)
+      @(& $script:ShowScript) | Should -Contain "Supervisor's last failure: none recorded"
+      Remove-Item -LiteralPath $script:StateFile
+      @(& $script:ShowScript) | Should -Contain "Supervisor's last failure: none recorded"
+    }
+  }
+}
+
+# What start-runner.ps1 and start-browser.ps1 hand to their program, read from a made-up install: a start-loop.ps1 in
+# its place prints the program's settings instead of starting it. Each runs in a PowerShell of its own.
+Describe 'The start scripts' {
+  BeforeAll {
+    $script:StartRoot = Join-Path ([IO.Path]::GetTempPath()) ('rpa-start-' + [guid]::NewGuid().ToString('N'))
+    $script:StartScripts = Join-Path (Join-Path $script:StartRoot 'install') 'scripts'
+    New-Item -ItemType Directory -Force -Path $script:StartScripts | Out-Null
+    foreach ($name in 'start-runner.ps1', 'start-browser.ps1') { Copy-Item -LiteralPath (Join-Path (Join-Path $script:InstallerDir 'scripts') $name) -Destination $script:StartScripts }
+    Set-Content -LiteralPath (Join-Path $script:StartScripts 'start-loop.ps1') -Value @'
+param($Name, $Label, $Exe, $Arguments, $WorkingDirectory, $Target)
+if ($Name -eq 'runner') { 'port={0} bind={1}' -f $env:RPA_RUNNER_PORT, $env:RPA_RUNNER_BIND }
+else { 'port={0} bind={1}' -f $env:RPA_BROWSER_PORT, $env:RPA_BROWSER_BIND }
+'@
+    $script:StartInstallFile = Join-Path (Join-Path $script:StartRoot 'install') 'install.json'
+    $script:Shell = (Get-Process -Id $PID).Path
+    function Invoke-StartScript([string]$Name, [hashtable]$Install) {
+      $Install | ConvertTo-Json | Set-Content -LiteralPath $script:StartInstallFile -Encoding UTF8
+      $saved = @{ Runner = $env:RPA_RUNNER_BIND; Browser = $env:RPA_BROWSER_BIND; ProgramData = $env:ProgramData }
+      $env:RPA_RUNNER_BIND = $null; $env:RPA_BROWSER_BIND = $null; $env:ProgramData = $script:StartRoot
+      try { @(& $script:Shell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $script:StartScripts $Name)) }
+      finally { $env:RPA_RUNNER_BIND = $saved.Runner; $env:RPA_BROWSER_BIND = $saved.Browser; $env:ProgramData = $saved.ProgramData }
+    }
+  }
+  AfterAll { Remove-Item -LiteralPath $script:StartRoot -Recurse -Force -ErrorAction SilentlyContinue }
+
+  It '<Name> lets its program listen on <Expected> in the <Mode> mode' -ForEach @(
+    @{ Name = 'start-runner.ps1'; Mode = 'signed-in'; Install = @{ runnerPort = 8765; browserPort = 3000; browser = $true; mode = 'signedIn' }; Expected = 'port=8765 bind=' }
+    @{ Name = 'start-browser.ps1'; Mode = 'signed-in'; Install = @{ runnerPort = 8765; browserPort = 3000; browser = $true; mode = 'signedIn' }; Expected = 'port=3000 bind=' }
+    @{ Name = 'start-runner.ps1'; Mode = 'signed-in (an install.json without a mode)'; Install = @{ runnerPort = 8765; browserPort = 3000; browser = $true }; Expected = 'port=8765 bind=' }
+    @{ Name = 'start-runner.ps1'; Mode = 'unattended'; Install = @{ runnerPort = 8765; browserPort = 3000; browser = $true; mode = 'unattended'; runnerInnerPort = 18765; browserInnerPort = 13000 }; Expected = 'port=18765 bind=127.0.0.1' }
+    @{ Name = 'start-browser.ps1'; Mode = 'unattended'; Install = @{ runnerPort = 8765; browserPort = 3000; browser = $true; mode = 'unattended'; runnerInnerPort = 18765; browserInnerPort = 13000 }; Expected = 'port=13000 bind=127.0.0.1' }
+  ) {
+    Invoke-StartScript $Name $Install | Should -BeExactly @($Expected)
   }
 }
 

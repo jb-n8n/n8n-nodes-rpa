@@ -133,6 +133,17 @@ Active and the runner listens inside it, and then passes the connection's bytes 
 the protocol stay between n8n and the runner. When no connection has held the session for `idleSeconds`, it signs the
 bot user out again. One bot user, one session at a time.
 
+`Install-Rpa.ps1 -Unattended [-IdleSeconds 15]` sets this up on Windows Server 2019 or later (it refuses Windows 10
+and 11, where it was not tested, and `-AutoSignIn` with it): it puts the bot user into Remote Desktop Users, turns
+Remote Desktop on with the registry value alone when it is off (no firewall rule for Remote Desktop), stores the bot
+user's password in the LSA secret, registers the service (LocalSystem, automatic start, started again a minute after
+a failure) and points the two firewall rules at `RpaSupervisor.exe`. The start scripts read `mode` from `install.json`
+and let the runner and the browser host listen on `127.0.0.1` at the inner ports (`RPA_RUNNER_BIND`,
+`RPA_BROWSER_BIND`). After the service starts, the installer makes one connection to the runner's port and waits up to
+120 s, so that the bot user's profile exists before n8n's first run. `Uninstall-Rpa.ps1`, and an install without
+`-Unattended`, put back what it changed. The install guide, [`docs/install/windows.md`](../docs/install/windows.md),
+section 4, "Running with nobody signed in", is the user's side of this.
+
 The service reads `install.json` in the install directory (`%ProgramFiles%\RPA Runner`), which the installer writes:
 
 | Field | Meaning |
@@ -142,7 +153,7 @@ The service reads `install.json` in the install directory (`%ProgramFiles%\RPA R
 | `runnerPort`, `runnerInnerPort` | The service listens on `runnerPort` and passes each connection to `127.0.0.1:runnerInnerPort`, where the runner listens in the bot user's session. |
 | `browserPort`, `browserInnerPort` | The same for the RPA browser; without `browserPort` only the runner is passed on. |
 | `idleSeconds` | How long the session stays signed in without a connection (default 15, 0 to 86400). |
-| `listenAddresses` | The addresses the service listens on (default `["0.0.0.0"]`). |
+| `listenAddresses` | The addresses the service listens on (default `["0.0.0.0"]`; the installer writes `["0.0.0.0"]`, where the runner and the browser host listen in the signed-in mode). |
 
 A field that is missing or wrong stops the service at start, and so does a port it cannot listen on; the reason is in
 its log, in one line. The bot user's password is read from the local security authority (the LSA secret
@@ -452,7 +463,7 @@ The UI parts run only on Windows: the `desktop` workflow builds and publishes ev
 Server 2025 in November 2026), starts
 
 the runner and drives the ERP Demo through it with the scenario client, then builds the Windows package, installs it
-and drives it. Its artifact `rpa-windows-package` holds the package, `rpa-windows-x64.zip`, with its SHA-256 (see
+and drives it, and installs it again with `-Unattended` and drives it through the RPA Supervisor. Its artifact `rpa-windows-package` holds the package, `rpa-windows-x64.zip`, with its SHA-256 (see
 "Releasing the Windows package"); the artifacts `rpa-desktop-runner` and `erp-demo` are the self-contained win-x64
 builds of the runner and the demo app (no .NET install needed).
 

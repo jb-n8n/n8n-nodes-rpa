@@ -12,6 +12,11 @@
 # is written to the pipeline. The runner's fingerprint comes from its start line in logs\runner.out.log; the browser's
 # is the SHA-256 of its certificate (browser-cert.pem). The bot user can write both files, so the fingerprints are
 # what this machine's bot user reports.
+#
+# In unattended mode (Install-Rpa.ps1 -Unattended) it also shows whether the service RPA Supervisor runs, the bot
+# user's sessions (quser.exe), the supervisor's last failure from supervisor-state.json and whether that failure blocks
+# sign-ins until the service is restarted (the service then still shows as running), and where its log is. Its folder
+# can be read by administrators only.
 param([switch]$ShowTokens)
 $ErrorActionPreference = 'Stop'
 $installDir = Split-Path -Parent $PSScriptRoot
@@ -91,4 +96,50 @@ foreach ($service in $services) {
   else { Write-Output ('{0} fingerprint: not known yet' -f $service.Name) }
   if ($listening -notcontains $service.Port) { Write-Output ('{0}: not listening: see {1}' -f $service.Name, $service.Log) }
   if ($ShowTokens) { $Host.UI.WriteLine((Get-TokenLine $service.Name $service.Token)) }
+}
+
+if ($install.mode -eq 'unattended') {
+  $supervisorDir = Join-Path $dataDir 'supervisor'
+  $stateFile = Join-Path $supervisorDir 'supervisor-state.json'
+  $user = [string]$install.user
+  Write-Output ('Mode: unattended. The RPA Supervisor signs {0} in when n8n connects, and out {1} s after the last connection.' -f $user, $install.idleSeconds)
+
+  $service = $null
+  try { $service = Get-CimInstance -ClassName Win32_Service -Filter "Name='RPA Supervisor'" -ErrorAction Stop } catch { }
+  if (-not $service) { Write-Output 'Supervisor: the service RPA Supervisor is not registered. Run Install-Rpa.ps1 -Unattended again.' }
+  elseif ($service.State -ne 'Running') { Write-Output ("Supervisor: the service RPA Supervisor is {0}. Start it: Start-Service 'RPA Supervisor'" -f $service.State.ToLowerInvariant()) }
+  else { Write-Output 'Supervisor: running' }
+
+  # quser.exe lists the user's sessions, whoever made them; it exits with 1 when there is none. What it writes to its
+  # error stream must not end this script.
+  $sessions = $null
+  $ErrorActionPreference = 'Continue'
+  try {
+    $said = @(& (Join-Path ([Environment]::SystemDirectory) 'quser.exe') $user 2>$null)
+    if ($LASTEXITCODE -eq 0) { $sessions = @($said | Select-Object -Skip 1 | ForEach-Object { "$_".Trim() } | Where-Object { $_ }) }
+    elseif ($LASTEXITCODE -eq 1) { $sessions = @() }
+  } catch { }
+  $ErrorActionPreference = 'Stop'
+  if ($null -eq $sessions) { Write-Output ('Sessions of {0}: could not be read (quser.exe)' -f $user) }
+  elseif ($sessions.Count -eq 0) { Write-Output ('Sessions of {0}: none' -f $user) }
+  else { foreach ($session in $sessions) { Write-Output ('Session of {0}: {1}' -f $user, $session) } }
+
+  $failure = $null
+  if (-not (Test-Path -LiteralPath $stateFile)) { Write-Output "Supervisor's last failure: none recorded" }
+  else {
+    try {
+      $failure = [string](Get-Content -Raw -LiteralPath $stateFile -ErrorAction Stop | ConvertFrom-Json).lastFailure
+      if ($failure) { Write-Output "Supervisor's last failure: $failure" } else { Write-Output "Supervisor's last failure: none recorded" }
+    } catch { Write-Output ("Supervisor's last failure: {0} could not be read; run this from an administrator PowerShell." -f $stateFile) }
+  }
+  # After a wrong or expired password the supervisor tries no sign-in until it starts again, and still shows as
+  # running. The failure is from this run of the service when the file was written after the service started.
+  if ($failure -and $failure.Contains('No further sign-in is tried until the RPA Supervisor service is restarted.') -and $service -and $service.State -eq 'Running') {
+    $started = $null
+    try { $started = (Get-Process -Id $service.ProcessId -ErrorAction Stop).StartTime } catch { }
+    if (-not $started -or (Get-Item -LiteralPath $stateFile).LastWriteTime -ge $started) {
+      Write-Output "Supervisor: sign-ins are blocked until the service is restarted. Store the right password with Install-Rpa.ps1 -Unattended -UserPassword, which restarts it, or fix the cause and run: Restart-Service 'RPA Supervisor'"
+    }
+  }
+  Write-Output ('Supervisor log: {0}' -f (Join-Path $supervisorDir 'supervisor.log'))
 }

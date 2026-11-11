@@ -18,7 +18,8 @@ What you get on the Windows machine:
 
 Both programs run inside the signed-in Windows session of one user, the **bot user**, and start when that user signs
 in. A Windows service cannot drive a desktop, so the bot user must be signed in, with its desktop unlocked, whenever
-a run should work.
+a run should work. On Windows Server a service can sign the bot user in for each run instead (section 4,
+[Running with nobody signed in](#running-with-nobody-signed-in)).
 
 **Who trusts whom.** Treat this machine as part of your n8n: whoever can use the RPA credentials in n8n can act on
 this machine as the bot user, as with the robot machine of other RPA tools. The runner's policy and the write
@@ -190,7 +191,7 @@ The parameters:
 | Parameter | What it does |
 |---|---|
 | `-User <name>` | The bot user. Default `rpa-runner`. A local user that does not exist is created as a standard user (a member of Users, its password never expires); `DOMAIN\name` must exist already. An existing user's password is never changed, and an existing user that is an administrator is refused. |
-| `-UserPassword <SecureString>` | The password for a new local user, or, with `-AutoSignIn`, the existing user's password to store (it is tried against the account first). A new user needs `-UserPassword` or `-AutoSignIn`. |
+| `-UserPassword <SecureString>` | The password for a new local user, or, with `-AutoSignIn` or `-Unattended`, the existing user's password to store (it is tried against the account first). A new user needs `-UserPassword`, `-AutoSignIn` or `-Unattended`. |
 | `-RunnerPort <n>` | The runner's port. Default 8765. |
 | `-BrowserPort <n>` | The browser's port. Default 3000. |
 | `-AllowFrom <address>[,<address>...]` | The installer's two firewall rules allow these addresses in (IP addresses, or ranges such as `10.0.0.0/24`), for the two programs only, on every network type (Domain, Private and Public). `0.0.0.0/0` is refused: that is what `-AllowFromAnyAddress` is for. |
@@ -199,7 +200,9 @@ The parameters:
 | `-NoFirewall` | Leaves Windows Firewall alone; you open the ports yourself. |
 | `-NoBrowser` | Installs the runner only. With the browser installed, whoever holds the browser token and can reach its port acts as the bot user through the browser, and the runner's policy does not limit that ([Who can reach the ports](#who-can-reach-the-ports)). With `-NoBrowser`, leave out the RPA Browser steps of section 6. |
 | `-AutoSignIn` | Windows signs the bot user in by itself at every start and keeps the desktop unlocked (section 4). |
-| `-Force` | Does not ask (about `-AutoSignIn`, or about another `-User` than the one of the install), and upgrades even while the runner is running (a run in progress fails). |
+| `-Unattended` | Windows Server only: the service RPA Supervisor signs the bot user in for each run and out again afterwards (section 4, [Running with nobody signed in](#running-with-nobody-signed-in)). Not with `-AutoSignIn`. |
+| `-IdleSeconds <n>` | With `-Unattended`: how long the bot user stays signed in after the last connection. Default 15, 0 to 86400. |
+| `-Force` | Does not ask (about `-AutoSignIn`, `-Unattended`, or another `-User` than the one of the install), and upgrades even while the runner is running (a run in progress fails). |
 
 A first install needs exactly one of `-AllowFrom`, `-AllowFromAnyAddress` and `-NoFirewall`.
 
@@ -290,6 +293,8 @@ codes: 0 installed, 1 refused or failed, 3 declined at a question. When it refus
   exits.
 - **Two Windows Firewall rules**, `RPA-Runner-In` and `RPA-Browser-In` (not with `-NoFirewall`).
 - **With `-AutoSignIn`** only: the settings listed in section 4.
+- **With `-Unattended`** only: the service RPA Supervisor and what section 4 lists under
+  [Running with nobody signed in](#running-with-nobody-signed-in).
 
 The browser also keeps a temporary folder in the bot user's profile (`AppData\Local\RPA Runner\browser-temp`), which
 can hold what was typed into pages. The browser host empties it when it starts, when it stops, and when the browser
@@ -304,7 +309,8 @@ n8n's credential test does not tell you the state: it succeeds whenever the runn
 and the modal shows n8n's own `Connection tested successfully`. A run tells you: on a locked or disconnected desktop
 it fails with `runner_unavailable` and says which.
 
-There are two ways to keep the bot user signed in.
+There are two ways to keep the bot user signed in. On Windows Server there is a third: a service signs the bot user
+in for each run, and out again afterwards ([Running with nobody signed in](#running-with-nobody-signed-in)).
 
 ### Automatic sign-in (`-AutoSignIn`)
 
@@ -388,6 +394,124 @@ needed, and that more than two administrative connections, or multiple user conn
 role and RDS CALs. Whether a bot user's session counts as administration is not stated there;
 [the licensing note](licensing.md#remote-desktop-to-windows-server) quotes the sources and lists what to confirm with
 your licensing contact.
+
+### Running with nobody signed in
+
+On Windows Server 2019 or later, add `-Unattended` to the install command, and the bot user does not have to stay
+signed in. A Windows service, the **RPA Supervisor** (`RpaSupervisor.exe`, running as SYSTEM), then listens on the
+runner's and the browser's port in their place. When n8n connects, the supervisor signs the bot user in through a
+Remote Desktop connection from this machine to itself, waits until the runner (or the browser) listens in that
+session, and then passes the connection through as it is: TLS, the token and the protocol stay between n8n and the
+runner, and the n8n credentials stay the same. When no connection has been open for `-IdleSeconds` (default 15), it
+signs the bot user out again. Between runs nobody is signed in.
+
+The installer refuses `-Unattended` on Windows 10 and 11, where it was not tested, and together with `-AutoSignIn`.
+
+**The command.** For a new bot user (the installer gives it a random password and stores it for the supervisor only):
+
+```powershell
+.\Install-Rpa.ps1 -AllowFrom <n8n address> -Unattended
+```
+
+For an existing local user, add `-UserPassword (Read-Host 'Password of rpa-runner' -AsSecureString)`; the installer
+tries the password against the account first. Before it changes anything, the installer lists what `-Unattended` does
+and asks you to type `YES` (not with `-Force`). To store a new password later, run the same command again with
+`-UserPassword`; the installer then starts the supervisor again, which it needs to use the new password.
+
+**What it changes**, besides what section 3 lists:
+
+- **Remote Desktop Users**: the bot user is added, unless it is a member already. Windows lets this group sign in
+  through Remote Desktop.
+- **Remote Desktop**: turned on when it is off, with the registry value `fDenyTSConnections` alone. The installer
+  turns on no firewall rule for Remote Desktop, because the supervisor connects from this machine to itself (turning
+  Remote Desktop on in Settings would also turn those rules on). Where Remote Desktop is on already, its rules stay
+  as they are.
+- **The bot user's password** is stored in the LSA secret `L$RpaRunnerBotPassword`. SYSTEM and administrators can
+  read it, and so can anyone who can read this machine's disk, a backup or a snapshot of it. The installer does not
+  put it on a command line, in a log or in a file.
+- **The service RPA Supervisor**, started with Windows after the Remote Desktop service, and started again a minute
+  after it fails. Its log and state are in `C:\ProgramData\RPA Runner\supervisor\`, a folder that only SYSTEM and
+  administrators can open. When it does not start, the reason is in the Application event log, source `RPA
+  Supervisor`, or in its log.
+- **The two firewall rules** let connections in to the supervisor instead of the runner and the browser. Who may
+  connect stays what you chose with `-AllowFrom`.
+- **The runner and the browser** listen on `127.0.0.1` only, at their port + 10000 (18765 and 13000 by default),
+  where the supervisor passes the connections on. The scheduled tasks stay as they are: they start both programs when
+  the supervisor signs the bot user in.
+
+After the service starts, the installer signs the bot user in once and waits until the runner answers, for up to
+120 s. Windows makes a user's profile at its first sign-in, which took 29 to 48 s on a test machine, and n8n's first
+run would wait for it otherwise. It prints how long that took. When the runner does not answer in time, it prints a
+warning with the supervisor's last failure, and the install is complete all the same.
+
+`Uninstall-Rpa.ps1` stops and removes the service, removes the stored password, takes the bot user out of Remote
+Desktop Users when the installer put it there, and turns Remote Desktop off again when the installer turned it on.
+An install without `-Unattended` over one with it does the same.
+
+**What the machine needs.**
+
+| What | Needed? | Why |
+|---|---|---|
+| Remote Desktop turned on (the Remote Desktop service running and listening on port 3389) | Yes. The installer turns it on when it is off. | The supervisor signs the bot user in through it. |
+| Network Level Authentication for Remote Desktop | Leave it on, as Windows sets it. | The sign-in works with it; a test with it turned off was refused. |
+| The bot user in Remote Desktop Users (or holding the right to sign in through Remote Desktop in another way) | Yes. The installer adds it. | Without it Windows refuses the sign-in. |
+| Inbound firewall rules for Remote Desktop | No. | The connection stays on this machine; the sign-in worked with all of them turned off. |
+| One session per user (Windows' default) | Keep the default. | The supervisor expects one session of the bot user. |
+| A password that does not expire and need not change at the next sign-in | Yes. | An expired password, or one that must change, stops the sign-ins (see the failures below). |
+| An account lockout policy | Not needed. | The supervisor tries a wrong password once and then stops trying. |
+| Group Policy time limits for Remote Desktop sessions (idle, disconnected, active) | None that end a session during a run. | A limit that ends the session ends the run. |
+
+Windows Server without the Remote Desktop Session Host role allows two remote sessions at a time; the bot user's
+session is one of them, so one administrator can still connect through Remote Desktop during a run. Whether the bot
+user's session needs Remote Desktop Services client access licences is a question for your Microsoft licence terms:
+see [the licensing note](licensing.md#remote-desktop-to-windows-server).
+
+**How a run looks.** n8n connects as before. A connection after a quiet time waits while the bot user is signed in:
+about 5 to 10 s, and about 20 s for the first connection after the machine starts; the RPA node waits up to 60 s for
+the runner's answer. Then the run goes on as in the signed-in mode, on a desktop that nobody sees. While the session
+is there, `quser rpa-runner` lists it; 15 s after the last connection it is gone. Check the supervisor from an
+administrator PowerShell (the bot user cannot read the supervisor's folder):
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File "C:\Program Files\RPA Runner\scripts\Show-RpaConnection.ps1"
+```
+
+Besides the lines of section 4 it shows:
+
+```text
+Mode: unattended. The RPA Supervisor signs rpa-runner in when n8n connects, and out 15 s after the last connection.
+Supervisor: running
+Sessions of rpa-runner: none
+Supervisor's last failure: none recorded
+Supervisor log: C:\ProgramData\RPA Runner\supervisor\supervisor.log
+```
+
+**Someone signed in as the bot user.** The supervisor does not sign out or take over a session of the bot user that it
+did not make. While someone is signed in as the bot user, at the console or through Remote Desktop, every run is
+refused within a few seconds, and the person's session is left alone. To watch or record what a run does, sign in as
+an administrator, not as the bot user, and sign the bot user out when you are done.
+
+**The log.** `C:\ProgramData\RPA Runner\supervisor\supervisor.log` (the previous one in `supervisor.1.log`) has a line
+for each sign-in, sign-out and failure with its reason. It does not write a password, a token or what a connection
+carries.
+`supervisor-state.json` beside it holds the session the supervisor made and its last failure.
+
+**When something fails.** n8n is not told why the supervisor could not sign the bot user in: the connection closes,
+and the run fails with `runner_unavailable` (or the browser's connection error). The reason is on the machine, in
+`Show-RpaConnection.ps1` and in `supervisor.log`.
+
+| What you see | Why | What to do |
+|---|---|---|
+| Last failure `UserSignedIn: ...` | Someone is signed in as the bot user. | Sign that session out. Runs work again with the next connection. |
+| Last failure `WrongPassword: ...` or `PasswordExpired: ...`, and `Supervisor: sign-ins are blocked until the service is restarted` | The stored password is wrong, has expired, or must be changed. The supervisor tried it once and tries no further sign-in, so that an account lockout policy is not tripped. The service still shows as running. | Give the bot user a password that does not expire, and store it with `.\Install-Rpa.ps1 -Unattended -UserPassword (...)` and the parameters of the install, which also starts the service again. Or fix the cause and run `Restart-Service 'RPA Supervisor'`. |
+| Last failure names the Remote Desktop service: `... (TermService) is not running`, `Nothing listens on the Remote Desktop port 3389: ...` or `Another program (process ...) listens on the Remote Desktop port 3389` | The supervisor signs in only while the Remote Desktop service runs and is the only program listening on port 3389. | Start the Remote Desktop service, turn Remote Desktop on, or end the other program. Right after the machine starts, the service may still be starting: the supervisor keeps trying while the connection waits, and the run starts when it can. |
+| The first run after a restart takes about 20 s before it starts | The first sign-in after a restart is slow. | Nothing. |
+| A run ends with its connection closed, or with `desktop_unavailable`, in the middle | The supervisor or its Remote Desktop connection ended during the run. Windows starts the supervisor again a minute after it fails. The next connection signs the session that was left out first and makes a new one. | Run it again, and read `supervisor.log` for why it ended. |
+| The bot user is signed in while no run is going on | Anything that connects to the runner's or the browser's port makes the supervisor sign the bot user in: a health check or a port scanner too. | Point health checks elsewhere (for example at the service's state), and limit who can reach the ports (`-AllowFrom`). |
+| `Supervisor: the service RPA Supervisor is stopped` | It was stopped, or it did not start. | `Start-Service 'RPA Supervisor'`. When it stops again, the reason is in `supervisor.log`, or in the Application event log, source `RPA Supervisor`, when its folder is missing or not its own. |
+
+Behind the supervisor, the runner's own log names every caller as `127.0.0.1`: every connection reaches the runner
+through the supervisor. The supervisor's log has the address of each connection it refused.
 
 ### After the first sign-in
 
@@ -807,6 +931,10 @@ same lines go to its output, `runner.out.log`, and its error output goes to `run
 goes to `browser.out.log` and `browser.err.log`. Each program's start loop writes `start-runner.log` or
 `start-browser.log` (each start and exit). A restart moves the previous output to `*.1.log`. A run's error in n8n has
 the form `<code>: <message>`.
+
+With `-Unattended`, a connection the RPA Supervisor could not serve fails with `runner_unavailable` too; the
+supervisor's log is `C:\ProgramData\RPA Runner\supervisor\supervisor.log`, and section 4,
+[Running with nobody signed in](#running-with-nobody-signed-in), lists its failures.
 
 | What you see | What it means | What to do, and the log to read |
 |---|---|---|
