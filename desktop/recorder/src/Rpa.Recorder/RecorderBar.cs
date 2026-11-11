@@ -10,11 +10,11 @@ namespace Rpa.Recorder;
 /// line. Below, what the stage needs: Ready offers two ways to choose the app; Recording and Paused show Pause or
 /// Resume, Finish, the numbered steps and the step actions (Delete step, Make secret…); after Finish, one page asks
 /// which recorded values change from run to run, the one place where a value becomes a variable (Back returns to the
-/// list, paused); Finished adds the name and Save; after saving, what to do next
-/// (allow the app with the policy tool, import the recording in n8n) and Record another. Everything the bar decides or
-/// says is in Rpa.Recorder.Core (BarText, StepRows, ValuesPage, DialogText, NoticeLine, SaveNames, NextSteps,
-/// BarLayout); this class shows it. The bar's own windows are never recorded, and after a bar action while recording
-/// the app gets the focus back.
+/// list, paused); Finished adds the name and Save; after saving, what to do next (allow the app with the policy tool,
+/// import the recording in n8n) and Record another. Everything the bar decides or says is in Rpa.Recorder.Core
+/// (BarText, StepRows, ValuesPage, DialogText, NoticeLine, SaveNames, NextSteps, BarLayout); this class shows it, and
+/// writes its stages and buttons to BarLog. The bar's own windows are never recorded, and after a bar action while
+/// recording the app gets the focus back.
 /// </summary>
 internal sealed class RecorderBar : Form
 {
@@ -26,6 +26,7 @@ internal sealed class RecorderBar : Form
     private readonly string _documents;
     private readonly string? _policyTool;
     private readonly NoticeLine _notices = new();
+    private readonly BarLog _log = new(BarLog.PathIn(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)), () => DateTimeOffset.Now);
     private Capture _capture;
     private BarStage _stage = BarStage.Ready;
     private string? _starting;
@@ -121,6 +122,15 @@ internal sealed class RecorderBar : Form
         Build();
         _capture = NewCapture();
 
+        // The bar log: each button by its name and the stage it was pressed in, before its action runs.
+        foreach (var (button, name) in new[]
+                 {
+                     (_startApp, BarButton.StartApp), (_useOpen, BarButton.UseOpenApp), (_pause, BarButton.PauseOrResume), (_finish, BarButton.Finish),
+                     (_back, BarButton.Back), (_continue, BarButton.Continue), (_delete, BarButton.DeleteStep), (_secret, BarButton.MakeSecret),
+                     (_changeFolder, BarButton.ChangeFolder), (_save, BarButton.Save), (_allowButton, BarButton.Allow), (_showFile, BarButton.ShowFile),
+                     (_recordAnother, BarButton.RecordAnother),
+                 })
+            button.Click += (_, _) => _log.Pressed(name, _stage);
         _startApp.Click += async (_, _) => await StartApp();
         _useOpen.Click += (_, _) => UseOpenApp();
         _pause.Click += (_, _) => TogglePause();
@@ -327,6 +337,7 @@ internal sealed class RecorderBar : Form
     private void ShowStage(BarStage stage)
     {
         _stage = stage;
+        _log.Stage(stage);
         var parts = BarText.Parts(stage, _list.SelectedIndex >= 0);
         _dot.ForeColor = BarText.Color(stage) switch { BarColor.Recording => Red, BarColor.Paused => Amber, _ => SystemColors.GrayText };
         _state.Text = BarText.StateLine(stage, _starting ?? _capture.ProgramPath, _shown.Count);

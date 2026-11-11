@@ -71,6 +71,9 @@ asks before it replaces a file.
 
 **Record another** starts over. It asks first when the steps are not saved, and so does closing the bar.
 
+The bar writes each stage and each button you press, with the time, to `%LOCALAPPDATA%\RPA Recorder\bar.log`. The log
+holds no step, no typed value and no file name. It starts again at 200 KB.
+
 <!-- screenshot: recorder-bar-saved.png -->
 
 ## What it records
