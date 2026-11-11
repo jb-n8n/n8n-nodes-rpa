@@ -193,7 +193,7 @@ export function validateScript(script: Script, ctx: PolicyContext): PolicyResult
       const normalized = path.replace(/\.paginate\.each\[\d+\]/g, '');
       if (!reportedSecretLocations.has(normalized)) {
         reportedSecretLocations.add(normalized);
-        let location = `script field ${normalized}`;
+        let location = `field ${normalized} of the steps`;
         const match = normalized.startsWith('steps[') ? normalized.match(/steps\[(\d+)\]/) : null;
         const step = match ? script.steps[parseInt(match[1])] : undefined;
         if (match && step) {
@@ -275,7 +275,7 @@ export function validateScript(script: Script, ctx: PolicyContext): PolicyResult
       if (!isAllowedSubmit(policy, k)) violations.push(`${where}: ${submitLabel(k)} is not an allowed submission`);
     }
   }
-  if (signIns > 1) violations.push('script has more than one signIn step');
+  if (signIns > 1) violations.push('the steps have more than one signIn step');
   // The Fill and Submit window opens on exactly one top-level click (nested paginate steps have no index of their own).
   if (policy.writeWindow) {
     const at = policy.writeWindow.step;

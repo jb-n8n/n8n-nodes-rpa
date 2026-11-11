@@ -599,7 +599,7 @@ describe('AI repair', () => {
   });
   it('agent-lane results that spent no model effort do not use up the repair', async () => {
     const before = [
-      taskFail('drift_detected', 'repair cannot record field extraction yet: update the script by hand', { lane: 'agent' }),
+      taskFail('drift_detected', 'repair cannot record field extraction yet: update the steps by hand', { lane: 'agent' }),
       taskFail('browser_unavailable', 'Could not connect to the browser server', { lane: 'agent', llmCalls: 0 }),
       taskFail('site_down', 'HTTP 503 at https://example.com/list', { lane: 'agent' }),
       taskFail('incomplete', 'run cancelled', { lane: 'agent', llmCalls: 0, tokens: 0 }),

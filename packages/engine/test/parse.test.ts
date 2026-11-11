@@ -104,7 +104,7 @@ describe('download mime', () => {
 describe('name replaces portal', () => {
   it('refuses a portal key', () => {
     const { name, ...rest } = baselineScript(URL0);
-    expect(issuesOf({ ...rest, portal: name })).toEqual(['script has unknown key "portal"']);
+    expect(issuesOf({ ...rest, portal: name })).toEqual(['the steps have the unknown key "portal"']);
     expect(parseScript(baselineScript(URL0)).name).toBe('demo-sandbox');
   });
 });

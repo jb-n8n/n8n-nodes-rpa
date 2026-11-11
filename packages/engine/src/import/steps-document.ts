@@ -45,7 +45,7 @@ export function importStepsDocument(data: unknown, opts: ImportOptions, report: 
   const read = readJson(data, MAX_STEPS_DOCUMENT_BYTES);
   if ('problem' in read) return fail({ tooLarge: TOO_LARGE, notText: NOT_TEXT, notJson: NOT_JSON }[read.problem]);
   const raw = Array.isArray(read.value) ? { steps: read.value } : read.value;
-  if (!isObject(raw)) return fail(NOT_STEPS(['script must be an object']));
+  if (!isObject(raw)) return fail(NOT_STEPS(['the steps must be an object']));
 
   const { signature: _signature, approvedBy: _approvedBy, ...doc } = raw;
   // A note, not a step left out (the approval lists dropped steps as left out).

@@ -488,7 +488,7 @@ describe('the browser lane next to desktop step sets', () => {
       policy: { startUrl: 'https://example.com/', navHosts: ['example.com'], subresourceHosts: [], login: [], allowedSubmits: [] },
       endpoint: { mode: 'playwright', wsUrl: 'ws://127.0.0.1:1/' },
     });
-    expect(r).toMatchObject({ ok: false, code: 'policy_violation', message: `invalid script: ${DESKTOP_STEPS_NEED_RUNNER}` });
+    expect(r).toMatchObject({ ok: false, code: 'policy_violation', message: `invalid steps: ${DESKTOP_STEPS_NEED_RUNNER}` });
   });
 });
 

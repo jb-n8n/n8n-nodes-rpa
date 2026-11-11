@@ -10,7 +10,7 @@ import { COND_TEXT_KEYS, DESKTOP_WRITE_VERBS, isText, MAX_UIA_TEXT, READ_NAME, R
 
 export class ScriptShapeError extends Error {
   constructor(public readonly issues: string[]) {
-    super(`invalid script: ${issues.join('; ')}`);
+    super(`invalid steps: ${issues.join('; ')}`);
     this.name = 'ScriptShapeError';
   }
 }
@@ -439,13 +439,13 @@ function checkStep(s: unknown, path: string, issues: string[], nested: boolean) 
 export function parseScript(input: unknown, opts: { defaultStartUrl?: string } = {}): Script {
   const issues: string[] = [];
   const doc: unknown = Array.isArray(input) ? { steps: input } : input;
-  if (!isObj(doc)) throw new ScriptShapeError(['script must be an object']);
+  if (!isObj(doc)) throw new ScriptShapeError(['the steps must be an object']);
   // Fail closed on the surface: a desktop step set never runs in a browser, and an unknown surface is refused.
   // Own properties only: the hash (canonicalize) covers own properties, so routing never reads an inherited one.
   const surface = Object.hasOwn(doc, 'surface') ? doc.surface : undefined;
   if (surface === 'desktop') throw new ScriptShapeError([DESKTOP_STEPS_NEED_RUNNER]);
   if (surface !== undefined && surface !== 'browser') throw new ScriptShapeError([SURFACE_INVALID]);
-  for (const k of Object.keys(doc)) if (!['surface', 'name', 'version', 'startUrl', 'interrupts', 'steps'].includes(k)) issues.push(`script has unknown key "${k}"`);
+  for (const k of Object.keys(doc)) if (!['surface', 'name', 'version', 'startUrl', 'interrupts', 'steps'].includes(k)) issues.push(`the steps have the unknown key "${k}"`);
   checkBrowserTemplates(doc.steps, issues);
   checkBrowserWriteLocators(doc.steps, issues);
   if (doc.name !== undefined && !isStr(doc.name)) issues.push('name must be a non-empty string');
@@ -735,11 +735,11 @@ export function isDesktopDocument(raw: unknown): boolean {
  */
 export function parseDesktopScript(input: unknown): DesktopScript {
   const issues: string[] = [];
-  if (!isObj(input)) throw new ScriptShapeError(['script must be an object']);
+  if (!isObj(input)) throw new ScriptShapeError(['the steps must be an object']);
   const doc = input;
   const surface = Object.hasOwn(doc, 'surface') ? doc.surface : undefined;
   if (surface !== 'desktop') throw new ScriptShapeError([surface === undefined || surface === 'browser' ? BROWSER_STEPS_NEED_BROWSER : SURFACE_INVALID]);
-  checkKeys(doc, ['surface', 'name', 'version', 'app', 'interrupts', 'steps'], 'script', issues);
+  for (const k of Object.keys(doc)) if (!['surface', 'name', 'version', 'app', 'interrupts', 'steps'].includes(k)) issues.push(`the steps have the unknown key "${k}"`);
   if (Object.hasOwn(doc, 'startUrl')) issues.push('startUrl is a browser setting, not allowed in a desktop step set: set app instead');
   if (doc.name !== undefined && !isStr(doc.name)) issues.push('name must be a non-empty string');
   if (doc.version !== undefined && !isInt(doc.version, 1, Number.MAX_SAFE_INTEGER)) issues.push('version must be a positive integer');

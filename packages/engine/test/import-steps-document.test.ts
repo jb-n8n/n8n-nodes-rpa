@@ -209,7 +209,7 @@ describe('a step document as an import source: reading it', () => {
   it('a desktop step set that does not parse is refused with the desktop parser\'s message', () => {
     const r = importSource('steps', json({ surface: 'desktop', app: { exe: 'ErpDemo.exe' }, startUrl: 'https://erp.example.com/', steps: [{ intent: 'Post', click: uia('btnPost', 'Button') }] }), opts);
     expect(r).toEqual({
-      drafts: [], report: { source: 'steps', steps: 0, items: [{ at: '', kind: 'error', what: 'Step document', reason: 'the step document is not valid steps: script has unknown key "startUrl"; startUrl is a browser setting, not allowed in a desktop step set: set app instead' }] },
+      drafts: [], report: { source: 'steps', steps: 0, items: [{ at: '', kind: 'error', what: 'Step document', reason: 'the step document is not valid steps: the steps have the unknown key "startUrl"; startUrl is a browser setting, not allowed in a desktop step set: set app instead' }] },
     });
   });
 });

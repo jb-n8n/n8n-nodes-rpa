@@ -350,7 +350,7 @@ async function agentLaneBody(input: TaskInput, repair: RepairInput, h: Handoff, 
     if (input.signal?.aborted) return fail('incomplete', CANCELLED);
     if (prove.policyViolation) {
       // The prove trace (scrubbed) shows the blocked request: it replaces the healing trace.
-      const out = fail('policy_violation', 'the compiled script attempted a blocked request during prove', prove.violations);
+      const out = fail('policy_violation', 'the compiled steps attempted a blocked request during prove', prove.violations);
       return prove.trace ? { ...out, trace: prove.trace } : out;
     }
     if (prove.ok) {
