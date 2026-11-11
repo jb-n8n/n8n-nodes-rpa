@@ -215,3 +215,14 @@ export function refuseCdpDownload(engine: Pick<Engine, 'DOWNLOAD_NEEDS_BROWSER_S
 }
 
 export const NO_MODEL = 'AI repair is on but no chat model is connected. Connect one to the Model input.';
+
+/** A text parameter for an error item when the parameters could not be read (never throws): trimmed, or null when empty. */
+export function safeParam(ctx: NodeContext, i: number, name: string): string | null {
+  let value: unknown;
+  try {
+    value = ctx.getNodeParameter(name, i, '');
+  } catch {
+    value = '';
+  }
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}

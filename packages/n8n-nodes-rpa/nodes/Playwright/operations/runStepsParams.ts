@@ -1,6 +1,6 @@
 // Run Steps' parameters: the Steps document, the trust and repair settings, Options → Variables with the RPA Secret
 // Variables credential merged in, and Expected File. Import Steps reads Variables and Expected File the same way.
-import type { DownloadTemplate, FileCheck, OutputSpec } from 'n8n-rpa-engine';
+import type { DownloadTemplate, FileCheck, OutputSpec, TrustInput } from 'n8n-rpa-engine';
 import { ConfigError, CREDENTIALS, secretVariablesConfig, VARIABLE_NAME } from '../config.js';
 import type { NodeContext } from '../context.js';
 import type { Engine } from '../engine.js';
@@ -186,5 +186,38 @@ export function readRunStepsParams(ctx: NodeContext, i: number): RunStepsParams 
     breakerResetKey,
     ...codeWorkflowOptions(ctx, opt),
     common,
+  };
+}
+
+export interface Identity { name: string | null; version: number | null; hash: string }
+
+/** Name, version and hash of the steps as given, for error items and agent-lane Data (the engine reports them for script runs). */
+export function stepsIdentity(engine: Engine, steps: StepsValue, optionName: string): Identity {
+  if (steps.kind === 'empty') return { name: optionName || null, version: null, hash: '' };
+  const doc = isObject(steps.raw) ? steps.raw : undefined;
+  const name = typeof doc?.name === 'string' && doc.name.trim() ? doc.name : optionName || null;
+  const version = typeof doc?.version === 'number' ? doc.version : null;
+  let hash = '';
+  try {
+    hash = engine.scriptHash(steps.raw);
+  } catch {
+    hash = '';
+  }
+  return { name, version, hash };
+}
+
+/** The engine's trust settings for a run of these steps; `siteLoginId` (browser steps) binds the signature to the Site Login. */
+export function trustInput(p: RunStepsParams, key: string | undefined, siteLoginId?: string): TrustInput {
+  return {
+    required: p.requireSignedSteps,
+    signature: p.signature,
+    approvedBy: p.approvedBy,
+    ...(key ? { key } : {}),
+    allowUnsignedWrites: p.allowUnsignedWrites,
+    expect: {
+      ...(p.name ? { name: p.name } : {}),
+      ...(p.expectedVersion !== undefined ? { version: p.expectedVersion } : {}),
+      ...(siteLoginId ? { siteLoginId } : {}),
+    },
   };
 }

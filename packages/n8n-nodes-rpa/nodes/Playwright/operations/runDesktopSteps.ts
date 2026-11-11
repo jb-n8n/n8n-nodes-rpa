@@ -1,13 +1,13 @@
 import type { IDataObject, INodeExecutionData, IPairedItemData } from 'n8n-workflow';
-import type { RunnerEndpoint, TaskResult, TrustInput } from 'n8n-rpa-engine';
+import type { RunnerEndpoint, TaskResult } from 'n8n-rpa-engine';
 import { ConfigError, CREDENTIALS, desktopRunnerConfig, signingKey } from '../config.js';
 import type { NodeContext } from '../context.js';
 import type { Engine } from '../engine.js';
 import { configNodeError, stepsRunError, type FailureDetails } from '../errors.js';
-import { configErrorItem, dataItem, failureItem } from '../output.js';
-import { credentialId, errorMessage, isObject } from './common.js';
+import { configErrorItem, dataItem, failureItem, OUTPUT_NOT_BUILT } from '../output.js';
+import { credentialId, errorMessage } from './common.js';
 import type { ItemOutcome } from './runSteps.js';
-import { withVariableHint, type RunStepsParams } from './runStepsParams.js';
+import { stepsIdentity, trustInput, withVariableHint, type RunStepsParams } from './runStepsParams.js';
 
 export const DESKTOP_STEPS_NEED_RUNNER_CREDENTIAL =
   'These are desktop steps (surface "desktop"): they run on a desktop runner. Attach an RPA Desktop Runner credential.';
@@ -25,18 +25,7 @@ export async function runDesktopStepsItem(ctx: NodeContext, engine: Engine, i: n
   const node = ctx.getNode();
   const paired: IPairedItemData[] = [{ item: i }];
   const raw = p.steps.kind === 'steps' ? p.steps.raw : undefined;
-  const doc = isObject(raw) ? raw : {};
-  let hash = '';
-  try {
-    hash = engine.scriptHash(raw);
-  } catch {
-    hash = '';
-  }
-  const id = {
-    name: typeof doc.name === 'string' && doc.name.trim() ? doc.name : p.name || null,
-    version: typeof doc.version === 'number' ? doc.version : null,
-    hash,
-  };
+  const id = stepsIdentity(engine, p.steps, p.name);
   const configError = (message: string): ItemOutcome => ({ kind: 'error', item: configErrorItem(message, id.name, paired), error: configNodeError(node, message, i) });
 
   let runner: RunnerEndpoint;
@@ -53,14 +42,7 @@ export async function runDesktopStepsItem(ctx: NodeContext, engine: Engine, i: n
     return configError(errorMessage(error));
   }
 
-  const trust: TrustInput = {
-    required: p.requireSignedSteps,
-    signature: p.signature,
-    approvedBy: p.approvedBy,
-    ...(key ? { key } : {}),
-    allowUnsignedWrites: p.allowUnsignedWrites,
-    expect: { ...(p.name ? { name: p.name } : {}), ...(p.expectedVersion !== undefined ? { version: p.expectedVersion } : {}) },
-  };
+  const trust = trustInput(p, key);
   const signal = ctx.getExecutionCancelSignal();
   let r: TaskResult;
   try {
@@ -79,7 +61,7 @@ export async function runDesktopStepsItem(ctx: NodeContext, engine: Engine, i: n
     const data: INodeExecutionData = { ...(await dataItem(ctx, r, id)), pairedItem: paired };
     return { kind: 'ok', data };
   } catch (error) {
-    const message = `the run finished but its output could not be built: ${errorMessage(error)}`;
+    const message = OUTPUT_NOT_BUILT(errorMessage(error));
     const item = await failureItem(ctx, { code: 'incomplete', message }, id, paired);
     Object.assign(item.json.details as IDataObject, { lane: r.lane, submitted: r.submitted });
     return { kind: 'error', item, error: stepsRunError(node, item.json.details as FailureDetails, i) };

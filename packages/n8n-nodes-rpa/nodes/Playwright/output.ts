@@ -20,7 +20,9 @@ async function failureBinary(ctx: NodeContext, r: { screenshot?: Buffer; trace?:
 type RunOk = Extract<TaskResult, { ok: true }>;
 type RunFailure = Extract<TaskResult, { ok: false }>;
 /** A JSON copy: log entries and step documents are plain data; n8n items must not share objects with the engine result. */
-const plain = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
+export const plain = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
+/** A failure after a run that finished: its output could not be built (for example the binary store failed). */
+export const OUTPUT_NOT_BUILT = (why: string): string => `the run finished but its output could not be built: ${why}`;
 
 /**
  * Facts a success may carry: the script lane always has them; the agent lane reports the files, blocked writes and the

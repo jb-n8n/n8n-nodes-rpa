@@ -11,11 +11,11 @@ import { DESKTOP_DOCUMENT_EVIDENCE_LINE, DESKTOP_EVIDENCE_LINE, DESKTOP_RECORDIN
 import { isQueueMode, openGuardStore, QUEUE_NEEDS_REDIS, type GuardStoreDeps } from '../guard-store.js';
 import { workflowFile } from '../import/workflow.js';
 import { lazyChatModel } from '../model.js';
-import { configErrorItem, desktopRepairedStepsJson, repairedStepsItem, repairedStepsJson, slug } from '../output.js';
+import { configErrorItem, desktopRepairedStepsJson, plain, repairedStepsItem, repairedStepsJson, slug } from '../output.js';
 import { codeSettingsFor, codeWorkflowOptions } from './codeWorkflow.js';
 import {
   asBoolean, asString, BROWSER_CREDENTIAL_NEEDED, browserCredentials, checkMaxItems, credentialId, errorMessage, field, hasDownloadStep, literalString, NO_MODEL,
-  readCommonOptions, refuseCdpDownload, regexOption, SITE_LOGIN_NO_ID, type CommonOptions,
+  readCommonOptions, refuseCdpDownload, regexOption, safeParam, SITE_LOGIN_NO_ID, type CommonOptions,
 } from './common.js';
 import { expectedDownload, variablesOption } from './runStepsParams.js';
 import { signingPolicy } from './signSteps.js';
@@ -165,8 +165,6 @@ type ItemOutcome =
   | { kind: 'ok'; data: INodeExecutionData; repaired: INodeExecutionData[] }
   | { kind: 'error'; item: INodeExecutionData; error: NodeOperationError };
 
-/** A JSON copy: n8n items must not share objects with the engine result. */
-const plain = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
 
 /** Every string in a JSON value through the masker (the report and the reasons: defence in depth behind the engine's own masking). */
 function maskDeep<T>(value: T, mask: (s: string) => string): T {
@@ -189,17 +187,6 @@ function leftOutOf(report: ImportReport): string[] {
   return report.items
     .filter((i) => i.kind === 'untranslated' || (i.kind === 'dropped' && i.notNeeded !== true))
     .map((i) => `${[i.at, i.what].filter((s) => s !== '').join(', ')}: ${i.reason}`);
-}
-
-/** Options → Name for an error item when the parameters could not be read (never throws). */
-function safeName(ctx: NodeContext, i: number): string | null {
-  let name: unknown;
-  try {
-    name = ctx.getNodeParameter('stepsName', i, '');
-  } catch {
-    name = '';
-  }
-  return typeof name === 'string' && name.trim() ? name.trim() : null;
 }
 
 /** Test seam for the guard store: the Redis factory and how the n8n execution mode is read (as Run Steps). */
@@ -246,7 +233,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
     // With a Site Login or a Start URL the policy is known now; otherwise each draft's first page decides it.
     if (siteLogin || p.startUrl) fixedPolicy = policyOf(p, siteLogin, p.startUrl);
   } catch (error) {
-    return configError(errorMessage(error), safeName(ctx, i));
+    return configError(errorMessage(error), safeParam(ctx, i, 'stepsName'));
   }
 
   const download = expectedDownload(engine, p.expectedFile);
@@ -611,7 +598,7 @@ export async function executeImportSteps(ctx: NodeContext, engine: Engine, deps:
       // under continue-on-fail, where n8n would copy the input items to Data as if they had succeeded.
       const message = errorMessage(error);
       const thrown = error instanceof NodeOperationError ? error : configNodeError(ctx.getNode(), message, i);
-      outcome = { kind: 'error', item: configErrorItem(message, safeName(ctx, i), [{ item: i }]), error: thrown };
+      outcome = { kind: 'error', item: configErrorItem(message, safeParam(ctx, i, 'stepsName'), [{ item: i }]), error: thrown };
     }
     if (outcome.kind === 'error') {
       if (!ctx.continueOnFail()) throw outcome.error;

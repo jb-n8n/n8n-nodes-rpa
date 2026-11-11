@@ -8,11 +8,11 @@ import { configNodeError, stepsRunError, type FailureDetails } from '../errors.j
 import { noteRepairRan, repairAlreadyRan, runOne, siteLoginGuard, type GuardSpec, type RunOneResult } from '../execute.js';
 import { openGuardStore, type GuardStore, type GuardStoreDeps } from '../guard-store.js';
 import { lazyChatModel } from '../model.js';
-import { configErrorItem, dataItem, failureItem, repairedStepsItem } from '../output.js';
+import { configErrorItem, dataItem, failureItem, OUTPUT_NOT_BUILT, repairedStepsItem } from '../output.js';
 import { codeSettingsFor } from './codeWorkflow.js';
-import { browserCredentials, checkMaxItems, credentialId, errorMessage, hasDownloadStep, isObject, NO_MODEL, rawParameter, refuseCdpDownload, SITE_LOGIN_NO_ID } from './common.js';
+import { browserCredentials, checkMaxItems, credentialId, errorMessage, hasDownloadStep, NO_MODEL, rawParameter, refuseCdpDownload, safeParam, SITE_LOGIN_NO_ID } from './common.js';
 import { BROWSER_STEPS_NEED_BROWSER_CREDENTIAL, runDesktopStepsItem } from './runDesktopSteps.js';
-import { expectedDownload, readRunStepsParams, withSecretVariables, withVariableHint, type RunStepsParams, type StepsValue } from './runStepsParams.js';
+import { expectedDownload, readRunStepsParams, stepsIdentity, trustInput, withSecretVariables, withVariableHint, type RunStepsParams } from './runStepsParams.js';
 
 export const STEPS_EMPTY_NEEDS_REPAIR = 'Steps is empty. Add steps, or turn on AI Repair to build them from the Goal.';
 
@@ -24,34 +24,6 @@ function aiRepairOutputs(ctx: NodeContext): boolean {
 export type ItemOutcome =
   | { kind: 'ok'; data?: INodeExecutionData; repaired?: INodeExecutionData }
   | { kind: 'error'; item: INodeExecutionData; error: NodeOperationError };
-
-interface Identity { name: string | null; version: number | null; hash: string }
-
-/** Name, version and hash of the steps as given, for error items and agent-lane Data (the engine reports them for script runs). */
-function stepsIdentity(engine: Engine, steps: StepsValue, optionName: string): Identity {
-  if (steps.kind === 'empty') return { name: optionName || null, version: null, hash: '' };
-  const doc = isObject(steps.raw) ? steps.raw : undefined;
-  const name = typeof doc?.name === 'string' && doc.name.trim() ? doc.name : optionName || null;
-  const version = typeof doc?.version === 'number' ? doc.version : null;
-  let hash = '';
-  try {
-    hash = engine.scriptHash(steps.raw);
-  } catch {
-    hash = '';
-  }
-  return { name, version, hash };
-}
-
-/** Options → Name for an error item when the parameters could not be read (never throws). */
-function safeOptionName(ctx: NodeContext, i: number): string | null {
-  let name: unknown;
-  try {
-    name = ctx.getNodeParameter('options.name', i, '');
-  } catch {
-    name = '';
-  }
-  return typeof name === 'string' && name.trim() ? name.trim() : null;
-}
 
 /** Test seam for the guard store: the Redis factory and how the n8n execution mode is read. */
 export type RunStepsDeps = GuardStoreDeps;
@@ -80,7 +52,7 @@ async function runStepsItem(ctx: NodeContext, engine: Engine, i: number, deps: R
     if (siteLoginId === '') throw new ConfigError(SITE_LOGIN_NO_ID);
     p = await withSecretVariables(ctx, i, readRunStepsParams(ctx, i));
   } catch (error) {
-    return configError(errorMessage(error), safeOptionName(ctx, i));
+    return configError(errorMessage(error), safeParam(ctx, i, 'options.name'));
   }
   // Routed by the steps' own (signed) surface: desktop steps run on the desktop runner, never in a browser.
   if (p.steps.kind === 'steps' && engine.isDesktopDocument(p.steps.raw)) return await runDesktopStepsItem(ctx, engine, i, p);
@@ -91,7 +63,7 @@ async function runStepsItem(ctx: NodeContext, engine: Engine, i: number, deps: R
     if (siteLoginId !== undefined) siteLogin = siteLoginConfig(await ctx.getCredentials(CREDENTIALS.siteLogin, i));
     if (credentialId(ctx, CREDENTIALS.signing) !== undefined) key = signingKey(await ctx.getCredentials(CREDENTIALS.signing, i));
   } catch (error) {
-    return configError(errorMessage(error), safeOptionName(ctx, i));
+    return configError(errorMessage(error), safeParam(ctx, i, 'options.name'));
   }
 
   const id = stepsIdentity(engine, p.steps, p.name);
@@ -133,18 +105,7 @@ async function runStepsItem(ctx: NodeContext, engine: Engine, i: number, deps: R
   if (p.steps.kind === 'empty' && !p.aiRepair) return configError(STEPS_EMPTY_NEEDS_REPAIR, id.name);
   if (p.steps.kind === 'empty' && !modelConnected) return configError(NO_MODEL, id.name);
 
-  const trust: TaskInput['trust'] = {
-    required: p.requireSignedSteps,
-    signature: p.signature,
-    approvedBy: p.approvedBy,
-    ...(key ? { key } : {}),
-    allowUnsignedWrites: p.allowUnsignedWrites,
-    expect: {
-      ...(p.name ? { name: p.name } : {}),
-      ...(p.expectedVersion !== undefined ? { version: p.expectedVersion } : {}),
-      ...(siteLoginId ? { siteLoginId } : {}),
-    },
-  };
+  const trust = trustInput(p, key, siteLoginId);
   const download = p.aiRepair ? expectedDownload(engine, p.expectedFile) : undefined;
   const repair: TaskInput['repair'] = p.aiRepair && modelConnected
     ? {
@@ -211,7 +172,7 @@ async function runStepsItem(ctx: NodeContext, engine: Engine, i: number, deps: R
     // failure that keeps what the run did: `submitted` must stay true after a write, so nobody re-runs it blindly, and
     // `passwordChanged` after a new password, so the workflow still stores it.
     return failure(
-      { code: 'incomplete', message: `the run finished but its output could not be built: ${errorMessage(error)}` },
+      { code: 'incomplete', message: OUTPUT_NOT_BUILT(errorMessage(error)) },
       { lane: r.lane, submitted: r.submitted, ...(r.passwordChanged ? { passwordChanged: true as const } : {}) },
     );
   }
@@ -240,7 +201,7 @@ export async function executeRunSteps(ctx: NodeContext, engine: Engine, deps: Ru
       // would copy the input items to Data as if they had succeeded.
       const message = errorMessage(error);
       const thrown = error instanceof NodeOperationError ? error : configNodeError(ctx.getNode(), message, i);
-      outcome = { kind: 'error', item: configErrorItem(message, safeOptionName(ctx, i), [{ item: i }]), error: thrown };
+      outcome = { kind: 'error', item: configErrorItem(message, safeParam(ctx, i, 'options.name'), [{ item: i }]), error: thrown };
     }
     if (outcome.kind === 'error') {
       if (!ctx.continueOnFail()) throw outcome.error;
