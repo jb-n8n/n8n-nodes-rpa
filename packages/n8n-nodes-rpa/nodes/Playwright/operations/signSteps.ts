@@ -33,8 +33,6 @@ export const NOT_REPLAYED_CHANGES_MISMATCH = 'the change list does not show ever
 export const PROVEN_FIRST_VERSION_WRITES =
   'the evidence line says the steps were proven in a fresh browser, but a first version that submits a form, downloads through a form, types a secret or changes a password is never replayed: it must carry the not-replayed evidence line';
 export const LEFT_OUT_MALFORMED = 'the left-out steps are not a list of text';
-/** The engine's STEPS_HASH_MISMATCH wording (the engine is loaded lazily, so its constants are not imported here). */
-export const HASH_MISMATCH = 'the steps do not match the hash that was reviewed';
 /** Site Login secrets shorter than this are not looked for in records (the engine's MIN_SECRET_LEN_FOR_LITERAL_CHECK). */
 const MIN_SECRET_LEN = 4;
 
@@ -345,7 +343,7 @@ async function signOne(ctx: NodeContext, engine: Engine, i: number, json: IDataO
   if (!approverId || !allowlist.includes(approverId.toLowerCase())) return refuse([APPROVER_NOT_ALLOWED]);
   if (!approved) {
     // Template 3 marks the row with this hash rejected, so the hash must be the hash of these steps.
-    if (!hashMatches(engine, p.steps, p.hash)) return refuse([HASH_MISMATCH]);
+    if (!hashMatches(engine, p.steps, p.hash)) return refuse([engine.STEPS_HASH_MISMATCH]);
     return record(rejectedRecord({ name: p.name, version: p.version, hash: p.hash }, approverId, at));
   }
   const leftOut = leftOutProblem(p);
