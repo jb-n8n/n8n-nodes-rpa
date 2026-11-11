@@ -37,6 +37,8 @@ on:
       - "packages/engine/src/import/recording.ts"
       - "packages/engine/src/steps/desktop-vocabulary.ts"
       - "packages/engine/src/steps/parse.ts"
+      # The install guide's sample policy change, which the runner's tests apply with the real parser.
+      - "docs/install/samples/erp-demo-policy-change.json"
       - ".github/workflows/desktop.yml"
   push:
     branches: [main]
@@ -53,6 +55,8 @@ on:
       - "packages/engine/src/import/recording.ts"
       - "packages/engine/src/steps/desktop-vocabulary.ts"
       - "packages/engine/src/steps/parse.ts"
+      # The install guide's sample policy change, which the runner's tests apply with the real parser.
+      - "docs/install/samples/erp-demo-policy-change.json"
       - ".github/workflows/desktop.yml"
   workflow_dispatch:
   # For a workflow that needs the package. Any job of the calling run can upload an artifact of the same name, with a
