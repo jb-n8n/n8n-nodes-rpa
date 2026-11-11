@@ -14,7 +14,9 @@ import { nodeInputs, nodeOutputs } from '../nodes/Playwright/description/io.js';
 import type { Engine } from '../nodes/Playwright/engine.js';
 import { resetGuardsForTests } from '../nodes/Playwright/guard.js';
 import { memoryGuardStore } from '../nodes/Playwright/guard-store.js';
-import { executeImportSteps, MAX_IMPORT_BYTES, STEPS_WITHHELD } from '../nodes/Playwright/operations/importSteps.js';
+import {
+  executeImportSteps, IMPORT_NEEDS_START, MAX_IMPORT_BYTES, NOT_TRIED_CANCELLED, SOURCE_UNKNOWN, STEPS_WITHHELD,
+} from '../nodes/Playwright/operations/importSteps.js';
 import { executeSignSteps } from '../nodes/Playwright/operations/signSteps.js';
 import { fullSafetyFlags } from '../nodes/Playwright/format.js';
 import { repairedStepsJson } from '../nodes/Playwright/output.js';
@@ -568,6 +570,42 @@ describe('Import Steps: execution', () => {
     const [locked] = await run(next);
     expect(next.adoptions).toHaveLength(0);
     expect((details(locked[0]).drafts as IDataObject[])[0]).toMatchObject({ code: 'locked_out' });
+  });
+
+  it('refuses a Source it does not know, before reading the file', async () => {
+    const engine = importEngine((input) => proved(input));
+    const [data] = await run(engine, { params: params({ source: 'cobol' }) });
+    expect(data[0].json.error).toBe(SOURCE_UNKNOWN);
+    expect(engine.imports).toHaveLength(0);
+  });
+
+  it('a draft that opens no page, with no Start URL and no Site Login, is not replayed', async () => {
+    const { startUrl: _start, ...noStart } = chromeDraft('sap-export').script;
+    const engine = importEngine((input) => proved(input), () => ({ drafts: [{ name: 'sap-export', script: noStart as Script }], report: { source: 'chrome', steps: 9, items: [] } }));
+    const [data] = await run(engine, { credentials: { playwrightBrowserApi: BROWSER } });
+    expect(engine.adoptions).toHaveLength(0);
+    expect(details(data[0]).drafts).toEqual([expect.objectContaining({ adopted: false, code: 'policy_violation', reason: IMPORT_NEEDS_START })]);
+  });
+
+  it('a cancelled execution tries no draft, and the error says where the reasons are', async () => {
+    const engine = importEngine((input) => proved(input), uipathResult(2));
+    const ctx = nodeContext({ params: params({ source: 'uipath', stepsName: 'sap-report' }), items: [fileItem(CHROME)], credentials: CREDS as never, signal: AbortSignal.abort() }) as Harness;
+    const error = await run(engine, {}, ctx).then(() => undefined, (e: unknown) => e);
+    expect(engine.adoptions).toHaveLength(0);
+    expect(error).toBeInstanceOf(NodeOperationError);
+    expect((error as NodeOperationError).message).toBe(`None of the 2 imported step lists could be replayed. sap-report-1: ${NOT_TRIED_CANCELLED}`);
+    expect((error as NodeOperationError).description).toBe('No step list was replayed. The reasons are in details.drafts.');
+  });
+
+  it('a replay that throws is reported for its draft, and the next draft is still tried', async () => {
+    const engine = importEngine((input, call) => {
+      if (call === 0) throw new Error('the browser went away');
+      return proved(input);
+    }, uipathResult(2));
+    const [data, repaired] = await run(engine, { params: params({ source: 'uipath', stepsName: 'sap-report' }) });
+    expect(engine.adoptions).toHaveLength(2);
+    expect(repaired).toHaveLength(1);
+    expect(drafts(data[0])[0]).toMatchObject({ adopted: false, code: 'incomplete', reason: 'the replay stopped unexpectedly: the browser went away' });
   });
 
   it('replays at most 10 drafts per import; the rest are reported, not tried', async () => {

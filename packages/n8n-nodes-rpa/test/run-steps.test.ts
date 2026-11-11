@@ -167,6 +167,13 @@ describe('Run Steps: trust and engine input', () => {
     expect(viewport({ width: 320, height: 2160 })).toEqual({ width: 320, height: 2160 });
     expect(viewport({ width: 'wide', height: null })).toEqual({ width: 1280, height: 800 });
   });
+  it('refuses a variable name the steps could not name, as the RPA Secret Variables credential does', () => {
+    const read = (name: string) => () => readRunStepsParams(ctx({ params: params({}, { variables: { values: [{ name, value: 'x' }] } }) }), 0);
+    for (const name of ['2026', 'from-date', 'a b']) {
+      expect(read(name)).toThrow(`Variable name "${name}" may only use letters, digits and underscores, and may not start with a digit`);
+    }
+    expect(read('from_2026')()).toMatchObject({ vars: { from_2026: 'x' } });
+  });
   it('reads the documented defaults', () => {
     const p = readRunStepsParams(ctx(), 0);
     expect(p).toMatchObject({
