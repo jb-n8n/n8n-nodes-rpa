@@ -631,7 +631,7 @@ export class FakeRunner {
       case 'app.launch': {
         const run = this.requireRun(p);
         const exe = String((p.app as { exe?: string })?.exe ?? '').split(/[\\/]/).pop() ?? '';
-        if (!this.policy.allowedApps.some((a) => a.exe.toLowerCase() === exe.toLowerCase())) throw new RpcError(E.policy_refused, `app not allowed: ${exe}`);
+        if (!this.policy.allowedApps.some((a) => a.exe.toLowerCase() === exe.toLowerCase())) throw new RpcError(E.policy_refused, `policy_refused: application "${exe}" is not in the runner's allowedApps`);
         if (this.appMissing) throw new RpcError(E.not_found, `not_found: no element matched application executable "${exe}" (no matching window of the run)`);
         run.app = this.app === 'erp' ? new ErpApp(() => this.run?.exportDir, this.erpChangesFor((p.app as { args?: unknown }).args))
           // The web view copies from its helper process: the run's while the helper descends from the app.

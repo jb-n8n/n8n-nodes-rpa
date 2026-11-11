@@ -74,7 +74,7 @@ The messages you meet most, word for word:
 | Runner's desktop locked | `runner_unavailable`: `the desktop runner's Windows session is locked: unlock it or sign the runner user in again` |
 | Runner token wrong | `The desktop runner at ... refused the token. Check the Token in the RPA Desktop Runner credential.` |
 | Runner certificate changed | `The desktop runner at ... presented a certificate with fingerprint ..., which is not the fingerprint in the RPA Desktop Runner credential. Nothing was sent.` |
-| App not allowed | `policy_violation`: `... application "ErpDemo.exe" is not in the runner's allowedApps` |
+| App not allowed | `policy_violation`: `the desktop runner is not allowed to start ErpDemo.exe. On the Windows machine, allow it: in the RPA Recorder choose "Allow this app…" after saving a recording of it, or as an administrator run: ...` |
 | App not installed | `runner_unavailable`: `the desktop runner could not start ErpDemo.exe: it is not installed at the path the runner's policy names (allowedApps[].path). ...` |
 | Runner busy | `busy`: `the desktop runner is busy with another run` |
 | Missing variable | `missing input "<name>"`, followed by `(a secret goes in an RPA Secret Variables credential, any other value in Options → Variables)` |

@@ -1183,6 +1183,11 @@ describe('5-import-a-bot.json (the first-day import)', () => {
         'Click Search', 'Click Vendor Row 1', 'Click File', added('Wait for the window erpdemo.exe'), 'Click Export...', added('Wait for the window Export line items'),
         'Save line-items.csv into the run&#39;s export folder', 'Click Save', added('Return the exported file line-items.csv <em>· returns a file</em>'),
       ].map((l) => `<li>${l}</li>`).join('') + `</ol>${POINTER}`);
+    // The parenthesis names the returned file only when one of the added steps returns it.
+    const noFile = { ...item, reviewSteps: (item.reviewSteps as { text: string; marks: string[]; added?: true }[]).filter((r) => !r.marks.includes('returns a file')) };
+    const noFileFields = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan({ ...ran, 'Import steps': [[{ json: data[0].json }], [{ json: noFile }]] }) });
+    expect(noFileFields[0].html).toContain('<em>13 recorded steps, plus 4 the import added (waits for each window)</em>');
+    expect(noFileFields[0].html).not.toContain('the returned file)');
     expect(String((review.parameters.options as IDataObject).customCss)).toContain('div.html li:has(> i) { color: #7e8186; }\ndiv.html li > i { font-style: normal; color: #7e8186; }');
     expect((item.steps as { steps: unknown[] }).steps).toHaveLength(17);
     // The candidate writes are asked, not explained twice: ticked to start with (the person here recorded or imported the

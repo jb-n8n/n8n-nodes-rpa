@@ -250,6 +250,9 @@ export const RUNNER_TOO_OLD_FOR_CLIPBOARD = 'the desktop runner is older than cl
 /** app.launch answered not_found: the allowed app is not installed where the runner's policy says. */
 export const runnerAppMissing = (exe: string) =>
   `the desktop runner could not start ${exe}: it is not installed at the path the runner's policy names (allowedApps[].path). Install it there or correct the policy`;
+/** app.launch refused because the app is not in the runner's allowedApps (the runner's own text, exactly, is what task.ts recognises). */
+export const runnerAppNotAllowed = (exe: string) =>
+  `the desktop runner is not allowed to start ${exe}. On the Windows machine, allow it: in the RPA Recorder choose "Allow this app…" after saving a recording of it, or as an administrator run: & "C:\\Program Files\\RPA Runner\\rpa.cmd" policy apply <the recording's .policy-change.json file>`;
 export const desktopNotInteractive = (locked: boolean) =>
   locked ? 'the desktop runner\'s Windows session is locked: unlock it or sign the runner user in again' : 'the desktop runner is not in an interactive Windows session';
 /** A desktop step the runner refused: the step (numbered from 1, as the review page numbers it), then the runner's own words. */
