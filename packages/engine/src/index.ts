@@ -41,6 +41,8 @@ export * from './lane/task.js';
 // Imports: importSource and adoptDraft are the entry points; the parsers, stripSecrets and buildDraft are
 // internal, and so is draft mode (lane/draft.ts: runDraft is reachable only through adoptDraft, never from runTask).
 export type * from './import/types.js';
+// The desktop recording file the RPA recorder saves (importSource 'recording' reads it).
+export type { RecordedEvent, RecordingFile } from './import/recording.js';
 export { importSource } from './import/index.js';
 export { adoptDraft, type AdoptInput, type AdoptResult } from './import/adopt.js';
 // Desktop step sets: the desktop lane, the runner client and the protocol's typed errors.

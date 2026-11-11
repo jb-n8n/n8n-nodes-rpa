@@ -10,7 +10,7 @@ import { readZipEntries, type ZipCaps } from '../steps/zip.js';
 import { buildDraft, cleanLabel, clickModifiers, describeEvent, MIN_SECRET_LENGTH } from './draft.js';
 import { stripSecrets, TOTP_OUTPUT_HINT } from './secrets.js';
 import type { Candidate, DesktopDraft, Draft, FlowNode, ImportEvent, ImportItem, ImportOptions, ImportReport, ImportResult, UiPathFlow } from './types.js';
-import { buildDesktopDraft, type DesktopEvent, type DesktopSequence } from './uipath-desktop.js';
+import { buildDesktopDraft, DRAFT_NAMES_SIGN_IN_VALUE, signInValueCheck, type DesktopEvent, type DesktopSequence } from './uipath-desktop.js';
 import { readDesktopSelector, type DesktopSelectorRead } from './uipath-desktop-selector.js';
 import { readSelector } from './uipath-selector.js';
 import type { UiaTarget, WindowSel } from '../types.js';
@@ -357,16 +357,13 @@ export function importUiPath(data: Buffer | Uint8Array | string, opts: ImportOpt
   }
 
   // Defence in depth for the desktop drafts: none names a Site Login secret or a value typed into a credential field.
-  const slAll = opts.hasSiteLogin ? [opts.secrets?.username, opts.secrets?.password, opts.secrets?.totpSecret] : [];
-  const draftMasker = createMasker([...slAll.filter((s): s is string => typeof s === 'string' && s.length >= MIN_SECRET_LENGTH), ...typedSecrets]);
-  const shortSecrets = slAll.filter((s): s is string => typeof s === 'string' && s.length > 0 && s.length < MIN_SECRET_LENGTH).map((s) => s.trim().toLowerCase());
+  const namesSignInValue = signInValueCheck(opts, typedSecrets);
   const desktopDrafts: DesktopDraft[] = [];
   for (const seq of desktop) {
     const draft = buildDesktopDraft(seq, report);
-    const typed = draft ? draft.script.steps.flatMap((s) => ('fill' in s ? [s.fill.value] : 'select' in s ? [s.select.option] : [])) : [];
-    if (draft && (draftMasker.containsSecret(JSON.stringify(draft.script)) || typed.some((v) => shortSecrets.includes(v.trim().toLowerCase())))) {
+    if (draft && namesSignInValue(draft)) {
       report.steps -= draft.script.steps.length;
-      report.items.push({ at: '', kind: 'error', what: seq.name, reason: 'the desktop draft still named a sign-in value, so it was not returned' });
+      report.items.push({ at: '', kind: 'error', what: seq.name, reason: DRAFT_NAMES_SIGN_IN_VALUE });
       missing.add(seq.number);
       continue;
     }

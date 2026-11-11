@@ -1,9 +1,11 @@
 // The import entry point: one source in, drafts and a report out. Every recording, code or project goes the same way:
 // its parser's events, then stripSecrets, then buildDraft; a step document is already steps and only goes through the
-// step parsers. It never throws: anything that goes wrong is a report error.
+// step parsers; a desktop recording's events go to the desktop draft builder. It never throws: anything that goes wrong
+// is a report error.
 import { chromeEvents, readChromeJson } from './chrome.js';
 import { buildDraft } from './draft.js';
 import { playwrightEvents, readPlaywrightCode } from './playwright.js';
+import { importRecording } from './recording.js';
 import { stripSecrets } from './secrets.js';
 import { importStepsDocument } from './steps-document.js';
 import type { ImportOptions, ImportReport, ImportResult, ImportSource } from './types.js';
@@ -23,8 +25,9 @@ function draftFrom(parse: (report: ImportReport) => ReturnType<typeof chromeEven
 }
 
 /**
- * Imports a recording, code, project or step document (`data`: the file's bytes or its text) as drafts for adoption,
- * with a report of what was not translated. Never throws, and returns a report even when there is no draft.
+ * Imports a recording, code, project, step document or desktop recording (`data`: the file's bytes or its text) as
+ * drafts for adoption, with a report of what was not translated. Never throws, and returns a report even when there is
+ * no draft.
  */
 export function importSource(source: ImportSource, data: Buffer | Uint8Array | string, opts: ImportOptions): ImportResult {
   const report: ImportReport = { source, steps: 0, items: [] };
@@ -44,8 +47,10 @@ export function importSource(source: ImportSource, data: Buffer | Uint8Array | s
         return importUiPath(data, opts, report);
       case 'steps': // steps written by hand: one draft, or one desktop draft
         return importStepsDocument(data, opts, report);
+      case 'recording': // a desktop recording: one desktop draft, plus a flow with its one desktop node
+        return importRecording(data, opts);
       default:
-        return failed(report, 'the source must be chrome, playwright, uipath or steps');
+        return failed(report, 'the source must be chrome, playwright, uipath, steps or recording');
     }
   } catch {
     // The error's text may quote the input, so only the fact is reported.

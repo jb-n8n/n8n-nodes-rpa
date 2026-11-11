@@ -3,8 +3,11 @@
 import type { DownloadTemplate } from '../steps/file-check.js';
 import type { ClickModifier, DesktopScript, Locator, PortalSecrets, Script } from '../types.js';
 
-/** Where the steps come from: a recording, code, a UiPath project, or a step document written by hand (`steps`). */
-export type ImportSource = 'chrome' | 'playwright' | 'uipath' | 'steps';
+/**
+ * Where the steps come from: a Chrome recording, code, a UiPath project, a step document written by hand (`steps`), or
+ * a desktop recording the RPA recorder saved (`recording`).
+ */
+export type ImportSource = 'chrome' | 'playwright' | 'uipath' | 'steps' | 'recording';
 /** One way to find an element, as the source recorded it. A target lists them best first: the first is the primary locator. */
 export type Candidate = Locator;
 /** `at` says where in the source the event came from (a step number, a line, an activity), for the report. */
@@ -54,16 +57,23 @@ export interface ImportOptions {
 /** Version 1, unsigned, accepted by parseScript. */
 export interface Draft { name: string; script: Script }
 /**
- * A desktop draft (a UiPath desktop sequence, or a desktop step document): version 1, unsigned, accepted by
- * parseDesktopScript. Never replayed at import; it goes to approval as written. `writeCandidates`: steps (1-based) that
- * may write, for the owner to confirm.
+ * A desktop draft (a UiPath desktop sequence, a desktop step document or a desktop recording): version 1, unsigned,
+ * accepted by parseDesktopScript. Never replayed at import; it goes to approval as written. `writeCandidates`: steps
+ * (1-based) that may write, for the owner to confirm.
  * `variables`: the run variables its steps type; `secretVariables`: those that hold a password or another secret.
  */
 export interface DesktopDraft { name: string; script: DesktopScript; writeCandidates: number[]; variables: string[]; secretVariables: string[] }
-/** `desktopDrafts`: UiPath desktop sequences or a desktop step document, apart from the browser drafts (only when there are any). */
+/**
+ * `desktopDrafts`: UiPath desktop sequences, a desktop step document or a desktop recording, apart from the browser
+ * drafts (only when there are any). `flow`: the workflow around the drafts, for a UiPath project and for a desktop
+ * recording (one desktop node, sequence 1, whose draft is `<name>-1`).
+ */
 export interface ImportResult { drafts: Draft[]; desktopDrafts?: DesktopDraft[]; report: ImportReport; flow?: UiPathFlow }
 
-/** A UiPath workflow's shape outside the browser (the UiPath importer fills it). Literal attribute values only; expressions stay text. */
+/**
+ * A UiPath workflow's shape outside the browser (the UiPath importer fills it; a desktop recording gives one desktop
+ * node). Literal attribute values only; expressions stay text.
+ */
 export interface UiPathFlow { name: string; nodes: FlowNode[] }
 export type FlowNode =
   | { kind: 'browser'; sequence: number; displayName: string }

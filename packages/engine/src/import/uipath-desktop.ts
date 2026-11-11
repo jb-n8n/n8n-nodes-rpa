@@ -5,10 +5,11 @@
 // ever imported (a secure or credential-like value is always a run variable), and no step is marked a write: the owner
 // declares writes when approving, and the report lists the candidates.
 import { desktopWriteCandidates } from '../proposal/desktop.js';
+import { createMasker } from '../secrets/mask.js';
 import { parseDesktopScript, ScriptShapeError } from '../steps/parse.js';
 import type { DesktopLocator, DesktopScript, DesktopStep, UiaCond, UiaTarget, WindowSel } from '../types.js';
-import { cleanLabel } from './draft.js';
-import type { DesktopDraft, ImportItem, ImportReport } from './types.js';
+import { cleanLabel, MIN_SECRET_LENGTH } from './draft.js';
+import type { DesktopDraft, ImportItem, ImportOptions, ImportReport } from './types.js';
 import { READ_NAME } from '../steps/desktop-vocabulary.js';
 
 /** One desktop activity, as the walker resolved it. `at` says where in the project it came from, for the report. */
@@ -83,9 +84,10 @@ const sameExe = (a: string | undefined, b: string): boolean => {
  * launched). A scope's window becomes a waitFor on the first element the next step finds there. A save path typed
  * into a Save dialog becomes `{{$exportDir}}\<file>` (the walker rewrote it) and an expectFile step after the next
  * click. Read names are made unique. Every candidate write (desktopWriteCandidates) gets a report item; none is
- * declared. Returns undefined (with an error item) when no valid step document could be built.
+ * declared. Returns undefined (with an error item) when no valid step document could be built. With `parserLimits`, a
+ * draft with too many steps is refused with the step parser's own reason, for a source that is not a UiPath project.
  */
-export function buildDesktopDraft(seq: DesktopSequence, report: ImportReport): DesktopDraft | undefined {
+export function buildDesktopDraft(seq: DesktopSequence, report: ImportReport, o: { parserLimits?: true } = {}): DesktopDraft | undefined {
   const add = (at: string, kind: ImportItem['kind'], what: string, reason: string) => report.items.push({ at, kind, what, reason });
   const launch = seq.events.find((e): e is Extract<DesktopEvent, { kind: 'launch' }> => e.kind === 'launch');
   const firstWindowExe = seq.events.map((e) => ('target' in e ? e.target?.window?.exe : 'window' in e ? e.window?.exe : undefined)).find((x) => x !== undefined);
@@ -176,7 +178,7 @@ export function buildDesktopDraft(seq: DesktopSequence, report: ImportReport): D
     add('', 'error', seq.name, 'Nothing in these desktop activities could be turned into steps.');
     return undefined;
   }
-  if (steps.length > 200) {
+  if (steps.length > 200 && !o.parserLimits) {
     add('', 'error', seq.name, 'the desktop sequence has more than 200 steps: split it in the UiPath project');
     return undefined;
   }
@@ -190,6 +192,24 @@ export function buildDesktopDraft(seq: DesktopSequence, report: ImportReport): D
     return undefined;
   }
   return desktopDraftOf(seq.name, script, report, { atOf, secretVariables: seq.secretVariables });
+}
+
+/** Why a desktop draft that names a sign-in value is not returned (signInValueCheck). */
+export const DRAFT_NAMES_SIGN_IN_VALUE = 'the desktop draft still named a sign-in value, so it was not returned';
+
+/**
+ * Defence in depth for desktop drafts: a check whether a draft names a value of the attached RPA Site Login or one of
+ * `typedSecrets` (values typed into credential fields, MIN_SECRET_LENGTH or longer) anywhere in its steps, or a
+ * shorter Site Login value as a whole typed value. A draft it finds is not returned (DRAFT_NAMES_SIGN_IN_VALUE).
+ */
+export function signInValueCheck(opts: ImportOptions, typedSecrets: string[]): (draft: DesktopDraft) => boolean {
+  const slAll = opts.hasSiteLogin ? [opts.secrets?.username, opts.secrets?.password, opts.secrets?.totpSecret] : [];
+  const draftMasker = createMasker([...slAll.filter((s): s is string => typeof s === 'string' && s.length >= MIN_SECRET_LENGTH), ...typedSecrets]);
+  const shortSecrets = slAll.filter((s): s is string => typeof s === 'string' && s.length > 0 && s.length < MIN_SECRET_LENGTH).map((s) => s.trim().toLowerCase());
+  return (draft) => {
+    const typed = draft.script.steps.flatMap((s) => ('fill' in s ? [s.fill.value] : 'select' in s ? [s.select.option] : []));
+    return draftMasker.containsSecret(JSON.stringify(draft.script)) || typed.some((v) => shortSecrets.includes(v.trim().toLowerCase()));
+  };
 }
 
 /** Why a step the source document marked `write: true` is a candidate write. */
