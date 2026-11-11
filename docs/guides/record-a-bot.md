@@ -57,7 +57,7 @@ start value. Leave the rest unticked: they stay as recorded. A secret shows as a
 
 **Finished.** `Finished · <n> steps` and `Check the steps, then name the recording and save it.` **Name** starts as
 `<program> recording`. The folder is `Documents\RPA recordings`. **Change folder…** picks another. Choose **Save**. It
-asks before it replaces a file.
+asks before it replaces a file. **Back** returns to the values page, to tick another value or rename a variable.
 
 **Saved.** `Saved · <n> steps` and `Saved <file> in <folder>. Two things are left to do:`
 1. **Allow <app> on this machine**, with **Allow this app…**. The runner starts only the apps in its **policy**, the

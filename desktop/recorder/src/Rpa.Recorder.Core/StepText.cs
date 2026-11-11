@@ -68,9 +68,8 @@ public static partial class StepText
 
     private static bool IsVariable(string value) => value.StartsWith("{{var.", StringComparison.Ordinal) && value.EndsWith("}}", StringComparison.Ordinal);
 
-    private static string Shown(string value, bool secret)
-    {
-        if (IsVariable(value)) return $"the {(secret ? "secret" : "variable")} {value[6..^2]}";
-        return $"\"{(value.Length > MaxShown ? value[..(MaxShown - 3)] + "..." : value)}\"";
-    }
+    private static string Shown(string value, bool secret) => IsVariable(value) ? $"the {(secret ? "secret" : "variable")} {value[6..^2]}" : Quoted(value);
+
+    /// <summary>A value in quotes, as a sentence shows it: its first 57 characters and three dots when it is longer.</summary>
+    public static string Quoted(string value) => $"\"{(value.Length > MaxShown ? value[..(MaxShown - 3)] + "..." : value)}\"";
 }

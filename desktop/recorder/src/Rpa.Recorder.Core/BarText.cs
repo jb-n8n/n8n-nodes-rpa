@@ -125,6 +125,19 @@ public static class BarText
     /// name and Save.</summary>
     public static BarStage AfterFinish(IReadOnlyList<RecordedStep> steps) => steps.Any(ValuesPage.Offers) ? BarStage.Values : BarStage.Finished;
 
+    /// <summary>
+    /// Where Back leads, or null where there is no Back. From the values page: to the list, paused, while the recording
+    /// can resume; once it has ended (<paramref name="ended"/>: the page was opened again from Finished), back to
+    /// Finished. From Finished: to the values page, when a step has a value to offer. Not after saving: Record another
+    /// is the way to change a recording then.
+    /// </summary>
+    public static BarStage? Back(BarStage stage, bool ended, IReadOnlyList<RecordedStep> steps) => stage switch
+    {
+        BarStage.Values => ended ? BarStage.Finished : BarStage.Paused,
+        BarStage.Finished when AfterFinish(steps) == BarStage.Values => BarStage.Values,
+        _ => null,
+    };
+
     public static string PauseButton(BarStage stage) => stage == BarStage.Paused ? "Resume" : "Pause";
 
     /// <summary>

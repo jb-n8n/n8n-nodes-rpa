@@ -73,6 +73,19 @@ public class BarTests
         // The list keeps at least six rows wherever it shows steps.
         Assert.Equal([0, 0, 6, 6, 0, 6, 6], Enum.GetValues<BarStage>().Select(BarText.MinListRows));
 
+        // Back: from the values page to the list, paused, while the recording can resume; once it has ended (the page
+        // opened again from Finished), back to Finished. From Finished to the values page when it has a value to offer.
+        // Not after saving: Record another is the way to change a recording then.
+        RecordedStep[] typed = [new(StepKind.Fill, DateTimeOffset.Now, "Date to") { Value = "2026-11-30" }];
+        RecordedStep[] clicked = [new(StepKind.Click, DateTimeOffset.Now, "Search")];
+        Assert.Equal(BarStage.Paused, BarText.Back(BarStage.Values, ended: false, typed));
+        Assert.Equal(BarStage.Finished, BarText.Back(BarStage.Values, ended: true, typed));
+        Assert.Equal(BarStage.Values, BarText.Back(BarStage.Finished, ended: true, typed));
+        Assert.Null(BarText.Back(BarStage.Finished, ended: true, clicked));
+        foreach (var stage in new[] { BarStage.Ready, BarStage.Starting, BarStage.Recording, BarStage.Paused, BarStage.Saved })
+            Assert.Null(BarText.Back(stage, ended: true, typed));
+        Assert.Equal(BarText.Save, BarText.Primary(BarStage.Finished));
+
         Assert.Equal("Pause", BarText.PauseButton(BarStage.Recording));
         Assert.Equal("Resume", BarText.PauseButton(BarStage.Paused));
 

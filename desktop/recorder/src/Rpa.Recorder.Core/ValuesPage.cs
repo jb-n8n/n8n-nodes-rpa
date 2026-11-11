@@ -1,8 +1,8 @@
 namespace Rpa.Recorder.Core;
 
 /// <summary>What a step on the values page is: a value as it was recorded, which the person may tick; a value that is a
-/// variable already, because it held <c>{{</c> (ticked, and its name can change); or a secret (ticked for good, shown
-/// by its variable's name only).</summary>
+/// variable already, made on this page before (the page opened again from Finished) or because it held <c>{{</c>
+/// (ticked for good, and its name can change); or a secret (ticked for good, shown by its variable's name only).</summary>
 public enum ValueKind { Recorded, Variable, Secret }
 
 /// <summary>
@@ -13,6 +13,9 @@ public enum ValueKind { Recorded, Variable, Secret }
 /// </summary>
 public sealed record ValueRow(int Index, RecordedStep Step, ValueKind Kind, string Text, bool Ticked, string Name)
 {
+    /// <summary>A variable's start value (<see cref="Session.StartValue"/>), or null. Never for a secret.</summary>
+    public string? StartValue { get; init; }
+
     public int Number => Index + 1;
 
     /// <summary>Only a value as recorded can be ticked and unticked: a secret's value is gone, and the recorder does not
@@ -50,10 +53,14 @@ public static class ValuesPage
     /// <summary>Why a tick cannot be taken off (null when it can).</summary>
     public static string? Tip(ValueRow row) => row.Kind switch
     {
-        ValueKind.Variable => "Its recorded value held {{, which a step cannot type as text, so it is a variable. Its name can change below.",
+        ValueKind.Variable => "Already a variable. Its name can change below.",
         ValueKind.Secret => "A secret stays a secret: its typed value is not in the recording.",
         _ => null,
     };
+
+    /// <summary>The grey line under a variable that has a start value, or null.</summary>
+    public static string? StartsAs(ValueRow row) =>
+        row.Kind == ValueKind.Variable && row.StartValue is { } value ? $"Starts as {StepText.Quoted(value)}." : null;
 
     /// <summary>A typed value or a chosen item, except a file name typed into a Save dialog (it stays as recorded: the run
     /// saves into its own export folder).</summary>
@@ -62,9 +69,10 @@ public static class ValuesPage
     /// <summary>
     /// The page's rows for these steps. A value as recorded starts unticked, with a name from its field's label; when
     /// another row, a variable or a secret has that name already, it gets <c>_2</c>, <c>_3</c> and so on. The choices
-    /// in <paramref name="previous"/> (the page before Back) stay with the steps they were made for.
+    /// in <paramref name="previous"/> (the page before Back) stay with the steps they were made for. A variable gets its
+    /// start value from <paramref name="startValue"/> (<see cref="Session.StartValue"/>).
     /// </summary>
-    public static IReadOnlyList<ValueRow> Rows(IReadOnlyList<RecordedStep> steps, IReadOnlyList<ValueRow>? previous = null)
+    public static IReadOnlyList<ValueRow> Rows(IReadOnlyList<RecordedStep> steps, IReadOnlyList<ValueRow>? previous = null, Func<RecordedStep, string?>? startValue = null)
     {
         previous ??= [];
         var rows = new List<ValueRow>();
@@ -76,7 +84,10 @@ public static class ValuesPage
             var kind = step.Secret && variable is not null ? ValueKind.Secret : variable is not null ? ValueKind.Variable : ValueKind.Recorded;
             var before = previous.FirstOrDefault(p => ReferenceEquals(p.Step, step));
             var name = kind == ValueKind.Secret ? variable! : before?.Name ?? variable;
-            rows.Add(new ValueRow(i, step, kind, StepText.Action(step), kind != ValueKind.Recorded || before?.Ticked == true, name ?? ""));
+            rows.Add(new ValueRow(i, step, kind, StepText.Action(step), kind != ValueKind.Recorded || before?.Ticked == true, name ?? "")
+            {
+                StartValue = kind == ValueKind.Variable ? startValue?.Invoke(step) : null,
+            });
         }
         var taken = rows.Where(r => r.Name.Length > 0).Select(r => r.Name).ToHashSet(StringComparer.Ordinal);
         for (var i = 0; i < rows.Count; i++)
