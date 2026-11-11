@@ -69,7 +69,7 @@
       "parameters": {
         "authentication": "basicAuth",
         "formTitle": "Import a bot",
-        "formDescription": "Upload a Chrome Recorder export (JSON), Playwright code (JavaScript or TypeScript), a UiPath project (ZIP or XAML), a step document you wrote (JSON) or an RPA recording (.rpa-recording.json). The steps are replayed in a fresh browser and shown to you for approval on the next page, and desktop steps without a replay; a step document that submits a form, downloads through a form, types a secret or changes a password is not run at all and goes to approval marked not replayed. The steps of an RPA recording are named after your Name with -1 at the end (line-item-export-1), as are a UiPath project's (-1, -2 and so on): the review page uses that name. Nothing runs on a schedule until a person approves it.",
+        "formDescription": "Upload a Chrome Recorder export (JSON), Playwright code (JavaScript or TypeScript), a UiPath project (ZIP or XAML), a step document you wrote (JSON) or an RPA recording (.rpa-recording.json). The steps are replayed in a fresh browser and shown to you for approval on the next page, and desktop steps without a replay; a step document that submits a form, downloads through a form, types a secret or changes a password is not run at all and goes to approval marked not replayed. The steps are named after your Name; a UiPath project gives one step list per sequence, named with -1, -2 and so on at the end. Nothing runs on a schedule until a person approves it.",
         "formFields": {
           "values": [
             {
@@ -81,11 +81,14 @@
               "requiredField": true
             },
             {
-              "fieldLabel": "Source",
+              "fieldLabel": "Source (optional)",
               "fieldName": "source",
               "fieldType": "dropdown",
               "fieldOptions": {
                 "values": [
+                  {
+                    "option": "Work it out from the file"
+                  },
                   {
                     "option": "Chrome Recorder"
                   },
@@ -103,7 +106,7 @@
                   }
                 ]
               },
-              "requiredField": true
+              "requiredField": false
             },
             {
               "fieldLabel": "Name for the steps",
@@ -111,18 +114,6 @@
               "fieldType": "text",
               "placeholder": "line-item-export",
               "requiredField": true
-            },
-            {
-              "fieldLabel": "File name pattern, if the bot downloads a file (regex)",
-              "fieldName": "expectedFileName",
-              "fieldType": "text",
-              "placeholder": "^LINEITEMS_"
-            },
-            {
-              "fieldLabel": "Required columns of that file (comma-separated)",
-              "fieldName": "columns",
-              "fieldType": "text",
-              "placeholder": "Document, Amount"
             }
           ]
         },
@@ -171,8 +162,130 @@
     },
     {
       "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005b5",
+              "leftValue": "={{ !['RPA recording', 'UiPath project'].includes($json.source) && !/\\.(?:rpa-recording\\.json|zip|xaml)$/i.test(String($json.bot?.filename ?? '')) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000526",
+      "name": "Asks about a download?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        0
+      ],
+      "notes": "A recording or a UiPath project never asks: their steps say which file they return. Every other upload gets the optional download question on a second page."
+    },
+    {
+      "parameters": {
+        "operation": "page",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "File name pattern, if the bot downloads a file (regex)",
+              "fieldName": "expectedFileName",
+              "fieldType": "text",
+              "placeholder": "^LINEITEMS_"
+            },
+            {
+              "fieldLabel": "Required columns of that file (comma-separated)",
+              "fieldName": "columns",
+              "fieldType": "text",
+              "placeholder": "Document, Amount"
+            }
+          ]
+        },
+        "limitWaitTime": true,
+        "limitType": "afterTimeInterval",
+        "resumeAmount": 1,
+        "resumeUnit": "hours",
+        "options": {
+          "formTitle": "The file it downloads",
+          "formDescription": "If the bot downloads a file, say which: the replay checks that it gets that file. Leave both empty when it downloads nothing.",
+          "buttonLabel": "Import"
+        }
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000527",
+      "name": "The file it downloads",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        660,
+        -120
+      ],
+      "notes": "Browser sources only (see Asks about a download?). The run pauses here until the person submits, at most 1 hour."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005c3",
+              "name": "name",
+              "value": "={{ $('Settings').first().json.name }}",
+              "type": "string"
+            },
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005c4",
+              "name": "source",
+              "value": "={{ $('Settings').first().json.source ?? '' }}",
+              "type": "string"
+            },
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005c5",
+              "name": "expectedFileName",
+              "value": "={{ $('The file it downloads').isExecuted ? $('The file it downloads').last().json.expectedFileName ?? '' : '' }}",
+              "type": "string"
+            },
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005c6",
+              "name": "columns",
+              "value": "={{ $('The file it downloads').isExecuted ? $('The file it downloads').last().json.columns ?? '' : '' }}",
+              "type": "string"
+            },
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005c7",
+              "name": "bot",
+              "value": "={{ $('Settings').first().binary.bot }}",
+              "type": "binary"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000528",
+      "name": "The upload",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        880,
+        0
+      ],
+      "notes": "What Import steps reads: the uploaded file (binary bot) and the Name and Source from the first page, the download answers when they were asked. The same file again after Import again."
+    },
+    {
+      "parameters": {
         "operation": "importSteps",
-        "source": "={{ ({ 'Chrome Recorder': 'chrome', 'Playwright code': 'playwright', 'UiPath project': 'uipath', 'Step document': 'steps', 'RPA recording': 'recording' })[$json.source] ?? '' }}",
+        "source": "={{ ({ 'Work it out from the file': 'auto', 'Chrome Recorder': 'chrome', 'Playwright code': 'playwright', 'UiPath project': 'uipath', 'Step document': 'steps', 'RPA recording': 'recording' })[$json.source || 'Work it out from the file'] ?? '' }}",
         "inputFrom": "binary",
         "binaryPropertyName": "bot",
         "stepsName": "={{ $json.name }}",
@@ -190,7 +303,7 @@
       "type": "n8n-nodes-rpa.playwright",
       "typeVersion": 1,
       "position": [
-        440,
+        1320,
         0
       ],
       "onError": "continueErrorOutput",
@@ -226,7 +339,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        660,
+        1540,
         -320
       ],
       "notes": "Only with approval \"by email\": each step list goes to RPA: 3 Approve steps."
@@ -250,7 +363,7 @@
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.2,
       "position": [
-        880,
+        1760,
         -320
       ],
       "notes": "Off until you set up approval by email (sticky Approval by email). Fire and forget, once for each item: every step list gets its own approval execution, which waits for a person; this run finishes now.",
@@ -286,7 +399,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        660,
+        1540,
         0
       ],
       "notes": "Any approval value other than \"by email\" approves on this form. No step list to approve: straight to the last page."
@@ -345,7 +458,7 @@
       "type": "n8n-nodes-base.dataTable",
       "typeVersion": 1.1,
       "position": [
-        880,
+        1760,
         -120
       ]
     },
@@ -407,7 +520,7 @@
       "type": "n8n-nodes-base.dataTable",
       "typeVersion": 1.1,
       "position": [
-        1100,
+        1980,
         -120
       ]
     },
@@ -432,7 +545,7 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        1320,
+        2200,
         -120
       ],
       "notes": "One block per step list on Repaired Steps: what it does besides reading, the steps the import left out, the numbered steps with their variables and files, then the write steps (desktop) and Approve and sign or Reject. Below the decisions, the details: each step list's own flags, evidence and change list. The run pauses here until the person submits, at most 1 hour; without an answer nothing is signed."
@@ -448,7 +561,7 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [
-        1540,
+        2420,
         -220
       ],
       "notes": "The Repaired steps items exactly as Import steps gave them, in the order the review page showed them. None when the page was not answered in time."
@@ -463,7 +576,7 @@
       "type": "n8n-nodes-base.splitOut",
       "typeVersion": 1,
       "position": [
-        1760,
+        2640,
         -220
       ]
     },
@@ -480,7 +593,7 @@
       "type": "n8n-nodes-rpa.playwright",
       "typeVersion": 1,
       "position": [
-        1980,
+        2860,
         -220
       ],
       "onError": "continueErrorOutput",
@@ -515,7 +628,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        2200,
+        3080,
         -280
       ]
     },
@@ -623,7 +736,7 @@
       "type": "n8n-nodes-base.dataTable",
       "typeVersion": 1.1,
       "position": [
-        2420,
+        3300,
         -340
       ],
       "notes": "Writes the signed steps as an active row, from Sign steps' record only."
@@ -687,7 +800,7 @@
       "type": "n8n-nodes-base.dataTable",
       "typeVersion": 1.1,
       "position": [
-        2640,
+        3520,
         -340
       ],
       "notes": "Every other active row of the same name becomes superseded (an import is a first version, so whatever its version), so the steps just approved are what runs under that name."
@@ -776,7 +889,7 @@
       "type": "n8n-nodes-base.dataTable",
       "typeVersion": 1.1,
       "position": [
-        2420,
+        3300,
         -180
       ],
       "notes": "A rejected step list: a rejected row, with no steps and no signature. A step list Sign steps refused writes no row; the last page names the reason."
@@ -811,7 +924,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        1540,
+        2420,
         160
       ],
       "notes": "A UiPath project or an RPA recording carries the rest of the bot as binary workflow on the Data output of Import steps."
@@ -834,7 +947,7 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        1760,
+        2640,
         80
       ],
       "notes": "The run pauses here until the browser shows this page, at most 1 hour. The file comes from the Data output of Import steps."
@@ -856,10 +969,70 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        1760,
+        2640,
         240
       ],
       "notes": "The run pauses here until the browser shows this page, at most 1 hour."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005b6",
+              "leftValue": "={{ String($json.error ?? '').includes('Pages Where the Password May Be Typed') }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000529",
+      "name": "Missing login page?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1540,
+        320
+      ],
+      "notes": "The sign-in was refused because an address is not listed in the RPA Site Login: the page says which and offers to import the same file again."
+    },
+    {
+      "parameters": {
+        "operation": "page",
+        "defineForm": "json",
+        "jsonOutput": "={{ JSON.stringify([{ fieldType: 'html', html: ((e) => '<p><b>The sign-in was refused:</b> ' + e($json.error) + '</p><ol><li>In n8n, open the <b>RPA Site Login</b> credential that Import steps uses.</li><li>Add the address named above to <b>Pages Where the Password May Be Typed</b> (one address per line) and save.</li><li>Click <b>Import again</b>: the same file is imported again.</li></ol>')((s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c])) }]).split('$').join('\\\\u0024') }}",
+        "limitWaitTime": true,
+        "limitType": "afterTimeInterval",
+        "resumeAmount": 1,
+        "resumeUnit": "hours",
+        "options": {
+          "formTitle": "Add the login page",
+          "formDescription": "Nothing was imported and nothing was signed.",
+          "buttonLabel": "Import again"
+        }
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000530",
+      "name": "Add the login page",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        1760,
+        260
+      ],
+      "notes": "Import again runs Import steps once more on the same upload (The upload), with the Site Login as it is then."
     },
     {
       "parameters": {
@@ -878,8 +1051,8 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        660,
-        320
+        1760,
+        420
       ],
       "notes": "The run pauses here until the browser shows this page, at most 1 hour."
     }
@@ -900,7 +1073,7 @@
       "main": [
         [
           {
-            "node": "Import steps",
+            "node": "Asks about a download?",
             "type": "main",
             "index": 0
           }
@@ -925,7 +1098,7 @@
         ],
         [
           {
-            "node": "Import failed",
+            "node": "Missing login page?",
             "type": "main",
             "index": 0
           }
@@ -1075,6 +1248,75 @@
         [
           {
             "node": "Imported",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Asks about a download?": {
+      "main": [
+        [
+          {
+            "node": "The file it downloads",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "The upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "The file it downloads": {
+      "main": [
+        [
+          {
+            "node": "The upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "The upload": {
+      "main": [
+        [
+          {
+            "node": "Import steps",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Missing login page?": {
+      "main": [
+        [
+          {
+            "node": "Add the login page",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Import failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add the login page": {
+      "main": [
+        [
+          {
+            "node": "The upload",
             "type": "main",
             "index": 0
           }

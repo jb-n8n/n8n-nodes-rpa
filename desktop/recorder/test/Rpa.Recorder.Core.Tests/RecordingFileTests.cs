@@ -138,4 +138,42 @@ public class RecordingFileTests
         Assert.Throws<ArgumentException>(() => s.ToPolicyChange(path, "abc"));
         Assert.Throws<ArgumentException>(() => s.ToPolicyChange(path.Replace("ErpDemo", "Other"), Sha));
     }
+
+    [Fact]
+    public void A_variable_keeps_the_value_that_was_recorded_as_its_start_value_except_a_secret()
+    {
+        var s = Record(ErpDemoObservations.List());
+        int Index(string intentStart) => s.Steps.Select((step, i) => (step, i)).First(x => StepText.Sentence(x.step).StartsWith(intentStart, StringComparison.Ordinal)).i;
+        var company = Index("Choose");
+        var dateFrom = Index("Type \"2026-01-20\"");
+        s.MarkVariable(company, "in_CompanyCode");
+        s.MarkVariable(dateFrom, "in_DateFrom");
+        var file = s.ToFile("ERP Demo line items");
+        Assert.Equal(new Dictionary<string, string> { ["in_CompanyCode"] = "2000", ["in_DateFrom"] = "2026-01-20" }, file.Variables);
+        var json = JsonDocument.Parse(file.ToJson()).RootElement;
+        Assert.Equal("""{"in_CompanyCode":"2000","in_DateFrom":"2026-01-20"}""", json.GetProperty("variables").GetRawText().Replace(" ", "").Replace("\n", "").Replace("\r", ""));
+        // The secret variable the password field gave never has a start value.
+        Assert.Equal(["password"], file.SecretVariables);
+        Assert.False(json.GetProperty("variables").TryGetProperty("password", out _));
+
+        // Made secret after it was a variable: no start value, and the typed value is gone.
+        s.MarkSecret(dateFrom, "in_DateFrom");
+        Assert.Equal(new Dictionary<string, string> { ["in_CompanyCode"] = "2000" }, s.ToFile("Test").Variables);
+        Assert.DoesNotContain("2026-01-20", s.ToFile("Test").ToJson());
+        // A deleted step takes its start value with it.
+        s.Delete(company);
+        Assert.Empty(s.ToFile("Test").Variables);
+        Assert.DoesNotContain("variables", s.ToFile("Test").ToJson());
+    }
+
+    [Fact]
+    public void A_value_the_importer_would_refuse_as_a_start_value_is_not_kept()
+    {
+        // More than one line, or longer than 500 characters: the variable starts empty (the person fills it in).
+        var note = El("Edit", "txtNote", "Note");
+        var s = Record(Typed(1, Name), Left(2, Name, "line one\nline two"), Typed(3, note), Left(4, note, new string('x', 501)));
+        s.MarkVariable(0, "note");
+        s.MarkVariable(1, "longText");
+        Assert.Empty(s.ToFile("Test").Variables);
+    }
 }

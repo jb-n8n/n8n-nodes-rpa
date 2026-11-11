@@ -11,7 +11,9 @@
 //     "name": "<the step set's name the person typed: one line, 1 to 200 characters>",
 //     "app": { "exe": "<the program's file name, such as ErpDemo.exe>", "args": ["<argument>", ...] },  (args optional)
 //     "events": [<event>, ...],                  (at most 400)
-//     "secretVariables": ["<variable>", ...]     (the variables whose fills were typed into secret fields)
+//     "secretVariables": ["<variable>", ...],    (the variables whose fills were typed into secret fields)
+//     "variables": { "<variable>": "<start value>", ... }   (optional: the value recorded where the person made a
+//                                                 variable, one line of at most 500 characters; never for a secret)
 //   }
 //
 // Every event has "at" (when it happened, as text: one line, 1 to 64 characters), "kind", and "label" (the name the
@@ -44,9 +46,15 @@
 // A key event whose chord the step format refuses (a Windows shell chord such as Alt+Tab, or a chord not in the
 // canonical spelling) and a select of an empty item are left out, each with a `dropped` report item; the rest imports.
 //
+// A start value is for a variable a step types or chooses ("{{var.name}}" in a fill's value or a select's option) and
+// never for a secret one (in secretVariables, or typed by a fill marked secret): such a file is refused. The draft
+// carries the start values beside its steps (DesktopDraft.startValues), never in them: the steps are signed with the
+// variable, and the generated workflow starts each variable with its value.
+//
 // On import, an automation id that stableDesktopId finds generated is dropped from its condition (an outer condition
 // left with only a control type goes from the path), and an event whose own condition is left with nothing but a
-// control type is left out. The draft is `<name>-1` for the import's Name, with the flow's one desktop node.
+// control type is left out. The draft is named the import's Name (one recording, one step list), with the flow's one
+// desktop node.
 import { stableDesktopId } from '../desktop/stable-ids.js';
 import { IMPORT_EMPTY } from '../messages.js';
 import { CREDENTIAL_FIELD } from '../secrets/credential-field.js';
@@ -62,7 +70,9 @@ const RECORDING_FORMAT = 'rpa-recording/1';
 /** One recorded event: a desktop event, `secret` on a fill typed into a secret field, `positional` on a target found by its position. */
 export type RecordedEvent = DesktopEvent & { secret?: true; positional?: true };
 /** A recording file, as the RPA recorder saves it (the format above). */
-export interface RecordingFile { format: typeof RECORDING_FORMAT; name: string; app: DesktopApp; events: RecordedEvent[]; secretVariables: string[] }
+export interface RecordingFile {
+  format: typeof RECORDING_FORMAT; name: string; app: DesktopApp; events: RecordedEvent[]; secretVariables: string[]; variables?: Record<string, string>;
+}
 
 /** A recording larger than this is refused before it is parsed, as a Chrome recording is. */
 const MAX_RECORDING_BYTES = MAX_CHROME_BYTES;
@@ -91,6 +101,14 @@ const NOTHING_LEFT = 'the automation id looks generated (it may change from run 
 const KEY_LEFT_OUT = (problem: string) => `the step was left out: its key ${problem}`;
 const EMPTY_OPTION = 'the step was left out: it chooses an empty item, which desktop steps cannot choose';
 const POSITIONAL = 'the step finds its element by a row position, not by what the row holds: on a later run it acts on whatever is in that row';
+const VARIABLES_NOT_OBJECT = 'variables must be an object of variable names and their start values';
+const BAD_VARIABLE_NAME = (name: string) => `variables has a name that is not a variable name (letters, digits and _): ${JSON.stringify(name.length > 60 ? `${name.slice(0, 60)}…` : name)}`;
+const SECRET_START_VALUE = (name: string) => `variables.${name} is a secret variable: a secret never has a start value in the recording`;
+const UNUSED_START_VALUE = (name: string) => `variables.${name} names a variable no step types`;
+/** A start value: one line, as a recorded value is. */
+const MAX_START_VALUE = 500;
+/** Every {{var.name}} in a text. */
+const VARIABLES_IN = /\{\{\s*var\.([A-Za-z0-9_]+)\s*\}\}/g;
 
 /** Keys beside at, kind and label, by kind. A Map, so a kind such as `constructor` or `__proto__` is never mistaken for one. */
 const EVENT_KEYS = new Map<string, readonly string[]>([
@@ -186,7 +204,7 @@ function recordingIssues(rec: Json): string[] {
     });
   };
 
-  onlyKeys(rec, ['format', 'name', 'app', 'events', 'secretVariables'], 'recording');
+  onlyKeys(rec, ['format', 'name', 'app', 'events', 'secretVariables', 'variables'], 'recording');
   if (!isText(rec.name, 200)) issues.push('name must be a non-empty single-line string of at most 200 characters');
   const app = rec.app;
   if (!isObject(app)) issues.push('app must be an object with exe');
@@ -236,6 +254,7 @@ function recordingIssues(rec: Json): string[] {
   if (!(isStringList(rec.secretVariables) && rec.secretVariables.every((v) => VARIABLE_NAME.test(v)))) {
     issues.push('secretVariables must be a list of variable names (letters, digits and _)');
   }
+  startValueIssues(rec, events, issues);
   // {{$exportDir}} only as a fill's value, as the step parser allows it; no other {{$...}} anywhere.
   const templates = (v: unknown, path: string) => {
     if (typeof v === 'string') {
@@ -248,6 +267,32 @@ function recordingIssues(rec: Json): string[] {
   };
   templates(rec, '');
   return issues;
+}
+
+/**
+ * The start values' problems: the key is optional; each name is a variable a fill's value or a select's option types,
+ * never a secret one (listed in secretVariables, or typed by a fill marked secret), and each value one line.
+ */
+function startValueIssues(rec: Json, events: unknown[], issues: string[]): void {
+  if (rec.variables === undefined) return;
+  if (!isObject(rec.variables)) { issues.push(VARIABLES_NOT_OBJECT); return; }
+  const used = new Set<string>();
+  const secret = new Set(isStringList(rec.secretVariables) ? rec.secretVariables : []);
+  for (const e of events) {
+    if (!isObject(e)) continue;
+    const text = e.kind === 'fill' ? e.value : e.kind === 'select' ? e.option : undefined;
+    if (typeof text !== 'string') continue;
+    for (const m of text.matchAll(VARIABLES_IN)) {
+      used.add(m[1]);
+      if (e.kind === 'fill' && e.secret === true) secret.add(m[1]);
+    }
+  }
+  for (const [name, value] of Object.entries(rec.variables)) {
+    if (!VARIABLE_NAME.test(name)) issues.push(BAD_VARIABLE_NAME(name));
+    else if (secret.has(name)) issues.push(SECRET_START_VALUE(name));
+    else if (!used.has(name)) issues.push(UNUSED_START_VALUE(name));
+    else if (!isText(value, MAX_START_VALUE)) issues.push(`variables.${name} must be a single-line string of at most ${MAX_START_VALUE} characters`);
+  }
 }
 
 /**
@@ -269,7 +314,7 @@ function stableTarget(t: UiaTarget): { target: UiaTarget; changed: boolean } | u
 }
 
 /**
- * Imports a recording file (`data`: its bytes or its text) as one desktop draft, `<opts.name>-1`, with a flow of one
+ * Imports a recording file (`data`: its bytes or its text) as one desktop draft named opts.name, with a flow of one
  * desktop node for the workflow around it. A file that is not a valid recording, a fill marked secret that carries a
  * typed value, and a draft that names a value of the RPA Site Login are each an `error` item and no draft.
  */
@@ -315,7 +360,8 @@ export function importRecording(data: Buffer | Uint8Array | string, opts: Import
     events.unshift({ at: '', kind: 'launch', exe: file.app.exe, ...(file.app.args?.length ? { args: [...file.app.args] } : {}), label: file.app.exe });
   }
 
-  const name = `${opts.name}-1`;
+  // One recording gives one step list: it keeps the Name the person typed.
+  const name = opts.name;
   const displayName = cleanLabel(file.name) || cleanLabel(opts.name);
   const draft = buildDesktopDraft({ number: 1, name, displayName, events, secretVariables: [...secretVariables] }, report, { parserLimits: true });
   // Defence in depth: nothing returned names a value of the RPA Site Login.
@@ -326,12 +372,14 @@ export function importRecording(data: Buffer | Uint8Array | string, opts: Import
     return r;
   };
   if (!draft) return masked({ drafts: [], report });
-  if (signInValueCheck(opts, [])(draft)) {
+  const startValues = { ...(file.variables ?? {}) };
+  // A start value goes into the generated workflow: one that holds a value of the RPA Site Login is refused like the draft.
+  if (signInValueCheck(opts, [])(draft) || Object.values(startValues).some((v) => masker.containsSecret(v))) {
     report.steps -= draft.script.steps.length;
     add('', 'error', name, DRAFT_NAMES_SIGN_IN_VALUE);
     return masked({ drafts: [], report });
   }
   const flowName = masker.mask(displayName);
-  const flow: UiPathFlow = { name: flowName, nodes: [{ kind: 'desktop', sequence: 1, displayName: flowName }] };
-  return masked({ drafts: [], desktopDrafts: [draft], report, flow });
+  const flow: UiPathFlow = { name: flowName, nodes: [{ kind: 'desktop', sequence: 1, displayName: flowName, draft: name }] };
+  return masked({ drafts: [], desktopDrafts: [{ ...draft, startValues }], report, flow });
 }

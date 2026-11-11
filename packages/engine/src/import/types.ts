@@ -60,9 +60,12 @@ export interface Draft { name: string; script: Script }
  * A desktop draft (a UiPath desktop sequence, a desktop step document or a desktop recording): version 1, unsigned,
  * accepted by parseDesktopScript. Never replayed at import; it goes to approval as written. `writeCandidates`: steps
  * (1-based) that may write, for the owner to confirm.
- * `variables`: the run variables its steps type; `secretVariables`: those that hold a password or another secret.
+ * `variables`: the run variables its steps type; `secretVariables`: those that hold a password or another secret;
+ * `startValues` (a recording): the value recorded for a variable that is not secret, for the generated workflow.
  */
-export interface DesktopDraft { name: string; script: DesktopScript; writeCandidates: number[]; variables: string[]; secretVariables: string[] }
+export interface DesktopDraft {
+  name: string; script: DesktopScript; writeCandidates: number[]; variables: string[]; secretVariables: string[]; startValues?: Record<string, string>;
+}
 /**
  * `desktopDrafts`: UiPath desktop sequences, a desktop step document or a desktop recording, apart from the browser
  * drafts (only when there are any). `flow`: the workflow around the drafts, for a UiPath project and for a desktop
@@ -76,9 +79,10 @@ export interface ImportResult { drafts: Draft[]; desktopDrafts?: DesktopDraft[];
  */
 export interface UiPathFlow { name: string; nodes: FlowNode[] }
 export type FlowNode =
-  | { kind: 'browser'; sequence: number; displayName: string }
-  /** A desktop sequence: the desktop draft `<name>-<sequence>`. Browser and desktop sequences share one numbering. */
-  | { kind: 'desktop'; sequence: number; displayName: string }
+  /** A browser sequence: the draft `draft` when given (a source without a flow of its own), else `<name>-<sequence>`. */
+  | { kind: 'browser'; sequence: number; displayName: string; draft?: string }
+  /** A desktop sequence: the desktop draft `draft` when given (a recording), else `<name>-<sequence>`. Browser and desktop sequences share one numbering. */
+  | { kind: 'desktop'; sequence: number; displayName: string; draft?: string }
   | { kind: 's3Upload'; bucket?: string; key?: string; displayName: string }
   | { kind: 'readSpreadsheet' | 'writeSpreadsheet'; path?: string; sheet?: string; displayName: string }
   | { kind: 'http'; method?: string; url?: string; displayName: string }

@@ -17,6 +17,11 @@ export const importStepsProperties: INodeProperties[] = [
     type: 'options',
     default: 'chrome',
     options: [
+      {
+        name: 'Work It Out From the File',
+        value: 'auto',
+        description: 'By the file name (.rpa-recording.json, .zip, .xaml, .js, .ts), else by what the JSON holds: an RPA recording, a Chrome Recorder export or a step document',
+      },
       { name: 'Chrome Recorder (JSON)', value: 'chrome', description: 'A recording exported from the Recorder panel of Chrome DevTools as JSON' },
       { name: 'Playwright Code (JavaScript or TypeScript)', value: 'playwright', description: 'Code from the codegen recorder, for JavaScript or TypeScript' },
       { name: 'UiPath Project (ZIP or XAML)', value: 'uipath', description: 'A UiPath project folder as a .zip, or one .xaml workflow' },
@@ -75,7 +80,7 @@ export const importStepsProperties: INodeProperties[] = [
     required: true,
     placeholder: 'line-item-export',
     description:
-      'Names the imported steps. A UiPath project with several browser sequences gives one step list per sequence, named <name>-1, <name>-2 and so on. An RPA recording gives one desktop step list, named <name>-1.',
+      'Names the imported steps. A UiPath project gives one step list per sequence, named <name>-1, <name>-2 and so on. Every other source gives one step list, named <name>.',
     displayOptions: importSteps,
   },
   {

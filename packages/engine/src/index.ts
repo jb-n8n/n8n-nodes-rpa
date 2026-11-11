@@ -42,6 +42,7 @@ export * from './lane/task.js';
 // internal, and so is draft mode (lane/draft.ts: runDraft is reachable only through adoptDraft, never from runTask).
 export type * from './import/types.js';
 export { importSource } from './import/index.js';
+export { detectImportSource } from './import/detect.js';
 export { adoptDraft, type AdoptInput, type AdoptResult } from './import/adopt.js';
 // Desktop step sets: the desktop lane, the runner client and the protocol's typed errors.
 export { checkDesktopTrust, DEFAULT_BUSY_WAIT_MS, DEFAULT_LEASE_MS, runDesktopTask, type DesktopTaskInput, type DesktopTaskResult } from './desktop/task.js';

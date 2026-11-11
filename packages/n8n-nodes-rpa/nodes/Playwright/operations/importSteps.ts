@@ -1,6 +1,6 @@
 import { NodeConnectionTypes, NodeOperationError, type IBinaryKeyData, type IDataObject, type INodeExecutionData, type IPairedItemData } from 'n8n-workflow';
 import type {
-  AdoptInput, AdoptResult, BrowserEndpoint, Draft, ErrorCode, ImportOptions, ImportReport, ImportSource, Masker, OutputSpec, PortalPolicy, Proposal,
+  AdoptInput, AdoptResult, BrowserEndpoint, DesktopDraft, Draft, ErrorCode, FlowNode, ImportOptions, ImportReport, ImportSource, Masker, OutputSpec, PortalPolicy, Proposal, UiPathFlow,
 } from 'n8n-rpa-engine';
 import { browserConfig, ConfigError, CREDENTIALS, policyFor, siteLoginConfig, type SiteLogin } from '../config.js';
 import type { NodeContext } from '../context.js';
@@ -39,7 +39,10 @@ export const TEXT_TOO_LARGE = 'Recording or Code is larger than 20 MiB, so it wa
 export const NAME_REQUIRED = 'Name is required: it names the imported steps.';
 export const NAME_EQUALS = 'Name must not start with "=".';
 export const SOURCE_UNKNOWN =
-  'Source must be Chrome Recorder (JSON), Playwright Code (JavaScript or TypeScript), UiPath Project (ZIP or XAML), Step Document (JSON) or RPA Recording';
+  'Source must be Work It Out From the File, Chrome Recorder (JSON), Playwright Code (JavaScript or TypeScript), UiPath Project (ZIP or XAML), Step Document (JSON) or RPA Recording';
+/** Source → Work It Out From the File, for a file whose name and content say nothing Import Steps knows. */
+export const SOURCE_NOT_DETECTED =
+  'Import Steps could not tell what the file holds: give it the name its tool saves (.rpa-recording.json, .zip, .xaml, .js or .ts), or choose its Source.';
 export const IMPORT_NEEDS_START = 'Import Steps needs a Start URL or a Site Login: the imported steps do not open a page first.';
 /** The repair goal when Goal is empty: the agent sees the imported steps as its base. */
 export const DEFAULT_GOAL = 'Do what the imported steps do, on the page as it is now.';
@@ -63,7 +66,7 @@ export const CHECKED_NOT_RUN =
 /** A UiPath project with browser sequences, imported without an RPA Browser credential (its desktop sequences need none). */
 export const IMPORT_BROWSER_NEEDED = 'The project has browser steps: attach an RPA Browser credential to replay them.';
 
-const SOURCES: readonly string[] = ['chrome', 'playwright', 'uipath', 'steps', 'recording'];
+const SOURCES: readonly string[] = ['auto', 'chrome', 'playwright', 'uipath', 'steps', 'recording'];
 /** Sources that may hold only desktop steps: the RPA Browser credential is needed only for browser steps, known after the import. */
 const MAY_BE_DESKTOP: readonly string[] = ['uipath', 'steps', 'recording'];
 /** Sources that are always a file (Input From is hidden for them). */
@@ -72,7 +75,8 @@ const FILE_ONLY: readonly string[] = ['uipath', 'recording'];
 const NO_EXPECTED_FILE: readonly string[] = ['steps', 'recording'];
 
 interface ImportParams {
-  source: ImportSource;
+  /** 'auto' (Work It Out From the File) until the file is read; then the source it holds. */
+  source: ImportSource | 'auto';
   inputFrom: 'binary' | 'text';
   binaryPropertyName: string;
   name: string;
@@ -103,7 +107,7 @@ function readImportParams(ctx: NodeContext, i: number): ImportParams {
   if (!SOURCES.includes(source)) throw new ConfigError(SOURCE_UNKNOWN);
   const idPattern = asString(get('idPattern', '')).trim();
   return {
-    source: source as ImportSource,
+    source: source as ImportSource | 'auto',
     // A UiPath project and an RPA recording are always a file (Input From is hidden for them).
     inputFrom: !FILE_ONLY.includes(source) && asString(get('inputFrom', 'binary')) === 'text' ? 'text' : 'binary',
     binaryPropertyName: asString(get('binaryPropertyName', 'data')).trim() || 'data',
@@ -217,21 +221,29 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
   let siteLogin: SiteLogin | undefined = undefined;
   let fixedPolicy: PortalPolicy | undefined = undefined;
   let data: Buffer | string;
+  let source: ImportSource;
   try {
     // An empty id would key every id-less Site Login's breaker together ("site-login:").
     if (siteLoginId === '') throw new ConfigError(SITE_LOGIN_NO_ID);
     p = readImportParams(ctx, i);
-    if (!MAY_BE_DESKTOP.includes(p.source) || credentialId(ctx, CREDENTIALS.browser) !== undefined) {
+    data = await readSource(ctx, i, p);
+    // Work It Out From the File: the file's name, else what it holds, decides the source before anything else is read.
+    if (p.source === 'auto') {
+      const fileName = p.inputFrom === 'binary' ? ctx.helpers.assertBinaryData(i, p.binaryPropertyName).fileName : undefined;
+      const detected = engine.detectImportSource(fileName, data);
+      if (!detected) throw new ConfigError(SOURCE_NOT_DETECTED);
+      source = detected;
+    } else source = p.source;
+    if (!MAY_BE_DESKTOP.includes(source) || credentialId(ctx, CREDENTIALS.browser) !== undefined) {
       endpoint = browserConfig(await browserCredentials(ctx, i));
       // A CDP connection cannot read downloaded files: refused before anything is read. A step document's downloads carry
       // their own checks and a recording runs no browser: Expected File is not used, so neither refuses one.
-      refuseCdpDownload(engine, endpoint, !NO_EXPECTED_FILE.includes(p.source) && expectedDownload(engine, p.expectedFile) !== undefined);
+      refuseCdpDownload(engine, endpoint, !NO_EXPECTED_FILE.includes(source) && expectedDownload(engine, p.expectedFile) !== undefined);
     }
     if (siteLoginId !== undefined) siteLogin = siteLoginConfig(await ctx.getCredentials(CREDENTIALS.siteLogin, i));
     if (siteLogin && !node.credentials?.[CREDENTIALS.redis] && isQueueMode(deps)) throw new ConfigError(QUEUE_NEEDS_REDIS);
     // With a Site Login or a Start URL the policy is known now; otherwise each draft's first page decides it.
     if (siteLogin || p.startUrl) fixedPolicy = policyOf(p, siteLogin, p.startUrl);
-    data = await readSource(ctx, i, p);
   } catch (error) {
     return configError(errorMessage(error), safeName(ctx, i));
   }
@@ -254,7 +266,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
     return false;
   };
   // A step document without a start address starts where Run Steps would start it: Start URL, else the Site Login's.
-  const startUrl = p.startUrl || (p.source === 'steps' ? siteLogin?.policy.startUrl ?? '' : '');
+  const startUrl = p.startUrl || (source === 'steps' ? siteLogin?.policy.startUrl ?? '' : '');
   const opts: ImportOptions = {
     name: p.name,
     ...(startUrl ? { startUrl } : {}),
@@ -266,7 +278,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
     // With a One-Time Code Workflow, a recorded code becomes a sign-in that takes its code from that workflow.
     ...(p.codeWorkflowId ? { codeFromWorkflow: true } : {}),
   };
-  const imported = engine.importSource(p.source, data, opts);
+  const imported = engine.importSource(source, data, opts);
   const report = maskDeep<ImportReport>(imported.report, mask);
   const desktopDrafts = imported.desktopDrafts ?? [];
   // What the import left out, as its (masked) report words it. The report does not say which step list a line belongs
@@ -274,13 +286,16 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
   const leftOut = leftOutOf(report);
   const withLeftOut = <P extends object>(proposal: P): P => (leftOut.length ? { ...proposal, leftOut: [...leftOut] } : proposal);
 
-  // A UiPath project's or a recording's flow becomes an n8n workflow for Import from file, whatever happens to its drafts.
+  // Every import with steps comes with the workflow around them, for Import from file, whatever happens to its drafts: a
+  // UiPath project's or a recording's flow, otherwise one pair per step list. It carries the run options the import used.
   let workflow: { binary: IBinaryKeyData; name: string } | undefined;
-  if (imported.flow) {
+  const flow = imported.flow ?? pairsFlow(p.name, imported.drafts, desktopDrafts);
+  if (flow) {
     try {
-      const file = workflowFile(imported.flow, imported.drafts, {
-        name: p.name, desktopDrafts, source: p.source === 'recording' ? 'recording' : 'uipath',
+      const file = workflowFile(flow, imported.drafts, {
+        name: p.name, desktopDrafts, source,
         ...(p.codeWorkflowId ? { codeWorkflow: { id: p.codeWorkflowId, timeoutSeconds: p.codeTimeoutMs / 1000 } } : {}),
+        run: { maxSeconds: p.common.maxSeconds, allowedHosts: p.common.allowedHosts },
       });
       const name = (JSON.parse(file.data.toString('utf8')) as { name: string }).name;
       workflow = { binary: { workflow: await ctx.helpers.prepareBinaryData(file.data, file.fileName, file.mimeType) }, name };
@@ -297,10 +312,10 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
   }
 
   // A browser step document that writes or types a secret is never run: it goes to approval as written.
-  const asWritten = p.source === 'steps' ? imported.drafts.filter((d) => engine.needsApprovalAsWritten(d.script.steps)) : [];
+  const asWritten = source === 'steps' ? imported.drafts.filter((d) => engine.needsApprovalAsWritten(d.script.steps)) : [];
   const toAdopt = imported.drafts.filter((d) => !asWritten.includes(d));
   if (toAdopt.length > 0 && !endpoint) {
-    const failed = configError(p.source === 'uipath' ? IMPORT_BROWSER_NEEDED : BROWSER_CREDENTIAL_NEEDED, p.name, { report, ...(workflow ? { workflowName: workflow.name } : {}) });
+    const failed = configError(source === 'uipath' ? IMPORT_BROWSER_NEEDED : BROWSER_CREDENTIAL_NEEDED, p.name, { report, ...(workflow ? { workflowName: workflow.name } : {}) });
     if (workflow && failed.kind === 'error') failed.item.binary = { ...workflow.binary };
     return failed;
   }
@@ -316,7 +331,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
     let problem: string | undefined;
     if (!withheld) {
       try {
-        const line = p.source === 'steps' ? DESKTOP_DOCUMENT_EVIDENCE_LINE : p.source === 'recording' ? DESKTOP_RECORDING_EVIDENCE_LINE : DESKTOP_EVIDENCE_LINE;
+        const line = source === 'steps' ? DESKTOP_DOCUMENT_EVIDENCE_LINE : source === 'recording' ? DESKTOP_RECORDING_EVIDENCE_LINE : DESKTOP_EVIDENCE_LINE;
         review = desktopRepairedStepsJson(engine, withLeftOut(engine.desktopProposal(d.script)), line);
       } catch (error) {
         problem = mask(errorMessage(error));
@@ -331,6 +346,8 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
       writeCandidates: [...d.writeCandidates],
       variables: [...d.variables],
       secretVariables: [...d.secretVariables],
+      // A recording's start values (never a secret's), for the review page and the generated workflow.
+      ...(d.startValues && Object.keys(d.startValues).length ? { startValues: { ...d.startValues } } : {}),
       reason: withheld ? STEPS_WITHHELD : problem ?? DESKTOP_FOR_APPROVAL,
     };
     return { entry, review };
@@ -447,6 +464,15 @@ function checkedCaptures(engine: Engine, r: { screenshot?: Buffer; trace?: Buffe
 }
 
 /** The policy for a run: the Site Login's (Start URL may move the start page within it), or Start URL's site plus Also Allow These Sites. */
+/** The flow of a source without one (a Chrome recording, Playwright code, a step document): one pair per step list, by its name. */
+function pairsFlow(name: string, drafts: Draft[], desktopDrafts: DesktopDraft[]): UiPathFlow | undefined {
+  const nodes: FlowNode[] = [
+    ...drafts.map((d, k): FlowNode => ({ kind: 'browser', sequence: k + 1, displayName: d.name, draft: d.name })),
+    ...desktopDrafts.map((d, k): FlowNode => ({ kind: 'desktop', sequence: drafts.length + k + 1, displayName: d.name, draft: d.name })),
+  ];
+  return nodes.length ? { name, nodes } : undefined;
+}
+
 function policyOf(p: ImportParams, siteLogin: SiteLogin | undefined, url: string): PortalPolicy {
   return policyFor({ siteLogin, url: url || undefined, allowedHosts: p.common.allowedHosts, allowPrivateNetwork: p.common.allowPrivateNetwork, operation: 'runSteps' });
 }

@@ -34,7 +34,7 @@ describe('the ERP Demo recording', () => {
     expect(r.drafts).toEqual([]);
     expect(r.desktopDrafts).toHaveLength(1);
     const d = r.desktopDrafts![0];
-    expect(d).toMatchObject({ name: 'erp-1', writeCandidates: [4, 16], variables: ['password'], secretVariables: ['password'] });
+    expect(d).toMatchObject({ name: 'erp', writeCandidates: [4, 16], variables: ['password'], secretVariables: ['password'], startValues: {} });
     expect(r.report.steps).toBe(17);
     expect(d.script.app).toEqual({ exe: 'ErpDemo.exe' });
     expect(d.script.steps.map((s) => s.intent)).toEqual([
@@ -61,8 +61,8 @@ describe('the ERP Demo recording', () => {
     expect(d.script.steps[16]).toMatchObject({ expectFile: { pattern: '^line-items\\.csv$' } });
     expect(d.script.steps.some((s) => 'write' in s)).toBe(false);
     expect(items(r, 'candidateWrite').map((i) => i.what)).toEqual(['Step 4: Press Enter in Password', 'Step 16: Click Save']);
-    // The workflow around it: one desktop node, named by the recording, whose draft is <name>-1.
-    expect(r.flow).toEqual({ name: 'ERP Demo line items', nodes: [{ kind: 'desktop', sequence: 1, displayName: 'ERP Demo line items' }] });
+    // The workflow around it: one desktop node, named by the recording, whose draft keeps the Name the person typed.
+    expect(r.flow).toEqual({ name: 'ERP Demo line items', nodes: [{ kind: 'desktop', sequence: 1, displayName: 'ERP Demo line items', draft: 'erp' }] });
   });
 
   it('the draft parses as a desktop script and holds no index', () => {
@@ -214,13 +214,13 @@ describe('a recording that is refused', () => {
     const long = recording();
     long.events[6].value = 'S1te-Login-Pass';
     const r = importRec(long, opts);
-    expectRefused(r, 'the desktop draft still named a sign-in value, so it was not returned', 'erp-1');
+    expectRefused(r, 'the desktop draft still named a sign-in value, so it was not returned', 'erp');
     expect(r.report.steps).toBe(0);
     expect(JSON.stringify(r)).not.toContain('S1te-Login-Pass');
     // A short Site Login value counts as a whole typed value.
     const short = recording();
     short.events[5].option = 'AB';
-    expectRefused(importRec(short, opts), 'the desktop draft still named a sign-in value, so it was not returned', 'erp-1');
+    expectRefused(importRec(short, opts), 'the desktop draft still named a sign-in value, so it was not returned', 'erp');
     // Without one, the same values import.
     expect(importRec(short).desktopDrafts).toHaveLength(1);
   });
@@ -256,7 +256,7 @@ describe('a recording that is refused', () => {
   it('refuses a recording that gives more than 200 steps, with the step parser\'s reason', () => {
     const rec = recording();
     while (rec.events.length < 220) rec.events.push(structuredClone(rec.events[8]));
-    expectRefused(importRec(rec), 'the desktop draft is not valid steps: steps has more than 200 steps', 'erp-1');
+    expectRefused(importRec(rec), 'the desktop draft is not valid steps: steps has more than 200 steps', 'erp');
   });
 
   it('refuses a recording with nothing to turn into steps', () => {
@@ -280,6 +280,47 @@ describe('a recording that is refused', () => {
     const long = recording();
     long.events[1]['k'.repeat(200)] = 1;
     expect(items(importRec(long), 'error')[0].reason).toBe(notValid(`events[1] has the unknown key "${'k'.repeat(60)}…"`));
+  });
+});
+
+describe('start values (variables): a variable starts with the value that was recorded, except a secret', () => {
+  /** The recording with step 6 (Company code) and step 7 (Date from) made variables, as the recorder writes them. */
+  const withVariables = (variables: Json = { in_CompanyCode: '2000', in_DateFrom: '2026-01-20' }): Json => {
+    const rec = recording();
+    const fill = rec.events.find((e: Json) => e.kind === 'fill' && e.label === 'Date from');
+    const select = rec.events.find((e: Json) => e.kind === 'select');
+    fill.value = '{{var.in_DateFrom}}';
+    select.option = '{{var.in_CompanyCode}}';
+    rec.variables = variables;
+    return rec;
+  };
+  it('the draft carries each start value beside the variable its steps type', () => {
+    const r = importRec(withVariables());
+    expect(items(r, 'error')).toEqual([]);
+    const d = r.desktopDrafts![0];
+    expect(d.variables).toEqual(['password', 'in_CompanyCode', 'in_DateFrom']);
+    expect(d.startValues).toEqual({ in_CompanyCode: '2000', in_DateFrom: '2026-01-20' });
+    expect(d.script.steps[5]).toMatchObject({ select: { option: '{{var.in_CompanyCode}}' } });
+    // The start value is not in the steps: they are signed with the variable.
+    expect(JSON.stringify(d.script)).not.toContain('2026-01-20');
+    // Without the key, no start values (a file from an older recorder).
+    expect(importRec(recording()).desktopDrafts![0].startValues).toEqual({});
+  });
+  it('refuses a start value for a secret variable, for a variable no step types, and of the wrong type', () => {
+    expectRefused(importRec(withVariables({ password: 'Long-password-1' })), notValid('variables.password is a secret variable: a secret never has a start value in the recording'));
+    const secretFill = withVariables({});
+    secretFill.secretVariables = [];
+    expectRefused(importRec({ ...secretFill, variables: { password: 'x' } }), notValid('variables.password is a secret variable: a secret never has a start value in the recording'));
+    expectRefused(importRec(withVariables({ in_Unused: 'a' })), notValid('variables.in_Unused names a variable no step types'));
+    expectRefused(importRec(withVariables({ in_CompanyCode: 2000 })), notValid('variables.in_CompanyCode must be a single-line string of at most 500 characters'));
+    expectRefused(importRec(withVariables({ 'not a name': 'a' })), notValid('variables has a name that is not a variable name (letters, digits and _): "not a name"'));
+    expectRefused(importRec({ ...withVariables(), variables: ['2000'] }), notValid('variables must be an object of variable names and their start values'));
+    // A secret never reaches the report through a start value either.
+    expect(JSON.stringify(importRec(withVariables({ password: 'Long-password-1' })))).not.toContain('Long-password-1');
+  });
+  it('refuses a start value that holds a value of the RPA Site Login', () => {
+    const opts: ImportOptions = { ...OPTS, hasSiteLogin: true, secrets: { username: 'clerk-login', password: 'Long-password-1' } };
+    expectRefused(importRec(withVariables({ in_CompanyCode: 'clerk-login', in_DateFrom: 'x' }), opts), 'the desktop draft still named a sign-in value, so it was not returned', 'erp');
   });
 });
 

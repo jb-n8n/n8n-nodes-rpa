@@ -854,7 +854,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
   const imp = byName(t, 'Import steps');
   type FormField = { fieldLabel: string; fieldName: string; fieldType: string; requiredField?: boolean; multipleFiles?: boolean; fieldOptions?: { values: { option: string }[] } };
   const fields = (form.parameters.formFields as { values: FormField[] }).values;
-  const SOURCES = { 'Chrome Recorder': 'chrome', 'Playwright code': 'playwright', 'UiPath project': 'uipath', 'Step document': 'steps', 'RPA recording': 'recording' };
+  const SOURCES = { 'Work it out from the file': 'auto', 'Chrome Recorder': 'chrome', 'Playwright code': 'playwright', 'UiPath project': 'uipath', 'Step document': 'steps', 'RPA recording': 'recording' };
   const COMPLETION = 'n8n-nodes-base.form';
 
   /**
@@ -961,14 +961,21 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(form).toMatchObject({ type: 'n8n-nodes-base.formTrigger', typeVersion: 2.5 });
     expect(imp).toMatchObject({ type: NODE_TYPE, typeVersion: 1, onError: 'continueErrorOutput' });
     expect(targets(t, 'Import a bot')).toEqual([['Settings']]);
-    expect(targets(t, 'Settings')).toEqual([['Import steps']]);
+    // The download question only for a browser source, on a second page; Import steps always reads The upload.
+    expect(targets(t, 'Settings')).toEqual([['Asks about a download?']]);
+    expect(targets(t, 'Asks about a download?')).toEqual([['The file it downloads'], ['The upload']]);
+    expect(targets(t, 'The file it downloads')).toEqual([['The upload']]);
+    expect(targets(t, 'The upload')).toEqual([['Import steps']]);
     // No chat model ships with it: a recording, a step document and a UiPath desktop sequence never use one, and n8n
     // would not publish the form while a model node has no credential. The README says how to add one.
     expect(t.nodes.filter((n) => n.type.startsWith('@n8n/n8n-nodes-langchain.'))).toEqual([]);
     expect(Object.values(t.connections).filter((c) => 'ai_languageModel' in c)).toEqual([]);
     // Data → Approve on this form? (the review path, or straight to the last page); Repaired Steps → Approval by email?; error (index 2) → its own page.
     expect(nodeOutputs('importSteps', imp.parameters.aiRepair)).toHaveLength(2);
-    expect(targets(t, 'Import steps')).toEqual([['Approve on this form?'], ['Approval by email?'], ['Import failed']]);
+    expect(targets(t, 'Import steps')).toEqual([['Approve on this form?'], ['Approval by email?'], ['Missing login page?']]);
+    // A refusal that names a login page the Site Login does not list: a page that says what to add, then the same file again.
+    expect(targets(t, 'Missing login page?')).toEqual([['Add the login page'], ['Import failed']]);
+    expect(targets(t, 'Add the login page')).toEqual([['The upload']]);
     expect(targets(t, 'Approval by email?')).toEqual([['Approve steps'], []]);
     expect(targets(t, 'Approve on this form?')).toEqual([['Create steps table'], ['Workflow file?']]);
     expect(targets(t, 'Create steps table')).toEqual([['Create run log table']]);
@@ -999,11 +1006,11 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(byName(t, 'Approval by email?').position[1]).toBeLessThan(Math.min(...['Approve on this form?', 'Import failed'].map((n) => byName(t, n).position[1])));
     const working = t.nodes.filter((n) => n.type !== STICKY).map((n) => n.name).sort();
     expect(working).toEqual([
-      'Approval by email?', 'Approve on this form?', 'Approve steps', 'Create run log table', 'Create steps table', 'Import a bot', 'Import failed', 'Import steps',
-      'Imported', 'Imported, with the workflow file', 'Record rejection', REVIEW, 'Save signed steps', 'Settings', 'Sign steps', 'Signed?', 'Step lists', 'Step lists to sign',
-      'Supersede older versions', 'Workflow file?',
+      'Add the login page', 'Approval by email?', 'Approve on this form?', 'Approve steps', 'Asks about a download?', 'Create run log table', 'Create steps table', 'Import a bot',
+      'Import failed', 'Import steps', 'Imported', 'Imported, with the workflow file', 'Missing login page?', 'Record rejection', REVIEW, 'Save signed steps', 'Settings', 'Sign steps',
+      'Signed?', 'Step lists', 'Step lists to sign', 'Supersede older versions', 'The file it downloads', 'The upload', 'Workflow file?',
     ]);
-    expect(t.nodes.filter((n) => n.type === COMPLETION).map((n) => n.typeVersion)).toEqual([2.5, 2.5, 2.5, 2.5]);
+    expect(t.nodes.filter((n) => n.type === COMPLETION).map((n) => n.typeVersion)).toEqual([2.5, 2.5, 2.5, 2.5, 2.5, 2.5]);
     // A form page pauses the run until the browser loads it; a closed tab must not leave the execution waiting for ever.
     for (const n of t.nodes.filter((x) => x.type === COMPLETION)) {
       expect(n.parameters, n.name).toMatchObject({ limitWaitTime: true, limitType: 'afterTimeInterval', resumeAmount: 1, resumeUnit: 'hours' });
@@ -1066,10 +1073,33 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     ]);
   });
 
-  it('the form asks for the bot file, its source, a name, and optionally the file it downloads', () => {
-    expect(fields.map((f) => [f.fieldName, f.fieldType, f.requiredField === true])).toEqual([
-      ['bot', 'file', true], ['source', 'dropdown', true], ['name', 'text', true], ['expectedFileName', 'text', false], ['columns', 'text', false],
-    ]);
+  it('the form asks for the bot file, an optional source (worked out from the file to start with) and a name; the download only for a browser source, on a second page', () => {
+    expect(fields.map((f) => [f.fieldName, f.fieldType, f.requiredField === true])).toEqual([['bot', 'file', true], ['source', 'dropdown', false], ['name', 'text', true]]);
+    expect(fields[1].fieldLabel).toBe('Source (optional)');
+    const page = byName(t, 'The file it downloads');
+    expect(page).toMatchObject({ type: COMPLETION, typeVersion: 2.5, parameters: { operation: 'page', options: { formTitle: 'The file it downloads', buttonLabel: 'Import' } } });
+    expect((page.parameters.formFields as { values: FormField[] }).values.map((f) => [f.fieldName, f.fieldType, f.requiredField === true])).toEqual([['expectedFileName', 'text', false], ['columns', 'text', false]]);
+    // Asked unless the Source or the file name says recording or UiPath (their steps say which file they return).
+    const asks = (byName(t, 'Asks about a download?').parameters as { conditions: { conditions: { leftValue: string }[] } }).conditions.conditions[0].leftValue;
+    const ask = (source: string | null, filename: string) => evaluate(asks, { $json: { source, bot: { filename } } });
+    expect(ask(null, 'export.json')).toBe(true);
+    expect(ask('Chrome Recorder', 'export.json')).toBe(true);
+    expect(ask('Step document', 'steps.json')).toBe(true);
+    expect(ask(null, 'erp.rpa-recording.json')).toBe(false);
+    expect(ask(null, 'Project.ZIP')).toBe(false);
+    expect(ask(null, 'Main.xaml')).toBe(false);
+    expect(ask('RPA recording', 'renamed.json')).toBe(false);
+    expect(ask('UiPath project', 'p.json')).toBe(false);
+    // The upload: the file from the first page (Settings passed it on), its Name and Source, and the download answers when asked.
+    const upload = byName(t, 'The upload');
+    expect(upload).toMatchObject({ type: 'n8n-nodes-base.set', typeVersion: 3.4 });
+    const values = (upload.parameters.assignments as { assignments: { name: string; value: string; type: string }[] }).assignments;
+    expect(values.map((a) => [a.name, a.type])).toEqual([['name', 'string'], ['source', 'string'], ['expectedFileName', 'string'], ['columns', 'string'], ['bot', 'binary']]);
+    const scope = (asked: boolean) => ({ $: (name: string) => (name === 'Settings'
+      ? { first: () => ({ json: { name: 'n', source: null }, binary: { bot: { fileName: 'export.json' } } }) }
+      : { isExecuted: asked, last: () => ({ json: { expectedFileName: '^X_', columns: null } }) }) });
+    expect(values.map((a) => evaluate(a.value, scope(true)))).toEqual(['n', '', '^X_', '', { fileName: 'export.json' }]);
+    expect(values.map((a) => evaluate(a.value, scope(false)))).toEqual(['n', '', '', '', { fileName: 'export.json' }]);
     // One file per import: the form refuses a second, so the upload is always binary `bot` (n8n adds `_0`, `_1` only for 2+ files).
     expect(fields[0].multipleFiles).toBe(false);
     expect(fields[1].fieldOptions?.values.map((o) => o.option)).toEqual(Object.keys(SOURCES));
@@ -1083,6 +1113,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(imp.parameters).toMatchObject({ operation: 'importSteps', inputFrom: 'binary', binaryPropertyName: 'bot', stepsName: '={{ $json.name }}', aiRepair: false });
     for (const [label, value] of Object.entries(SOURCES)) expect(resolved(formItem(label, CHROME)).source).toBe(value);
     expect(resolved(formItem('Something else', CHROME)).source).toBe('');
+    // Not chosen (n8n sends null; The upload passes it on as ''): worked out from the file.
+    expect(resolved(formItem(null as unknown as string, CHROME)).source).toBe('auto');
+    expect(resolved(formItem('', CHROME)).source).toBe('auto');
     expect(resolved(formItem('Chrome Recorder', CHROME, { expectedFileName: '^LINEITEMS_', columns: 'Document, Amount' })).expectedFile)
       .toEqual({ file: { namePattern: '^LINEITEMS_', requiredColumns: 'Document, Amount' } });
     // n8n's Form Trigger sends null for a field that was not filled in.
@@ -1188,7 +1221,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const fields = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan(ran) });
     const html = fields.filter((f) => f.fieldType === 'html').map((f) => String(f.html));
     expect(html.map((h) => h.slice(0, 4))).toEqual(['<h3>', '<p><', '<h3>', '<p><', '<h4>']);
-    expect(html[0]).toMatch(/^<h3>1 of 2: line-item-export-1, version 1<\/h3><p>Opens ErpDemo.exe/);
+    expect(html[0]).toMatch(/^<h3>1 of 2: line-item-export, version 1<\/h3><p>Opens ErpDemo.exe/);
     expect(html[2]).toMatch(/^<h3>2 of 2: second&lt;b&gt;, version 1<\/h3>/);
     // The details name each step list.
     expect(html[4]).toContain('<p><b>second&lt;b&gt;</b></p><p><em><b>Safety flags:</b>');
@@ -1325,7 +1358,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(completion('Imported, with the workflow file').completionMessage.split('\n')[1]).toBe(shown.completionMessage.split('\n')[1]);
     const ifParams = byName(t, 'Workflow file?').parameters as { conditions: { conditions: { leftValue: string; operator: unknown }[] } };
     expect(ifParams.conditions.conditions).toEqual([expect.objectContaining({ operator: { type: 'boolean', operation: 'true', singleValue: true } })]);
-    expect(evaluate(ifParams.conditions.conditions[0].leftValue, { $: nodesRan({ 'Import steps': [data, []] }) })).toBe(false);
+    // Every import with steps comes with a workflow file now, a Chrome recording's too.
+    expect(evaluate(ifParams.conditions.conditions[0].leftValue, { $: nodesRan({ 'Import steps': [data, []] }) })).toBe(true);
+    expect(evaluate(ifParams.conditions.conditions[0].leftValue, { $: nodesRan({ 'Import steps': [[{ json: { report: {}, drafts: [] } }], []] }) })).toBe(false);
 
     const withFile = completion('Imported, with the workflow file');
     expect(withFile).toMatchObject({ operation: 'completion', respondWith: 'returnBinary', inputDataFieldName: 'workflow', completionTitle: 'Imported' });
@@ -1338,6 +1373,18 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(uiMessage).toMatch(/^Imported: \d+ steps; \d+ not translated, \d+ removed as secrets\./);
     expect(uiMessage).toContain('line-item-export.workflow.json');
     expect(uiMessage).toContain('Import from file');
+  });
+
+  it('a refusal that names a login page the Site Login does not list: a page that says what to add where, and Import again with the same file', () => {
+    const cond = (byName(t, 'Missing login page?').parameters as { conditions: { conditions: { leftValue: string }[] } }).conditions.conditions[0].leftValue;
+    const refusal = 'auth_blocked: Sign in: the password field is on sandbox:8080/acme/signin <b>$&</b>, which is not listed in the Site Login under Pages Where the Password May Be Typed';
+    expect(evaluate(cond, { $json: { error: refusal } })).toBe(true);
+    expect(evaluate(cond, { $json: { error: 'drift_detected: No element found' } })).toBe(false);
+    expect(evaluate(cond, { $json: {} })).toBe(false);
+    const page = byName(t, 'Add the login page');
+    expect(page).toMatchObject({ type: COMPLETION, parameters: { operation: 'page', defineForm: 'json', options: { formTitle: 'Add the login page', formDescription: 'Nothing was imported and nothing was signed.', buttonLabel: 'Import again' } } });
+    const fields = jsonFormFields(String(page.parameters.jsonOutput), { $json: { error: refusal } });
+    expect(fields).toEqual([{ fieldType: 'html', html: `<p><b>The sign-in was refused:</b> ${escapeHtml(refusal)}</p><ol><li>In n8n, open the <b>RPA Site Login</b> credential that Import steps uses.</li><li>Add the address named above to <b>Pages Where the Password May Be Typed</b> (one address per line) and save.</li><li>Click <b>Import again</b>: the same file is imported again.</li></ol>` }]);
   });
 
   it('a failed import shows its reason on a completion page', async () => {
@@ -1359,8 +1406,8 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const form = (byName(t, 'Import a bot').parameters as { formDescription?: string }).formDescription ?? '';
     expect(form).toContain('a step document that submits a form, downloads through a form, types a secret or changes a password is not run at all and goes to approval marked not replayed');
     expect(form).toContain('shown to you for approval on the next page');
-    // The review page names a recording's steps <name>-1, a name the person did not type.
-    expect(form).toContain('The steps of an RPA recording are named after your Name with -1 at the end (line-item-export-1)');
+    // One name: the review page, the table row and the generated workflow use the Name the person typed (UiPath: -1, -2).
+    expect(form).toContain('The steps are named after your Name; a UiPath project gives one step list per sequence, named with -1, -2 and so on at the end.');
     const about = sticky(t, 'About this workflow').content;
     for (const s of ['Chrome Recorder', 'Playwright code', 'UiPath', 'RPA: 2 Data feed', 'each step list gets its own approval',
       '**step document**', 'this is how hand-written steps get approved and signed']) expect(about, s).toContain(s);

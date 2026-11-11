@@ -32,6 +32,8 @@ const TYPES: Record<string, number> = {
   // Each Run steps' Chat model (nodes-langchain at tag n8n@2.41.0) and its Approve steps.
   '@n8n/n8n-nodes-langchain.lmChatAnthropic': 1.5,
   'n8n-nodes-base.executeWorkflow': 1.2,
+  // Off until a person sets the time (ScheduleTrigger.node.ts at tag n8n@2.41.0 has versions 1 to 1.2 and later).
+  'n8n-nodes-base.scheduleTrigger': 1.2,
 };
 const CHAT = '@n8n/n8n-nodes-langchain.lmChatAnthropic';
 const EXECUTE = 'n8n-nodes-base.executeWorkflow';
@@ -199,6 +201,7 @@ describe('buildWorkflow', () => {
     // The working nodes, in flow order, with their types.
     expect(working(w).map((n) => [n.name, n.type])).toEqual([
       ['Run the bot', 'n8n-nodes-base.manualTrigger'],
+      ['On a schedule', 'n8n-nodes-base.scheduleTrigger'],
       ['Get active steps (sap-report-1)', 'n8n-nodes-base.dataTable'],
       ['Use Browser Chrome: SAP Logon', NODE_TYPE],
       ['Chat model (sap-report-1)', CHAT],
@@ -211,6 +214,11 @@ describe('buildWorkflow', () => {
       ['Read Range', 'n8n-nodes-base.extractFromFile'],
     ]);
     expect(targets(w, 'Run the bot')).toEqual([['Get active steps (sap-report-1)']]);
+    // The Schedule Trigger starts the same nodes, and is off until a person sets the time.
+    expect(targets(w, 'On a schedule')).toEqual([['Get active steps (sap-report-1)']]);
+    expect(byName(w, 'On a schedule')).toMatchObject({ disabled: true, parameters: { rule: { interval: [{ field: 'days', triggerAtHour: 6 }] } } });
+    expect(byName(w, 'On a schedule').notes).toBe('Set the time, then turn this node on and publish the workflow. Until then the bot runs only when you click Execute.');
+    expect(content(byName(w, 'About this import'))).toContain('**On a schedule** is off: set the time, turn it on and publish the workflow.');
     expect(targets(w, 'Get active steps (sap-report-1)')).toEqual([['Use Browser Chrome: SAP Logon']]);
     // Data (0) still feeds the next node; Repaired Steps (1) goes to Approve steps; the Chat model is the Model input.
     expect(targets(w, 'Use Browser Chrome: SAP Logon')).toEqual([['Upload line items to S3'], ['Approve steps (sap-report-1)']]);
@@ -241,9 +249,13 @@ describe('buildWorkflow', () => {
       approvedBy: '={{ $json.approvedBy }}',
       aiRepair: true,
       goal: 'Do what the imported steps do: sap-report-1',
-      options: { name: 'sap-report-1', expectedVersion: '={{ $json.version }}' },
+      // The run variables the steps type, empty for the person to fill in (none is secret here).
+      options: { name: 'sap-report-1', expectedVersion: '={{ $json.version }}', variables: { values: [{ name: 'company', value: '' }, { name: 'from', value: '' }, { name: 'to', value: '' }] } },
     });
     expect(byName(w, 'Use Browser Chrome: SAP Logon').notes).toMatch(/sap-report-1/);
+    // Allow Private Network is never set: the note says when a person may need it.
+    expect(byName(w, 'Use Browser Chrome: SAP Logon').notes).toContain('For a site on your own network, turn on Options → Allow Private Network here.');
+    expect(JSON.stringify(w)).not.toContain('allowPrivateNetwork');
 
     // S3: the literal bucket and key, the file Run steps downloaded (the draft's download is top-level step 7).
     expect(byName(w, 'Upload line items to S3').parameters).toEqual({
@@ -375,7 +387,8 @@ describe('buildWorkflow', () => {
     expect(workflow.getChildNodes('Use Browser Chrome: SAP Logon')).toContain('Approve steps (sap-report-1)');
     // Every working node is reachable from the trigger, the Chat model through the Run steps it serves; no sticky is connected.
     const reached = new Set(workflow.getChildNodes('Run the bot'));
-    for (const n of working(w).filter((x) => x.name !== 'Run the bot' && x.type !== CHAT)) expect(reached, n.name).toContain(n.name);
+    for (const n of working(w).filter((x) => !['Run the bot', 'On a schedule'].includes(x.name) && x.type !== CHAT)) expect(reached, n.name).toContain(n.name);
+    expect(workflow.getChildNodes('On a schedule')).toEqual(workflow.getChildNodes('Run the bot'));
     for (const n of working(w).filter((x) => x.type === CHAT)) expect(reached).toContain(workflow.getChildNodes(n.name, 'ai_languageModel')[0]);
     for (const s of stickies(w)) expect(reached.has(s.name)).toBe(false);
     expect(workflow.getParentNodes('Run the bot')).toEqual([]);
@@ -456,13 +469,13 @@ describe('buildWorkflow', () => {
     lint(h);
     expect(byName(h, 'Not translated: Browser').parameters).toMatchObject({ color: COLOUR.grey });
     expect(content(byName(h, 'Not translated: Browser'))).toContain('no draft named n-2');
-    expect(working(h).map((n) => n.name).slice(1, 3)).toEqual(['Wait', 'Wait 2']);
+    expect(working(h).map((n) => n.name).slice(2, 4)).toEqual(['Wait', 'Wait 2']);
     for (const n of h.nodes) expect(n.name.length).toBeLessThanOrEqual(100);
     expect(targets(h, 'Run the bot')).toEqual([['Wait']]);
 
     const empty = buildWorkflow(flowOf([]), [], { name: 'e' });
     lint(empty);
-    expect(working(empty).map((n) => n.name)).toEqual(['Run the bot']);
+    expect(working(empty).map((n) => n.name)).toEqual(['Run the bot', 'On a schedule']);
   });
 
   it('workflowFile gives the binary for the Data output: <name>.workflow.json, application/json', () => {
@@ -526,7 +539,7 @@ describe('buildWorkflow', () => {
     ]), [], { name: 'r' });
     lint(w);
     expect(w.nodes.slice(0, 2).map((n) => [n.name, n.type])).toEqual([['About this import', STICKY], ['Set once', STICKY]]);
-    expect(working(w).map((n) => n.name)).toEqual(['Run the bot', 'Set once 2', 'About this import 2']);
+    expect(working(w).map((n) => n.name)).toEqual(['Run the bot', 'On a schedule', 'Set once 2', 'About this import 2']);
     expect(targets(w, 'Set once 2')).toEqual([['About this import 2']]);
   });
 
@@ -573,9 +586,9 @@ describe('buildWorkflow', () => {
     expect(ms).toBeLessThan(bound(2000));
     expect(bytes).toBeLessThan(1024 * 1024);
     expect(w.nodes.length).toBeLessThanOrEqual(MAX_WORKFLOW_NODES + 4);
-    // The trigger counts as a node, so 499 activities are drawn; the sticky counts the rest.
+    // The two triggers count as nodes, so 498 activities are drawn; the sticky counts the rest.
     const drawn = stickies(w).filter((n) => n.name.startsWith('Not translated: ')).length;
-    expect(drawn).toBe(MAX_WORKFLOW_NODES - 1);
+    expect(drawn).toBe(MAX_WORKFLOW_NODES - 2);
     const rest = (total - drawn).toLocaleString('en-US');
     const more = byName(w, `${rest} more activities`);
     expect(more.parameters).toMatchObject({ color: COLOUR.grey });
@@ -596,7 +609,7 @@ describe('buildWorkflow', () => {
     lint(w);
     expect(w.nodes.length).toBeLessThanOrEqual(MAX_WORKFLOW_NODES + 4);
     expect(targets(w, 'Run the bot')).toEqual([['If 299']]);
-    const drawn = working(w).length - 1;
+    const drawn = working(w).length - 2;
     const rest = (300 + 2_000 + 1_000 - drawn).toLocaleString('en-US');
     expect(content(byName(w, `${rest} more activities`))).toContain('see the report');
     expect(w.nodes.map((n) => n.name)).not.toContain('After 0');
@@ -691,9 +704,10 @@ describe('buildWorkflow', () => {
     const runOptions = (w: WorkflowJson, run: string) => (byName(w, run).parameters as { options: Record<string, unknown> }).options;
     const set = buildWorkflow(flow, [draft('m-1'), draft('m-2')], { name: 'm', codeWorkflow: { id: 'wf-code-1', timeoutSeconds: 45 } });
     lint(set);
-    for (const run of ['Log in', 'Export']) expect(runOptions(set, run)).toMatchObject({ codeWorkflowId: 'wf-code-1', codeTimeout: 45 });
+    // The option is n8n's workflow picker: written in the picker's own form, by ID.
+    for (const run of ['Log in', 'Export']) expect(runOptions(set, run)).toMatchObject({ codeWorkflowId: { __rl: true, mode: 'id', value: 'wf-code-1' }, codeTimeout: 45 });
     const plainTimeout = buildWorkflow(flow, [draft('m-1'), draft('m-2')], { name: 'm', codeWorkflow: { id: 'wf-code-1', timeoutSeconds: 120 } });
-    expect(runOptions(plainTimeout, 'Log in')).toMatchObject({ codeWorkflowId: 'wf-code-1' });
+    expect(runOptions(plainTimeout, 'Log in')).toMatchObject({ codeWorkflowId: { __rl: true, mode: 'id', value: 'wf-code-1' } });
     expect(runOptions(plainTimeout, 'Log in')).not.toHaveProperty('codeTimeout');
     const none = buildWorkflow(flow, [draft('m-1'), draft('m-2')], { name: 'm' });
     expect(runOptions(none, 'Log in')).not.toHaveProperty('codeWorkflowId');
@@ -701,6 +715,31 @@ describe('buildWorkflow', () => {
     for (const id of ['={{ $json.id }}', 'a{{ b }}']) {
       expect(runOptions(buildWorkflow(flow, [draft('m-1'), draft('m-2')], { name: 'm', codeWorkflow: { id, timeoutSeconds: 120 } }), 'Log in')).not.toHaveProperty('codeWorkflowId');
     }
+  });
+
+  it('the run options the import was proven with go to every Run steps: Max Seconds when not the default, Also Allow These Sites on browser steps', () => {
+    const runOptions = (w: WorkflowJson, run: string) => (byName(w, run).parameters as { options: Record<string, unknown> }).options;
+    const flow = flowOf([{ kind: 'browser', sequence: 1, displayName: 'Log in' }]);
+    const w = buildWorkflow(flow, [draft('o-1')], { name: 'o', run: { maxSeconds: 240, allowedHosts: ['cdn.example.com', 'static.example.com'] } });
+    expect(runOptions(w, 'Log in')).toMatchObject({ maxSeconds: 240, allowedHosts: 'cdn.example.com, static.example.com' });
+    const plain = buildWorkflow(flow, [draft('o-1')], { name: 'o', run: { maxSeconds: 180, allowedHosts: [] } });
+    expect(runOptions(plain, 'Log in')).not.toHaveProperty('maxSeconds');
+    expect(runOptions(plain, 'Log in')).not.toHaveProperty('allowedHosts');
+    // A host that n8n would read as an expression is not written.
+    expect(runOptions(buildWorkflow(flow, [draft('o-1')], { name: 'o', run: { allowedHosts: ['={{ 1 }}'] } }), 'Log in')).not.toHaveProperty('allowedHosts');
+  });
+
+  it('a desktop step list starts its variables with their recorded values; a value n8n would read as an expression starts empty; a secret is never listed', () => {
+    const desktop = {
+      name: 'd', writeCandidates: [], variables: ['company', 'odd', 'password'], secretVariables: ['password'],
+      startValues: { company: '2000', odd: '={{ $env.HOME }}' },
+      script: { surface: 'desktop' as const, name: 'd', version: 1, app: { exe: 'App.exe' }, steps: [{ intent: 'Type', fill: { field: { uia: { path: [{ name: 'x' }] } }, value: '{{var.company}}' } }] },
+    };
+    const w = buildWorkflow({ name: 'd', nodes: [{ kind: 'desktop', sequence: 1, displayName: 'Desk', draft: 'd' }] }, [], { name: 'd', desktopDrafts: [desktop], source: 'recording' });
+    const run = byName(w, 'Desk');
+    expect((run.parameters as { options: Record<string, unknown> }).options.variables).toEqual({ values: [{ name: 'company', value: '2000' }, { name: 'odd', value: '' }] });
+    expect(JSON.stringify(w)).not.toContain('$env');
+    expect(content(byName(w, 'Fill in the variables (d)'))).toContain('Options → Variables: `company` (starts as `2000`), `odd`. Secret: `password`');
   });
 
   it('the Goal is never project text that could be an expression', () => {

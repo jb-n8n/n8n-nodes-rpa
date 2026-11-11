@@ -21,6 +21,10 @@ namespace Rpa.Recorder.Core;
 public sealed class Session
 {
     private readonly List<RecordedStep> _steps = [];
+    /// <summary>The value each variable held when the person made it one (never a secret's); <see cref="ToFile"/> keeps those still in use.</summary>
+    private readonly Dictionary<string, string> _startValues = [];
+    /// <summary>The longest start value the importer takes (MAX_START_VALUE in recording.ts).</summary>
+    public const int MaxStartValueLength = 500;
     private (string Exe, IReadOnlyList<string> Args)? _app;
     /// <summary>The field the person is typing into, until they leave it. Its value is never kept here.</summary>
     private Typing? _typing;
@@ -198,11 +202,14 @@ public sealed class Session
 
     public void Delete(int index) => _steps.RemoveAt(index);
 
-    /// <summary>Makes a fill's value or a select's item the run variable <paramref name="name"/>. A secret fill stays secret.</summary>
+    /// <summary>Makes a fill's value or a select's item the run variable <paramref name="name"/>. A secret fill stays secret.
+    /// The value it held becomes the variable's start value (see <see cref="ToFile"/>), unless the fill is secret.</summary>
     public void MarkVariable(int index, string name)
     {
         CheckName(name);
         var step = _steps[index];
+        var recorded = step.Kind switch { StepKind.Fill => step.Value, StepKind.Select => step.Option, _ => null };
+        if (recorded is not null && !step.Secret && step.ExportFile is null && !recorded.Contains("{{")) _startValues.TryAdd(name, recorded);
         _steps[index] = step.Kind switch
         {
             StepKind.Fill => step with { Value = Variable(name), ExportFile = null },
@@ -218,6 +225,7 @@ public sealed class Session
         var step = _steps[index];
         if (step.Kind != StepKind.Fill) throw new InvalidOperationException("only a typed value can be secret");
         _steps[index] = step with { Value = Variable(name), ExportFile = null, Secret = true };
+        _startValues.Remove(name);
     }
 
     /// <summary>Adds a step that reads the element's text into the run output <paramref name="name"/>.</summary>
@@ -256,7 +264,13 @@ public sealed class Session
         if (events.Count > RecordingFile.MaxEvents)
             throw new InvalidOperationException($"a recording holds at most {RecordingFile.MaxEvents} events; this one has {events.Count}: delete steps or record the work in shorter parts");
         var secrets = _steps.Where(s => s.Secret).Select(s => s.Value![6..^2]).Distinct().ToArray();
-        return new RecordingFile(name, exe, args, events, secrets);
+        // A start value for each variable a step still types or chooses, never for a secret one, and only a value the
+        // importer takes (one line of at most 500 characters).
+        var used = _steps.Where(s => !s.Secret).Select(s => s.Kind switch { StepKind.Fill => s.Value, StepKind.Select => s.Option, _ => null })
+            .OfType<string>().Where(v => v.StartsWith("{{var.", StringComparison.Ordinal) && v.EndsWith("}}", StringComparison.Ordinal)).Select(v => v[6..^2]).ToHashSet();
+        var variables = _startValues.Where(v => used.Contains(v.Key) && !secrets.Contains(v.Key) && v.Value.Length is > 0 and <= MaxStartValueLength && !v.Value.Contains('\r') && !v.Value.Contains('\n'))
+            .ToDictionary(v => v.Key, v => v.Value);
+        return new RecordingFile(name, exe, args, events, secrets) { Variables = variables };
     }
 
     /// <summary>The change that allows the recorded application, by its path and SHA-256, for <c>RpaPolicy.exe apply</c>.
