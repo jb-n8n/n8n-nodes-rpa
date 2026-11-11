@@ -282,7 +282,7 @@ describe('desktop task: refusals and runner errors', () => {
     const twice = failed(await run(doc([{ intent: 'Type somewhere', fill: { field: { uia: { path: [{ controlType: 'Edit' }] } }, value: 'x' }, timeoutMs: 300 }])));
     expect({ code: twice.code, message: twice.message }).toEqual({ code: 'drift_detected', message: 'Step 1 (Type somewhere): Edit matches 2 elements' });
     const expectFails = failed(await run(doc([{ intent: 'Sign in', click: uia('btnSignIn', 'Button'), expect: { visible: uia('txtSearch') }, timeoutMs: 300 }])));
-    expect({ code: expectFails.code, message: expectFails.message }).toEqual({ code: 'drift_detected', message: 'Sign in: expected UI Automation Edit #txtSearch to be visible within 0.3 s' });
+    expect({ code: expectFails.code, message: expectFails.message }).toEqual({ code: 'drift_detected', message: 'Step 1 (Sign in): expected UI Automation Edit #txtSearch to be visible within 0.3 s' });
   });
 
   it('a locator that matches several elements, a disabled element and a copy of the app the run did not start: the step, then the runner\'s own words without their code', async () => {
@@ -411,7 +411,7 @@ describe('desktop task: refusals and runner errors', () => {
   it('secret variables: unsigned steps cannot type one (policy_violation), and nothing is typed', async () => {
     const d = doc(SIGN_IN);
     const f = failed(await run(d, { trust: { required: false }, secretVars: ['password'] }));
-    expect({ code: f.code, message: f.message }).toEqual({ code: 'policy_violation', message: `Type the password: ${UNSIGNED_SECRET_VARIABLE}` });
+    expect({ code: f.code, message: f.message }).toEqual({ code: 'policy_violation', message: `Step 2 (Type the password): ${UNSIGNED_SECRET_VARIABLE}` });
     const typed = runner!.requests.filter((q) => q.method === 'act').map((q) => JSON.stringify(q.params));
     expect(typed.join()).not.toContain(DEMO_PASSWORD);
     expect(JSON.stringify(f)).not.toContain(DEMO_PASSWORD);

@@ -184,7 +184,7 @@ describe('desktop steps with the RPA Secret Variables credential', () => {
     runner = await FakeRunner.start();
     const unsignedParams = { ...params(DESKTOP_STEPS), requireSignedSteps: false, signature: '', approvedBy: '', options: onlyUser };
     const [data] = await executeRunSteps(ctx(secretCreds(runner.endpoint), unsignedParams), fakeEngine(() => scriptOk()));
-    expect(data[0].json.error).toBe('policy_violation: Type the password: Unsigned steps cannot type a secret variable. Sign them with Sign Steps; Allow Unsigned Writes does not cover it.');
+    expect(data[0].json.error).toBe('policy_violation: Step 2 (Type the password): Unsigned steps cannot type a secret variable. Sign them with Sign Steps; Allow Unsigned Writes does not cover it.');
     expect(JSON.stringify(runner.requests)).not.toContain(DEMO_PASSWORD);
   });
   it('a password nobody supplied fails as a missing variable, and the message says where a secret goes', async () => {
