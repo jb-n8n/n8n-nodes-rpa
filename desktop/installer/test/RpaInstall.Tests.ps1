@@ -1477,6 +1477,17 @@ Describe 'Invoke-RpaInstallPlan' {
       Should -Throw -ExpectedMessage 'The installer has no step "make coffee"; nothing was changed.'
   }
 
+  # A step name the plan may list but the switch has no case for would print its name and do nothing.
+  It 'has a case for every step it knows, and knows every step it has a case for' {
+    $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $script:InstallerDir 'RpaInstall.Machine.ps1'), [ref]$null, [ref]$null)
+    $function = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-RpaInstallPlan' }, $false)
+    $switch = $function.Find({ param($node) $node -is [Management.Automation.Language.SwitchStatementAst] -and $node.Condition.Extent.Text -eq '$step' }, $true)
+    $cases = @($switch.Clauses | ForEach-Object { $_.Item1.Value })
+    $known = InModuleScope RpaInstall { $script:KnownSteps }
+    $cases.Count | Should -Be $known.Count
+    @($cases | Sort-Object) | Should -BeExactly @($known | Sort-Object)
+  }
+
   # The question -AutoSignIn asks can sit between the plan and the steps, and a standard user can make the folder.
   It 'looks at the owner of the scheduled task folder again directly before it registers a task' {
     Mock -ModuleName RpaInstall Get-RpaTaskFolderOwner { 'BOT-PC\mallory' }
