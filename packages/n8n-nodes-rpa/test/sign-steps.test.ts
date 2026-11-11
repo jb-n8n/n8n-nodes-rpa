@@ -330,12 +330,34 @@ describe('Sign Steps: refusals', () => {
   });
   it('Approved By off the allowlist is refused, for approvals and for rejections', async () => {
     for (const approved of [true, false]) {
-      for (const approverId of ['mallory@example.com', '']) {
-        const e = only(await sign(repairedItem(STEPS), { params: params({ approved, approverId }) })).json;
-        expect(e.message).toBe('Sign Steps refused: Approved By is not on the Approver Allowlist');
-      }
+      const e = only(await sign(repairedItem(STEPS), { params: params({ approved, approverId: 'mallory@example.com' }) })).json;
+      expect(e.message).toBe('Sign Steps refused: Approved By is not on the Approver Allowlist');
     }
     expect(only(await sign(repairedItem(STEPS), { params: params({ approverId: 'Approver@Example.com' }) })).json.status).toBe('active');
+  });
+  it('an empty Approved By with more than one address on the allowlist is refused, for approvals and for rejections', async () => {
+    for (const approved of [true, false]) {
+      for (const approverId of ['', '  ']) {
+        const e = only(await sign(repairedItem(STEPS), { params: params({ approved, approverId }) })).json;
+        expect(e.message).toBe('Sign Steps refused: Approved By is empty, and the Approver Allowlist holds more than one address: set Approved By to the one who decided');
+      }
+    }
+  });
+  it('an empty Approved By with exactly one address on the allowlist is that address, as the allowlist spells it', async () => {
+    const one = 'Approver@Example.com';
+    for (const allowlist of [one, ` ${one}, `, `${one}\n${one.toLowerCase()}`]) {
+      const signed = only(await sign(repairedItem(STEPS), { params: params({ approverId: '', approverAllowlist: allowlist }) })).json;
+      expect(signed).toMatchObject({ status: 'active', approvedBy: one });
+      const rejected = only(await sign(repairedItem(STEPS), { params: params({ approved: false, approverId: ' ', approverAllowlist: allowlist }) })).json;
+      expect(rejected).toMatchObject({ status: 'rejected', approvedBy: one });
+    }
+    // A given Approved By is still checked against that one address.
+    const e = only(await sign(repairedItem(STEPS), { params: params({ approverId: 'mallory@example.com', approverAllowlist: one }) })).json;
+    expect(e.message).toBe('Sign Steps refused: Approved By is not on the Approver Allowlist');
+    // The allowlist stays a literal: an expression there is refused before any default is taken from it.
+    const p = params({ approverId: '', approverAllowlist: one });
+    const x = only(await sign(repairedItem(STEPS), { params: p, rawParameters: { ...p, approverAllowlist: '={{ $json.allowlist }}' } })).json;
+    expect(x).toMatchObject({ error: 'Approver Allowlist must be set directly, not with an expression.', details: { configError: true } });
   });
   it('without continue-on-fail a refusal is thrown with its reasons', async () => {
     const run = executeSignSteps(harness({ params: params({ approverId: 'mallory@example.com' }), items: [{ json: repairedItem(STEPS) }], credentials: SIGNING }), engine, () => NOW);

@@ -20,9 +20,9 @@ export const signStepsProperties: INodeProperties[] = [
     name: 'approverId',
     type: 'string',
     default: '',
-    required: true,
     placeholder: 'ops-lead@example.com',
-    description: 'Who decided. Use the address the approval request was sent to.',
+    description:
+      'Who decided: an address on the Approver Allowlist. Leave it empty when the allowlist holds one address: that address is recorded. With more than one, it is required.',
     displayOptions: signSteps,
   },
   {

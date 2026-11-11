@@ -644,7 +644,7 @@ It is built from three templates on top of Run Steps and Sign Steps, with standa
 **Set it up on the sandbox (about 10 minutes)**
 1. Start the stack as in Hello world. Create these credentials. The values are the sandbox's synthetic defaults, not real secrets:
    - **RPA Browser**: as in Hello world.
-   - **RPA Site Login**: Login Page URL `http://sandbox:8080/acme/login`, Username `summit-ops`, Password `demo-password`, TOTP Secret `JBSWY3DPEHPK3PXP`, Sites the Browser May Open `sandbox:8080`, Pages Where the Password May Be Typed `sandbox:8080/acme/login` and `sandbox:8080/acme/mfa` (one per line), Forms It May Submit `POST sandbox:8080/acme/reports/export`.
+   - **RPA Site Login**: Login Page URL `http://sandbox:8080/acme/login`, Username `summit-ops`, Password `demo-password`, TOTP Secret `JBSWY3DPEHPK3PXP`, Sites the Browser May Open `sandbox:8080`, Pages Where the Password May Be Typed `sandbox:8080/acme/login` and `sandbox:8080/acme/mfa` (one per line), Forms It May Submit `POST sandbox:8080/acme/reports/export`, Requests That Only Read `POST sandbox:8080/sap*/bc/gui/sap/its/webgui` and `POST sandbox:8080/sap/opu/odata/sap/ZLINEITEMS_SRV/$batch` (one per line).
    - **RPA Step Signing**: the output of `openssl rand -hex 32`.
    - **Anthropic**: your API key, for the data feed's **Chat model**, which builds and repairs its steps. Template 5 imports a bot without a model.
    - **SMTP**: Host `mailpit`, Port `1025`, SSL/TLS off, no user or password.

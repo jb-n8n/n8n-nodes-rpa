@@ -248,7 +248,7 @@ export function parseConnectionLine(kind: LineKind, line: string): { url: string
   }
   const token = parts.get('token') ?? '';
   // Without -ShowTokens the installer prints token=<hidden: run with -ShowTokens>.
-  if (token.startsWith('<')) throw new ConfigError(`${inLine} has no token: the installer hides it. Run Show-RpaConnection.ps1 -ShowTokens on that machine and paste the line it prints.`);
+  if (token.startsWith('<')) throw new ConfigError(`${inLine} has no token: the installer hides it. On that machine, in an administrator PowerShell, run & "C:\\Program Files\\RPA Runner\\rpa.cmd" connection -ShowTokens and paste the line it prints.`);
   if (!token) throw new ConfigError(`${inLine} has no token (token=…).`);
   const fingerprint = parts.get('fingerprint') ?? '';
   if (!fingerprint) throw new ConfigError(`${inLine} has no fingerprint (fingerprint=…).`);
@@ -334,7 +334,7 @@ export function secretVariablesConfig(data: CredentialData): Record<string, stri
 export function signingKey(data: CredentialData): string {
   const key = typeof data.secretKey === 'string' ? data.secretKey : '';
   if (key.length < MIN_SIGNING_KEY_LENGTH) {
-    throw new ConfigError(`The Step Signing key must be at least ${MIN_SIGNING_KEY_LENGTH} characters (generate one with: openssl rand -hex 32)`);
+    throw new ConfigError(`The Step Signing key must be at least ${MIN_SIGNING_KEY_LENGTH} characters (let your password manager generate a password of 32 or more characters)`);
   }
   return key;
 }

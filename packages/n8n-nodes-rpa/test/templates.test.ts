@@ -963,11 +963,11 @@ describe('5-import-a-bot.json (the first-day import)', () => {
    * The review page answered with `answer` (n8n gives each field under its fieldName), then Step lists, Step lists to sign
    * (one item per list, Split Out) and Sign steps with its parameters resolved per item, as n8n resolves them.
    */
-  async function signAfterReview(ran: Record<string, INodeExecutionData[][]>, answer: IDataObject) {
+  async function signAfterReview(ran: Record<string, INodeExecutionData[][]>, answer: IDataObject, over: IDataObject = {}) {
     const after = { ...ran, [REVIEW]: [[{ json: { ...answer, submittedAt: '2026-11-11T10:00:00.000Z', formMode: 'production' } }]] };
     const { lists } = evaluate(String(byName(t, 'Step lists').parameters.jsonOutput), { $: nodesRan(after) }) as { lists: IDataObject[] };
     expect(byName(t, 'Step lists to sign').parameters).toEqual({ fieldToSplitOut: 'lists', options: {} });
-    const sign = byName(t, 'Sign steps').parameters;
+    const sign = { ...byName(t, 'Sign steps').parameters, ...over };
     const params = (i: number) => Object.fromEntries(Object.entries(sign).map(([k, v]) => [k, typeof v === 'string' && v.startsWith('=') ? evaluate(v, { $: nodesRan(after), $itemIndex: i }) : v]));
     const ctx = harness({ params, rawParameters: sign, items: lists.map((json) => ({ json })), credentials: { playwrightScriptSigningApi: { secretKey: 'k'.repeat(32) } }, continueOnFail: true });
     const out = await executeSignSteps(ctx, importEngine(() => NOT_ADOPTABLE), () => new Date('2026-11-11T10:00:01.000Z'));
@@ -1037,13 +1037,14 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     for (const n of t.nodes) expect(n, n.name).not.toHaveProperty('credentials');
   });
 
-  it('approves on this form by default: Settings holds approval "on this form" and the approver; only "by email" hands over to RPA: 3', () => {
+  it('approves on this form by default: Settings holds approval "on this form" (the approver is typed once, in Sign steps); only "by email" hands over to RPA: 3', () => {
     const settings = byName(t, 'Settings');
     expect(settings).toMatchObject({ type: 'n8n-nodes-base.set', typeVersion: 3.4 });
     expect(settings.parameters).toMatchObject({
       includeOtherFields: true,
-      assignments: { assignments: [{ name: 'approval', value: 'on this form', type: 'string' }, { name: 'approver', value: APPROVER, type: 'string' }, { name: 'showDetails', value: false, type: 'boolean' }] },
+      assignments: { assignments: [{ name: 'approval', value: 'on this form', type: 'string' }, { name: 'showDetails', value: false, type: 'boolean' }] },
     });
+    expect(settings.notes).not.toContain('approver');
     // Set 3.4 passes the upload (binary bot) on unless told to strip it.
     expect(settings).not.toHaveProperty('parameters.options.stripBinary');
     const cond = (name: string) => (byName(t, name).parameters as { conditions: { conditions: { leftValue: string }[] } }).conditions.conditions[0].leftValue;
@@ -1068,7 +1069,10 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const signed = byName(t, 'Signed?').parameters as { conditions: { conditions: { leftValue: string; rightValue: string; operator: unknown }[] } };
     expect(signed.conditions.conditions).toEqual([expect.objectContaining({ leftValue: '={{ $json.status }}', rightValue: 'active', operator: { type: 'string', operation: 'equals' } })]);
     const sign = byName(t, 'Sign steps');
-    expect(sign).toMatchObject({ type: NODE_TYPE, onError: 'continueErrorOutput', parameters: { operation: 'signSteps', approverAllowlist: APPROVER, approverId: "={{ $('Settings').first().json.approver }}" } });
+    expect(sign).toMatchObject({ type: NODE_TYPE, onError: 'continueErrorOutput', parameters: { operation: 'signSteps', approverAllowlist: APPROVER } });
+    // The approver typed once: Approved By is left empty, so Sign Steps records the allowlist's one address.
+    expect(sign.parameters).not.toHaveProperty('approverId');
+    expect(sign.notes).toContain('Approver Allowlist: your address, typed here once');
     expect(loadInN8n(sign).outputs).toEqual(['Success', 'Error']);
     // The allowlist is a literal: Sign Steps refuses an expression there, so item data cannot choose who may approve.
     expect(String(sign.parameters.approverAllowlist).startsWith('=')).toBe(false);
@@ -1158,7 +1162,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(fromDoc[0].json.drafts).toEqual([expect.objectContaining({ name: 'line-item-export', adopted: false })]);
   });
 
-  it('an RPA recording: the review page shows its steps and ticks its candidate writes; Sign steps signs exactly the ticked and typed writes', async () => {
+  it('an RPA recording: the review page shows its steps, the ones the import added in grey, and ticks its candidate writes but the sign-in key; Sign steps signs exactly the ticked and typed writes', async () => {
     const { data, repaired, ran } = await importedRecording();
     expect(data[0].json.report).toMatchObject({ source: 'recording', steps: 17 });
     expect(data[0].binary?.workflow).toMatchObject({ fileName: 'line-item-export.workflow.json' });
@@ -1174,19 +1178,30 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // What it does besides reading, in short lines, then one short sentence per step: its verb, the value it types or
     // chooses and its field, as the recorder's bar words it; a secret variable never shows a value.
     const POINTER = '<p><em>How each step finds its control is in this run\'s execution in n8n (the Import steps node\'s output), and in the approval email when approval is by email.</em></p>';
-    expect(fields[0].html).toBe('<p>Opens ErpDemo.exe on the desktop runner.<br>Returns a file to n8n: step 17.<br>Not tried by the import: read every step before you approve.</p><p><b>The steps</b></p><ol>'
+    // The steps the import added (a wait for each window, the returned file) keep their numbers, in grey (<i>: the page's
+    // CSS colours a list item that holds one, and its number), with one grey line above the list that counts them.
+    const added = (l: string) => `<i>${l}</i>`;
+    expect(fields[0].html).toBe('<p>Opens ErpDemo.exe on the desktop runner.<br>Returns a file to n8n: step 17.<br>Not tried by the import: read every step before you approve.</p><p><b>The steps</b></p>'
+      + '<p><em>12 recorded steps, plus 5 the import added (waits for each window, the returned file)</em></p><ol>'
       + [
-        'Wait for the window ERP Demo - Sign in', 'Type &quot;clerk&quot; into User name', 'Type into Password <em>· secret variable password</em>', 'Press Enter in Password',
-        'Wait for the window ERP Demo - Line items', 'Choose &quot;2000&quot; in Company code', 'Type &quot;2026-01-20&quot; into Date from', 'Type &quot;2026-11-30&quot; into Date to',
-        'Click Search', 'Click Vendor Row 1', 'Click File', 'Wait for the window erpdemo.exe', 'Click Export...', 'Wait for the window Export line items',
-        'Save line-items.csv into the run&#39;s export folder', 'Click Save', 'Return the exported file line-items.csv <em>· returns a file</em>',
+        added('Wait for the window ERP Demo - Sign in'), 'Type &quot;clerk&quot; into User name', 'Type into Password <em>· secret variable password</em>', 'Press Enter in Password',
+        added('Wait for the window ERP Demo - Line items'), 'Choose &quot;2000&quot; in Company code', 'Type &quot;2026-01-20&quot; into Date from', 'Type &quot;2026-11-30&quot; into Date to',
+        'Click Search', 'Click Vendor Row 1', 'Click File', added('Wait for the window erpdemo.exe'), 'Click Export...', added('Wait for the window Export line items'),
+        'Save line-items.csv into the run&#39;s export folder', 'Click Save', added('Return the exported file line-items.csv <em>· returns a file</em>'),
       ].map((l) => `<li>${l}</li>`).join('') + `</ol>${POINTER}`);
+    expect(String((review.parameters.options as IDataObject).customCss)).toContain('div.html li:has(> i) { color: #7e8186; }\ndiv.html li > i { font-style: normal; color: #7e8186; }');
     expect((item.steps as { steps: unknown[] }).steps).toHaveLength(17);
-    // The candidate writes are asked, not explained twice: ticked to start with (the person here recorded or imported the bot).
+    // The candidate writes are asked, not explained twice: ticked to start with (the person here recorded or imported the
+    // bot), except a key pressed in the password field: that signs in, it does not save. It stays in the list, unticked.
     expect(fields[1]).toEqual({
       fieldLabel: 'Which of these steps save, send or submit?', fieldName: 'writes_0', fieldType: 'checkbox',
-      fieldOptions: { values: [{ option: 'Step 4: Press Enter in Password' }, { option: 'Step 16: Click Save' }] }, defaultValue: 'Step 4: Press Enter in Password,Step 16: Click Save',
+      fieldOptions: { values: [{ option: 'Step 4: Press Enter in Password' }, { option: 'Step 16: Click Save' }] }, defaultValue: 'Step 16: Click Save',
     });
+    // Without the hints (an Import steps output from before them), every candidate starts ticked and no step is grey.
+    const bare = (data[0].json.drafts as IDataObject[]).map(({ signInKeys: _k, addedSteps: _a, ...d }) => d);
+    const older = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan({ ...ran, 'Import steps': [[{ json: { ...data[0].json, drafts: bare } }], repaired] }) });
+    expect(older[1].defaultValue).toBe('Step 4: Press Enter in Password,Step 16: Click Save');
+    expect(older[0].html).not.toMatch(/<i>|recorded steps/);
     expect(fields[0].html).not.toContain('candidate');
     expect(fields[3]).toMatchObject({ fieldLabel: 'Any other step that saves, sends or submits (its number, optional)', placeholder: '7, 9' });
     expect(fields[3]).not.toHaveProperty('requiredField');
@@ -1235,9 +1250,10 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const refused = await signAfterReview(ran, { writes_0: [], moreWrites_0: '99', decision_0: 'Approve and sign' });
     expect(refused.signed).toEqual([]);
     expect(String(refused.errors[0].error)).toBe('Sign Steps refused: Write Steps: there is no step 99 (the steps are numbered 1 to 17)');
-    const other = await signAfterReview({ ...ran, Settings: [[{ json: { approval: 'on this form', approver: 'someone-else@example.com' } }]] }, { decision_0: 'Approve and sign' });
-    expect(other.signed).toEqual([]);
-    expect(String(other.errors[0].error)).toContain('Approved By is not on the Approver Allowlist');
+    // With a second address on the allowlist, Approved By must say which one decided: an empty one is refused.
+    const two = await signAfterReview(ran, { decision_0: 'Approve and sign' }, { approverAllowlist: `${APPROVER}, someone-else@example.com` });
+    expect(two.signed).toEqual([]);
+    expect(String(two.errors[0].error)).toBe('Sign Steps refused: Approved By is empty, and the Approver Allowlist holds more than one address: set Approved By to the one who decided');
   });
 
   it('several step lists: one block each, named, with its own decision; item n of Sign steps takes the answers of block n', async () => {
@@ -1407,6 +1423,14 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // Every import with steps comes with a workflow file now, a Chrome recording's too.
     expect(evaluate(ifParams.conditions.conditions[0].leftValue, { $: nodesRan({ 'Import steps': [data, []] }) })).toBe(true);
     expect(evaluate(ifParams.conditions.conditions[0].leftValue, { $: nodesRan({ 'Import steps': [[{ json: { report: {}, drafts: [] } }], []] }) })).toBe(false);
+    // After the review page, the file comes only when a step list was approved: a rejected bot gets no workflow to run.
+    const afterReview = (answer: IDataObject) => evaluate(ifParams.conditions.conditions[0].leftValue, { $: nodesRan({ 'Import steps': [data, []], [REVIEW]: [[{ json: answer }]] }) });
+    expect(afterReview({ decision_0: 'Approve and sign' })).toBe(true);
+    expect(afterReview({ decision_0: 'Reject', decision_1: 'Approve and sign' })).toBe(true);
+    expect(afterReview({ decision_0: 'Reject' })).toBe(false);
+    expect(afterReview({ decision_0: 'Reject', decision_1: 'Reject' })).toBe(false);
+    // Not answered in time: the page gives its input item on, with no decision.
+    expect(afterReview({ name: 'steps table' })).toBe(false);
 
     const withFile = completion('Imported, with the workflow file');
     expect(withFile).toMatchObject({ operation: 'completion', respondWith: 'returnBinary', inputDataFieldName: 'workflow', completionTitle: 'Imported' });
@@ -1460,7 +1484,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const set = sticky(t, 'Set once').content;
     expectChecklist(set);
     for (const s of ['Keep **Authentication** on', 'Basic Auth credential on **Import a bot**', '**RPA Browser**', '**RPA Site Login**', '**RPA Step Signing**',
-      '**Settings → approver**', '**Sign steps → Approver Allowlist**', '**Options → Allow Private Network**', 'Publish']) expect(set, s).toContain(s);
+      '**Sign steps → Approver Allowlist**', '**Options → Allow Private Network**', 'Publish']) expect(set, s).toContain(s);
+    expect(set).toContain('Type your address once, in **Sign steps → Approver Allowlist**');
+    expect(set).not.toContain('Settings → approver');
     // The default path needs no other template.
     expect(set).not.toContain('RPA: 3');
     const email = sticky(t, 'Approval by email').content;

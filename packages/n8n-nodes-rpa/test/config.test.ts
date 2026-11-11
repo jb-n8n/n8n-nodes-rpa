@@ -379,11 +379,11 @@ describe('Connection Line (RPA Desktop Runner and RPA Browser credentials)', () 
   it('the installer\'s hidden token is refused with what to run instead', () => {
     const hidden = RUNNER.line.replace(RUNNER.token, FIXTURE.hiddenToken);
     expect(refusal(runnerLine(hidden))).toBe(
-      'The Connection Line in the RPA Desktop Runner credential has no token: the installer hides it. Run Show-RpaConnection.ps1 -ShowTokens on that machine and paste the line it prints.',
+      'The Connection Line in the RPA Desktop Runner credential has no token: the installer hides it. On that machine, in an administrator PowerShell, run & "C:\\Program Files\\RPA Runner\\rpa.cmd" connection -ShowTokens and paste the line it prints.',
     );
     for (const h of FIXTURE.hidden) {
       expect(refusal(h.kind === 'runner' ? runnerLine(h.line) : browserLine(h.line))).toBe(
-        `The Connection Line in the ${h.kind === 'runner' ? 'RPA Desktop Runner' : 'RPA Browser'} credential has no token: the installer hides it. Run Show-RpaConnection.ps1 -ShowTokens on that machine and paste the line it prints.`,
+        `The Connection Line in the ${h.kind === 'runner' ? 'RPA Desktop Runner' : 'RPA Browser'} credential has no token: the installer hides it. On that machine, in an administrator PowerShell, run & "C:\\Program Files\\RPA Runner\\rpa.cmd" connection -ShowTokens and paste the line it prints.`,
       );
     }
   });

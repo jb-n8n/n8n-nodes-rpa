@@ -1,4 +1,4 @@
-import type { DesktopProposal, DownloadTemplate, PortalPolicy, Proposal, Script, Step } from 'n8n-rpa-engine';
+import type { DesktopProposal, DesktopStep, DownloadTemplate, PortalPolicy, Proposal, Script, Step } from 'n8n-rpa-engine';
 import type { Engine } from './engine.js';
 
 /**
@@ -122,4 +122,37 @@ export function leftOutList(p: { leftOut?: readonly string[] }): string {
 
 export function safetyLine(p: Pick<Proposal, 'safetyFlags'>): string {
   return p.safetyFlags.length ? p.safetyFlags.map(oneLine).join('; ') : 'none';
+}
+
+/** JSON with object keys sorted, so that two targets recorded with their keys in another order compare equal. */
+function canonical(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonical).join(',')}]`;
+  if (typeof v === 'object' && v !== null) {
+    return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonical((v as Record<string, unknown>)[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(v) ?? 'null';
+}
+
+/**
+ * For the review page only (never signed or reviewed): the numbers (from 1) of the desktop key steps that press a key in a
+ * field where a secret variable is typed, or with no target right after such a fill (the key then goes to that field).
+ * Enter in the password field signs in; it does not save, so the review page leaves such a candidate write unticked.
+ */
+export function signInKeySteps(steps: readonly DesktopStep[], secretVariables: readonly string[]): number[] {
+  const typesSecret = (s: DesktopStep | undefined): s is Extract<DesktopStep, { fill: unknown }> =>
+    s !== undefined && 'fill' in s && [...s.fill.value.matchAll(/\{\{\s*var\.([A-Za-z0-9_]+)\s*\}\}/g)].some((m) => secretVariables.includes(m[1]));
+  const secretFields = new Set(steps.filter(typesSecret).map((s) => canonical(s.fill.field.uia)));
+  return steps.flatMap((s, i) => {
+    if (!('key' in s)) return [];
+    const inSecretField = s.key.target ? secretFields.has(canonical(s.key.target.uia)) : typesSecret(steps[i - 1]);
+    return inSecretField ? [i + 1] : [];
+  });
+}
+
+/**
+ * For the review page only: the numbers (from 1) of the steps an import adds to a recording, which the person did not
+ * record: a wait for each window and each returned file (the recorder records neither).
+ */
+export function importAddedSteps(steps: readonly DesktopStep[]): number[] {
+  return steps.flatMap((s, i) => ('waitFor' in s || 'expectFile' in s ? [i + 1] : []));
 }

@@ -314,6 +314,41 @@ describe('checkRequest read-only POSTs', () => {
   });
 });
 
+describe('violationMessage names a blocked write', () => {
+  const host = 'sandbox:8080';
+  const policy = policyFor({ url: `http://${host}`, host });
+  const message = (url: string, method: string, isNavigation = false) => {
+    const v = checkRequest(policy, { url, method, isNavigation });
+    expect(v).toMatchObject({ kind: 'write' });
+    return violationMessage({ ...v!, fatal: true }, policy);
+  };
+  it('a POST: its method, host and path (session segments masked, never the query), then the two fields that can let it through', () => {
+    expect(message(`http://${host}/sap(bD1lbiZjPTAwMQ==)/bc/gui/sap/its/webgui?sap-client=001&token=abc#x`, 'post')).toBe(
+      'a blocked request was attempted during the run: POST sandbox:8080/sap(…)/bc/gui/sap/its/webgui. If it only reads data, list it in the RPA Site Login under Requests That Only Read, as POST sandbox:8080/sap*/bc/gui/sap/its/webgui; if it saves or sends, only a step that submits may send it, listed under Forms It May Submit.',
+    );
+    expect(message(`http://${host}/acme/notices/acknowledge`, 'POST')).toBe(
+      'a blocked request was attempted during the run: POST sandbox:8080/acme/notices/acknowledge. If it only reads data, list it in the RPA Site Login under Requests That Only Read, as POST sandbox:8080/acme/notices/acknowledge; if it saves or sends, only a step that submits may send it, listed under Forms It May Submit.',
+    );
+  });
+  it('another method: only a declared submission lets it through', () => {
+    expect(message(`http://${host}/api/items/7?force=1`, 'DELETE')).toBe(
+      'a blocked request was attempted during the run: DELETE sandbox:8080/api/items/7. Only a step that submits may send it, listed in the RPA Site Login under Forms It May Submit.',
+    );
+  });
+  it('a navigation that looks like an action is named, with why', () => {
+    const strict = { ...policy, refuseDestructiveNavigation: true };
+    const v = checkRequest(strict, { url: `http://${host}/acme/logout?next=/home`, method: 'GET', isNavigation: true });
+    expect(v).toMatchObject({ kind: 'write', method: 'GET' });
+    expect(violationMessage({ ...v!, fatal: true }, strict)).toBe(
+      'a blocked request was attempted during the run: GET sandbox:8080/acme/logout. Its address looks like an action (such as delete, send or sign out), which this run does not open.',
+    );
+  });
+  it('a write without a method, and every other kind without a message of its own, keep the short text', () => {
+    expect(violationMessage({ kind: 'write', url: `http://${host}/x`, fatal: true }, policy)).toBe('a blocked request was attempted during the run');
+    expect(violationMessage({ kind: 'websocket', url: `ws://${host}/socket`, fatal: true }, policy)).toBe('a blocked request was attempted during the run');
+  });
+});
+
 describe('openSession read-only POSTs', () => {
   it('a read-only POST is let through and not counted', async () => {
     portal.reset();

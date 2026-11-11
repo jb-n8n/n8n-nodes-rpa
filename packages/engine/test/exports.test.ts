@@ -32,7 +32,7 @@ const EXPORTS = [
   'SIGNIN_NEXT_NO_PASSWORD', 'STEPS_CHANGED_AFTER_REVIEW', 'STEPS_HASH_MISMATCH', 'STEPS_NAME_MISMATCH', 'STEPS_VERSION_MISMATCH',
   'STEP_VERBS', 'ScriptShapeError', 'SignInPolicyError', 'UNSIGNED_CHANGE_PASSWORD', 'UNSIGNED_REQUIRED', 'UNSIGNED_SECRET_FILL', 'UNSIGNED_SECRET_VARIABLE', 'UNSIGNED_WRITES', 'UNVERIFIED_COUNT_FLAG', 'USE_CASE_WORDS',
   'WINDOW_STEP_NOT_CLICK', 'WORKFLOW_CODE', 'WRITE_STEPS_INVALID', 'absoluteHttpUrl', 'adoptDraft', 'agentSignInLocked', 'agentSignInRejected',
-  'agentSystemPrompt', 'binaryName', 'browserLocatorOnDesktop', 'browserStepOnDesktop', 'browserUnreachable', 'browserVersionMismatch',
+  'agentSystemPrompt', 'binaryName', 'blockedActionAddress', 'blockedPost', 'blockedWrite', 'browserLocatorOnDesktop', 'browserStepOnDesktop', 'browserUnreachable', 'browserVersionMismatch',
   'build', 'buildProposal', 'candidatesFor', 'candidatesOf', 'canonicalize', 'captureTooLarge', 'changeListMatches', 'checkDesktopTrust',
   'checkFile', 'checkRequest', 'checkTrust', 'clampBudget', 'classifyFailure', 'codeWorkflowFailed', 'codeWorkflowTimedOut', 'compileProposal', 'connectRunner', 'countMismatch',
   'createAddressGuard', 'createMasker', 'currentIdentity', 'declareWrites', 'defaultResolveHost', 'describeCheck', 'describeDesktopStep',
