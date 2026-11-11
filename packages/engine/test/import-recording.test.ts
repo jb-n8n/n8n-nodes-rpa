@@ -173,6 +173,42 @@ describe('a recording that is refused', () => {
     }
   });
 
+  it('refuses a typed value in a field that looks like a password field and is not marked secret', () => {
+    const typed = 'Typed-Into-Pwd-7';
+    const reason = notValid('events[2] types into a field that looks like a password field (by its name, id or label), so its value must be a run variable marked secret, such as {{var.password}} with "secret": true');
+    const cases: ((e: Json) => void)[] = [
+      () => {}, // the ERP Demo password field: id txtPassword, name and label Password
+      (e) => { e.target.path[0] = { controlType: 'Edit', automationId: 'txtField2', name: 'PIN' }; e.label = 'Field 2'; },
+      (e) => { e.target.path[0] = { controlType: 'Edit', automationId: 'txtKennwort' }; e.label = ''; },
+      (e) => { e.target.path[0] = { controlType: 'Edit', automationId: 'txtField2' }; e.label = 'Client secret'; },
+    ];
+    for (const change of cases) {
+      const rec = recording();
+      delete rec.events[2].secret;
+      rec.events[2].value = typed;
+      change(rec.events[2]);
+      const r = importRec(rec);
+      expectRefused(r, reason);
+      expect(JSON.stringify(r)).not.toContain(typed);
+    }
+    // Marked secret with a variable, it imports; unmarked, a variable is not a typed value.
+    expect(importRec(recording()).desktopDrafts).toHaveLength(1);
+    const unmarked = recording();
+    delete unmarked.events[2].secret;
+    expect(importRec(unmarked).desktopDrafts).toHaveLength(1);
+    // A field whose name, id and label say nothing of a password keeps its typed value.
+    const other = recording();
+    delete other.events[2].secret;
+    other.events[2].value = typed;
+    other.events[2].target.path[0] = { controlType: 'Edit', automationId: 'txtField2', name: 'Field 2' };
+    other.events[2].label = 'Field 2';
+    other.events[3].target.path[0] = other.events[2].target.path[0];
+    other.events[3].label = 'Field 2';
+    const r = importRec(other);
+    expect(items(r, 'error')).toEqual([]);
+    expect(r.desktopDrafts![0].script.steps[2]).toMatchObject({ fill: { value: typed } });
+  });
+
   it('refuses a recording that names a value of the RPA Site Login', () => {
     const opts: ImportOptions = { name: 'erp', hasSiteLogin: true, secrets: { username: 'ab', password: 'S1te-Login-Pass' } };
     const long = recording();

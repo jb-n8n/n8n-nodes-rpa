@@ -35,7 +35,9 @@
 //              "index" refuses the file)
 //
 // A fill with "secret": true was typed into a secret field: its value is exactly one run variable, "{{var.name}}",
-// never what was typed. A fill into a Save dialog's file name has the value "{{$exportDir}}\<file>" and "exportFile":
+// never what was typed. A fill not marked secret whose field's name, automation id or label looks like a password
+// field (CREDENTIAL_FIELD: password words, PIN, secret) refuses the file unless its value is exactly one
+// "{{var.name}}". A fill into a Save dialog's file name has the value "{{$exportDir}}\<file>" and "exportFile":
 // "<file>"; no other "{{$...}}" template may appear anywhere. "positional": true marks a target found by a name that
 // carries a position (a grid cell, "Vendor Row 1").
 //
@@ -44,6 +46,7 @@
 // control type is left out. The draft is `<name>-1` for the import's Name, with the flow's one desktop node.
 import { stableDesktopId } from '../desktop/stable-ids.js';
 import { IMPORT_EMPTY } from '../messages.js';
+import { CREDENTIAL_FIELD } from '../secrets/credential-field.js';
 import { createMasker } from '../secrets/mask.js';
 import type { DesktopApp, UiaCond, UiaTarget } from '../types.js';
 import { MAX_CHROME_BYTES } from './chrome.js';
@@ -75,6 +78,8 @@ const UNKNOWN_KEY = (path: string, key: string) => `${path} has the unknown key 
 const HAS_INDEX = (path: string) => `${path} has an index: a recording finds an element by its id or name, not by its position among its siblings`;
 const RESERVED_TEMPLATE = (path: string) => `${path} holds a {{$...}} template: only a fill's value may hold {{$exportDir}}`;
 const SECRET_NOT_VARIABLE = (path: string) => `${path} is marked secret, so its value must be one run variable such as {{var.password}}: a typed secret is not imported`;
+const PASSWORD_LITERAL = (path: string) =>
+  `${path} types into a field that looks like a password field (by its name, id or label), so its value must be a run variable marked secret, such as {{var.password}} with "secret": true`;
 const NOT_EXE_NAME = (path: string) => `${path} must be a program's file name, such as ErpDemo.exe, without a folder`;
 const OTHER_APP = (path: string) => `${path} must open the recording's app, with the same exe and args`;
 const UNSTABLE_ID = 'the automation id looks generated (it may change from run to run), so the step finds the element without it';
@@ -108,6 +113,13 @@ type Json = Record<string, unknown>;
 const isObject = (v: unknown): v is Json => typeof v === 'object' && v !== null && !Array.isArray(v);
 const isText = (v: unknown, max: number): v is string => typeof v === 'string' && v.length > 0 && v.length <= max && !/[\r\n]/.test(v);
 const isStringList = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string');
+
+/** What names a fill's field: its label, and the name and automation id of the field's own (last) condition. */
+function fieldTexts(e: Json): string[] {
+  const path = isObject(e.target) && Array.isArray(e.target.path) ? e.target.path : [];
+  const own: unknown = path[path.length - 1];
+  return [e.label, ...(isObject(own) ? [own.name, own.automationId] : [])].filter((t): t is string => typeof t === 'string');
+}
 
 /**
  * The recording's bytes or text as JSON, refusing more than MAX_RECORDING_BYTES before anything is decoded or parsed.
@@ -203,6 +215,10 @@ function recordingIssues(rec: Json): string[] {
         string(e, 'value', at);
         if (e.exportFile !== undefined && (typeof e.exportFile !== 'string' || !FILE_NAME.test(e.exportFile))) issues.push(`${at}.exportFile must be a file name without a folder`);
         if (e.secret !== undefined && (e.secret !== true || typeof e.value !== 'string' || !ONE_VARIABLE.test(e.value))) issues.push(SECRET_NOT_VARIABLE(at));
+        // The recorder never reads a field it takes for secret: a typed value in one was changed by hand or is a recorder fault.
+        else if (e.secret === undefined && typeof e.value === 'string' && !ONE_VARIABLE.test(e.value) && fieldTexts(e).some((t) => CREDENTIAL_FIELD.test(t))) {
+          issues.push(PASSWORD_LITERAL(at));
+        }
         break;
       case 'select': string(e, 'option', at); break;
       case 'check': if (typeof e.checked !== 'boolean') issues.push(`${at}.checked must be true or false`); break;
