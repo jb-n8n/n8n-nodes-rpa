@@ -1,7 +1,7 @@
 import type { Locator } from './types.js';
 
-// Every user-facing golden string of the engine. Tests assert them verbatim, and
-// test/wording.test.ts checks that none of them contains a use-case word.
+// User-facing texts that several modules share, or that the node and its tests name. A text used in one place stays
+// next to its code. Tests assert them verbatim, and test/wording.test.ts checks that none of these contains a use-case word.
 
 /** Words no user-facing text may contain. */
 export const USE_CASE_WORDS = /\b(portal|recall|notice|dealer)s?\b/i;
