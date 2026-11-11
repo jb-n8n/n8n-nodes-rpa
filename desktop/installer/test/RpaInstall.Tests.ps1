@@ -4173,6 +4173,30 @@ public static class Program {
       @(Get-GhCalls | Where-Object { $_ -like 'attestation*' }).Count | Should -Be 0
     }
 
+    # A copy that names no SHA-256 (the repository's own, with -Zip) has only the .sha256 file beside the zip, which
+    # comes from the same place: the attestation is then what ties the zip to a release.
+    It 'without a named SHA-256 stops when the GitHub CLI is <State>, says why and what to do, and does not ask it to verify' -ForEach @(
+      @{ State = 'missing'; Reason = 'the GitHub CLI is not installed here ({0})' }
+      @{ State = 'signed out'; Reason = 'the GitHub CLI here is not signed in (gh auth status)' }
+    ) {
+      Set-FakeGh 1 0
+      $result = Test-RpaAttestation $script:FakeGh $State 'C:\x\rpa-windows-x64.zip' '0.3.0' $false $false
+      $result.Refusal | Should -BeExactly ('This Get-Rpa.ps1 names no SHA-256 for the zip: it was not published with a release, so only the build attestation ties the zip to one, and it cannot be checked: {0}. Use the Get-Rpa.ps1 published with the release, or install the GitHub CLI here and sign it in (gh auth login).' -f ($Reason -f $script:FakeGh))
+      $result.Line | Should -BeNullOrEmpty
+      @(Get-GhCalls | Where-Object { $_ -like 'attestation*' }).Count | Should -Be 0
+    }
+
+    It 'without a named SHA-256 goes on when a signed-in GitHub CLI accepts the attestation, and stops when it refuses' {
+      Set-FakeGh 0 0
+      (Test-RpaAttestation $script:FakeGh 'ready' 'C:\x\rpa-windows-x64.zip' '0.3.0' $false $false).Line | Should -BeExactly 'The attestation: gh accepted it (desktop-release.yml of jb-n8n/n8n-nodes-rpa, tag desktop-v0.3.0).'
+      Set-FakeGh 0 1
+      (Test-RpaAttestation $script:FakeGh 'ready' 'C:\x\rpa-windows-x64.zip' '0.3.0' $false $false).Refusal | Should -BeExactly 'gh attestation verify did not accept C:\x\rpa-windows-x64.zip (exit code 1): made-up verify output'
+    }
+
+    It 'asks for the attestation when the script names no SHA-256' {
+      (Get-Content -Raw -LiteralPath $script:GetRpa) | Should -Match ([regex]::Escape("Test-RpaAttestation `$gh `$ghState '' `$Version ([bool]`$RequireAttestation) ([bool]`$PackageSha256)"))
+    }
+
     It 'stops before the download when -RequireAttestation cannot be met, and otherwise checks before the unpack' {
       $source = Get-Content -Raw -LiteralPath $script:GetRpa
       $source | Should -Match ([regex]::Escape("`$ghState = Get-RpaGhState `$gh"))

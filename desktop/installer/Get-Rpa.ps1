@@ -19,7 +19,9 @@
 #      installed or not signed in, the attestation is NOT checked: it says so in one line, with the command to check it
 #      on a machine with gh (of the zip, or of this script, which names the zip's SHA-256), and goes on; the zip must
 #      still have the SHA-256 of the .sha256 file and the one this script names. With -RequireAttestation the check is
-#      mandatory: without a signed-in gh it stops before it downloads anything.
+#      mandatory: without a signed-in gh it stops before it downloads anything. A copy that names no SHA-256 (the
+#      repository's own, run with -Zip) has only the .sha256 file beside the zip, from the same place, so there the
+#      check is always mandatory.
 #   5. Unpacks into C:\Program Files\RPA package\<version>, a new folder that takes the access rules of Program Files
 #      (only administrators can change it), refusing an entry outside rpa-windows-x64\, and a folder that is there
 #      already. Then it checks that no account other than Administrators, SYSTEM, TrustedInstaller and you can change
@@ -155,9 +157,10 @@ function Get-RpaGhState([string]$Gh) {
 }
 
 # The attestation check: Refusal (stop before the unpack) or Line (what to say, and go on). A ready gh verifies the
-# zip, and a failed check is a refusal. Without a ready gh the check is not made: a refusal with -Require, otherwise
-# a line that says so, why it matters and how to check it elsewhere.
-function Test-RpaAttestation([string]$Gh, [string]$State, [string]$ZipPath, [string]$Version, [bool]$Require) {
+# zip, and a failed check is a refusal. Without a ready gh the check is not made: a refusal with -Require, or when
+# the script names no SHA-256 (-Named false: then only the attestation ties the zip to a release), otherwise a line
+# that says so, why it matters and how to check it elsewhere.
+function Test-RpaAttestation([string]$Gh, [string]$State, [string]$ZipPath, [string]$Version, [bool]$Require, [bool]$Named = $true) {
   $workflow = '{0}/.github/workflows/desktop-release.yml' -f $Repository
   $tag = 'refs/tags/desktop-v{0}' -f $Version
   if ($State -eq 'ready') {
@@ -170,6 +173,9 @@ function Test-RpaAttestation([string]$Gh, [string]$State, [string]$ZipPath, [str
   }
   $reason = 'the GitHub CLI here is not signed in (gh auth status)'
   if ($State -eq 'missing') { $reason = 'the GitHub CLI is not installed here ({0})' -f $Gh }
+  if (-not $Named) {
+    return @{ Refusal = ('This Get-Rpa.ps1 names no SHA-256 for the zip: it was not published with a release, so only the build attestation ties the zip to one, and it cannot be checked: {0}. Use the Get-Rpa.ps1 published with the release, or install the GitHub CLI here and sign it in (gh auth login).' -f $reason); Line = $null }
+  }
   if ($Require) {
     return @{ Refusal = ('-RequireAttestation: the build attestation cannot be checked: {0}. Install the GitHub CLI here and sign it in (gh auth login), then run this again.' -f $reason); Line = $null }
   }
@@ -234,10 +240,11 @@ if (-not $Zip -and -not $Version) { Stop-Rpa 'This Get-Rpa.ps1 names no release:
 $programFiles = [Environment]::GetFolderPath('ProgramFiles')
 $gh = Join-Path (Join-Path $programFiles 'GitHub CLI') 'gh.exe'
 $ghState = Get-RpaGhState $gh
-# With -RequireAttestation, a gh that cannot check stops it before anything is downloaded.
+# With -RequireAttestation, or in a copy that names no SHA-256, a gh that cannot check stops it before anything is
+# downloaded or unpacked.
 if ($ghState -ne 'ready') {
-  $early = Test-RpaAttestation $gh $ghState '' $Version ([bool]$RequireAttestation)
-  if ($early.Refusal) { Stop-Rpa ('{0} Nothing was downloaded.' -f $early.Refusal) }
+  $early = Test-RpaAttestation $gh $ghState '' $Version ([bool]$RequireAttestation) ([bool]$PackageSha256)
+  if ($early.Refusal) { Stop-Rpa ('{0} Nothing was downloaded or unpacked.' -f $early.Refusal) }
 }
 
 $root = Join-Path $programFiles 'RPA package'
@@ -283,7 +290,7 @@ if (-not $Zip) {
 }
 
 # Asked while the zip is held open, after its SHA-256 matched; its line is said after the unpack.
-$attest = { param($ZipPath, $Version) $script:Attestation = Test-RpaAttestation $gh $ghState $ZipPath $Version ([bool]$RequireAttestation); $script:Attestation.Refusal }
+$attest = { param($ZipPath, $Version) $script:Attestation = Test-RpaAttestation $gh $ghState $ZipPath $Version ([bool]$RequireAttestation) ([bool]$PackageSha256); $script:Attestation.Refusal }
 Write-Host ('Checking {0}: its SHA-256, the build attestation and what it holds' -f $zipPath)
 try { $unpacked = Expand-RpaPackage $zipPath $shaPath $PackageSha256 $Version $root $attest }
 catch { Stop-Rpa $_.Exception.Message }
