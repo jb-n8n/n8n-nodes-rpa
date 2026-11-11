@@ -13,7 +13,10 @@ browser session at a time: a second browser run that starts while one is open wa
 | `runner/src/Rpa.Runner.Windows` | The Windows driver (net8.0-windows): UI Automation through [FlaUI](https://github.com/FlaUI/FlaUI) (MIT), session health, the foreground check, window capture. |
 | `runner/src/Rpa.Runner` | The executable, `RpaRunner.exe`. |
 | `runner/src/Rpa.Runner.PolicyTool` | The policy tool, `RpaPolicy.exe`: shows a change to the policy file, asks, and applies it as an administrator. |
+| `runner/src/Rpa.Supervisor.Core` | The platform-neutral part of the RPA Supervisor (net8.0): when to sign the bot user in and out, the port proxy, reading `install.json`, the supervisor's log. |
+| `runner/src/Rpa.Supervisor` | The RPA Supervisor, `RpaSupervisor.exe`: the Windows service for unattended mode and its Remote Desktop host (see "Unattended mode"). |
 | `runner/test/Rpa.Runner.Core.Tests` | Unit tests of the core with a fake desktop (run anywhere). |
+| `runner/test/Rpa.Supervisor.Core.Tests` | Unit tests of the supervisor's core with fake sessions (run anywhere). |
 | `runner/test/Rpa.Runner.Scenario` | The protocol test client CI runs against the real runner and the ERP Demo on Windows. |
 | `erp-demo` | ERP Demo: a small "legacy ERP" WinForms app with a v1 and a v2 UI. |
 | `installer` | The Windows package: `Install-Rpa.ps1`, `Uninstall-Rpa.ps1` and their module, the start scripts and `Show-RpaConnection.ps1` (`scripts/`), the script that stages the zip (`build/Stage.ps1`) and the Pester tests. |
@@ -119,6 +122,65 @@ acts with that person's access. Three limits to keep in mind:
   read a file of the bot user through a `file://` page, and, after a CDP session set the download folder of its
   browser context (`Browser.setDownloadBehavior`), saved a download with the name and content it chose into a folder
   of the bot user's profile; the file belonged to the bot user. A file only administrators could read was refused.
+
+## Unattended mode
+
+The runner needs a signed-in, unlocked desktop. In unattended mode nobody has to be signed in: the RPA Supervisor, a
+Windows service (`RPA Supervisor`, `RpaSupervisor.exe`, running as SYSTEM), listens on the runner's port (and the
+browser's) in place of the runner. When n8n connects, it signs the bot user in over a Remote Desktop connection from the
+machine to itself (to `127.0.0.2`, through the RDP client control that ships with Windows), waits until the session is
+Active and the runner listens inside it, and then passes the connection's bytes through unchanged: TLS, the token and
+the protocol stay between n8n and the runner. When no connection has held the session for `idleSeconds`, it signs the
+bot user out again. One bot user, one session at a time.
+
+`Install-Rpa.ps1 -Unattended [-IdleSeconds 15]` sets this up on Windows Server 2019 or later (it refuses Windows 10
+and 11, where it was not tested, and `-AutoSignIn` with it): it puts the bot user into Remote Desktop Users, turns
+Remote Desktop on with the registry value alone when it is off (no firewall rule for Remote Desktop), stores the bot
+user's password in the LSA secret, registers the service (LocalSystem, automatic start, started again a minute after a
+failure) and points the two firewall rules at `RpaSupervisor.exe`. The start scripts read `mode` from `install.json`
+and let the runner and the browser host listen on `127.0.0.1` at the inner ports (`RPA_RUNNER_BIND`,
+`RPA_BROWSER_BIND`). After the service starts, the installer makes one connection to the runner's port and waits up to
+120 s, so that the bot user's profile exists before n8n's first run. An upgrade keeps unattended mode and its idle
+time; `Uninstall-Rpa.ps1`, and an install with `-Unattended:$false`, put back what it changed. The install guide,
+[`docs/install/windows.md`](../docs/install/windows.md), section 4, "Running with nobody signed in", is the user's
+side of this.
+
+The service reads `install.json` in the install directory (`%ProgramFiles%\RPA Runner`), which the installer writes:
+
+| Field | Meaning |
+|---|---|
+| `mode` | `"unattended"` makes the service run; with anything else it writes one line to its log and does nothing. |
+| `user` | The bot user: a local Windows user, as `name`, `.\name` or `<this machine>\name`. |
+| `runnerPort`, `runnerInnerPort` | The service listens on `runnerPort` and passes each connection to `127.0.0.1:runnerInnerPort`, where the runner listens in the bot user's session. |
+| `browserPort`, `browserInnerPort` | The same for the RPA browser; without `browserPort` only the runner is passed on. |
+| `idleSeconds` | How long the session stays signed in without a connection (default 15, 0 to 86400). |
+| `listenAddresses` | The addresses the service listens on (default `["0.0.0.0"]`; the installer writes `["0.0.0.0"]`, where the runner and the browser host listen in the signed-in mode). |
+
+A field that is missing or wrong stops the service at start, and so does a port it cannot listen on; the reason is in
+its log, in one line. The bot user's password is read from the local security authority (the LSA secret
+`L$RpaRunnerBotPassword`, which standard users cannot read) for each sign-in. It reaches the Remote Desktop host process
+on its standard input, never on a command line, and is not written to the log or any file. The Remote Desktop connection
+does not check the server's identity: the server is the machine itself, over the loopback. Before each sign-in the
+service checks that the machine's Remote Desktop service (TermService) is running and that every listener on port 3389
+is that service: while the service is stopped any user may listen on the port, and such a listener stays after the
+service starts again. Until both hold, no sign-in is tried and the connection waits. It does not check who answers on
+the port after that check.
+
+The machine needs Remote Desktop turned on with Network Level Authentication, and the bot user in the Remote Desktop
+Users group. The service refuses a connection rather than act on a session it did not create: when someone is signed in
+as the bot user (at the console or over Remote Desktop), connections are closed until that session is signed out. When
+Windows refuses the password, or the account (unknown, disabled, locked, restricted or expired), or the password has
+expired or must change, the service tries no further sign-in until it is restarted, because retrying could lock the
+account out. Another refusal by the Remote Desktop client fails that connection only.
+
+The service's log and state are in `%ProgramData%\RPA Runner\supervisor\`, a folder the installer creates for SYSTEM and
+administrators only (the service does not create it); when it is missing, is a link, or is owned by anyone but SYSTEM or
+Administrators, the service does not start, and says so in the Windows event log. The log is `supervisor.log` there (the
+previous one in `supervisor.1.log`). It records sign-ins, sign-outs and failures with their reasons, never a password, a
+token or bytes of a connection, and writes the same failure at most once in 30 s. `supervisor-state.json` names the
+session the service created and its last failure, so that after a restart it signs its own stale session out and leaves
+anyone else's alone. A connection waits up to 90 s for the session and the runner together; the first sign-in after a
+restart, or of a new user, can take most of that.
 
 ## Changing the policy
 
@@ -402,7 +464,7 @@ The UI parts run only on Windows: the `desktop` workflow builds and publishes ev
 Server 2025 in November 2026), starts
 
 the runner and drives the ERP Demo through it with the scenario client, then builds the Windows package, installs it
-and drives it. Its artifact `rpa-windows-package` holds the package, `rpa-windows-x64.zip`, with its SHA-256 (see
+and drives it, and installs it again with `-Unattended` and drives it through the RPA Supervisor. Its artifact `rpa-windows-package` holds the package, `rpa-windows-x64.zip`, with its SHA-256 (see
 "Releasing the Windows package"); the artifacts `rpa-desktop-runner` and `erp-demo` are the self-contained win-x64
 builds of the runner and the demo app (no .NET install needed).
 

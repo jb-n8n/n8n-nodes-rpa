@@ -6,20 +6,21 @@
 #
 #   -Out            where the package goes: <Out>\rpa-windows-x64\ (the tree below), <Out>\rpa-windows-x64.zip and
 #                   <Out>\rpa-windows-x64.zip.sha256. What is there under those three names is replaced.
-#   -RunnerDir      the folder with the published RpaRunner.exe (dotnet publish desktop/runner/src/Rpa.Runner)
+#   -RunnerDir      the folder with the published RpaRunner.exe (dotnet publish desktop/runner/src/Rpa.Runner) and
+#                   RpaSupervisor.exe (dotnet publish desktop/runner/src/Rpa.Supervisor, into the same folder)
 #   -PolicyToolDir  the folder with the published RpaPolicy.exe (dotnet publish
 #                   desktop/runner/src/Rpa.Runner.PolicyTool, on Windows: its administrator manifest is embedded
 #                   only there)
 #   -ErpDemoDir     the folder with the published demo app, v1\ErpDemo.exe and v2\ErpDemo.exe
-#   Publish the runner and the policy tool as single files without IncludeNativeLibrariesForSelfExtract: such a
-#   program would unpack native libraries to the temp folder of whoever starts it, at every start, and load them
-#   from there. Without it the publish leaves those libraries beside the program, and this script copies every .dll
-#   it finds there into runner\ with the program.
+#   Publish the runner, the supervisor and the policy tool as single files without
+#   IncludeNativeLibrariesForSelfExtract: such a program would unpack native libraries to the temp folder of whoever
+#   starts it, at every start, and load them from there. Without it the publish leaves those libraries beside the
+#   program, and this script copies every .dll it finds there into runner\ with the program.
 #
 #   rpa-windows-x64\
 #     Install-Rpa.ps1  Uninstall-Rpa.ps1  RpaInstall.psd1  RpaInstall.Plan.ps1  RpaInstall.SignIn.ps1
 #     RpaInstall.Machine.ps1  LICENSE  VERSION
-#     runner\    RpaRunner.exe  RpaPolicy.exe  *.dll (the native libraries of both)  policy.example.json
+#     runner\    RpaRunner.exe  RpaSupervisor.exe  RpaPolicy.exe  *.dll (their native libraries)  policy.example.json
 #     browser\   node.exe  LICENSE-node.txt  host\{host.mjs,run-server.mjs}  gate\{gate.mjs,ecs.mjs,selfsigned.mjs}
 #                node_modules\ (playwright)  ms-playwright\ (Chromium)  ms-playwright.sha256
 #     scripts\   start-loop.ps1  start-runner.ps1  start-browser.ps1  Show-RpaConnection.ps1
@@ -146,7 +147,7 @@ function Get-FileList([string]$Root) {
   $list.ToString()
 }
 
-foreach ($needed in @((Join-Path $RunnerDir 'RpaRunner.exe'), (Join-Path $PolicyToolDir 'RpaPolicy.exe'),
+foreach ($needed in @((Join-Path $RunnerDir 'RpaRunner.exe'), (Join-Path $RunnerDir 'RpaSupervisor.exe'), (Join-Path $PolicyToolDir 'RpaPolicy.exe'),
     (Join-Path $ErpDemoDir 'v1\ErpDemo.exe'), (Join-Path $ErpDemoDir 'v2\ErpDemo.exe'))) {
   if (-not (Test-Path -LiteralPath $needed -PathType Leaf)) { throw ('{0} is missing. Publish it first.' -f $needed) }
 }
@@ -172,8 +173,9 @@ if ($properties -notmatch '<Version>(\d+\.\d+\.\d+)</Version>') { throw 'desktop
 $version = $Matches[1]
 [IO.File]::WriteAllText((Join-Path $stage 'VERSION'), $version + "`r`n", [Text.Encoding]::ASCII)
 
-Write-Host 'The runner, the policy tool and the demo app'
+Write-Host 'The runner, the supervisor, the policy tool and the demo app'
 Copy-Program $RunnerDir 'RpaRunner.exe' (Join-Path $stage 'runner')
+Copy-Program $RunnerDir 'RpaSupervisor.exe' (Join-Path $stage 'runner')
 Copy-Program $PolicyToolDir 'RpaPolicy.exe' (Join-Path $stage 'runner')
 Copy-Named (Join-Path $repo 'desktop\runner') @('policy.example.json') (Join-Path $stage 'runner')
 foreach ($ui in 'v1', 'v2') {

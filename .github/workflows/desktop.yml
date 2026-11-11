@@ -9,8 +9,10 @@
 # - the Windows package: the installer's tests, the browser host's and the gate's tests, the package staged by
 #   desktop/installer/build/Stage.ps1, then installed from its zip for a new standard user, the policy changed with
 #   the installed policy tool, the installed runner and browser started and driven (the same scenario; a browser
-#   session with a window through a tunnel that checks the certificate's fingerprint), an upgrade, and the uninstall.
-#   The package is uploaded as the artifact rpa-windows-package.
+#   session with a window through a tunnel that checks the certificate's fingerprint), an upgrade, and the uninstall;
+#   then an install with -Unattended for another new user (the service RPA Supervisor, which signs the bot user in
+#   through a Remote Desktop connection from the machine to itself), the scenario through the supervisor, and its
+#   uninstall. The package is uploaded as the artifact rpa-windows-package.
 # Uses no repository secrets. Actions are pinned by full commit SHA. What the job downloads besides them: the .NET
 # packages (NuGet), and for the package Node.js (checked against a SHA-256 written in Stage.ps1), Playwright (npm ci
 # against the lockfile in images/browser/server) and Chromium (Playwright's installer; the list of the files it
@@ -84,6 +86,9 @@ jobs:
       - name: Core unit tests
         timeout-minutes: 10
         run: dotnet test desktop/runner/test/Rpa.Runner.Core.Tests -c Release --no-build --logger "console;verbosity=normal"
+      - name: Supervisor core unit tests
+        timeout-minutes: 10
+        run: dotnet test desktop/runner/test/Rpa.Supervisor.Core.Tests -c Release --no-build --logger "console;verbosity=normal"
 
   windows:
     runs-on: windows-latest
@@ -140,16 +145,23 @@ jobs:
 
       - name: Core unit tests (Windows)
         timeout-minutes: 10
-        run: dotnet test desktop/runner/test/Rpa.Runner.Core.Tests -c Release --no-build
+        run: |
+          dotnet test desktop/runner/test/Rpa.Runner.Core.Tests -c Release --no-build
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          dotnet test desktop/runner/test/Rpa.Supervisor.Core.Tests -c Release --no-build
 
-      - name: Publish the runner, the policy tool and the demo app (self-contained win-x64, single file)
+      - name: Publish the runner, the supervisor, the policy tool and the demo app (self-contained win-x64, single file)
         timeout-minutes: 10
         run: |
-          # The runner and the policy tool are published without IncludeNativeLibrariesForSelfExtract: with it, a single
-          # file unpacks native libraries to the temp folder of whoever starts it, at every start, and loads them from
-          # there. Without it they stay beside the program, and Stage.ps1 copies them into the package.
+          # The runner, the supervisor and the policy tool are published without IncludeNativeLibrariesForSelfExtract:
+          # with it, a single file unpacks native libraries to the temp folder of whoever starts it, at every start, and
+          # loads them from there. Without it they stay beside the program, and Stage.ps1 copies them into the package.
+          # The supervisor goes into the runner's folder, where Stage.ps1 takes it from; the two bring the same
+          # libraries of the same runtime.
           $single = @('-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '-p:PublishSingleFile=true')
           dotnet publish desktop/runner/src/Rpa.Runner @single '-p:EnableCompressionInSingleFile=true' -o "$env:OUT\rpa-desktop-runner"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          dotnet publish desktop/runner/src/Rpa.Supervisor @single '-p:EnableCompressionInSingleFile=true' -o "$env:OUT\rpa-desktop-runner"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           Copy-Item desktop/runner/policy.example.json, desktop/README.md "$env:OUT\rpa-desktop-runner\"
           # The policy tool is published on Windows: its manifest, which asks for administrator rights, is embedded
@@ -583,6 +595,124 @@ jobs:
           Assert ($LASTEXITCODE -eq 0) "Uninstall-Rpa.ps1 -RemoveData, from the unpacked package, exits 0 (it was $LASTEXITCODE)"
           Assert (-not (Test-Path -LiteralPath $data)) 'the data directory is gone'
 
+      # -Unattended, for another new user: the installer makes its random password, which is stored only for the RPA
+      # Supervisor and printed nowhere. The service listens on the public ports in place of the runner and the browser
+      # and signs the bot user in through a Remote Desktop connection from this machine to itself; the installer signs
+      # it in once (the first sign-in makes the profile). This step checks what the install changed and that the
+      # service runs. Whether a hosted runner allows the loopback Remote Desktop sign-in is only known from a run: the
+      # next step checks the sign-in itself, and if a hosted runner refuses it, that check is left to a run on a real
+      # Windows Server.
+      - name: Install with -Unattended (the service RPA Supervisor)
+        timeout-minutes: 10
+        shell: powershell
+        run: |
+          function Assert([bool]$ok, [string]$what) { if (-not $ok) { throw "FAILED: $what" }; Write-Host "ok: $what" }
+          $install = Join-Path $env:ProgramFiles 'RPA Runner'
+          $data = Join-Path $env:ProgramData 'RPA Runner'
+          # What the uninstall must put back: Remote Desktop as found, and the Remote Desktop firewall rules untouched.
+          $terminal = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server'
+          $deny = (Get-ItemProperty -LiteralPath $terminal -Name fDenyTSConnections).fDenyTSConnections
+          $rdpRules = (@(Get-NetFirewallRule -Group '@FirewallAPI.dll,-28752' -ErrorAction SilentlyContinue | ForEach-Object { '{0}={1}' -f $_.Name, $_.Enabled }) | Sort-Object) -join ','
+          Set-Content -LiteralPath "$env:OUT\unattended-before.json" -Value (@{ deny = $deny; rdpRules = $rdpRules } | ConvertTo-Json)
+          Write-Host "before: fDenyTSConnections $deny; Remote Desktop firewall rules: $rdpRules"
+
+          $global:LASTEXITCODE = 0
+          & 'C:\rpa-ci\package\rpa-windows-x64\Install-Rpa.ps1' -User rpa-ci-unattended -Unattended -AllowFrom 127.0.0.1 -Force
+          Assert ($LASTEXITCODE -eq 0) "Install-Rpa.ps1 -Unattended exits 0 (it was $LASTEXITCODE)"
+
+          $record = Get-Content -Raw -LiteralPath "$install\install.json" -Encoding UTF8 | ConvertFrom-Json
+          Assert ($record.mode -eq 'unattended' -and $record.user -eq 'rpa-ci-unattended' -and $record.idleSeconds -eq 15 -and $record.runnerInnerPort -eq 18765 -and $record.browserInnerPort -eq 13000 -and (@($record.listenAddresses) -join ',') -eq '0.0.0.0') 'install.json records the mode, the user, the idle time, the ports behind the supervisor and where it listens'
+          $service = Get-CimInstance -ClassName Win32_Service -Filter "Name='RPA Supervisor'"
+          Assert ($service.State -eq 'Running' -and $service.StartMode -eq 'Auto' -and $service.StartName -eq 'LocalSystem') 'the service RPA Supervisor runs as LocalSystem and starts with Windows'
+          Assert ($service.PathName -eq ('"{0}\runner\RpaSupervisor.exe"' -f $install)) "the service runs the installed RpaSupervisor.exe, its path quoted ($($service.PathName))"
+          $listeners = @(Get-NetTCPConnection -State Listen -LocalPort 8765, 3000 -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -eq $service.ProcessId })
+          Assert ($listeners.Count -ge 2) 'the service listens on port 8765 and 3000'
+          foreach ($rule in 'RPA-Runner-In', 'RPA-Browser-In') {
+            $found = Get-NetFirewallRule -Name $rule
+            Assert (($found | Get-NetFirewallApplicationFilter).Program -eq "$install\runner\RpaSupervisor.exe" -and (@(($found | Get-NetFirewallAddressFilter).RemoteAddress) -join ',') -eq '127.0.0.1') "firewall rule $rule is for the RPA Supervisor, from 127.0.0.1 only"
+          }
+          $rdpUsers = ((New-Object Security.Principal.SecurityIdentifier 'S-1-5-32-555').Translate([Security.Principal.NTAccount]).Value -split '\\')[-1]
+          $groups = @(([ADSI]"WinNT://$env:COMPUTERNAME/rpa-ci-unattended,user").Groups() | ForEach-Object { $_.GetType().InvokeMember('Name', 'GetProperty', $null, $_, $null) })
+          Assert ($groups -contains $rdpUsers) "rpa-ci-unattended is in $rdpUsers"
+          Assert ((Get-ItemProperty -LiteralPath $terminal -Name fDenyTSConnections).fDenyTSConnections -eq 0) 'Remote Desktop is on'
+          $after = (@(Get-NetFirewallRule -Group '@FirewallAPI.dll,-28752' -ErrorAction SilentlyContinue | ForEach-Object { '{0}={1}' -f $_.Name, $_.Enabled }) | Sort-Object) -join ','
+          Assert ($after -eq $rdpRules) 'the Remote Desktop firewall rules are as they were'
+          $acl = Get-Acl -LiteralPath "$data\supervisor"
+          $others = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) | Where-Object { 'S-1-5-18', 'S-1-5-32-544' -notcontains $_.IdentityReference.Value })
+          Assert ($acl.AreAccessRulesProtected -and $others.Count -eq 0 -and $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -eq 'S-1-5-32-544') 'the supervisor folder is there, and only SYSTEM and Administrators have access'
+
+          $shown = @(& (Join-Path $PSHOME 'powershell.exe') -NoProfile -ExecutionPolicy Bypass -File "$install\scripts\Show-RpaConnection.ps1")
+          $shown | ForEach-Object { Write-Host "  | $_" }
+          Assert ($shown -contains 'Mode: unattended. The RPA Supervisor signs rpa-ci-unattended in when n8n connects, and out 15 s after the last connection.' -and $shown -contains 'Supervisor: running') 'Show-RpaConnection.ps1 shows the mode and that the supervisor runs'
+          Get-Content "$data\supervisor\supervisor.log" -ErrorAction SilentlyContinue | Select-Object -Last 20 | ForEach-Object { Write-Host "  log | $_" }
+
+      # The sign-in through the supervisor: every session of the bot user is signed out, then the scenario connects to
+      # the public port, which signs the bot user in; the session is there after the scenario and gone after the idle
+      # time. The scenario client runs in this job's session, not in the bot user's, so its copy to the clipboard
+      # cannot reach the run's app (RPA_SCENARIO_OTHER_SESSION leaves that one check out).
+      # continue-on-error: a loopback Remote Desktop sign-in has not been seen on a hosted runner yet, and a refusal
+      # there must not keep the package from being uploaded. Its result shows on the step; the check is made on a real
+      # Windows Server in any case.
+      - name: Run the scenario through the RPA Supervisor (a session is made, and signed out after the idle time)
+        continue-on-error: true
+        timeout-minutes: 12
+        shell: powershell
+        run: |
+          function Assert([bool]$ok, [string]$what) { if (-not $ok) { throw "FAILED: $what" }; Write-Host "ok: $what" }
+          $install = Join-Path $env:ProgramFiles 'RPA Runner'
+          $data = Join-Path $env:ProgramData 'RPA Runner'
+          $quser = Join-Path ([Environment]::SystemDirectory) 'quser.exe'
+          function Get-BotSessions { $ErrorActionPreference = 'Continue'; @(& $quser rpa-ci-unattended 2>$null | Select-Object -Skip 1 | ForEach-Object { "$_".Trim() } | Where-Object { $_ }) }
+          Write-Host "::add-mask::$(([IO.File]::ReadAllText((Join-Path $data 'token'))).Trim())"
+
+          $output = @('n' | & "$install\runner\RpaPolicy.exe" apply (Join-Path $env:GITHUB_WORKSPACE 'desktop\installer\test\ci-policy-change.json') --yes)
+          Assert ($LASTEXITCODE -eq 0) 'RpaPolicy.exe allows the two demo apps'
+          foreach ($session in Get-BotSessions) {
+            # USERNAME, SESSIONNAME (empty for a disconnected session), ID, STATE, ...
+            if ($session -match '\s(\d+)\s+(Active|Disc)\s') { & (Join-Path ([Environment]::SystemDirectory) 'logoff.exe') $Matches[1] }
+          }
+          for ($i = 0; $i -lt 60 -and (Get-BotSessions).Count -gt 0; $i++) { Start-Sleep -Seconds 1 }
+          Assert ((Get-BotSessions).Count -eq 0) 'rpa-ci-unattended has no session'
+
+          $runner = @(& (Join-Path $PSHOME 'powershell.exe') -NoProfile -ExecutionPolicy Bypass -File "$install\scripts\Show-RpaConnection.ps1" | Where-Object { $_ -match '^Runner fingerprint: ((?:[0-9A-F]{2}:){31}[0-9A-F]{2})$' } | ForEach-Object { $Matches[1] })
+          Assert ($runner.Count -eq 1) 'the runner started in the bot user session at install time and printed its fingerprint'
+          $env:RPA_RUNNER_TOKEN = ([IO.File]::ReadAllText((Join-Path $data 'token'))).Trim()
+          $env:RPA_SCENARIO_OTHER_SESSION = '1'
+          dotnet desktop/runner/test/Rpa.Runner.Scenario/bin/Release/net8.0/Rpa.Runner.Scenario.dll `
+            --url wss://127.0.0.1:8765/rpa/v1 --fingerprint $runner[0] `
+            --app "$install\erp-demo\v1\ErpDemo.exe" --app-v2 "$install\erp-demo\v2\ErpDemo.exe" --out "$env:OUT\unattended-scenario"
+          $code = $LASTEXITCODE
+          $env:RPA_RUNNER_TOKEN = $null
+          $sessions = @(Get-BotSessions)
+          $sessions | ForEach-Object { Write-Host "  session | $_" }
+          Get-Content "$data\supervisor\supervisor.log" -ErrorAction SilentlyContinue | Select-Object -Last 30 | ForEach-Object { Write-Host "  log | $_" }
+          Assert ($code -eq 0) "the protocol scenario passes through the RPA Supervisor (exit code $code)"
+          Assert ($sessions.Count -eq 1) 'the scenario left one session of rpa-ci-unattended'
+          for ($i = 0; $i -lt 60 -and (Get-BotSessions).Count -gt 0; $i++) { Start-Sleep -Seconds 1 }
+          Assert ((Get-BotSessions).Count -eq 0) 'the supervisor signed rpa-ci-unattended out after the idle time'
+          Assert ([bool](Get-Content "$data\supervisor\supervisor.log" | Select-String 'No connection for 15 s; signing rpa-ci-unattended out\.')) 'the log says why it signed out'
+
+      # The uninstall puts back what -Unattended changed: the service, the group membership, Remote Desktop as found.
+      - name: Uninstall the install with -Unattended
+        timeout-minutes: 10
+        shell: powershell
+        run: |
+          function Assert([bool]$ok, [string]$what) { if (-not $ok) { throw "FAILED: $what" }; Write-Host "ok: $what" }
+          $install = Join-Path $env:ProgramFiles 'RPA Runner'
+          $before = Get-Content -Raw -LiteralPath "$env:OUT\unattended-before.json" | ConvertFrom-Json
+          Copy-Item (Join-Path $env:ProgramData 'RPA Runner\supervisor\*') "$env:OUT\install-logs\" -ErrorAction SilentlyContinue
+          $global:LASTEXITCODE = 0
+          & "$install\Uninstall-Rpa.ps1"
+          Assert ($LASTEXITCODE -eq 0) "Uninstall-Rpa.ps1 exits 0 (it was $LASTEXITCODE)"
+          Assert (-not (Get-Service -Name 'RPA Supervisor' -ErrorAction SilentlyContinue)) 'the service RPA Supervisor is gone'
+          Assert (-not [Diagnostics.EventLog]::SourceExists('RPA Supervisor')) 'its event source is gone'
+          $rdpUsers = ((New-Object Security.Principal.SecurityIdentifier 'S-1-5-32-555').Translate([Security.Principal.NTAccount]).Value -split '\\')[-1]
+          $groups = @(([ADSI]"WinNT://$env:COMPUTERNAME/rpa-ci-unattended,user").Groups() | ForEach-Object { $_.GetType().InvokeMember('Name', 'GetProperty', $null, $_, $null) })
+          Assert ($groups -notcontains $rdpUsers) "rpa-ci-unattended is no longer in $rdpUsers"
+          $deny = (Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections).fDenyTSConnections
+          Assert ($deny -eq $before.deny) "Remote Desktop is as it was found (fDenyTSConnections $deny)"
+          Assert (@(Get-NetFirewallRule -Name 'RPA-*' -ErrorAction SilentlyContinue).Count -eq 0) 'the two firewall rules are gone'
+
       - name: Collect the installed programs' logs
         if: always()
         timeout-minutes: 2
@@ -590,6 +720,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force "$env:OUT\install-logs" | Out-Null
           Copy-Item (Join-Path $env:ProgramData 'RPA Runner\logs\*') "$env:OUT\install-logs\" -ErrorAction SilentlyContinue
+          Copy-Item (Join-Path $env:ProgramData 'RPA Runner\supervisor\*') "$env:OUT\install-logs\" -ErrorAction SilentlyContinue
           Get-ChildItem "$env:OUT\install-logs" -ErrorAction SilentlyContinue | ForEach-Object { '{0} {1}' -f $_.Name, $_.Length }
           $global:LASTEXITCODE = 0
 
@@ -601,6 +732,7 @@ jobs:
           path: |
             out/install-logs
             out/install-scenario
+            out/unattended-scenario
             out/logs/browser-smoke*.log
           retention-days: 14
           if-no-files-found: ignore

@@ -31,6 +31,8 @@ export type { AllowedSubmit } from '../policy/submits.js';
 export const PLAYWRIGHT_VERSION = '1.63.0';
 /** How long connecting to a remote browser may take. */
 export const CONNECT_TIMEOUT_MS = 10_000;
+/** The same for an endpoint with a certificate fingerprint: its machine may sign a user in before it answers (5 to 16 s measured). */
+const PINNED_CONNECT_TIMEOUT_MS = 60_000;
 /** How long a Browser Server connection waits for a free session by default (BrowserEndpoint.sessionWaitMs). */
 export const SESSION_WAIT_MS = 60_000;
 /** The longest Session.idle() waits for pending address checks. */
@@ -437,7 +439,9 @@ async function connect(
   const options = { headers, timeout: CONNECT_TIMEOUT_MS, ...slowMo };
   if (e.mode === 'playwright') {
     const wsUrl = e.wsUrl as string;
-    return e.fingerprint ? connectPinned(wsUrl, e.fingerprint, (url) => connectServer(url, options)) : connectServer(wsUrl, options);
+    return e.fingerprint
+      ? connectPinned(wsUrl, e.fingerprint, (url) => connectServer(url, { ...options, timeout: PINNED_CONNECT_TIMEOUT_MS }))
+      : connectServer(wsUrl, options);
   }
   return chromium.connectOverCDP(e.wsUrl as string, options);
 }
@@ -454,7 +458,7 @@ async function connect(
  * tunnel (it takes one connection), so the connect fails.
  */
 async function connectPinned(wssUrl: string, fingerprint: string, connectTo: (wsUrl: string) => Promise<Browser>): Promise<Browser> {
-  const tunnel = await openPinnedTunnel(wssUrl, fingerprint, { handshakeTimeoutMs: CONNECT_TIMEOUT_MS });
+  const tunnel = await openPinnedTunnel(wssUrl, fingerprint, { handshakeTimeoutMs: PINNED_CONNECT_TIMEOUT_MS });
   try {
     const browser = await connectTo(tunnel.wsUrl);
     browser.on('disconnected', () => { void tunnel.close(); });

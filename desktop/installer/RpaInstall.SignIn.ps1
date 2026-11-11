@@ -1,6 +1,7 @@
-# The installer's module, second of three files (RpaInstall.psd1 loads them into one module): automatic sign-in, for
-# Windows PowerShell 5.1. Every change -AutoSignIn makes is recorded in install.json before it is made and put back by
-# the uninstaller; what an uninstall cannot put back goes into a list that the next install reads.
+# The installer's module, second of three files (RpaInstall.psd1 loads them into one module): automatic sign-in, the
+# stored passwords, and the records of what -AutoSignIn and -Unattended change, for Windows PowerShell 5.1. Every such
+# change is recorded in install.json before it is made and put back by the uninstaller; what an uninstall cannot put
+# back goes into a list that the next install reads. The steps of -Unattended are in RpaInstall.Machine.ps1.
 #
 # Registry values are read and written through .NET (not reg.exe: Windows PowerShell 5.1 leaves an empty string out of
 # a tool's command line, and quotes in the data would need escaping). install.json keeps a value as its type (REG_SZ,
@@ -8,6 +9,11 @@
 # list, bytes as hex pairs.
 
 $script:Winlogon = 'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+# The LSA secret Winlogon reads the automatic sign-in password from, and the one the RPA Supervisor reads the bot
+# user's password from (desktop/runner/src/Rpa.Supervisor/LsaSecret.cs). An L$ secret can be read on this machine only,
+# by SYSTEM and administrators.
+$script:AutoSignInSecret = 'DefaultPassword'
+$script:SupervisorSecret = 'L$RpaRunnerBotPassword'
 # Where a user's registry is loaded for a moment when that user is not signed in.
 $script:HiveMount = 'HKU\RpaBotUser'
 $script:MountedSid = $null
@@ -89,7 +95,17 @@ function Get-RpaChangeText($Change) {
     'key' { return ('registry key {0} (it did not exist)' -f $Change.key) }
     'task' { return ('scheduled task {0}{1} (it was enabled)' -f $Change.key, $Change.name) }
     'power' { return ('power timeout {0} {1} (it was {2} seconds)' -f $Change.key, $Change.name, $Change.value) }
-    'secret' { return 'the password stored for automatic sign-in (it is still stored)' }
+    'secret' {
+      if ([string]$Change.key -eq $script:SupervisorSecret) { return "the bot user's password stored for the RPA Supervisor (it is still stored)" }
+      return 'the password stored for automatic sign-in (it is still stored)'
+    }
+    'group' { return ('the membership of {0} in Remote Desktop Users (it was not a member)' -f $Change.value) }
+    'service' { return ('the service {0} (it was not there)' -f $Change.key) }
+    'firewall' {
+      $what = 'the runner'
+      if ([string]$Change.key -eq $script:BrowserRule) { $what = 'the browser' }
+      return ('firewall rule {0} (it was for {1})' -f $Change.key, $what)
+    }
   }
   ('{0} {1} {2}' -f $Change.kind, $Change.key, $Change.name).Trim()
 }
@@ -114,7 +130,7 @@ function Add-RpaLeftovers($Existing, [object[]]$Failed, [string]$User, [string]$
     $entries += New-Object psobject -Property $entry
   }
   [ordered]@{
-    note       = 'Settings that Uninstall-Rpa.ps1 could not put back to what they were before Install-Rpa.ps1 -AutoSignIn changed them. Each entry is the record of what was there before, and why it was not put back.'
+    note       = 'Settings that Uninstall-Rpa.ps1 could not put back to what they were before Install-Rpa.ps1 -AutoSignIn or -Unattended changed them. Each entry is the record of what was there before, and why it was not put back.'
     notPutBack = $entries
   }
 }
@@ -224,8 +240,26 @@ function Get-RpaPowerTimeout([string]$Subgroup, [string]$Setting) {
 function Set-RpaSignInPassword([hashtable]$Run) {
   if (-not $Run.Password) { throw 'There is no password to store for automatic sign-in.' }
   Add-RpaNativeTypes
-  Add-RpaSignInChange $Run ([ordered]@{ kind = 'secret'; key = 'DefaultPassword'; name = '' })
-  [RpaLsaSecret]::Store('DefaultPassword', $Run.Password)
+  Add-RpaSignInChange $Run ([ordered]@{ kind = 'secret'; key = $script:AutoSignInSecret; name = '' })
+  [RpaLsaSecret]::Store($script:AutoSignInSecret, $Run.Password)
+}
+
+# The bot user's password for the RPA Supervisor, which reads it for each sign-in: in the LSA secret
+# L$RpaRunnerBotPassword, the same way as the one for automatic sign-in. The password is the SecureString the run
+# holds (-UserPassword, or the one made for a user the run created); it does not go into a command's parameters, a
+# file or the output. The step that registers the service comes after this one and starts the service again, which it needs
+# to use a password stored again.
+function Set-RpaSupervisorPassword([hashtable]$Run) {
+  if (-not $Run.Password) { throw 'There is no password to store for the RPA Supervisor.' }
+  Add-RpaNativeTypes
+  Add-RpaSignInChange $Run ([ordered]@{ kind = 'secret'; key = $script:SupervisorSecret; name = '' })
+  [RpaLsaSecret]::Store($script:SupervisorSecret, $Run.Password)
+}
+
+# Deletes an LSA secret; one that is not there is no error.
+function Remove-RpaLsaSecret([string]$Name) {
+  Add-RpaNativeTypes
+  [RpaLsaSecret]::Remove($Name)
 }
 
 function Enable-RpaAutoSignIn([hashtable]$Run) {
@@ -308,17 +342,18 @@ function Restore-RpaSignInChange($Change) {
       Invoke-RpaNative powercfg.exe @('/setacvalueindex', 'SCHEME_CURRENT', [string]$Change.key, [string]$Change.name, [string]$Change.value)
       Invoke-RpaNative powercfg.exe @('/setactive', 'SCHEME_CURRENT')
     }
-    'secret' {
-      Add-RpaNativeTypes
-      [RpaLsaSecret]::Remove('DefaultPassword')
-    }
+    'secret' { Remove-RpaLsaSecret ([string]$Change.key) }
+    'group' { Remove-RpaGroupMember ([string]$Change.key) ([string]$Change.name) }
+    'service' { Remove-RpaSupervisor }
+    'firewall' { Set-RpaFirewallRuleProgram ([string]$Change.key) (Get-RpaSignedInProgram ([string]$Change.key)) }
   }
 }
 
 # Puts recorded changes back, the last one first. The values of a user go into that user's registry, loaded from its
 # profile when the user is not signed in; when that profile is no longer on the machine (the user was removed), the
 # setting went with it, and the record is skipped with a line that says so. With -KeepWinlogon the automatic sign-in
-# values and the stored password are left alone (someone has pointed automatic sign-in at another account since).
+# values and the password stored for it are left alone (someone has pointed automatic sign-in at another account
+# since).
 # Each change that cannot be put back is printed when that happens. Returns those: for each, the record (Change;
 # nothing when a user's registry could not be closed again) and a line that names it with the reason (Text).
 function Restore-RpaSignInChanges([object[]]$Changes, [bool]$KeepWinlogon) {
@@ -327,7 +362,7 @@ function Restore-RpaSignInChanges([object[]]$Changes, [bool]$KeepWinlogon) {
   [array]::Reverse($ordered)
   foreach ($change in $ordered) {
     $key = [string]$change.key
-    if ($KeepWinlogon -and ($change.kind -eq 'secret' -or $key -eq $script:Winlogon)) { continue }
+    if ($KeepWinlogon -and (($change.kind -eq 'secret' -and $key -eq $script:AutoSignInSecret) -or $key -eq $script:Winlogon)) { continue }
     $mounted = $false
     $failure = $null
     try {
