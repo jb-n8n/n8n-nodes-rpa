@@ -336,6 +336,9 @@ async function signOne(ctx: NodeContext, engine: Engine, i: number, json: IDataO
   // A download that was never run has no file evidence: the evidence line tells the approver the file was never seen.
   if (!notReplayed && fileEvidenceProblem(p)) return refuse([FILE_EVIDENCE_MISMATCH]);
   if (shownTextChanged(engine, proposal, p.shownText)) return refuse([SHOWN_TEXT_CHANGED]);
+  // shownTextChanged skips a missing text (older items may lack one). The point of a not-replayed approval is that the
+  // approver saw every step, so its change list must be there.
+  if (notReplayed && (typeof p.shownText.changeList !== 'string' || p.shownText.changeList === '')) return refuse([SHOWN_TEXT_CHANGED]);
   // Parsed once for the checks below; engine.signSteps parses the steps it signs itself.
   let script: Script;
   try {

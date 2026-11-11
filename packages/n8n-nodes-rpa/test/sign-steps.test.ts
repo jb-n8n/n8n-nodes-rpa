@@ -223,6 +223,13 @@ describe('Sign Steps: browser steps not replayed', () => {
     expect(e.message).toMatch(/^Sign Steps refused: /);
     expect(e.status).toBeUndefined();
   });
+  it('Sign Steps refuses a not-replayed item whose shown change list was removed', async () => {
+    const { changeList: _shown, ...item } = notReplayedItem(WRITES);
+    for (const without of [item, { ...item, changeList: '' }]) expect(only(await sign(without)).json.message).toBe(SHOWN);
+    // Another item without its shown change list signs as before (older items may not carry every shown text).
+    const { changeList: _old, ...older } = repairedItem(STEPS);
+    expect(only(await sign(older)).json.status).toBe('active');
+  });
   it('an item proven in a browser with a download still needs its file evidence', async () => {
     const download: Script = { ...STEPS, steps: [STEPS.steps[0], { intent: 'Get the file', download: { trigger: { role: 'button', name: 'Export' }, check: { name: '^items' } } }] };
     const e = only(await sign(craftedItem(download, ['download step', 'host: example.com', 'count unverified: the page that was read states no total'], { count: 0, total: null, diff: { missing: [], extra: [] } }))).json;
