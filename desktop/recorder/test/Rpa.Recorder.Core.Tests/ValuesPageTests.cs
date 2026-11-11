@@ -88,7 +88,7 @@ public class ValuesPageTests
     }
 
     [Fact]
-    public void A_value_made_a_variable_while_recording_is_ticked_and_can_be_renamed()
+    public void A_value_that_is_a_variable_already_is_ticked_and_can_be_renamed()
     {
         var s = Flow();
         s.MarkVariable(4, "in_CompanyCode");
@@ -101,6 +101,55 @@ public class ValuesPageTests
         Assert.True(row.NameEditable);
         Assert.Empty(ValuesPage.Changes([row]));
         Assert.Equal([(4, "company")], ValuesPage.Changes([row.WithName(" company ")]));
+    }
+
+    [Fact]
+    public void The_page_opened_again_from_Finished_shows_the_variables_it_made_with_their_start_values()
+    {
+        var s = Flow();
+        var rows = ValuesPage.Rows(s.Steps).ToList();
+        rows[3] = rows[3].WithTick(true).WithName("date_from");
+        ValuesPage.Apply(s, rows);
+
+        // Back from Finished: the page again, without the choices of before (Continue applied them).
+        var again = ValuesPage.Rows(s.Steps, null, s.StartValue);
+        var made = again.Single(r => r.Index == 5);
+        Assert.Equal((ValueKind.Variable, true, "date_from", "2026-01-20"), (made.Kind, made.Ticked, made.Name, made.StartValue));
+        Assert.Equal("Type the variable date_from into Date", made.Text);
+        Assert.Equal("Starts as \"2026-01-20\".", ValuesPage.StartsAs(made));
+        // Ticked for good; its name can change, and keeps its start value.
+        Assert.False(made.CanUntick);
+        Assert.True(made.NameEditable);
+        ValuesPage.Apply(s, again.Select(r => r.Index == 5 ? r.WithName("from") : r));
+        Assert.Equal(new Dictionary<string, string> { ["from"] = "2026-01-20" }, s.ToFile("Line items").Variables);
+
+        // A value as recorded and a secret have no start line; nor has a variable without a start value ({{).
+        Assert.All(again.Where(r => r.Index != 5), r => Assert.Null(ValuesPage.StartsAs(r)));
+        var braces = Record(Typed(1, User), Left(2, User, "{{x}}"));
+        Assert.Null(ValuesPage.StartsAs(ValuesPage.Rows(braces.Steps, null, braces.StartValue)[0]));
+    }
+
+    [Fact]
+    public void A_start_value_is_the_one_the_file_gets_and_is_cut_as_the_sentence_cuts_a_value()
+    {
+        var s = Flow();
+        var notes = s.Steps.Select((step, i) => (step, i)).Single(x => x.step.Label == "Notes").i;
+        Assert.Null(s.StartValue(s.Steps[notes]));
+        s.MarkVariable(notes, "notes");
+        Assert.Equal("monthly", s.StartValue(s.Steps[notes]));
+        // Made secret afterwards: no start value any more.
+        s.MarkSecret(notes, "notes_pin");
+        Assert.Null(s.StartValue(s.Steps[notes]));
+
+        var longText = new string('a', 80);
+        var t = Record(Typed(1, Notes), Left(2, Notes, longText));
+        t.MarkVariable(0, "notes");
+        var row = ValuesPage.Rows(t.Steps, null, t.StartValue)[0];
+        Assert.Equal($"Starts as \"{new string('a', 57)}...\".", ValuesPage.StartsAs(row));
+        // A value the file does not take (more than 500 characters) is not shown as a start value either.
+        var tooLong = Record(Typed(1, Notes), Left(2, Notes, new string('b', Session.MaxStartValueLength + 1)));
+        tooLong.MarkVariable(0, "notes");
+        Assert.Null(tooLong.StartValue(tooLong.Steps[0]));
     }
 
     [Fact]
@@ -214,8 +263,7 @@ public class ValuesPageTests
     public void The_page_asks_one_question_and_says_what_a_tick_does()
     {
         Assert.Equal("Which of these change from run to run?", BarText.Guidance(BarStage.Values));
-        Assert.Equal("Tick each value that changes: it becomes a variable with the name under it. On each run n8n supplies it, " +
-                     "starting with the value recorded here. A value left unticked stays as recorded.", ValuesPage.Intro);
+        Assert.Equal("Tick each value that changes from run to run. n8n can then set it on each run, and it starts as recorded here.", ValuesPage.Intro);
         Assert.Equal(("Continue", "Back"), (ValuesPage.Continue, ValuesPage.Back));
         Assert.Equal("Variable name", ValuesPage.NameLabel);
     }
@@ -223,10 +271,11 @@ public class ValuesPageTests
     [Fact]
     public void A_tick_that_cannot_be_taken_off_says_why()
     {
-        var s = Flow();
-        s.MarkVariable(1, "user");
+        // A typed value that holds {{ is the field's variable from the start: a step cannot type {{ as text.
+        var s = Record(Typed(1, User), Left(2, User, "{{x}}"), Typed(3, Password), Left(4, Password, null), Typed(5, Notes), Left(6, Notes, "monthly"));
         var rows = ValuesPage.Rows(s.Steps);
-        Assert.Equal("Made a variable while recording, so it stays one. Its name can change below.", ValuesPage.Tip(rows[0]));
+        Assert.Equal((ValueKind.Variable, "user_name"), (rows[0].Kind, rows[0].Name));
+        Assert.Equal("Already a variable. Its name can change below.", ValuesPage.Tip(rows[0]));
         Assert.Equal("A secret stays a secret: its typed value is not in the recording.", ValuesPage.Tip(rows[1]));
         Assert.Null(ValuesPage.Tip(rows[2]));
     }

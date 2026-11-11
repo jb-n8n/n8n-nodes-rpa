@@ -25,12 +25,12 @@ draw their own controls: there it may record nothing, or steps that do not find 
 The bar opens at the top right of the screen and stays on top. Its top line says the stage, with a coloured dot, and
 one sentence under it says what to do now. Drag it aside if it covers the app. Clicks on the bar are not recorded.
 
-**Ready.** Two buttons: **Start an app…** and **Use an app that is already open…**. The bar says
+**Ready.** Two buttons: **Start an app…** and **Use an open app…**. The bar says
 `Your clicks and what you type in that app become steps, listed here as plain sentences.` and
 `Clicks on this window are never recorded, and password boxes are never read.`
 - **Start an app…** opens a small window: **App** with **Browse…**, and **Arguments (optional)**. Do not put a
   password in the arguments: they are saved in the recording. Choose **Start recording**.
-- **Use an app that is already open…** lists the windows of other apps. Choose the app's window.
+- **Use an open app…** lists the windows of other apps. Choose the app's window.
 
 **Starting.** `Starting <app>…` and `Wait for its window: recording starts when it shows.` An app that shows no
 window within 30 seconds is reported.
@@ -42,33 +42,37 @@ without detours. Each step appears in the numbered list as a sentence, such as `
 - To return a value to n8n, point at it in the app and press **F9**: `Point at a value in the app and press F9 to read it on every run.`
   The bar asks for an output name (for example `out_result_count`) and adds `Read "6 line items" as out_result_count`.
 - To fix a mistake, select the step and choose **Delete step**.
-- **Make variable…** and **Make secret…** turn a selected step's value into a variable or a secret now. You can also
-  do it all at once after **Finish**.
+- **Make secret…** turns a selected step's typed value into a secret. Values that change from run to run become
+  variables after **Finish**.
 
 <!-- screenshot: recorder-bar-recording.png -->
 
-**Which of these change from run to run?** After **Finish**, the bar lists every step that typed a value or chose an
-item. Tick each value that changes from run to run, such as a date or a company code. It becomes a variable with the
-name under it, which you can change, and the recorded value becomes its start value. Leave the rest unticked: they stay
-as recorded. A secret shows as a secret and stays one. Choose **Continue**, or **Back** to record more.
+**Which of these change from run to run?** After **Finish**, the top line says `Almost done · <n> steps` and the bar
+lists every step that typed a value or chose an item. Tick each value that changes from run to run, such as a date or
+a company code. It becomes a variable with the name under it, which you can change, and the recorded value becomes its
+start value. Leave the rest unticked: they stay as recorded. A secret shows as a secret and stays one. Choose
+**Continue**, or **Back** to record more.
 
 <!-- screenshot: recorder-values-page.png -->
 
-**Finished.** `Check the steps, then name the recording and save it.` **Name** starts as `<program> recording`.
-The folder is `Documents\RPA recordings`. **Change folder…** picks another. Choose **Save**. It asks before it replaces
-a file.
+**Finished.** `Finished · <n> steps` and `Check the steps, then name the recording and save it.` **Name** starts as
+`<program> recording`. The folder is `Documents\RPA recordings`. **Change folder…** picks another. Choose **Save**. It
+asks before it replaces a file. **Back** returns to the values page, to tick another value or rename a variable.
 
-**Saved.** `Saved <file> in <folder>. Two things are left to do:`
+**Saved.** `Saved · <n> steps` and `Saved <file> in <folder>. Two things are left to do:`
 1. **Allow <app> on this machine**, with **Allow this app…**. The runner starts only the apps in its **policy**, the
    list of allowed apps on this machine. The button starts the policy tool with administrator rights: Windows asks for
    them, and the tool shows what it will allow (the app's path and a fingerprint of the file) and asks. Type `y`. The
    bar then says the tool reported success. A recorder that is not part of an install shows the command for an
    administrator instead.
-2. **Import the recording in n8n**, with **Show the file**. Upload the `.rpa-recording.json` file on n8n's
-   **Import a bot** form ([desktop bot guide](desktop-bot.md#4-import-and-approve)). n8n lists a few more steps than
-   the bar: a wait for each window, and one for each file the bot returns.
+2. **Import the recording in n8n**, with **Show the file**: `Upload it in n8n's Import a bot form.` Upload the
+   `.rpa-recording.json` file there ([desktop bot guide](desktop-bot.md#4-import-and-approve)). Its review page also
+   lists the steps the import adds: a wait for each window, and one for each file the bot returns.
 
 **Record another** starts over. It asks first when the steps are not saved, and so does closing the bar.
+
+The bar writes each stage and each button you press, with the time, to `%LOCALAPPDATA%\RPA Recorder\bar.log`. The log
+holds no step, no typed value and no file name. It starts again at 200 KB.
 
 <!-- screenshot: recorder-bar-saved.png -->
 

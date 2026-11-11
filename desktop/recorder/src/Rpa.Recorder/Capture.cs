@@ -240,6 +240,12 @@ internal sealed class Capture : IDisposable
         lock (_gate) return _session.Steps.Select(s => (s, _late.Contains(s.At))).ToArray();
     }
 
+    /// <summary>The start value a step gives its variable (<see cref="Session.StartValue"/>), or null.</summary>
+    public string? StartValue(RecordedStep step)
+    {
+        lock (_gate) return _session.StartValue(step);
+    }
+
     public void AddRead(ElementFacts element, WindowFacts window, string name) =>
         Use(s => { s.AddRead(element, window, name); _seen[s.Steps[^1].At] = element.Name; return 0; });
 

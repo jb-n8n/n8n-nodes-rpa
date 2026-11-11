@@ -88,41 +88,19 @@ public class StepListTests
     public void The_step_actions_are_enabled_only_for_a_selected_step_they_fit()
     {
         var steps = Flow().Steps;
-        Assert.Equal(new StepActions(false, false, false, "Select a step to change it."), StepRows.ActionsFor(null, 0));
-        Assert.Equal(new StepActions(true, true, true, "Step 2 is selected."), StepRows.ActionsFor(steps[1], 2));
-        Assert.Equal(new StepActions(true, false, false, "Step 3 is already a secret."), StepRows.ActionsFor(steps[2], 3));
-        Assert.Equal(new StepActions(true, false, false, "Step 7 has no value to make a variable or a secret."), StepRows.ActionsFor(steps[6], 7));
-        // A chosen item can be a variable; only a typed value can be a secret.
-        Assert.Equal(new StepActions(true, true, false, "Step 5 is selected."), StepRows.ActionsFor(steps[4], 5));
-        Assert.Equal(new StepActions(true, false, false, "Step 1 has no value to make a variable or a secret."), StepRows.ActionsFor(steps[0], 1));
+        Assert.Equal(new StepActions(false, false, "Select a step to change it."), StepRows.ActionsFor(null, 0));
+        Assert.Equal(new StepActions(true, true, "Step 2 is selected."), StepRows.ActionsFor(steps[1], 2));
+        Assert.Equal(new StepActions(true, false, "Step 3 is already a secret."), StepRows.ActionsFor(steps[2], 3));
+        Assert.Equal(new StepActions(true, false, "Step 7 has no typed value to make a secret."), StepRows.ActionsFor(steps[6], 7));
+        // Only a typed value can be a secret, not a chosen item.
+        Assert.Equal(new StepActions(true, false, "Step 5 has no typed value to make a secret."), StepRows.ActionsFor(steps[4], 5));
+        Assert.Equal(new StepActions(true, false, "Step 1 has no typed value to make a secret."), StepRows.ActionsFor(steps[0], 1));
 
         // A file name typed into a Save dialog goes into the run's export folder: it stays as recorded.
         var save = new WindowFacts("app.exe", "Save As", "#32770");
         var fileName = El("Edit", "1001", "File name:", "Edit", false, false, El("ComboBox", "FileNameControlHost", "File name:"));
         var export = Record(Typed(1, fileName, save), Left(2, fileName, @"C:\out\report.csv", window: save)).Steps[0];
-        Assert.Equal(new StepActions(true, false, false, "Step 4 saves a file into the run's export folder: its name stays as recorded."), StepRows.ActionsFor(export, 4));
-    }
-
-    [Fact]
-    public void The_variable_question_names_the_step_and_its_value_and_uses_the_buttons_words()
-    {
-        var steps = Flow().Steps;
-        var q = DialogText.Variable(5, steps[4]);
-        Assert.Equal("Make step 5 a variable", q.Title);
-        Assert.Equal("Step 5 chooses \"2000\" in Company code. On each run this value comes from the variable below (n8n supplies it).", q.Text);
-        Assert.Equal(("Variable name", "company_code", "Make variable"), (q.NameLabel, q.Suggested, q.Action));
-        Assert.Equal(BarText.MakeVariable, q.Action + "…");
-
-        var typed = DialogText.Variable(2, steps[1]);
-        Assert.Equal("Step 2 types \"clerk\" into User name. On each run this value comes from the variable below (n8n supplies it).", typed.Text);
-        Assert.Equal("user_name", typed.Suggested);
-
-        // A value that is a variable already: the question names the variable, and suggests its name.
-        var s = Flow();
-        s.MarkVariable(4, "in_CompanyCode");
-        var again = DialogText.Variable(5, s.Steps[4]);
-        Assert.Equal("Step 5 chooses the variable in_CompanyCode in Company code. On each run this value comes from the variable below (n8n supplies it).", again.Text);
-        Assert.Equal("in_CompanyCode", again.Suggested);
+        Assert.Equal(new StepActions(true, false, "Step 4 saves a file into the run's export folder: its name stays as recorded."), StepRows.ActionsFor(export, 4));
     }
 
     [Fact]

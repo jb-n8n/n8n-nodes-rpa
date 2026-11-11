@@ -33,6 +33,7 @@ All notable changes to `n8n-nodes-rpa`, the `rpa-browser` image and the Windows 
 - n8n waits up to 60 seconds for a desktop runner, and tries once more when the connection drops during its TLS handshake.
 - `RpaPolicy.exe apply` takes the change file from where it is: it copies it into `C:\ProgramData\RPA Runner\policy-changes\` first. No need to copy it by hand.
 - The README and the guides are rewritten around three ways in. The reference moved to `docs/reference/`.
+- **RPA Recorder**: a value becomes a variable on the page after **Finish** only (**Make variable…** left the bar, and **Back** before saving returns to that page), the top line says `Almost done` on that page and `Saved` after saving, and the bar logs its stages and buttons to `%LOCALAPPDATA%\RPA Recorder\bar.log`.
 
 ### Removed
 

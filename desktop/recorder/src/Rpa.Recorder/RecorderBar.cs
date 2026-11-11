@@ -8,12 +8,13 @@ namespace Rpa.Recorder;
 /// The recorder's bar: a window that stays on top at the top right of the screen. At the top, the state in words with
 /// a coloured dot (red while recording, amber while paused), one sentence that says what to do now, and the notice
 /// line. Below, what the stage needs: Ready offers two ways to choose the app; Recording and Paused show Pause or
-/// Resume, Finish, the numbered steps and the step actions; after Finish, one page asks which recorded values change
-/// from run to run (Back returns to the list, paused); Finished adds the name and Save; after saving, what to do next
-/// (allow the app with the policy tool, import the recording in n8n) and Record another. Everything the bar decides or
-/// says is in Rpa.Recorder.Core (BarText, StepRows, ValuesPage, DialogText, NoticeLine, SaveNames, NextSteps,
-/// BarLayout); this class shows it. The bar's own windows are never recorded, and after a bar action while recording
-/// the app gets the focus back.
+/// Resume, Finish, the numbered steps and the step actions (Delete step, Make secret…); after Finish, one page asks
+/// which recorded values change from run to run, the one place where a value becomes a variable (Back returns to the
+/// list, paused, or to Finished once the recording has ended); Finished adds the name, Save, and Back to that page;
+/// after saving, what to do next (allow the app with the policy tool, import the recording in n8n) and Record another. Everything the bar decides or says is in Rpa.Recorder.Core
+/// (BarText, StepRows, ValuesPage, DialogText, NoticeLine, SaveNames, NextSteps, BarLayout); this class shows it, and
+/// writes its stages and buttons to BarLog. The bar's own windows are never recorded, and after a bar action while
+/// recording the app gets the focus back.
 /// </summary>
 internal sealed class RecorderBar : Form
 {
@@ -25,6 +26,7 @@ internal sealed class RecorderBar : Form
     private readonly string _documents;
     private readonly string? _policyTool;
     private readonly NoticeLine _notices = new();
+    private readonly BarLog _log = new(BarLog.PathIn(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)), () => DateTimeOffset.Now);
     private Capture _capture;
     private BarStage _stage = BarStage.Ready;
     private string? _starting;
@@ -33,6 +35,8 @@ internal sealed class RecorderBar : Form
     private IReadOnlyList<RecordedStep>? _saved;
     private string? _savedRecording, _savedChange;
     private AllowState _allow = AllowState.NotDone;
+    // The recording has ended (Finish, then the name and Save): it cannot resume, so Back on the values page leads to Finished.
+    private bool _ended;
     private bool _asking;
     // A screen narrower than 1280 at 100 % (BarLayout.WidthFor): the bar starts narrower and Ready says it can be moved.
     private bool _narrow;
@@ -61,7 +65,6 @@ internal sealed class RecorderBar : Form
     private readonly Label _actionHint;
     private readonly FlowLayoutPanel _actionRow = Row();
     private readonly Button _delete = SmallDialog.NewButton(BarText.DeleteStep);
-    private readonly Button _variable = SmallDialog.NewButton(BarText.MakeVariable);
     private readonly Button _secret = SmallDialog.NewButton(BarText.MakeSecret);
     // The values page (Values): its sentence, a scrolling table in the list's place, a problem line and Back / Continue.
     private readonly Label _valuesIntro;
@@ -79,6 +82,8 @@ internal sealed class RecorderBar : Form
     private readonly Label _folderLine;
     private readonly Button _changeFolder = SmallDialog.NewButton(BarText.ChangeFolder);
     private readonly Button _save = SmallDialog.NewButton(BarText.Save);
+    // Finished's Back to the values page: the page's own Back, in the same place beside the stage's primary button.
+    private readonly Button _finishedBack = SmallDialog.NewButton(ValuesPage.Back);
     private readonly TableLayoutPanel _nextBlock = Column();
     private readonly Label _allowTitle, _allowDetail, _importTitle, _importDetail;
     private readonly TextBox _allowCommand = new() { ReadOnly = true, Dock = DockStyle.Fill, BackColor = SystemColors.Window, Margin = new Padding(0, 0, 0, BarLayout.Tight) };
@@ -121,18 +126,27 @@ internal sealed class RecorderBar : Form
         Build();
         _capture = NewCapture();
 
+        // The bar log: each button by its name and the stage it was pressed in, before its action runs.
+        foreach (var (button, name) in new[]
+                 {
+                     (_startApp, BarButton.StartApp), (_useOpen, BarButton.UseOpenApp), (_pause, BarButton.PauseOrResume), (_finish, BarButton.Finish),
+                     (_back, BarButton.Back), (_finishedBack, BarButton.Back), (_continue, BarButton.Continue), (_delete, BarButton.DeleteStep), (_secret, BarButton.MakeSecret),
+                     (_changeFolder, BarButton.ChangeFolder), (_save, BarButton.Save), (_allowButton, BarButton.Allow), (_showFile, BarButton.ShowFile),
+                     (_recordAnother, BarButton.RecordAnother),
+                 })
+            button.Click += (_, _) => _log.Pressed(name, _stage);
         _startApp.Click += async (_, _) => await StartApp();
         _useOpen.Click += (_, _) => UseOpenApp();
         _pause.Click += (_, _) => TogglePause();
         _finish.Click += (_, _) => Finish();
-        _back.Click += (_, _) => ShowStage(BarStage.Paused);
+        _back.Click += (_, _) => GoBack();
+        _finishedBack.Click += (_, _) => GoBack();
         _continue.Click += (_, _) => ContinueFromValues();
         _valuesArea.ClientSizeChanged += (_, _) => FitValues();
         // Once saved, selecting a step shows the step actions again.
         _list.SelectedIndexChanged += (_, _) => { if (_stage == BarStage.Saved) ShowStage(_stage); else ShowActions(); };
         _delete.Click += (_, _) => Delete();
-        _variable.Click += (_, _) => Mark(secret: false);
-        _secret.Click += (_, _) => Mark(secret: true);
+        _secret.Click += (_, _) => MakeSecret();
         _changeFolder.Click += (_, _) => ChangeFolder();
         _save.Click += (_, _) => Save();
         _allowButton.Click += async (_, _) => await Allow();
@@ -189,6 +203,9 @@ internal sealed class RecorderBar : Form
         _readyText.Margin = new Padding(0, BarLayout.Group, 0, 0);
         Buttons(_recordRow, BarLayout.Space, _pause, _finish);
         _recordRow.Margin = new Padding(0, BarLayout.Space, 0, 0);
+        // Named here: WinForms otherwise names an unnamed control after a label before it (the values page's hidden intro).
+        _list.AccessibleName = BarText.ListName;
+        _valuesArea.AccessibleName = ValuesPage.AreaName;
         _listArea.Controls.Add(_list);
         _listArea.Controls.Add(_empty);
         _empty.BringToFront();
@@ -197,7 +214,7 @@ internal sealed class RecorderBar : Form
         // The step actions are two rows of the bar's own table, not a table of their own: a table inside a table is
         // measured at the width of its widest label, where the buttons wrapped into three rows, and the bar kept those
         // rows' height as an empty band under them. They never wrap: 4 apart, they fit a bar 360 wide.
-        Buttons(_actionRow, BarLayout.Tight, _delete, _variable, _secret);
+        Buttons(_actionRow, BarLayout.Tight, _delete, _secret);
         _actionRow.WrapContents = false;
         _actionHint.Margin = new Padding(0, BarLayout.Space, 0, 0);
 
@@ -224,9 +241,14 @@ internal sealed class RecorderBar : Form
         _changeFolder.Anchor = AnchorStyles.Right;
         folderRow.Controls.Add(_folderLine, 0, 0);
         folderRow.Controls.Add(_changeFolder, 1, 0);
-        _save.Anchor = AnchorStyles.Right;
-        _save.Margin = new Padding(0, BarLayout.Space, 0, 0);
-        _saveBlock.Controls.AddRange([nameLabel, _name, folderRow, _save]);
+        // Right to left, as the values page's buttons: Save at the right edge, Back to its left.
+        var saveRow = Row();
+        saveRow.FlowDirection = FlowDirection.RightToLeft;
+        saveRow.WrapContents = false;
+        saveRow.Margin = new Padding(0, BarLayout.Space, 0, 0);
+        _save.Margin = _finishedBack.Margin = new Padding(BarLayout.Space, 0, 0, 0);
+        saveRow.Controls.AddRange([_save, _finishedBack]);
+        _saveBlock.Controls.AddRange([nameLabel, _name, folderRow, saveRow]);
 
         _allowTitle.Margin = new Padding(0, BarLayout.Group, 0, 0);
         _importTitle.Margin = new Padding(0, BarLayout.Group, 0, 0);
@@ -325,6 +347,7 @@ internal sealed class RecorderBar : Form
     private void ShowStage(BarStage stage)
     {
         _stage = stage;
+        _log.Stage(stage);
         var parts = BarText.Parts(stage, _list.SelectedIndex >= 0);
         _dot.ForeColor = BarText.Color(stage) switch { BarColor.Recording => Red, BarColor.Paused => Amber, _ => SystemColors.GrayText };
         _state.Text = BarText.StateLine(stage, _starting ?? _capture.ProgramPath, _shown.Count);
@@ -340,10 +363,12 @@ internal sealed class RecorderBar : Form
         var values = parts.HasFlag(BarPart.ValuesPage);
         _listArea.Visible = parts.HasFlag(BarPart.List) || values;
         _list.Visible = parts.HasFlag(BarPart.List);
-        _empty.Visible = _list.Visible && _shown.Count == 0;
+        // From the parts, not _list.Visible: before the bar is first shown, Visible reads false for every control in it.
+        _empty.Visible = BarText.ShowsEmptyList(parts, _shown.Count);
         _valuesArea.Visible = _valuesIntro.Visible = _valuesButtons.Visible = values;
         _valuesProblem.Visible = values && _valuesProblem.Text.Length > 0;
         _saveBlock.Visible = parts.HasFlag(BarPart.SaveBlock);
+        _finishedBack.Visible = stage == BarStage.Finished && BarText.Back(stage, _ended, _shown) is not null;
         _nextBlock.Visible = parts.HasFlag(BarPart.NextSteps);
         _pause.Text = BarText.PauseButton(stage);
         _folderLine.Text = SaveNames.FolderLine(SaveNames.FolderShown(_folder, _documents));
@@ -358,7 +383,7 @@ internal sealed class RecorderBar : Form
             _allowCommand.Visible = allow.Command is not null;
             _allowButton.Visible = allow.Button is not null;
             _allowButton.Enabled = allow.ButtonEnabled;
-            var import = NextSteps.Import(NextSteps.ReturnsFile(_saved ?? _shown));
+            var import = NextSteps.Import();
             _importTitle.Text = import.Title;
             _importDetail.Text = import.Detail;
         }
@@ -411,7 +436,6 @@ internal sealed class RecorderBar : Form
         var i = _list.SelectedIndex;
         var actions = StepRows.ActionsFor(i >= 0 && i < _shown.Count ? _shown[i] : null, i + 1);
         _delete.Enabled = actions.Delete;
-        _variable.Enabled = actions.Variable;
         _secret.Enabled = actions.Secret;
         _actionHint.Text = actions.Hint;
     }
@@ -518,7 +542,13 @@ internal sealed class RecorderBar : Form
             EndRecording();
             return;
         }
-        ShowValues(ValuesPage.Rows(steps, _valueRows));
+        OpenValues();
+    }
+
+    /// <summary>The values page for the steps as they are now, with the choices made before Back.</summary>
+    private void OpenValues()
+    {
+        ShowValues(ValuesPage.Rows(_capture.Steps().Select(s => s.Step).ToArray(), _valueRows, _capture.StartValue));
         ShowStage(BarStage.Values);
         var first = _valuesTable.Controls.OfType<CheckBox>().FirstOrDefault(c => c.Enabled);
         if (first is not null) first.Focus();
@@ -535,9 +565,21 @@ internal sealed class RecorderBar : Form
         EndRecording();
     }
 
+    /// <summary>Back (<see cref="BarText.Back"/>): from the values page to the list, paused, or to Finished once the
+    /// recording has ended; from Finished to the values page.</summary>
+    private void GoBack()
+    {
+        if (BarText.Back(_stage, _ended, _shown) is not { } to) return;
+        if (to == BarStage.Values) OpenValues();
+        else ShowStage(to);
+    }
+
     private void EndRecording()
     {
-        _capture.Stop();
+        if (!_ended) _capture.Stop();
+        _ended = true;
+        // A step selected while recording would stay selected, and Finished and Saved would open with the step actions.
+        _list.ClearSelected();
         if (_name.Text.Trim().Length == 0) _name.Text = SaveNames.SuggestedName(_capture.ProgramPath);
         ShowStage(BarStage.Finished);
         _name.Focus();
@@ -556,7 +598,9 @@ internal sealed class RecorderBar : Form
         foreach (var old in _valuesTable.Controls.Cast<Control>().ToArray()) old.Dispose();
         _valueTexts.Clear();
         _valuesTable.RowStyles.Clear();
-        _valuesTable.RowCount = rows.Count * 2;
+        // Three table rows a value: its sentence, the grey start line of a variable (empty, so 0 high, without one), and
+        // its name box or secret note.
+        _valuesTable.RowCount = rows.Count * 3;
         int D(int logical) => LogicalToDeviceUnits(logical);
         for (var i = 0; i < rows.Count; i++)
         {
@@ -608,12 +652,17 @@ internal sealed class RecorderBar : Form
                 };
                 under = name;
             }
-            _valuesTable.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            _valuesTable.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            _valuesTable.Controls.Add(tick, 0, 2 * i);
-            _valuesTable.Controls.Add(number, 1, 2 * i);
-            _valuesTable.Controls.Add(text, 2, 2 * i);
-            _valuesTable.Controls.Add(under, 2, 2 * i + 1);
+            for (var r = 0; r < 3; r++) _valuesTable.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            _valuesTable.Controls.Add(tick, 0, 3 * i);
+            _valuesTable.Controls.Add(number, 1, 3 * i);
+            _valuesTable.Controls.Add(text, 2, 3 * i);
+            if (ValuesPage.StartsAs(row) is { } startsAs)
+            {
+                var start = new Label { AutoSize = true, Text = startsAs, UseMnemonic = false, ForeColor = SystemColors.GrayText, Margin = new Padding(0, D(BarLayout.Tight), 0, 0) };
+                _valueTexts.Add(start);
+                _valuesTable.Controls.Add(start, 2, 3 * i + 1);
+            }
+            _valuesTable.Controls.Add(under, 2, 3 * i + 2);
         }
         _valuesTable.ResumeLayout();
         _valuesArea.AutoScrollPosition = Point.Empty;
@@ -637,16 +686,15 @@ internal sealed class RecorderBar : Form
         BackToApp();
     }
 
-    private void Mark(bool secret)
+    private void MakeSecret()
     {
         var i = _list.SelectedIndex;
         if (i < 0 || i >= _shown.Count) return;
-        var question = secret ? DialogText.Secret(i + 1, _shown[i]) : DialogText.Variable(i + 1, _shown[i]);
-        using var dialog = new NameDialog(this, question, []);
+        using var dialog = new NameDialog(this, DialogText.Secret(i + 1, _shown[i]), []);
         if (Ask(dialog))
         {
             var name = dialog.Answer;
-            try { _capture.Use(s => { if (secret) s.MarkSecret(i, name); else s.MarkVariable(i, name); return 0; }); }
+            try { _capture.Use(s => { s.MarkSecret(i, name); return 0; }); }
             catch (Exception e) when (e is ArgumentException or InvalidOperationException) { Say(e.Message); }
         }
         BackToApp();
@@ -799,6 +847,7 @@ internal sealed class RecorderBar : Form
         _saved = null;
         _savedRecording = _savedChange = null;
         _valueRows = null;
+        _ended = false;
         _allow = AllowState.NotDone;
         _name.Text = "";
         _list.ShowRows([], followNewest: false);

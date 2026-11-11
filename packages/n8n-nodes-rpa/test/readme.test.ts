@@ -204,13 +204,16 @@ describe('the recorder guide', () => {
   it('quotes the bar as the recorder says it', () => {
     const source = ['BarText.cs', 'NextSteps.cs', 'Notices.cs', 'DialogText.cs', 'ValuesPage.cs', 'SaveNames.cs', 'StepRows.cs']
       .map((f) => read(`desktop/recorder/src/Rpa.Recorder.Core/${f}`)).join('\n');
-    for (const text of ['Start an app…', 'Use an app that is already open…', 'Start recording', 'Finish', 'Delete step', 'Make variable…', 'Make secret…',
+    for (const text of ['Start an app…', 'Use an open app…', 'Start recording', 'Finish', 'Delete step', 'Make secret…',
       'Which of these change from run to run?', 'Continue', 'Change folder…', 'Allow this app…', 'Show the file', 'Record another',
       'Point at a value in the app and press F9 to read it on every run.', 'Input in other programs is not recorded.', 'Check the steps, then name the recording and save it.',
-      'Your clicks and what you type in that app become steps, listed here as plain sentences.', 'RPA recordings']) {
+      'Your clicks and what you type in that app become steps, listed here as plain sentences.', 'RPA recordings',
+      'Almost done · ', 'Finished · ', 'Saved · ', 'Upload it in n8n\'s Import a bot form.']) {
       expect(doc.recordBot, text).toContain(text);
       expect(source, text).toContain(text);
     }
+    // Variables are made on the values page only.
+    expect(doc.recordBot).not.toContain('Make variable');
     expect((doc.recordBot.match(/<!-- screenshot: [a-z0-9-]+\.png -->/g) ?? []).length).toBeLessThanOrEqual(4);
   });
 });

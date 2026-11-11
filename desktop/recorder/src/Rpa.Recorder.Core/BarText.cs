@@ -16,7 +16,7 @@ public enum BarColor { Neutral, Recording, Paused }
 public enum BarPart
 {
     None = 0,
-    /// <summary>Start an app… and Use an app that is already open….</summary>
+    /// <summary>Start an app… and Use an open app….</summary>
     StartButtons = 1,
     /// <summary>The two sentences about what gets recorded.</summary>
     ReadyText = 2,
@@ -25,7 +25,7 @@ public enum BarPart
     List = 8,
     /// <summary>The line about F9 under the list.</summary>
     ReadHint = 16,
-    /// <summary>Delete step, Make variable…, Make secret… with the line that says what they act on.</summary>
+    /// <summary>Delete step and Make secret… with the line that says what they act on.</summary>
     StepActions = 32,
     /// <summary>Name, the folder with Change folder…, and Save.</summary>
     SaveBlock = 64,
@@ -40,11 +40,11 @@ public static class BarText
 {
     public const string Title = "RPA Recorder";
     public const string StartApp = "Start an app…";
-    public const string UseOpenApp = "Use an app that is already open…";
+    // Short enough to fit beside Start an app… on a bar 360 wide. Its window keeps the longer title (DialogText.OpenTitle).
+    public const string UseOpenApp = "Use an open app…";
     public const string Finish = "Finish";
     public const string DeleteStep = "Delete step";
-    // Short enough that the three step actions fit one row on a bar 360 wide.
-    public const string MakeVariable = "Make variable…";
+    // A variable is made on the values page (ValuesPage); a secret can be made on the bar, before saving.
     public const string MakeSecret = "Make secret…";
     public const string Name = "Name";
     public const string Save = "Save";
@@ -53,6 +53,12 @@ public static class BarText
     public const string ReadHint = "Point at a value in the app and press F9 to read it on every run.";
     /// <summary>The empty list before anything is recorded.</summary>
     public const string EmptyList = "The steps appear here once the app is recording.";
+    /// <summary>The list's accessible name: without one, Windows names it after a label near it.</summary>
+    public const string ListName = "Recorded steps";
+
+    /// <summary>Whether the empty list shows <see cref="EmptyList"/>: wherever the stage shows the list and there are no
+    /// steps. Decided from the stage's parts, so it holds before the window is first shown.</summary>
+    public static bool ShowsEmptyList(BarPart parts, int steps) => parts.HasFlag(BarPart.List) && steps == 0;
 
     /// <summary>The two sentences of Ready. On a small screen (<paramref name="narrow"/>, see
     /// <see cref="BarLayout.WidthFor"/>) the second also says that the bar can be moved.</summary>
@@ -67,14 +73,17 @@ public static class BarText
 
     public static string Steps(int count) => count == 1 ? "1 step" : $"{count} steps";
 
-    /// <summary>The top line: the state in words, with the step count.</summary>
+    /// <summary>The top line: the state in words, with the step count. The values page is Almost done: Back can still
+    /// resume recording.</summary>
     public static string StateLine(BarStage stage, string? programPath, int steps) => stage switch
     {
         BarStage.Ready => "Ready",
         BarStage.Starting => $"Starting {AppName(programPath)}…",
         BarStage.Recording => $"Recording {AppName(programPath)} · {(steps == 0 ? "no steps yet" : Steps(steps))}",
         BarStage.Paused => $"Paused · {Steps(steps)}",
-        _ => $"Finished · {Steps(steps)}",
+        BarStage.Values => $"Almost done · {Steps(steps)}",
+        BarStage.Finished => $"Finished · {Steps(steps)}",
+        _ => $"Saved · {Steps(steps)}",
     };
 
     public static BarColor Color(BarStage stage) => stage switch
@@ -115,6 +124,19 @@ public static class BarText
     /// <summary>Where Finish leads: the values page when a step typed a value or chose an item, else straight to the
     /// name and Save.</summary>
     public static BarStage AfterFinish(IReadOnlyList<RecordedStep> steps) => steps.Any(ValuesPage.Offers) ? BarStage.Values : BarStage.Finished;
+
+    /// <summary>
+    /// Where Back leads, or null where there is no Back. From the values page: to the list, paused, while the recording
+    /// can resume; once it has ended (<paramref name="ended"/>: the page was opened again from Finished), back to
+    /// Finished. From Finished: to the values page, when a step has a value to offer. Not after saving: Record another
+    /// is the way to change a recording then.
+    /// </summary>
+    public static BarStage? Back(BarStage stage, bool ended, IReadOnlyList<RecordedStep> steps) => stage switch
+    {
+        BarStage.Values => ended ? BarStage.Finished : BarStage.Paused,
+        BarStage.Finished when AfterFinish(steps) == BarStage.Values => BarStage.Values,
+        _ => null,
+    };
 
     public static string PauseButton(BarStage stage) => stage == BarStage.Paused ? "Resume" : "Pause";
 

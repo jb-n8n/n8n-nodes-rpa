@@ -83,7 +83,7 @@ public sealed class Session
     public const int MaxArgs = 50, MaxArgLength = 1000;
 
     /// <summary>
-    /// The recording is of a program whose window was already open (Use an app that is already open): the recording's app is that
+    /// The recording is of a program whose window was already open (Use an open app…): the recording's app is that
     /// program (<paramref name="exePath"/>, its file), with no arguments, and no launch step (the importer adds one).
     /// </summary>
     public void Attach(string exePath)
@@ -238,6 +238,19 @@ public sealed class Session
         if (value is not null && !step.Secret) _startValues.Add((marked, name, value));
     }
 
+    /// <summary>The start value <paramref name="step"/> gives its variable, as the file gets it (<see cref="ToFile"/>), or
+    /// null when it gives none.</summary>
+    public string? StartValue(RecordedStep step)
+    {
+        var (from, _, value) = _startValues.FirstOrDefault(c => ReferenceEquals(c.Step, step));
+        return from is not null && !step.Secret && Writable(value) ? value : null;
+    }
+
+    /// <summary>A start value the file may hold: never one made secret in this session, and only one the importer takes
+    /// (one line of at most 500 characters).</summary>
+    private bool Writable(string value) =>
+        value.Length is > 0 and <= MaxStartValueLength && !value.Contains('\r') && !value.Contains('\n') && !_madeSecret.Contains(Hash(value));
+
     /// <summary>Makes a fill secret: its value becomes the run variable <paramref name="name"/>, and the typed value is gone.</summary>
     public void MarkSecret(int index, string name)
     {
@@ -297,8 +310,7 @@ public sealed class Session
         {
             var kept = _steps.FirstOrDefault(s => ReferenceEquals(s, step));
             var typed = kept?.Kind == StepKind.Fill ? kept.Value : kept?.Option;
-            if (kept is null || kept.Secret || typed != Variable(varName) || secrets.Contains(varName) || _madeSecret.Contains(Hash(value))) continue;
-            if (value.Length is 0 or > MaxStartValueLength || value.Contains('\r') || value.Contains('\n')) continue;
+            if (kept is null || kept.Secret || typed != Variable(varName) || secrets.Contains(varName) || !Writable(value)) continue;
             variables.TryAdd(varName, value);
         }
         return new RecordingFile(name, exe, args, events, secrets) { Variables = variables };

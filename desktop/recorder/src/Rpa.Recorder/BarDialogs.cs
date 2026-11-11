@@ -111,7 +111,7 @@ internal abstract class SmallDialog : Form
     };
 }
 
-/// <summary>Make variable…, Make secret… and the F9 question: what the step does, a labelled name box with a
+/// <summary>Make secret… and the F9 question: what the step does, a labelled name box with a
 /// suggestion, and one line with the name rule (or what is wrong with the name typed).</summary>
 internal sealed class NameDialog : SmallDialog
 {

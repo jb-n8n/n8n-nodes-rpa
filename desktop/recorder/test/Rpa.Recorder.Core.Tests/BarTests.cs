@@ -21,9 +21,9 @@ public class BarTests
         Assert.Equal("Recording ErpDemo.exe · no steps yet", BarText.StateLine(BarStage.Recording, Erp, 0));
         Assert.Equal("Paused · 9 steps", BarText.StateLine(BarStage.Paused, Erp, 9));
         Assert.Equal("Finished · 13 steps", BarText.StateLine(BarStage.Finished, Erp, 13));
-        Assert.Equal("Finished · 13 steps", BarText.StateLine(BarStage.Saved, Erp, 13));
-        // The page that asks which values change is part of finishing.
-        Assert.Equal("Finished · 13 steps", BarText.StateLine(BarStage.Values, Erp, 13));
+        Assert.Equal("Saved · 13 steps", BarText.StateLine(BarStage.Saved, Erp, 13));
+        // The page that asks which values change comes before the name and Save.
+        Assert.Equal("Almost done · 13 steps", BarText.StateLine(BarStage.Values, Erp, 13));
         Assert.Equal([BarColor.Neutral, BarColor.Neutral, BarColor.Recording, BarColor.Paused, BarColor.Neutral, BarColor.Neutral, BarColor.Neutral],
             Enum.GetValues<BarStage>().Select(BarText.Color));
     }
@@ -64,8 +64,27 @@ public class BarTests
         Assert.Equal(BarPart.ValuesPage, BarText.Parts(BarStage.Values));
         Assert.Equal(BarPart.ValuesPage, BarText.Parts(BarStage.Values, stepSelected: true));
 
+        // The empty list says what comes there wherever it shows, from the very first Ready on (decided from the parts:
+        // before the window is shown, every control in it reads as hidden).
+        Assert.Equal([true, true, true, true, false, true, true], Enum.GetValues<BarStage>().Select(s => BarText.ShowsEmptyList(BarText.Parts(s), 0)));
+        Assert.False(BarText.ShowsEmptyList(BarText.Parts(BarStage.Ready), 1));
+        Assert.False(BarText.ShowsEmptyList(BarText.Parts(BarStage.Recording), 3));
+
         // The list keeps at least six rows wherever it shows steps.
         Assert.Equal([0, 0, 6, 6, 0, 6, 6], Enum.GetValues<BarStage>().Select(BarText.MinListRows));
+
+        // Back: from the values page to the list, paused, while the recording can resume; once it has ended (the page
+        // opened again from Finished), back to Finished. From Finished to the values page when it has a value to offer.
+        // Not after saving: Record another is the way to change a recording then.
+        RecordedStep[] typed = [new(StepKind.Fill, DateTimeOffset.Now, "Date to") { Value = "2026-11-30" }];
+        RecordedStep[] clicked = [new(StepKind.Click, DateTimeOffset.Now, "Search")];
+        Assert.Equal(BarStage.Paused, BarText.Back(BarStage.Values, ended: false, typed));
+        Assert.Equal(BarStage.Finished, BarText.Back(BarStage.Values, ended: true, typed));
+        Assert.Equal(BarStage.Values, BarText.Back(BarStage.Finished, ended: true, typed));
+        Assert.Null(BarText.Back(BarStage.Finished, ended: true, clicked));
+        foreach (var stage in new[] { BarStage.Ready, BarStage.Starting, BarStage.Recording, BarStage.Paused, BarStage.Saved })
+            Assert.Null(BarText.Back(stage, ended: true, typed));
+        Assert.Equal(BarText.Save, BarText.Primary(BarStage.Finished));
 
         Assert.Equal("Pause", BarText.PauseButton(BarStage.Recording));
         Assert.Equal("Resume", BarText.PauseButton(BarStage.Paused));
@@ -92,10 +111,14 @@ public class BarTests
     {
         Assert.Equal("Start an app…", BarText.StartApp);
         Assert.Equal("Start an app", DialogText.StartTitle);
-        Assert.Equal("Use an app that is already open…", BarText.UseOpenApp);
+        // Short, so that it fits beside Start an app… on a bar 360 wide; its window keeps the longer title.
+        Assert.Equal("Use an open app…", BarText.UseOpenApp);
         Assert.Equal("Use an app that is already open", DialogText.OpenTitle);
-        Assert.Equal(("Delete step", "Make variable…", "Make secret…"), (BarText.DeleteStep, BarText.MakeVariable, BarText.MakeSecret));
+        // A variable is made on the values page only; a secret can be made on the bar too (before saving, while recording).
+        Assert.Equal(("Delete step", "Make secret…"), (BarText.DeleteStep, BarText.MakeSecret));
         Assert.Equal("Earlier notices", DialogText.NoticesTitle);
+        // A screen reader names the list and the values page by these, not after a label near them.
+        Assert.Equal(("Recorded steps", "Values that can change"), (BarText.ListName, ValuesPage.AreaName));
         Assert.Equal("Record another", DialogText.StartOverUnsaved(2).Title);
         Assert.Equal(BarText.RecordAnother, DialogText.StartOverUnsaved(2).Title);
         // No label is written in capitals.
@@ -239,15 +262,8 @@ public class BarTests
                 null, $"RpaPolicy.exe apply \"{change}\"", false),
             NextSteps.Allow("ErpDemo.exe", null, change, AllowState.NotDone));
 
-        // Said once, so that the longer list n8n shows does not surprise: what the import adds to the bar's steps.
-        Assert.Equal(new NextLine("2. Import the recording in n8n",
-                "Upload it in n8n's Import a bot form. n8n lists a few more steps than this bar: it adds a wait for each window.", "Show the file", null, true),
-            NextSteps.Import(returnsFile: false));
-        Assert.Equal("Upload it in n8n's Import a bot form. n8n lists a few more steps than this bar: it adds a wait for each window, and one for each file the bot returns.",
-            NextSteps.Import(returnsFile: true).Detail);
-        Assert.False(NextSteps.ReturnsFile([]));
-        Assert.True(NextSteps.ReturnsFile([new RecordedStep(StepKind.Fill, DateTimeOffset.Now, "File name:") { ExportFile = "a.csv", Value = "{{$exportDir}}\\a.csv" }]));
-        Assert.False(NextSteps.ReturnsFile([new RecordedStep(StepKind.Fill, DateTimeOffset.Now, "Notes") { Value = "a.csv" }]));
+        // The steps the import adds are said on n8n's review page, where they show.
+        Assert.Equal(new NextLine("2. Import the recording in n8n", "Upload it in n8n's Import a bot form.", "Show the file", null, true), NextSteps.Import());
     }
 
     [Fact]

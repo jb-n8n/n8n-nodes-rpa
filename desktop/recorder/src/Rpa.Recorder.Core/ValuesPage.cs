@@ -1,8 +1,8 @@
 namespace Rpa.Recorder.Core;
 
-/// <summary>What a step on the values page is: a value as it was recorded, which the person may tick; a value made a
-/// variable on the bar while recording (ticked, and its name can change); or a secret (ticked for good, shown by its
-/// variable's name only).</summary>
+/// <summary>What a step on the values page is: a value as it was recorded, which the person may tick; a value that is a
+/// variable already, made on this page before (the page opened again from Finished) or because it held <c>{{</c>
+/// (ticked for good, and its name can change); or a secret (ticked for good, shown by its variable's name only).</summary>
 public enum ValueKind { Recorded, Variable, Secret }
 
 /// <summary>
@@ -13,6 +13,9 @@ public enum ValueKind { Recorded, Variable, Secret }
 /// </summary>
 public sealed record ValueRow(int Index, RecordedStep Step, ValueKind Kind, string Text, bool Ticked, string Name)
 {
+    /// <summary>A variable's start value (<see cref="Session.StartValue"/>), or null. Never for a secret.</summary>
+    public string? StartValue { get; init; }
+
     public int Number => Index + 1;
 
     /// <summary>Only a value as recorded can be ticked and unticked: a secret's value is gone, and the recorder does not
@@ -29,15 +32,16 @@ public sealed record ValueRow(int Index, RecordedStep Step, ValueKind Kind, stri
 
 /// <summary>
 /// The page the bar shows after Finish, before the name and Save: "Which of these change from run to run?", with every
-/// step that typed a value or chose an item. Each ticked value becomes a run variable, as Make variable… makes it: its
-/// recorded value is kept beside it as its start value (<see cref="Session.MarkVariable"/>), never for a secret. A
-/// secret shows its variable's name, never a value.
+/// step that typed a value or chose an item. It is the one place where a value becomes a run variable: its recorded
+/// value is kept beside it as its start value (<see cref="Session.MarkVariable"/>), never for a secret. A secret shows
+/// its variable's name, never a value.
 /// </summary>
 public static class ValuesPage
 {
     public const string Question = "Which of these change from run to run?";
-    public const string Intro = "Tick each value that changes: it becomes a variable with the name under it. On each run n8n supplies it, " +
-                                "starting with the value recorded here. A value left unticked stays as recorded.";
+    /// <summary>The page's accessible name: without one, Windows names it after a label near it.</summary>
+    public const string AreaName = "Values that can change";
+    public const string Intro = "Tick each value that changes from run to run. n8n can then set it on each run, and it starts as recorded here.";
     public const string NameLabel = "Variable name";
     public const string Continue = "Continue";
     public const string Back = "Back";
@@ -49,10 +53,14 @@ public static class ValuesPage
     /// <summary>Why a tick cannot be taken off (null when it can).</summary>
     public static string? Tip(ValueRow row) => row.Kind switch
     {
-        ValueKind.Variable => "Made a variable while recording, so it stays one. Its name can change below.",
+        ValueKind.Variable => "Already a variable. Its name can change below.",
         ValueKind.Secret => "A secret stays a secret: its typed value is not in the recording.",
         _ => null,
     };
+
+    /// <summary>The grey line under a variable that has a start value, or null.</summary>
+    public static string? StartsAs(ValueRow row) =>
+        row.Kind == ValueKind.Variable && row.StartValue is { } value ? $"Starts as {StepText.Quoted(value)}." : null;
 
     /// <summary>A typed value or a chosen item, except a file name typed into a Save dialog (it stays as recorded: the run
     /// saves into its own export folder).</summary>
@@ -61,9 +69,10 @@ public static class ValuesPage
     /// <summary>
     /// The page's rows for these steps. A value as recorded starts unticked, with a name from its field's label; when
     /// another row, a variable or a secret has that name already, it gets <c>_2</c>, <c>_3</c> and so on. The choices
-    /// in <paramref name="previous"/> (the page before Back) stay with the steps they were made for.
+    /// in <paramref name="previous"/> (the page before Back) stay with the steps they were made for. A variable gets its
+    /// start value from <paramref name="startValue"/> (<see cref="Session.StartValue"/>).
     /// </summary>
-    public static IReadOnlyList<ValueRow> Rows(IReadOnlyList<RecordedStep> steps, IReadOnlyList<ValueRow>? previous = null)
+    public static IReadOnlyList<ValueRow> Rows(IReadOnlyList<RecordedStep> steps, IReadOnlyList<ValueRow>? previous = null, Func<RecordedStep, string?>? startValue = null)
     {
         previous ??= [];
         var rows = new List<ValueRow>();
@@ -75,7 +84,10 @@ public static class ValuesPage
             var kind = step.Secret && variable is not null ? ValueKind.Secret : variable is not null ? ValueKind.Variable : ValueKind.Recorded;
             var before = previous.FirstOrDefault(p => ReferenceEquals(p.Step, step));
             var name = kind == ValueKind.Secret ? variable! : before?.Name ?? variable;
-            rows.Add(new ValueRow(i, step, kind, StepText.Action(step), kind != ValueKind.Recorded || before?.Ticked == true, name ?? ""));
+            rows.Add(new ValueRow(i, step, kind, StepText.Action(step), kind != ValueKind.Recorded || before?.Ticked == true, name ?? "")
+            {
+                StartValue = kind == ValueKind.Variable ? startValue?.Invoke(step) : null,
+            });
         }
         var taken = rows.Where(r => r.Name.Length > 0).Select(r => r.Name).ToHashSet(StringComparer.Ordinal);
         for (var i = 0; i < rows.Count; i++)
@@ -91,7 +103,8 @@ public static class ValuesPage
     }
 
     /// <summary>What is wrong with the name of a ticked value, with its step's number, or null when Continue can apply
-    /// the page. Names are checked as the variable question checks them; two values may share a name (one variable).</summary>
+    /// the page. Names are checked as the bar's other name questions check them; two values may share a name (one
+    /// variable).</summary>
     public static string? Problem(IEnumerable<ValueRow> rows) =>
         rows.Where(r => r.NameEditable).Select(r => DialogText.NameProblem(r.Name, []) is { } problem ? $"Step {r.Number}: {problem}" : null)
             .FirstOrDefault(p => p is not null);
