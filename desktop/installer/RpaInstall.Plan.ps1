@@ -252,7 +252,7 @@ function Get-RpaInstallPlan {
     } else {
       # An existing user's password is never changed, so automatic sign-in can only store one that is given.
       if ($autoSignIn -and $Facts.UserExists -and -not $hasPassword -and -not $signInKept) {
-        $refusals.Add(('-AutoSignIn for the existing user {0} needs -UserPassword. A password the installer generated earlier is not known to anyone: set a new password for {0} and pass it, or remove {0} so the installer creates it again.' -f $user))
+        $refusals.Add(('-AutoSignIn for the existing user {0} needs -UserPassword. A password the installer generated earlier is not known to anyone: set a new password for {0} and pass it, or remove {0} so the installer creates it again. After a new password the runner cannot read its certificate: remove it and put the new fingerprint into the n8n credential (docs/install/windows.md, section 10).' -f $user))
       }
       if ($autoSignIn -and $Facts.UserExists -and $hasPassword -and $Facts.UserPasswordWrong) {
         $refusals.Add(('The password given for {0} is not correct.' -f $user))
@@ -281,10 +281,14 @@ function Get-RpaInstallPlan {
         $refusals.Add(('Automatic sign-in is set up for {0}, and with -Unattended nobody may be signed in by Windows itself. Run Uninstall-Rpa.ps1 first, which turns automatic sign-in off, then install with -Unattended.' -f $Facts.InstalledAutoSignInUser))
       }
       elseif ($Facts.UserExists -and -not $hasPassword -and -not $secretKept) {
-        $refusals.Add(('-Unattended for the existing user {0} needs -UserPassword: the RPA Supervisor signs {0} in with it. A password the installer generated earlier is not known to anyone: set a new password for {0} and pass it, or remove {0} so the installer creates it again.' -f $user))
+        $refusals.Add(('-Unattended for the existing user {0} needs -UserPassword: the RPA Supervisor signs {0} in with it. A password the installer generated earlier is not known to anyone: set a new password for {0} and pass it, or remove {0} so the installer creates it again. After a new password the runner cannot read its certificate: remove it and put the new fingerprint into the n8n credential (docs/install/windows.md, section 10).' -f $user))
       }
       elseif ($Facts.UserExists -and $hasPassword -and $Facts.UserPasswordWrong -and -not $autoSignIn) {
         $refusals.Add(('The password given for {0} is not correct.' -f $user))
+      }
+      # The supervisor signs in through the Remote Desktop service, and depends on it: a disabled one cannot start.
+      if ($Facts.RemoteDesktopServiceDisabled) {
+        $refusals.Add('-Unattended needs the Remote Desktop service (TermService), which is disabled on this machine: set it to start (Set-Service TermService -StartupType Manual) and run the installer again.')
       }
       # The service's folder: it writes its log and state there as SYSTEM, and refuses to start in one it cannot trust.
       $supervisorRefusal = Get-RpaPathRefusal $Facts.SupervisorDir $Facts.SupervisorDirState $true
@@ -350,8 +354,8 @@ function Get-RpaInstallPlan {
     }
 
     if ($upgrade -and $Facts.RunnerRunning) {
-      $text = 'The runner is running; a run in progress will fail. Use -Force to continue.'
-      if ($Parameters.Force) { $warnings.Add($text) } else { $refusals.Add($text) }
+      $text = 'The runner is running; a run in progress will fail.'
+      if ($Parameters.Force) { $warnings.Add($text) } else { $refusals.Add($text + ' Use -Force to continue.') }
     }
     # A mistyped -User would otherwise move the install to that name, or create a user of that name, without a word.
     if ($userChanged) {

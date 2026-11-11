@@ -352,6 +352,21 @@ public sealed class SessionManager
 
     private bool IsOurs(SessionInfo session) => session.Id == _state.SessionId && session.LogonTime == _state.LogonTime;
 
+    /// <summary>Records that a connection's target (the runner or the browser host in the session) did not listen in
+    /// time, as the last failure, like a sign-in failure: in LastFailure, the state file and the log.</summary>
+    internal async Task RecordTargetFailureAsync(string message)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            Record(null, message);
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
     // Records a sign-in failure and returns a fresh exception to throw.
     private SessionException Fail(SessionException e)
     {

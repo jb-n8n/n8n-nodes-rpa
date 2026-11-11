@@ -208,6 +208,27 @@ public sealed class PortProxyTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_runner_that_does_not_start_in_the_session_is_the_last_failure_and_names_its_log()
+    {
+        var dir = Directory.CreateTempSubdirectory("rpa-supervisor-").FullName;
+        _cleanup.Add(new Deleter(dir));
+        var stateFile = Path.Combine(dir, "supervisor-state.json");
+        var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-11-10T08:00:00Z"));
+        var setup = Start(time, readySeconds: 45, stateFile: stateFile);
+        var client = await Connect(setup.ListenPort);
+        var read = client.GetStream().ReadAsync(new byte[1]).AsTask();
+
+        await DriveUntil(time, () => read.IsCompleted, TimeSpan.FromSeconds(5));
+
+        Assert.Equal(0, await read.WaitAsync(Patience));
+        var expected = $"Nothing listened on 127.0.0.1:{setup.TargetPort} within 45 s: the runner did not start in {Bot}'s session; " +
+            $"read %ProgramData%\\RPA Runner\\logs\\runner.out.log. The connection to port {setup.ListenPort} is closed.";
+        Assert.Equal(expected, setup.Manager.LastFailure);
+        Assert.Contains("Nothing listened on 127.0.0.1", File.ReadAllText(stateFile));
+        Assert.Contains(_log.Failures, f => f.Reason is null && f.Message == expected);
+    }
+
+    [Fact]
     public async Task Each_connection_holds_the_session_and_releases_it_when_it_closes()
     {
         var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-11-10T08:00:00Z"));

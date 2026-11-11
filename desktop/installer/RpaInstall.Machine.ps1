@@ -230,6 +230,7 @@ function Get-RpaMachineFacts {
     Leftovers                  = $null
     IsServer                   = $false
     RemoteDesktopDenied        = $false
+    RemoteDesktopServiceDisabled = $false
     InstalledMode              = $null
     InstalledSupervisorSecret  = $false
     InstalledUnattendedChanges = $false
@@ -267,6 +268,8 @@ function Get-RpaMachineFacts {
   $facts.IsServer = (Get-CimInstance -ClassName Win32_OperatingSystem).ProductType -ne 1
   $denied = (Get-RpaRegistryRecord $script:TerminalServer 'fDenyTSConnections')
   $facts.RemoteDesktopDenied = $denied.existed -and $denied.type -eq 'REG_DWORD' -and $denied.value -eq '1'
+  $termService = Get-Service -Name TermService -ErrorAction SilentlyContinue
+  $facts.RemoteDesktopServiceDisabled = [bool]$termService -and [string]$termService.StartType -eq 'Disabled'
 
   if ($account.IsDomain) {
     try {
@@ -936,6 +939,8 @@ function New-RpaUser([hashtable]$Account, [Security.SecureString]$Password) {
     $plain = $null
   }
   New-LocalUser -Name $Account.Name -Password $Password -PasswordNeverExpires -UserMayNotChangePassword -AccountNeverExpires -FullName 'RPA Runner' -Description 'Runs the RPA desktop runner and browser' | Out-Null
+  # New-LocalUser leaves "password not required" set; a password is required.
+  Invoke-RpaNative net.exe @('user', $Account.Name, '/passwordreq:yes')
   Add-LocalGroupMember -SID 'S-1-5-32-545' -Member $Account.Name -ErrorAction SilentlyContinue
   $Password
 }
@@ -1278,6 +1283,12 @@ function Remove-RpaSupervisorService {
   throw ('The service {0} is marked for deletion and still there. Close the Services window and any other program that has it open, and run this again.' -f $script:SupervisorService)
 }
 
+# The program path of a service as Windows keeps it (quotes included), or nothing when there is no such service.
+function Get-RpaServicePath([string]$Name) {
+  $service = Get-CimInstance -ClassName Win32_Service -Filter ("Name='{0}'" -f $Name) -ErrorAction SilentlyContinue
+  if ($service) { [string]$service.PathName }
+}
+
 # Puts back what the step 'register the supervisor service' did: the service and its event source. Its folder stays
 # with the data directory, as the logs do.
 function Remove-RpaSupervisor {
@@ -1368,9 +1379,11 @@ function Undo-RpaUnattended([hashtable]$Run) {
 # On a failed upgrade: install.json's mode, the RPA Supervisor's fields and the browser port go back to what the
 # record before this run said (an older record without a mode was signed in), so that the start scripts do not move
 # the runner and the browser behind a supervisor that the undo removed.
+# Only when this run wrote unattended over a record that was not: a failed run without -Unattended over an unattended
+# install keeps the signed-in mode it wrote, because what the supervisor needs may be gone by then.
 function Restore-RpaModeBefore([hashtable]$Run) {
   $before = $Run.Before
-  if (-not $before) { return }
+  if (-not $before -or $Run.Install.mode -ne 'unattended' -or [string]$before.mode -eq 'unattended') { return }
   foreach ($field in 'browserPort', 'mode', 'idleSeconds', 'runnerInnerPort', 'browserInnerPort', 'listenAddresses') {
     $property = $before.PSObject.Properties[$field]
     if ($property) { $Run.Install[$field] = $property.Value }
@@ -1851,9 +1864,15 @@ function Invoke-RpaUninstall {
       }
     }
   }
-  # The RPA Supervisor's service, its event source and the stored password by their names too: also when install.json
-  # is gone or does not record them. Nothing when they are not there.
-  Remove-RpaSupervisor
+  # The RPA Supervisor when install.json does not record it (it is gone, or older): the service only when it runs this
+  # install's RpaSupervisor.exe, with its event source. A recorded one was put back above, or is listed as not put
+  # back (for example while the Services window holds it) and is not tried again. The stored password by its name,
+  # the product's own.
+  if (-not ($install -and @($install.signInChanges | Where-Object { $_ -and $_.kind -eq 'service' }).Count -gt 0)) {
+    $path = Get-RpaServicePath $script:SupervisorService
+    if ($path -and $path -ieq ('"{0}\runner\RpaSupervisor.exe"' -f $layout.InstallDir)) { Remove-RpaSupervisor }
+    elseif ($path) { Write-Host ('  left: the service {0}, which runs {1}, not this install''s program' -f $script:SupervisorService, $path) }
+  }
   Remove-RpaLsaSecret $script:SupervisorSecret
   Write-Host '  remove the program files'
   Remove-RpaProgramFiles $layout

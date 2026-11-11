@@ -139,10 +139,17 @@ public sealed class PortProxy(SessionManager manager, SupervisorOptions options,
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            sessionReady = sessionReady && manager.HasOpenConnection;
-            log.Failure(sessionReady ? null : SessionFailure.Timeout, sessionReady
-                ? $"Nothing listened on 127.0.0.1:{map.TargetPort} within {options.ReadySeconds} s; the connection to port {map.ListenPort} is closed."
-                : $"No session within {options.ReadySeconds} s; the connection to port {map.ListenPort} is closed.");
+            if (sessionReady && manager.HasOpenConnection)
+            {
+                // The bot user is signed in, but the program did not start in its session: the last failure says
+                // which program, and the log that says why. The runner's port comes first in install.json.
+                var (program, file) = map == options.Ports[0] ? ("runner", "runner.out.log") : ("browser host", "browser.err.log");
+                await manager.RecordTargetFailureAsync(
+                    $"Nothing listened on 127.0.0.1:{map.TargetPort} within {options.ReadySeconds} s: the {program} did not start in " +
+                    $"{options.User}'s session; read %ProgramData%\\RPA Runner\\logs\\{file}. The connection to port {map.ListenPort} is closed.");
+            }
+            else
+                log.Failure(SessionFailure.Timeout, $"No session within {options.ReadySeconds} s; the connection to port {map.ListenPort} is closed.");
             return null;
         }
         catch (SessionException)
