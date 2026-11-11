@@ -186,6 +186,8 @@ public sealed class SessionManagerTests : IDisposable
         Assert.Equal(1, _host.Calls);
         Assert.Contains(reason.ToString(), manager.LastFailure);
         Assert.Contains(reason.ToString(), ReadState()["lastFailure"]!.GetValue<string>());
+        // Show-RpaConnection.ps1 detects the blocked state by this exact sentence.
+        Assert.Contains("No further sign-in is tried until the RPA Supervisor service is restarted.", ReadState()["lastFailure"]!.GetValue<string>());
     }
 
     [Fact]
