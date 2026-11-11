@@ -1670,7 +1670,10 @@ function Invoke-RpaInstallPlan {
     Write-Host ('  {0}' -f $step)
     try {
       switch ($step) {
-        'stop running services' { Stop-RpaServices $layout.InstallDir }
+        'stop running services' {
+          $run.Stopped = $true
+          Stop-RpaServices $layout.InstallDir
+        }
         'copy program files' { Copy-RpaProgramFiles $source $layout.InstallDir }
         'create user' {
           $run.Password = New-RpaUser $account $run.Password
@@ -1728,6 +1731,7 @@ function Invoke-RpaInstallPlan {
     } catch {
       $failure = New-Object InvalidOperationException ('The step "{0}" failed: {1}' -f $step, $_.Exception.Message)
       $undone = Undo-RpaFailedRun $run
+      if ($run.Stopped) { Resume-RpaAfterFailedRun $run }
       $failure.Data['NotPutBack'] = [string[]]@($undone.NotPutBack)
       $failure.Data['UserKept'] = $undone.UserKept
       $failure.Data['SignedOut'] = [bool]$run.SignedOut
@@ -1826,12 +1830,31 @@ function Get-RpaUninstallFacts {
   $facts
 }
 
-# Switches the two tasks on again and starts them, and the RPA Supervisor when its service runs this install's program,
-# after a stop that is not followed by an upgrade or a removal.
-function Resume-RpaServices {
+# Switches the two tasks on again (the stop switched them off).
+function Enable-RpaTasks {
   foreach ($name in $script:RunnerTask, $script:BrowserTask) {
     Get-ScheduledTask -TaskPath $script:TaskPath -TaskName $name -ErrorAction SilentlyContinue | Enable-ScheduledTask | Out-Null
   }
+}
+
+# After the undo of a failed upgrade: 'stop running services' switched the tasks off and stopped the RPA Supervisor, and
+# nothing else starts them again. The tasks are switched on and started (where the bot user is signed in its programs
+# run again), and the supervisor when install.json still says unattended and its service runs this install's program.
+# What does not start is one line in the output, not a second error.
+function Resume-RpaAfterFailedRun([hashtable]$Run) {
+  $mode = ''
+  if ($Run.Install) { $mode = [string]$Run.Install.mode } elseif ($Run.Before) { $mode = [string]$Run.Before.mode }
+  try { Enable-RpaTasks } catch { Write-Host ('  undo: could not switch the scheduled tasks on again: {0}' -f $_.Exception.Message) }
+  Start-RpaTasks
+  if ($mode -eq 'unattended' -and (Get-RpaServicePath $script:SupervisorService) -ieq (Get-RpaSupervisorPath $Run.Layout.InstallDir)) {
+    try { Start-Service -Name $script:SupervisorService } catch { Write-Host ('  undo: could not start the service {0} again: {1}' -f $script:SupervisorService, $_.Exception.Message) }
+  }
+}
+
+# Switches the two tasks on again and starts them, and the RPA Supervisor when its service runs this install's program,
+# after a stop that is not followed by an upgrade or a removal.
+function Resume-RpaServices {
+  Enable-RpaTasks
   Start-RpaTasks
   if ((Get-RpaServicePath $script:SupervisorService) -ieq (Get-RpaSupervisorPath (Get-RpaLayout).InstallDir)) { Start-Service -Name $script:SupervisorService }
 }

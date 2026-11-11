@@ -1498,6 +1498,48 @@ Describe 'Invoke-RpaInstallPlan' {
       Should -Invoke -ModuleName RpaInstall Copy-RpaProgramFiles -Times 0 -Exactly
     }
 
+    # 'stop running services' switched the tasks off and stopped the RPA Supervisor; the undo of a failed upgrade
+    # switches the tasks on again, and starts the supervisor where the install stays unattended.
+    It 'a failed upgrade of an unattended install starts the supervisor again (and a signed-in one only its tasks): <Mode>' -ForEach @(
+      @{ Mode = 'unattended'; Starts = 1 }
+      @{ Mode = 'signedIn'; Starts = 0 }
+    ) {
+      if (-not (Get-Command Start-Service -ErrorAction SilentlyContinue)) { function global:Start-Service { [CmdletBinding()] param([string]$Name) } }
+      $package = New-TestPackage @()
+      $env:RPA_TEST_MODE = $Mode
+      $env:RPA_TEST_PATH = InModuleScope RpaInstall { Get-RpaSupervisorPath (Get-RpaLayout).InstallDir }
+      Mock -ModuleName RpaInstall Read-RpaInstallFile { [pscustomobject]@{ user = 'rpa-runner'; autoSignIn = $false; mode = $env:RPA_TEST_MODE } }
+      Mock -ModuleName RpaInstall Get-RpaSid { 'S-1-5-21-1-2-3-1001' }
+      Mock -ModuleName RpaInstall Write-Host { }
+      Mock -ModuleName RpaInstall Stop-RpaServices { }
+      Mock -ModuleName RpaInstall Copy-RpaProgramFiles { throw 'Access is denied.' }
+      Mock -ModuleName RpaInstall Undo-RpaFailedRun { @{ NotPutBack = @(); UserKept = $null } }
+      Mock -ModuleName RpaInstall Enable-RpaTasks { }
+      Mock -ModuleName RpaInstall Start-RpaTasks { }
+      Mock -ModuleName RpaInstall Get-RpaServicePath { $env:RPA_TEST_PATH }
+      Mock -ModuleName RpaInstall Start-Service { }
+      $plan = @{ Refusals = @(); Warnings = @(); Steps = @('stop running services', 'copy program files') }
+      try {
+        { Invoke-RpaInstallPlan -Plan $plan -Parameters (New-TestParameters) -SourceDir $package } | Should -Throw -ExpectedMessage 'The step "copy program files" failed: Access is denied.'
+      } finally { $env:RPA_TEST_MODE = $null; $env:RPA_TEST_PATH = $null }
+      Should -Invoke -ModuleName RpaInstall Enable-RpaTasks -Times 1 -Exactly
+      Should -Invoke -ModuleName RpaInstall Start-RpaTasks -Times 1 -Exactly
+      Should -Invoke -ModuleName RpaInstall Start-Service -Times $Starts -Exactly -ParameterFilter { $Name -eq 'RPA Supervisor' }
+    }
+
+    It 'a supervisor that does not start again after a failed upgrade is one line, not a second error' {
+      $env:RPA_TEST_PATH = InModuleScope RpaInstall { Get-RpaSupervisorPath (Get-RpaLayout).InstallDir }
+      if (-not (Get-Command Start-Service -ErrorAction SilentlyContinue)) { function global:Start-Service { [CmdletBinding()] param([string]$Name) } }
+      Mock -ModuleName RpaInstall Enable-RpaTasks { }
+      Mock -ModuleName RpaInstall Start-RpaTasks { }
+      Mock -ModuleName RpaInstall Get-RpaServicePath { $env:RPA_TEST_PATH }
+      Mock -ModuleName RpaInstall Start-Service { throw 'Cannot start service.' }
+      try {
+        $said = @(InModuleScope RpaInstall { Resume-RpaAfterFailedRun @{ Layout = (Get-RpaLayout); Install = @{ mode = 'unattended' } } 6>&1 })
+      } finally { $env:RPA_TEST_PATH = $null }
+      ($said -join "`n") | Should -BeExactly '  undo: could not start the service RPA Supervisor again: Cannot start service.'
+    }
+
     It 'with -NoBrowser does not ask for the files of the browser' {
       $package = New-TestPackage $script:BrowserNeeded
       Mock -ModuleName RpaInstall Copy-RpaProgramFiles { }
