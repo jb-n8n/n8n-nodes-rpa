@@ -870,7 +870,7 @@ class Walker {
       case 'RetryScope': {
         const mark = this.report.items.length;
         const { items, n } = this.walkCount(this.body(el), ctx);
-        const check = this.countIn(this.body(el, new Set(['Condition'])));
+        const check = this.countIn(this.body(el, new Set(['Condition']))).n;
         this.insert(mark, at, 'converted', displayName, `${name}: its ${activities(n)} ${were(n)} imported once, in order. The steps do not retry them: a step that fails ends the run, and n8n's Retry On Fail setting on the Run steps node runs all the steps again${check ? `. Its check that they worked (${activities(check)}) was not imported` : ''}`);
         return items;
       }
@@ -1475,9 +1475,13 @@ class Walker {
     return { items, n: (this.walkedIn.get(ctx.file) ?? 0) - before };
   }
 
-  /** How many activities `els` hold, without walking them (for a body that is not imported). Charged against MAX_WALK. */
-  private countIn(els: XmlNode[]): number {
+  /**
+   * How many activities `els` hold (`n`), and how many of them do more than log or comment (`work`), without walking
+   * them (for a body that is not imported). Charged against MAX_WALK.
+   */
+  private countIn(els: XmlNode[]): { n: number; work: number } {
     let n = 0;
+    let work = 0;
     let visits = 0;
     const stack = [...els];
     while (stack.length) {
@@ -1490,11 +1494,14 @@ class Walker {
         continue;
       }
       const name = local(el.name);
-      if (!STRUCTURE.has(name)) n++;
+      if (!STRUCTURE.has(name)) {
+        n++;
+        if (!HOUSEKEEPING.has(name)) work++;
+      }
       if (name !== 'CommentOut') append(stack, el.children);
     }
     this.spend(visits);
-    return n;
+    return { n, work };
   }
 
   /** Adds a report item at `mark`, so that a block's item comes before the items of what it holds. */
@@ -1631,7 +1638,7 @@ class Walker {
     const catches = el.children.find((c) => isProperty(c) && propertyName(c) === 'Catches');
     for (const c of catches ? content(catches) : []) {
       const type = c.attrs['x:TypeArguments'] ?? 'Exception';
-      const k = this.countIn([c]);
+      const k = this.countIn([c]).n;
       this.add(at, 'untranslated', `Catch ${local(type)}`, `the catch branch${k ? ` (${activities(k)})` : ''} was not imported: give the n8n node an error output or the workflow an error workflow`);
     }
     const fin = this.walkCount(this.body(el, new Set(['Finally'])), ctx);
@@ -1762,6 +1769,10 @@ class Walker {
     };
     visit(stateAt(el, 'InitialState'));
     for (const c of content(el)) visit(deref(c));
+    // A final state (End Process) comes last, whichever transition reaches it first: Studio saves the initial state's
+    // failure transition, to the final state, before its success transition.
+    const isFinal = (st: XmlNode) => (st.attrs.IsFinal ?? '').trim().toLowerCase() === 'true';
+    states.sort((a, b) => Number(isFinal(a)) - Number(isFinal(b)));
 
     const total = states.length;
     const names = states.map((s) => displayOf(s));
@@ -1776,11 +1787,15 @@ class Walker {
       const listed = ui.length > 10 ? `${ui.slice(0, 10).join(', ')} and ${ui.length - 10} more` : ui.join(', ');
       item.reason = ui.length ? `state ${i + 1} of ${total}: the steps from its entry (${activities(n)}): ${listed}` : `state ${i + 1} of ${total}: its entry (${activities(n)}) gave no UI steps`;
       append(out, items);
+      // What only logs or comments is accounted for and not listed as left out, as logging is anywhere else.
       const exit = this.countIn(this.body(state, new Set(['Exit'])));
-      if (exit) this.add(this.at(state, ctx), 'untranslated', `${what}: Exit`, `its ${activities(exit)} ${were(exit)} not imported: the steps run each state's entry only`);
+      if (exit.n && !exit.work) this.add(this.at(state, ctx), 'dropped', `${what}: Exit`, `its ${activities(exit.n)} only log or comment, which the steps do not need`, true);
+      else if (exit.n) this.add(this.at(state, ctx), 'untranslated', `${what}: Exit`, `its ${activities(exit.n)} ${were(exit.n)} not imported: the steps run each state's entry only`);
       for (const t of transitions(state)) {
         const k = this.countIn(this.body(t, new Set(['Trigger', 'Action'])));
-        if (k) this.add(this.at(t, ctx), 'untranslated', cleanLabel(`Transition "${displayOf(t)}"`), `its trigger and action (${activities(k)}) were not imported: the steps do not move between states`);
+        const name = cleanLabel(`Transition "${displayOf(t)}"`);
+        if (k.n && !k.work) this.add(this.at(t, ctx), 'dropped', name, `its trigger and action (${activities(k.n)}) only log or comment, which the steps do not need`, true);
+        else if (k.n) this.add(this.at(t, ctx), 'untranslated', name, `its trigger and action (${activities(k.n)}) were not imported: the steps do not move between states`);
       }
     });
     return out;

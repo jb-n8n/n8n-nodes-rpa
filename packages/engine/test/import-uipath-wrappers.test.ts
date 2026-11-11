@@ -172,6 +172,10 @@ describe('UiPath blocks that wrap UI activities: the fixture with every kind', (
 describe('UiPath blocks: the standard state-machine template', () => {
   const OPTS: ImportOptions = { name: 'invoices', hasSiteLogin: false, vars: { in_InvoiceNumber: 'INV-1' } };
 
+  // The fixture is shaped as Studio saves the standard template (checked against UiPath's published template, which is not
+  // copied here): the first state in the file is not the initial one, each state is written inside the transition that
+  // first reaches it, the initial state's failure transition (to End Process, a final state) comes before its success
+  // transition, and some transitions' actions only log or comment.
   it('imports each state\'s entry in the order of the states and names each state in the report', () => {
     const r = importSource('uipath', fixtureZip('uipath-state-machine'), OPTS);
     expect(kinds(r, 'error')).toEqual([]);
@@ -197,8 +201,12 @@ describe('UiPath blocks: the standard state-machine template', () => {
       },
       { at: 'Main.xaml: State_1', kind: 'converted', what: 'State "Initialization"', reason: 'state 1 of 4: the steps from its entry (2 activities): Open invoices.example.com, Click Invoices' },
       { at: 'Main.xaml: LogMessage_1', kind: 'dropped', what: 'Log Message (Initialization)', reason: "logging is not a step: the run's own record and n8n's executions show what happened", notNeeded: true },
+      // A transition whose action only logs or comments is accounted for, but not listed as left out.
+      { at: 'Main.xaml: Transition_2', kind: 'dropped', what: 'Transition "System Exception (failed initialization)"', reason: 'its trigger and action (1 activity) only log or comment, which the steps do not need', notNeeded: true },
+      { at: 'Main.xaml: Transition_1', kind: 'dropped', what: 'Transition "Successful"', reason: 'its trigger and action (1 activity) only log or comment, which the steps do not need', notNeeded: true },
       { at: 'Main.xaml: State_2', kind: 'converted', what: 'State "Get Transaction Data"', reason: 'state 2 of 4: its entry (1 activity) gave no UI steps' },
       { at: 'Framework/GetTransactionData.xaml: GetQueueItem_1', kind: 'untranslated', what: 'Get Transaction Item', reason: 'GetQueueItem: this activity has no step equivalent in this release' },
+      { at: 'Main.xaml: Transition_4', kind: 'untranslated', what: 'Transition "No Data"', reason: 'its trigger and action (2 activities) were not imported: the steps do not move between states' },
       { at: 'Main.xaml: State_3', kind: 'converted', what: 'State "Process Transaction"', reason: 'state 3 of 4: the steps from its entry (2 activities): Open invoices.example.com/invoices, Type into Invoice number, Click Open' },
       {
         at: 'Main.xaml: TryCatch_1', kind: 'converted', what: 'Try Catch (process the transaction)',
@@ -208,7 +216,7 @@ describe('UiPath blocks: the standard state-machine template', () => {
       { at: 'Main.xaml: TryCatch_1', kind: 'untranslated', what: 'Catch Exception', reason: 'the catch branch (1 activity) was not imported: give the n8n node an error output or the workflow an error workflow' },
       { at: 'Main.xaml: State_4', kind: 'converted', what: 'State "End Process"', reason: 'state 4 of 4: the steps from its entry (1 activity): Open invoices.example.com, Click Sign out' },
     ]);
-    expect(leftOut(r)).toEqual(['General Business Process', 'Get Transaction Item', 'Catch BusinessRuleException', 'Catch Exception']);
+    expect(leftOut(r)).toEqual(['General Business Process', 'Get Transaction Item', 'Transition "No Data"', 'Catch BusinessRuleException', 'Catch Exception']);
   });
 
   it('a state machine read today would have imported nothing: no state is lost when a state is reached only by a reference', () => {
