@@ -22,7 +22,7 @@ export interface RunnerEndpoint {
   fingerprint: string;
 }
 
-export const RUNNER_CONNECT_TIMEOUT_MS = 10_000;
+export const RUNNER_CONNECT_TIMEOUT_MS = 60_000;
 /** How long a call waits beyond the timeout it gives the runner. */
 const CALL_MARGIN_MS = 5_000;
 /** Calls without a timeout of their own (hello, run.begin, run.end, app.launch, snapshot) wait this long. */

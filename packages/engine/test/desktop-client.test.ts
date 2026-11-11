@@ -1,12 +1,13 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { bound } from './timing.js';
-import { connectRunner, fingerprintOf, normalizeFingerprint, probeRunner, runnerAddress } from '../src/desktop/client.js';
+import { connectRunner, fingerprintOf, normalizeFingerprint, probeRunner, RUNNER_CONNECT_TIMEOUT_MS, runnerAddress } from '../src/desktop/client.js';
 import {
   DesktopUnavailableError, ElementNotFoundError, ElementNotUniqueError, ExpectedFileMissingError, FingerprintMismatchError, NoRunError, PolicyRefusedError,
   RunnerBusyError, RunnerConnectError, RunnerDisconnectedError, runnerError, RunnerError, RunnerTimeoutError, RunnerTokenRefusedError,
 } from '../src/desktop/protocol.js';
 import { acceptKey, encodeFrame, FrameReader, OPCODE, WsProtocolError } from '../src/desktop/ws.js';
 import { RUNNER_FINGERPRINT_INVALID, RUNNER_URL_HAS_CREDENTIALS, RUNNER_URL_NOT_SECURE } from '../src/messages.js';
+import { startDelayedProxy } from './delayed-proxy.js';
 import { FakeRunner } from './fake-runner.js';
 import { selfSignedCert } from './fake-runner-cert.js';
 
@@ -210,5 +211,49 @@ describe('error codes and the lease', () => {
     expect(err).toBeInstanceOf(RunnerDisconnectedError);
     expect((err as Error).message).toBe('the desktop runner did not answer resolve within 1 s');
     await client.close();
+  });
+});
+
+describe('the wait for a runner that signs a user in first', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  /** A runner behind a proxy that holds the connection until released, so its TLS handshake starts late. */
+  async function behindProxy() {
+    runner = await FakeRunner.start();
+    const proxy = await startDelayedProxy(Number(new URL(runner.url).port));
+    return { proxy, endpoint: { ...runner.endpoint, url: `wss://127.0.0.1:${proxy.port}` } };
+  }
+
+  it('waits 60 s', () => {
+    expect(RUNNER_CONNECT_TIMEOUT_MS).toBe(60_000);
+  });
+  it('a runner that answers its TLS handshake after 20 s is connected', async () => {
+    const { proxy, endpoint } = await behindProxy();
+    try {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const connecting = connectRunner(endpoint);
+      await vi.advanceTimersByTimeAsync(20_000);
+      proxy.release();
+      const client = await connecting;
+      vi.useRealTimers();
+      expect(client.closed).toBe(false);
+      await client.close();
+    } finally { await proxy.close(); }
+  });
+  it('a runner that never answers fails after 60 s with a message naming 60 s', async () => {
+    const { proxy, endpoint } = await behindProxy();
+    try {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const outcome = connectRunner(endpoint).catch((e: unknown) => e);
+      await proxy.whenHeld();
+      let settled = false;
+      void outcome.then(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      const err = await outcome;
+      expect(err).toBeInstanceOf(RunnerConnectError);
+      expect((err as Error).message).toMatch(/\(no answer within 60 s\)\. Is it running, and is the port open\?$/);
+    } finally { vi.useRealTimers(); await proxy.close(); }
   });
 });
