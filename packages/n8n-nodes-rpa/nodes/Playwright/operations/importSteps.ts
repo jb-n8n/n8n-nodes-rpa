@@ -5,7 +5,7 @@ import type {
 import { browserConfig, ConfigError, CREDENTIALS, policyFor, siteLoginConfig, type SiteLogin } from '../config.js';
 import type { NodeContext } from '../context.js';
 import type { Engine } from '../engine.js';
-import { configNodeError, errorJson, GUIDANCE } from '../errors.js';
+import { configNodeError, errorJson, guidanceFor } from '../errors.js';
 import { isBreakerCode, runGuarded, type GuardedResult } from '../execute.js';
 import { isQueueMode, openGuardStore, QUEUE_NEEDS_REDIS, type GuardStoreDeps } from '../guard-store.js';
 import { workflowFile } from '../import/workflow.js';
@@ -323,7 +323,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
     const what = `${first.code ? `${first.code}: ` : ''}${mask(first.reason)}`;
     const message = outcomes.length === 1 ? what : NONE_ADOPTED(outcomes.length, `${first.draft.name}: ${what}`);
     const error = new NodeOperationError(node, message, {
-      itemIndex: i, description: first.code ? `${first.code}: ${GUIDANCE[first.code]}` : 'Nothing was adopted. The reasons are in details.drafts.',
+      itemIndex: i, description: first.code ? `${first.code}: ${guidanceFor(first.code, first.reason)}` : 'Nothing was adopted. The reasons are in details.drafts.',
     });
     error.message = message;
     Object.assign(error.context, { code: first.code ?? null, name: p.name });

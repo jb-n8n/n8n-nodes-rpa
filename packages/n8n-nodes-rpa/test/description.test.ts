@@ -313,7 +313,7 @@ describe('wording and guidance', () => {
     expect(GUIDANCE).toEqual({
       login_failed: 'The site rejected the username or password. The login breaker is now open: fix the RPA Site Login credential, then change Options → Login Breaker Reset Key.',
       account_locked: 'The site says the account is locked. Unlock it with the site owner, then change Options → Login Breaker Reset Key.',
-      auth_blocked: 'The site asked for a second factor the node cannot answer. A person has to sign in.',
+      auth_blocked: 'The site asked for a second factor this run could not answer: the first line says which. If nothing automatic can answer it (a push message, a hardware key), a person has to sign in.',
       site_down: 'The site did not answer, returned a server error, or the first page did not finish loading in time. Try again later.',
       browser_unavailable: 'The browser server could not be reached or was rejected. Check the RPA Browser credential (README: Where the browser runs).',
       drift_detected: 'The page no longer matches the steps: an element was not found or matched more than one (desktop steps: also a control that cannot take the step\'s action, such as a fill on a button). Fix the locator, or use Run Steps with AI repair.',

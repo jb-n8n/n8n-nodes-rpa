@@ -44,6 +44,7 @@ describe('classifyFailure', () => {
     expect(classifyFailure({ violations: [], failure: fail('detected:account_locked') })).toBe('account_locked');
     expect(classifyFailure({ violations: [], failure: fail('detected:mfa_sms') })).toBe('auth_blocked');
     expect(classifyFailure({ violations: [], failure: fail('detected:mfa_totp') })).toBe('auth_blocked');
+    expect(classifyFailure({ violations: [], failure: fail('detected:mfa_totp: the site asked for a one-time code and the Site Login has no TOTP Secret') })).toBe('auth_blocked');
   });
   it('recognises lockout text on the page', () => {
     expect(classifyFailure({ violations: [], failure: fail('x'), pageText: 'Your account has been locked.' })).toBe('account_locked');

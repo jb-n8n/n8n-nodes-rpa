@@ -5,7 +5,7 @@ import type { ErrorCode } from 'n8n-rpa-engine';
 export const GUIDANCE: Record<ErrorCode, string> = {
   login_failed: 'The site rejected the username or password. The login breaker is now open: fix the RPA Site Login credential, then change Options → Login Breaker Reset Key.',
   account_locked: 'The site says the account is locked. Unlock it with the site owner, then change Options → Login Breaker Reset Key.',
-  auth_blocked: 'The site asked for a second factor the node cannot answer. A person has to sign in.',
+  auth_blocked: 'The site asked for a second factor this run could not answer: the first line says which. If nothing automatic can answer it (a push message, a hardware key), a person has to sign in.',
   site_down: 'The site did not answer, returned a server error, or the first page did not finish loading in time. Try again later.',
   browser_unavailable: 'The browser server could not be reached or was rejected. Check the RPA Browser credential (README: Where the browser runs).',
   drift_detected: 'The page no longer matches the steps: an element was not found or matched more than one (desktop steps: also a control that cannot take the step\'s action, such as a fill on a button). Fix the locator, or use Run Steps with AI repair.',
@@ -18,6 +18,23 @@ export const GUIDANCE: Record<ErrorCode, string> = {
   password_change_failed: 'The site did not confirm the new password: its change-password page came back, or still showed when the wait for its answer ran out (then the new password may or may not be in force). The login breaker stays closed. Keep the pending password, and check the site\'s password rules and the run variable that holds it.',
   runner_unavailable: 'The desktop runner could not be reached, refused the token or the certificate, its Windows session is locked or signed out, or the app is not installed where the runner\'s policy says. Check the RPA Desktop Runner credential and the runner machine.',
 };
+
+/** auth_blocked because the One-Time Code Workflow gave no code (the engine's `the one-time code workflow …` failures). */
+const CODE_WORKFLOW_GUIDANCE =
+  'The sign-in needed a one-time code from the One-Time Code Workflow and did not get one: the first line says why. Run that workflow by itself until it returns one item with a code field, publish it, then run again.';
+/**
+ * auth_blocked because the steps type a code and the Site Login has no TOTP Secret (`detected:mfa_totp: …`). A detect
+ * step that found a check named mfa_totp fails with the bare `detected:mfa_totp`, which this does not match.
+ */
+const NO_TOTP_SECRET_GUIDANCE =
+  'The site asked for a one-time code and the RPA Site Login has no TOTP Secret. Put the authenticator\'s seed in the Site Login, or, in Run Steps, take the code from a workflow ("source": "workflow" in the sign-in step, and Options → One-Time Code Workflow).';
+
+/** The guidance for a failure: by its code, and for auth_blocked by its message, which says what could not be answered. */
+export function guidanceFor(code: ErrorCode, message: string): string {
+  if (code === 'auth_blocked' && message.includes('one-time code workflow')) return CODE_WORKFLOW_GUIDANCE;
+  if (code === 'auth_blocked' && message.includes('detected:mfa_totp:')) return NO_TOTP_SECRET_GUIDANCE;
+  return GUIDANCE[code];
+}
 
 /**
  * The json of an item for n8n's error output. n8n replaces the json of any item that carries `item.error` with
@@ -48,10 +65,10 @@ export interface FailureDetails extends IDataObject {
   passwordChanged?: true;
 }
 
-/** A failed run as a NodeOperationError: message `<code>: <message>`, its GUIDANCE text as description. */
+/** A failed run as a NodeOperationError: message `<code>: <message>`, its guidance (guidanceFor) as description. */
 export function stepsRunError(node: INode, d: FailureDetails, itemIndex: number): NodeOperationError {
   const message = `${d.code}: ${d.message}`;
-  const error = new NodeOperationError(node, message, { description: `${d.code}: ${GUIDANCE[d.code]}`, itemIndex });
+  const error = new NodeOperationError(node, message, { description: `${d.code}: ${guidanceFor(d.code, d.message)}`, itemIndex });
   error.message = message;
   Object.assign(error.context, {
     code: d.code, name: d.name, version: d.version, hash: d.hash, lane: d.lane, stepIntent: d.stepIntent, traceRef: d.traceRef, submitted: d.submitted,

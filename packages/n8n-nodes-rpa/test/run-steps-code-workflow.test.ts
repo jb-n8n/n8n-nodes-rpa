@@ -50,6 +50,10 @@ describe('One-Time Code Workflow options', () => {
     const wf = opts.find((o) => o.name === 'codeWorkflowId');
     const timeout = opts.find((o) => o.name === 'codeTimeout');
     expect(wf).toMatchObject({ displayName: 'One-Time Code Workflow', type: 'string', default: '', displayOptions: { show: { '/operation': ['runSteps'] } } });
+    expect(wf).toMatchObject({
+      placeholder: 'e.g. 4nQkZp2r8XyT1bLm (from the workflow\'s address, after /workflow/)',
+      description: 'ID of the published workflow that supplies the sign-in code when the steps\' sign-in takes its code from a workflow ("source": "workflow"). It starts with an Execute Workflow Trigger, receives requestedAt and must return exactly one item with a code field of 6 to 10 digits. Publish it before the first run.',
+    });
     expect(timeout).toMatchObject({ displayName: 'Code Timeout (Seconds)', type: 'number', default: 120, displayOptions: { show: { '/operation': ['runSteps'] } } });
   });
 
@@ -140,6 +144,13 @@ describe('codeProviderFor', () => {
   it('a failing workflow: its first line, with every long number removed', async () => {
     const err = await ask(async () => { throw new Error(`Node "Parse" failed on ${CODE} and 1234\nstack line 5678901`); }).catch((e: Error) => e);
     expect((err as Error).message).toBe('it stopped with an error: Node "Parse" failed on [number] and [number]');
+  });
+
+  it('a workflow n8n will not run because it is not published says so, with n8n\'s words in brackets', async () => {
+    const err = await ask(async () => { throw new Error('Workflow is not active and cannot be executed.'); }).catch((e: Error) => e);
+    expect((err as Error).message).toBe(
+      'it is not published: open the workflow set in Options → One-Time Code Workflow and click Publish (Workflow is not active and cannot be executed.)',
+    );
   });
 
   it('a failing workflow: digit groups with spaces in them are removed too', async () => {

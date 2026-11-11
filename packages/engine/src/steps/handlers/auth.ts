@@ -144,7 +144,7 @@ async function tickChecks(ctx: StepContext, check: DslLocator[] | undefined, tim
 /** Types the TOTP code into a declared login page's code field and submits it. Shared by signIn and the agent's enter_code tool. */
 export async function submitTotp(ctx: StepContext, spec: CodeSpec, timeout: number): Promise<void> {
   const totpSecret = ctx.secrets?.totpSecret;
-  if (!totpSecret) throw new Error(`${DETECTED_PREFIX}mfa_totp`);
+  if (!totpSecret) throw new Error(`${DETECTED_PREFIX}mfa_totp: the site asked for a one-time code and the Site Login has no TOTP Secret`);
   const field = await resolveUnique(ctx.page, spec.field, timeout);
   const button = await resolveUnique(ctx.page, spec.submit, timeout);
   const left = msUntilNextWindow(Date.now());

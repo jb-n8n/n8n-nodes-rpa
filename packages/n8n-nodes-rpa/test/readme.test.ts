@@ -360,7 +360,7 @@ describe('README', () => {
       'The file is larger than 20 MiB, so it was not read.', '`<name>-1`', 'starting with `=` is refused', '**Expected File (First Version)**', '**ID Pattern (Regex)**',
       'is never imported', 'one `signIn` step', 'refused before the browser opens', 'no rows or files from these runs are delivered',
       'no form submissions or writes (**Requests That Only Read** still pass)', 'about twice **Max Seconds** per step list',
-      'On sites with an authenticator code, **Max Seconds** must leave room for up to a 30 s wait', 'login breaker and run lock', 'at most 10 step lists',
+      'On sites with an authenticator code, the import needs the **TOTP Secret** in the Site Login (it cannot yet take a code from a workflow), and **Max Seconds** must leave room for up to a 30 s wait', 'login breaker and run lock', 'at most 10 step lists',
       '**RPA Redis** (optional; needed in queue mode with a Site Login',
       '{ report, drafts: [{ name, steps, adopted, code?, reason?, traceRef? }], workflowName? }', '`steps: null`', '`trace-<n>`', '`details.traceRef`', '`adopted: false`', 'never on Repaired Steps',
       '`<name>.workflow.json`', '`application/json`', '**Import from file**', '**Sign Steps** take it unchanged', 'No Step Signing key',
@@ -399,7 +399,12 @@ describe('README', () => {
     expect(options).toContain('**One-Time Code Workflow**, **Code Timeout (Seconds)** (120)');
     const at = ref.slice(ref.indexOf('**Code from a workflow.**'));
     for (const text of ['`"source": "workflow"`', '**Execute Workflow Trigger**', '`{ requestedAt }`', 'exactly one item whose `code` is 6 to 10 digits',
-      'never appears in the output, logs or errors', 'runs the workflow once more', '`auth_blocked`', 'a configuration error']) expect(at, text).toContain(text);
+      'never appears in the output, logs or errors', 'runs the workflow once more', '`auth_blocked`', 'a configuration error',
+      '(its ID). Publish that workflow first: the node starts it by its ID, and n8n 2.x refuses one that is not published ("Workflow is not active and cannot be executed"); the run then fails `auth_blocked`. The ID is the part of the workflow\'s address after /workflow/.',
+      'The code is in that workflow\'s own output: in its settings, turn off saving successful executions, so that n8n keeps no codes.',
+    ]) expect(at, text).toContain(text);
+    const row = section('## Error codes').split('\n').find((l) => l.startsWith('| `auth_blocked` |'));
+    expect(row).toBe('| `auth_blocked` | The site asked for a second factor this run could not answer; the message says which (no TOTP Secret, or the One-Time Code Workflow gave no code). | Fix what the message names. If nothing automatic can answer the factor, a person has to sign in. |');
   });
 
   it('documents signIn.next in the Run Steps reference and both login pages in the safety model', () => {

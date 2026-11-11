@@ -311,9 +311,9 @@ export const OPTION_ENTRIES: INodeProperties[] = [
     name: 'codeWorkflowId',
     type: 'string',
     default: '',
-    placeholder: 'e.g. 4nQkZp2r8XyT1bLm',
+    placeholder: "e.g. 4nQkZp2r8XyT1bLm (from the workflow's address, after /workflow/)",
     description:
-      'ID of the workflow that supplies the sign-in code when the steps\' sign-in takes its code from a workflow ("source": "workflow"). It starts with an Execute Workflow Trigger, receives requestedAt and must return exactly one item with a code field of 6 to 10 digits.',
+      'ID of the published workflow that supplies the sign-in code when the steps\' sign-in takes its code from a workflow ("source": "workflow"). It starts with an Execute Workflow Trigger, receives requestedAt and must return exactly one item with a code field of 6 to 10 digits. Publish it before the first run.',
     displayOptions: only(['runSteps']),
   },
   {

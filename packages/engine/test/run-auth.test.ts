@@ -45,13 +45,13 @@ describe('signIn / detect / interrupts', () => {
       expect(r.ok).toBe(true);
     } finally { await session.close(); }
   });
-  it('reports TOTP MFA without a secret as detected:mfa_totp', async () => {
+  it('reports TOTP MFA without a secret as detected:mfa_totp, and says the Site Login has no TOTP Secret', async () => {
     portal.setState({ mfa: 'totp' });
     const ctx = await atLogin({ username: SECRETS.username, password: SECRETS.password });
     try {
       const r = await runSteps(ctx, SIGN_IN_STEPS);
       expect(r.ok).toBe(false);
-      if (!r.ok) expect(r.failure.message).toBe('detected:mfa_totp');
+      if (!r.ok) expect(r.failure.message).toBe('detected:mfa_totp: the site asked for a one-time code and the Site Login has no TOTP Secret');
     } finally { await session.close(); }
   });
   it('detects SMS MFA and failed logins', async () => {
