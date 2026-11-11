@@ -203,6 +203,54 @@ function fingerprintText(value: unknown): string {
   return String(value).trim() || `(${typeof value})`;
 }
 
+/** The two kinds of Connection Line the Windows installer prints: the scheme, the path after the port, the credential. */
+const LINE_KINDS = {
+  runner: { scheme: 'rpa-runner', path: '/rpa/v1', credential: 'RPA Desktop Runner', what: "desktop runner's" },
+  browser: { scheme: 'rpa-browser', path: '/', credential: 'RPA Browser', what: "browser's" },
+} as const;
+type LineKind = keyof typeof LINE_KINDS;
+const FINGERPRINT_HEX = /^(?:[0-9A-Fa-f]{64}|(?:[0-9A-Fa-f]{2}:){31}[0-9A-Fa-f]{2})$/;
+
+/**
+ * A Connection Line (`rpa-runner://<address>:<port>/rpa/v1#token=<token>&fingerprint=<64 hex>`, or `rpa-browser://…/#…`)
+ * → the wss:// address, the token and the fingerprint. The line holds the token: no message repeats any part of it, each
+ * says only what is wrong. The fingerprint is passed on as written; the engine checks it as it checks the separate field.
+ */
+export function parseConnectionLine(kind: LineKind, line: string): { url: string; token: string; fingerprint: string } {
+  const k = LINE_KINDS[kind];
+  const other = LINE_KINDS[kind === 'runner' ? 'browser' : 'runner'];
+  const inLine = `The Connection Line in the ${k.credential} credential`;
+  const ofLine = (part: string) => `The ${part} in the Connection Line of the ${k.credential} credential`;
+  const m = /^(rpa-runner|rpa-browser):\/\/([^/?#]*)([^#]*)(?:#(.*))?$/is.exec(line);
+  if (!m) throw new ConfigError(`${inLine} must be the whole line that starts with ${k.scheme}://, as the installer prints it.`);
+  if (m[1].toLowerCase() !== k.scheme) {
+    throw new ConfigError(`${inLine} is the ${other.what} line (${other.scheme}://). Paste it into an ${other.credential} credential, and here the line that starts with ${k.scheme}://.`);
+  }
+  const hostPort = /^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9_.-]+):(\d+)$/.exec(m[2]);
+  const noAddress = `${inLine} has no address and port (${k.scheme}://<address>:<port>${k.path}).`;
+  if (!hostPort) throw new ConfigError(noAddress);
+  const port = Number(hostPort[2]);
+  if (port < 1 || port > 65535) throw new ConfigError(`${ofLine('port')} must be a number from 1 to 65535.`);
+  const url = `wss://${hostPort[1]}:${hostPort[2]}${k.path}`;
+  if (!parseUrl(url)?.hostname) throw new ConfigError(noAddress);
+  if (m[3] !== k.path) throw new ConfigError(`${inLine} must continue with ${k.path} after the port.`);
+  const parts = new Map<string, string>();
+  for (const part of m[4] ? m[4].split('&') : []) {
+    const eq = part.indexOf('=');
+    const key = eq > 0 ? part.slice(0, eq) : '';
+    if ((key !== 'token' && key !== 'fingerprint') || parts.has(key)) throw new ConfigError(`${inLine} may hold only token= and fingerprint=, once each, after the #.`);
+    parts.set(key, part.slice(eq + 1));
+  }
+  const token = parts.get('token') ?? '';
+  // Without -ShowTokens the installer prints token=<hidden: run with -ShowTokens>.
+  if (token.startsWith('<')) throw new ConfigError(`${inLine} has no token: the installer hides it. Run Show-RpaConnection.ps1 -ShowTokens on that machine and paste the line it prints.`);
+  if (!token) throw new ConfigError(`${inLine} has no token (token=…).`);
+  const fingerprint = parts.get('fingerprint') ?? '';
+  if (!fingerprint) throw new ConfigError(`${inLine} has no fingerprint (fingerprint=…).`);
+  if (!FINGERPRINT_HEX.test(fingerprint)) throw new ConfigError(`${ofLine('fingerprint')} is not 64 hex digits.`);
+  return { url, token, fingerprint };
+}
+
 /** RPA Browser credential (playwrightBrowserApi) → endpoint. Empty fields fall back to the reference compose stack. */
 export function browserConfig(data: CredentialData): BrowserEndpoint {
   const mode = text(data, 'mode') || 'playwright';
@@ -210,18 +258,29 @@ export function browserConfig(data: CredentialData): BrowserEndpoint {
   const slow = typeof data.slowMo === 'number' && Number.isFinite(data.slowMo) && data.slowMo >= 1 ? { slowMo: Math.min(MAX_SLOW_MO, Math.floor(data.slowMo)) } : {};
   if (mode === 'local') return { mode: 'local', headless: data.headless !== false, ...slow };
   if (mode !== 'playwright' && mode !== 'cdp') throw new ConfigError('Mode must be Browser Server, Chrome DevTools Protocol (CDP) or Local Browser');
+  const privateNetwork = data.privateNetwork === true ? { privateNetwork: true } : {};
+  // Connection Line: Browser Server mode only, where the field shows. Filled, it replaces Endpoint URL, Token and
+  // Certificate Fingerprint.
+  const line = mode === 'playwright' ? text(data, 'connectionLine') : '';
+  if (line) {
+    const { url, token, fingerprint } = parseConnectionLine('browser', line);
+    return { mode, wsUrl: url, token, fingerprint, ...privateNetwork, ...slow };
+  }
   const wsUrl = text(data, 'wsUrl') || DEFAULT_ENDPOINT_URL;
   const token = typeof data.token === 'string' && data.token ? data.token : undefined;
   // Certificate Fingerprint (SHA-256): Browser Server mode only, where the field shows. The engine checks its format and
   // that the Endpoint URL is wss://.
   const fingerprint = mode === 'playwright' ? fingerprintText(data.fingerprint) : '';
-  return {
-    mode, wsUrl, ...(token ? { token } : {}), ...(fingerprint ? { fingerprint } : {}), ...(data.privateNetwork === true ? { privateNetwork: true } : {}), ...slow,
-  };
+  return { mode, wsUrl, ...(token ? { token } : {}), ...(fingerprint ? { fingerprint } : {}), ...privateNetwork, ...slow };
 }
 
-/** The RPA Desktop Runner credential as the engine's RunnerEndpoint. The engine checks the URL and fingerprint formats. */
+/**
+ * The RPA Desktop Runner credential as the engine's RunnerEndpoint: from the Connection Line when it is filled, else from
+ * the three fields. The engine checks the URL and fingerprint formats.
+ */
 export function desktopRunnerConfig(data: CredentialData): { url: string; token: string; fingerprint: string } {
+  const line = text(data, 'connectionLine');
+  if (line) return parseConnectionLine('runner', line);
   const url = text(data, 'url');
   const fingerprint = text(data, 'fingerprint');
   const token = typeof data.token === 'string' ? data.token : '';

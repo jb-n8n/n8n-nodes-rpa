@@ -49,14 +49,27 @@ const ctx = (credentials: HarnessOptions['credentials'], p: Record<string, unkno
 const details = (json: IDataObject) => json.details as IDataObject;
 
 describe('RPA Desktop Runner credential', () => {
-  it('asks for the runner URL, the token (masked) and the certificate fingerprint, all required', () => {
+  it('asks for the Connection Line (masked), or the runner URL, the token (masked) and the certificate fingerprint, none required by itself', () => {
     const c = new RpaDesktopRunnerApi();
     expect({ name: c.name, displayName: c.displayName }).toEqual({ name: 'rpaDesktopRunnerApi', displayName: 'RPA Desktop Runner' });
     const fields = c.properties.filter((p) => p.type !== 'notice');
-    expect(fields.map((p) => [p.name, p.displayName, p.required, p.typeOptions?.password === true])).toEqual([
-      ['url', 'Runner URL', true, false], ['token', 'Token', true, true], ['fingerprint', 'Certificate Fingerprint', true, false],
+    expect(fields.map((p) => [p.name, p.displayName, p.required === true, p.typeOptions?.password === true])).toEqual([
+      ['connectionLine', 'Connection Line', false, true], ['url', 'Runner URL', false, false], ['token', 'Token', false, true], ['fingerprint', 'Certificate Fingerprint', false, false],
     ]);
-    expect(fields[0].placeholder).toBe('wss://runner.example.com:8765');
+    expect(fields[1].placeholder).toBe('wss://runner.example.com:8765');
+  });
+
+  it('the credential test works with the Connection Line alone, and says what is wrong with a line without repeating it', async () => {
+    runner = await FakeRunner.start();
+    const { host } = new URL(runner.endpoint.url);
+    const hex = runner.endpoint.fingerprint.replace(/:/g, '');
+    const line = `rpa-runner://${host}/rpa/v1#token=${runner.endpoint.token}&fingerprint=${hex}`;
+    expect(await desktopRunnerTestResult({ connectionLine: line }, engine)).toEqual({ status: 'OK', message: 'Connected to the desktop runner (session interactive)' });
+    const wrongKind = await desktopRunnerTestResult({ connectionLine: line.replace('rpa-runner://', 'rpa-browser://').replace('/rpa/v1#', '/#') }, engine);
+    expect(wrongKind.status).toBe('Error');
+    expect(wrongKind.message).toContain("is the browser's line (rpa-browser://)");
+    expect(wrongKind.message).not.toContain(runner.endpoint.token);
+    expect(runner.tcpConnections).toBe(1);
   });
 
   it('the credential test connects (pinned), calls hello and reports the session', async () => {

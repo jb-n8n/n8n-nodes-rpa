@@ -1,0 +1,72 @@
+[
+  {
+    "about": "a machine name, the default ports, runner and browser",
+    "runner": {
+      "line": "rpa-runner://rpa-bot-01:8765/rpa/v1#token=SampleRunnerToken01-not-a-secret_aaaaaaaaaaaaaaa&fingerprint=0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF",
+      "address": "rpa-bot-01", "port": 8765, "url": "wss://rpa-bot-01:8765/rpa/v1",
+      "token": "SampleRunnerToken01-not-a-secret_aaaaaaaaaaaaaaa", "fingerprint": "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
+    },
+    "browser": {
+      "line": "rpa-browser://rpa-bot-01:3000/#token=SampleBrowserToken01-not-a-secret_bbbbbbbbbbbbbb&fingerprint=FEDCBA9876543210FEDCBA9876543210FEDCBA9876543210FEDCBA9876543210",
+      "address": "rpa-bot-01", "port": 3000, "url": "wss://rpa-bot-01:3000/",
+      "token": "SampleBrowserToken01-not-a-secret_bbbbbbbbbbbbbb", "fingerprint": "FEDCBA9876543210FEDCBA9876543210FEDCBA9876543210FEDCBA9876543210"
+    }
+  },
+  {
+    "about": "a machine name, the default port, runner only (installed without the browser)",
+    "runner": {
+      "line": "rpa-runner://bot-02:8765/rpa/v1#token=SampleRunnerToken02-not-a-secret_ccccccccccccccc&fingerprint=AAAABBBBCCCCDDDDEEEEFFFF00001111AAAABBBBCCCCDDDDEEEEFFFF00001111",
+      "address": "bot-02", "port": 8765, "url": "wss://bot-02:8765/rpa/v1",
+      "token": "SampleRunnerToken02-not-a-secret_ccccccccccccccc", "fingerprint": "AAAABBBBCCCCDDDDEEEEFFFF00001111AAAABBBBCCCCDDDDEEEEFFFF00001111"
+    },
+    "browser": null
+  },
+  {
+    "about": "an IPv4 address, runner and browser",
+    "runner": {
+      "line": "rpa-runner://10.20.30.40:8765/rpa/v1#token=SampleRunnerToken03-not-a-secret_ddddddddddddddd&fingerprint=1111222233334444555566667777888899990000AAAABBBBCCCCDDDDEEEEFFFF",
+      "address": "10.20.30.40", "port": 8765, "url": "wss://10.20.30.40:8765/rpa/v1",
+      "token": "SampleRunnerToken03-not-a-secret_ddddddddddddddd", "fingerprint": "1111222233334444555566667777888899990000AAAABBBBCCCCDDDDEEEEFFFF"
+    },
+    "browser": {
+      "line": "rpa-browser://10.20.30.40:3000/#token=SampleBrowserToken03-not-a-secret_eeeeeeeeeeeeee&fingerprint=FFFFEEEEDDDDCCCCBBBBAAAA0000999988887777666655554444333322221111",
+      "address": "10.20.30.40", "port": 3000, "url": "wss://10.20.30.40:3000/",
+      "token": "SampleBrowserToken03-not-a-secret_eeeeeeeeeeeeee", "fingerprint": "FFFFEEEEDDDDCCCCBBBBAAAA0000999988887777666655554444333322221111"
+    }
+  },
+  {
+    "about": "an IPv6 address in brackets, runner and browser",
+    "runner": {
+      "line": "rpa-runner://[fd00:1234::42]:8765/rpa/v1#token=SampleRunnerToken04-not-a-secret_fffffffffffffff&fingerprint=ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789",
+      "address": "[fd00:1234::42]", "port": 8765, "url": "wss://[fd00:1234::42]:8765/rpa/v1",
+      "token": "SampleRunnerToken04-not-a-secret_fffffffffffffff", "fingerprint": "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789"
+    },
+    "browser": {
+      "line": "rpa-browser://[fd00:1234::42]:3000/#token=SampleBrowserToken04-not-a-secret_gggggggggggggg&fingerprint=9876543210ABCDEF9876543210ABCDEF9876543210ABCDEF9876543210ABCDEF",
+      "address": "[fd00:1234::42]", "port": 3000, "url": "wss://[fd00:1234::42]:3000/",
+      "token": "SampleBrowserToken04-not-a-secret_gggggggggggggg", "fingerprint": "9876543210ABCDEF9876543210ABCDEF9876543210ABCDEF9876543210ABCDEF"
+    }
+  },
+  {
+    "about": "a full DNS name given with -Address (a tunnel), non-default ports, runner and browser",
+    "runner": {
+      "line": "rpa-runner://bots.example.net:9443/rpa/v1#token=SampleRunnerToken05-not-a-secret_hhhhhhhhhhhhhhh&fingerprint=0F1E2D3C4B5A69780F1E2D3C4B5A69780F1E2D3C4B5A69780F1E2D3C4B5A6978",
+      "address": "bots.example.net", "port": 9443, "url": "wss://bots.example.net:9443/rpa/v1",
+      "token": "SampleRunnerToken05-not-a-secret_hhhhhhhhhhhhhhh", "fingerprint": "0F1E2D3C4B5A69780F1E2D3C4B5A69780F1E2D3C4B5A69780F1E2D3C4B5A6978"
+    },
+    "browser": {
+      "line": "rpa-browser://bots.example.net:9444/#token=SampleBrowserToken05-not-a-secret_iiiiiiiiiiiiii&fingerprint=8796A5B4C3D2E1F08796A5B4C3D2E1F08796A5B4C3D2E1F08796A5B4C3D2E1F0",
+      "address": "bots.example.net", "port": 9444, "url": "wss://bots.example.net:9444/",
+      "token": "SampleBrowserToken05-not-a-secret_iiiiiiiiiiiiii", "fingerprint": "8796A5B4C3D2E1F08796A5B4C3D2E1F08796A5B4C3D2E1F08796A5B4C3D2E1F0"
+    }
+  },
+  {
+    "about": "a machine name, a non-default runner port, runner only",
+    "runner": {
+      "line": "rpa-runner://RPA-WIN-07:18765/rpa/v1#token=SampleRunnerToken06-not-a-secret_jjjjjjjjjjjjjjj&fingerprint=C0FFEE00C0FFEE00C0FFEE00C0FFEE00C0FFEE00C0FFEE00C0FFEE00C0FFEE00",
+      "address": "RPA-WIN-07", "port": 18765, "url": "wss://RPA-WIN-07:18765/rpa/v1",
+      "token": "SampleRunnerToken06-not-a-secret_jjjjjjjjjjjjjjj", "fingerprint": "C0FFEE00C0FFEE00C0FFEE00C0FFEE00C0FFEE00C0FFEE00C0FFEE00C0FFEE00"
+    },
+    "browser": null
+  }
+]

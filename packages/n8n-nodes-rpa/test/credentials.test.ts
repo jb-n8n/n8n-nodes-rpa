@@ -20,7 +20,7 @@ vi.hoisted(() => {
   process.env.PLAYWRIGHT_BROWSERS_PATH = '/nonexistent-playwright-browsers';
 });
 
-const SECRET_FIELDS = ['password', 'totpSecret', 'token', 'secretKey'];
+const SECRET_FIELDS = ['password', 'totpSecret', 'token', 'secretKey', 'connectionLine'];
 
 const V2 = [new PlaywrightBrowserApi(), new PlaywrightSiteLoginApi(), new PlaywrightScriptSigningApi(), new PlaywrightRedisApi(), new RpaDesktopRunnerApi()];
 const USE_CASE_WORDS = /\b(portal|recall|notice|dealer)s?\b/i;
@@ -75,6 +75,13 @@ describe('v2 credential types', () => {
       for (const p of c.properties) expect({ field: p.name, password: p.typeOptions?.password === true }).toEqual({ field: p.name, password: SECRET_FIELDS.includes(p.name) });
     }
   });
+  it('the Connection Line is a password-type field that takes no expression, in both credentials', () => {
+    for (const c of [new RpaDesktopRunnerApi(), new PlaywrightBrowserApi()]) {
+      expect(c.properties.find((p) => p.name === 'connectionLine'), c.name).toMatchObject({
+        displayName: 'Connection Line', type: 'string', default: '', noDataExpression: true, typeOptions: { password: true },
+      });
+    }
+  });
   it('declare a themed icon (the same file for light and dark) that exists, and a documentation URL', () => {
     for (const c of V2) {
       expect(c.icon).toEqual({ light: 'file:rpa.svg', dark: 'file:rpa.svg' }); // one icon: it reads on both themes
@@ -88,7 +95,11 @@ describe('v2 credential types', () => {
   it('RPA Browser: fields, defaults and a start command per mode', () => {
     const props = new PlaywrightBrowserApi().properties;
     const byName = Object.fromEntries(props.map((p) => [p.name, p]));
-    expect(props.filter((p) => p.type !== 'notice').map((p) => p.name)).toEqual(['mode', 'wsUrl', 'token', 'fingerprint', 'privateNetwork', 'headless', 'slowMo']);
+    expect(props.filter((p) => p.type !== 'notice').map((p) => p.name)).toEqual(['mode', 'connectionLine', 'wsUrl', 'token', 'fingerprint', 'privateNetwork', 'headless', 'slowMo']);
+    expect(byName.connectionLine).toMatchObject({ placeholder: 'rpa-browser://<address>:3000/#token=…&fingerprint=…', displayOptions: { show: { mode: ['playwright'] } } });
+    expect(byName.connectionLine.description).toBe(
+      'The one line the Windows installer prints for the browser. It holds the address, the token and the certificate fingerprint: keep it as secret as the token. When it is filled, Endpoint URL, Token and Certificate Fingerprint are not used.',
+    );
     expect(byName.mode.default).toBe('playwright');
     expect(((byName.mode.options ?? []) as OptionLike[]).map((o) => [o.value, o.name])).toEqual([
       ['playwright', 'Browser Server'], ['cdp', 'Chrome DevTools Protocol (CDP)'], ['local', 'Local Browser (Development Only)'],
@@ -104,6 +115,7 @@ describe('v2 credential types', () => {
     expect(notice('playwright')).toContain('README: Where the browser runs');
     expect(notice('playwright')).toContain('BROWSER_TOKEN');
     expect(notice('playwright')).toContain('Show-RpaConnection.ps1 -ShowTokens');
+    expect(notice('playwright')).toContain('paste the browser\'s Connection Line');
     expect(notice('playwright')).toContain('Private Network Endpoint stays off');
     expect(notice('local')).toContain('npx playwright install chromium');
     expect(notice('cdp').length).toBeGreaterThan(20);
@@ -123,11 +135,17 @@ describe('v2 credential types', () => {
       displayOptions: { show: { mode: ['playwright'] } },
     });
   });
-  it('RPA Desktop Runner: says where its three values come from', () => {
+  it('RPA Desktop Runner: says where its Connection Line and its three values come from', () => {
     const props = new RpaDesktopRunnerApi().properties;
     expect(props[0].displayName).toContain('Show-RpaConnection.ps1 -ShowTokens');
     expect(props[0].displayName).toContain('Windows guide, section 6');
+    expect(props[0].displayName).toContain('Paste the Connection Line');
     expect(props.find((p) => p.name === 'fingerprint')?.description).toContain('Show-RpaConnection.ps1 prints');
+    const line = props.find((p) => p.name === 'connectionLine');
+    expect(line).toMatchObject({ placeholder: 'rpa-runner://<address>:8765/rpa/v1#token=…&fingerprint=…' });
+    expect(line?.description).toBe(
+      'The one line the Windows installer prints for the runner. It holds the address, the token and the certificate fingerprint: keep it as secret as the token. When it is filled, the three fields below are not used.',
+    );
   });
   it('RPA Site Login: the login page, the secrets and the six allowlist fields, in order', () => {
     const props = new PlaywrightSiteLoginApi().properties.filter((p) => p.type !== 'notice');
