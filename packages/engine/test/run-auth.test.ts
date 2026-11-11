@@ -155,6 +155,26 @@ describe('signIn / detect / interrupts', () => {
       if (!r.ok) throw new Error(r.failure.message);
     } finally { await session.close(); }
   });
+  it('a login form nested in a <button type="button"> is refused (its target cannot be read); an ordinary form still signs in', async () => {
+    const nested = await signInAfter((page) => page.evaluate(() => {
+      const form = document.querySelector('form')!;
+      const button = document.createElement('button');
+      button.type = 'button';
+      // Named apart, so only the form check can stop the sign-in.
+      button.setAttribute('aria-label', 'Panel');
+      form.replaceWith(button);
+      button.appendChild(form);
+    }));
+    try {
+      if (nested.r.ok) throw new Error('expected failure');
+      expect(nested.r.failure.message).toBe("signIn refused: the username field's form posts to an address that is not a web address (http or https), which is not listed in the Site Login under Pages Where the Password May Be Typed.");
+      expect(nested.ctx.violations).toContainEqual(expect.objectContaining({ kind: 'signin', fatal: true }));
+    } finally { await session.close(); }
+    const { r } = await signInAfter(async () => undefined);
+    try {
+      if (!r.ok) throw new Error(r.failure.message);
+    } finally { await session.close(); }
+  });
   it('submits credentials only once per run', async () => {
     const ctx = await atLogin();
     try {

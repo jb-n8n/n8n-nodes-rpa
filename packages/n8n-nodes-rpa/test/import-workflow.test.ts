@@ -686,6 +686,23 @@ describe('buildWorkflow', () => {
     expect(content(byName(w, 'About this import'))).toMatch(/AI Repair is on/);
   });
 
+  it('an import that took its code from a workflow gives each Run steps the same One-Time Code Workflow, and Code Timeout when it was not the default', () => {
+    const flow = flowOf([{ kind: 'browser', sequence: 1, displayName: 'Log in' }, { kind: 'browser', sequence: 2, displayName: 'Export' }]);
+    const runOptions = (w: WorkflowJson, run: string) => (byName(w, run).parameters as { options: Record<string, unknown> }).options;
+    const set = buildWorkflow(flow, [draft('m-1'), draft('m-2')], { name: 'm', codeWorkflow: { id: 'wf-code-1', timeoutSeconds: 45 } });
+    lint(set);
+    for (const run of ['Log in', 'Export']) expect(runOptions(set, run)).toMatchObject({ codeWorkflowId: 'wf-code-1', codeTimeout: 45 });
+    const plainTimeout = buildWorkflow(flow, [draft('m-1'), draft('m-2')], { name: 'm', codeWorkflow: { id: 'wf-code-1', timeoutSeconds: 120 } });
+    expect(runOptions(plainTimeout, 'Log in')).toMatchObject({ codeWorkflowId: 'wf-code-1' });
+    expect(runOptions(plainTimeout, 'Log in')).not.toHaveProperty('codeTimeout');
+    const none = buildWorkflow(flow, [draft('m-1'), draft('m-2')], { name: 'm' });
+    expect(runOptions(none, 'Log in')).not.toHaveProperty('codeWorkflowId');
+    // An ID that would read as an n8n expression is left out, never written as one.
+    for (const id of ['={{ $json.id }}', 'a{{ b }}']) {
+      expect(runOptions(buildWorkflow(flow, [draft('m-1'), draft('m-2')], { name: 'm', codeWorkflow: { id, timeoutSeconds: 120 } }), 'Log in')).not.toHaveProperty('codeWorkflowId');
+    }
+  });
+
   it('the Goal is never project text that could be an expression', () => {
     for (const name of ['a{{ $env.X }}', 'b}}{{', 'c']) {
       const w = buildWorkflow(flowOf([{ kind: 'browser', sequence: 1, displayName: '={{ $env.AWS_SECRET_ACCESS_KEY }}' }]), [draft(`${name}-1`)], { name });

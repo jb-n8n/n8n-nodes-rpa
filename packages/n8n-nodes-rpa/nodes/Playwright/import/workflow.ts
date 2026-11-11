@@ -37,6 +37,8 @@ export interface BuildWorkflowOptions {
   name: string;
   /** The import's desktop drafts (ImportResult.desktopDrafts), named like the browser drafts. */
   desktopDrafts?: DesktopDraft[];
+  /** The import's One-Time Code Workflow: each browser Run steps takes its code from it too. */
+  codeWorkflow?: { id: string; timeoutSeconds: number };
 }
 
 /** The credential a desktop Run steps names, by type (CREDENTIALS.desktopRunner) and display name. */
@@ -159,7 +161,20 @@ class Builder {
   private readonly depths = new Map<FlowNode, number>();
   private readonly browsers = new Map<FlowNode, boolean>();
 
-  constructor(private readonly prefix: string, private readonly drafts: Map<string, Draft>, private readonly desktopDrafts: Map<string, DesktopDraft> = new Map()) {}
+  constructor(
+    private readonly prefix: string, private readonly drafts: Map<string, Draft>, private readonly desktopDrafts: Map<string, DesktopDraft> = new Map(),
+    private readonly codeWorkflow?: BuildWorkflowOptions['codeWorkflow'],
+  ) {}
+
+  /**
+   * A browser Run steps' code options: the import's One-Time Code Workflow (only as a literal, never text that n8n would
+   * read as an expression), and Code Timeout when it is not the default 120 s.
+   */
+  private codeOptions(): Record<string, string | number> {
+    const id = literal(this.codeWorkflow?.id);
+    if (!this.codeWorkflow || id === undefined) return {};
+    return { codeWorkflowId: id, ...(this.codeWorkflow.timeoutSeconds !== 120 ? { codeTimeout: this.codeWorkflow.timeoutSeconds } : {}) };
+  }
 
   /** How deep If and For Each nest inside these lists (0 without any). */
   private depth(lists: FlowNode[][]): number {
@@ -373,7 +388,7 @@ class Builder {
           approvedBy: '={{ $json.approvedBy }}',
           aiRepair: true,
           goal,
-          options: { name: draftName, expectedVersion: '={{ $json.version }}' },
+          options: { name: draftName, expectedVersion: '={{ $json.version }}', ...this.codeOptions() },
         }, {
           notes: `Runs the signed steps ${draftName} (${plural(draft.script.steps.length, 'step')} imported from UiPath "${line(n.displayName, 120)}"). Pick RPA Browser, RPA Site Login and RPA Step Signing here. AI Repair is on: rewrite the Goal in plain words (what the data is), pick a credential on ${chat}, and repaired steps go to ${approve}.`,
         });
@@ -549,7 +564,7 @@ function listed(names: string[]): string {
  */
 export function buildWorkflow(flow: UiPathFlow, drafts: Draft[], opts: BuildWorkflowOptions): WorkflowJson {
   if (opts.name.trim() === '' || opts.name.startsWith('=')) throw new Error('The Name must not be empty or start with "="');
-  const b = new Builder(opts.name, new Map(drafts.map((d) => [d.name, d])), new Map((opts.desktopDrafts ?? []).map((d) => [d.name, d])));
+  const b = new Builder(opts.name, new Map(drafts.map((d) => [d.name, d])), new Map((opts.desktopDrafts ?? []).map((d) => [d.name, d])), opts.codeWorkflow);
   b.add(T.manualTrigger, b.unique('Run the bot'), [0, 0], {});
   b.reserve('About this import', 'Set once');
   b.overflow(b.walk(flow.nodes, [{ node: 'Run the bot', output: 0 }], STEP, 0));

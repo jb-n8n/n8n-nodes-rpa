@@ -5,7 +5,7 @@ import type {
 import { browserConfig, ConfigError, CREDENTIALS, policyFor, siteLoginConfig, type SiteLogin } from '../config.js';
 import type { NodeContext } from '../context.js';
 import type { Engine } from '../engine.js';
-import { configNodeError, errorJson, guidanceFor } from '../errors.js';
+import { configNodeError, errorJson, failedOnCode, guidanceFor } from '../errors.js';
 import { isBreakerCode, runGuarded, type GuardedResult } from '../execute.js';
 import { isQueueMode, openGuardStore, QUEUE_NEEDS_REDIS, type GuardStoreDeps } from '../guard-store.js';
 import { workflowFile } from '../import/workflow.js';
@@ -42,6 +42,8 @@ export const IMPORT_NEEDS_START = 'Import Steps needs a Start URL or a Site Logi
 export const DEFAULT_GOAL = 'Do what the imported steps do, on the page as it is now.';
 export const NOT_TRIED_LIMIT = `not tried: an import adopts at most ${MAX_ADOPTIONS} step lists`;
 export const NOT_TRIED_CANCELLED = 'not tried: the execution was cancelled';
+/** A step list after one that failed on its one-time code: another sign-in would ask for (or type) another code. */
+export const NOT_TRIED_CODE = (name: string, reason: string) => `not tried: ${name} failed on its one-time code (${reason})`;
 export const NOTHING_IMPORTED = (reason: string) => `Nothing was imported: ${reason}`;
 export const NONE_ADOPTED = (n: number, first: string) => `None of the ${n} imported step lists could be adopted. ${first}`;
 /** Why a draft's steps are null on Data: they carry a Site Login value (defence in depth behind the importer's own stripping). */
@@ -240,7 +242,9 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
   let workflow: { binary: IBinaryKeyData; name: string } | undefined;
   if (imported.flow) {
     try {
-      const file = workflowFile(imported.flow, imported.drafts, { name: p.name, desktopDrafts });
+      const file = workflowFile(imported.flow, imported.drafts, {
+        name: p.name, desktopDrafts, ...(p.codeWorkflowId ? { codeWorkflow: { id: p.codeWorkflowId, timeoutSeconds: p.codeTimeoutMs / 1000 } } : {}),
+      });
       const name = (JSON.parse(file.data.toString('utf8')) as { name: string }).name;
       workflow = { binary: { workflow: await ctx.helpers.prepareBinaryData(file.data, file.fileName, file.mimeType) }, name };
     } catch (error) {
@@ -396,9 +400,15 @@ async function adoptAll(
   const guardFor = siteLogin && siteLoginId ? siteLoginGuard(siteLogin, siteLoginId, p.breakerResetKey, 2 * budgetMs + TOTP_WAIT_MS) : undefined;
   const signal = ctx.getExecutionCancelSignal();
   const outcomes: DraftOutcome[] = [];
+  /** Set once a step list failed on its one-time code: the item's later step lists sign in no more. */
+  let codeFailed: string | undefined;
   for (const [k, draft] of c.drafts.entries()) {
     if (k >= MAX_ADOPTIONS) {
       outcomes.push({ draft, kind: 'failed', reason: NOT_TRIED_LIMIT });
+      continue;
+    }
+    if (codeFailed !== undefined) {
+      outcomes.push({ draft, kind: 'failed', reason: codeFailed });
       continue;
     }
     if (signal?.aborted) {
@@ -474,6 +484,7 @@ async function adoptAll(
       const hint = r.code === 'drift_detected' && p.aiRepair && !modelConnected ? ` (${NO_MODEL})` : '';
       const captures = p.common.saveTrace === 'never' ? undefined : checkedCaptures(engine, r, { masker: c.masker, textMasker: c.textMasker, policy });
       outcomes.push({ draft, kind: 'failed', code: r.code, reason: `${r.message}${hint}`, ...(captures ? { captures } : {}) });
+      if (failedOnCode(r.code, r.message)) codeFailed = NOT_TRIED_CODE(draft.name, r.message);
     }
   }
   return outcomes;

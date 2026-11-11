@@ -313,7 +313,7 @@ export const OPTION_ENTRIES: INodeProperties[] = [
     default: '',
     placeholder: "e.g. 4nQkZp2r8XyT1bLm (from the workflow's address, after /workflow/)",
     description:
-      'ID of the published workflow that supplies the sign-in code when the steps\' sign-in takes its code from a workflow ("source": "workflow"). It starts with an Execute Workflow Trigger, receives requestedAt and must return exactly one item with a code field of 6 to 10 digits. Publish it before the first run.',
+      'ID of the published workflow that supplies the sign-in code when the steps\' sign-in takes its code from a workflow ("source": "workflow"). It starts with an Execute Workflow Trigger, receives requestedAt and must return exactly one item with a code field of 6 to 10 digits. Publish it before the first run. In Import Steps, setting it makes the imported sign-in take its code from this workflow, even when the Site Login has a TOTP Secret; the approved steps then need the same workflow here in Run Steps.',
     displayOptions: only(['runSteps', 'importSteps']),
   },
   {

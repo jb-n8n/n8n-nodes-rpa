@@ -29,6 +29,14 @@ const CODE_WORKFLOW_GUIDANCE =
 const NO_TOTP_SECRET_GUIDANCE =
   'The site asked for a one-time code and the RPA Site Login has no TOTP Secret. Put the authenticator\'s seed in the Site Login, or take the code from a workflow: set Options → One-Time Code Workflow (in Run Steps, also set "source": "workflow" in the sign-in step).';
 
+/**
+ * A sign-in that failed on its one-time code: every failure of a code from the One-Time Code Workflow (`detected:mfa_code: …`,
+ * a code the site rejected twice included), or no TOTP Secret for a code the site asked for (`detected:mfa_totp: …`).
+ */
+export function failedOnCode(code: ErrorCode, message: string): boolean {
+  return code === 'auth_blocked' && (message.includes('detected:mfa_code: ') || message.includes('detected:mfa_totp:'));
+}
+
 /** The guidance for a failure: by its code, and for auth_blocked by its message, which says what could not be answered. */
 export function guidanceFor(code: ErrorCode, message: string): string {
   if (code === 'auth_blocked' && message.includes('one-time code workflow')) return CODE_WORKFLOW_GUIDANCE;

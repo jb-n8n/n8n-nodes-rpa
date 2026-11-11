@@ -16,6 +16,7 @@ import { memoryGuardStore } from '../nodes/Playwright/guard-store.js';
 import { executeImportSteps, MAX_IMPORT_BYTES, STEPS_WITHHELD } from '../nodes/Playwright/operations/importSteps.js';
 import { executeSignSteps } from '../nodes/Playwright/operations/signSteps.js';
 import { repairedStepsJson } from '../nodes/Playwright/output.js';
+import type { WorkflowJson } from '../nodes/Playwright/import/workflow.js';
 import { DISPATCH, Playwright } from '../nodes/Playwright/Playwright.node.js';
 import { fakeEngine } from './fake-engine.js';
 import { credentialsV2, nodeContext, signStepsParams, siteLoginData } from './feed-fixtures.js';
@@ -644,6 +645,47 @@ describe('Import Steps: execution', () => {
         'auth_blocked: The site asked for a one-time code and the RPA Site Login has no TOTP Secret. Put the authenticator\'s seed in the Site Login, or take the code from a workflow: set Options → One-Time Code Workflow (in Run Steps, also set "source": "workflow" in the sign-in step).',
       );
       expect(engine.adoptions[0]).not.toHaveProperty('codeProvider');
+    });
+
+    it('a code workflow that is not published ends the import with the code-workflow guidance', async () => {
+      const engine = importEngine(async (input) => {
+        // As the engine's sign-in reports a provider that failed (auth.ts codeFromWorkflow).
+        let why = '';
+        await input.codeProvider!({ requestedAt: '2026-11-10T10:00:00.000Z' }).catch((e: unknown) => { why = (e as Error).message; });
+        return adoptFailure('auth_blocked', `Sign in with an authentication code: detected:mfa_code: ${real.codeWorkflowFailed(why)}`);
+      });
+      const ctx = nodeContext({
+        params: params({}, { codeWorkflowId: 'wf-code-1' }), items: [fileItem(CHROME)], credentials: NO_SEED as never, continueOnFail: false,
+        executeWorkflow: async () => { throw new Error('Workflow is not active and cannot be executed.'); },
+      }) as Harness;
+      const error = await run(engine, {}, ctx).then(() => undefined, (e: unknown) => e);
+      expect(error).toBeInstanceOf(NodeOperationError);
+      expect((error as NodeOperationError).message).toBe(
+        'auth_blocked: Sign in with an authentication code: detected:mfa_code: the one-time code workflow failed: it is not published: open the workflow set in Options → One-Time Code Workflow and click Publish (Workflow is not active and cannot be executed.)',
+      );
+      expect((error as NodeOperationError).description).toBe(
+        'auth_blocked: The sign-in needed a one-time code from the One-Time Code Workflow and did not get one: the first line says why. Run that workflow by itself until it returns one item with a code field, publish it, then run again.',
+      );
+    });
+
+    it('after a step list fails on the code, the item\'s other step lists are not tried: one sign-in in all', async () => {
+      const failure = 'Sign in with an authentication code: detected:mfa_code: the site rejected the one-time code from the workflow twice';
+      const engine = importEngine(() => adoptFailure('auth_blocked', failure), uipathResult(3));
+      const ctx = nodeContext({
+        params: params({ source: 'uipath', stepsName: 'sap-report' }, { codeWorkflowId: 'wf-code-1', codeTimeout: 45 }), items: [fileItem(projectZip(), 'p.zip', 'application/zip')],
+        credentials: NO_SEED as never, continueOnFail: true, executeWorkflow: async () => ({ executionId: 'sub-1', data: [[{ json: { code: CODE } }]] }),
+      }) as Harness;
+      const [data] = await run(engine, {}, ctx);
+      expect(engine.adoptions).toHaveLength(1);
+      const listed = details(data[0]).drafts as IDataObject[];
+      expect(listed.map((d) => [d.name, d.adopted, d.code ?? null])).toEqual([['sap-report-1', false, 'auth_blocked'], ['sap-report-2', false, null], ['sap-report-3', false, null]]);
+      expect(listed[0].reason).toBe(failure);
+      for (const d of listed.slice(1)) expect(d.reason).toBe(`not tried: sap-report-1 failed on its one-time code (${failure})`);
+      // The generated workflow's Run steps take their code from the same workflow.
+      const workflow = JSON.parse(binaryText(data[0], 'workflow').toString('utf8')) as WorkflowJson;
+      const runs = workflow.nodes.filter((n) => (n.parameters as { operation?: string }).operation === 'runSteps');
+      expect(runs).toHaveLength(3);
+      for (const n of runs) expect((n.parameters as { options: IDataObject }).options).toMatchObject({ codeWorkflowId: 'wf-code-1', codeTimeout: 45 });
     });
   });
 

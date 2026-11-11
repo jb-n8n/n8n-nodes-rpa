@@ -62,13 +62,14 @@ function assertLoginPage(ctx: StepContext) {
 }
 /**
  * Where the form of `locator`'s element posts (its form's action, absolute), or null outside a form. Read by formTarget,
- * so a form field named "action" cannot hide it.
+ * so a form field named "action" cannot hide it. A form whose target formTarget cannot read (a form the page nests in a
+ * button of type "button", or in a label of one) gives '', which is not a web address: the caller refuses it.
  */
 async function formActionOf(locator: Locator): Promise<string | null> {
   const form = (await locator.evaluateHandle((el) => (el as HTMLInputElement).form ?? null)).asElement();
   if (!form) return null;
   try {
-    return (await form.evaluate(formTarget, false))?.action ?? null;
+    return (await form.evaluate(formTarget, false))?.action ?? '';
   } finally {
     await form.dispose();
   }
