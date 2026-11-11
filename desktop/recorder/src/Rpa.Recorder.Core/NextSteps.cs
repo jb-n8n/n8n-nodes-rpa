@@ -23,7 +23,22 @@ public static class NextSteps
     public const string ShowFile = "Show the file";
     public const string Cancelled = "The administrator prompt was cancelled, so the policy tool did not start.";
 
-    public static readonly NextLine Import = new("2. Import the recording in n8n", "Upload it in n8n's Import a bot form.", ShowFile, null, true);
+    /// <summary>The tool's option that closes its own window after a successful apply, without waiting for Enter (after
+    /// a refusal or an error it still waits, so that the person can read why).</summary>
+    public const string CloseOnSuccess = "--close-on-success";
+
+    /// <summary>
+    /// 2: import the recording. It also says, once, that n8n's list has more steps than the bar's: the import adds a
+    /// wait for each window and, when the bot returns a file (<paramref name="returnsFile"/>), a step for it.
+    /// </summary>
+    public static NextLine Import(bool returnsFile) => new(
+        "2. Import the recording in n8n",
+        "Upload it in n8n's Import a bot form. n8n lists a few more steps than this bar: it adds a wait for each window" +
+        (returnsFile ? ", and one for each file the bot returns." : "."),
+        ShowFile, null, true);
+
+    /// <summary>Whether the recording returns a file: a step saves one into the run's export folder.</summary>
+    public static bool ReturnsFile(IEnumerable<RecordedStep> steps) => steps.Any(s => s.ExportFile is not null);
 
     /// <param name="app">The recorded program's file name.</param>
     /// <param name="tool">The policy tool (<see cref="FindPolicyTool"/>), or null when there is none to start.</param>
@@ -51,8 +66,12 @@ public static class NextSteps
         return tool.StartsWith(root, StringComparison.OrdinalIgnoreCase) && exists(tool) ? tool : null;
     }
 
-    /// <summary>The policy tool's arguments: <c>apply</c> and the change file, quoted as Windows programs read them.</summary>
+    /// <summary>The policy tool's arguments: <c>apply</c> and the change file, quoted as Windows programs read them. This
+    /// is the command an administrator runs by hand.</summary>
     public static string ApplyArguments(string changePath) => CommandLine.JoinArguments(["apply", changePath]);
+
+    /// <summary>The arguments the bar starts the tool with: <see cref="ApplyArguments"/> and <see cref="CloseOnSuccess"/>.</summary>
+    public static string StartArguments(string changePath) => CommandLine.JoinArguments(["apply", changePath, CloseOnSuccess]);
 
     /// <summary>Explorer's arguments that open a folder with the file selected.</summary>
     public static string ExplorerSelect(string path) => $"/select,\"{path}\"";

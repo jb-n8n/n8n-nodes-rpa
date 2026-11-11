@@ -2,10 +2,11 @@ namespace Rpa.Recorder.Core;
 
 /// <summary>
 /// The bar's stages, in order. Ready: nothing chosen yet. Starting: the chosen program is starting. Recording and
-/// Paused: the person works in the app. Finished: the recording ended and is not saved (or changed since it was).
-/// Saved: finished and saved, with what to do next.
+/// Paused: the person works in the app. Values: after Finish, the page that asks once which recorded values change from
+/// run to run (<see cref="ValuesPage"/>); nothing is recorded, and Back returns to the list, paused. Finished: the
+/// recording ended and is not saved (or changed since it was). Saved: finished and saved, with what to do next.
 /// </summary>
-public enum BarStage { Ready, Starting, Recording, Paused, Finished, Saved }
+public enum BarStage { Ready, Starting, Recording, Paused, Values, Finished, Saved }
 
 /// <summary>The colour of the dot before the state line: red while recording, amber while paused, grey otherwise.</summary>
 public enum BarColor { Neutral, Recording, Paused }
@@ -30,6 +31,8 @@ public enum BarPart
     SaveBlock = 64,
     /// <summary>The two numbered lines of what to do next, and Record another.</summary>
     NextSteps = 128,
+    /// <summary>In place of the list: which values change from run to run, with Back and Continue.</summary>
+    ValuesPage = 256,
 }
 
 /// <summary>What the bar says at each stage, and the names of its actions (an action has the same name everywhere).</summary>
@@ -88,6 +91,7 @@ public static class BarText
         BarStage.Starting => "Wait for its window: recording starts when it shows.",
         BarStage.Recording => "Do the work in the app. Each step appears in the list below.",
         BarStage.Paused => "Nothing is recorded until you resume.",
+        BarStage.Values => ValuesPage.Question,
         BarStage.Finished => "Check the steps, then name the recording and save it.",
         _ => $"Saved {savedFile} in {savedFolder}. Two things are left to do:",
     };
@@ -99,13 +103,18 @@ public static class BarText
         BarStage.Ready => BarPart.StartButtons | BarPart.ReadyText | BarPart.List,
         BarStage.Starting => BarPart.List,
         BarStage.Recording or BarStage.Paused => BarPart.RecordButtons | BarPart.List | BarPart.ReadHint | BarPart.StepActions,
+        BarStage.Values => BarPart.ValuesPage,
         BarStage.Finished => BarPart.List | BarPart.StepActions | BarPart.SaveBlock,
         _ => BarPart.List | BarPart.NextSteps | (stepSelected ? BarPart.StepActions : BarPart.None),
     };
 
-    /// <summary>How many one-line rows the list keeps at least: the bar grows downward for them
-    /// (<see cref="BarLayout.GrowForList"/>) where the list shows steps.</summary>
-    public static int MinListRows(BarStage stage) => stage is BarStage.Ready or BarStage.Starting ? 0 : 6;
+    /// <summary>How many rows the list keeps at least (<see cref="StepRows.ListHeight"/>): the bar grows for them
+    /// (<see cref="BarLayout.GrowForList"/>) where the list shows steps. The values page grows for its own rows.</summary>
+    public static int MinListRows(BarStage stage) => stage is BarStage.Ready or BarStage.Starting or BarStage.Values ? 0 : 6;
+
+    /// <summary>Where Finish leads: the values page when a step typed a value or chose an item, else straight to the
+    /// name and Save.</summary>
+    public static BarStage AfterFinish(IReadOnlyList<RecordedStep> steps) => steps.Any(ValuesPage.Offers) ? BarStage.Values : BarStage.Finished;
 
     public static string PauseButton(BarStage stage) => stage == BarStage.Paused ? "Resume" : "Pause";
 
@@ -118,6 +127,7 @@ public static class BarText
     public static string? Primary(BarStage stage, NextLine? allow = null) => stage switch
     {
         BarStage.Ready => StartApp,
+        BarStage.Values => ValuesPage.Continue,
         BarStage.Finished => Save,
         BarStage.Saved => allow switch
         {

@@ -22,7 +22,9 @@ public class BarTests
         Assert.Equal("Paused · 9 steps", BarText.StateLine(BarStage.Paused, Erp, 9));
         Assert.Equal("Finished · 13 steps", BarText.StateLine(BarStage.Finished, Erp, 13));
         Assert.Equal("Finished · 13 steps", BarText.StateLine(BarStage.Saved, Erp, 13));
-        Assert.Equal([BarColor.Neutral, BarColor.Neutral, BarColor.Recording, BarColor.Paused, BarColor.Neutral, BarColor.Neutral],
+        // The page that asks which values change is part of finishing.
+        Assert.Equal("Finished · 13 steps", BarText.StateLine(BarStage.Values, Erp, 13));
+        Assert.Equal([BarColor.Neutral, BarColor.Neutral, BarColor.Recording, BarColor.Paused, BarColor.Neutral, BarColor.Neutral, BarColor.Neutral],
             Enum.GetValues<BarStage>().Select(BarText.Color));
     }
 
@@ -58,9 +60,12 @@ public class BarTests
         Assert.Equal(BarPart.List | BarPart.NextSteps, BarText.Parts(BarStage.Saved));
         Assert.Equal(BarPart.List | BarPart.StepActions | BarPart.NextSteps, BarText.Parts(BarStage.Saved, stepSelected: true));
         Assert.Equal(BarPart.List | BarPart.StepActions | BarPart.SaveBlock, BarText.Parts(BarStage.Finished, stepSelected: true));
+        // Between Finish and the name: the page that asks which values change, in place of the list.
+        Assert.Equal(BarPart.ValuesPage, BarText.Parts(BarStage.Values));
+        Assert.Equal(BarPart.ValuesPage, BarText.Parts(BarStage.Values, stepSelected: true));
 
         // The list keeps at least six rows wherever it shows steps.
-        Assert.Equal([0, 0, 6, 6, 6, 6], Enum.GetValues<BarStage>().Select(BarText.MinListRows));
+        Assert.Equal([0, 0, 6, 6, 0, 6, 6], Enum.GetValues<BarStage>().Select(BarText.MinListRows));
 
         Assert.Equal("Pause", BarText.PauseButton(BarStage.Recording));
         Assert.Equal("Resume", BarText.PauseButton(BarStage.Paused));
@@ -73,6 +78,7 @@ public class BarTests
         Assert.Null(BarText.Primary(BarStage.Recording));
         Assert.Null(BarText.Primary(BarStage.Paused));
         Assert.Equal(BarText.Save, BarText.Primary(BarStage.Finished));
+        Assert.Equal(ValuesPage.Continue, BarText.Primary(BarStage.Values));
         Assert.Equal(NextSteps.AllowButton, BarText.Primary(BarStage.Saved, NextSteps.Allow("ErpDemo.exe", tool, change, AllowState.NotDone)));
         Assert.Equal(NextSteps.ShowFile, BarText.Primary(BarStage.Saved, NextSteps.Allow("ErpDemo.exe", tool, change, AllowState.Allowed)));
         Assert.Equal(NextSteps.ShowFile, BarText.Primary(BarStage.Saved, NextSteps.Allow("ErpDemo.exe", null, change, AllowState.NotDone)));
@@ -93,7 +99,7 @@ public class BarTests
         Assert.Equal("Record another", DialogText.StartOverUnsaved(2).Title);
         Assert.Equal(BarText.RecordAnother, DialogText.StartOverUnsaved(2).Title);
         // No label is written in capitals.
-        foreach (var text in new[] { BarText.StartApp, BarText.UseOpenApp, BarText.Finish, BarText.Save, BarText.ChangeFolder, BarText.RecordAnother, BarText.ReadHint, NextSteps.AllowButton, NextSteps.ShowFile })
+        foreach (var text in new[] { BarText.StartApp, BarText.UseOpenApp, BarText.Finish, BarText.Save, BarText.ChangeFolder, BarText.RecordAnother, BarText.ReadHint, NextSteps.AllowButton, NextSteps.ShowFile, ValuesPage.Continue, ValuesPage.Back })
             Assert.NotEqual(text.ToUpperInvariant(), text);
     }
 
@@ -233,7 +239,15 @@ public class BarTests
                 null, $"RpaPolicy.exe apply \"{change}\"", false),
             NextSteps.Allow("ErpDemo.exe", null, change, AllowState.NotDone));
 
-        Assert.Equal(new NextLine("2. Import the recording in n8n", "Upload it in n8n's Import a bot form.", "Show the file", null, true), NextSteps.Import);
+        // Said once, so that the longer list n8n shows does not surprise: what the import adds to the bar's steps.
+        Assert.Equal(new NextLine("2. Import the recording in n8n",
+                "Upload it in n8n's Import a bot form. n8n lists a few more steps than this bar: it adds a wait for each window.", "Show the file", null, true),
+            NextSteps.Import(returnsFile: false));
+        Assert.Equal("Upload it in n8n's Import a bot form. n8n lists a few more steps than this bar: it adds a wait for each window, and one for each file the bot returns.",
+            NextSteps.Import(returnsFile: true).Detail);
+        Assert.False(NextSteps.ReturnsFile([]));
+        Assert.True(NextSteps.ReturnsFile([new RecordedStep(StepKind.Fill, DateTimeOffset.Now, "File name:") { ExportFile = "a.csv", Value = "{{$exportDir}}\\a.csv" }]));
+        Assert.False(NextSteps.ReturnsFile([new RecordedStep(StepKind.Fill, DateTimeOffset.Now, "Notes") { Value = "a.csv" }]));
     }
 
     [Fact]
@@ -257,6 +271,10 @@ public class BarTests
             NextSteps.ApplyArguments(@"C:\Users\clerk\Documents\RPA recordings\a b.policy-change.json"));
         Assert.Equal(["apply", @"C:\Users\clerk\Documents\RPA recordings\a b.policy-change.json"],
             CommandLine.Split(NextSteps.ApplyArguments(@"C:\Users\clerk\Documents\RPA recordings\a b.policy-change.json")));
+        // Started by the bar, the tool's window closes by itself after a successful apply; the command for an
+        // administrator (ApplyArguments) waits as the tool run by hand does.
+        Assert.Equal(["apply", @"C:\Users\clerk\Documents\RPA recordings\a b.policy-change.json", "--close-on-success"],
+            CommandLine.Split(NextSteps.StartArguments(@"C:\Users\clerk\Documents\RPA recordings\a b.policy-change.json")));
         Assert.Equal("/select,\"C:\\Users\\clerk\\Documents\\RPA recordings\\a.rpa-recording.json\"",
             NextSteps.ExplorerSelect(@"C:\Users\clerk\Documents\RPA recordings\a.rpa-recording.json"));
 
@@ -303,10 +321,30 @@ public class BarTests
         Assert.Equal(new Rectangle(1492, 8, 420, 660), BarLayout.GrowForList(bar, 100, 160, area));
         // High enough already: nothing changes, and the bar never shrinks for it.
         Assert.Equal(bar, BarLayout.GrowForList(bar, 200, 160, area));
-        // At most to the bottom of the working area.
-        Assert.Equal(new Rectangle(1492, 8, 420, 720), BarLayout.GrowForList(bar, 100, 400, new Rectangle(0, 0, 1024, 728)));
-        // A bar already lower than the working area's bottom is left as it is.
-        Assert.Equal(new Rectangle(0, 500, 420, 600), BarLayout.GrowForList(new Rectangle(0, 500, 420, 600), 100, 160, new Rectangle(0, 0, 1024, 728)));
+        // Down to the bottom of the working area, then up: at most as high as the working area.
+        Assert.Equal(new Rectangle(1492, 0, 420, 728), BarLayout.GrowForList(bar, 100, 400, new Rectangle(0, 0, 1024, 728)));
+        Assert.Equal(new Rectangle(1492, 8, 420, 720), BarLayout.GrowForList(bar, 100, 220, new Rectangle(0, 0, 1024, 728)));
+        // A bar the person moved down (and made shorter) goes up as far as it must, so that the list does not vanish.
+        Assert.Equal(new Rectangle(8, 14, 360, 714), BarLayout.GrowForList(new Rectangle(8, 176, 360, 544), 0, 170, new Rectangle(0, 0, 1024, 728)));
+        Assert.Equal(new Rectangle(0, 68, 420, 660), BarLayout.GrowForList(new Rectangle(0, 500, 420, 600), 100, 160, new Rectangle(0, 0, 1024, 728)));
+        // Higher than the working area already: never smaller, and its top at the top.
+        Assert.Equal(new Rectangle(0, 0, 420, 800), BarLayout.GrowForList(new Rectangle(0, 50, 420, 800), 100, 160, new Rectangle(0, 0, 1024, 728)));
+        // A second screen above the first.
+        Assert.Equal(new Rectangle(1492, -1000, 420, 660), BarLayout.GrowForList(new Rectangle(1492, -1000, 420, 600), 100, 160, new Rectangle(0, -1040, 1920, 1040)));
+    }
+
+    [Fact]
+    public void The_list_is_grown_for_six_real_rows_wherever_it_is_scrolled()
+    {
+        // One-line rows of 27: six of them.
+        Assert.Equal(162, StepRows.ListHeight([27, 27, 27, 27, 27, 27, 27, 27], 6, 27));
+        // Rows that wrap count as high as they are: the six highest in a row.
+        Assert.Equal(27 * 4 + 46 * 2, StepRows.ListHeight([27, 46, 27, 27, 27, 27, 46, 27, 27, 27], 6, 27));
+        Assert.Equal(46 * 6, StepRows.ListHeight([46, 46, 46, 46, 46, 46, 46], 6, 27));
+        // Fewer steps than rows: the steps, and one-line rows for the rest.
+        Assert.Equal(46 + 27 * 5, StepRows.ListHeight([46], 6, 27));
+        Assert.Equal(27 * 6, StepRows.ListHeight([], 6, 27));
+        Assert.Equal(0, StepRows.ListHeight([46, 27], 0, 27));
     }
 
     [Fact]

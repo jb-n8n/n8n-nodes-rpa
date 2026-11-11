@@ -174,7 +174,7 @@ public static class PolicyCommand
 
     public const string Usage = """
         Usage: RpaPolicy show [--policy <path>]
-               RpaPolicy apply <change.json> [--yes] [--policy <path>]
+               RpaPolicy apply <change.json> [--yes] [--close-on-success] [--policy <path>]
                RpaPolicy allow-app <path-to-exe> [--pin-hash] [--yes] [--policy <path>]
           show          Print the policy file
           apply         Add what a change file lists to the policy (from a copy the tool keeps in
@@ -182,11 +182,14 @@ public static class PolicyCommand
           allow-app     Add an application to the policy's allowedApps
           --pin-hash    Also pin the application file's SHA-256
           --yes         Do not ask before writing (only from an administrator console)
+          --close-on-success
+                        In a window of its own, close it once the change is applied instead of
+                        waiting for Enter (the recorder starts the tool so)
           --policy      The policy file (default %ProgramData%\RPA Runner\policy.json; only from an
                         administrator console)
         """;
 
-    private sealed record Arguments(string Command, string? Target, string? Policy, bool Yes, bool PinHash)
+    private sealed record Arguments(string Command, string? Target, string? Policy, bool Yes, bool PinHash, bool CloseOnSuccess = false)
     {
         public string PolicyPath => Policy ?? Path.Combine(RunnerOptions.DefaultDataDir(), "policy.json");
     }
@@ -281,25 +284,37 @@ public static class PolicyCommand
         return visible.ToString();
     }
 
+    /// <summary>Whether the change was applied (or there was nothing to change) with nothing left for the person to
+    /// read: a runner that could not be restarted is said, and then the tool waits.</summary>
+    private sealed class Ending
+    {
+        public bool Clean { get; set; }
+    }
+
     /// <summary>
     /// Runs one command. Whoever starts the tool chooses its arguments, and the Windows administrator prompt shows an
     /// administrator only the tool's name. So <c>--yes</c> is ignored and <c>--policy</c> is refused unless
     /// <paramref name="console"/> says the options can be honoured (<see cref="PolicyConsole.HonoursOptions"/>):
-    /// the change to the runner's own policy is then still shown and asked about.
+    /// the change to the runner's own policy is then still shown and asked about. <c>--close-on-success</c> needs no
+    /// such console: it only leaves out the wait for Enter after a clean apply, whose summary the person has read and
+    /// answered; after anything else the tool still waits.
     /// </summary>
     public static int Run(string[] args, TextReader input, TextWriter output, IPolicyFiles files, Action restartRunner, PolicyConsole console)
     {
         int code;
+        var ending = new Ending();
         try
         {
-            code = Command(args, input, output, files, restartRunner, console);
+            code = Command(args, input, output, files, restartRunner, console, ending);
         }
         catch (Exception e)
         {
             // Refusals and anything unforeseen end the same way: the message, no stack trace, exit 1.
             code = Fail(output, e.Message);
+            ending.Clean = false;
         }
-        if (console.ClosesWithTheTool)
+        var closeOnSuccess = code == 0 && ending.Clean && Parse(args)?.CloseOnSuccess == true;
+        if (console.ClosesWithTheTool && !closeOnSuccess)
         {
             // The tool's own window closes when it exits; without this nothing it printed could be read.
             Print(output, "Press Enter to close.");
@@ -308,7 +323,7 @@ public static class PolicyCommand
         return code;
     }
 
-    private static int Command(string[] args, TextReader input, TextWriter output, IPolicyFiles files, Action restartRunner, PolicyConsole console)
+    private static int Command(string[] args, TextReader input, TextWriter output, IPolicyFiles files, Action restartRunner, PolicyConsole console, Ending ending)
     {
         if (args is ["--help"] or ["-h"] or ["/?"])
         {
@@ -332,8 +347,8 @@ public static class PolicyCommand
         return arguments.Command switch
         {
             "show" => Show(arguments.PolicyPath, output, files),
-            "apply" => Change(CopiedChange(arguments.Target!, arguments.PolicyPath, files), arguments, input, output, files, restartRunner, console),
-            _ => Change(AllowApp(arguments, files), arguments, input, output, files, restartRunner, console),
+            "apply" => Change(CopiedChange(arguments.Target!, arguments.PolicyPath, files), arguments, input, output, files, restartRunner, console, ending),
+            _ => Change(AllowApp(arguments, files), arguments, input, output, files, restartRunner, console, ending),
         };
     }
 
@@ -348,7 +363,7 @@ public static class PolicyCommand
         if (args.Length == 0 || args[0] is not ("show" or "apply" or "allow-app")) return null;
         var command = args[0];
         string? target = null, policy = null;
-        bool yes = false, pinHash = false;
+        bool yes = false, pinHash = false, closeOnSuccess = false;
         for (var i = 1; i < args.Length; i++)
         {
             switch (args[i])
@@ -356,12 +371,13 @@ public static class PolicyCommand
                 case "--policy" when i + 1 < args.Length: policy = args[++i]; break;
                 case "--yes" when command != "show": yes = true; break;
                 case "--pin-hash" when command == "allow-app": pinHash = true; break;
+                case "--close-on-success" when command == "apply": closeOnSuccess = true; break;
                 case var a when !a.StartsWith("--", StringComparison.Ordinal) && target is null && command != "show": target = a; break;
                 default: return null;
             }
         }
         if (target is null && command != "show") return null;
-        return new Arguments(command, target, policy, yes, pinHash);
+        return new Arguments(command, target, policy, yes, pinHash, closeOnSuccess);
     }
 
     private static int Fail(TextWriter output, string message)
@@ -539,7 +555,7 @@ public static class PolicyCommand
         return JsonSerializer.Serialize(new Dictionary<string, object> { ["allowedApps"] = new[] { app } });
     }
 
-    private static int Change(string change, Arguments arguments, TextReader input, TextWriter output, IPolicyFiles files, Action restartRunner, PolicyConsole console)
+    private static int Change(string change, Arguments arguments, TextReader input, TextWriter output, IPolicyFiles files, Action restartRunner, PolicyConsole console, Ending ending)
     {
         var before = ExistingPolicy(arguments.PolicyPath, files);
         var current = before is null ? null : Text(before, before.Length);
@@ -558,6 +574,7 @@ public static class PolicyCommand
         if (result.Summary.Count == 0)
         {
             Print(output, "Nothing to change.");
+            ending.Clean = true;
             return 0;
         }
         var rows = PolicyChange.Printed(result.Summary);
@@ -601,6 +618,7 @@ public static class PolicyCommand
             return 0;
         }
         Print(output, "Policy updated. The runner restarts within 10 seconds and uses the new policy.");
+        ending.Clean = true;
         return 0;
     }
 }
