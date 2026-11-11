@@ -41,6 +41,8 @@ internal static class Native
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hwnd);
     [DllImport("user32.dll")] private static extern bool EnumWindows(EnumProc callback, IntPtr lParam);
+    [DllImport("user32.dll")] private static extern bool EnumChildWindows(IntPtr parent, EnumProc callback, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern int GetDlgCtrlID(IntPtr hwnd);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(IntPtr hwnd, StringBuilder text, int max);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr hwnd, StringBuilder text, int max);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern IntPtr OpenProcess(uint access, bool inherit, uint processId);
@@ -92,6 +94,14 @@ internal static class Native
     {
         var list = new List<IntPtr>();
         EnumWindows((h, _) => { if (IsWindowVisible(h)) list.Add(h); return true; }, IntPtr.Zero);
+        return list;
+    }
+
+    /// <summary>A window's child windows, at every depth.</summary>
+    public static List<IntPtr> ChildWindows(IntPtr parent)
+    {
+        var list = new List<IntPtr>();
+        EnumChildWindows(parent, (h, _) => { list.Add(h); return true; }, IntPtr.Zero);
         return list;
     }
 

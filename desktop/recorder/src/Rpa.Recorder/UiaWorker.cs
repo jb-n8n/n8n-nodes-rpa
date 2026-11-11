@@ -81,6 +81,23 @@ internal sealed class UiaWorker : IDisposable
         return element is null ? null : Describe(element, withAncestors: true);
     }
 
+    /// <summary>
+    /// The file-name box of the Save dialog <paramref name="dialog"/> (<see cref="FileDialogs.IsFileNameBox"/>): among the
+    /// dialog's child windows, an Edit with control id 1001, described with its ancestors. Its text is not read here.
+    /// </summary>
+    public Described? FileNameBox(IntPtr dialog, WindowFacts window)
+    {
+        foreach (var hwnd in Native.ChildWindows(dialog))
+        {
+            if (Native.GetDlgCtrlID(hwnd) != FileDialogs.NameBoxId || Native.ClassOf(hwnd) != "Edit") continue;
+            var element = Safe(() => _automation.FromHandle(hwnd));
+            if (element is null) continue;
+            var d = Describe(element, withAncestors: true);
+            if (FileDialogs.IsFileNameBox(window, d.Facts)) return d;
+        }
+        return null;
+    }
+
     private Described Describe(AutomationElement element, bool withAncestors)
     {
         var ancestors = new List<ElementFacts>();

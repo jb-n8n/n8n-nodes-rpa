@@ -22,8 +22,9 @@ internal sealed class Person(int appProcessId, int seed) : IDisposable
     public void Dispose() => _automation.Dispose();
 
     /// <summary>Sign in, pick company 2000, type and paste the dates, search, click a result cell, export the line items
-    /// into <paramref name="exportFile"/>. v2: Find instead of Search, Reports > Export line items..., a confirmation.</summary>
-    public void ErpFlow(string password, bool v2, string exportFile)
+    /// into <paramref name="exportFile"/>, or, when it is null, under the name the Save dialog offers. v2: Find instead
+    /// of Search, Reports > Export line items..., a confirmation.</summary>
+    public void ErpFlow(string password, bool v2, string? exportFile)
     {
         var login = Window(t => t == "ERP Demo - Sign in", 30000);
         Click(First(login, Find.ByAutomationId("txtUser")));
@@ -57,6 +58,18 @@ internal sealed class Person(int appProcessId, int seed) : IDisposable
             Click(First(Window(t => t == "Confirm export", 10000), Find.ByAutomationId("btnConfirmExport")));
         }
         var dialog = Window(t => t == "Export line items", 15000);
+        if (exportFile is null)
+        {
+            // The offered name is kept: Save at once. The dialog saves in the folder it used last and asks first when a
+            // file of that name is there (an earlier pass left one): Yes then.
+            Click(First(dialog, Find.ByControlType(ControlType.Button).And(Find.ByAutomationId("1"))));
+            Until(() => !Shows("Export line items") || Shows("Confirm Save As"), 10000, "the Save dialog to close or ask");
+            if (Shows("Confirm Save As"))
+                Click(First(Window(t => t == "Confirm Save As", 5000), Find.ByControlType(ControlType.Button).And(Find.ByName("Yes"))));
+            Until(() => !Shows("Export line items"), 10000, "the Save dialog to close");
+            Thread.Sleep(1000);
+            return;
+        }
         Directory.CreateDirectory(Path.GetDirectoryName(exportFile)!);
         if (File.Exists(exportFile)) File.Delete(exportFile);
         Click(First(dialog, Find.ByControlType(ControlType.Edit).And(Find.ByAutomationId("1001"))));
@@ -81,6 +94,9 @@ internal sealed class Person(int appProcessId, int seed) : IDisposable
         Thread.Sleep(_random.Next(300, 700)); // a person looks at a new window first
         return found!;
     }
+
+    /// <summary>Whether a window of the app with this title is shown.</summary>
+    private bool Shows(string title) => N.TopLevelWindows().Any(h => N.ProcessOf(h) == appProcessId && N.TitleOf(h) == title);
 
     private static AutomationElement First(AutomationElement root, ConditionBase condition)
     {

@@ -19,6 +19,8 @@ internal sealed record Notice(NoticeKind Kind, DateTimeOffset At, string Text);
 /// <item>typing keys do not wait, and only their time and focused element are used (never the key);</item>
 /// <item>the field being typed into is read when it is left, before the input that leaves it goes on, and a secret
 /// field (<see cref="SecretRules.IsSecret"/>) is never read;</item>
+/// <item>a Save dialog's file-name box is read when the dialog is accepted, before the input goes on, unless it was
+/// typed into; nothing else of a dialog is read;</item>
 /// <item>the recorder's own windows are never recorded.</item>
 /// </list>
 /// The rules themselves are in Rpa.Recorder.Core; this class only asks Windows and UI Automation.
@@ -394,6 +396,7 @@ internal sealed class Capture : IDisposable
             var window = UiaWorker.WindowOf(d, top);
             var down = new MouseDown(at, window, d.Facts, 1);
             LeaveField(down);
+            AcceptFileDialog(down, top, null);
             var late = job.ElapsedMilliseconds > BudgetMs;
             described.Set();
             var matches = _worker.CountMatches(window, LocatorRules.Condition(d.Facts), d.ProcessId);
@@ -408,13 +411,15 @@ internal sealed class Capture : IDisposable
     {
         var d = _worker.Focused();
         if (d is null || d.ProcessId == _ownProcess || !InScope(d.ProcessId)) return;
-        _lastAppWindow = Native.GetAncestor(Native.GetForegroundWindow(), Native.GA_ROOT);
+        var root = Native.GetAncestor(Native.GetForegroundWindow(), Native.GA_ROOT);
+        _lastAppWindow = root;
         var window = UiaWorker.WindowOf(d, Native.GetForegroundWindow());
         var fieldKind = KeyRules.Field(d.Facts);
         if (Notices.ShortcutDropped(ctrl, alt, kind, fieldKind)) Notify(NoticeKind.CtrlAltDropped, Notices.CtrlAltDropped);
         var typing = kind == KeyKind.Printable || KeyRules.IsTyping(kind, fieldKind);
         var key = new KeyDown(at, window, d.Facts, typing ? "" : chord ?? "", typing);
         LeaveField(key);
+        AcceptFileDialog(key, root, d);
         Add(key, job is not null && !typing && job.ElapsedMilliseconds > BudgetMs, d.Facts);
         lock (_gate)
         {
@@ -430,6 +435,7 @@ internal sealed class Capture : IDisposable
         if (!KeyRules.Activates(d.Facts)) { Key(at, null, KeyKind.Printable, null); return; }
         var activated = new Activated(at, UiaWorker.WindowOf(d, Native.GetForegroundWindow()), d.Facts);
         LeaveField(activated);
+        AcceptFileDialog(activated, Native.GetAncestor(Native.GetForegroundWindow(), Native.GA_ROOT), null);
         Add(activated, job.ElapsedMilliseconds > BudgetMs, d.Facts);
     }
 
@@ -452,6 +458,29 @@ internal sealed class Capture : IDisposable
         ElementFacts? field;
         lock (_gate) field = _session.FieldLeftBy(next);
         if (field is not null) Leave(field, next.At);
+    }
+
+    /// <summary>
+    /// When <paramref name="accepting"/> accepts a Save dialog (<see cref="FileDialogs.AcceptedDialog"/>), reads that
+    /// dialog's file-name box before the input goes on, and nothing else of it: the session makes the name it holds the
+    /// export step a typed name makes. The box is not read when it was typed into (its step is there) or when it may be
+    /// a password box.
+    /// </summary>
+    private void AcceptFileDialog(Observation accepting, IntPtr dialog, Described? focused)
+    {
+        if (FileDialogs.AcceptedDialog(accepting) is not { } window) return;
+        var box = focused is not null && FileDialogs.IsFileNameBox(window, focused.Facts) ? focused : _worker.FileNameBox(dialog, window);
+        if (box is null) return;
+        bool reads;
+        lock (_gate) reads = _session.ReadsNameBox(window, box.Facts);
+        var value = reads && !SecretRules.IsSecret(box.Facts, UiaWorker.ReadPasswordFlag(box.Element)) ? UiaWorker.ReadValue(box.Element) : null;
+        bool notice;
+        lock (_gate)
+        {
+            _session.Add(new FileDialogAccepted(accepting.At, window, box.Facts, value));
+            notice = _session.TakeSaveNotice();
+        }
+        if (notice) Notify(NoticeKind.SaveKeepsFolder, Notices.SaveKeepsFolder, always: true);
     }
 
     private void LeaveFieldNow()

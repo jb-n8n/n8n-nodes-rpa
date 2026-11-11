@@ -256,7 +256,8 @@ jobs:
           }
 
       # The recorder records the reference flow that a stand-in for a person performs with synthetic input (the same
-      # ERP Demo build, then with --ui v2), and the scenario checks the recording against the engine's golden file.
+      # ERP Demo build, then with --ui v2), and the scenario checks the recording against the engine's golden file. A third
+      # pass keeps the name the Save dialog offers, and checks that the recording still saves it into the export folder.
       # continue-on-error: low-level hooks and synthetic input together have not been seen on a hosted runner yet, and a
       # failure here must not keep the package from being uploaded. Its result shows on the step; the check is made on
       # a real Windows Server in any case.

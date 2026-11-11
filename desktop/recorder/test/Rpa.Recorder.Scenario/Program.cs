@@ -11,7 +11,9 @@ namespace Rpa.Recorder.Scenario;
 /// RpaRecorder.exe (published with <c>-p:RecorderScenario=true</c>); the package's build refuses headless.
 /// <code>Rpa.Recorder.Scenario --recorder &lt;RpaRecorder.exe&gt; --app &lt;ErpDemo.exe&gt; --golden &lt;erp.rpa-recording.json&gt; --out &lt;folder&gt;</code>
 /// Pass 1 (v1) must equal the golden recording apart from timestamps; pass 2 (<c>--ui v2</c>) must be a valid recording
-/// with the v2 controls. In neither may the demo password occur in a file the recorder wrote or in what it printed.
+/// with the v2 controls; in pass 3 (v1 again) the person keeps the name the Save dialog offers, and the recording must
+/// save that name into the run's export folder all the same. In no pass may the demo password occur in a file the
+/// recorder wrote or in what it printed.
 /// Exit code 0 when every check passed.
 /// </summary>
 internal static class Program
@@ -45,6 +47,8 @@ internal static class Program
             CheckV2(second.Recording);
             CheckPolicyChange("v2", second.PolicyChange, app, ["--ui", "v2"]);
         }
+        var offered = Record(recorder, app, [], Path.Combine(output, "v1-offered"), v2: false, seed: 73, keepOfferedName: true);
+        if (offered is { } third) CheckOfferedName(third.Recording);
 
         Console.WriteLine();
         Console.WriteLine($"{Results.Count(r => r.Ok)} passed, {Results.Count(r => !r.Ok)} failed");
@@ -52,9 +56,10 @@ internal static class Program
     }
 
     /// <summary>One pass: the recorder records the flow; null when the pass could not finish.</summary>
-    private static (JsonNode Recording, JsonNode PolicyChange)? Record(string recorder, string app, string[] appArgs, string folder, bool v2, int seed)
+    private static (JsonNode Recording, JsonNode PolicyChange)? Record(string recorder, string app, string[] appArgs, string folder, bool v2, int seed,
+        bool keepOfferedName = false)
     {
-        var pass = v2 ? "v2" : "v1";
+        var pass = v2 ? "v2" : keepOfferedName ? "v1, offered name" : "v1";
         if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
         var saved = Path.Combine(folder, "saved");
         var start = new ProcessStartInfo(recorder)
@@ -78,7 +83,7 @@ internal static class Program
         try
         {
             using var person = new Person(appProcess, seed);
-            var flowed = Try(() => person.ErpFlow(Password, v2, Path.Combine(folder, "export", "line-items.csv")), out var failure);
+            var flowed = Try(() => person.ErpFlow(Password, v2, keepOfferedName ? null : Path.Combine(folder, "export", "line-items.csv")), out var failure);
             Check($"{pass}: the person performs the flow", flowed, () => failure);
             process.StandardInput.Close();
             var ended = process.WaitForExit(60000);
@@ -106,9 +111,6 @@ internal static class Program
     private static void CheckV2(JsonNode recording)
     {
         var events = recording["events"]!.AsArray().Select(e => e!).ToList();
-        string? Id(JsonNode e) => e["target"]?["path"]?.AsArray().Last()?["automationId"]?.GetValue<string>();
-        string? NameOf(JsonNode e) => e["target"]?["path"]?.AsArray().Last()?["name"]?.GetValue<string>();
-        string Kind(JsonNode e) => e["kind"]!.GetValue<string>();
         Check("v2: the app and its launch carry --ui v2",
             recording["app"]?["args"]?.ToJsonString() == "[\"--ui\",\"v2\"]" && events.Any(e => Kind(e) == "launch" && e["args"]?.ToJsonString() == "[\"--ui\",\"v2\"]"), () => recording["app"]!.ToJsonString());
         Check("v2: the password is a secret run variable", events.Any(e => Kind(e) == "fill" && Id(e) == "txtPassword" && e["value"]!.GetValue<string>() == "{{var.password}}" && e["secret"]?.GetValue<bool>() == true)
@@ -124,6 +126,32 @@ internal static class Program
             && e["value"]!.GetValue<string>() == "{{$exportDir}}\\line-items.csv") && Kind(events[^1]) == "click" && Id(events[^1]) == "1", () => "");
         Check("v2: no locator has an index", !recording.ToJsonString().Contains("\"index\"", StringComparison.Ordinal), () => "");
     }
+
+    /// <summary>
+    /// Pass 3: the person kept the name the Save dialog offers. The recording must type that name into the run's export
+    /// folder (one fill of the name box, control 1001, with exportFile) right before the click on Save (control 1).
+    /// Windows shows the offered name with or without its extension, as the machine's Explorer setting has it.
+    /// </summary>
+    private static void CheckOfferedName(JsonNode recording)
+    {
+        var events = recording["events"]!.AsArray().Select(e => e!).ToList();
+        var fills = events.Select((e, i) => (e, i)).Where(x => Kind(x.e) == "fill" && Id(x.e) == "1001").ToList();
+        var file = fills.Count == 1 ? fills[0].e["exportFile"]?.GetValue<string>() : null;
+        var next = fills.Count == 1 && fills[0].i + 1 < events.Count ? events[fills[0].i + 1] : null;
+        Check("v1, offered name: the offered name goes into the run's export folder, then Save",
+            file is "line-items" or "line-items.csv" && fills[0].e["value"]?.GetValue<string>() == $"{{{{$exportDir}}}}\\{file}"
+            && next is not null && Kind(next) == "click" && Id(next) == "1",
+            () => "expected: one fill of the name box (1001) with exportFile line-items or line-items.csv and the value {{$exportDir}}\\<that name>, "
+                + "then a click on Save (1); recorded:\n" + string.Join("\n", events.Select(Shown)));
+    }
+
+    /// <summary>An event as a failed check shows it: its kind, its element's id, its label, and a fill's value and file.</summary>
+    private static string Shown(JsonNode e) =>
+        $"{Kind(e)} [{Id(e)}] {e["label"]?.GetValue<string>()}{(e["value"] is { } v ? $" value={v.GetValue<string>()}" : "")}{(e["exportFile"] is { } f ? $" exportFile={f.GetValue<string>()}" : "")}";
+
+    private static string? Id(JsonNode e) => e["target"]?["path"]?.AsArray().Last()?["automationId"]?.GetValue<string>();
+    private static string? NameOf(JsonNode e) => e["target"]?["path"]?.AsArray().Last()?["name"]?.GetValue<string>();
+    private static string Kind(JsonNode e) => e["kind"]!.GetValue<string>();
 
     private static void CheckPolicyChange(string pass, JsonNode change, string app, string[] args)
     {
