@@ -573,7 +573,6 @@ describe('UiPath projects', () => {
       { kind: 'untranslated', activity: 'NGetText', displayName: "Get Text 'Total'", note: expect.stringContaining('ID Pattern') },
       { kind: 'email', to: 'ops@acme.example', subject: 'Done', displayName: 'Send Outlook Mail Message' },
       { kind: 'wait', seconds: 3, displayName: 'Pause' },
-      { kind: 'untranslated', activity: 'FlowDecision', displayName: 'Decide', note: expect.stringContaining('Flowchart') },
       { kind: 'untranslated', activity: 'UploadFile', displayName: 'Upload outside a scope', note: expect.stringContaining('Amazon') },
       { kind: 'writeSpreadsheet', path: 'out.xlsx', displayName: 'Write DataTable to Excel' },
       { kind: 'untranslated', activity: 'MysteryActivity', displayName: 'Mystery', note: expect.stringContaining('1 activity inside') },
@@ -581,6 +580,8 @@ describe('UiPath projects', () => {
     const items = r.report.items;
     for (const what of ['Comment', 'Assign', 'Disabled']) expect(items).toContainEqual(expect.objectContaining({ kind: 'dropped', what }));
     expect(items).toContainEqual(expect.objectContaining({ kind: 'untranslated', what: 'Catch Exception' }));
+    // A Flowchart's decision is a report item, not a flow node: a node would cut the UI steps around it into two runs.
+    expect(items).toContainEqual(expect.objectContaining({ at: 'Main.xaml: FlowDecision', kind: 'untranslated', what: 'Decide', reason: expect.stringContaining('the decision was not imported') }));
     expect(JSON.stringify(r)).not.toContain('Never');
   });
 });

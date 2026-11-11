@@ -1,0 +1,8 @@
+<Activity mc:Ignorable="sap sap2010" x:Class="GetTransactionData" xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:s="clr-namespace:System;assembly=mscorlib" xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation" xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation" xmlns:ui="http://schemas.uipath.com/workflow/activities" xmlns:uix="http://schemas.uipath.com/workflow/activities/uix" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <x:Members>
+    <x:Property Name="out_TransactionItem" Type="OutArgument(ui:QueueItem)" />
+  </x:Members>
+  <Sequence DisplayName="Get Transaction Data" sap2010:WorkflowViewState.IdRef="Sequence_1">
+    <ui:GetQueueItem DisplayName="Get Transaction Item" QueueType="InvoicesToApprove" TransactionItem="[out_TransactionItem]" sap2010:WorkflowViewState.IdRef="GetQueueItem_1" />
+  </Sequence>
+</Activity>

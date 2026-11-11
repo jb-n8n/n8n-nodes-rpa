@@ -4,12 +4,13 @@
 // the author set an Expected File.
 import { looksGenerated } from '../agent/stable-ids.js';
 import { substituteVars } from '../compile/compile.js';
-import { IMPORT_EMPTY } from '../messages.js';
+import { IMPORT_EMPTY, PRESS_PASSWORD_REFUSED } from '../messages.js';
+import { PASSWORD_FIELD } from '../secrets/credential-field.js';
 import { createMasker } from '../secrets/mask.js';
 import { canonicalize } from '../sign.js';
 import { absoluteHttpUrl, parseScript, ScriptShapeError } from '../steps/parse.js';
 import { SESSION_SEGMENT, stablePath } from '../steps/urls.js';
-import type { ClickModifier, Locator, Script, Step } from '../types.js';
+import type { ClickModifier, Locator, Script, Step, StepWhen } from '../types.js';
 import type { Candidate, Draft, ImportEvent, ImportItem, ImportOptions, ImportReport } from './types.js';
 
 /** Labels in intents and report items are at most this many characters. */
@@ -110,6 +111,7 @@ export function describeEvent(e: ImportEvent): string {
     case 'check': return `${e.checked ? 'Check' : 'Uncheck'} ${named('the box')}`;
     case 'waitFor': return `Wait for ${named('the element')}`;
     case 'enter': { const n = cleanLabel(e.label); return n ? `Press Enter in ${shown(n)}` : 'Press Enter'; }
+    case 'press': { const n = nameOf(e.label, e.target); return n ? `Press ${e.key} in ${shown(n)}` : `Press ${e.key}`; }
     case 'expectUrl': return `URL check ${shown(cleanLabel(stablePath(e.path)))}`;
     case 'signIn': return e.totp ? 'Sign in with an authentication code' : 'Sign in';
     case 'report': return cleanLabel(e.item.what);
@@ -235,10 +237,12 @@ const OVERSIZED = `a locator longer than ${MAX_CANDIDATE_CHARS} characters is ne
  */
 export function capEvent(e: ImportEvent): { event: ImportEvent; item?: ImportItem; empty: boolean } {
   const fits = (c: Candidate) => JSON.stringify(c).length <= MAX_CANDIDATE_CHARS;
+  const when = 'when' in e && e.when ? ('visible' in e.when ? e.when.visible : e.when.hidden) : undefined;
   const lists = 'target' in e ? [e.target] : e.kind === 'signIn' ? [e.username, ...(e.next ? [e.next] : []), e.password, e.submit, ...(e.totp ? [e.totp.field, e.totp.submit] : [])] : [];
+  if (when) lists.push(when);
   if (lists.every((l) => l.every(fits))) return { event: e, empty: false };
   const cut = (l: Candidate[]) => l.filter(fits);
-  const event: ImportEvent = 'target' in e
+  let event: ImportEvent = 'target' in e
     ? { ...e, target: cut(e.target) } as ImportEvent
     : e.kind === 'signIn'
       ? {
@@ -246,8 +250,11 @@ export function capEvent(e: ImportEvent): { event: ImportEvent; item?: ImportIte
         ...(e.totp ? { totp: { field: cut(e.totp.field), submit: cut(e.totp.submit) } } : {}),
       }
       : e;
-  const empty = 'target' in event ? event.target.length === 0
-    : event.kind === 'signIn' && [event.username, event.password, event.submit, ...(event.next ? [event.next] : [])].some((l) => l.length === 0);
+  if (when && 'when' in e && e.when) event = { ...event, when: 'visible' in e.when ? { visible: cut(when) } : { hidden: cut(when) } } as ImportEvent;
+  // A step whose condition lost every candidate must not run without it.
+  // A press without a target (the focused element) needs none.
+  const empty = (when !== undefined && when.length > 0 && cut(when).length === 0) || ('target' in event ? event.target.length === 0 && (e.kind !== 'press' || e.target.length > 0)
+    : event.kind === 'signIn' && [event.username, event.password, event.submit, ...(event.next ? [event.next] : [])].some((l) => l.length === 0));
   return { event, empty, item: { at: e.at, kind: 'dropped', what: describeEvent(event), reason: empty ? `${OVERSIZED}, and the step has no other` : OVERSIZED } };
 }
 
@@ -380,7 +387,9 @@ export function buildDraft(events: ImportEvent[], opts: ImportOptions, report: I
   const selects: { step: number; event: Extract<ImportEvent, { kind: 'fill' | 'select' }> }[] = [];
   // A navigation check belongs to the step the event before it built; when that event built nothing, the check goes too.
   let lastBuilt = false;
-  const push = (step: Step) => { steps.push(step); lastBuilt = true; };
+  /** The condition the current event's source put around it, given to the step it builds. */
+  let gate: StepWhen | undefined;
+  const push = (step: Step) => { steps.push(gate && !step.when ? { ...step, when: gate } : step); lastBuilt = true; };
   const noLocator = (e: Extract<ImportEvent, { target: Candidate[] }>) => {
     add(e.at, 'dropped', describeEvent(e), e.target.length
       ? 'no usable locator: the recorded ones name ids that look generated per page load, which a later run would not find'
@@ -389,6 +398,19 @@ export function buildDraft(events: ImportEvent[], opts: ImportOptions, report: I
   };
 
   events.forEach((e, i) => {
+    gate = undefined;
+    if ('when' in e && e.when) {
+      // Only the primary locator: the step looks at the element once, and a step whose condition cannot be kept must not
+      // run without it.
+      const loc = pickLocator('visible' in e.when ? e.when.visible : e.when.hidden);
+      if (!loc) {
+        add(e.at, 'dropped', describeEvent(e), 'the element its condition looks at has no usable locator, and the step must not run without its condition: it was left out');
+        lastBuilt = false;
+        return;
+      }
+      delete loc.fallbacks;
+      gate = 'visible' in e.when ? { visible: loc } : { hidden: loc };
+    }
     if (between.has(i) && builtSignIns.has(between.get(i)!)) {
       add(e.at, 'dropped', describeEvent(e), 'it checks the "Stay signed in?" page between the sign-in and its answer, which shows only sometimes: the answer runs only when it shows', true);
       return;
@@ -495,6 +517,19 @@ export function buildDraft(events: ImportEvent[], opts: ImportOptions, report: I
           break;
         }
         prev.expect = { ...(prev.expect ?? {}), url: path };
+        break;
+      }
+      case 'press': {
+        // No target: the key goes to the element that has the focus.
+        const target = e.target.length ? pickLocator(e.target) : undefined;
+        if (e.target.length && !target) { noLocator(e); break; }
+        // The step refuses a password field when it runs: an import never writes one that would.
+        if (PASSWORD_FIELD.test(`${e.label} ${JSON.stringify(e.target)}`)) {
+          add(e.at, 'untranslated', describeEvent(e), PRESS_PASSWORD_REFUSED);
+          lastBuilt = false;
+          break;
+        }
+        push({ intent: describeEvent(e), press: { key: e.key, ...(target ? { target } : {}) } });
         break;
       }
       case 'enter':

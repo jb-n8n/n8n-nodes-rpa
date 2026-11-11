@@ -390,8 +390,8 @@ describe('Playwright code', () => {
       '  });',
       "  await page.getByText('Done').click();", // 24
     ].join('\n')));
-    // Line 7's hover is a step now (Playwright hover imports as hover).
-    expect(events.map((e) => e.at)).toEqual(['line 4', 'line 7', 'line 24']);
+    // Line 7's hover is a step now (Playwright hover imports as hover), and so is line 15's press of Tab.
+    expect(events.map((e) => e.at)).toEqual(['line 4', 'line 7', 'line 15', 'line 24']);
     const at = (line: number) => items.find((i) => i.at === `line ${line}`);
     expect(at(5)).toMatchObject({ kind: 'untranslated', what: 'Click the element', reason: expect.stringContaining('.first()') });
     expect(at(6)).toMatchObject({ kind: 'untranslated', reason: expect.stringContaining('.filter()') });
@@ -401,7 +401,7 @@ describe('Playwright code', () => {
     expect(at(10)).toMatchObject({ kind: 'untranslated' });
     expect(at(13)).toMatchObject({ kind: 'untranslated', reason: expect.stringContaining('${') });
     expect(at(14)).toMatchObject({ kind: 'untranslated', reason: expect.stringContaining('pattern') });
-    expect(at(15)).toMatchObject({ kind: 'untranslated', what: 'Press Tab' });
+    expect(at(15)).toBeUndefined();
     expect(at(16)).toMatchObject({ kind: 'untranslated' });
     expect(at(17)).toMatchObject({ kind: 'untranslated', reason: expect.stringContaining('pattern') });
     expect(at(18)).toMatchObject({ kind: 'untranslated' });
