@@ -59,7 +59,7 @@ const FROM = {
 } as const;
 /** The default Max Seconds of Run Steps: a run option equal to it is not written. */
 const DEFAULT_MAX_SECONDS = 180;
-/** The credential type a run's secret variables come from (Task N3: RPA Secret Variables). */
+/** The credential type a run's secret variables come from. */
 const SECRET_VARIABLES = '**RPA Secret Variables**';
 /** Where the steps get approved by default. */
 const IMPORT_FORM = 'RPA: 5 Import a bot';

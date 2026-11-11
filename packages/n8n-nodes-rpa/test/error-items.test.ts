@@ -1,4 +1,4 @@
-// Regression: n8n's normalizeNodeErrors wipes structured fields from error items
+// Error items keep their structured fields through n8n's error output and normalizeNodeErrors.
 import { afterEach, describe, expect, it } from 'vitest';
 import type { GenericValue, IDataObject, INodeExecutionData, IPairedItemData } from 'n8n-workflow';
 import type { TaskFailure } from 'n8n-rpa-engine';

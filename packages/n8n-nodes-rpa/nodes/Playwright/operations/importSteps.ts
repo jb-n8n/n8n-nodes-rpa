@@ -468,7 +468,6 @@ function checkedCaptures(engine: Engine, r: { screenshot?: Buffer; trace?: Buffe
   return trace || screenshot ? { ...(trace ? { trace } : {}), ...(screenshot ? { screenshot } : {}) } : undefined;
 }
 
-/** The policy for a run: the Site Login's (Start URL may move the start page within it), or Start URL's site plus Also Allow These Sites. */
 /** The flow of a source without one (a Chrome recording, Playwright code, a step document): one pair per step list, by its name. */
 function pairsFlow(name: string, drafts: Draft[], desktopDrafts: DesktopDraft[]): UiPathFlow | undefined {
   const nodes: FlowNode[] = [
@@ -478,6 +477,7 @@ function pairsFlow(name: string, drafts: Draft[], desktopDrafts: DesktopDraft[])
   return nodes.length ? { name, nodes } : undefined;
 }
 
+/** The policy for a run: the Site Login's (Start URL may move the start page within it), or Start URL's site plus Also Allow These Sites. */
 function policyOf(p: ImportParams, siteLogin: SiteLogin | undefined, url: string): PortalPolicy {
   return policyFor({ siteLogin, url: url || undefined, allowedHosts: p.common.allowedHosts, allowPrivateNetwork: p.common.allowPrivateNetwork, operation: 'runSteps' });
 }

@@ -467,7 +467,7 @@ describe('3-approve-steps.json', () => {
     });
     expect(table(byName(t, 'Record rejection')).columns?.value).toEqual({ status: 'rejected', approvedBy: SETTINGS_APPROVER, approvedAt: '={{ $now.toISO() }}' });
   });
-  it('Supersede older versions runs after Save signed steps: every other active row of the same name up to the new version becomes superseded (I1)', () => {
+  it('Supersede older versions runs after Save signed steps: every other active row of the same name up to the new version becomes superseded', () => {
     expect(targets(t, 'Save signed steps')).toEqual([['Supersede older versions', 'Email signed steps']]);
     expect(targets(t, 'Supersede older versions')).toEqual([]);
     const n = table(byName(t, 'Supersede older versions'));
@@ -489,7 +489,7 @@ describe('3-approve-steps.json', () => {
     expect(byName(t, 'Supersede older versions').notes).toContain('An approved first version (an import) replaces every other active row of its name');
     expect(sticky(t, 'About this workflow').content).toContain('An approved import becomes the version that runs under its name, also when a higher version was active.');
   });
-  it('Email signed steps confirms what was signed, naming the steps signed as writes for desktop steps (I2); the hash and the review digest are one reference line at the end', () => {
+  it('Email signed steps confirms what was signed, naming the steps signed as writes for desktop steps; the hash and the review digest are one reference line at the end', () => {
     const p = byName(t, 'Email signed steps').parameters as { operation: string; toEmail: string; subject: string; text: string; emailFormat: string };
     expect(p).toMatchObject({ operation: 'send', toEmail: SETTINGS_APPROVER, emailFormat: 'text' });
     const reviewed = { hash: 'h0', digest: 'd0' };

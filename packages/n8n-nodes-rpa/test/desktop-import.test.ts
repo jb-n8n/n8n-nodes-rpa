@@ -168,7 +168,7 @@ describe('approving imported desktop steps: Sign Steps with Write Steps', () => 
     expect(await sign(item, { approved: false, writeSteps: '16' })).toMatchObject({ status: 'rejected', hash: item.hash, steps: '' });
   });
 
-  it('numbers the change list for desktop steps, and Sign Steps names the steps it signed as writes with their intents (I2)', async () => {
+  it('numbers the change list for desktop steps, and Sign Steps names the steps it signed as writes with their intents', async () => {
     const { repaired } = await importSample();
     const item = repaired[0].json;
     const lines = String(item.changeList).split('\n');
@@ -184,7 +184,7 @@ describe('approving imported desktop steps: Sign Steps with Write Steps', () => 
     expect(none).toMatchObject({ status: 'active', writeSteps: [], writeLine: 'Signed as writes: none' });
   });
 
-  it('says plainly that an unlisted step can still save unless the runner policy lists its control (I3)', async () => {
+  it('says plainly that an unlisted step can still save unless the runner policy lists its control', async () => {
     const { repaired } = await importSample();
     expect(String(repaired[0].json.safetyLine)).toContain(
       'candidate write: step 16 (Click Save) may save, post or submit',

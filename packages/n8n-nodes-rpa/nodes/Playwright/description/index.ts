@@ -48,7 +48,7 @@ export const QUICK_PROPERTIES: INodeProperties[] = [
 /**
  * Operations in menu order: the quick operations first (QUICK_OPERATION_OPTIONS), then the expert operations, Import
  * Steps last.
- * The order is logical on purpose. @n8n/eslint-plugin-community-nodes 0.35.0 has no option-sorting rule, so there is
+ * The order is logical on purpose. @n8n/eslint-plugin-community-nodes 0.37.0 has no option-sorting rule, so there is
  * nothing to disable here.
  */
 export const OPERATION_OPTIONS: INodePropertyOptions[] = [
