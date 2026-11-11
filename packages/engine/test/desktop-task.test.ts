@@ -285,6 +285,28 @@ describe('desktop task: refusals and runner errors', () => {
     expect({ code: expectFails.code, message: expectFails.message }).toEqual({ code: 'drift_detected', message: 'Sign in: expected UI Automation Edit #txtSearch to be visible within 0.3 s' });
   });
 
+  it('the runner\'s own texts for a locator that matches several elements, a disabled element and a copy of the app it did not start reach the error unchanged', async () => {
+    // Copies of what desktop/runner sends (RpcErrors.NotUnique, RetryableActionException.Disabled, WindowScope.RunWindows).
+    const notUnique = 'not_unique: the primary target {controlType="Button", name="Copy"} matched 2 visible elements. To match one, add the window, '
+      + 'a parent with an automationId before it in the path (parent, then child), or another condition such as name, automationId or className.';
+    const disabled = 'timeout: the element is disabled: the app reports it to UI Automation as not enabled ({controlType="Button", automationId="btnSignIn"}). '
+      + 'If a person can click it, target an enabled element inside it, or use key steps (Tab, Space).';
+    const otherCopy = 'policy_refused: the window {title="ERP Demo - Sign in"} belongs to a copy of "ErpDemo.exe" that this run did not start '
+      + '(most often one that was already open before the run), so the run will not drive it. Close that copy on the runner machine (or end its process), then run again.';
+    runner = await FakeRunner.start();
+    const click = doc([{ intent: 'Click Copy', click: uia('btnSignIn', 'Button') }]);
+    const cases: [string, number, string, string][] = [
+      ['resolve', -32005, notUnique, 'drift_detected'],
+      ['act', -32007, disabled, 'drift_detected'],
+      ['resolve', -32003, otherCopy, 'policy_violation'],
+    ];
+    for (const [method, code, message, shown] of cases) {
+      runner.errorFor = { [method]: { code, message } };
+      const r = failed(await run(click));
+      expect({ code: r.code, message: r.message }).toEqual({ code: shown, message: `Click Copy: ${message}` });
+    }
+  });
+
   it('policy_refused: a declared write control or a gated key without the write flag; with a signed write: true it runs', async () => {
     const post = (write: boolean) => doc([...SIGN_IN, { intent: 'Post', click: uia('btnPost', 'Button'), ...(write ? { write: true } : {}) }]);
     const refused = failed(await run(post(false)));

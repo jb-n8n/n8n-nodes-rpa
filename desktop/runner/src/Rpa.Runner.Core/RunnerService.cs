@@ -335,7 +335,7 @@ public sealed class RunnerService
             }
             catch (RetryableActionException e)
             {
-                if (_time.GetUtcNow() >= deadline) throw RpcErrors.Timeout($"{e.Message} ({what})");
+                if (_time.GetUtcNow() >= deadline) throw RpcErrors.Timeout($"{e.Message} ({what}){(e.Hint is null ? "" : $". {e.Hint}")}");
                 ct.ThrowIfCancellationRequested();
                 Thread.Sleep(TargetResolver.PollInterval);
             }
@@ -640,9 +640,18 @@ public sealed class RunnerService
     }
 }
 
-/// <summary>Thrown by the driver when the action may succeed if retried (element disabled, busy). The message is fixed
-/// text (never a value).</summary>
-public sealed class RetryableActionException(string message) : Exception(message);
+/// <summary>Thrown by the driver when the action may succeed if retried (element disabled, busy). The message and the
+/// hint are fixed text (never a value).</summary>
+public sealed class RetryableActionException(string message, string? hint = null) : Exception(message)
+{
+    /// <summary>What to do when the retries run out; it follows the target in the timeout message.</summary>
+    public string? Hint { get; } = hint;
+
+    /// <summary>The element the action targets is disabled (a read or a focus still works).</summary>
+    public static RetryableActionException Disabled() => new(
+        "the element is disabled: the app reports it to UI Automation as not enabled",
+        "If a person can click it, target an enabled element inside it, or use key steps (Tab, Space).");
+}
 
 /// <summary>The segment typing model: segments are concatenated in order, export-directory markers filled with the
 /// run's directory. Text segments are never interpreted.</summary>

@@ -325,6 +325,8 @@ export class FakeRunner {
   clockOffsetMs = 0;
   /** Another application's window holds the foreground (clipboard.read is refused). */
   foregroundElsewhere = false;
+  /** Answers every request of a method with this error (a test's copy of a text the real runner sends). */
+  errorFor: Record<string, { code: number; message: string } | undefined> = {};
   readonly erpUi: 'v1' | 'v2';
   readonly erpChanges: ErpChange[];
   readonly noWindowsMethod: boolean;
@@ -598,6 +600,8 @@ export class FakeRunner {
   }
 
   private async answer(method: string, p: Record<string, unknown>): Promise<unknown> {
+    const forced = this.errorFor[method];
+    if (forced) throw new RpcError(forced.code, forced.message);
     switch (method) {
       case 'hello':
         return { protocol: 1, runner: { version: '0.0.0-fake', os: 'Windows Server 2022 (fake)', session: { ...this.session } } };

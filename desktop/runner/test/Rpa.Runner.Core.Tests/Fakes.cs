@@ -101,8 +101,16 @@ public sealed class FakeDesktop : IDesktop
 
     public IUiNode? GetOwnerWindow(IUiNode window) => ((FakeNode)window).Owner;
 
+    /// <summary>Runs at every look at the top-level windows (each attempt of the resolver looks once per candidate).</summary>
+    public Action? OnLook { get; set; }
+
     public SessionState GetSessionState() => Session;
-    public IReadOnlyList<IUiNode> GetTopLevelWindows() => Windows;
+
+    public IReadOnlyList<IUiNode> GetTopLevelWindows()
+    {
+        OnLook?.Invoke();
+        return Windows;
+    }
     public IUiNode? GetForegroundWindow() => Foreground;
     public IUiNode? GetFocusedElement() => Focused;
 
@@ -125,6 +133,8 @@ public sealed class FakeDesktop : IDesktop
     public string? Perform(UiOperation op)
     {
         BeforeInput?.Invoke(op);
+        // As the Windows driver: a disabled element takes no input, only a read or a focus.
+        if (op.Action is not (ActionKind.Read or ActionKind.Focus) && !op.Element.IsEnabled) throw RetryableActionException.Disabled();
         if (op.Action is ActionKind.Type or ActionKind.Key)
         {
             // As the Windows driver does right before keyboard input: first the window manager's focus window (a bare

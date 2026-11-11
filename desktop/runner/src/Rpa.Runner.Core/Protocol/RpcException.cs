@@ -52,7 +52,9 @@ public static class RpcErrors
                 : $"not_found: no element matched {what} in window \"{windowTitle}\"");
 
     public static RpcException NotUnique(int count, string what) =>
-        new(NotUniqueCode, "not_unique", $"not_unique: the primary target {what} matched {count} visible elements");
+        new(NotUniqueCode, "not_unique",
+            $"not_unique: the primary target {what} matched {count} visible elements. To match one, add the window, a parent with an " +
+            "automationId before it in the path (parent, then child), or another condition such as name, automationId or className.");
 
     public static RpcException ExpectedFileMissing(string why) =>
         new(ExpectedFileMissingCode, "expected_file_missing", $"expected_file_missing: {why}");

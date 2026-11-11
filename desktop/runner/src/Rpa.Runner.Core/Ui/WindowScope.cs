@@ -76,6 +76,7 @@ public sealed class WindowScope
     {
         var allowed = new List<IUiNode>();
         string? refusedExe = null;
+        var refusedIsAllowedApp = false;
         foreach (var w in _desktop.GetTopLevelWindows())
         {
             bool matches;
@@ -83,10 +84,21 @@ public sealed class WindowScope
             catch (ElementGoneException) { continue; }
             if (!matches) continue;
             if (IsRunProcess(run, w.ProcessId)) allowed.Add(w);
-            else if (sel is not null && refusedExe is null && !IsOsSurface(w)) refusedExe = _processes.GetExeName(w.ProcessId) ?? "unknown";
+            else if (sel is not null && refusedExe is null && !IsOsSurface(w))
+            {
+                refusedExe = _processes.GetExeName(w.ProcessId) ?? "unknown";
+                refusedIsAllowedApp = _policy.IsAllowedPath(_processes.GetExePath(w.ProcessId));
+            }
         }
         if (allowed.Count == 0 && refusedExe is not null)
-            throw RpcErrors.PolicyRefused($"the window {sel} belongs to \"{refusedExe}\", which is not an application this run launched from the allowed list");
+        {
+            // An allowed app's own executable that the run did not start: most often a copy left open, or an app that
+            // keeps one window and handed the run's launch over to it.
+            throw RpcErrors.PolicyRefused(refusedIsAllowedApp
+                ? $"the window {sel} belongs to a copy of \"{refusedExe}\" that this run did not start (most often one that was already open " +
+                  "before the run), so the run will not drive it. Close that copy on the runner machine (or end its process), then run again."
+                : $"the window {sel} belongs to \"{refusedExe}\", which is not an application this run launched from the allowed list");
+        }
         return allowed;
     }
 

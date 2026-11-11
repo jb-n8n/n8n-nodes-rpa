@@ -479,6 +479,15 @@ Error codes: -32001 `runner_busy`, -32002 `desktop_unavailable`, -32003 `policy_
 -32005 `not_unique`, -32006 `expected_file_missing`, -32007 `timeout`, -32008 `no_run`; `error.data.name` carries the
 name. Messages never contain typed values.
 
+`resolve` and `act` look for their target every 200 ms until one candidate matches exactly one visible element or
+`timeoutMs` runs out. A primary target that matched more than one element on every look for 3 seconds is answered
+`not_unique` then (with the count and what to add to the locator), without waiting out a longer `timeoutMs`; a window
+that is still drawing can show two matches for a moment and then one, which resolves. A target that matches nothing
+waits the whole `timeoutMs` (`not_found`), and so does an `act` on a disabled element (`timeout`, with what to do
+instead). A window selector that matches only a window of a copy of an allowed app that the run did not start (one a
+person left open, or one an app that keeps one window handed the launch to) is `policy_refused` with a message that
+says to close that copy.
+
 Beyond the minimum: `act` with `action: "key"` may omit `target` (the key goes to the run's focused element, under the
 same write checks); `snapshot` adds `truncated: true` when it stopped at `maxNodes` or `maxDepth`; `windows { runId }`
 returns `{ windows: [{ title, exe, automationId, className, foreground }] }`, the run's top-level windows (its own and

@@ -60,6 +60,114 @@ public sealed class ResolverTests : IDisposable
         Assert.Equal("not_unique", e["data"]!["name"]!.GetValue<string>());
     }
 
+    /// <summary>Puts the harness's desktop on its fake clock, moved one second at every look at the windows, so each
+    /// attempt of the resolver is a second after the one before. <paramref name="onLook"/> runs at each look (1-based).
+    /// Returns the clock's time at each look.</summary>
+    private static List<DateTimeOffset> OneSecondPerLook(Harness h, Action<int>? onLook = null)
+    {
+        var time = h.Time!;
+        var looks = new List<DateTimeOffset>();
+        h.Desktop.OnLook = () =>
+        {
+            looks.Add(time.GetUtcNow());
+            onLook?.Invoke(looks.Count);
+            time.Advance(TimeSpan.FromSeconds(1));
+        };
+        return looks;
+    }
+
+    private const string NotUniqueHint =
+        "To match one, add the window, a parent with an automationId before it in the path (parent, then child), or another condition such as name, automationId or className.";
+
+    [Fact]
+    public void A_locator_that_matches_several_elements_for_3_s_is_not_unique_after_3_s_not_after_the_timeout()
+    {
+        using var h = new Harness(realTime: false);
+        h.BeginWithApp();
+        var looks = OneSecondPerLook(h);
+        var t0 = h.Time!.GetUtcNow();
+        var e = h.Err("resolve", Resolve(Harness.T(new { controlType = "Button" }), 20000), RpcErrors.NotUniqueCode);
+        Assert.Equal($"not_unique: the primary target {{controlType=\"Button\"}} matched 3 visible elements. {NotUniqueHint}", e["message"]!.GetValue<string>());
+        // Three on every look from the first to the one 3 s later, and no wait for the rest of the 20 s.
+        Assert.Equal(TimeSpan.FromSeconds(3), looks[^1] - looks[0]);
+        Assert.True(h.Time.GetUtcNow() - t0 < TimeSpan.FromSeconds(5), $"waited {h.Time.GetUtcNow() - t0}");
+    }
+
+    [Fact]
+    public void A_step_timeout_under_3_s_keeps_its_own_timeout_for_several_matches()
+    {
+        using var h = new Harness(realTime: false);
+        h.BeginWithApp();
+        OneSecondPerLook(h);
+        var t0 = h.Time!.GetUtcNow();
+        h.Err("resolve", Resolve(Harness.T(new { controlType = "Button" }), 1000), RpcErrors.NotUniqueCode);
+        Assert.Equal(TimeSpan.FromSeconds(1), h.Time.GetUtcNow() - t0);
+    }
+
+    [Fact]
+    public void Two_matches_that_become_one_within_3_s_resolve()
+    {
+        using var h = new Harness(realTime: false);
+        var w = h.BeginWithApp();
+        w.Child("Button", "Copy", "btnCopyA").Child("Button", "Copy", "btnCopyB");
+        var second = w.Find("btnCopyB");
+        // A window still drawing: two Copy buttons at first, the second gone from the third look (2 s in).
+        OneSecondPerLook(h, look => { if (look == 3) second.IsOffscreen = true; });
+        var r = h.Ok("resolve", Resolve(Harness.T(new { controlType = "Button", name = "Copy" }), 20000));
+        Assert.Equal(0, r["candidate"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void The_3_s_count_again_from_the_first_look_with_several_matches_after_one_without()
+    {
+        using var h = new Harness(realTime: false);
+        var w = h.BeginWithApp();
+        w.Child("Button", "Copy", "btnCopyA").Child("Button", "Copy", "btnCopyB");
+        var first = w.Find("btnCopyA");
+        var second = w.Find("btnCopyB");
+        // Two at looks 1 and 2, none at look 3 (both offscreen), two again from look 4.
+        var looks = OneSecondPerLook(h, look => first.IsOffscreen = second.IsOffscreen = look == 3);
+        h.Err("resolve", Resolve(Harness.T(new { controlType = "Button", name = "Copy" }), 20000), RpcErrors.NotUniqueCode);
+        // Looks 4 to 7 are 3 s of two matches.
+        Assert.Equal(7, looks.Count);
+    }
+
+    [Fact]
+    public void No_match_keeps_waiting_for_the_whole_timeout()
+    {
+        using var h = new Harness(realTime: false);
+        h.BeginWithApp();
+        OneSecondPerLook(h);
+        var t0 = h.Time!.GetUtcNow();
+        h.Err("resolve", Resolve(Harness.T(new { automationId = "btnNotThereYet" }), 10000), RpcErrors.NotFoundCode);
+        Assert.Equal(TimeSpan.FromSeconds(10), h.Time.GetUtcNow() - t0);
+    }
+
+    [Fact]
+    public void A_disabled_element_keeps_waiting_for_the_whole_timeout_and_says_what_to_do()
+    {
+        using var h = new Harness(realTime: false);
+        var w = h.BeginWithApp();
+        w.Find("btnSignIn").IsEnabled = false;
+        var time = h.Time!;
+        var tries = 0;
+        h.Desktop.BeforeInput = _ =>
+        {
+            tries++;
+            time.Advance(TimeSpan.FromSeconds(1));
+        };
+        var t0 = time.GetUtcNow();
+        var e = h.Err("act", new { runId = Harness.RunId, target = Harness.T(new { automationId = "btnSignIn" }), action = "click", timeoutMs = 10000 },
+            RpcErrors.TimeoutCode);
+        Assert.Equal(
+            "timeout: the element is disabled: the app reports it to UI Automation as not enabled ({automationId=\"btnSignIn\"}). " +
+            "If a person can click it, target an enabled element inside it, or use key steps (Tab, Space).",
+            e["message"]!.GetValue<string>());
+        Assert.True(time.GetUtcNow() - t0 >= TimeSpan.FromSeconds(10), $"waited {time.GetUtcNow() - t0}");
+        Assert.Equal(10, tries);
+        Assert.Empty(h.Desktop.Performed);
+    }
+
     [Fact]
     public void Offscreen_elements_do_not_count()
     {
@@ -127,7 +235,9 @@ public sealed class ResolverTests : IDisposable
         _h.Desktop.Windows.Insert(0, other);
         var target = new { window = new { exe = "notepad.exe" }, path = new object[] { new { automationId = "btnElsewhere" } } };
         var e = _h.Err("resolve", Resolve(target), RpcErrors.PolicyRefusedCode);
-        Assert.Contains("notepad.exe", e["message"]!.GetValue<string>());
+        Assert.Equal(
+            "policy_refused: the window {exe=\"notepad.exe\"} belongs to \"notepad.exe\", which is not an application this run launched from the allowed list",
+            e["message"]!.GetValue<string>());
     }
 
     [Fact]
@@ -137,8 +247,30 @@ public sealed class ResolverTests : IDisposable
         _h.Processes.Names[5555] = "ErpDemo.exe";
         _h.Desktop.Windows.Clear();
         _h.Desktop.Windows.Add(foreign);
-        _h.Err("resolve", Resolve(new { window = new { exe = "ErpDemo.exe" }, path = new object[] { new { automationId = "btnSignIn" } } }),
+        var e = _h.Err("resolve", Resolve(new { window = new { exe = "ErpDemo.exe" }, path = new object[] { new { automationId = "btnSignIn" } } }),
             RpcErrors.PolicyRefusedCode);
+        // Its path is unknown, so it is not known to be a copy of the allowed app: the general text.
+        Assert.Equal(
+            "policy_refused: the window {exe=\"ErpDemo.exe\"} belongs to \"ErpDemo.exe\", which is not an application this run launched from the allowed list",
+            e["message"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void A_copy_of_the_allowed_app_that_this_run_did_not_start_is_refused_with_what_to_do()
+    {
+        // An app that keeps one window: the copy a person left open holds the window, and the run's own copy is gone.
+        var foreign = Harness.MainWindow(5555);
+        _h.Processes.Names[5555] = "ErpDemo.exe";
+        _h.Processes.Paths[5555] = _h.AppPath;
+        _h.Desktop.Windows.Clear();
+        _h.Desktop.Windows.Add(foreign);
+        var e = _h.Err("resolve", Resolve(new { window = new { title = "ERP Demo - Line items" }, path = new object[] { new { automationId = "btnSignIn" } } }),
+            RpcErrors.PolicyRefusedCode);
+        Assert.Equal(
+            "policy_refused: the window {title=\"ERP Demo - Line items\"} belongs to a copy of \"ErpDemo.exe\" that this run did not start " +
+            "(most often one that was already open before the run), so the run will not drive it. " +
+            "Close that copy on the runner machine (or end its process), then run again.",
+            e["message"]!.GetValue<string>());
     }
 
     [Fact]
