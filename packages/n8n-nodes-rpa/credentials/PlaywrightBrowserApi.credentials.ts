@@ -7,7 +7,7 @@ export class PlaywrightBrowserApi implements ICredentialType {
 
   icon: Icon = { light: 'file:rpa.svg', dark: 'file:rpa.svg' };
 
-  documentationUrl = 'https://github.com/jb-n8n/n8n-nodes-rpa#where-the-browser-runs';
+  documentationUrl = 'https://github.com/jb-n8n/n8n-nodes-rpa/blob/main/docs/reference/operator.md#where-the-browser-runs';
 
   properties: INodeProperties[] = [
     {

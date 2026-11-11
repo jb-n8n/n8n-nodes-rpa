@@ -7,7 +7,7 @@ export class PlaywrightScriptSigningApi implements ICredentialType {
 
   icon: Icon = { light: 'file:rpa.svg', dark: 'file:rpa.svg' };
 
-  documentationUrl = 'https://github.com/jb-n8n/n8n-nodes-rpa#the-self-healing-data-feed';
+  documentationUrl = 'https://github.com/jb-n8n/n8n-nodes-rpa/blob/main/docs/reference/security.md#signing-and-approval';
 
   properties: INodeProperties[] = [
     {

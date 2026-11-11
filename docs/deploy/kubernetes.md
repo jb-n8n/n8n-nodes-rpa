@@ -38,7 +38,7 @@ The managed example uses worker pools, an early-alpha n8n feature that needs an 
 
 ## 3. The image
 
-The image is `ghcr.io/jb-n8n/rpa-browser:<version>`, built from `images/browser/`. Its Playwright version must match the node's `playwright-core` (1.63 today; repository README, "Version matching"). A mismatch fails every run with `browser_unavailable` and names the version it needs.
+The image is `ghcr.io/jb-n8n/rpa-browser:<version>`, built from `images/browser/`. Its Playwright version must match the node's `playwright-core` (1.63 today; docs/reference/operator.md, "Version matching"). A mismatch fails every run with `browser_unavailable` and names the version it needs.
 
 **Publishing it (owner, once).** `.github/workflows/browser-image.yml` publishes only from a `browser-v<major>.<minor>.<patch>` tag on `main`, or from `main` by hand, after the image's tests pass. Before the first publish:
 
@@ -162,8 +162,8 @@ To set the credential up by hand instead: **+ → New credential → RPA Browser
    | `... had no free browser session for 60 s ...` | Every session was busy for the engine's whole 60 s wait: add capacity (section 8). |
    | A navigation timeout or a DNS error on the page | The browser's egress: `allowed_egress_cidrs`, `egress_except_cidrs`, or DNS (NodeLocal DNSCache, section 9). The attach examples don't expose `egress_except_cidrs`; add it to the example's `module` block. |
 
-2. **Hello world.** Open **RPA: Hello world**, pick the credentials and run it. It takes a screenshot and extracts a table, as in the repository README's "Hello world in 10 minutes". Its second node, **Extract the sandbox table**, reads `http://sandbox:8080`, the repository's compose sandbox, which your cluster doesn't have: point it at a table on a page of your own, or remove it.
-3. **First automation.** Run **RPA: 1 Create tables (run once)** once; it creates the two Data Tables. Then follow the repository README's "The self-healing data feed": **RPA: 2 Data feed** runs the steps, and **RPA: 3 Approve steps** is where a person approves repaired steps. Pick the credentials on each node; the sticky notes list them.
+2. **Hello world.** Open **RPA: Hello world**, pick the credentials and run it. It takes a screenshot and extracts a table, as in step 3 of the [browser bot guide](../guides/browser-bot.md). Its second node, **Extract the sandbox table**, reads `http://sandbox:8080`, the repository's compose sandbox, which your cluster doesn't have: point it at a table on a page of your own, or remove it.
+3. **First automation.** Follow the [browser bot guide](../guides/browser-bot.md) from step 4, with your own site in place of the sandbox: **RPA: 2 Data feed** runs the steps, and **RPA: 3 Approve steps** is where a person approves repaired steps. Pick the credentials on each node; the sticky notes list them.
 
 ## 8. Sizing
 
@@ -186,7 +186,7 @@ Every RPA run holds one browser session from its first step to its last, and eac
 - **Enforcement.** On EKS, the VPC CNI enforces NetworkPolicy only with its network policy agent on: `aws eks update-addon --cluster-name <cluster> --addon-name vpc-cni --configuration-values '{"enableNetworkPolicy":"true"}'`, or the add-on's configuration in Terraform. The managed example adopts `vpc-cni` as a managed add-on with `resolve_conflicts_on_create = "OVERWRITE"`. Adopting it that way replaces a self-managed CNI configuration (custom environment variables such as warm IP targets or custom networking); if you have one, set `manage_vpc_cni_network_policy = false` and turn the agent on yourself.
 - **Domain allowlists.** NetworkPolicy matches addresses only. For names:
   - On Cilium, `egress_fqdns` (`egress.fqdns`) adds a CiliumNetworkPolicy that allows the listed names on 80/443 through Cilium's DNS proxy, and denies the metadata ranges and `egress_except_cidrs` on every port, so a name that resolves into them stays blocked.
-  - Elsewhere, route the browser's egress through a transparent filtering gateway. The gate doesn't pass proxy settings to the browser, and an explicit forward proxy would also blur the engine's address checks (repository README, "Address checks run in n8n").
+  - Elsewhere, route the browser's egress through a transparent filtering gateway. The gate doesn't pass proxy settings to the browser, and an explicit forward proxy would also blur the engine's address checks ([Operator guide](../reference/operator.md#address-checks-run-in-n8n)).
 - **Ingress** on 3000 comes only from `n8n_pod_selector`; on 9464 only from `metrics_from`. The Service never carries 9464.
 - **The token.**
   - It stays out of Terraform state, Helm values, logs and metrics.
@@ -288,6 +288,6 @@ Settled while building, for reference:
 
 ## Upgrades
 
-- **Image.** Change `image.tag` (or `digest`) and apply. New pods start first; old pods drain. Keep the image's Playwright version equal to the node package's `playwright-core`: upgrade both together (repository README, "Version matching").
+- **Image.** Change `image.tag` (or `digest`) and apply. New pods start first; old pods drain. Keep the image's Playwright version equal to the node package's `playwright-core`: upgrade both together (docs/reference/operator.md, "Version matching").
 - **Chart or module.** `terraform plan` shows chart template changes too: the module adds a digest of the chart's files to the values.
 - **n8n.** Keep n8n at 2.41 or later.

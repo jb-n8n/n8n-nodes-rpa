@@ -7,7 +7,7 @@ export class RpaSecretVariablesApi implements ICredentialType {
 
   icon: Icon = { light: 'file:rpa.svg', dark: 'file:rpa.svg' };
 
-  documentationUrl = 'https://github.com/jb-n8n/n8n-nodes-rpa#run-steps-reference';
+  documentationUrl = 'https://github.com/jb-n8n/n8n-nodes-rpa/blob/main/docs/reference/security.md#secret-variables';
 
   properties: INodeProperties[] = [
     {

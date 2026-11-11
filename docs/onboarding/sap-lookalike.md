@@ -11,7 +11,7 @@ It is a look-alike built from public documentation, not SAP. [What this look-ali
 
 ## 1. Start
 
-Start the stack as in the README's **Hello world in 10 minutes** (`.env` with `BROWSER_TOKEN` and `N8N_ENCRYPTION_KEY`, then `docker compose up --build -d`). Then switch the sandbox to realistic mode:
+Start the stack as in step 1 of the [browser bot guide](../guides/browser-bot.md) (`.env` with `BROWSER_TOKEN` and `N8N_ENCRYPTION_KEY`, then `docker compose up --build -d`). Then switch the sandbox to realistic mode:
 
 ```bash
 SANDBOX_SAP=realistic docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build sandbox
@@ -40,7 +40,7 @@ Create an **RPA Site Login** credential:
 - **Client and language.** The logon page prefills Client `100` and Language `EN`, so the steps only fill User and Password.
 - **Why `sap*`.** After the logon, the classic GUI moves to a per-session path, `/sap(<context>)/bc/gui/sap/its/webgui`, and posts every screen there. `*` matches the `(<context>)` part. The Fiori app reads through `$batch` POSTs on one OData service, so that entry names the service exactly.
 - **Wrong passwords lock the user.** Five wrong passwords lock `RPA_BOT` (`User is locked. Please notify the person responsible`). **Reset to baseline** on http://localhost:8080/admin (user `admin`, password `change-me`) unlocks it. So does restarting the sandbox.
-- **The caveat for real SAP** (README, **Sites that post to read (such as SAP)**). On a real system these same endpoints also carry saves. The web GUI posts Save and Post to the same `…/its/webgui` URL, and Fiori saves through `$batch` change sets. Listing them leaves no write protection for them. Your bot user must have display-only authorizations in SAP.
+- **The caveat for real SAP** ([Security: Sites that post to read](../reference/security.md#sites-that-post-to-read)). On a real system these same endpoints also carry saves. The web GUI posts Save and Post to the same `…/its/webgui` URL, and Fiori saves through `$batch` change sets. Listing them leaves no write protection for them. Your bot user must have display-only authorizations in SAP.
 
 ## 3. The onboarding checklist
 
@@ -52,7 +52,7 @@ Add an RPA node with Operation **Screenshot**, URL `http://sandbox:8080/sap/bc/g
 
 ### 3.2 Hello world
 
-Import `packages/n8n-nodes-rpa/templates/hello-world.json` and run it, as in the README. It proves the browser can reach a public site and the sandbox.
+Import `packages/n8n-nodes-rpa/templates/hello-world.json` and run it, as in the browser bot guide. It proves the browser can reach a public site and the sandbox.
 
 ### 3.3 First automation, hand-written: the classic GUI XLSX export
 
@@ -100,16 +100,16 @@ The same flow on the other report-screen releases (set them on `/admin` under **
 
 ### 3.4 First automation from a plain-English goal (AI build) (not walked)
 
-Use the data feed templates as in the README's **The self-healing data feed**:
+Use the data feed templates as in the [browser bot guide](../guides/browser-bot.md#5-import-the-two-workflows):
 - Pick the SAP Site Login on **Run steps** and **Sign steps**.
 - Write a Goal such as "Open Line Item Report, run company code 1000 for 01.09.2026 to 30.09.2026, and read the document numbers in the list".
 - Set **ID Pattern** `19\d{8}`, and clear **Stated Total Pattern**, because the ALV states no "Showing … of N" total.
 
-AI build and repair make two kinds of steps (README, **AI Repair rules**): data feeds that read IDs, whose rows carry `id` only (README, **Known limits**), and downloads of one checked file. To build the XLSX export instead of the ID feed, clear **ID Pattern** on **Run steps**, set **Expected File (First Version)** with **Required Columns** `Document No., Posting Date, Company Code, Amount, Currency`, and write a Goal such as "Export the Line Item Report for company code 1000, 01.09.2026 to 30.09.2026, as a spreadsheet". Match on the columns rather than the file name (section 5). The agent builds the steps, a fresh browser downloads the file again and checks it, and the Repaired steps item carries the file evidence for approval. The export's Continue posts to the web GUI, which the Site Login's **Requests That Only Read** covers, so the step is a plain `download` with a `trigger`, which repair can heal. A `download` with `via` (a declared form post) could not be repaired.
+AI build and repair make two kinds of steps ([Steps: AI Repair](../reference/steps.md#ai-repair)): data feeds that read IDs, whose rows carry `id` only (same page, **Known limits**), and downloads of one checked file. To build the XLSX export instead of the ID feed, clear **ID Pattern** on **Run steps**, set **Expected File (First Version)** with **Required Columns** `Document No., Posting Date, Company Code, Amount, Currency`, and write a Goal such as "Export the Line Item Report for company code 1000, 01.09.2026 to 30.09.2026, as a spreadsheet". Match on the columns rather than the file name (section 5). The agent builds the steps, a fresh browser downloads the file again and checks it, and the Repaired steps item carries the file evidence for approval. The export's Continue posts to the web GUI, which the Site Login's **Requests That Only Read** covers, so the step is a plain `download` with a `trigger`, which repair can heal. A `download` with `via` (a declared form post) could not be repaired.
 
 ### 3.5 Approve and sign (not walked)
 
-As in the README: the review email in Mailpit (http://localhost:8025), then **Approve**. The approval workflow signs the steps and writes an `active` row to `playwright_steps`. In the approval evidence, check that the read-only entries the proof run used are listed on the Site Login. The classic-GUI ID feed uses only the `…/its/webgui` entry from section 2; the evidence lists only the entries a run used. Sign Steps refuses an entry that isn't on the Site Login.
+As in the browser bot guide: the review email in Mailpit (http://localhost:8025), then **Approve**. The approval workflow signs the steps and writes an `active` row to `playwright_steps`. In the approval evidence, check that the read-only entries the proof run used are listed on the Site Login. The classic-GUI ID feed uses only the `…/its/webgui` entry from section 2; the evidence lists only the entries a run used. Sign Steps refuses an entry that isn't on the Site Login.
 
 ### 3.6 A scheduled run (not walked)
 
@@ -168,11 +168,11 @@ The Fiori releases (each was run on the walkthrough day):
 The importers are built: **Import Steps** reads a **Chrome Recorder** export (DevTools Recorder JSON), **Playwright code** (the Playwright recorder's output) or a **UiPath** project. It strips typed passwords into a `signIn` step, runs the draft once, replays it in a fresh browser without writes, and sends what passed through the same approve and sign flow as a repair. The template **RPA: 5 Import a bot** (`packages/n8n-nodes-rpa/templates/5-import-a-bot.json`) puts a form in front of it. This walkthrough uses the Chrome fixture the engine's tests import, `packages/engine/test/fixtures/import/chrome-sap-export.json`, recorded on the light sandbox: the `/acme/login` sign-in with a TOTP code, then the light web GUI's Line Item Report for company code 1000, September 2026, exported as CSV.
 
 1. Run the sandbox in light mode (section 1 without `SANDBOX_SAP`). Make a copy of the fixture and replace `http://localhost:8080` with `http://sandbox:8080` in it, the address the browser service uses.
-2. Create an **RPA Site Login** with the README's sandbox values (Login Page URL `http://sandbox:8080/acme/login`, Username `summit-ops`, Password `demo-password`, TOTP Secret `JBSWY3DPEHPK3PXP`, Sites the Browser May Open `sandbox:8080`, Pages Where the Password May Be Typed `sandbox:8080/acme/login` and `sandbox:8080/acme/mfa`) and the two **Requests That Only Read** entries from section 2.
-3. Import workflows 1 and 3 as in the README's data feed set-up, with this Site Login on **Sign steps**, and publish workflow 3. Import `5-import-a-bot.json`. On **Import a bot** pick or create a Basic Auth credential (the form asks for its user name and password; keep it on, or anyone with the URL could start logins with this Site Login). Pick the RPA Browser and this Site Login on **Import steps** (the template ships with **AI Repair** off and no chat model, which this clean import does not need), turn on **Options → Allow Private Network** on **Import steps**, and choose **RPA: 3 Approve steps** in **Approve steps**.
-4. Click **Execute workflow**, sign in to the form with the Basic Auth user name and password, and fill it in: the copied file, Source **Chrome Recorder**, Name `sap-line-items-export`, file name pattern `^LINEITEMS_1000_`, required columns `Document, Posting Date, Company Code, Amount, Currency`.
-5. Expect the last page to read `Imported: 9 steps; 1 not translated, 3 removed as secrets.` and `1 of 1 step list passed the replay and is waiting for approval in RPA: 3 Approve steps.` The not translated step is the recording's `waitForExpression`. The removed values are the typed username, password and code: the draft signs in with one `signIn` step instead. The export click becomes a `download` step with the file checks from the form.
-6. Approve the review email in Mailpit. Workflow 3 signs version 1 and writes an `active` row to `playwright_steps`. Run it on a schedule with Run Steps as the data feed template does.
+2. Create an **RPA Site Login** with the sandbox values of the browser bot guide (Login Page URL `http://sandbox:8080/acme/login`, Username `summit-ops`, Password `demo-password`, TOTP Secret `JBSWY3DPEHPK3PXP`, Sites the Browser May Open `sandbox:8080`, Pages Where the Password May Be Typed `sandbox:8080/acme/login` and `sandbox:8080/acme/mfa`) and the two **Requests That Only Read** entries from section 2.
+3. Import `5-import-a-bot.json` and follow its **Set once** note. On **Import a bot** pick or create a Basic Auth credential (keep it on, or anyone with the URL could start logins with this Site Login). Pick the RPA Browser and this Site Login on **Import steps** (the template ships with **AI Repair** off and no chat model, which this clean import does not need), and turn on **Options → Allow Private Network** there. Pick the RPA Step Signing and this Site Login on **Sign steps**, and type your address in its **Approver Allowlist**. Publish the workflow.
+4. Open the form's production URL, sign in with the Basic Auth user name and password, and fill it in: the copied file, Source **Chrome Recorder** (or leave it to work out), Name `sap-line-items-export`. On the next page, **The file it downloads**, give the file name pattern `^LINEITEMS_1000_` and the required columns `Document, Posting Date, Company Code, Amount, Currency`.
+5. The page **Review and approve** shows the step list: it signs in with the RPA Site Login, returns a file, and what the replay proved. Choose **Approve and sign**.
+6. Expect the last page to read `Imported: 9 steps; 1 not translated, 3 removed as secrets.`, `1 of 1 step list passed the replay.` and `Approved and signed: sap-line-items-export v1 is now the version that runs under that name.` The not translated step is the recording's `waitForExpression`. The removed values are the typed username, password and code: the draft signs in with one `signIn` step instead. The export click becomes a `download` step with the file checks from the form. The browser downloads `sap-line-items-export.workflow.json`, a workflow that runs the steps: import it and pick its credentials.
 
 Without a Site Login the sign-in is removed and the report says `The recording signs in: attach an RPA Site Login so the import can sign in without the typed password.` For Playwright code, record with `npx playwright codegen` and the JavaScript or TypeScript target; for UiPath, upload the project folder as a .zip.
 

@@ -74,7 +74,7 @@ export const runStepsProperties: INodeProperties[] = [
     placeholder: STEPS_PLACEHOLDER,
     description:
       'A step document { name?, version?, startUrl?, steps: [...] } or a bare array of steps, as JSON text or an object. Map it from an item with an expression, for example {{ $json.steps }}. Empty means a first run, which needs AI Repair.',
-    hint: 'Verbs and JSON shape: README → Run Steps reference',
+    hint: 'Verbs and JSON shape: docs/reference/steps.md in the repository',
     displayOptions: runSteps,
   },
   {
