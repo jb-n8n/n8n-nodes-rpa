@@ -145,12 +145,13 @@ function Get-RpaUnattendedNotice([string]$User, [int]$RunnerPort, [int]$BrowserP
 
 # Decides what an install does. -Parameters holds Install-Rpa.ps1's parameters (User, UserPassword, RunnerPort,
 # BrowserPort, NoBrowser, NoFirewall, AllowFrom, AllowFromAnyAddress, IncludePublicNetwork, AutoSignIn, Unattended,
-# IdleSeconds, IdleSecondsGiven, Force); -Facts is what Get-RpaMachineFacts returns. With a refusal there are no steps: the installer
+# UnattendedGiven, IdleSeconds, IdleSecondsGiven, Force); -Facts is what Get-RpaMachineFacts returns. With a refusal there are no steps: the installer
 # changes nothing. Questions are what the installer has confirmed with YES before the first step (with -Force they are
 # warnings). AllowFrom in the result is what the firewall rules let in: addresses and ranges, or the one word any, or
 # nothing without rules; PublicNetwork says whether the rules also apply on networks Windows treats as Public. Notice
 # is what -Unattended changes, in lines to show and confirm before the first step, when an earlier run has not set it
-# up already.
+# up already. Unattended and IdleSeconds are the mode and idle time the install gets: an upgrade keeps them from the
+# record unless -Unattended or -IdleSeconds is given.
 function Get-RpaInstallPlan {
   param(
     [Parameter(Mandatory = $true)][hashtable]$Parameters,
@@ -168,12 +169,16 @@ function Get-RpaInstallPlan {
   $noRulesRecorded = [bool]$Facts.Installed -and (@($Facts.InstalledAllowFrom) -contains 'none')
   if ($noRulesRecorded -and $given.Count -eq 0 -and -not $any -and -not $includePublic) { $firewall = $false }
   $autoSignIn = [bool]$Parameters.AutoSignIn
-  $unattended = [bool]$Parameters.Unattended
   $upgrade = [bool]$Facts.Installed
   $runnerPort = [int]$Parameters.RunnerPort
   $browserPort = [int]$Parameters.BrowserPort
   # An install that an earlier run made with -Unattended.
   $wasUnattended = $upgrade -and [string]$Facts.InstalledMode -eq 'unattended'
+  # An upgrade keeps the recorded mode, as it keeps automatic sign-in: only -Unattended:$false goes back to the
+  # signed-in mode. The idle time stays what the install recorded unless -IdleSeconds is given.
+  $unattended = [bool]$Parameters.Unattended -or ($wasUnattended -and -not $Parameters.UnattendedGiven)
+  $idleSeconds = [int]$Parameters.IdleSeconds
+  if ($wasUnattended -and -not $Parameters.IdleSecondsGiven -and $null -ne $Facts.InstalledIdleSeconds) { $idleSeconds = [int]$Facts.InstalledIdleSeconds }
   # The password an earlier run with -Unattended stored for this same user stays, while install.json records it.
   $secretKept = $unattended -and $wasUnattended -and [bool]$Facts.InstalledForUser -and [bool]$Facts.UserExists -and [bool]$Facts.InstalledSupervisorSecret
   # A local user that does not exist is created, on a first install and on an upgrade (someone removed it since).
@@ -269,8 +274,14 @@ function Get-RpaInstallPlan {
       if (-not $Facts.IsServer) {
         $refusals.Add('-Unattended is for Windows Server 2019 or later. It was not tested on Windows 10 or 11, so the installer does not set it up there. Install without -Unattended, and have the bot user signed in (-AutoSignIn, or by hand).')
       }
-      if ($autoSignIn) {
+      if ($autoSignIn -and -not $Parameters.Unattended) {
+        $refusals.Add('This install was made with -Unattended, which an upgrade keeps. To use -AutoSignIn instead, run the installer with -Unattended:$false -AutoSignIn.')
+      } elseif ($autoSignIn) {
         $refusals.Add('-Unattended and -AutoSignIn cannot be used together: -AutoSignIn keeps the bot user signed in, -Unattended signs it in only for the runs. Choose one.')
+      }
+      # The RPA Supervisor connects to the standard Remote Desktop port.
+      if ($Facts.RemoteDesktopPort -and [int]$Facts.RemoteDesktopPort -ne 3389) {
+        $refusals.Add(('-Unattended needs Remote Desktop on port 3389, where the RPA Supervisor connects, and this machine sets it to port {0} (PortNumber of RDP-Tcp).' -f $Facts.RemoteDesktopPort))
       }
       # The RPA Supervisor signs in a local user of this machine only.
       if ($Facts.UserIsDomain) {
@@ -410,9 +421,9 @@ function Get-RpaInstallPlan {
     $steps.Add('register the runner task')
     if ($browser) { $steps.Add('register the browser task') } elseif ($upgrade) { $steps.Add('remove the browser task') }
     $steps.Add('write install.json')
-    # An install without -Unattended over one with it: the service, the stored password, the group membership and
-    # Remote Desktop go back to what they were, from the records in install.json; also when a run before tried that
-    # and could not put everything back.
+    # An install with -Unattended:$false over one with -Unattended: the service, the stored password, the group
+    # membership and Remote Desktop go back to what they were, from the records in install.json; also when a run
+    # before tried that and could not put everything back.
     if ($upgrade -and $Facts.InstalledUnattendedChanges -and -not $unattended) { $steps.Add('put back what -Unattended changed') }
     if ($autoSignIn) {
       if (-not $signInKept) { foreach ($step in $script:SignInSteps) { $steps.Add($step) } }
@@ -434,9 +445,12 @@ function Get-RpaInstallPlan {
   if ($unattended -and -not $wasUnattended -and $steps.Count -gt 0) {
     $shownBrowserPort = 0
     if ($browser) { $shownBrowserPort = $browserPort }
-    $notice = @(Get-RpaUnattendedNotice $user $runnerPort $shownBrowserPort ([int]$Parameters.IdleSeconds) $steps.ToArray())
+    $notice = @(Get-RpaUnattendedNotice $user $runnerPort $shownBrowserPort $idleSeconds $steps.ToArray())
   }
-  @{ Refusals = $refusals.ToArray(); Warnings = $warnings.ToArray(); Questions = $questions.ToArray(); Steps = $steps.ToArray(); AllowFrom = $allowFrom; PublicNetwork = $publicNetwork; Notice = $notice }
+  @{
+    Refusals = $refusals.ToArray(); Warnings = $warnings.ToArray(); Questions = $questions.ToArray(); Steps = $steps.ToArray()
+    AllowFrom = $allowFrom; PublicNetwork = $publicNetwork; Notice = $notice; Unattended = $unattended; IdleSeconds = $idleSeconds
+  }
 }
 
 # Decides whether an uninstall may run. -Parameters holds Uninstall-Rpa.ps1's parameters (RemoveData); -Facts is what

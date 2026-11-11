@@ -19,6 +19,9 @@ public sealed class PortProxy(SessionManager manager, SupervisorOptions options,
 
     private static readonly TimeSpan TargetPoll = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan AcceptRetry = TimeSpan.FromMilliseconds(500);
+    private static readonly TimeSpan PeerLogInterval = TimeSpan.FromSeconds(30);
+    private const int MaxPeersRemembered = 256;
+    private readonly Dictionary<(string Address, int Port), long> _peersLogged = [];
     private int _waiting;
     private int _fullLogged;
 
@@ -80,6 +83,7 @@ public sealed class PortProxy(SessionManager manager, SupervisorOptions options,
                 client.Dispose();
                 continue;
             }
+            LogPeer(client, map);
 
             if (Interlocked.Increment(ref _waiting) > MaxWaiting)
             {
@@ -91,6 +95,30 @@ public sealed class PortProxy(SessionManager manager, SupervisorOptions options,
             }
             _ = ServeAsync(client, map, ct);
         }
+    }
+
+    // Who connected: behind the proxy the runner and the browser host see every peer as 127.0.0.1. One line per address
+    // and port per PeerLogInterval; the memory of what was logged is cleared before it holds more than
+    // MaxPeersRemembered entries, so that many addresses cannot make it grow without limit.
+    private void LogPeer(Socket client, PortMap map)
+    {
+        string address;
+        try
+        {
+            address = (client.RemoteEndPoint as IPEndPoint)?.Address.ToString() ?? "an unknown address";
+        }
+        catch (Exception e) when (e is SocketException or ObjectDisposedException)
+        {
+            address = "an unknown address";
+        }
+        lock (_peersLogged)
+        {
+            var key = (address, map.ListenPort);
+            if (_peersLogged.TryGetValue(key, out var at) && manager.Time.GetElapsedTime(at) < PeerLogInterval) return;
+            if (_peersLogged.Count >= MaxPeersRemembered) _peersLogged.Clear();
+            _peersLogged[key] = manager.Time.GetTimestamp();
+        }
+        log.Info($"Connection from {address} to port {map.ListenPort}.");
     }
 
     private async Task ServeAsync(Socket client, PortMap map, CancellationToken ct)

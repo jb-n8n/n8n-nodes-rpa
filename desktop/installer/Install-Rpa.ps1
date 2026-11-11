@@ -47,8 +47,8 @@
 #                  L$RpaRunnerBotPassword), registers the service and points the firewall rules at it. It lists these
 #                  and asks for YES first, unless -Force is given. For an existing user it needs -UserPassword (tried
 #                  against the account first); a user it creates gets a random password. It then signs the bot user in
-#                  once, which makes the user's profile. Uninstall-Rpa.ps1, and an install without -Unattended, put
-#                  these back.
+#                  once, which makes the user's profile. An upgrade keeps unattended mode and its idle time without
+#                  -Unattended; Uninstall-Rpa.ps1, and an install with -Unattended:$false, put these back.
 #   -Force         Do not ask (about -AutoSignIn, -Unattended, or another -User than the one of the install), and
 #                  upgrade even while the runner is running (a run in progress fails).
 #
@@ -265,7 +265,7 @@ $parameters = @{
   User = $User; UserPassword = $UserPassword; RunnerPort = $RunnerPort; BrowserPort = $BrowserPort
   AllowFrom = $AllowFrom; AllowFromAnyAddress = [bool]$AllowFromAnyAddress; IncludePublicNetwork = [bool]$IncludePublicNetwork
   NoBrowser = [bool]$NoBrowser; NoFirewall = [bool]$NoFirewall; AutoSignIn = [bool]$AutoSignIn; Unattended = [bool]$Unattended
-  IdleSeconds = $IdleSeconds; IdleSecondsGiven = $PSBoundParameters.ContainsKey('IdleSeconds'); Force = [bool]$Force
+  UnattendedGiven = $PSBoundParameters.ContainsKey('Unattended'); IdleSeconds = $IdleSeconds; IdleSecondsGiven = $PSBoundParameters.ContainsKey('IdleSeconds'); Force = [bool]$Force
 }
 $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (Get-RpaMachineFacts -Parameters $parameters)
 foreach ($warning in $plan.Warnings) { Write-Warning $warning }
@@ -325,7 +325,7 @@ catch {
     Write-Host 'The install did not finish, and the settings listed above could not be put back.'
     Write-Host ('  They stay recorded in {0}, with what they were before:' -f (Get-RpaLayout).InstallFile)
     Write-Host '  Uninstall-Rpa.ps1 and the next run of Install-Rpa.ps1 use that record.'
-    if ($Unattended) { Write-Host '  The set-up of -Unattended did not finish. What the earlier steps installed is left in place.' }
+    if ($plan.Unattended) { Write-Host '  The set-up of -Unattended did not finish. What the earlier steps installed is left in place.' }
     else { Write-Host '  The set-up of automatic sign-in did not finish. What the earlier steps installed is left in place.' }
     if ($userKept) {
       Write-Host ('  The user {0}, which this run created, is kept. Its password is known to nobody.' -f $userKept)
@@ -348,8 +348,8 @@ if ($plan.Steps -contains 'write policy') { Write-Host ('             It is new 
 else { Write-Host ('             It was there already and is kept as it is. Change it with {0}' -f $policyTool) }
 if ($NoBrowser) { Write-Host ('  Task:      \RPA\RPA Runner starts when {0} signs in' -f $User) }
 else { Write-Host ('  Tasks:     \RPA\RPA Runner and \RPA\RPA Browser start when {0} signs in' -f $User) }
-if ($Unattended) {
-  Write-Host ('  Service:   RPA Supervisor signs {0} in when n8n connects, and out {1} s after the last connection;' -f $User, $IdleSeconds)
+if ($plan.Unattended) {
+  Write-Host ('  Service:   RPA Supervisor signs {0} in when n8n connects, and out {1} s after the last connection;' -f $User, $plan.IdleSeconds)
   Write-Host ('             its log is {0}' -f (Join-Path $layout.SupervisorDir 'supervisor.log'))
 }
 if ($NoFirewall) { Write-Host '  Firewall:  not changed (-NoFirewall)' }
@@ -359,7 +359,7 @@ else {
   if ($plan.AllowFrom -notcontains 'any') { $from = $plan.AllowFrom -join ', ' }
   if ($NoBrowser) { Write-Host ('  Firewall:  inbound TCP {0} is open to {1} (rule RPA-Runner-In)' -f $RunnerPort, $from) }
   else { Write-Host ('  Firewall:  inbound TCP {0} and {1} are open to {2} (rules RPA-Runner-In and RPA-Browser-In)' -f $RunnerPort, $BrowserPort, $from) }
-  if ($Unattended) { Write-Host '             for the RPA Supervisor' }
+  if ($plan.Unattended) { Write-Host '             for the RPA Supervisor' }
   if ($plan.PublicNetwork) { Write-Host '             on Domain, Private and Public networks' }
   else { Write-Host '             on Domain and Private networks, not on Public ones' }
 }
@@ -371,13 +371,13 @@ if ($plan.Steps -contains 'remove the old tokens') {
   Write-Host 'Update the n8n credentials with the new tokens, which Show-RpaConnection.ps1 -ShowTokens shows.'
 }
 if ($plan.Steps -contains 'turn on automatic sign-in') { Write-Host ('Automatic sign-in is on: Windows signs {0} in at its next start.' -f $User) }
-if ($Unattended) {
+if ($plan.Unattended) {
   Write-Host ('Nobody needs to be signed in: the RPA Supervisor signs {0} in for each run. Run Show-RpaConnection.ps1, as an' -f $User)
   Write-Host 'administrator, for what the n8n credentials need and for how the supervisor is doing:'
 } else { Write-Host ('Sign in as {0}, then run Show-RpaConnection.ps1:' -f $User) }
 # Windows PowerShell by its full path, so that the line does not depend on what is found along PATH where it is typed.
 Write-Host ('  {0} -ExecutionPolicy Bypass -File "{1}"' -f (Join-Path $PSHOME 'powershell.exe'), (Join-Path (Join-Path $layout.InstallDir 'scripts') 'Show-RpaConnection.ps1'))
-if ($Unattended) { Write-Host ('While someone is signed in as {0}, runs are refused: sign {0} out after looking at something.' -f $User) }
+if ($plan.Unattended) { Write-Host ('While someone is signed in as {0}, runs are refused: sign {0} out after looking at something.' -f $User) }
 elseif (-not $upgrade) { Write-Host ('If {0} is already signed in, sign out and sign in again.' -f $User) }
 # The exit code of a run that finished, whatever the last Windows tool it ran left in $LASTEXITCODE.
 exit 0

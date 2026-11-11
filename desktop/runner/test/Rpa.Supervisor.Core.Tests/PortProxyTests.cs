@@ -229,6 +229,31 @@ public sealed class PortProxyTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_connection_is_logged_with_its_address_and_port_at_most_once_per_30_s_for_the_same_address()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-11-10T08:00:00Z"));
+        var setup = Start(time);
+        var line = $"Connection from 127.0.0.1 to port {setup.ListenPort}.";
+        int Lines() => _log.Infos.Count(i => i == line);
+        async Task Until(Func<bool> done)
+        {
+            for (var i = 0; i < 500 && !done(); i++) await Task.Delay(10);
+        }
+
+        await Connect(setup.ListenPort);
+        await Until(() => Lines() == 1);
+        await Connect(setup.ListenPort);
+        await Until(() => setup.Host.Calls > 0); // both are accepted and wait for the session
+        await Task.Delay(200);
+        Assert.Equal(1, Lines());
+
+        time.Advance(TimeSpan.FromSeconds(31));
+        await Connect(setup.ListenPort);
+        await Until(() => Lines() == 2);
+        Assert.Equal(2, Lines());
+    }
+
+    [Fact]
     public async Task Each_connection_holds_the_session_and_releases_it_when_it_closes()
     {
         var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-11-10T08:00:00Z"));

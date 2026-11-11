@@ -233,6 +233,8 @@ function Get-RpaMachineFacts {
     RemoteDesktopServiceDisabled = $false
     InstalledMode              = $null
     InstalledSupervisorSecret  = $false
+    InstalledIdleSeconds       = $null
+    RemoteDesktopPort          = $null
     InstalledUnattendedChanges = $false
     SupervisorDir              = $layout.SupervisorDir
     SupervisorDirState         = $null
@@ -258,8 +260,9 @@ function Get-RpaMachineFacts {
     if ($install.autoSignIn -eq $true) { $facts.InstalledAutoSignInUser = [string]$install.user }
     $facts.InstalledAutoSignInForUser = ($install.autoSignIn -eq $true) -and $facts.InstalledForUser
     $facts.InstalledMode = [string]$install.mode
+    if ($null -ne $install.idleSeconds) { $facts.InstalledIdleSeconds = [int]$install.idleSeconds }
     # What install.json records of -Unattended: the stored password (a failed run may have removed it again), and
-    # anything an install without -Unattended has to put back (also after a first attempt failed).
+    # anything an install with -Unattended:$false has to put back (also after a first attempt failed).
     $records = @($install.signInChanges | Where-Object { $_ -and (Test-RpaUnattendedChange $_) })
     $facts.InstalledSupervisorSecret = [bool]($records | Where-Object { $_.kind -eq 'secret' })
     $facts.InstalledUnattendedChanges = $records.Count -gt 0
@@ -268,6 +271,8 @@ function Get-RpaMachineFacts {
   $facts.IsServer = (Get-CimInstance -ClassName Win32_OperatingSystem).ProductType -ne 1
   $denied = (Get-RpaRegistryRecord $script:TerminalServer 'fDenyTSConnections')
   $facts.RemoteDesktopDenied = $denied.existed -and $denied.type -eq 'REG_DWORD' -and $denied.value -eq '1'
+  $port = Get-RpaRegistryRecord ($script:TerminalServer + '\WinStations\RDP-Tcp') 'PortNumber'
+  if ($port.existed) { $facts.RemoteDesktopPort = [int]$port.value }
   $termService = Get-Service -Name TermService -ErrorAction SilentlyContinue
   $facts.RemoteDesktopServiceDisabled = [bool]$termService -and [string]$termService.StartType -eq 'Disabled'
 
@@ -302,7 +307,9 @@ function Get-RpaMachineFacts {
     } catch { $facts.UserAdminUnknown = $true }
     # A password that would be stored for automatic sign-in is tried first. 1326 is Windows' "the user name or
     # password is incorrect"; 1385 means the password is right and only this kind of logon is not allowed.
-    if (($Parameters.AutoSignIn -or $Parameters.Unattended) -and $Parameters.UserPassword) {
+    # An upgrade of an unattended install stays unattended without -Unattended (unless -Unattended:$false).
+    $keepsUnattended = $install -and $install.mode -eq 'unattended' -and -not $Parameters.UnattendedGiven
+    if (($Parameters.AutoSignIn -or $Parameters.Unattended -or $keepsUnattended) -and $Parameters.UserPassword) {
       $domain = '.'
       if ($account.IsDomain) { $domain = $account.Domain }
       $code = [RpaAccounts]::CheckPassword($domain, $account.Name, $Parameters.UserPassword)
@@ -313,7 +320,7 @@ function Get-RpaMachineFacts {
 
   $ports = @([int]$Parameters.RunnerPort, [int]$Parameters.BrowserPort)
   # With -Unattended the runner and the browser listen behind the RPA Supervisor, at their port + 10000.
-  if ($Parameters.Unattended) { $ports += @($ports | ForEach-Object { $_ + $script:InnerPortOffset } | Where-Object { $_ -le 65535 }) }
+  if ($Parameters.Unattended -or ($install -and $install.mode -eq 'unattended' -and -not $Parameters.UnattendedGiven)) { $ports += @($ports | ForEach-Object { $_ + $script:InnerPortOffset } | Where-Object { $_ -le 65535 }) }
   foreach ($port in $ports) {
     $listener = Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($listener) {
@@ -367,13 +374,13 @@ function Get-RpaSid([hashtable]$Account) {
   catch { throw ('The Windows user {0} does not exist.' -f $Account.Display) }
 }
 
-# Ends the two tasks and everything started from the install directory: the RPA Supervisor (stopped as a service
-# first, which signs its session out; a process ended otherwise would be started again by Windows a minute later), the
+# Ends the two tasks and everything started from the install directory: the RPA Supervisor (when its service runs this
+# install's program, stopped as a service first, which signs its session out; a process ended otherwise would be started again by Windows a minute later), the
 # runner, the browser host, its browser, the demo app, and the start scripts (also when someone started them by hand),
 # which would otherwise start the programs again while their files are replaced. The tasks are switched off until they
 # are registered again or removed; the service stays stopped until it is registered again or removed.
 function Stop-RpaServices([string]$InstallDir) {
-  if (Get-Service -Name $script:SupervisorService -ErrorAction SilentlyContinue) { Stop-Service -Name $script:SupervisorService -Force }
+  if ((Get-RpaServicePath $script:SupervisorService) -ieq (Get-RpaSupervisorPath $InstallDir)) { Stop-Service -Name $script:SupervisorService -Force }
   foreach ($name in $script:RunnerTask, $script:BrowserTask) {
     $task = Get-ScheduledTask -TaskPath $script:TaskPath -TaskName $name -ErrorAction SilentlyContinue
     if ($task) {
@@ -1179,9 +1186,9 @@ function New-RpaInstallRecord {
     publicNetwork = $publicNetwork
     mode          = 'signedIn'
   }
-  if ($Parameters.Unattended) {
+  if ($Plan.Unattended) {
     $record.mode = 'unattended'
-    $record.idleSeconds = [int]$Parameters.IdleSeconds
+    $record.idleSeconds = [int]$Plan.IdleSeconds
     $record.runnerInnerPort = [int]$Parameters.RunnerPort + $script:InnerPortOffset
     if ($Parameters.NoBrowser) { $record.browserPort = $null }
     else { $record.browserInnerPort = [int]$Parameters.BrowserPort + $script:InnerPortOffset }
@@ -1205,7 +1212,7 @@ function Start-RpaTasks {
 }
 
 # ---- What -Unattended changes. Each change is recorded in install.json before it is made (Add-RpaSignInChange), with
-# what was there, so that a failed install, Uninstall-Rpa.ps1 and an install without -Unattended put it back
+# what was there, so that a failed install, Uninstall-Rpa.ps1 and an install with -Unattended:$false put it back
 # (Restore-RpaSignInChange). ----
 
 # The bot user into Remote Desktop Users, which Windows' default rights let sign in through Remote Desktop, unless it
@@ -1263,7 +1270,7 @@ function Register-RpaSupervisor([hashtable]$Run) {
   Remove-RpaSupervisorService
   if (-not [Diagnostics.EventLog]::SourceExists($script:SupervisorService)) { New-EventLog -LogName Application -Source $script:SupervisorService }
   # Quoted, because the path holds spaces: unquoted, Windows would try C:\Program.exe first.
-  $exe = '"{0}"' -f (Join-Path (Join-Path $layout.InstallDir 'runner') 'RpaSupervisor.exe')
+  $exe = Get-RpaSupervisorPath $layout.InstallDir
   $description = 'Signs the RPA bot user in through a Remote Desktop connection from this machine to itself when n8n connects, and out again afterwards.'
   New-Service -Name $script:SupervisorService -BinaryPathName $exe -DisplayName $script:SupervisorService -Description $description -StartupType Automatic -DependsOn 'TermService' | Out-Null
   Invoke-RpaNative sc.exe @('failure', $script:SupervisorService, 'reset=', '86400', 'actions=', 'restart/60000/restart/60000/restart/60000')
@@ -1287,6 +1294,11 @@ function Remove-RpaSupervisorService {
 function Get-RpaServicePath([string]$Name) {
   $service = Get-CimInstance -ClassName Win32_Service -Filter ("Name='{0}'" -f $Name) -ErrorAction SilentlyContinue
   if ($service) { [string]$service.PathName }
+}
+
+# The program path of this install's RPA Supervisor as Windows keeps it for the service, quotes included.
+function Get-RpaSupervisorPath([string]$InstallDir) {
+  '"{0}\runner\RpaSupervisor.exe"' -f $InstallDir.TrimEnd('\')
 }
 
 # Puts back what the step 'register the supervisor service' did: the service and its event source. Its folder stays
@@ -1361,7 +1373,7 @@ function Test-RpaUnattendedChange($Change) {
   $false
 }
 
-# The step 'put back what -Unattended changed', for an install without -Unattended over one with it: puts back what
+# The step 'put back what -Unattended changed', for an install with -Unattended:$false over one with -Unattended: puts back what
 # install.json records of -Unattended (the firewall rules, the service, the stored password, Remote Desktop, the group
 # membership), the last first, and keeps in install.json only the records of what it could not put back. Those fail
 # the step, so that the next run or Uninstall-Rpa.ps1 tries them again.
@@ -1379,7 +1391,7 @@ function Undo-RpaUnattended([hashtable]$Run) {
 # On a failed upgrade: install.json's mode, the RPA Supervisor's fields and the browser port go back to what the
 # record before this run said (an older record without a mode was signed in), so that the start scripts do not move
 # the runner and the browser behind a supervisor that the undo removed.
-# Only when this run wrote unattended over a record that was not: a failed run without -Unattended over an unattended
+# Only when this run wrote unattended over a record that was not: a failed run with -Unattended:$false over an unattended
 # install keeps the signed-in mode it wrote, because what the supervisor needs may be gone by then.
 function Restore-RpaModeBefore([hashtable]$Run) {
   $before = $Run.Before
@@ -1645,14 +1657,14 @@ function Get-RpaUninstallFacts {
   $facts
 }
 
-# Switches the two tasks on again and starts them, and the RPA Supervisor when it is registered, after a stop that is
-# not followed by an upgrade or a removal.
+# Switches the two tasks on again and starts them, and the RPA Supervisor when its service runs this install's program,
+# after a stop that is not followed by an upgrade or a removal.
 function Resume-RpaServices {
   foreach ($name in $script:RunnerTask, $script:BrowserTask) {
     Get-ScheduledTask -TaskPath $script:TaskPath -TaskName $name -ErrorAction SilentlyContinue | Enable-ScheduledTask | Out-Null
   }
   Start-RpaTasks
-  if (Get-Service -Name $script:SupervisorService -ErrorAction SilentlyContinue) { Start-Service -Name $script:SupervisorService }
+  if ((Get-RpaServicePath $script:SupervisorService) -ieq (Get-RpaSupervisorPath (Get-RpaLayout).InstallDir)) { Start-Service -Name $script:SupervisorService }
 }
 
 # Removes the install directory. A list of what an uninstall could not put back stays, alone in the directory, for
@@ -1870,7 +1882,7 @@ function Invoke-RpaUninstall {
   # the product's own.
   if (-not ($install -and @($install.signInChanges | Where-Object { $_ -and $_.kind -eq 'service' }).Count -gt 0)) {
     $path = Get-RpaServicePath $script:SupervisorService
-    if ($path -and $path -ieq ('"{0}\runner\RpaSupervisor.exe"' -f $layout.InstallDir)) { Remove-RpaSupervisor }
+    if ($path -and $path -ieq (Get-RpaSupervisorPath $layout.InstallDir)) { Remove-RpaSupervisor }
     elseif ($path) { Write-Host ('  left: the service {0}, which runs {1}, not this install''s program' -f $script:SupervisorService, $path) }
   }
   Remove-RpaLsaSecret $script:SupervisorSecret

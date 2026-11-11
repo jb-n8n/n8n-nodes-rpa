@@ -54,7 +54,7 @@ BeforeAll {
       DataDirEntries = $null
       DataFiles = @{ 'policy.json' = New-PathState 'missing'; 'token' = New-PathState 'missing'; 'browser-token' = New-PathState 'missing' }
       TaskFolderOwner = $null; PublicNetwork = $false
-      IsServer = $true; RemoteDesktopDenied = $false; RemoteDesktopServiceDisabled = $false; InstalledMode = $null; InstalledSupervisorSecret = $false; InstalledUnattendedChanges = $false
+      IsServer = $true; RemoteDesktopDenied = $false; RemoteDesktopServiceDisabled = $false; RemoteDesktopPort = 3389; InstalledIdleSeconds = $null; InstalledMode = $null; InstalledSupervisorSecret = $false; InstalledUnattendedChanges = $false
       SupervisorDir = "$($script:DataDir)\supervisor"; SupervisorDirState = New-PathState 'missing'
     }
     foreach ($key in $Change.Keys) { $facts[$key] = $Change[$key] }
@@ -1008,6 +1008,7 @@ Describe 'Get-RpaInstallPlan' {
       $plans = @(
         (Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true }) -Facts (New-TestFacts @{ RemoteDesktopDenied = $true }))
         (Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-UnattendedFacts))
+        (Get-RpaInstallPlan -Parameters (New-TestParameters @{ UnattendedGiven = $true }) -Facts (New-UnattendedFacts))
       )
       $known = InModuleScope RpaInstall { $script:KnownSteps }
       foreach ($plan in $plans) { foreach ($step in $plan.Steps) { $known | Should -Contain $step } }
@@ -1068,9 +1069,35 @@ Describe 'Get-RpaInstallPlan' {
       (Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true; IdleSeconds = 60; IdleSecondsGiven = $true }) -Facts (New-TestFacts)).Refusals.Count | Should -Be 0
     }
 
-    It 'without -Unattended over an unattended install puts back what -Unattended changed, after install.json is written' {
-      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-UnattendedFacts)
+    It 'an upgrade without -Unattended over an unattended install stays unattended and keeps idleSeconds' {
+      $facts = New-UnattendedFacts @{ InstalledIdleSeconds = 60 }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts $facts
       $plan.Refusals.Count | Should -Be 0
+      $plan.Unattended | Should -BeTrue
+      $plan.IdleSeconds | Should -Be 60
+      $plan.Steps | Should -Not -Contain 'put back what -Unattended changed'
+      # The stored password is kept, as with -Unattended and no -UserPassword; nothing is asked again.
+      @($plan.Steps | Where-Object { $script:UnattendedSteps -contains $_ }) | Should -BeExactly @($script:UnattendedSteps[0], $script:UnattendedSteps[3], $script:UnattendedSteps[4])
+      @($plan.Notice).Count | Should -Be 0
+      # -IdleSeconds given: that one.
+      (Get-RpaInstallPlan -Parameters (New-TestParameters @{ IdleSeconds = 30; IdleSecondsGiven = $true }) -Facts $facts).IdleSeconds | Should -Be 30
+      # A first install takes the parameter's value (15 by default).
+      (Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true }) -Facts (New-TestFacts)).IdleSeconds | Should -Be 15
+    }
+
+    It 'refuses -AutoSignIn over an unattended install, and says that -Unattended:$false -AutoSignIn goes back' {
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ AutoSignIn = $true; UserPassword = New-TestPassword }) -Facts (New-UnattendedFacts)
+      $plan.Refusals | Should -BeExactly @('This install was made with -Unattended, which an upgrade keeps. To use -AutoSignIn instead, run the installer with -Unattended:$false -AutoSignIn.')
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ AutoSignIn = $true; UserPassword = New-TestPassword; UnattendedGiven = $true }) -Facts (New-UnattendedFacts)
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Steps | Should -Contain 'put back what -Unattended changed'
+      @($plan.Steps | Where-Object { $script:SignInSteps -contains $_ }) | Should -BeExactly $script:SignInSteps
+    }
+
+    It '-Unattended:$false puts back what -Unattended changed, after install.json is written' {
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $false; UnattendedGiven = $true }) -Facts (New-UnattendedFacts)
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Unattended | Should -BeFalse
       foreach ($step in $script:UnattendedSteps) { $plan.Steps | Should -Not -Contain $step }
       $plan.Steps | Should -Contain 'put back what -Unattended changed'
       [array]::IndexOf($plan.Steps, 'put back what -Unattended changed') | Should -Be ([array]::IndexOf($plan.Steps, 'write install.json') + 1)
@@ -1108,6 +1135,12 @@ Describe 'Get-RpaInstallPlan' {
       $plan.Refusals | Should -BeExactly @('-Unattended needs the Remote Desktop service (TermService), which is disabled on this machine: set it to start (Set-Service TermService -StartupType Manual) and run the installer again.')
       $plan.Steps.Count | Should -Be 0
       (Get-RpaInstallPlan -Parameters (New-TestParameters @{ UserPassword = New-TestPassword }) -Facts (New-TestFacts @{ RemoteDesktopServiceDisabled = $true })).Refusals.Count | Should -Be 0
+    }
+
+    It 'refuses it when Remote Desktop listens on another port than 3389' {
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true }) -Facts (New-TestFacts @{ RemoteDesktopPort = 3390 })
+      $plan.Refusals | Should -BeExactly @('-Unattended needs Remote Desktop on port 3389, where the RPA Supervisor connects, and this machine sets it to port 3390 (PortNumber of RDP-Tcp).')
+      (Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true }) -Facts (New-TestFacts @{ RemoteDesktopPort = 3389 })).Refusals.Count | Should -Be 0
     }
 
     It "warns that an expiring password stops the supervisor's sign-ins" {
@@ -2328,8 +2361,8 @@ Describe 'install.json' {
 
   # The names RPA Supervisor reads (desktop/runner/src/Rpa.Supervisor.Core/InstallFile.cs).
   It 'with -Unattended holds what the RPA Supervisor reads: the mode, the plain user name, the ports behind it, the idle time and where it listens' {
-    $plan = @{ Steps = @('write install.json'); AllowFrom = @('10.0.0.5'); PublicNetwork = $true }
-    $record = New-TestRecord $plan $null @{ Unattended = $true; IdleSeconds = 30; User = '.\rpa-runner' }
+    $plan = @{ Steps = @('write install.json'); AllowFrom = @('10.0.0.5'); PublicNetwork = $true; Unattended = $true; IdleSeconds = 30 }
+    $record = New-TestRecord $plan $null @{ Unattended = $true; User = '.\rpa-runner' }
     @($record.Keys) | Should -BeExactly @('version', 'user', 'runnerPort', 'browserPort', 'browser', 'autoSignIn', 'allowFrom', 'publicNetwork', 'mode', 'idleSeconds', 'runnerInnerPort', 'browserInnerPort', 'listenAddresses', 'signInChanges')
     $record.mode | Should -BeExactly 'unattended'
     $record.user | Should -BeExactly 'rpa-runner'
@@ -2342,7 +2375,7 @@ Describe 'install.json' {
   }
 
   It 'with -Unattended -NoBrowser has no browser port, so that the RPA Supervisor passes on the runner port only' {
-    $record = New-TestRecord @{ Steps = @(); AllowFrom = @('10.0.0.5'); PublicNetwork = $true } $null @{ Unattended = $true; NoBrowser = $true }
+    $record = New-TestRecord @{ Steps = @(); AllowFrom = @('10.0.0.5'); PublicNetwork = $true; Unattended = $true; IdleSeconds = 15 } $null @{ Unattended = $true; NoBrowser = $true }
     $record.browserPort | Should -BeNullOrEmpty
     $record.Contains('browserInnerPort') | Should -BeFalse
     $record.runnerInnerPort | Should -Be 18765
@@ -2350,7 +2383,7 @@ Describe 'install.json' {
 
   It 'never holds the password' {
     $password = New-MadeUpPassword
-    $plan = @{ Steps = @('write install.json', "store the bot user's password for the supervisor"); AllowFrom = @('10.0.0.5'); PublicNetwork = $true }
+    $plan = @{ Steps = @('write install.json', "store the bot user's password for the supervisor"); AllowFrom = @('10.0.0.5'); PublicNetwork = $true; Unattended = $true; IdleSeconds = 15 }
     $record = New-TestRecord $plan $null @{ Unattended = $true; UserPassword = $password.Secure }
     ($record | ConvertTo-Json -Depth 5).Contains($password.Text) | Should -BeFalse
   }

@@ -136,13 +136,14 @@ bot user out again. One bot user, one session at a time.
 `Install-Rpa.ps1 -Unattended [-IdleSeconds 15]` sets this up on Windows Server 2019 or later (it refuses Windows 10
 and 11, where it was not tested, and `-AutoSignIn` with it): it puts the bot user into Remote Desktop Users, turns
 Remote Desktop on with the registry value alone when it is off (no firewall rule for Remote Desktop), stores the bot
-user's password in the LSA secret, registers the service (LocalSystem, automatic start, started again a minute after
-a failure) and points the two firewall rules at `RpaSupervisor.exe`. The start scripts read `mode` from `install.json`
+user's password in the LSA secret, registers the service (LocalSystem, automatic start, started again a minute after a
+failure) and points the two firewall rules at `RpaSupervisor.exe`. The start scripts read `mode` from `install.json`
 and let the runner and the browser host listen on `127.0.0.1` at the inner ports (`RPA_RUNNER_BIND`,
 `RPA_BROWSER_BIND`). After the service starts, the installer makes one connection to the runner's port and waits up to
-120 s, so that the bot user's profile exists before n8n's first run. `Uninstall-Rpa.ps1`, and an install without
-`-Unattended`, put back what it changed. The install guide, [`docs/install/windows.md`](../docs/install/windows.md),
-section 4, "Running with nobody signed in", is the user's side of this.
+120 s, so that the bot user's profile exists before n8n's first run. An upgrade keeps unattended mode and its idle
+time; `Uninstall-Rpa.ps1`, and an install with `-Unattended:$false`, put back what it changed. The install guide,
+[`docs/install/windows.md`](../docs/install/windows.md), section 4, "Running with nobody signed in", is the user's
+side of this.
 
 The service reads `install.json` in the install directory (`%ProgramFiles%\RPA Runner`), which the installer writes:
 
