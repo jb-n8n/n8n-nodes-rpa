@@ -6,7 +6,8 @@ import type { Engine } from '../engine.js';
 import { configNodeError, stepsRunError, type FailureDetails } from '../errors.js';
 import { configErrorItem, dataItem, failureItem } from '../output.js';
 import { credentialId, errorMessage, isObject } from './common.js';
-import { withVariableHint, type ItemOutcome, type RunStepsParams } from './runSteps.js';
+import type { ItemOutcome } from './runSteps.js';
+import { withVariableHint, type RunStepsParams } from './runStepsParams.js';
 
 export const DESKTOP_STEPS_NEED_RUNNER_CREDENTIAL =
   'These are desktop steps (surface "desktop"): they run on a desktop runner. Attach an RPA Desktop Runner credential.';

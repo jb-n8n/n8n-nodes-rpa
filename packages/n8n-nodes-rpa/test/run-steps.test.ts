@@ -5,7 +5,8 @@ import { isEmptySteps, MAX_BUDGET_MS, proposalDigest, scriptHash, type Proposal,
 import { ConfigError, MAX_SECONDS } from '../nodes/Playwright/config.js';
 import { memoryGuardStore, type GuardStore } from '../nodes/Playwright/guard-store.js';
 import { BREAKER_KEY, resetGuardsForTests, siteLoginKey } from '../nodes/Playwright/guard.js';
-import { executeRunSteps, parseStepsParam, readRunStepsParams } from '../nodes/Playwright/operations/runSteps.js';
+import { executeRunSteps } from '../nodes/Playwright/operations/runSteps.js';
+import { parseStepsParam, readRunStepsParams } from '../nodes/Playwright/operations/runStepsParams.js';
 import { Playwright } from '../nodes/Playwright/Playwright.node.js';
 import { agentOk, fakeEngine, scriptOk, taskFail } from './fake-engine.js';
 import { harness, type HarnessOptions } from './harness.js';

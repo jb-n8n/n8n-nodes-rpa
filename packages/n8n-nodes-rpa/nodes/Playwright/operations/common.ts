@@ -213,3 +213,5 @@ export function hasDownloadStep(steps: unknown): boolean {
 export function refuseCdpDownload(engine: Pick<Engine, 'DOWNLOAD_NEEDS_BROWSER_SERVER'>, endpoint: { mode: string }, wantsDownload: boolean): void {
   if (wantsDownload && endpoint.mode === 'cdp') throw new ConfigError(engine.DOWNLOAD_NEEDS_BROWSER_SERVER);
 }
+
+export const NO_MODEL = 'AI repair is on but no chat model is connected. Connect one to the Model input.';

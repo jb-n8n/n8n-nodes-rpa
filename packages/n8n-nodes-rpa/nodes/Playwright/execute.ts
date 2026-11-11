@@ -1,8 +1,9 @@
 import { NodeOperationError } from 'n8n-workflow';
 import type { ErrorCode, TaskInput, TaskResult } from 'n8n-rpa-engine';
+import type { SiteLogin } from './config.js';
 import type { NodeContext } from './context.js';
 import type { Engine } from './engine.js';
-import { loginCorrected, openBreaker, resetBreaker, tripBreaker, type BreakerCode, type BreakerRecord, type LoginFingerprints } from './guard.js';
+import { loginCorrected, loginFingerprints, openBreaker, resetBreaker, siteLoginKey, tripBreaker, type BreakerCode, type BreakerRecord, type LoginFingerprints } from './guard.js';
 import type { GuardStore } from './guard-store.js';
 import { isObject } from './operations/common.js';
 
@@ -188,4 +189,28 @@ async function runTask(ctx: NodeContext, engine: Engine, opts: { itemIndex: numb
   } catch (error) {
     throw new NodeOperationError(ctx.getNode(), error as Error, { itemIndex: opts.itemIndex });
   }
+}
+
+/**
+ * One repair per execution. The flag lives in n8n's per-execution context data ('flow'), so it
+ * covers every item, a node that runs again in the same execution (Loop Over Items) and every Run Steps node of the
+ * workflow, and it is gone when the execution ends.
+ */
+const REPAIR_RAN = 'playwrightRepairRan';
+export const repairAlreadyRan = (ctx: NodeContext): boolean => ctx.getContext('flow')[REPAIR_RAN] === true;
+export function noteRepairRan(ctx: NodeContext): void {
+  ctx.getContext('flow')[REPAIR_RAN] = true;
+}
+
+/**
+ * Breaker and lock for a Site Login: keyed by its credential id, golden messages naming only the login host, and the
+ * login's fingerprints (a corrected username or password gets one try). The lock lasts `budgetMs` (the longest the
+ * guarded run can take) plus LOCK_GRACE_MS.
+ */
+export function siteLoginGuard(siteLogin: SiteLogin, id: string, resetKey: string, budgetMs: number): (store: GuardStore) => GuardSpec {
+  const loginHost = new URL(siteLogin.policy.startUrl).host;
+  return (store) => ({
+    key: siteLoginKey(id), resetKey, store, ttlMs: budgetMs + LOCK_GRACE_MS,
+    lockedOutMessage: () => siteLoginLockedOut(loginHost), busyMessage: SITE_LOGIN_BUSY, fingerprints: loginFingerprints(siteLogin.secrets),
+  });
 }

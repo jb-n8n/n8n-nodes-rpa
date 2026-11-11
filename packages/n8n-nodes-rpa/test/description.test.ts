@@ -13,7 +13,8 @@ import { STEPS_PLACEHOLDER, UNSIGNED_NOTICE } from '../nodes/Playwright/descript
 import { CODE_WORKFLOW_GUIDANCE, GUIDANCE, guidanceFor, LOGIN_PAGE_GUIDANCE, NO_TOTP_SECRET_GUIDANCE, PASSWORD_CHANGED_GUIDANCE } from '../nodes/Playwright/errors.js';
 import { SITE_LOGIN_PASSWORD_CHANGED, siteLoginLockedOut } from '../nodes/Playwright/execute.js';
 import { COMPILERS, quickFieldNames, type QuickOp } from '../nodes/Playwright/operations/quick.js';
-import { executeRunSteps, readRunStepsParams } from '../nodes/Playwright/operations/runSteps.js';
+import { executeRunSteps } from '../nodes/Playwright/operations/runSteps.js';
+import { readRunStepsParams } from '../nodes/Playwright/operations/runStepsParams.js';
 import { DISPATCH, Playwright } from '../nodes/Playwright/Playwright.node.js';
 import { fakeEngine } from './fake-engine.js';
 import { harness } from './harness.js';

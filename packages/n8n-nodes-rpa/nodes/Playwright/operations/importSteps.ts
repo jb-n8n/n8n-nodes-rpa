@@ -6,19 +6,18 @@ import { browserConfig, ConfigError, CREDENTIALS, policyFor, siteLoginConfig, ty
 import type { NodeContext } from '../context.js';
 import type { Engine } from '../engine.js';
 import { configNodeError, errorJson, failedOnCode, guidanceFor } from '../errors.js';
-import { isBreakerCode, runGuarded, type GuardedResult } from '../execute.js';
+import { isBreakerCode, noteRepairRan, repairAlreadyRan, runGuarded, siteLoginGuard, type GuardedResult } from '../execute.js';
 import { DESKTOP_DOCUMENT_EVIDENCE_LINE, DESKTOP_EVIDENCE_LINE, DESKTOP_RECORDING_EVIDENCE_LINE, importAddedSteps, signInKeySteps } from '../format.js';
 import { isQueueMode, openGuardStore, QUEUE_NEEDS_REDIS, type GuardStoreDeps } from '../guard-store.js';
 import { workflowFile } from '../import/workflow.js';
 import { lazyChatModel } from '../model.js';
 import { configErrorItem, desktopRepairedStepsJson, repairedStepsItem, repairedStepsJson, slug } from '../output.js';
+import { codeSettingsFor, codeWorkflowOptions } from './codeWorkflow.js';
 import {
-  asBoolean, asString, BROWSER_CREDENTIAL_NEEDED, browserCredentials, checkMaxItems, credentialId, errorMessage, field, hasDownloadStep, literalString, readCommonOptions,
-  refuseCdpDownload, regexOption, SITE_LOGIN_NO_ID, type CommonOptions,
+  asBoolean, asString, BROWSER_CREDENTIAL_NEEDED, browserCredentials, checkMaxItems, credentialId, errorMessage, field, hasDownloadStep, literalString, NO_MODEL,
+  readCommonOptions, refuseCdpDownload, regexOption, SITE_LOGIN_NO_ID, type CommonOptions,
 } from './common.js';
-import {
-  codeSettingsFor, codeWorkflowOptions, expectedDownload, NO_MODEL, noteRepairRan, repairAlreadyRan, siteLoginGuard, variablesOption,
-} from './runSteps.js';
+import { expectedDownload, variablesOption } from './runStepsParams.js';
 import { signingPolicy } from './signSteps.js';
 
 /** The largest file or text Import Steps reads. The importers apply their own, smaller limits. */

@@ -1,277 +1,20 @@
 import { NodeConnectionTypes, NodeOperationError, type IDataObject, type INodeExecutionData, type IPairedItemData } from 'n8n-workflow';
-import type { BrowserEndpoint, CodeProvider, DownloadTemplate, ErrorCode, FileCheck, OutputSpec, PortalPolicy, TaskInput, TaskResult } from 'n8n-rpa-engine';
-import {
-  browserConfig, ConfigError, CREDENTIALS, policyFor, secretVariablesConfig, signingKey, siteLoginConfig, UrlPolicyError, VARIABLE_NAME, type SiteLogin,
-} from '../config.js';
+import type { BrowserEndpoint, ErrorCode, PortalPolicy, TaskInput, TaskResult } from 'n8n-rpa-engine';
+import { browserConfig, ConfigError, CREDENTIALS, policyFor, signingKey, siteLoginConfig, UrlPolicyError, type SiteLogin } from '../config.js';
 import type { NodeContext } from '../context.js';
 import { nodeOutputs } from '../description/io.js';
 import type { Engine } from '../engine.js';
 import { configNodeError, stepsRunError, type FailureDetails } from '../errors.js';
-import { LOCK_GRACE_MS, runOne, SITE_LOGIN_BUSY, siteLoginLockedOut, type GuardSpec, type RunOneResult } from '../execute.js';
-import { loginFingerprints, siteLoginKey } from '../guard.js';
+import { noteRepairRan, repairAlreadyRan, runOne, siteLoginGuard, type GuardSpec, type RunOneResult } from '../execute.js';
 import { openGuardStore, type GuardStore, type GuardStoreDeps } from '../guard-store.js';
 import { lazyChatModel } from '../model.js';
 import { configErrorItem, dataItem, failureItem, repairedStepsItem } from '../output.js';
+import { codeSettingsFor } from './codeWorkflow.js';
+import { browserCredentials, checkMaxItems, credentialId, errorMessage, hasDownloadStep, isObject, NO_MODEL, rawParameter, refuseCdpDownload, SITE_LOGIN_NO_ID } from './common.js';
 import { BROWSER_STEPS_NEED_BROWSER_CREDENTIAL, runDesktopStepsItem } from './runDesktopSteps.js';
-import {
-  asBoolean, asNumber, asString, browserCredentials, checkMaxItems, clamp, credentialId, errorMessage, field, isExpressionText, isObject, literalBoolean, literalRaw, literalString,
-  rawParameter, readCommonOptions, rowCheckPatterns,
-  refuseCdpDownload, rowChecks, hasDownloadStep, SITE_LOGIN_NO_ID, splitList, type CommonOptions,
-} from './common.js';
+import { expectedDownload, readRunStepsParams, withSecretVariables, withVariableHint, type RunStepsParams, type StepsValue } from './runStepsParams.js';
 
 export const STEPS_EMPTY_NEEDS_REPAIR = 'Steps is empty. Add steps, or turn on AI Repair to build them from the Goal.';
-export const NO_MODEL = 'AI repair is on but no chat model is connected. Connect one to the Model input.';
-export const EXPECTED_VERSION_WHOLE = 'Expected Version must be a whole number';
-export const GOAL_NEEDS_TEXT = 'Goal is required when AI Repair is on';
-
-export type StepsValue = { kind: 'empty' } | { kind: 'steps'; raw: unknown };
-
-/** JSON text → value, or the parser's message (kept out of a catch block: the caller throws). */
-function parseJson(text: string): { ok: true; value: unknown } | { ok: false; message: string } {
-  let result: { ok: true; value: unknown } | { ok: false; message: string };
-  try {
-    result = { ok: true, value: JSON.parse(text) as unknown };
-  } catch (error) {
-    result = { ok: false, message: errorMessage(error) };
-  }
-  return result;
-}
-
-/**
- * The Steps parameter → empty (a first run) or the raw step document. Text is parsed once (a Data Table column holds
- * JSON text). Empty is exactly the engine's isEmptySteps: undefined, null, blank, [], or an object whose `steps` is [].
- * A valid document with the wrong shape is left to the engine (policy_violation).
- */
-export function parseStepsParam(value: unknown): StepsValue {
-  let v = value;
-  if (typeof v === 'string') {
-    if (v.trim() === '') return { kind: 'empty' };
-    const parsed = parseJson(v);
-    if (!parsed.ok) throw new ConfigError(`Steps is not valid JSON: ${parsed.message}`);
-    v = parsed.value;
-    if (typeof v === 'string' && v.trim() === '') return { kind: 'empty' };
-  }
-  if (v === undefined || v === null) return { kind: 'empty' };
-  if (Array.isArray(v) && v.length === 0) return { kind: 'empty' };
-  if (isObject(v) && Array.isArray(v.steps) && v.steps.length === 0) return { kind: 'empty' };
-  return { kind: 'steps', raw: v };
-}
-
-export interface RunStepsParams {
-  steps: StepsValue;
-  startUrl: string;
-  requireSignedSteps: boolean;
-  signature: string;
-  approvedBy: string;
-  aiRepair: boolean;
-  goal: string;
-  /** Expected File's raw collection value; turned into RepairInput.download with the engine's MIME table (expectedDownload). */
-  expectedFile: unknown;
-  output?: OutputSpec;
-  vars: Record<string, string>;
-  /** The names in `vars` that came from the RPA Secret Variables credential (withSecretVariables); [] without it. */
-  secretVars: string[];
-  name: string;
-  expectedVersion?: number;
-  allowUnsignedWrites: boolean;
-  deliverUnconfirmed: boolean;
-  maxActions: number;
-  maxTokens: number;
-  breakerResetKey: string;
-  /** Options → One-Time Code Workflow: the workflow ID, '' when not set. */
-  codeWorkflowId: string;
-  /** Options → Code Timeout (Seconds), in ms. */
-  codeTimeoutMs: number;
-  common: CommonOptions;
-}
-
-/**
- * Expected Version: absent when empty; otherwise digits only after trimming (Data Table numbers may arrive as text), or
- * a configuration error. Number('0x3'), Number('1e0') and negative numbers are refused, not coerced.
- */
-function expectedVersionOption(v: unknown): number | undefined {
-  if (v === undefined || v === null || (typeof v === 'string' && v.trim() === '')) return undefined;
-  const text = typeof v === 'number' ? String(v) : typeof v === 'string' ? v.trim() : '';
-  if (!/^\d+$/.test(text)) throw new ConfigError(EXPECTED_VERSION_WHOLE);
-  return Number(text);
-}
-
-/** Options → Variables: fixedCollection { values: [{ name, value }] }. Not n8n expressions; {{var.name}} is replaced in steps. */
-export function variablesOption(v: unknown): Record<string, string> {
-  const vars: Record<string, string> = {};
-  const entries = field(v, 'values');
-  for (const entry of Array.isArray(entries) ? entries : []) {
-    const name = asString(field(entry, 'name')).trim();
-    if (!name) continue;
-    if (!VARIABLE_NAME.test(name)) throw new ConfigError(`Variable name "${name}" may only use letters, digits and underscores, and may not start with a digit`);
-    vars[name] = asString(field(entry, 'value'));
-  }
-  return vars;
-}
-
-export const SECRET_VARIABLE_TWICE = (name: string) =>
-  `Variable "${name}" is set both in Options → Variables and in the RPA Secret Variables credential: keep it in one of them.`;
-
-/**
- * The run variables with the RPA Secret Variables credential's pairs merged in, as secret variables (the engine masks
- * their values from the run start, and only signed steps type them). A name in both places is a configuration
- * error that names the variable, never a value. Without the credential, `p` as it is.
- */
-export async function withSecretVariables(ctx: NodeContext, i: number, p: RunStepsParams): Promise<RunStepsParams> {
-  if (credentialId(ctx, CREDENTIALS.secretVariables) === undefined) return p;
-  const secret = secretVariablesConfig(await ctx.getCredentials(CREDENTIALS.secretVariables, i));
-  for (const name of Object.keys(secret)) if (Object.hasOwn(p.vars, name)) throw new ConfigError(SECRET_VARIABLE_TWICE(name));
-  return { ...p, vars: { ...p.vars, ...secret }, secretVars: Object.keys(secret) };
-}
-
-export const MISSING_VARIABLE_HINT = 'a secret goes in an RPA Secret Variables credential, any other value in Options → Variables';
-/** A run that stopped on a variable nobody supplied (the engine's `missing input "<name>"`) says where its value goes. */
-export const withVariableHint = (message: string): string => (/missing input "[A-Za-z0-9_]+"/.test(message) ? `${message} (${MISSING_VARIABLE_HINT})` : message);
-
-/** The configured row checks, or undefined when none is set (only the configured checks run). */
-function outputOption(opt: (name: string) => unknown): OutputSpec | undefined {
-  return rowChecks(rowCheckPatterns(opt), splitList(asString(opt('requiredFields'))));
-}
-
-/**
- * Expected File (First Version) → RepairInput.download: only the fields that are set, and undefined when none is.
- * Numbers below 1 are "not set" (a fraction is floored first), like an empty text.
- */
-export function expectedDownload(engine: Pick<Engine, 'MIME'>, v: unknown): DownloadTemplate | undefined {
-  const file = field(v, 'file');
-  const opt = (name: string): unknown => field(file, name);
-  const types = opt('fileType');
-  const mime = (Array.isArray(types) ? types : []).flatMap((t) => (typeof t === 'string' && t in engine.MIME ? [engine.MIME[t as keyof typeof engine.MIME] as string] : []));
-  const positive = (x: unknown): number | undefined => {
-    const n = typeof x === 'number' ? x : typeof x === 'string' && x.trim() !== '' ? Number(x) : Number.NaN;
-    return Number.isFinite(n) && Math.floor(n) >= 1 ? Math.floor(n) : undefined;
-  };
-  const name = asString(opt('namePattern')).trim();
-  const minBytes = positive(opt('minBytes'));
-  const columns = splitList(asString(opt('requiredColumns')));
-  const minRows = positive(opt('minRows'));
-  const check: FileCheck = {
-    ...(name ? { name } : {}),
-    ...(minBytes !== undefined ? { minBytes } : {}),
-    ...(columns.length ? { columns } : {}),
-    ...(minRows !== undefined ? { minRows } : {}),
-  };
-  if (!mime.length && Object.keys(check).length === 0) return undefined;
-  return { ...(mime.length ? { mime } : {}), check };
-}
-
-export function readRunStepsParams(ctx: NodeContext, i: number): RunStepsParams {
-  const get = (name: string, fallback: unknown): unknown => ctx.getNodeParameter(name, i, fallback);
-  // Literal-only switches first: an expression in any of them stops the item before anything else is read.
-  const requireSignedSteps = literalBoolean(ctx, i, 'requireSignedSteps', 'Require Signed Steps', true);
-  const allowUnsignedWrites = literalBoolean(ctx, i, 'options.allowUnsignedWrites', 'Allow Unsigned Writes', false);
-  const deliverUnconfirmed = literalBoolean(ctx, i, 'options.deliverUnconfirmed', 'Deliver Unconfirmed Rows', false);
-  // Literal and the same for every item: a per-item key would reset the login breaker item by item.
-  const breakerResetKey = literalString(ctx, 'options.breakerResetKey', 'Login Breaker Reset Key');
-  const common = readCommonOptions(ctx, i);
-  const options = get('options', {});
-  const opt = (name: string): unknown => field(options, name);
-  const aiRepair = asBoolean(get('aiRepair', false), false);
-  const goal = asString(get('goal', '')).trim();
-  if (aiRepair && !goal) throw new ConfigError(GOAL_NEEDS_TEXT);
-  const output = outputOption(opt);
-  const expectedVersion = expectedVersionOption(opt('expectedVersion'));
-  return {
-    steps: parseStepsParam(get('steps', '')),
-    startUrl: asString(get('startUrl', '')).trim(),
-    requireSignedSteps,
-    signature: asString(get('signature', '')).trim(),
-    approvedBy: asString(get('approvedBy', '')).trim(),
-    aiRepair,
-    goal,
-    expectedFile: get('expectedFile', {}),
-    ...(output ? { output } : {}),
-    vars: variablesOption(opt('variables')),
-    secretVars: [],
-    name: asString(opt('name')).trim(),
-    ...(expectedVersion !== undefined ? { expectedVersion } : {}),
-    allowUnsignedWrites,
-    deliverUnconfirmed,
-    maxActions: clamp(Math.floor(asNumber(opt('maxActions'), 40)), 1, 200),
-    maxTokens: clamp(Math.floor(asNumber(opt('maxTokens'), 200_000)), 1000, 1_000_000),
-    breakerResetKey,
-    ...codeWorkflowOptions(ctx, opt),
-    common,
-  };
-}
-
-/**
- * Options → One-Time Code Workflow as saved: the workflow picker's value ({ __rl: true, mode, value }), or the plain ID a
- * workflow saved before the picker holds. undefined for anything else.
- */
-function workflowIdOf(raw: unknown): string | undefined {
-  if (raw === undefined || raw === null) return '';
-  if (typeof raw === 'string') return raw;
-  if (isObject(raw) && raw.__rl === true && (raw.value === undefined || raw.value === null || typeof raw.value === 'string')) return asString(raw.value);
-  return undefined;
-}
-
-/**
- * Options → One-Time Code Workflow and Code Timeout (Seconds), read the same way by Run Steps and Import Steps. The
- * workflow is a literal, read from the saved parameter: an expression (in the picker's value or as text) is refused, so
- * item data never chooses which workflow the node runs.
- */
-export function codeWorkflowOptions(ctx: NodeContext, opt: (name: string) => unknown): { codeWorkflowId: string; codeTimeoutMs: number } {
-  const raw = literalRaw(ctx, 'options.codeWorkflowId', 'One-Time Code Workflow', (r) => {
-    const id = workflowIdOf(r);
-    return id === undefined || isExpressionText(id);
-  });
-  return {
-    codeWorkflowId: (workflowIdOf(raw) ?? '').trim(),
-    codeTimeoutMs: clamp(Math.floor(asNumber(opt('codeTimeout'), 120)), 1, 300) * 1000,
-  };
-}
-
-/** A one-time code as the engine takes it once its spaces are removed: 6 to 10 digits (the engine's WORKFLOW_CODE). */
-export const ONE_TIME_CODE = /^[0-9]{6,10}$/;
-const NOT_ONE_ITEM = (n: number) => `it returned ${n} items; it must return exactly one item with a code field`;
-const NO_CODE_FIELD = 'its item has no code field of 6 to 10 digits';
-/** n8n's refusal to run a workflow that is not published (n8n 2.x still says "Workflow is not active"). */
-const NOT_PUBLISHED = /workflow is not active/i;
-const notPublished = (n8nWords: string) =>
-  `it is not published: open the workflow set in Options → One-Time Code Workflow and click Publish (${n8nWords.slice(0, 90)})`;
-
-/**
- * The engine's codeProvider for Options → One-Time Code Workflow: runs that workflow with one item { requestedAt } and
- * takes json.code from its single output item. Everything else it returns is dropped. Its errors never carry the code:
- * a returned value is never repeated, and a failing workflow's message keeps only its first line, with numbers of four or
- * more digits removed, spaces between the digits included ("123 456"); a workflow n8n refuses as "not active" is named as
- * not published, with n8n's words in brackets. The engine shows these errors after "the one-time code workflow failed: ".
- */
-export function codeProviderFor(ctx: Pick<NodeContext, 'executeWorkflow'>, workflowId: string): CodeProvider {
-  return async ({ requestedAt }) => {
-    let result: Awaited<ReturnType<NodeContext['executeWorkflow']>> | undefined;
-    let failed: unknown;
-    try {
-      result = await ctx.executeWorkflow({ id: workflowId }, [{ json: { requestedAt } }]);
-    } catch (error) {
-      failed = error;
-    }
-    // Thrown outside the catch block (as parseJson does): the message is rebuilt, never the workflow's error as is.
-    if (!result) {
-      const first = errorMessage(failed).split('\n')[0].replace(/\d[\d ]{2,}\d/g, '[number]');
-      throw new Error(NOT_PUBLISHED.test(first) ? notPublished(first) : `it stopped with an error: ${first.slice(0, 200)}`);
-    }
-    const items = (result.data?.[0] ?? []).filter((item) => item !== null && item !== undefined);
-    if (items.length !== 1) throw new Error(NOT_ONE_ITEM(items.length));
-    const code: unknown = items[0].json?.code;
-    const text = typeof code === 'number' && Number.isSafeInteger(code) && code >= 0 ? String(code) : code;
-    if (typeof text !== 'string' || !ONE_TIME_CODE.test(text.replace(/ /g, ''))) throw new Error(NO_CODE_FIELD);
-    return text;
-  };
-}
-
-/** The engine's code settings for a run: the code provider and its timeout when a One-Time Code Workflow is set, else none. */
-export function codeSettingsFor(
-  ctx: Pick<NodeContext, 'executeWorkflow'>, o: { codeWorkflowId: string; codeTimeoutMs: number },
-): { codeProvider?: CodeProvider; codeTimeoutMs?: number } {
-  return o.codeWorkflowId ? { codeProvider: codeProviderFor(ctx, o.codeWorkflowId), codeTimeoutMs: o.codeTimeoutMs } : {};
-}
 
 /** Decided once per execution from the raw parameters, so an expression-valued AI Repair keeps the Repaired Steps output. */
 function aiRepairOutputs(ctx: NodeContext): boolean {
@@ -281,17 +24,6 @@ function aiRepairOutputs(ctx: NodeContext): boolean {
 export type ItemOutcome =
   | { kind: 'ok'; data?: INodeExecutionData; repaired?: INodeExecutionData }
   | { kind: 'error'; item: INodeExecutionData; error: NodeOperationError };
-
-/**
- * One repair per execution. The flag lives in n8n's per-execution context data ('flow'), so it
- * covers every item, a node that runs again in the same execution (Loop Over Items) and every Run Steps node of the
- * workflow, and it is gone when the execution ends.
- */
-const REPAIR_RAN = 'playwrightRepairRan';
-export const repairAlreadyRan = (ctx: NodeContext): boolean => ctx.getContext('flow')[REPAIR_RAN] === true;
-export function noteRepairRan(ctx: NodeContext): void {
-  ctx.getContext('flow')[REPAIR_RAN] = true;
-}
 
 interface Identity { name: string | null; version: number | null; hash: string }
 
@@ -319,19 +51,6 @@ function safeOptionName(ctx: NodeContext, i: number): string | null {
     name = '';
   }
   return typeof name === 'string' && name.trim() ? name.trim() : null;
-}
-
-/**
- * Breaker and lock for a Site Login: keyed by its credential id, golden messages naming only the login host, and the
- * login's fingerprints (a corrected username or password gets one try). The lock lasts `budgetMs` (the longest the
- * guarded run can take) plus LOCK_GRACE_MS.
- */
-export function siteLoginGuard(siteLogin: SiteLogin, id: string, resetKey: string, budgetMs: number): (store: GuardStore) => GuardSpec {
-  const loginHost = new URL(siteLogin.policy.startUrl).host;
-  return (store) => ({
-    key: siteLoginKey(id), resetKey, store, ttlMs: budgetMs + LOCK_GRACE_MS,
-    lockedOutMessage: () => siteLoginLockedOut(loginHost), busyMessage: SITE_LOGIN_BUSY, fingerprints: loginFingerprints(siteLogin.secrets),
-  });
 }
 
 /** Test seam for the guard store: the Redis factory and how the n8n execution mode is read. */
