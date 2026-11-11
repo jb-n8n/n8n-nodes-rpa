@@ -7,7 +7,7 @@ export class RpaDesktopRunnerApi implements ICredentialType {
 
   icon: Icon = { light: 'file:rpa.svg', dark: 'file:rpa.svg' };
 
-  documentationUrl = 'https://github.com/jb-n8n/n8n-nodes-rpa#desktop-runs';
+  documentationUrl = 'https://github.com/jb-n8n/n8n-nodes-rpa/blob/main/docs/install/windows.md#6-connect-n8n';
 
   properties: INodeProperties[] = [
     {

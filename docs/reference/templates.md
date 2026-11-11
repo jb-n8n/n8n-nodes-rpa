@@ -1,0 +1,103 @@
+# Templates reference
+
+The package ships workflow templates in `packages/n8n-nodes-rpa/templates/` (also in the npm package's `templates/`
+folder). Import one with **⋯ → Import from File** in a new workflow. Each has a green **Set once** note that lists what
+to pick, in order.
+
+| File | Workflow | What it does |
+|---|---|---|
+| `hello-world.json` | `RPA: Hello world` | A first screenshot and a table from the sandbox site ([Browser bot guide](../guides/browser-bot.md)) |
+| `0-connection-check.json` | `RPA: 0 Connection check` | One screenshot of the URL in **Site to check**: shows the browser reaches your site before anyone writes steps |
+| `2-data-feed.json` | `RPA: 2 Data feed` | Runs every 6 hours: the newest approved steps, a run log, your destination, an alert. A chat model builds the first version from a Goal and repairs the steps when the site changes |
+| `3-approve-steps.json` | `RPA: 3 Approve steps` | Approval by email: emails the evidence, waits for a person's answer, signs the steps |
+| `5-import-a-bot.json` | `RPA: 5 Import a bot` | A form: upload a bot, review and approve it on the next page, download the workflow that runs it ([Move a bot](../guides/move-a-bot.md)) |
+
+Templates 2, 3 and 5 create the two Data Tables when they are missing.
+
+## RPA: 5 Import a bot
+
+- **Settings**: `approval` is `on this form` (the default) or `by email`. `showDetails` (false) puts each step list's
+  safety flags, evidence and change list on the review page.
+- **Import a bot** asks for the **Bot file**, **Source (optional)** and **Name for the steps**. For a browser bot it asks
+  on a second page, **The file it downloads**, for a file name pattern and required columns.
+- **Review and approve** shows each step list: what it opens, whether it signs in, forms it submits, files it returns,
+  what the replay proved, the steps it left out, and the numbered steps. For desktop steps it asks "Which of these steps
+  save, send or submit?". The **Decision** is **Approve and sign** or **Reject**. A page left unanswered for an hour
+  signs nothing.
+- The last page says `Approved and signed: <name> v1 is now the version that runs under that name.`, or
+  `Rejected: <name> v1. Nothing was signed.` When a step list was approved, it also downloads the workflow that runs
+  the bot.
+- **Add the login page** shows when the sign-in stopped at an address the Site Login does not list. Add it under
+  **Pages Where the Password May Be Typed**, then choose **Import again**.
+- Keep **Authentication** on: an anonymous form could start logins with the attached Site Login and approve steps.
+  The form's page stays open until the import ends. Behind a reverse proxy, set its read timeout above twice
+  **Max Seconds** (for nginx, `proxy_read_timeout`). Do not submit the form again after a timeout: the first import
+  still finishes, and its result is in **Executions**.
+
+## RPA: 2 Data feed
+
+The self-healing data feed reads data from a site that has no API (sign-in, second factor, filters) on a schedule.
+When the signed steps stop matching, the chat model repairs the run on the same browser session, a fresh browser
+proves the repaired steps with no model, and **RPA: 3 Approve steps** asks a person. The next run uses the new steps
+with no model call.
+
+- **Settings** holds `name`, the step list's name. Every Data Table filter and the Run Steps **Name** option use it.
+- **Get active steps**: the newest `active` row of that name. **Run steps** runs it with **Require Signed Steps** on,
+  **Expected Version** from the row, the Site Login, **ID Pattern** `N26-\d{4}` and **Stated Total Pattern**
+  `Showing \d+-\d+ of (\d+)` (the sandbox's "Showing <first>-<last> of <total>" line). Change both for your site.
+- **AI Repair** is on only when no unexpired `pending` row exists, so a waiting approval is not repaired again.
+- **The first run.** With no active row, the model builds version 1 from the **Goal**, and the only output is the
+  Repaired steps item, which goes to approval. Nothing reads the site's data until version 1 is approved. Each such run
+  signs in and spends model tokens.
+- **Outputs**: Data goes to **Log run** and **Send data to destination** (a placeholder: replace it). Repaired Steps
+  goes to **Approve steps**. The error output goes to **Alert on failure** and **Log failed run**.
+- **A new site**: copy the feed and change `name`, the Site Login, the **Goal** and the **ID Pattern**. With another
+  Site Login, copy workflow 3 too and pick the new Site Login on its **Sign steps**.
+
+## RPA: 3 Approve steps
+
+Called by the data feed, or by template 5 with `approval` set to `by email`. It writes a `pending` row that expires
+after `approvalTimeoutHours` (72), then:
+- **Browser steps**: a review email with the safety flags first, in red, then the steps the import left out, the
+  evidence, the change list and the before and after screenshots. Then an approval email with **Approve** and **Reject**.
+  The emails HTML-escape every value. The safety flags are the full list: every host, form submission, download and pop-up handler the steps have.
+  The change list compares the steps themselves, not their intents, so a step that clicks another element is listed
+  even when its intent reads the same.
+- **Desktop steps**: one email, `Approve desktop steps v<version> for <name>?`, with the numbered steps and a
+  **Review and decide** button, to a form with **Decision** and the candidate writes as tick boxes, none ticked to start.
+- Approve: **Sign steps** signs, the row becomes `active`, older `active` rows of the name become `superseded`, and
+  **Email signed steps** confirms. Reject or a refused signature: `rejected`. No answer in time: `expired`.
+- Rejected Repaired steps can come back unchanged if the next repair produces the same steps. They reuse their row.
+- Approval links need a real desktop browser: n8n ignores clicks from link scanners. Mailpit keeps no mail across a
+  restart of the compose stack. If an approval email is lost, wait for `expiresAt`, or delete the `pending` row.
+
+## Data Tables
+
+`playwright_steps` holds the step lists. Rows are added, and only their status changes.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `name` | string | The step list's name |
+| `version` | number | Its version. Run Steps checks it as Expected Version |
+| `steps` | string | The steps as JSON (empty for a rejected row) |
+| `hash` | string | SHA-256 of the steps: ties the approval to what was shown |
+| `signature` | string | The HMAC with the Step Signing key |
+| `approvedBy` | string | Who decided: the address on the Approver Allowlist |
+| `approvedAt` | string | When (ISO 8601) |
+| `status` | string | `pending`, `active`, `superseded`, `rejected` or `expired` |
+| `expiresAt` | string | When a `pending` row stops blocking a new repair |
+
+`playwright_runs` gets one row per run of the data feed.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `name` | string | The step list's name |
+| `lane` | string | `script` (signed steps) or `agent` (a repair or a first run) |
+| `version` | number | The version used, 0 when none |
+| `hash` | string | Hash of those steps |
+| `confirmed` | boolean | The row count matched the total the page states |
+| `rowCount` | number | Rows returned |
+| `durationMs` | number | Run time |
+| `llmTokens` | number | Model tokens used |
+| `code` | string | Error code, empty on success |
+| `executionId` | string | The n8n execution |

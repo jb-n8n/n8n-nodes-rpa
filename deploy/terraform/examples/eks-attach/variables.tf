@@ -27,7 +27,7 @@ variable "token_secret_name" {
 }
 
 variable "image" {
-  description = "The rpa-browser image: repository plus tag and/or digest. Its run-server must match the node's playwright-core (README, Version matching)."
+  description = "The rpa-browser image: repository plus tag and/or digest. Its run-server must match the node's playwright-core (docs/reference/operator.md, Version matching)."
   type = object({
     repository = string
     tag        = optional(string, "")

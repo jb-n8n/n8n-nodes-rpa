@@ -1,7 +1,7 @@
 # RPA desktop runner and ERP Demo
 
 The runner speaks the desktop protocol and drives Windows apps through UI Automation; Run Steps sends it desktop
-steps (README, [Desktop runs](../README.md#desktop-runs)). To install the runner, the policy tool and the RPA browser
+steps ([Steps: Desktop steps](../docs/reference/steps.md#desktop-steps)). To install the runner, the policy tool and the RPA browser
 on a Windows machine, follow the [Windows install guide](../docs/install/windows.md), which uses the package this
 folder builds (`installer/`, released as `rpa-windows-x64.zip`). The RPA browser the package installs serves one
 browser session at a time: a second browser run that starts while one is open waits up to 60 s for it, then fails
@@ -19,7 +19,7 @@ browser session at a time: a second browser run that starts while one is open wa
 | `runner/test/Rpa.Supervisor.Core.Tests` | Unit tests of the supervisor's core with fake sessions (run anywhere). |
 | `runner/test/Rpa.Runner.Scenario` | The protocol test client CI runs against the real runner and the ERP Demo on Windows. |
 | `recorder/src/Rpa.Recorder.Core` | The platform-neutral part of the recorder (net8.0): the session that turns input into steps, the locator and secret rules, the recording file and the policy change file. |
-| `recorder/src/Rpa.Recorder` | The recorder, `RpaRecorder.exe` (net8.0-windows): a bar that stays on top, and the hooks and UI Automation that watch the app. It saves a recording file for Import Steps; see [Recording a flow](../docs/install/windows.md#12-recording-a-flow). |
+| `recorder/src/Rpa.Recorder` | The recorder, `RpaRecorder.exe` (net8.0-windows): a bar that stays on top, and the hooks and UI Automation that watch the app. It saves a recording file for Import Steps; see [Record a bot](../docs/guides/record-a-bot.md). |
 | `recorder/test/Rpa.Recorder.Core.Tests` | Unit tests of the recorder's core with fakes (run anywhere). |
 | `recorder/test/Rpa.Recorder.Scenario` | The recorder scenario CI runs on Windows: a stand-in for a person drives the ERP Demo while `RpaRecorder.exe` records it, and the file is compared with a golden one. |
 | `erp-demo` | ERP Demo: a small "legacy ERP" WinForms app with a v1 and a v2 UI. |

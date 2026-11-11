@@ -22,7 +22,35 @@ make -C deploy check # the Helm chart and the Terraform modules (needs terraform
 The Redis tests of the queue-mode breaker and lock run when `REDIS_URL` points at a test database (for example
 `REDIS_URL=redis://localhost:6379/15`); without it they are skipped.
 
-The README's [Development](README.md#development) section lists what each suite covers and how to run one test file.
+Run one test file with `pnpm --filter n8n-rpa-engine exec vitest run <file>` or
+`pnpm --filter n8n-nodes-rpa exec vitest run test/<file>`.
+
+| Suite | Command | Covers |
+|---|---|---|
+| Engine | `pnpm --filter n8n-rpa-engine test` | Step runner, locators, policy and address checks, masking, signing, traces, the agent loop (with a scripted fake model), compile, prove, imports. Runs against the sandbox and a real Chromium. |
+| Node | `pnpm --filter n8n-nodes-rpa test` | Every operation through an n8n execution harness, the credentials, the templates' JSON, and the doc texts the docs quote (`test/readme.test.ts`). |
+| Eval | `pnpm --filter n8n-rpa-eval test` | The eval's fixtures and leak detectors. `pnpm --filter n8n-rpa-eval start` runs the live heal-rate eval (needs `ANTHROPIC_API_KEY`). |
+| Sandbox and gate | `pnpm --filter n8n-rpa-sandbox test`, `pnpm --filter n8n-rpa-gate test` | The sample site and the browser's token gate. |
+| Deploy script | `node --test "deploy/scripts/test/*.test.mjs"` | `deploy/scripts/configure-n8n.mjs` against a fake n8n API. |
+| Acceptance | `pnpm acceptance` | The acceptance criteria through the templates. `ACCEPTANCE_COMPOSE=1` adds the compose smoke test (start the stack with `docker-compose.dev.yml` first). |
+| Desktop | see [`desktop/README.md`](desktop/README.md#building-and-testing) | The runner, the recorder and the installer (.NET and Pester). |
+
+**Stacks.** `docker compose up --build -d` runs n8n with the node built from the source, the browser, the sandbox and
+Mailpit ([browser bot guide](docs/guides/browser-bot.md)). `docker compose -p n8n-rpa-queue -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.queue.yml up -d --build`
+runs n8n in queue mode with Postgres, Redis and two workers, on its own ports (n8n http://localhost:35678).
+`SANDBOX_SAP=realistic` switches the sandbox's SAP pages to a realistic look-alike
+([runbook](docs/onboarding/sap-lookalike.md)). `docker/n8n.Dockerfile` builds the n8n image with the node baked in.
+Rebuild after changing the engine or the node: `docker compose up --build -d n8n`.
+
+**Secrets in this repo.** `.env` is git-ignored: copy `.env.example`. n8n writes its encryption key into the `n8n_data`
+volume, so treat that volume as secret. Every password, TOTP secret and key in the sandbox, the templates and the tests
+is synthetic.
+
+**Layout.** `packages/engine` (the engine, bundled into the node), `packages/n8n-nodes-rpa` (the node, its credentials
+and templates), `packages/eval` (the heal-rate eval and acceptance tests), `sandbox/portal` (the sample site),
+`images/browser` (the `rpa-browser` image: run-server, token gate, supervisor), `docker/` (the n8n image), `deploy/`
+(Helm chart, Terraform, the configure script), `desktop/` (the Windows runner, recorder, policy tool and installer) and
+`docs/` (guides, reference, install and deploy runbooks).
 
 ## Changes
 

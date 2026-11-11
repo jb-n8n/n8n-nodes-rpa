@@ -27,7 +27,7 @@ Out of scope:
 
 ## What the safety model is designed to do
 
-The full rules are in the README, [Safety model](README.md#safety-model). Desktop runs follow the desktop runner's local policy on the Windows machine (README, [Desktop runs](README.md#desktop-runs)), not the browser rules in the bullets below. With the browser installed beside the runner (the installer's default), a Windows machine set up with the installer trusts the n8n that holds its tokens: the runner's policy keeps mistakes and automatic repair within the allowed apps, and is not a barrier against that n8n (see the install guide, [Who can reach the ports](docs/install/windows.md#who-can-reach-the-ports)). In short, a report is a vulnerability when one of these does not hold:
+The full rules are in the [security reference](docs/reference/security.md#browser-runs). Desktop runs follow the desktop runner's local policy on the Windows machine ([Desktop runs](docs/reference/security.md#desktop-runs)), not the browser rules in the bullets below. With the browser installed beside the runner (the installer's default), a Windows machine set up with the installer trusts the n8n that holds its tokens: the runner's policy keeps mistakes and automatic repair within the allowed apps, and is not a barrier against that n8n (see the install guide, [Who can reach the ports](docs/install/windows.md#who-can-reach-the-ports)). In short, a report is a vulnerability when one of these does not hold:
 
 - A run opens only the sites its operation allows: the URL's site plus **Also Allow These Sites**, or, with a Site Login, only the sites listed in that credential.
 - Sites on your own network (loopback, private, link-local, shared address space) are blocked as literal addresses, as names that resolve to them and on every redirect hop, unless **Allow Private Network** is on.
@@ -38,4 +38,4 @@ The full rules are in the README, [Safety model](README.md#safety-model). Deskto
 - Pages cannot open channels the engine does not see: shared workers, WebSockets from workers, WebSocketStream, WebTransport and WebRTC are unavailable in every frame.
 - The browser gate forwards only connections that carry the token and refuses launch options other than `headless`, `timeout` and `slowMo`.
 
-The README lists the accepted risks (one shared signing key, side effects of GET requests, Data Table write access, secrets drawn in images or canvas, and others). Reports that only restate an accepted risk are welcome as hardening suggestions, but are not treated as vulnerabilities.
+The [security reference](docs/reference/security.md#accepted-risks) lists the accepted risks (one shared signing key, side effects of GET requests, Data Table write access, secrets drawn in images or canvas, and others). Reports that only restate an accepted risk are welcome as hardening suggestions, but are not treated as vulnerabilities.

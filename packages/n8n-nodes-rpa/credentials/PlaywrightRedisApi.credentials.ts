@@ -7,7 +7,7 @@ export class PlaywrightRedisApi implements ICredentialType {
 
   icon: Icon = { light: 'file:rpa.svg', dark: 'file:rpa.svg' };
 
-  documentationUrl = 'https://github.com/jb-n8n/n8n-nodes-rpa#operator-guidance';
+  documentationUrl = 'https://github.com/jb-n8n/n8n-nodes-rpa/blob/main/docs/reference/operator.md#queue-mode';
 
   properties: INodeProperties[] = [
     {

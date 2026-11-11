@@ -19,7 +19,7 @@
     },
     {
       "parameters": {
-        "content": "### Set once (green)\n1. Keep **Authentication** on: pick or create a Basic Auth credential on **Import a bot**.\n2. Pick **RPA Browser**, and **RPA Site Login** when the bot signs in, on **Import steps**.\n3. Pick **RPA Step Signing**, and the same **RPA Site Login**, on **Sign steps**.\n4. Type your address once, in **Sign steps → Approver Allowlist**: it is recorded as the approver.\n5. For a site on your own network (the sandbox), turn on **Options → Allow Private Network** in **Import steps**.\n6. Publish, then open the form.",
+        "content": "### Set once (green)\n1. Keep **Authentication** on: pick or create a Basic Auth credential on **Import a bot**.\n2. Pick **RPA Step Signing** on **Sign steps**.\n3. Type your address once, in **Sign steps → Approver Allowlist**: it is recorded as the approver.\n4. Browser bots only: pick **RPA Browser** on **Import steps**. When the bot signs in, pick the same **RPA Site Login** on **Import steps** and on **Sign steps**.\n5. Browser bots on your own network (the sandbox): turn on **Options → Allow Private Network** in **Import steps**.\n6. Publish, then open the form.",
         "height": 300,
         "width": 480,
         "color": 4
