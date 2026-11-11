@@ -45,7 +45,7 @@ internal static class Describe
         return "{" + string.Join(", ", parts) + "}";
     }
 
-    private static string Quote(string s) => "\"" + (s.Length > 80 ? s[..80] + "..." : s) + "\"";
+    public static string Quote(string s) => "\"" + (s.Length > 80 ? s[..80] + "..." : s) + "\"";
 }
 
 /// <summary>Reads and validates request params. Every failure is -32602 with the offending field named.</summary>

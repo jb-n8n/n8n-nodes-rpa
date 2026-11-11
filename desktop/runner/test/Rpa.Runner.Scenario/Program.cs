@@ -135,7 +135,7 @@ internal sealed class Scenario(Uri url, string token, string fingerprint, string
             await Step("not_unique (-32005) gives the count", async () =>
             {
                 var e = await ExpectError(-32005, () => Call("resolve", new { runId = _runId, target = TW(MainTitle, new { controlType = "Edit" }), timeoutMs = 0 }));
-                Expect(System.Text.RegularExpressions.Regex.IsMatch(e.RunnerMessage, @"matched \d+ visible"), "message gives N");
+                Expect(System.Text.RegularExpressions.Regex.IsMatch(e.RunnerMessage, @"found \d+ text boxes"), "message gives N");
             });
 
             ok = await Step("search company 1000: select, click Search, 12 results", async () =>

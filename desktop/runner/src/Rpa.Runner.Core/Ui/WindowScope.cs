@@ -94,10 +94,9 @@ public sealed class WindowScope
         {
             // An allowed app's own executable that the run did not start: most often a copy left open, or an app that
             // keeps one window and handed the run's launch over to it.
-            throw RpcErrors.PolicyRefused(refusedIsAllowedApp
-                ? $"the window {sel} belongs to a copy of \"{refusedExe}\" that this run did not start (most often one that was already open " +
-                  "before the run), so the run will not drive it. Close that copy on the runner machine (or end its process), then run again."
-                : $"the window {sel} belongs to \"{refusedExe}\", which is not an application this run launched from the allowed list");
+            throw refusedIsAllowedApp
+                ? RpcErrors.OtherCopy(sel!, refusedExe)
+                : RpcErrors.PolicyRefused($"the window {sel} belongs to \"{refusedExe}\", which is not an application this run launched from the allowed list");
         }
         return allowed;
     }
