@@ -9,7 +9,7 @@ import { CANCELLED, clampBudget, laneFailure, type LaneSuccess } from '../lane/s
 import type { TaskFailure } from '../lane/task.js';
 import { hasSignature, type TrustInput, type TrustResult } from '../lane/trust.js';
 import {
-  DESKTOP_UNSIGNED_WRITES, desktopNotInteractive, desktopStepFailure, inputTooLong, nameMismatch, RUNNER_BUSY, runnerAppMissing, SIGNATURE_INVALID, SIGNATURE_WITHOUT_KEY,
+  DESKTOP_UNSIGNED_WRITES, desktopNotInteractive, desktopStepFailure, inputTooLong, nameMismatch, RUNNER_BUSY, runnerAppMissing, runnerAppNotAllowed, SIGNATURE_INVALID, SIGNATURE_WITHOUT_KEY,
   UNSIGNED_REQUIRED, UNSIGNED_SECRET_VARIABLE, versionMismatch,
 } from '../messages.js';
 import { createMasker, type Masker } from '../secrets/mask.js';
@@ -282,6 +282,12 @@ export async function runDesktopTask(input: DesktopTaskInput): Promise<DesktopTa
     } catch (err) {
       // not_found from app.launch is the executable missing on the runner's machine: an installation problem, not drift.
       if (err instanceof ElementNotFoundError) return fail('runner_unavailable', runnerAppMissing(script.app.exe.split(/[\\/]/).pop() ?? script.app.exe), ids);
+      // policy_refused from app.launch with the runner's exact "not in the runner's allowedApps" text is the app missing from its
+      // policy: name the way out instead. Other policy refusals (a writable folder, a changed file) keep the runner's own words.
+      if (err instanceof PolicyRefusedError) {
+        const exe = script.app.exe.split(/[\\/]/).pop() ?? script.app.exe;
+        if (err.message === `policy_refused: application "${exe}" is not in the runner's allowedApps`) return fail('policy_violation', runnerAppNotAllowed(exe), ids);
+      }
       throw err;
     }
 

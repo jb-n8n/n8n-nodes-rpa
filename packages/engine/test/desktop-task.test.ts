@@ -10,7 +10,7 @@ import { createMasker } from '../src/secrets/mask.js';
 import { signScript } from '../src/sign.js';
 import type { DesktopLocator } from '../src/types.js';
 import { NoRunError } from '../src/desktop/protocol.js';
-import { runBinaryTooLarge, runnerAppMissing } from '../src/messages.js';
+import { runBinaryTooLarge, runnerAppMissing, runnerAppNotAllowed } from '../src/messages.js';
 import { MAX_RUN_BINARY_BYTES } from '../src/steps/limits.js';
 import { MAX_EXPECTED_FILE_BYTES } from '../src/steps/parse.js';
 import { newRunState, runSteps, type StepContext } from '../src/steps/run.js';
@@ -419,7 +419,8 @@ describe('desktop task: refusals and runner errors', () => {
 
   it('an app outside the runner policy is refused at launch', async () => {
     const r = failed(await run(doc(SIGN_IN, { app: { exe: 'C:\\Windows\\notepad.exe' } })));
-    expect({ code: r.code, message: r.message }).toEqual({ code: 'policy_violation', message: 'app not allowed: notepad.exe' });
+    expect({ code: r.code, message: r.message }).toEqual({ code: 'policy_violation', message: runnerAppNotAllowed('notepad.exe') });
+    expect(r.message).toContain('policy apply <the recording\'s .policy-change.json file>');
     expect(runner!.run).toBeUndefined();
   });
 
