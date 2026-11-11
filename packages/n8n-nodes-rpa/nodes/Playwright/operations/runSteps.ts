@@ -103,7 +103,7 @@ export function variablesOption(v: unknown): Record<string, string> {
   for (const entry of Array.isArray(entries) ? entries : []) {
     const name = asString(field(entry, 'name')).trim();
     if (!name) continue;
-    if (!VARIABLE_NAME.test(name)) throw new ConfigError(`Variable name "${name}" may only use letters, digits and underscores`);
+    if (!VARIABLE_NAME.test(name)) throw new ConfigError(`Variable name "${name}" may only use letters, digits and underscores, and may not start with a digit`);
     vars[name] = asString(field(entry, 'value'));
   }
   return vars;

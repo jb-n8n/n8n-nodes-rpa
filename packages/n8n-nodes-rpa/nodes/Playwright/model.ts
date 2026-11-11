@@ -15,7 +15,7 @@ export function lazyChatModel(resolve: () => Promise<unknown>): ChatModel & { re
   const get = (): Promise<ChatModel> =>
     (model ??= resolve().then((value) => {
       resolved = true;
-      if (value === null || value === undefined) throw new Error('no chat model is connected to the Chat Model input');
+      if (value === null || value === undefined) throw new Error('no chat model is connected to the Model input');
       if (Array.isArray(value)) throw new Error(`expected one chat model, got ${value.length}`);
       if (!isChatModel(value)) throw new Error('the connected chat model does not support tool calling (it has no bindTools method)');
       return value;
