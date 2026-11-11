@@ -16,8 +16,8 @@
 #   4. Checks the build attestation of the zip with the GitHub CLI when C:\Program Files\GitHub CLI\gh.exe is
 #      installed and signed in, as docs/install/windows.md does: the workflow desktop-release.yml of
 #      jb-n8n/n8n-nodes-rpa attested it, for the tag desktop-v<version>. A failed check stops it. Where gh is not
-#      installed or not signed in, the attestation is NOT checked: it says so in one line, with the command to check it
-#      on a machine with gh (of the zip, or of this script, which names the zip's SHA-256), and goes on; the zip must
+#      installed or not signed in, the attestation is NOT checked: it says so in one line, with the command that checks
+#      the zip's attestation on a machine with gh, and goes on; the zip must
 #      still have the SHA-256 of the .sha256 file and the one this script names. With -RequireAttestation the check is
 #      mandatory: without a signed-in gh it stops before it downloads anything. A copy that names no SHA-256 (the
 #      repository's own, run with -Zip) has only the .sha256 file beside the zip, from the same place, so there the

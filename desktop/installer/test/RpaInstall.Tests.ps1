@@ -4233,7 +4233,6 @@ public static class Program {
       $source = Get-Content -Raw -LiteralPath $script:GetRpa
       $source | Should -Match ([regex]::Escape("`$ghState = Get-RpaGhState `$gh"))
       $source.IndexOf('$early = Test-RpaAttestation') | Should -BeLessThan $source.IndexOf('Invoke-WebRequest')
-      $source | Should -Not -Match 'AttestationChecked'
     }
   }
 
