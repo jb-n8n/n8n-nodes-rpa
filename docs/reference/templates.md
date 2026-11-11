@@ -25,7 +25,8 @@ Templates 2, 3 and 5 create the two Data Tables when they are missing.
   save, send or submit?". The **Decision** is **Approve and sign** or **Reject**. A page left unanswered for an hour
   signs nothing.
 - The last page says `Approved and signed: <name> v1 is now the version that runs under that name.`, or
-  `Rejected: <name> v1. Nothing was signed.`, and downloads the workflow that runs the bot.
+  `Rejected: <name> v1. Nothing was signed.` When a step list was approved, it also downloads the workflow that runs
+  the bot.
 - **Add the login page** shows when the sign-in stopped at an address the Site Login does not list. Add it under
   **Pages Where the Password May Be Typed**, then choose **Import again**.
 - Keep **Authentication** on: an anonymous form could start logins with the attached Site Login and approve steps.
