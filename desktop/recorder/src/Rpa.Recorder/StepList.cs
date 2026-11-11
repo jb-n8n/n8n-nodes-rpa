@@ -38,6 +38,9 @@ internal sealed class StepList : ListBox
     /// <summary>The height of a row of one line, in the list's pixels.</summary>
     public int RowHeight => Font.Height + 2 * Pad;
 
+    /// <summary>Each row's height as last measured for the list's width, in the list's pixels.</summary>
+    public IReadOnlyList<int> RowHeights => _heights;
+
     /// <summary>Shows the rows, keeping the selected row. With <paramref name="followNewest"/> the list scrolls so that
     /// the last row is in view; otherwise it stays where it was.</summary>
     public void ShowRows(IReadOnlyList<StepRow> rows, bool followNewest)

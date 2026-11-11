@@ -57,8 +57,8 @@ internal sealed class RecorderBar : Form
     private readonly StepList _list = new() { Dock = DockStyle.Fill };
     private readonly Label _empty = new() { Text = BarText.EmptyList, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, ForeColor = SystemColors.GrayText, BackColor = SystemColors.Window, BorderStyle = BorderStyle.FixedSingle, UseMnemonic = false };
     private readonly Label _readHint;
-    private readonly TableLayoutPanel _actions = Column();
     private readonly Label _actionHint;
+    private readonly FlowLayoutPanel _actionRow = Row();
     private readonly Button _delete = SmallDialog.NewButton(BarText.DeleteStep);
     private readonly Button _variable = SmallDialog.NewButton(BarText.MakeVariable);
     private readonly Button _secret = SmallDialog.NewButton(BarText.MakeSecret);
@@ -101,8 +101,8 @@ internal sealed class RecorderBar : Form
         _folderLine = Wrap(quiet: true);
         _allowTitle = Wrap();
         _allowDetail = Wrap(quiet: true);
-        _importTitle = Wrap(NextSteps.Import.Title);
-        _importDetail = Wrap(NextSteps.Import.Detail, quiet: true);
+        _importTitle = Wrap();
+        _importDetail = Wrap(quiet: true);
         Build();
         _capture = NewCapture();
 
@@ -166,21 +166,22 @@ internal sealed class RecorderBar : Form
         noticeRow.Controls.Add(_notice, 0, 0);
         noticeRow.Controls.Add(_earlier, 1, 0);
 
-        Buttons(_startRow, _startApp, _useOpen);
+        Buttons(_startRow, BarLayout.Space, _startApp, _useOpen);
         _startRow.Margin = new Padding(0, BarLayout.Space, 0, 0);
         _readyText.Margin = new Padding(0, BarLayout.Group, 0, 0);
-        Buttons(_recordRow, _pause, _finish);
+        Buttons(_recordRow, BarLayout.Space, _pause, _finish);
         _recordRow.Margin = new Padding(0, BarLayout.Space, 0, 0);
         _listArea.Controls.Add(_list);
         _listArea.Controls.Add(_empty);
         _empty.BringToFront();
         _readHint.Margin = new Padding(0, BarLayout.Tight, 0, 0);
 
-        var actionRow = Row();
-        Buttons(actionRow, _delete, _variable, _secret);
+        // The step actions are two rows of the bar's own table, not a table of their own: a table inside a table is
+        // measured at the width of its widest label, where the buttons wrapped into three rows, and the bar kept those
+        // rows' height as an empty band under them. They never wrap: 4 apart, they fit a bar 360 wide.
+        Buttons(_actionRow, BarLayout.Tight, _delete, _variable, _secret);
+        _actionRow.WrapContents = false;
         _actionHint.Margin = new Padding(0, BarLayout.Space, 0, 0);
-        _actions.Controls.Add(_actionHint);
-        _actions.Controls.Add(actionRow);
 
         var nameLabel = Wrap(BarText.Name);
         nameLabel.Margin = new Padding(0, BarLayout.Group, 0, BarLayout.Tight);
@@ -202,7 +203,7 @@ internal sealed class RecorderBar : Form
         _recordAnother.Anchor = AnchorStyles.Right;
         _nextBlock.Controls.AddRange([_allowTitle, _allowDetail, _allowCommand, _allowButton, _importTitle, _importDetail, _showFile, _recordAnother]);
 
-        Control[] rows = [header, _guidance, noticeRow, _startRow, _readyText, _recordRow, _listArea, _readHint, _actions, _saveBlock, _nextBlock];
+        Control[] rows = [header, _guidance, noticeRow, _startRow, _readyText, _recordRow, _listArea, _readHint, _actionHint, _actionRow, _saveBlock, _nextBlock];
         // Each part in its own row, by number. Added without a position, a part goes into the next free cell, and a
         // TableLayoutPanel gives a hidden control no cell: the parts after a hidden one moved up into the row styles
         // of others, and the list lost its 100 % row while recording. A part at a fixed row keeps it; a hidden part's
@@ -230,10 +231,10 @@ internal sealed class RecorderBar : Form
 
     private static FlowLayoutPanel Row() => new() { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, Dock = DockStyle.Fill, Margin = Padding.Empty };
 
-    /// <summary>A row of buttons, the first at the left edge and the others a space apart.</summary>
-    private static void Buttons(FlowLayoutPanel row, params Button[] buttons)
+    /// <summary>A row of buttons, the first at the left edge and the others <paramref name="gap"/> apart.</summary>
+    private static void Buttons(FlowLayoutPanel row, int gap, params Button[] buttons)
     {
-        for (var i = 0; i < buttons.Length; i++) buttons[i].Margin = new Padding(i == 0 ? 0 : BarLayout.Space, 0, 0, BarLayout.Tight);
+        for (var i = 0; i < buttons.Length; i++) buttons[i].Margin = new Padding(i == 0 ? 0 : gap, 0, 0, BarLayout.Tight);
         row.Controls.AddRange(buttons);
     }
 
@@ -287,7 +288,7 @@ internal sealed class RecorderBar : Form
         _listArea.Visible = parts.HasFlag(BarPart.List);
         _empty.Visible = _shown.Count == 0;
         _readHint.Visible = parts.HasFlag(BarPart.ReadHint);
-        _actions.Visible = parts.HasFlag(BarPart.StepActions);
+        _actionHint.Visible = _actionRow.Visible = parts.HasFlag(BarPart.StepActions);
         _saveBlock.Visible = parts.HasFlag(BarPart.SaveBlock);
         _nextBlock.Visible = parts.HasFlag(BarPart.NextSteps);
         _pause.Text = BarText.PauseButton(stage);
@@ -303,6 +304,9 @@ internal sealed class RecorderBar : Form
             _allowCommand.Visible = allow.Command is not null;
             _allowButton.Visible = allow.Button is not null;
             _allowButton.Enabled = allow.ButtonEnabled;
+            var import = NextSteps.Import(NextSteps.ReturnsFile(_saved ?? _shown));
+            _importTitle.Text = import.Title;
+            _importDetail.Text = import.Detail;
         }
         AcceptButton = BarText.Primary(stage, allow) switch
         {
@@ -317,10 +321,11 @@ internal sealed class RecorderBar : Form
     }
 
     /// <summary>
-    /// When the stage or its parts change, the bar grows downward (at most to the bottom of the working area) so that
-    /// the list keeps <see cref="BarText.MinListRows"/> one-line rows: the save and next-step parts would otherwise leave
-    /// it three. It does not grow again for every new step, so a bar the person made smaller stays so while recording,
-    /// and it never shrinks by itself.
+    /// When the stage or its parts change, the bar grows (<see cref="BarLayout.GrowForList"/>: down to the bottom of the
+    /// working area, then up) so that the list shows <see cref="BarText.MinListRows"/> rows as high as they are
+    /// (<see cref="StepRows.ListHeight"/>). It does not grow again for every new step, so a bar the person made smaller
+    /// stays so while recording, and it never shrinks by itself. The list's row is the table's only Percent row:
+    /// whatever the bar grows by goes to it.
     /// </summary>
     private void KeepListRows(BarStage stage, BarPart parts)
     {
@@ -328,7 +333,7 @@ internal sealed class RecorderBar : Form
         if (rows == 0 || !IsHandleCreated || _grownFor == (stage, parts)) return;
         _grownFor = (stage, parts);
         _layout.PerformLayout();
-        var needed = rows * _list.RowHeight + (_list.Height - _list.ClientSize.Height);
+        var needed = StepRows.ListHeight(_list.RowHeights, rows, _list.RowHeight) + (_list.Height - _list.ClientSize.Height);
         var grown = BarLayout.GrowForList(Bounds, _list.Height, needed, Screen.FromControl(this).WorkingArea);
         if (grown != Bounds) Bounds = grown;
     }
@@ -564,7 +569,7 @@ internal sealed class RecorderBar : Form
         {
             using var process = Process.Start(new ProcessStartInfo(tool)
             {
-                UseShellExecute = true, Verb = "runas", Arguments = NextSteps.ApplyArguments(change), WorkingDirectory = Path.GetDirectoryName(tool)!,
+                UseShellExecute = true, Verb = "runas", Arguments = NextSteps.StartArguments(change), WorkingDirectory = Path.GetDirectoryName(tool)!,
             });
             if (process is null) return (null, "Windows gave no process.");
             process.WaitForExit();

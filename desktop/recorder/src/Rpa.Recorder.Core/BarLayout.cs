@@ -22,13 +22,17 @@ public static class BarLayout
     public static int WidthFor(int areaWidth) => areaWidth < 1280 ? MinWidth : Width;
 
     /// <summary>
-    /// The bar grown downward so that its list is <paramref name="needed"/> high when it is <paramref name="list"/>
-    /// high now: at most to the bottom of the working area, and never smaller than it is.
+    /// The bar grown so that its list is <paramref name="needed"/> high when it is <paramref name="list"/> high now:
+    /// downward to the bottom of the working area, then upward as far as it must (a bar the person moved down keeps its
+    /// list), at most as high as the working area, and never smaller than it is.
     /// </summary>
     public static Rectangle GrowForList(Rectangle bar, int list, int needed, Rectangle area)
     {
-        var height = Math.Max(bar.Height, Math.Min(bar.Height + Math.Max(0, needed - list), area.Bottom - bar.Top));
-        return bar with { Height = height };
+        var more = needed - list;
+        if (more <= 0) return bar;
+        var height = Math.Max(bar.Height, Math.Min(bar.Height + more, area.Height));
+        var top = Math.Max(area.Top, Math.Min(bar.Top, area.Bottom - height));
+        return bar with { Y = top, Height = height };
     }
 
     /// <summary>The bar at the top right of the working area, <paramref name="gap"/> from its edges, and no larger than

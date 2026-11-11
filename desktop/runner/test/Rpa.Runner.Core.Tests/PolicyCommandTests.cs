@@ -1168,6 +1168,40 @@ public class PolicyCommandTests
     }
 
     [Fact]
+    public void Started_by_the_recorder_the_tool_closes_its_window_after_a_successful_apply_and_waits_after_anything_else()
+    {
+        // The recorder's bar passes --close-on-success and reads the exit code; the tool run by hand waits as above.
+        var policy = Path.Combine(RunnerOptions.DefaultDataDir(), "policy.json");
+        var tool = new Tool { Console = OwnWindow };
+        Assert.Equal(0, tool.Run("y\nrest", "apply", ChangePath, "--close-on-success"));
+        Assert.EndsWith($"{Prompt}{Updated}\n", tool.Output);
+        Assert.Equal("rest", tool.Unread);
+        Assert.Equal(policy, Assert.Single(tool.Files.Writes).Path);
+        // Nothing to change is a success too.
+        Assert.Equal(0, tool.Run("rest", "apply", ChangePath, "--close-on-success"));
+        Assert.EndsWith("Nothing to change.\n", tool.Output);
+        Assert.Equal("rest", tool.Unread);
+
+        // Declined, refused, a usage error, or applied with a runner that could not be restarted: the person reads why.
+        var waiting = new (int Code, string Typed, string[] Args, Exception? RestartFailure)[]
+        {
+            (3, "n\n\nrest", ["apply", ChangePath, "--close-on-success"], null),
+            (1, "\nrest", ["apply", Path.Combine(Root, "changes", "missing.json"), "--close-on-success"], null),
+            (2, "\nrest", ["apply", "--close-on-success"], null),
+            (2, "\nrest", ["show", "--close-on-success"], null),
+            (0, "y\n\nrest", ["apply", ChangePath, "--close-on-success"], new System.ComponentModel.Win32Exception(5, "Access is denied.")),
+        };
+        foreach (var (code, typed, args, failure) in waiting)
+        {
+            var other = new Tool { Console = OwnWindow, RestartFailure = failure };
+            Assert.Equal(code, other.Run(typed, args));
+            Assert.EndsWith($"\n{Closing}\n", "\n" + other.Output.Replace(Prompt, Prompt + "\n"));
+            Assert.Equal("rest", other.Unread);
+        }
+        Assert.Contains("[--close-on-success]", PolicyCommand.Usage);
+    }
+
+    [Fact]
     public void A_tool_with_no_console_or_with_company_does_not_wait()
     {
         // No console (a hidden process), a console nobody can type in (a scheduled task), and consoles other
@@ -1765,7 +1799,7 @@ public class PolicyCommandTests
         var tool = new Tool();
         Assert.Equal(2, tool.Run(""));
         Assert.Equal(UsageText, tool.Output);
-        foreach (var line in new[] { "RpaPolicy show [--policy <path>]", "RpaPolicy apply <change.json> [--yes] [--policy <path>]", "RpaPolicy allow-app <path-to-exe> [--pin-hash] [--yes] [--policy <path>]" })
+        foreach (var line in new[] { "RpaPolicy show [--policy <path>]", "RpaPolicy apply <change.json> [--yes] [--close-on-success] [--policy <path>]", "RpaPolicy allow-app <path-to-exe> [--pin-hash] [--yes] [--policy <path>]" })
             Assert.Contains(line, PolicyCommand.Usage);
     }
 
@@ -1774,7 +1808,7 @@ public class PolicyCommandTests
     {
         string[][] invalid =
         [
-            ["remove-app", ErpPath], ["apply"], ["apply", ChangePath, "extra.json"], ["apply", ChangePath, "--pin-hash"],
+            ["remove-app", ErpPath], ["apply"], ["apply", ChangePath, "extra.json"], ["apply", ChangePath, "--pin-hash"], ["allow-app", ErpPath, "--close-on-success"],
             ["apply", ChangePath, "--policy"], ["apply", ChangePath, "--force"], ["allow-app"], ["show", ChangePath], ["show", "--yes"],
         ];
         foreach (var args in invalid)

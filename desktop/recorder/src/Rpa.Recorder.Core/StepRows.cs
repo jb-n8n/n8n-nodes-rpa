@@ -86,6 +86,20 @@ public static class StepRows
         return top;
     }
 
+    /// <summary>
+    /// How high the list must be to show <paramref name="rows"/> rows wherever it is scrolled: the highest
+    /// <paramref name="rows"/> rows that follow each other (a row that wraps is as high as it is), and rows of
+    /// <paramref name="oneLine"/> for those there are no steps for yet.
+    /// </summary>
+    public static int ListHeight(IReadOnlyList<int> heights, int rows, int oneLine)
+    {
+        var shown = Math.Min(rows, heights.Count);
+        var highest = 0;
+        for (var first = 0; first + shown <= heights.Count && shown > 0; first++)
+            highest = Math.Max(highest, heights.Skip(first).Take(shown).Sum());
+        return highest + (rows - shown) * oneLine;
+    }
+
     /// <summary>Whether the list scrolls to the newest step: a step was added, or the newest one changed (a click into a
     /// field became the fill). An edit or a delete of a step leaves the list where the person is.</summary>
     public static bool NewestChanged(IReadOnlyList<RecordedStep> before, IReadOnlyList<RecordedStep> now) =>

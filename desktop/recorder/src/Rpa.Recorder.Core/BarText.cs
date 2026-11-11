@@ -103,7 +103,7 @@ public static class BarText
         _ => BarPart.List | BarPart.NextSteps | (stepSelected ? BarPart.StepActions : BarPart.None),
     };
 
-    /// <summary>How many one-line rows the list keeps at least: the bar grows downward for them
+    /// <summary>How many rows the list keeps at least (<see cref="StepRows.ListHeight"/>): the bar grows for them
     /// (<see cref="BarLayout.GrowForList"/>) where the list shows steps.</summary>
     public static int MinListRows(BarStage stage) => stage is BarStage.Ready or BarStage.Starting ? 0 : 6;
 
