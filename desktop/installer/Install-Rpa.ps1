@@ -51,7 +51,9 @@
 #                  needs no -UserPassword: it keeps the password stored for automatic sign-in (tried first), turns
 #                  automatic sign-in off and signs the bot user out. An upgrade keeps unattended mode and its idle
 #                  time without -Unattended; Uninstall-Rpa.ps1, and an install with -Unattended:$false, put these
-#                  back.
+#                  back. Given none of -Unattended, -AutoSignIn and -UserPassword, a first install for a new bot user
+#                  on Windows Server is an unattended install, and its list says so first; on Windows 10 and 11 it is
+#                  refused.
 #   -Force         Do not ask (about -AutoSignIn, -Unattended, or another -User than the one of the install), and
 #                  upgrade even while the runner is running (a run in progress fails).
 #

@@ -153,6 +153,12 @@ function Get-RpaUnattendedNotice([string]$User, [int]$RunnerPort, [int]$BrowserP
   $lines
 }
 
+# Whether Install-Rpa.ps1 was given no sign-in mode: none of -Unattended (also not -Unattended:$false), -AutoSignIn
+# and -UserPassword. A first install for a new local bot user on Windows Server is then an unattended install.
+function Test-RpaNoModeGiven([hashtable]$Parameters) {
+  -not $Parameters.Unattended -and -not $Parameters.UnattendedGiven -and -not $Parameters.AutoSignIn -and $null -eq $Parameters.UserPassword
+}
+
 # Decides what an install does. -Parameters holds Install-Rpa.ps1's parameters (User, UserPassword, RunnerPort,
 # BrowserPort, NoBrowser, NoFirewall, AllowFrom, AllowFromAnyAddress, IncludePublicNetwork, AutoSignIn, Unattended,
 # UnattendedGiven, IdleSeconds, IdleSecondsGiven, Force); -Facts is what Get-RpaMachineFacts returns. With a refusal there are no steps: the installer
@@ -160,8 +166,9 @@ function Get-RpaUnattendedNotice([string]$User, [int]$RunnerPort, [int]$BrowserP
 # warnings). AllowFrom in the result is what the firewall rules let in: addresses and ranges, or the one word any, or
 # nothing without rules; PublicNetwork says whether the rules also apply on networks Windows treats as Public. Notice
 # is what -Unattended changes, in lines to show and confirm before the first step, when an earlier run has not set it
-# up already. Unattended and IdleSeconds are the mode and idle time the install gets: an upgrade keeps them from the
-# record unless -Unattended or -IdleSeconds is given.
+# up already; without a sign-in mode its first two lines say that the install is unattended for that reason.
+# Unattended and IdleSeconds are the mode and idle time the install gets: an upgrade keeps them from the record unless
+# -Unattended or -IdleSeconds is given.
 function Get-RpaInstallPlan {
   param(
     [Parameter(Mandatory = $true)][hashtable]$Parameters,
@@ -187,6 +194,10 @@ function Get-RpaInstallPlan {
   # An upgrade keeps the recorded mode, as it keeps automatic sign-in: only -Unattended:$false goes back to the
   # signed-in mode. The idle time stays what the install recorded unless -IdleSeconds is given.
   $unattended = [bool]$Parameters.Unattended -or ($wasUnattended -and -not $Parameters.UnattendedGiven)
+  # Without a mode, a first install for a new local bot user on Windows Server is unattended; on Windows 10 or 11 it is
+  # refused as before, with the sentence that names -AutoSignIn.
+  $defaultMode = (Test-RpaNoModeGiven $Parameters) -and -not $upgrade -and -not $Facts.UserExists -and -not $Facts.UserIsDomain -and [bool]$Facts.IsServer
+  if ($defaultMode) { $unattended = $true }
   $idleSeconds = [int]$Parameters.IdleSeconds
   if ($wasUnattended -and -not $Parameters.IdleSecondsGiven -and $null -ne $Facts.InstalledIdleSeconds) { $idleSeconds = [int]$Facts.InstalledIdleSeconds }
   # An install with automatic sign-in for this same bot user moves to -Unattended with the password it has: the one
@@ -489,6 +500,12 @@ function Get-RpaInstallPlan {
     $shownBrowserPort = 0
     if ($browser) { $shownBrowserPort = $browserPort }
     $notice = @(Get-RpaUnattendedNotice $user $runnerPort $shownBrowserPort $idleSeconds $steps.ToArray())
+    if ($defaultMode) {
+      $notice = @(
+        'No sign-in mode was given, so this install is unattended (-Unattended): the default on Windows Server for a new bot'
+        'user. The other choices: -AutoSignIn (Windows keeps the bot user signed in), or -UserPassword (a person signs it in).'
+      ) + $notice
+    }
   } elseif ($back -and $steps.Count -gt 0) {
     $notice = @('-Unattended:$false changes how this machine works:')
     if ($steps -contains 'keep the supervisor password for automatic sign-in') {

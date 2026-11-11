@@ -217,8 +217,9 @@ Describe 'Get-RpaInstallPlan' {
       (Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts $facts).Refusals.Count | Should -Be 0
     }
 
-    It 'refuses a new local user without -AutoSignIn and without -UserPassword' {
-      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-TestFacts)
+    # On Windows Server such an install is unattended (Context 'without a sign-in mode').
+    It 'refuses a new local user without -AutoSignIn and without -UserPassword on Windows 10 or 11' {
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-TestFacts @{ IsServer = $false })
       $plan.Refusals | Should -BeExactly @('Give -UserPassword for the new user rpa-runner, or use -AutoSignIn to have a random password stored for automatic sign-in.')
       $plan.Steps.Count | Should -Be 0
     }
@@ -968,6 +969,65 @@ Describe 'Get-RpaInstallPlan' {
       $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-InstalledFacts @{ InstalledAutoSignInForUser = $true })
       $plan.Refusals.Count | Should -Be 0
       @($plan.Steps | Where-Object { $script:SignInSteps -contains $_ }) | Should -BeExactly @('store sign-in password')
+    }
+  }
+
+  # A first install for a new bot user on Windows Server, given none of -Unattended, -AutoSignIn and -UserPassword.
+  Context 'without a sign-in mode' {
+    BeforeAll {
+      $script:DefaultModeLines = @(
+        'No sign-in mode was given, so this install is unattended (-Unattended): the default on Windows Server for a new bot'
+        'user. The other choices: -AutoSignIn (Windows keeps the bot user signed in), or -UserPassword (a person signs it in).'
+      )
+    }
+
+    It 'is an unattended install, and its notice says so in its first lines and names the other choices' {
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-TestFacts)
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Unattended | Should -BeTrue
+      $plan.IdleSeconds | Should -Be 15
+      $explicit = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true }) -Facts (New-TestFacts)
+      $plan.Steps | Should -BeExactly $explicit.Steps
+      $plan.Notice | Should -BeExactly (@($script:DefaultModeLines) + @($explicit.Notice))
+      # Given explicitly, the notice is what it was.
+      $explicit.Notice[0] | Should -BeExactly '-Unattended changes how this machine works:'
+    }
+
+    It 'takes -IdleSeconds, which is for -Unattended' {
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ IdleSeconds = 60; IdleSecondsGiven = $true }) -Facts (New-TestFacts)
+      $plan.Refusals.Count | Should -Be 0
+      $plan.IdleSeconds | Should -Be 60
+    }
+
+    It 'refuses on Windows 10 or 11 as before, with the sentence that names -AutoSignIn' {
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-TestFacts @{ IsServer = $false })
+      $plan.Refusals | Should -BeExactly @('Give -UserPassword for the new user rpa-runner, or use -AutoSignIn to have a random password stored for automatic sign-in.')
+      $plan.Unattended | Should -BeFalse
+    }
+
+    It 'is not the default when <Why>' -ForEach @(
+      @{ Why = '-UserPassword is given (a person signs the bot user in)'; Parameters = @{ UserPassword = 'password' }; Facts = @{} }
+      @{ Why = '-AutoSignIn is given'; Parameters = @{ AutoSignIn = $true }; Facts = @{} }
+      @{ Why = '-Unattended:$false is given'; Parameters = @{ UnattendedGiven = $true }; Facts = @{} }
+      @{ Why = 'the user exists'; Parameters = @{}; Facts = @{ UserExists = $true; UserSid = 'S-1-5-21-1-2-3-1001' } }
+      @{ Why = 'the user is a domain user'; Parameters = @{ User = 'CORP\svc-rpa' }; Facts = @{ UserIsDomain = $true; UserExists = $true } }
+      @{ Why = 'it is an upgrade (of an install whose user is gone)'; Parameters = @{}; Facts = @{ Installed = $true; UserExists = $false } }
+    ) {
+      $change = @{}
+      foreach ($key in $Parameters.Keys) { $change[$key] = $Parameters[$key] }
+      if ($change.UserPassword) { $change.UserPassword = New-TestPassword }
+      $facts = if ($Facts.Installed) { New-InstalledFacts $Facts } else { New-TestFacts $Facts }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters $change) -Facts $facts
+      $plan.Unattended | Should -BeFalse
+      ($plan.Notice -join "`n") | Should -Not -Match 'No sign-in mode was given'
+    }
+
+    It 'gathers the ports behind the RPA Supervisor too when no mode is given' {
+      InModuleScope RpaInstall -Parameters @{ P = (New-TestParameters) } { Test-RpaNoModeGiven $P } | Should -BeTrue
+      foreach ($change in @(@{ UserPassword = New-TestPassword }, @{ AutoSignIn = $true }, @{ UnattendedGiven = $true })) {
+        InModuleScope RpaInstall -Parameters @{ P = (New-TestParameters $change) } { Test-RpaNoModeGiven $P } | Should -BeFalse
+      }
+      $script:ModuleSource | Should -Match ([regex]::Escape("if (`$Parameters.Unattended -or (Test-RpaNoModeGiven `$Parameters) -or (`$install -and `$install.mode -eq 'unattended' -and -not `$Parameters.UnattendedGiven))"))
     }
   }
 

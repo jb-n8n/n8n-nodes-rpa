@@ -356,8 +356,9 @@ function Get-RpaMachineFacts {
   }
 
   $ports = @([int]$Parameters.RunnerPort, [int]$Parameters.BrowserPort)
-  # With -Unattended the runner and the browser listen behind the RPA Supervisor, at their port + 10000.
-  if ($Parameters.Unattended -or ($install -and $install.mode -eq 'unattended' -and -not $Parameters.UnattendedGiven)) { $ports += @($ports | ForEach-Object { $_ + $script:InnerPortOffset } | Where-Object { $_ -le 65535 }) }
+  # With -Unattended the runner and the browser listen behind the RPA Supervisor, at their port + 10000; also without a
+  # sign-in mode, which can make the install unattended.
+  if ($Parameters.Unattended -or (Test-RpaNoModeGiven $Parameters) -or ($install -and $install.mode -eq 'unattended' -and -not $Parameters.UnattendedGiven)) { $ports += @($ports | ForEach-Object { $_ + $script:InnerPortOffset } | Where-Object { $_ -le 65535 }) }
   foreach ($port in $ports) {
     $listener = Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($listener) {
