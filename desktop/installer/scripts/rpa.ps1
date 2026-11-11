@@ -17,6 +17,19 @@ param(
   [string]$Address
 )
 $ErrorActionPreference = 'Stop'
+
+# A path the person typed, as a full path: a relative one is resolved against PowerShell's current location (not the
+# process's folder, which .NET uses and which is not where the person is), as the file system would read what was
+# typed. Nothing is read as a pattern and no link is followed, so it is the path that was typed, in full. A place that
+# is not the file system (Env:, HKLM:) is refused.
+function Get-RpaTypedPath([string]$Path) {
+  $provider = $null
+  $drive = $null
+  $full = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path, [ref]$provider, [ref]$drive)
+  if ($provider.Name -ne 'FileSystem') { throw ('{0} is not a path in the file system.' -f $Path) }
+  $full
+}
+
 $installDir = Split-Path -Parent $PSScriptRoot
 $show = Join-Path $PSScriptRoot 'Show-RpaConnection.ps1'
 $given = @{}
@@ -32,7 +45,9 @@ if ($Command -eq 'status' -and -not $Action -and -not $File -and $given.Count -e
   exit $LASTEXITCODE
 }
 if ($Command -eq 'policy' -and $Action -eq 'apply' -and $File -and $given.Count -eq 0) {
-  & (Join-Path (Join-Path $installDir 'runner') 'RpaPolicy.exe') apply $File
+  # The tool is started as a program of its own, which reads a relative path against another folder: give it the full path.
+  try { $full = Get-RpaTypedPath $File } catch { Write-Output $_.Exception.Message; exit 1 }
+  & (Join-Path (Join-Path $installDir 'runner') 'RpaPolicy.exe') apply $full
   exit $LASTEXITCODE
 }
 Write-Output 'Usage:'

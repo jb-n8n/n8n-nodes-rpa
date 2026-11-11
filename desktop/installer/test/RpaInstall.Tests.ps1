@@ -761,6 +761,7 @@ Describe 'Get-RpaInstallPlan' {
         'register the runner task'
         'register the browser task'
         'write install.json'
+        'add the Start menu shortcut'
         'start tasks'
       )
     }
@@ -806,6 +807,7 @@ Describe 'Get-RpaInstallPlan' {
         'register the runner task'
         'register the browser task'
         'write install.json'
+        'add the Start menu shortcut'
       )
     }
 
@@ -888,6 +890,7 @@ Describe 'Get-RpaInstallPlan' {
         'store sign-in password'
         'turn on automatic sign-in'
         'keep the desktop unlocked'
+        'add the Start menu shortcut'
       )
     }
 
@@ -904,6 +907,7 @@ Describe 'Get-RpaInstallPlan' {
         'register the runner task'
         'register the browser task'
         'write install.json'
+        'add the Start menu shortcut'
         'start tasks'
       )
     }
@@ -1084,6 +1088,7 @@ Describe 'Get-RpaInstallPlan' {
         "store the bot user's password for the supervisor"
         'register the supervisor service'
         'point the firewall rules at the supervisor'
+        'add the Start menu shortcut'
       )
       foreach ($step in $script:SignInSteps) { $plan.Steps | Should -Not -Contain $step }
     }
@@ -1298,6 +1303,7 @@ Describe 'Get-RpaInstallPlan' {
           'sign the bot user out'
           'register the supervisor service'
           'point the firewall rules at the supervisor'
+          'add the Start menu shortcut'
           'start tasks'
         )
         $plan.Steps | Should -Not -Contain "store the bot user's password for the supervisor"
@@ -1372,6 +1378,7 @@ Describe 'Get-RpaInstallPlan' {
           'turn on automatic sign-in'
           'keep the desktop unlocked'
           'put back what -Unattended changed'
+          'add the Start menu shortcut'
           'start tasks'
         )
         $known = InModuleScope RpaInstall { $script:KnownSteps }
@@ -3653,7 +3660,7 @@ public static class Program {
     @{ Typed = 'connection'; Arguments = @('connection'); What = 'Show-RpaConnection.ps1'; Expected = @('Show-RpaConnection.ps1'); Code = 4 }
     @{ Typed = 'connection -ShowTokens -Address fd00::20'; Arguments = @('connection', '-ShowTokens', '-Address', 'fd00::20'); What = 'Show-RpaConnection.ps1 -ShowTokens -Address fd00::20'; Expected = @('Show-RpaConnection.ps1', '-Address fd00::20', '-ShowTokens True'); Code = 4 }
     @{ Typed = 'status'; Arguments = @('status'); What = 'Show-RpaConnection.ps1 -Status'; Expected = @('Show-RpaConnection.ps1', '-Status True'); Code = 4 }
-    @{ Typed = 'policy apply <a path with spaces and = , ; & ^ %>'; Arguments = @('policy', 'apply', 'C:\Users\a b\RPA recordings\x=1,2;3&4^5%6.json'); What = 'RpaPolicy.exe apply with the path as one argument'; Expected = @('[apply]', '[C:\Users\a b\RPA recordings\x=1,2;3&4^5%6.json]'); Code = 3 }
+    @{ Typed = 'policy apply <a path with spaces and = , ; & ^ %>'; Arguments = @('policy', 'apply', (Join-Path ([IO.Path]::GetTempPath()) 'rpa made up/a b/RPA recordings/x=1,2;3&4^5%6.json')); What = 'RpaPolicy.exe apply with the path as one argument'; Expected = @('[apply]', ('[{0}]' -f (Join-Path ([IO.Path]::GetTempPath()) 'rpa made up/a b/RPA recordings/x=1,2;3&4^5%6.json'))); Code = 3 }
   ) {
     $output = @(& $script:Shell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script:RpaScript @Arguments)
     $output | Should -BeExactly $Expected
@@ -4255,5 +4262,279 @@ public static class Program {
       $source | Should -Match ([regex]::Escape("'Show-RpaConnection.ps1', 'rpa.ps1') (Join-Path `$stage 'scripts')"))
       $source | Should -Match ([regex]::Escape("Get-ReleaseGetRpa (Get-Content -Raw -LiteralPath (Join-Path `$installer 'Get-Rpa.ps1')) `$version `$hash"))
     }
+  }
+}
+
+# A path a person types is resolved against PowerShell's current location, as the person meant it, and used in full:
+# .NET resolves a relative path against the process's folder (C:\Windows\system32 in an administrator PowerShell that
+# was started from the Start menu), which is not where the person is. Get-Rpa.ps1 and scripts\rpa.ps1 each hold the
+# same function, because each runs alone.
+Describe 'A path a person types' {
+  BeforeAll {
+    . (Join-Path $script:InstallerDir 'Get-Rpa.ps1')
+    $script:Typed = Join-Path ([IO.Path]::GetTempPath()) ('rpa-typed-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path (Join-Path $script:Typed 'where I am') | Out-Null
+    # A started program reports the folder's real name (on macOS /var is /private/var).
+    if ($env:OS -ne 'Windows_NT') { $script:Typed = (& /bin/sh -c 'cd "$1" && pwd -P' sh $script:Typed) }
+    $script:There = Join-Path $script:Typed 'where I am'
+    $script:Processes = [IO.Directory]::GetCurrentDirectory()
+  }
+  AfterAll { Remove-Item -LiteralPath $script:Typed -Recurse -Force -ErrorAction SilentlyContinue }
+
+  It 'a relative path is resolved against the PowerShell location, not the process folder' {
+    Push-Location -LiteralPath $script:There
+    try {
+      [IO.Directory]::SetCurrentDirectory($script:Processes)
+      Get-RpaTypedPath 'rpa-windows-x64.zip' | Should -BeExactly (Join-Path $script:There 'rpa-windows-x64.zip')
+      Get-RpaTypedPath (Join-Path '.' 'a.zip') | Should -BeExactly (Join-Path $script:There 'a.zip')
+      Get-RpaTypedPath (Join-Path '..' 'b.zip') | Should -BeExactly (Join-Path $script:Typed 'b.zip')
+    } finally { Pop-Location }
+  }
+
+  It 'a full path stays as it is, and a name is never read as a pattern' {
+    $full = Join-Path $script:There 'x[1]*.zip'
+    Get-RpaTypedPath $full | Should -BeExactly $full
+    Push-Location -LiteralPath $script:There
+    try { Get-RpaTypedPath 'x[1]*.zip' | Should -BeExactly $full } finally { Pop-Location }
+  }
+
+  It 'does not follow a link: the path is the one typed' {
+    if ($env:OS -eq 'Windows_NT') { Set-ItResult -Skipped -Because 'needs a link that a test may make'; return }
+    $link = Join-Path $script:Typed 'link'
+    New-Item -ItemType SymbolicLink -Path $link -Target $script:There | Out-Null
+    Push-Location -LiteralPath $link
+    try { Get-RpaTypedPath 'a.zip' | Should -BeExactly (Join-Path $link 'a.zip') } finally { Pop-Location }
+  }
+
+  It 'refuses a place that is not the file system' {
+    { Get-RpaTypedPath 'Env:Path' } | Should -Throw -ExpectedMessage '*is not a path in the file system*'
+  }
+
+  It 'is the same function in Get-Rpa.ps1 and scripts\rpa.ps1' {
+    function Get-FunctionText([string]$File) {
+      $ast = [Management.Automation.Language.Parser]::ParseFile($File, [ref]$null, [ref]$null)
+      $found = $ast.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-RpaTypedPath' }, $false)
+      $found.Count | Should -Be 1
+      $found[0].Extent.Text
+    }
+    (Get-FunctionText (Join-Path (Join-Path $script:InstallerDir 'scripts') 'rpa.ps1')) | Should -BeExactly (Get-FunctionText (Join-Path $script:InstallerDir 'Get-Rpa.ps1'))
+  }
+
+  It 'Get-Rpa.ps1 resolves -Zip with it before it looks for the file, and works with the full paths' {
+    $source = Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir 'Get-Rpa.ps1')
+    $source | Should -Match ([regex]::Escape('$zipPath = Get-RpaTypedPath $Zip'))
+    $source | Should -Not -Match '\$zipPath = \$Zip\b'
+    $source | Should -Not -Match '\$shaPath = \$Zip\b'
+  }
+
+  It 'rpa policy apply hands the policy tool the full path of a relative file' {
+    $root = Join-Path ([IO.Path]::GetTempPath()) ('rpa-cmd-typed-' + [guid]::NewGuid().ToString('N'))
+    $scripts = Join-Path (Join-Path $root 'RPA Runner') 'scripts'
+    $runner = Join-Path (Join-Path $root 'RPA Runner') 'runner'
+    New-Item -ItemType Directory -Force -Path $scripts, $runner | Out-Null
+    Copy-Item -LiteralPath (Join-Path (Join-Path $script:InstallerDir 'scripts') 'rpa.ps1') -Destination $scripts
+    $tool = Join-Path $runner 'RpaPolicy.exe'
+    if ($env:OS -eq 'Windows_NT') {
+      Add-Type -OutputType ConsoleApplication -OutputAssembly $tool -TypeDefinition 'public static class Program { public static int Main(string[] args) { foreach (string arg in args) System.Console.WriteLine("[" + arg + "]"); return 0; } }'
+    } else {
+      [IO.File]::WriteAllText($tool, "#!/bin/sh`nfor a in `"`$@`"; do printf '[%s]\n' `"`$a`"; done`n")
+      & chmod +x $tool
+    }
+    try {
+      Push-Location -LiteralPath $script:There
+      try {
+        $output = @(& (Get-Process -Id $PID).Path -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $scripts 'rpa.ps1') policy apply (Join-Path '.' 'change [1].json'))
+      } finally { Pop-Location }
+      $output | Should -BeExactly @('[apply]', ('[{0}]' -f (Join-Path $script:There 'change [1].json')))
+    } finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+  }
+}
+
+# The Start menu shortcut "RPA Recorder" for all users: made by the step 'add the Start menu shortcut', recorded in
+# install.json before it is made (kind shortcut, the key is the file), removed by a failed install and by the uninstaller.
+Describe 'The Start menu shortcut' {
+  BeforeAll {
+    function New-ShortcutRun([string]$Recorder = 'present', [object[]]$Recorded = @()) {
+      $install = Join-Path $TestDrive ('install-' + [guid]::NewGuid().ToString('N'))
+      New-Item -ItemType Directory -Force -Path (Join-Path $install 'recorder') | Out-Null
+      if ($Recorder -eq 'present') { Set-Content -LiteralPath (Join-Path (Join-Path $install 'recorder') 'RpaRecorder.exe') -Value 'made up' }
+      @{
+        Layout = @{ InstallDir = $install; InstallFile = (Join-Path $install 'install.json') }
+        NewChanges = @(); Install = [ordered]@{ version = '0.0.0'; user = 'rpa-runner'; signInChanges = @($Recorded) }
+      }
+    }
+    $script:Menu = Join-Path $TestDrive 'Programs'
+    New-Item -ItemType Directory -Force -Path $script:Menu | Out-Null
+    $script:Lnk = Join-Path $script:Menu 'RPA Recorder.lnk'
+    function Invoke-ShortcutStep([hashtable]$Run) {
+      $env:RPA_TEST_LNK = $script:Lnk
+      try { @(InModuleScope RpaInstall -Parameters @{ Run = $Run } { Add-RpaStartMenuShortcut $Run 6>&1 } | ForEach-Object { "$_" }) } finally { $env:RPA_TEST_LNK = $null }
+    }
+    function New-ShortcutRecord { New-Object psobject -Property ([ordered]@{ kind = 'shortcut'; key = $script:Lnk; name = '' }) }
+  }
+  BeforeEach {
+    Remove-Item -LiteralPath $script:Lnk -Force -ErrorAction SilentlyContinue
+    Mock -ModuleName RpaInstall Get-RpaShortcutPath { $env:RPA_TEST_LNK }
+    $env:RPA_TEST_MADE = ''
+    Mock -ModuleName RpaInstall New-RpaShortcutFile {
+      # The record is in install.json by the time the shortcut is made.
+      $recorded = @((Get-Content -Raw -LiteralPath $env:RPA_TEST_INSTALLFILE | ConvertFrom-Json).signInChanges | Where-Object { $_.kind -eq 'shortcut' })
+      $env:RPA_TEST_MADE += ('{0}|{1}|{2}|recorded={3};' -f $Path, $Target, $WorkingDirectory, $recorded.Count)
+      Set-Content -LiteralPath $Path -Value 'shortcut'
+    }
+  }
+  AfterEach { $env:RPA_TEST_MADE = $null; $env:RPA_TEST_INSTALLFILE = $null }
+  AfterAll { if ($script:StubbedFirewall) { Remove-Item -LiteralPath Function:\Remove-NetFirewallRule -ErrorAction SilentlyContinue } }
+
+  It 'is for all users: the common Programs folder of the Start menu, named RPA Recorder' {
+    $source = Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir 'RpaInstall.Machine.ps1')
+    $source | Should -Match ([regex]::Escape("[Environment]::GetFolderPath('CommonPrograms')"))
+    $source | Should -Match ([regex]::Escape("'RPA Recorder.lnk'"))
+    $source | Should -Match ([regex]::Escape("New-Object -ComObject WScript.Shell"))
+    $source | Should -Not -Match "GetFolderPath\('(Desktop|CommonDesktopDirectory|Programs|StartMenu)'\)"
+  }
+
+  It 'decides <Case>' -ForEach @(
+    @{ Case = 'to skip it when the package has no recorder'; Given = @{ RecorderThere = $false; Exists = $false; IsFile = $false; Recorded = $false }; Expected = 'skip' }
+    @{ Case = 'to skip it, and not to touch one, when there is no recorder'; Given = @{ RecorderThere = $false; Exists = $true; IsFile = $true; Recorded = $true }; Expected = 'skip' }
+    @{ Case = 'to make it when none is there'; Given = @{ RecorderThere = $true; Exists = $false; IsFile = $false; Recorded = $false }; Expected = 'create' }
+    @{ Case = 'to make it again when the one it recorded is gone'; Given = @{ RecorderThere = $true; Exists = $false; IsFile = $false; Recorded = $true }; Expected = 'create' }
+    @{ Case = 'to replace the one it made'; Given = @{ RecorderThere = $true; Exists = $true; IsFile = $true; Recorded = $true }; Expected = 'create' }
+    @{ Case = 'to leave one it did not make'; Given = @{ RecorderThere = $true; Exists = $true; IsFile = $true; Recorded = $false }; Expected = 'leave' }
+    @{ Case = 'to leave a folder or a link in its place, even a recorded name'; Given = @{ RecorderThere = $true; Exists = $true; IsFile = $false; Recorded = $true }; Expected = 'leave' }
+  ) {
+    InModuleScope RpaInstall -Parameters @{ A = $Given } { Get-RpaShortcutAction -RecorderThere $A.RecorderThere -Exists $A.Exists -IsFile $A.IsFile -Recorded $A.Recorded } | Should -BeExactly $Expected
+  }
+
+  It 'records it before it makes it, pointing at the recorder with its folder as the working directory' {
+    $run = New-ShortcutRun
+    $env:RPA_TEST_INSTALLFILE = $run.Layout.InstallFile
+    $said = Invoke-ShortcutStep $run
+    $recorder = Join-Path (Join-Path $run.Layout.InstallDir 'recorder') 'RpaRecorder.exe'
+    $env:RPA_TEST_MADE | Should -BeExactly ('{0}|{1}|{2}|recorded=1;' -f $script:Lnk, $recorder, (Join-Path $run.Layout.InstallDir 'recorder'))
+    $said.Count | Should -Be 0
+    @($run.Install.signInChanges).Count | Should -Be 1
+    $run.Install.signInChanges[0].kind | Should -BeExactly 'shortcut'
+    $run.Install.signInChanges[0].key | Should -BeExactly $script:Lnk
+    @($run.NewChanges).Count | Should -Be 1
+  }
+
+  It 'makes none, and records nothing, when the package has no recorder' {
+    $run = New-ShortcutRun 'missing'
+    $env:RPA_TEST_INSTALLFILE = $run.Layout.InstallFile
+    Invoke-ShortcutStep $run | Should -BeNullOrEmpty
+    $env:RPA_TEST_MADE | Should -BeExactly ''
+    @($run.Install.signInChanges).Count | Should -Be 0
+    $run.Layout.InstallFile | Should -Not -Exist
+  }
+
+  It 'leaves a shortcut of that name that it did not make, says so in one line, and records nothing' {
+    Set-Content -LiteralPath $script:Lnk -Value 'somebody else'
+    $run = New-ShortcutRun
+    $env:RPA_TEST_INSTALLFILE = $run.Layout.InstallFile
+    $said = @(Invoke-ShortcutStep $run)
+    $said.Count | Should -Be 1
+    $said[0] | Should -BeExactly ('  left: {0}, which this installer did not make' -f $script:Lnk)
+    $env:RPA_TEST_MADE | Should -BeExactly ''
+    (Get-Content -Raw -LiteralPath $script:Lnk).Trim() | Should -BeExactly 'somebody else'
+    @($run.Install.signInChanges).Count | Should -Be 0
+  }
+
+  It 'makes the shortcut again on an upgrade, keeping the one record' {
+    Set-Content -LiteralPath $script:Lnk -Value 'old'
+    $run = New-ShortcutRun 'present' @(New-ShortcutRecord)
+    $env:RPA_TEST_INSTALLFILE = $run.Layout.InstallFile
+    $null = InModuleScope RpaInstall -Parameters @{ Run = $run } { Save-RpaInstallFile $Run }
+    Invoke-ShortcutStep $run | Should -BeNullOrEmpty
+    $env:RPA_TEST_MADE | Should -Match 'recorded=1;$'
+    @($run.Install.signInChanges).Count | Should -Be 1
+    @($run.NewChanges).Count | Should -Be 0
+  }
+
+  It 'is a step of the plan, once, on a first install and on an upgrade, before the tasks are started' {
+    $first = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-TestFacts)
+    @($first.Steps | Where-Object { $_ -eq 'add the Start menu shortcut' }).Count | Should -Be 1
+    $first.Steps[-1] | Should -BeExactly 'add the Start menu shortcut'
+    $upgrade = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-InstalledFacts)
+    @($upgrade.Steps | Where-Object { $_ -eq 'add the Start menu shortcut' }).Count | Should -Be 1
+    $upgrade.Steps[-2..-1] | Should -BeExactly @('add the Start menu shortcut', 'start tasks')
+    (InModuleScope RpaInstall { $script:KnownSteps }) | Should -Contain 'add the Start menu shortcut'
+    $first.Steps.IndexOf('add the Start menu shortcut') | Should -BeGreaterThan $first.Steps.IndexOf('write install.json')
+  }
+
+  It 'is described in words, and put back by removing the file' {
+    InModuleScope RpaInstall -Parameters @{ Record = (New-ShortcutRecord) } { Get-RpaChangeText $Record } | Should -BeExactly ('the Start menu shortcut {0} (it was not there)' -f $script:Lnk)
+    Set-Content -LiteralPath $script:Lnk -Value 'ours'
+    InModuleScope RpaInstall -Parameters @{ Record = (New-ShortcutRecord) } { Restore-RpaSignInChange $Record }
+    $script:Lnk | Should -Not -Exist
+  }
+
+  It 'put back: a shortcut that is gone is no error, and a folder in its place is left alone' {
+    { InModuleScope RpaInstall -Parameters @{ Record = (New-ShortcutRecord) } { Restore-RpaSignInChange $Record } } | Should -Not -Throw
+    New-Item -ItemType Directory -Path $script:Lnk | Out-Null
+    Set-Content -LiteralPath (Join-Path $script:Lnk 'keep.txt') -Value 'x'
+    { InModuleScope RpaInstall -Parameters @{ Record = (New-ShortcutRecord) } { Restore-RpaSignInChange $Record } } | Should -Not -Throw
+    (Join-Path $script:Lnk 'keep.txt') | Should -Exist
+    Remove-Item -LiteralPath $script:Lnk -Recurse -Force
+  }
+
+  It 'a failed install removes the shortcut this run made, with its record' {
+    $run = New-ShortcutRun
+    $env:RPA_TEST_INSTALLFILE = $run.Layout.InstallFile
+    Invoke-ShortcutStep $run | Out-Null
+    $script:Lnk | Should -Exist
+    $run.Account = @{ Display = 'rpa-runner'; Name = 'rpa-runner' }
+    $run.Upgrade = $false; $run.AutoSignInBefore = $false; $run.CreatedUser = $false; $run.WroteInstallFile = $true
+    $null = InModuleScope RpaInstall -Parameters @{ Run = $run } { Undo-RpaFailedRun $Run 6>$null }
+    $script:Lnk | Should -Not -Exist
+    $run.Layout.InstallFile | Should -Not -Exist
+  }
+
+  It 'turning automatic sign-in off leaves the shortcut and its record alone' {
+    Mock -ModuleName RpaInstall Restore-RpaSignInChanges { @() }
+    $secret = New-Object psobject -Property ([ordered]@{ kind = 'secret'; key = 'DefaultPassword'; name = '' })
+    $run = New-ShortcutRun 'present' @($secret, (New-ShortcutRecord))
+    $null = InModuleScope RpaInstall -Parameters @{ Run = $run } { Disable-RpaAutoSignIn $Run }
+    Should -Invoke -ModuleName RpaInstall Restore-RpaSignInChanges -Times 1 -Exactly -ParameterFilter { @($Changes).Count -eq 1 -and $Changes[0].kind -eq 'secret' }
+    @($run.Install.signInChanges | ForEach-Object { $_.kind }) | Should -BeExactly @('shortcut')
+  }
+
+  It 'the uninstaller removes it, and says nothing of sign-in settings when that is all it recorded' {
+    $install = Join-Path $TestDrive 'RPA Runner'
+    New-Item -ItemType Directory -Force -Path $install | Out-Null
+    $file = Join-Path $install 'install.json'
+    Set-Content -LiteralPath $script:Lnk -Value 'ours'
+    $env:RPA_TEST_LNK = $script:Lnk
+    $env:RPA_TEST_INSTALLFILE = $file
+    Set-Content -LiteralPath $file -Value ('{{ "version": "0.3.0", "user": "rpa-runner", "autoSignIn": false, "mode": "signedIn", "signInChanges": [ {{ "kind": "shortcut", "key": {0}, "name": "" }} ] }}' -f (ConvertTo-Json $script:Lnk))
+    Mock -ModuleName RpaInstall Get-RpaLayout { @{ InstallDir = $env:RPA_TEST_INSTALL_DIR; InstallFile = $env:RPA_TEST_INSTALLFILE; DataDir = 'C:\ProgramData\RPA Runner'; LeftoversFile = (Join-Path $TestDrive 'left.json') } }
+    $env:RPA_TEST_INSTALL_DIR = $install
+    Mock -ModuleName RpaInstall Get-RpaSid { 'S-1-5-21-1-2-3-1001' }
+    Mock -ModuleName RpaInstall Stop-RpaServices { }
+    Mock -ModuleName RpaInstall Get-RpaUninstallFacts { @{ DataDir = 'C:\ProgramData\RPA Runner'; DataDirState = @{ Exists = $false; IsLink = $false }; Accounts = @(); RunningSids = @(); UnknownProcesses = @(); AutoSignInSid = $null } }
+    Mock -ModuleName RpaInstall Remove-RpaBrowserTemp { @() }
+    Mock -ModuleName RpaInstall Unregister-RpaTask { }
+    # Windows' own command, which a Mock needs to find.
+    if (-not (Get-Command Remove-NetFirewallRule -ErrorAction SilentlyContinue)) { function global:Remove-NetFirewallRule { }; $script:StubbedFirewall = $true }
+    Mock -ModuleName RpaInstall Remove-NetFirewallRule { }
+    Mock -ModuleName RpaInstall Remove-RpaLsaSecret { }
+    Mock -ModuleName RpaInstall Get-RpaServicePath { $null }
+    Mock -ModuleName RpaInstall Remove-RpaProgramFiles { }
+    Mock -ModuleName RpaInstall Get-RpaPathState { @{ Exists = $false } }
+    Mock -ModuleName RpaInstall Restore-RpaSignInChanges { @() }
+    try {
+      $result = InModuleScope RpaInstall { Invoke-RpaUninstall -Plan @{ Refusals = @() } 6>$null }
+    } finally { $env:RPA_TEST_INSTALL_DIR = $null }
+    Should -Invoke -ModuleName RpaInstall Restore-RpaSignInChanges -Times 1 -Exactly -ParameterFilter { @($Changes).Count -eq 1 -and $Changes[0].kind -eq 'shortcut' }
+    $result.HadChanges | Should -BeFalse
+    @($result.ShortcutNotRemoved).Count | Should -Be 0
+    @(InModuleScope RpaInstall -Parameters @{ Result = $result } { Get-RpaUninstallSummary $Result }) | Should -BeExactly @('RPA is removed.')
+  }
+
+  It 'the uninstaller names a shortcut it could not remove' {
+    $result = @{ NotRestored = @(); ShortcutNotRemoved = @('the Start menu shortcut C:\x.lnk (it was not there): Access is denied.'); Layout = @{ DataDir = 'C:\d' } }
+    $lines = @(InModuleScope RpaInstall -Parameters @{ Result = $result } { Get-RpaUninstallSummary $Result })
+    $lines | Should -Contain '  The Start menu shortcut could not be removed:'
+    $lines | Should -Contain '    the Start menu shortcut C:\x.lnk (it was not there): Access is denied.'
   }
 }

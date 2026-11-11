@@ -495,6 +495,7 @@ function Get-RpaInstallPlan {
       $steps.Add('register the supervisor service')
       if ($firewall) { $steps.Add('point the firewall rules at the supervisor') }
     }
+    $steps.Add('add the Start menu shortcut')
     if ($upgrade) { $steps.Add('start tasks') }
   }
 

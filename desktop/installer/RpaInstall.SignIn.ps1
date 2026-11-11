@@ -106,6 +106,7 @@ function Get-RpaChangeText($Change) {
       if ([string]$Change.key -eq $script:BrowserRule) { $what = 'the browser' }
       return ('firewall rule {0} (it was for {1})' -f $Change.key, $what)
     }
+    'shortcut' { return ('the Start menu shortcut {0} (it was not there)' -f $Change.key) }
   }
   ('{0} {1} {2}' -f $Change.kind, $Change.key, $Change.name).Trim()
 }
@@ -296,7 +297,8 @@ function Copy-RpaAutoSignInPassword([hashtable]$Run) {
 # unlocked). The records of -Unattended stay; install.json keeps only the records of what could not be put back, and
 # says that automatic sign-in is off. From here on a failed run turns automatic sign-in on again.
 function Disable-RpaAutoSignIn([hashtable]$Run) {
-  $records = @($Run.Install.signInChanges | Where-Object { $_ -and -not (Test-RpaUnattendedChange $_) })
+  # Not the Start menu shortcut, which is no sign-in setting.
+  $records = @($Run.Install.signInChanges | Where-Object { $_ -and -not (Test-RpaUnattendedChange $_) -and [string]$_.kind -ne 'shortcut' })
   $Run.AutoSignInTurnedOff = $true
   $failed = @(Restore-RpaSignInChanges $records $false)
   $left = @($failed | Where-Object { $_.Change } | ForEach-Object { Get-RpaChangeId $_.Change })
@@ -413,6 +415,7 @@ function Restore-RpaSignInChange($Change) {
     'group' { Remove-RpaGroupMember ([string]$Change.key) ([string]$Change.name) }
     'service' { Remove-RpaSupervisor }
     'firewall' { Set-RpaFirewallRuleProgram ([string]$Change.key) (Get-RpaSignedInProgram ([string]$Change.key)) }
+    'shortcut' { Remove-RpaShortcut ([string]$Change.key) }
   }
 }
 

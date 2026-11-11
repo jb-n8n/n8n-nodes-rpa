@@ -14,6 +14,8 @@ $script:RemoteDesktopUsers = 'S-1-5-32-555'
 $script:TerminalServer = 'HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server'
 # How long the installer waits for the first sign-in through the RPA Supervisor, which creates the bot user's profile.
 $script:FirstSignInSeconds = 120
+# The one Start menu entry of the install, in the Start menu of all users.
+$script:ShortcutName = 'RPA Recorder.lnk'
 $script:StarterPolicy = '{ "allowedApps": [], "maxFileBytes": 20971520 }'
 $script:Utf8 = New-Object Text.UTF8Encoding $false
 # Administrators and SYSTEM: the only owners the installer accepts for what it finds in the data directory.
@@ -27,7 +29,7 @@ $script:KnownSteps = @(
   'keep the automatic sign-in password for the supervisor',
   'turn off automatic sign-in', 'allow the bot user to sign in through Remote Desktop', 'turn on Remote Desktop',
   "store the bot user's password for the supervisor", 'sign the bot user out', 'register the supervisor service',
-  'point the firewall rules at the supervisor', 'start tasks')
+  'point the firewall rules at the supervisor', 'add the Start menu shortcut', 'start tasks')
 
 # Where things are. Program Files keeps its default permissions (users read and run, only administrators change), so
 # the bot user cannot replace what it runs.
@@ -1360,6 +1362,70 @@ function Save-RpaInstallFile([hashtable]$Run) {
   [IO.File]::WriteAllText($Run.Layout.InstallFile, ($Run.Install | ConvertTo-Json -Depth 5), $script:Utf8)
 }
 
+# ---- The Start menu shortcut "RPA Recorder" (the only one: no desktop shortcut, no other entry). It is recorded in
+# install.json before it is made (kind shortcut, the key is the file), so that a failed install and Uninstall-Rpa.ps1
+# remove it. ----
+
+# Where it goes: the Programs folder of the Start menu for all users.
+function Get-RpaShortcutPath {
+  Join-Path ([Environment]::GetFolderPath('CommonPrograms')) $script:ShortcutName
+}
+
+# What to do about the shortcut, from what is there: skip (the package has no recorder), create (nothing is there, or
+# a file that this installer recorded: it is made again) or leave (anything else is there: a shortcut somebody else
+# made, a folder, a link; it is not touched).
+function Get-RpaShortcutAction([bool]$RecorderThere, [bool]$Exists, [bool]$IsFile, [bool]$Recorded) {
+  if (-not $RecorderThere) { return 'skip' }
+  if (-not $Exists) { return 'create' }
+  if ($IsFile -and $Recorded) { return 'create' }
+  'leave'
+}
+
+# Whether a path is there, and whether it is a plain file (no folder, no link of any kind); a link that leads nowhere is
+# there too.
+function Get-RpaShortcutSlot([string]$Path) {
+  try { $attributes = [IO.File]::GetAttributes($Path) } catch { return @{ Exists = $false; IsFile = $false } }
+  @{ Exists = $true; IsFile = -not ($attributes -band ([IO.FileAttributes]::Directory -bor [IO.FileAttributes]::ReparsePoint)) }
+}
+
+# Makes the file with the Windows shell's own shortcut object: it starts the recorder, in the recorder's folder.
+function New-RpaShortcutFile([string]$Path, [string]$Target, [string]$WorkingDirectory) {
+  $shell = New-Object -ComObject WScript.Shell
+  try {
+    $link = $shell.CreateShortcut($Path)
+    $link.TargetPath = $Target
+    $link.WorkingDirectory = $WorkingDirectory
+    $link.Description = 'RPA Recorder'
+    $link.Save()
+  } finally { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($shell) }
+}
+
+# The step 'add the Start menu shortcut'. A package without a recorder gets none. One of that name that this installer
+# did not make is left as it is, with one line.
+function Add-RpaStartMenuShortcut([hashtable]$Run) {
+  $path = Get-RpaShortcutPath
+  $folder = Join-Path $Run.Layout.InstallDir 'recorder'
+  $target = Join-Path $folder 'RpaRecorder.exe'
+  $slot = Get-RpaShortcutSlot $path
+  $id = Get-RpaChangeId ([ordered]@{ kind = 'shortcut'; key = $path; name = '' })
+  $recorded = @($Run.Install.signInChanges | Where-Object { $_ -and (Get-RpaChangeId $_) -eq $id }).Count -gt 0
+  switch (Get-RpaShortcutAction ([IO.File]::Exists($target)) $slot.Exists $slot.IsFile $recorded) {
+    'create' {
+      Add-RpaSignInChange $Run ([ordered]@{ kind = 'shortcut'; key = $path; name = '' })
+      New-RpaShortcutFile $path $target $folder
+    }
+    'leave' { Write-Host ('  left: {0}, which this installer did not make' -f $path) }
+  }
+}
+
+# Puts the shortcut back to not being there. Only the file this installer names and makes is removed, and only a plain
+# file: a folder or a link in its place is not touched.
+function Remove-RpaShortcut([string]$Path) {
+  if ([IO.Path]::GetFileName($Path) -ine $script:ShortcutName) { throw ('{0} is not a shortcut this installer makes' -f $Path) }
+  $slot = Get-RpaShortcutSlot $Path
+  if ($slot.Exists -and $slot.IsFile) { Remove-Item -LiteralPath $Path -Force }
+}
+
 # Starts the tasks again in the bot user's session after an upgrade. When that user is not signed in nothing starts,
 # and the tasks start at its next logon as always.
 function Start-RpaTasks {
@@ -1737,6 +1803,7 @@ function Invoke-RpaInstallPlan {
           Wait-RpaFirstSignIn $run $runnerPort
         }
         'point the firewall rules at the supervisor' { Set-RpaSupervisorFirewall $run (-not $Parameters.NoBrowser) }
+        'add the Start menu shortcut' { Add-RpaStartMenuShortcut $run }
         'start tasks' { Start-RpaTasks }
       }
     } catch {
@@ -2010,7 +2077,7 @@ function Invoke-RpaUninstall {
   $result = @{
     User = $null; UserKept = $false; AutoSignIn = $false; SignInKept = $false; SignInFailed = $false; HadChanges = $false; NotRestored = @()
     LeftoversFile = $null; LeftoversProblem = $null; DataRemoved = $false; DataKept = $false; BrowserTemp = @(); Layout = $layout
-    Switch = '-AutoSignIn'; RemoteDesktopOff = $false
+    Switch = '-AutoSignIn'; RemoteDesktopOff = $false; ShortcutNotRemoved = @()
   }
   if ($install) {
     $result.User = [string]$install.user
@@ -2054,18 +2121,25 @@ function Invoke-RpaUninstall {
   } catch { }
   Write-Host '  remove the firewall rules'
   Remove-NetFirewallRule -Name $script:RunnerRule, $script:BrowserRule -ErrorAction SilentlyContinue
-  if ($install -and @($install.signInChanges).Count -gt 0) {
+  # The Start menu shortcut is no sign-in setting: its record is put back on its own.
+  $shortcuts = @($install.signInChanges | Where-Object { $_ -and [string]$_.kind -eq 'shortcut' })
+  if ($shortcuts.Count -gt 0) {
+    Write-Host '  remove the Start menu shortcut'
+    $result.ShortcutNotRemoved = @(Restore-RpaSignInChanges $shortcuts $false | ForEach-Object { $_.Text })
+  }
+  $signInRecords = @($install.signInChanges | Where-Object { $_ -and [string]$_.kind -ne 'shortcut' })
+  if ($install -and $signInRecords.Count -gt 0) {
     Write-Host ('  put back what {0} changed' -f $result.Switch)
     $result.HadChanges = $true
     # Unless someone has pointed automatic sign-in at another account since the install.
     $account = Get-RpaAccount -User $result.User -ComputerName $env:COMPUTERNAME
     $current = (Get-ItemProperty -LiteralPath ('Registry::HKEY_LOCAL_MACHINE{0}' -f $script:Winlogon.Substring(4)) -Name 'DefaultUserName' -ErrorAction SilentlyContinue).DefaultUserName
     $result.SignInKept = $result.AutoSignIn -and ($current -ne $account.Name)
-    $failed = @(Restore-RpaSignInChanges @($install.signInChanges) $result.SignInKept)
+    $failed = @(Restore-RpaSignInChanges $signInRecords $result.SignInKept)
     $result.NotRestored = @($failed | ForEach-Object { $_.Text })
     $result.SignInFailed = [bool]($failed | Where-Object { $_.Change -and (($_.Change.kind -eq 'secret' -and [string]$_.Change.key -eq $script:AutoSignInSecret) -or [string]$_.Change.key -eq $script:Winlogon) })
     # Remote Desktop was off before -Unattended turned it on, and is off again now: an administrator may use it since.
-    $remoteDesktop = @($install.signInChanges | Where-Object { $_ -and $_.kind -eq 'registry' -and [string]$_.key -eq $script:TerminalServer -and $_.name -eq 'fDenyTSConnections' })
+    $remoteDesktop = @($signInRecords | Where-Object { $_ -and $_.kind -eq 'registry' -and [string]$_.key -eq $script:TerminalServer -and $_.name -eq 'fDenyTSConnections' })
     $result.RemoteDesktopOff = $remoteDesktop.Count -gt 0 -and -not ($failed | Where-Object { $_.Change -and [string]$_.Change.key -eq $script:TerminalServer })
     # install.json goes with the program files, so the record of what was not put back is written now, before
     # anything else can stop the run.
@@ -2121,6 +2195,10 @@ function Get-RpaUninstallSummary([hashtable]$Result) {
         $lines += '  tries these settings again.'
       } else { $lines += '  This list could not be kept in {0}: {1}' -f $Result.Layout.LeftoversFile, $Result.LeftoversProblem }
     }
+  }
+  if (@($Result.ShortcutNotRemoved).Count -gt 0) {
+    $lines += '  The Start menu shortcut could not be removed:'
+    foreach ($line in @($Result.ShortcutNotRemoved)) { $lines += '    {0}' -f $line }
   }
   foreach ($entry in @($Result.BrowserTemp | Where-Object { $_ })) {
     if ($entry.Removed) { $lines += "  Removed:   {0} (the browser's temp folder of {1})" -f $entry.Path, $entry.Name }
