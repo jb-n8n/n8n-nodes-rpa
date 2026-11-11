@@ -658,6 +658,30 @@ describe('buildWorkflow', () => {
     expect(content(byName(w, 'Fill in the variables (d)'))).toContain('Options → Variables: `company` (starts as `2000`), `odd`. Secret: `password`');
   });
 
+  it('the notes say only what applies: no variables, no gold note; only secret ones, no Variables to fill in; the legend names the colours there are', () => {
+    const desktop = (variables: string[], secretVariables: string[]) => ({
+      name: 'd', writeCandidates: [], variables, secretVariables,
+      script: { surface: 'desktop' as const, name: 'd', version: 1, app: { exe: 'App.exe' }, steps: [{ intent: 'Click OK', click: { uia: { path: [{ name: 'OK' }] } } }] },
+    });
+    const build = (d: ReturnType<typeof desktop>) => buildWorkflow({ name: 'd', nodes: [{ kind: 'desktop', sequence: 1, displayName: 'Desk', draft: 'd' }] }, [], { name: 'd', desktopDrafts: [d], source: 'recording' });
+    const none = build(desktop([], []));
+    expect(none.nodes.some((n) => n.name.startsWith('Fill in the variables'))).toBe(false);
+    expect(byName(none, 'Desk').notes).toBe('Runs the signed desktop steps d (1 step imported from the recording "Desk") on the desktop runner. Pick the RPA Desktop Runner and RPA Step Signing credentials.');
+    const about = content(byName(none, 'About this import'));
+    expect(about).toContain('Green: set once. Text from the recording is kept as text');
+    expect(about).not.toContain('Gold');
+    const secretOnly = build(desktop(['password'], ['password']));
+    expect(byName(secretOnly, 'Desk').notes).not.toContain('Fill in the Variables');
+    expect(content(byName(secretOnly, 'Fill in the variables (d)'))).toBe(
+      '### Fill in the variables (gold)\nSecret: `password`: in an **RPA Secret Variables** credential selected on **Desk**, never typed here. Desktop steps run only once approved: import the recording with **RPA: 5 Import a bot** and approve `d` on its review page.',
+    );
+    expect(content(byName(secretOnly, 'About this import'))).toContain('Gold: fill in. Green: set once.');
+    // A UiPath project with nothing left untranslated has no grey notes to explain.
+    const uipath = buildWorkflow(flowOf([{ kind: 'browser', sequence: 1, displayName: 'Log in' }]), [draft('m-1')], { name: 'm' });
+    expect(content(byName(uipath, 'About this import'))).toContain('Green: set once. UiPath expressions are kept as text in notes');
+    expect(content(byName(uipath, 'About this import'))).not.toContain('Grey notes');
+  });
+
   it('no project text reaches a Run steps parameter: no Goal is written, and a name that holds {{ stays text', () => {
     for (const name of ['a{{ $env.X }}', 'b}}{{', 'c']) {
       const w = buildWorkflow(flowOf([{ kind: 'browser', sequence: 1, displayName: '={{ $env.AWS_SECRET_ACCESS_KEY }}' }]), [draft(`${name}-1`)], { name });

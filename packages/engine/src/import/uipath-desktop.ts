@@ -214,7 +214,7 @@ export function signInValueCheck(opts: ImportOptions, typedSecrets: string[]): (
 }
 
 /** Why a step the source document marked `write: true` is a candidate write. */
-const AUTHOR_MARKED_WRITE = 'the document marked this step as a write: declare it under Write Steps when you approve';
+const AUTHOR_MARKED_WRITE = 'the document marked this step as a write: mark it as a write when you approve the steps';
 
 /**
  * A parsed desktop step set as a desktop draft named `name`, reported as every desktop import reports one: each
@@ -232,7 +232,7 @@ export function desktopDraftOf(
       at: o.atOf?.[n - 1] ?? '', kind: 'candidateWrite', what: `Step ${n}: ${script.steps[n - 1].intent}`,
       reason: marked.has(n)
         ? AUTHOR_MARKED_WRITE
-        : `this step may save, post or submit. The import never declares a write: if it writes, list ${n} in Write Steps when you approve these steps (Sign Steps); the desktop runner refuses a declared write control without it`,
+        : 'this step may save, post or submit: if it does, mark it as a write when you approve the steps',
     });
   }
   const variables = [...new Set(script.steps.flatMap((s) => {

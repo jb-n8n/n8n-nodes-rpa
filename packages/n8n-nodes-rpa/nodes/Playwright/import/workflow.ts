@@ -184,6 +184,8 @@ class Builder {
   readonly draftNames: string[] = [];
   readonly desktopRunNodes: string[] = [];
   readonly desktopDraftNames: string[] = [];
+  /** The colours of the stickies drawn so far: the legend names only these. */
+  readonly colours = new Set<number>();
   credentials = 0;
   others = 0;
   untranslated = 0;
@@ -293,6 +295,7 @@ class Builder {
     return name;
   }
   sticky(name: string, content: string, color: number, position: [number, number], width = 220, height = 240, reserved = false): void {
+    this.colours.add(color);
     this.add(T.sticky, reserved ? name : this.unique(name), position, { content, height, width, color });
   }
   connect(tails: Tail[], to: string, type: ConnectionType = 'main'): void {
@@ -383,6 +386,9 @@ class Builder {
     const start = draft.startValues ?? {};
     /** The start values the workflow writes: those n8n would not read as an expression. */
     const plain = (values: Record<string, string>) => Object.values(values).filter((v) => literal(v) !== undefined);
+    const plainVars = draft.variables.filter((v) => !secret.has(v));
+    // Only what applies: a list with no variables asks for none, and one whose variables are all secret has no Variables.
+    const fillIn = plain(start).length ? ' The Variables start with the values that were recorded: change them here.' : plainVars.length ? ' Fill in the Variables.' : '';
     this.add(T.rpa, run, [runX, y], {
       operation: 'runSteps',
       steps: "={{ $json.steps ?? '' }}",
@@ -393,16 +399,19 @@ class Builder {
       options: { name: draftName, expectedVersion: '={{ $json.version }}', ...this.runOptions(false), ...this.variablesOption(draft.variables, secret, start) },
     }, {
       credentials: { ...DESKTOP_RUNNER_CREDENTIAL },
-      notes: `Runs the signed desktop steps ${draftName} (${plural(draft.script.steps.length, 'step')} ${FROM[this.source].steps} "${line(n.displayName, 120)}") on the desktop runner. Pick the RPA Desktop Runner and RPA Step Signing credentials.${plain(start).length ? ' The Variables start with the values that were recorded: change them here.' : ' Fill in the Variables.'}${secret.size ? ` ${[...secret].join(', ')}: put ${secret.size === 1 ? 'it' : 'them'} in an RPA Secret Variables credential (type rpaSecretVariablesApi, field Variables) and select it here.` : ''}`,
+      notes: `Runs the signed desktop steps ${draftName} (${plural(draft.script.steps.length, 'step')} ${FROM[this.source].steps} "${line(n.displayName, 120)}") on the desktop runner. Pick the RPA Desktop Runner and RPA Step Signing credentials.${fillIn}${secret.size ? ` ${[...secret].join(', ')}: put ${secret.size === 1 ? 'it' : 'them'} in an RPA Secret Variables credential (type rpaSecretVariablesApi, field Variables) and select it here.` : ''}`,
     });
     this.connect([{ node: get, output: 0 }], run);
     this.desktopRunNodes.push(run);
-    const plainVars = draft.variables.filter((v) => !secret.has(v));
-    const listedVars = plainVars.length ? plainVars.map((v) => (literal(start[v]) !== undefined ? `${code(v, 60)} (starts as ${code(start[v], 120)})` : code(v, 60))).join(', ') : 'none';
-    const secretVars = secret.size ? ` Secret: ${[...secret].map((v) => code(v, 60)).join(', ')}: in an ${SECRET_VARIABLES} credential selected on **${md(run)}**, never typed here.` : '';
-    this.sticky(`Fill in the variables (${draftName})`,
-      `### Fill in the variables (gold)\nOn **${md(run)}**, Options → Variables: ${listedVars}.${secretVars} Desktop steps run only once approved: ${FROM[this.source].importIt} with **${IMPORT_FORM}** and approve ${code(draftName)} on its review page.`,
-      COLOUR.gold, [runX - 80, y + 160], 320, 260);
+    if (plainVars.length || secret.size) {
+      const listedVars = plainVars.length
+        ? `On **${md(run)}**, Options → Variables: ${plainVars.map((v) => (literal(start[v]) !== undefined ? `${code(v, 60)} (starts as ${code(start[v], 120)})` : code(v, 60))).join(', ')}.`
+        : '';
+      const secretVars = secret.size ? `Secret: ${[...secret].map((v) => code(v, 60)).join(', ')}: in an ${SECRET_VARIABLES} credential selected on **${md(run)}**, never typed here.` : '';
+      this.sticky(`Fill in the variables (${draftName})`,
+        `### Fill in the variables (gold)\n${[listedVars, secretVars].filter(Boolean).join(' ')} Desktop steps run only once approved: ${FROM[this.source].importIt} with **${IMPORT_FORM}** and approve ${code(draftName)} on its review page.`,
+        COLOUR.gold, [runX - 80, y + 160], 320, 260);
+    }
     this.lastFile = downloadProperty(draft);
     return { tails: [{ node: run, output: 0 }], x: x + 2 * STEP };
   }
@@ -642,9 +651,10 @@ export function buildWorkflow(flow: UiPathFlow, drafts: Draft[], opts: BuildWork
       ? `${uipath ? 'Each desktop sequence is' : 'The desktop steps are'} **Get active steps** → **Run steps** on the **RPA Desktop Runner**: it runs only the newest signed, active version of its steps (${b.desktopDraftNames.slice(0, 3).map((d) => code(d)).join(', ')}${b.desktopDraftNames.length > 3 ? ', …' : ''}) from ${STEPS_TABLE}. Desktop steps are not replayed at import and have no AI repair yet: approve them on the review page of **${IMPORT_FORM}**, ticking the steps that save, send or submit.`
       : '',
     '**On a schedule** is off: set the time, turn it on and publish the workflow. **Run the bot** runs it now.',
-    uipath
-      ? 'Grey notes: not translated, rebuild by hand. Gold: fill in. Green: set once. UiPath expressions are kept as text in notes; nothing from the project runs as an n8n expression.'
-      : `Gold: fill in. Green: set once. Text from ${from.origin} is kept as text; nothing from it runs as an n8n expression.`,
+    [
+      uipath && (b.untranslated || b.skipped) ? 'Grey notes: not translated, rebuild by hand.' : '', b.colours.has(COLOUR.gold) ? 'Gold: fill in.' : '', 'Green: set once.',
+      uipath ? 'UiPath expressions are kept as text in notes; nothing from the project runs as an n8n expression.' : `Text from ${from.origin} is kept as text; nothing from it runs as an n8n expression.`,
+    ].filter(Boolean).join(' '),
   ].filter(Boolean).join('\n\n');
   const setOnce = [
     '### Set once (green)',

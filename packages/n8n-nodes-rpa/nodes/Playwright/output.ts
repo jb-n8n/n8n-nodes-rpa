@@ -139,9 +139,10 @@ export function repairedStepsJson(engine: Engine, proposal: Proposal, attachment
  * browser item, so the approval template and Sign Steps take it unchanged. Nothing was replayed: the evidence is empty,
  * the evidence line (one of DESKTOP_EVIDENCE_LINES, by where the steps came from) says so, and there are no
  * screenshots. The safety flags are the engine's full list (desktopSafetyFlags), which Sign Steps recomputes; the
- * digest covers them.
+ * digest covers them. `secretVariables`: the names of the steps' secret variables (never a value), for the approval email
+ * to mark them as the review page does; shown only, neither the digest nor the signature covers them.
  */
-export function desktopRepairedStepsJson(engine: Engine, proposal: DesktopProposal, line: string = DESKTOP_EVIDENCE_LINE): IDataObject {
+export function desktopRepairedStepsJson(engine: Engine, proposal: DesktopProposal, line: string = DESKTOP_EVIDENCE_LINE, secretVariables: readonly string[] = []): IDataObject {
   const safetyFlags = engine.desktopSafetyFlags(engine.parseDesktopScript(proposal.steps));
   const p: DesktopProposal = withLeftOut({ ...proposal, safetyFlags });
   return {
@@ -158,6 +159,7 @@ export function desktopRepairedStepsJson(engine: Engine, proposal: DesktopPropos
     changeList: changeList(p),
     safetyLine: safetyLine(p),
     ...leftOutFields(p),
+    ...(secretVariables.length ? { secretVariables: [...secretVariables] } : {}),
     attachmentNames: '',
   };
 }

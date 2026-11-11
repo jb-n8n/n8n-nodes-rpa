@@ -94,7 +94,7 @@ describe('the sample UiPath desktop project (ERP Demo)', () => {
       ['Main.xaml: SendHotkey_1', 'Step 4: Press Enter in Password'],
       ['Workflows/SearchAndExport.xaml: Click_4', 'Step 16: Click Save'],
     ]);
-    expect(items(r, 'candidateWrite')[1].reason).toContain('list 16 in Write Steps when you approve');
+    expect(items(r, 'candidateWrite')[1].reason).toBe('this step may save, post or submit: if it does, mark it as a write when you approve the steps');
   });
 
   it('the save path becomes {{$exportDir}} and an expectFile step; lossy selector parts are reported', () => {
@@ -313,8 +313,8 @@ describe('approving and signing an imported desktop draft', () => {
     expect(p).toMatchObject({ name: 'erp-1', baseVersion: null, version: 1, evidence: { count: 0, total: null, diff: { missing: [], extra: [] } } });
     expect(p.safetyFlags).toEqual([
       'desktop app: "ErpDemo.exe"',
-      'candidate write: step 4 (Press Enter in Password) may save, post or submit: list 4 in Write Steps if it does (the desktop runner refuses a write only on the controls and keys its policy lists, so leaving a step unlisted does not stop it from saving unless its control is in the runner policy)',
-      'candidate write: step 16 (Click Save) may save, post or submit: list 16 in Write Steps if it does (the desktop runner refuses a write only on the controls and keys its policy lists, so leaving a step unlisted does not stop it from saving unless its control is in the runner policy)',
+      'candidate write: step 4 (Press Enter in Password) may save, post or submit',
+      'candidate write: step 16 (Click Save) may save, post or submit',
       'file returned to n8n: step 17 returns the file matching "^line-items\\\\.csv$" from the run\'s export folder',
     ]);
     expect(p.changes).toHaveLength(17);
@@ -385,7 +385,7 @@ describe('approving and signing an imported desktop draft', () => {
     // Flags and change list match the crafted steps, so only the preset write is refused, with or without Write Steps.
     for (const writeSteps of [[], [16]]) {
       const r = signDesktopSteps({ proposal: crafted, key: KEY, approverId: OWNER, reviewedDigest: proposalDigest(crafted), writeSteps });
-      expect(r).toEqual({ ok: false, reasons: ['the reviewed steps already mark a write: only Write Steps, chosen when you approve, declares writes'] });
+      expect(r).toEqual({ ok: false, reasons: ['the reviewed steps already mark a write: writes are marked only when the steps are approved'] });
     }
     const step = { ...p.steps.steps[8], optional: true, checkpoint: true, timeoutMs: 5000, expect: { visible: { uia: { path: [{ automationId: 'lblResultCount' }] } } } } as DesktopStep;
     expect(describeDesktopStep(step)).toMatch(/; then expect id "lblResultCount" visible; optional; checkpoint; timeout 5000 ms\)$/);

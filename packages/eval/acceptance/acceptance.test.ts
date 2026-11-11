@@ -521,7 +521,7 @@ describe('approving imported desktop steps through template 3 (I1)', () => {
     expect(active(table)).toHaveLength(1);
     expect(active(table)[0].id).toBe(table.rows.at(-1)!.id);
     const none = await approvalRun(table, desktopRepaired(), 'approve', feed, { writeSteps: '' });
-    expect(none).toMatchObject({ outcome: 'active', signed: { writeLine: 'Signed as writes: none (no step was listed in Write Steps)' } });
+    expect(none).toMatchObject({ outcome: 'active', signed: { writeLine: 'Signed as writes: none' } });
     expect(active(table)).toHaveLength(1);
     expect(JSON.parse(String(active(table)[0].steps)).steps.some((st: IDataObject) => st.write === true)).toBe(false);
     expect(table.rows.map((r) => r.status)).toEqual(['superseded', 'superseded', 'active']);

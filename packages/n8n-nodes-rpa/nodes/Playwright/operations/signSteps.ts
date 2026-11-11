@@ -450,7 +450,7 @@ function signDesktop(
 
 /** `Signed as writes: step 16 (Click Save)`, or none. */
 export function desktopWriteLine(writes: { step: number; intent: string }[]): string {
-  if (writes.length === 0) return 'Signed as writes: none (no step was listed in Write Steps)';
+  if (writes.length === 0) return 'Signed as writes: none';
   return `Signed as writes: ${writes.map((w) => `step ${w.step} (${w.intent.replace(/\s+/g, ' ').trim()})`).join(', ')}`;
 }
 

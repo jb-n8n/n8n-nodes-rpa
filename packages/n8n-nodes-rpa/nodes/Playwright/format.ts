@@ -72,13 +72,13 @@ export function evidenceLine(p: Proposal | DesktopProposal, engine: Pick<Engine,
 
 /** The evidence line of desktop steps from a UiPath import: nothing was replayed, so the approver reviews the steps as written. */
 export const DESKTOP_EVIDENCE_LINE =
-  'Not replayed: desktop steps imported from UiPath are reviewed as written (there is no desktop proof yet). Check every step, and list in Write Steps the steps that save, post or submit.';
+  'Not replayed: desktop steps imported from UiPath are reviewed as written (there is no desktop proof yet). Check every step, and mark each step that saves, posts or submits as a write.';
 /** The same for desktop steps from a step document (Import Steps → Step Document (JSON)). */
 export const DESKTOP_DOCUMENT_EVIDENCE_LINE =
-  'Not replayed: desktop steps from a step document are reviewed as written (there is no desktop proof yet). Check every step, and list in Write Steps the steps that save, post or submit.';
+  'Not replayed: desktop steps from a step document are reviewed as written (there is no desktop proof yet). Check every step, and mark each step that saves, posts or submits as a write.';
 /** The same for desktop steps from a recording (Import Steps → RPA Recording). */
 export const DESKTOP_RECORDING_EVIDENCE_LINE =
-  'Not replayed: desktop steps imported from a recording are reviewed as written (there is no desktop proof yet). Check every step, and list in Write Steps the steps that save, post or submit.';
+  'Not replayed: desktop steps imported from a recording are reviewed as written (there is no desktop proof yet). Check every step, and mark each step that saves, posts or submits as a write.';
 /**
  * The evidence line of browser steps from a step document that go to approval without a replay (Import Steps never runs
  * steps that submit a form, download through a form, type a secret or change a password). Sign Steps accepts it only on

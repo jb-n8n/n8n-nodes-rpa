@@ -56,7 +56,7 @@ export const NONE_ADOPTED = (n: number, first: string) => `None of the ${n} impo
 export const STEPS_WITHHELD = 'The steps are not shown: they contain a value of the RPA Site Login.';
 /** A desktop draft on Data: it goes to approval as imported, without a replay. */
 export const DESKTOP_FOR_APPROVAL =
-  'Desktop steps are not replayed at import (there is no desktop proof yet): they go to approval as imported. Review every step, supply the variables in Run steps, and list the steps that save, post or submit in Write Steps when you approve.';
+  'Desktop steps are not replayed at import: they go to approval as imported. Review every step, and mark each step that saves, posts or submits as a write when you approve.';
 /** A browser step document on Data that goes to approval without a run or a replay (it writes or types a secret). */
 export const WRITES_FOR_APPROVAL =
   "These browser steps are not replayed at import, because they submit a form, download through a form, type a secret or change a password: they go to approval as written. Review every step, each form's target and each download, and supply the variables in Run steps.";
@@ -332,7 +332,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
     if (!withheld) {
       try {
         const line = source === 'steps' ? DESKTOP_DOCUMENT_EVIDENCE_LINE : source === 'recording' ? DESKTOP_RECORDING_EVIDENCE_LINE : DESKTOP_EVIDENCE_LINE;
-        review = desktopRepairedStepsJson(engine, withLeftOut(engine.desktopProposal(d.script)), line);
+        review = desktopRepairedStepsJson(engine, withLeftOut(engine.desktopProposal(d.script)), line, d.secretVariables);
       } catch (error) {
         problem = mask(errorMessage(error));
       }

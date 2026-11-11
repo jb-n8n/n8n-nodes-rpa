@@ -489,15 +489,29 @@ describe('3-approve-steps.json', () => {
     expect(byName(t, 'Supersede older versions').notes).toContain('An approved first version (an import) replaces every other active row of its name');
     expect(sticky(t, 'About this workflow').content).toContain('An approved import becomes the version that runs under its name, also when a higher version was active.');
   });
-  it('Email signed steps confirms what was signed, naming the steps signed as writes for desktop steps (I2)', () => {
+  it('Email signed steps confirms what was signed, naming the steps signed as writes for desktop steps (I2); the hash and the review digest are one reference line at the end', () => {
     const p = byName(t, 'Email signed steps').parameters as { operation: string; toEmail: string; subject: string; text: string; emailFormat: string };
     expect(p).toMatchObject({ operation: 'send', toEmail: SETTINGS_APPROVER, emailFormat: 'text' });
-    const signed = { name: 'erp-1', version: 1, hash: 'h1', approvedBy: APPROVER, approvedAt: '2026-10-29T12:00:00.000Z', writeLine: 'Signed as writes: step 16 (Click Save)' };
-    const scope = (json: IDataObject) => ({ $: (name: string) => { expect(name).toBe('Sign steps'); return { item: { json } }; } });
-    expect(render(p.subject, scope(signed))).toBe('Signed: steps v1 for erp-1 are active');
-    expect(render(p.text, scope(signed))).toBe(`Steps v1 for erp-1 are signed and active (hash h1), approved by ${APPROVER} at 2026-10-29T12:00:00.000Z.\nSigned as writes: step 16 (Click Save)`);
-    const { writeLine: _w, ...browser } = signed;
-    expect(render(p.text, scope(browser))).toMatch(/are signed and active \(hash h1\), approved by .*\.\n$/);
+    const reviewed = { hash: 'h0', digest: 'd0' };
+    const signed = {
+      name: 'erp', version: 1, hash: 'h1', approvedBy: APPROVER, approvedAt: '2026-10-29T12:00:00.000Z',
+      writeSteps: [{ step: 16, intent: 'Click Save' }], writeLine: 'Signed as writes: step 16 (Click Save)',
+    };
+    const scope = (json: IDataObject, received: IDataObject = reviewed) => ({
+      $: (name: string) => { expect(['Sign steps', 'Repaired steps received']).toContain(name); return { item: { json: name === 'Sign steps' ? json : received } }; },
+    });
+    expect(render(p.subject, scope(signed))).toBe('Signed: steps v1 for erp are active');
+    // A step marked as a write changes the hash: one sentence says so.
+    expect(render(p.text, scope(signed))).toBe(
+      `Steps v1 for erp are signed and active, approved by ${APPROVER} at 2026-10-29T12:00:00.000Z.\nSigned as writes: step 16 (Click Save). The hash changed because step 16 was marked as a write.\n\nReference: hash h1, review digest d0.`,
+    );
+    const two = { ...signed, writeSteps: [{ step: 4, intent: 'Press Enter' }, { step: 16, intent: 'Click Save' }], writeLine: 'Signed as writes: step 4 (Press Enter), step 16 (Click Save)' };
+    expect(render(p.text, scope(two)).split('\n')[1]).toBe('Signed as writes: step 4 (Press Enter), step 16 (Click Save). The hash changed because steps 4 and 16 were marked as writes.');
+    const none = { ...signed, hash: 'h0', writeSteps: [], writeLine: 'Signed as writes: none' };
+    expect(render(p.text, scope(none))).toBe(`Steps v1 for erp are signed and active, approved by ${APPROVER} at 2026-10-29T12:00:00.000Z.\nSigned as writes: none.\n\nReference: hash h0, review digest d0.`);
+    // Browser steps: no write line.
+    const { writeLine: _w, writeSteps: _s, ...browser } = { ...signed, hash: 'h0' };
+    expect(render(p.text, scope(browser))).toBe(`Steps v1 for erp are signed and active, approved by ${APPROVER} at 2026-10-29T12:00:00.000Z.\n\nReference: hash h0, review digest d0.`);
   });
   it('Ask for approval waits at most approvalTimeoutHours; Timed out? is true when send-and-wait resumed without an answer', () => {
     const ask = byName(t, 'Ask for approval').parameters;
@@ -575,7 +589,7 @@ describe('3-approve-steps.json', () => {
     const received = {
       version: 1, name: 'erp-1', hash: 'h', digest: 'd', evidenceLine: 'Not replayed', safetyLine: 'desktop app: "ErpDemo.exe"',
       changeList: 'Step 1: Wait for the window\nStep 2: Click Save <b>',
-      safetyFlags: ['desktop app: "ErpDemo.exe"', 'candidate write: step 2 (Click Save, then $& close) may save, post or submit: list 2 in Write Steps if it does (…)', 'candidate write: step 7 (Press Enter) may save, post or submit: list 7 in Write Steps if it does (…)'],
+      safetyFlags: ['desktop app: "ErpDemo.exe"', 'candidate write: step 2 (Click Save, then $& close) may save, post or submit', 'candidate write: step 7 (Press Enter) may save, post or submit'],
       steps: { surface: 'desktop', app: { exe: 'ErpDemo.exe' }, steps: [
         { intent: 'Wait for the window', waitFor: {} }, { intent: 'Click Save <b>', click: {} }, { intent: 'Type into User name', fill: { field: { uia: { path: [{ name: 'User name' }] } }, value: '{{var.username}}' } },
         { intent: 'Type into Date to', fill: { field: { uia: { path: [{ controlType: 'Edit', name: 'Date to' }] } }, value: '2026-11-30' } },
@@ -587,6 +601,9 @@ describe('3-approve-steps.json', () => {
     // The short view first: what it does besides reading, then one short sentence per step with its marks.
     expect(message.split('\n\nClick Review and decide')[0]).toBe('Desktop steps v1 for erp-1, for your approval.\nOpens ErpDemo.exe on the desktop runner.\nReturns a file to n8n: step 6.\n'
       + 'Not tried by the import: read every step before you approve.\n\nThe steps:\n1. Wait for the window\n2. Click Save &lt;b&gt;\n3. Type into User name (variable username)\n4. Type &quot;2026-11-30&quot; into Date to\n5. Read the count (gives its text to n8n as out_count)\n6. Return the file (returns a file)');
+    // A secret variable is marked as one, as on the review page (the item names them; never a value).
+    const secret = render(String(ask.message), { $: (name: string) => ({ item: { json: name === 'Settings' ? { approvalTimeoutHours: 72 } : { ...received, secretVariables: ['username'] } } }) });
+    expect(secret).toContain('\n3. Type into User name (secret variable username)\n');
     expect(message).toContain('tick the steps that save, send or submit (none is ticked for you), then approve or reject.');
     expect(message).toContain('Ticked steps are allowed to save or send. An unticked step is stopped only when it tries to use a control or key that your administrator has protected on the bot machine.');
     // The full detail below: the item's own change list, evidence and flags.
@@ -1195,7 +1212,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(steps.steps.flatMap((s, i) => (s.write ? [i + 1] : []))).toEqual([9, 16]);
     // Everything unticked: no write.
     const none = await signAfterReview(ran, { writes_0: [], moreWrites_0: null, decision_0: 'Approve and sign' });
-    expect(none.signed[0]).toMatchObject({ status: 'active', writeLine: 'Signed as writes: none (no step was listed in Write Steps)' });
+    expect(none.signed[0]).toMatchObject({ status: 'active', writeLine: 'Signed as writes: none' });
     // Reject: a rejected record, nothing signed.
     const rejected = await signAfterReview(ran, { writes_0: ['Step 16: Click Save'], decision_0: 'Reject' });
     expect(rejected.signed).toEqual([expect.objectContaining({ status: 'rejected', name: item.name, steps: '', signature: '', approvedBy: APPROVER })]);
@@ -1227,7 +1244,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const { data, repaired } = await importedRecording();
     // A candidate whose intent holds a comma and angle brackets: n8n compares the ticked-to-start labels with the options
     // after its JSON-form escaping of < and > (not applied to options) and splits the start value at commas.
-    const flag = 'candidate write: step 3 (Save, then <b>close</b>) may save, post or submit: list 3 in Write Steps if it does (…)';
+    const flag = 'candidate write: step 3 (Save, then <b>close</b>) may save, post or submit';
     const two = [repaired[0], { json: { ...repaired[0].json, name: 'second<b>', safetyFlags: [...(repaired[0].json.safetyFlags as string[]), flag] } }];
     const ran = { Settings: [[{ json: settingsJson() }]], 'Import steps': [data, two] } as Record<string, INodeExecutionData[][]>;
     const fields = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan(ran) });
@@ -1335,6 +1352,19 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(items.filter((i) => i.kind === 'secret')).toHaveLength(3);
     expect(message).toContain('Imported: 9 steps; 1 not translated, 3 removed as secrets.');
     expect(message).toContain('removed as secrets.\n0 of 1 step list passed the replay.\n');
+    // Only what applies: no zero counts, and a workflow that is not from a UiPath project is the bot's own.
+    const first = (report: Record<string, unknown>) => page(shown.completionMessage, { 'Import steps': [[{ json: { report, drafts: [] } }], []] }).split('\n')[0];
+    expect(first({ steps: 17, items: [] })).toBe('Imported: 17 steps.');
+    expect(first({ steps: 1, items: [{ kind: 'secret' }] })).toBe('Imported: 1 step; 1 removed as secrets.');
+    expect(first({ steps: 5, items: [{ kind: 'untranslated' }, { kind: 'untranslated' }] })).toBe('Imported: 5 steps; 2 not translated.');
+    const fileLine = (report: Record<string, unknown>) => page(completion('Imported, with the workflow file').completionMessage, {
+      'Import steps': [[{ json: { report, drafts: [] }, binary: { workflow: { fileName: 'bot.workflow.json', data: '', mimeType: 'application/json' } } }], []],
+    }).split('\n').at(-1);
+    expect(fileLine({ source: 'recording', steps: 17, items: [] })).toBe('Your browser downloads bot.workflow.json: the workflow that runs the bot. Open it in n8n with Import from file.');
+    expect(fileLine({ source: 'chrome', steps: 9, items: [{ kind: 'untranslated' }] })).toBe('Your browser downloads bot.workflow.json: the workflow that runs the bot. Open it in n8n with Import from file.');
+    expect(fileLine({ source: 'uipath', steps: 9, items: [] })).toBe('Your browser downloads bot.workflow.json: the rest of the bot as an n8n workflow. Open it in n8n with Import from file.');
+    expect(fileLine({ source: 'uipath', steps: 9, items: [{ kind: 'untranslated' }] }))
+      .toBe('Your browser downloads bot.workflow.json: the rest of the bot as an n8n workflow. Open it in n8n with Import from file; grey notes in it mark what was not translated.');
     // Approval by email: the step lists wait in RPA: 3 (each count in the singular or the plural, "there too" once the workflow was named).
     const email = (drafts: Record<string, unknown>[]) => page(shown.completionMessage, {
       Settings: [[{ json: { ...settingsJson(), approval: 'by email' } }]], 'Import steps': [[{ json: { report: { steps: 9, items: [] }, drafts } }], []],
@@ -1386,7 +1416,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // n8n's Return Binary File looks for the field on the page's parent nodes: Import steps is one of them on both paths.
     expect(evaluate(ifParams.conditions.conditions[0].leftValue, { $: nodesRan({ 'Import steps': [ui, []] }) })).toBe(true);
     const uiMessage = page(withFile.completionMessage, { 'Import steps': [ui, []] });
-    expect(uiMessage).toMatch(/^Imported: \d+ steps; \d+ not translated, \d+ removed as secrets\./);
+    expect(uiMessage).toMatch(/^Imported: \d+ steps[;.]/);
     expect(uiMessage).toContain('line-item-export.workflow.json');
     expect(uiMessage).toContain('Import from file');
   });

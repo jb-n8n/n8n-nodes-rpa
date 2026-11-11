@@ -140,13 +140,9 @@ export function desktopSafetyFlags(script: DesktopScript): string[] {
       flags.push(`clipboard read: step ${n} (${oneLine(s.intent)}) returns the clipboard's text to n8n as ${q(s.read.as)} (the desktop runner allows it only when its policy sets clipboardRead, only while the run's window is in front, and only for text the run's app copied in the last step that acted on it, at most 10 seconds earlier)`);
     }
     if (s.write === true) flags.push(`write: step ${n} (${oneLine(s.intent)}) is a declared write step`);
-    else if (looksLikeWrite(s)) {
-      // Plain about what listing does: it marks the step for the runner's write gate, which covers only the controls and
-      // keys the runner's policy lists. It does not stop an unlisted step from saving through any other control.
-      flags.push(
-        `candidate write: step ${n} (${oneLine(s.intent)}) may save, post or submit: list ${n} in Write Steps if it does (the desktop runner refuses a write only on the controls and keys its policy lists, so leaving a step unlisted does not stop it from saving unless its control is in the runner policy)`,
-      );
-    }
+    // One clause per step. What marking a step as a write does (it passes the runner's write gate, which covers only the
+    // controls and keys the runner's policy lists) is said once, beside the question, on the review page and in the email.
+    else if (looksLikeWrite(s)) flags.push(`candidate write: step ${n} (${oneLine(s.intent)}) may save, post or submit`);
   });
   return flags;
 }
@@ -173,7 +169,7 @@ export const writeStepNotAllowed = (n: number, verb: string) => `Write Steps: st
 export const DESKTOP_FLAGS_INCOMPLETE = 'the safety flags do not list the app, the returned files, the clipboard reads, the declared writes and the candidate writes the steps have';
 export const DESKTOP_CHANGES_MISMATCH = 'the change list does not show every step of the steps, in order, as added';
 export const DESKTOP_NEEDS_FIRST_VERSION = 'desktop steps have no repair yet, so a desktop proposal must be a first version (no base version) that shows every step';
-export const DESKTOP_WRITES_PRESET = 'the reviewed steps already mark a write: only Write Steps, chosen when you approve, declares writes';
+export const DESKTOP_WRITES_PRESET = 'the reviewed steps already mark a write: writes are marked only when the steps are approved';
 export const DESKTOP_EVIDENCE_INVALID = 'desktop steps are not replayed at import, so their evidence must be empty (no rows, no file)';
 
 /** Write Steps as typed by the approver: step numbers separated by commas or spaces; '' or only spaces is none. */

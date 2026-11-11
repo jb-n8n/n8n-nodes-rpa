@@ -1010,7 +1010,7 @@ describe('Import Steps: a step document', () => {
     expect(engine.adoptions).toHaveLength(0);
     expect(drafts(data[0])).toEqual([expect.objectContaining({
       name: 'orders', surface: 'desktop', adopted: false, forApproval: true, writeCandidates: [3, 4], variables: ['user', 'order'], secretVariables: [],
-      reason: 'Desktop steps are not replayed at import (there is no desktop proof yet): they go to approval as imported. Review every step, supply the variables in Run steps, and list the steps that save, post or submit in Write Steps when you approve.',
+      reason: 'Desktop steps are not replayed at import: they go to approval as imported. Review every step, and mark each step that saves, posts or submits as a write when you approve.',
     })]);
     const items = (data[0].json.report as { items: IDataObject[] }).items;
     expect(items.filter((i) => i.kind === 'candidateWrite').map((i) => i.what)).toEqual(['Step 3: Run the batch', 'Step 4: Click Save']);
@@ -1018,7 +1018,7 @@ describe('Import Steps: a step document', () => {
     expect(repaired).toHaveLength(1);
     const item = repaired[0].json;
     expect(item).toMatchObject({ name: 'orders', baseVersion: null, version: 1, attachmentNames: '' });
-    expect(item.evidenceLine).toBe('Not replayed: desktop steps from a step document are reviewed as written (there is no desktop proof yet). Check every step, and list in Write Steps the steps that save, post or submit.');
+    expect(item.evidenceLine).toBe('Not replayed: desktop steps from a step document are reviewed as written (there is no desktop proof yet). Check every step, and mark each step that saves, posts or submits as a write.');
     // The safety line is recomputed from the steps, as Sign Steps does: it names the steps that read like a write. Step 3,
     // which the document marked a write, is a candidate on Data and in the report.
     expect(String(item.safetyLine)).toContain('candidate write: step 4 (Click Save) may save, post or submit');

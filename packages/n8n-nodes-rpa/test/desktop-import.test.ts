@@ -64,15 +64,17 @@ describe('Import Steps with a UiPath desktop project', () => {
     expect(json.drafts).toEqual([expect.objectContaining({
       name: 'erp-1', surface: 'desktop', adopted: false, forApproval: true, writeCandidates: [4, 16],
       variables: ['username', 'password', 'in_CompanyCode', 'in_DateFrom', 'in_DateTo'], secretVariables: ['password'],
-      reason: 'Desktop steps are not replayed at import (there is no desktop proof yet): they go to approval as imported. Review every step, supply the variables in Run steps, and list the steps that save, post or submit in Write Steps when you approve.',
+      reason: 'Desktop steps are not replayed at import: they go to approval as imported. Review every step, and mark each step that saves, posts or submits as a write when you approve.',
     })]);
     expect(repaired).toHaveLength(1);
     const item = repaired[0].json;
     expect(item).toMatchObject({ name: 'erp-1', baseVersion: null, version: 1, attachmentNames: '' });
-    expect(item.evidenceLine).toBe('Not replayed: desktop steps imported from UiPath are reviewed as written (there is no desktop proof yet). Check every step, and list in Write Steps the steps that save, post or submit.');
+    expect(item.evidenceLine).toBe('Not replayed: desktop steps imported from UiPath are reviewed as written (there is no desktop proof yet). Check every step, and mark each step that saves, posts or submits as a write.');
     expect(String(item.safetyLine)).toContain('candidate write: step 16 (Click Save) may save, post or submit');
     expect(String(item.changeList).split('\n')).toHaveLength(17);
     expect((item.steps as { steps: unknown[] }).steps.some((s) => Object.hasOwn(s as object, 'write'))).toBe(false);
+    // The names of its secret variables, for the approval email to mark them (shown, not reviewed: never a value).
+    expect(item.secretVariables).toEqual(['password']);
   });
 
   it('a project with browser steps still needs the RPA Browser credential', async () => {
@@ -173,13 +175,13 @@ describe('approving imported desktop steps: Sign Steps with Write Steps', () => 
     const two = await sign(item, { writeSteps: '4, 16' });
     expect(two).toMatchObject({ writeSteps: [{ step: 4, intent: 'Press Enter in Password' }, { step: 16, intent: 'Click Save' }], writeLine: 'Signed as writes: step 4 (Press Enter in Password), step 16 (Click Save)' });
     const none = await sign(item, { writeSteps: '' });
-    expect(none).toMatchObject({ status: 'active', writeSteps: [], writeLine: 'Signed as writes: none (no step was listed in Write Steps)' });
+    expect(none).toMatchObject({ status: 'active', writeSteps: [], writeLine: 'Signed as writes: none' });
   });
 
   it('says plainly that an unlisted step can still save unless the runner policy lists its control (I3)', async () => {
     const { repaired } = await importSample();
     expect(String(repaired[0].json.safetyLine)).toContain(
-      'candidate write: step 16 (Click Save) may save, post or submit: list 16 in Write Steps if it does (the desktop runner refuses a write only on the controls and keys its policy lists, so leaving a step unlisted does not stop it from saving unless its control is in the runner policy)',
+      'candidate write: step 16 (Click Save) may save, post or submit',
     );
     const { signStepsProperties } = await import('../nodes/Playwright/description/signSteps.js');
     const description = String(signStepsProperties.find((p) => p.name === 'writeSteps')!.description);
@@ -226,7 +228,7 @@ async function importRecording(rec: Json = recording(), over: Record<string, unk
   const [data, repaired] = await executeImportSteps(harness({ params: { ...recordingParams, ...over }, items: [recordingItem(rec)], credentials, continueOnFail: true }), noBrowser());
   return { data, repaired };
 }
-const RECORDING_LINE = 'Not replayed: desktop steps imported from a recording are reviewed as written (there is no desktop proof yet). Check every step, and list in Write Steps the steps that save, post or submit.';
+const RECORDING_LINE = 'Not replayed: desktop steps imported from a recording are reviewed as written (there is no desktop proof yet). Check every step, and mark each step that saves, posts or submits as a write.';
 
 describe('Import Steps with an RPA recording', () => {
   it('Import Steps offers RPA Recording and reads it only from a file', async () => {
@@ -251,7 +253,7 @@ describe('Import Steps with an RPA recording', () => {
     const json = data[0].json;
     expect(json.drafts).toEqual([expect.objectContaining({
       name: 'erp', surface: 'desktop', adopted: false, forApproval: true, writeCandidates: [4, 16], variables: ['password'], secretVariables: ['password'],
-      reason: 'Desktop steps are not replayed at import (there is no desktop proof yet): they go to approval as imported. Review every step, supply the variables in Run steps, and list the steps that save, post or submit in Write Steps when you approve.',
+      reason: 'Desktop steps are not replayed at import: they go to approval as imported. Review every step, and mark each step that saves, posts or submits as a write when you approve.',
     })]);
     expect(json.workflowName).toBe('ERP Demo line items (imported from a recording)');
     expect(data[0].binary?.workflow).toMatchObject({ mimeType: 'application/json', fileName: 'erp.workflow.json' });
@@ -265,7 +267,7 @@ describe('Import Steps with an RPA recording', () => {
     const { repaired } = await importRecording();
     expect(repaired[0].json.evidenceLine).toBe(RECORDING_LINE);
     const uipath = await importSample();
-    expect(uipath.repaired[0].json.evidenceLine).toBe('Not replayed: desktop steps imported from UiPath are reviewed as written (there is no desktop proof yet). Check every step, and list in Write Steps the steps that save, post or submit.');
+    expect(uipath.repaired[0].json.evidenceLine).toBe('Not replayed: desktop steps imported from UiPath are reviewed as written (there is no desktop proof yet). Check every step, and mark each step that saves, posts or submits as a write.');
     // Sign Steps takes the recording's item, with its line, and signs exactly the declared writes.
     const record = await sign(repaired[0].json, { writeSteps: '4, 16' });
     expect(record).toMatchObject({ name: 'erp', version: 1, status: 'active', writeLine: 'Signed as writes: step 4 (Press Enter in Password), step 16 (Click Save)' });
@@ -284,7 +286,7 @@ describe('Import Steps with an RPA recording', () => {
     expect(run.parameters).toMatchObject({ operation: 'runSteps', aiRepair: false, options: { name: 'erp' } });
     expect(run.parameters.options).not.toHaveProperty('variables');
     expect(run.credentials).toEqual({ rpaDesktopRunnerApi: { id: null, name: 'RPA Desktop Runner' } });
-    expect(run.notes).toBe('Runs the signed desktop steps erp (17 steps imported from the recording "ERP Demo line items") on the desktop runner. Pick the RPA Desktop Runner and RPA Step Signing credentials. Fill in the Variables. password: put it in an RPA Secret Variables credential (type rpaSecretVariablesApi, field Variables) and select it here.');
+    expect(run.notes).toBe('Runs the signed desktop steps erp (17 steps imported from the recording "ERP Demo line items") on the desktop runner. Pick the RPA Desktop Runner and RPA Step Signing credentials. password: put it in an RPA Secret Variables credential (type rpaSecretVariablesApi, field Variables) and select it here.');
     const gold = String(wf.nodes.find((n) => n.name === 'Fill in the variables (erp)')!.parameters.content);
     expect(gold).toContain('import the recording with **RPA: 5 Import a bot**');
     const text = JSON.stringify(wf);

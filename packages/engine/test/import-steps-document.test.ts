@@ -179,7 +179,7 @@ describe('a step document as an import source: reading it', () => {
     expect(parseDesktopScript(r.desktopDrafts![0].script)).toEqual(script);
     const candidate = (n: number, intent: string) => ({
       at: '', kind: 'candidateWrite', what: `Step ${n}: ${intent}`,
-      reason: `this step may save, post or submit. The import never declares a write: if it writes, list ${n} in Write Steps when you approve these steps (Sign Steps); the desktop runner refuses a declared write control without it`,
+      reason: 'this step may save, post or submit: if it does, mark it as a write when you approve the steps',
     });
     expect(r.report).toEqual({
       source: 'steps', steps: 5, items: [
@@ -188,7 +188,7 @@ describe('a step document as an import source: reading it', () => {
         // A note, not an untranslated step: the import form counts untranslated items as steps it could not take.
         { at: '', kind: 'converted', what: 'Expected File', reason: 'the download steps of a step document carry their own checks: Expected File is not used' },
         // The step the document marked as a write says so; a step that only reads like one gets the general reason.
-        { at: '', kind: 'candidateWrite', what: 'Step 3: Run the batch', reason: 'the document marked this step as a write: declare it under Write Steps when you approve' },
+        { at: '', kind: 'candidateWrite', what: 'Step 3: Run the batch', reason: 'the document marked this step as a write: mark it as a write when you approve the steps' },
         candidate(4, 'Click Save'),
       ],
     });
