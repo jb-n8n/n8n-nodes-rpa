@@ -256,6 +256,57 @@ function Set-RpaSupervisorPassword([hashtable]$Run) {
   [RpaLsaSecret]::Store($script:SupervisorSecret, $Run.Password)
 }
 
+# The password stored for automatic sign-in (the LSA secret DefaultPassword), as a SecureString, or nothing when it is
+# missing or empty. It goes to no command line, file or output.
+function Read-RpaAutoSignInPassword {
+  Add-RpaMoveTypes
+  [RpaLsaRead]::Read($script:AutoSignInSecret)
+}
+
+# The step 'keep the automatic sign-in password for the supervisor', when an install with automatic sign-in moves to
+# -Unattended: the bot user's password stays the one it has (a new password set by an administrator would make what
+# the bot user's programs protect with it unreadable). It is read from the secret for automatic sign-in while that is
+# still there, kept in the run's memory (a failed run stores it for automatic sign-in again) and stored for the
+# supervisor.
+function Copy-RpaAutoSignInPassword([hashtable]$Run) {
+  $stored = Read-RpaAutoSignInPassword
+  if (-not $stored) { throw 'The password stored for automatic sign-in is missing or empty; nothing of it was kept.' }
+  $Run.Password = $stored
+  Set-RpaSupervisorPassword $Run
+}
+
+# The step 'turn off automatic sign-in': puts back what -AutoSignIn changed, from its records in install.json, the last
+# first, as Uninstall-Rpa.ps1 does (the Winlogon values, the secret DefaultPassword, the settings that kept the desktop
+# unlocked). The records of -Unattended stay; install.json keeps only the records of what could not be put back, and
+# says that automatic sign-in is off. From here on a failed run turns automatic sign-in on again.
+function Disable-RpaAutoSignIn([hashtable]$Run) {
+  $records = @($Run.Install.signInChanges | Where-Object { $_ -and -not (Test-RpaUnattendedChange $_) })
+  $Run.AutoSignInTurnedOff = $true
+  $failed = @(Restore-RpaSignInChanges $records $false)
+  $left = @($failed | Where-Object { $_.Change } | ForEach-Object { Get-RpaChangeId $_.Change })
+  $done = @($records | ForEach-Object { Get-RpaChangeId $_ } | Where-Object { $left -notcontains $_ })
+  $Run.Install.signInChanges = @($Run.Install.signInChanges | Where-Object { $done -notcontains (Get-RpaChangeId $_) })
+  $Run.Install.autoSignIn = $false
+  Save-RpaInstallFile $Run
+  if ($failed.Count -gt 0) { throw ('Could not turn automatic sign-in off: {0}' -f (@($failed | ForEach-Object { $_.Text }) -join '; ')) }
+}
+
+# After a failed run that had turned automatic sign-in off: turns it on again as -AutoSignIn does, with the password the
+# run kept in memory, recording each setting anew. Returns, like Restore-RpaSignInChanges, what it could not do.
+function Enable-RpaAutoSignInAgain([hashtable]$Run) {
+  Write-Host ('  undo: turn automatic sign-in of {0} on again' -f $Run.Account.Display)
+  try {
+    Set-RpaSignInPassword $Run
+    Enable-RpaAutoSignIn $Run
+    Set-RpaDesktopUnlocked $Run
+    $Run.AutoSignInTurnedOff = $false
+  } catch {
+    $text = 'automatic sign-in of {0}, which this run had turned off: {1}' -f $Run.Account.Display, $_.Exception.GetBaseException().Message
+    Write-Host ('    could not put back: {0}' -f $text)
+    @{ Change = $null; Text = $text }
+  }
+}
+
 # Deletes an LSA secret; one that is not there is no error.
 function Remove-RpaLsaSecret([string]$Name) {
   Add-RpaNativeTypes

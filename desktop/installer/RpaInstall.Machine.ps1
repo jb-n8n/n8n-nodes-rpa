@@ -23,8 +23,9 @@ $script:KnownSteps = @(
   'write policy', 'write token', 'write browser-token', 'add the runner firewall rule', 'add the browser firewall rule',
   'remove the browser firewall rule', 'register the runner task', 'register the browser task',
   'remove the browser task', 'write install.json', 'put back what -Unattended changed', 'store sign-in password',
-  'turn on automatic sign-in', 'keep the desktop unlocked', 'allow the bot user to sign in through Remote Desktop',
-  'turn on Remote Desktop', "store the bot user's password for the supervisor", 'register the supervisor service',
+  'turn on automatic sign-in', 'keep the desktop unlocked', 'keep the automatic sign-in password for the supervisor',
+  'turn off automatic sign-in', 'allow the bot user to sign in through Remote Desktop', 'turn on Remote Desktop',
+  "store the bot user's password for the supervisor", 'sign the bot user out', 'register the supervisor service',
   'point the firewall rules at the supervisor', 'start tasks')
 
 # Where things are. Program Files keeps its default permissions (users read and run, only administrators change), so
@@ -234,6 +235,8 @@ function Get-RpaMachineFacts {
     InstalledMode              = $null
     InstalledSupervisorSecret  = $false
     InstalledIdleSeconds       = $null
+    AutoSignInPassword         = $null
+    AutoSignInPasswordProblem  = $null
     RemoteDesktopPort          = $null
     InstalledUnattendedChanges = $false
     SupervisorDir              = $layout.SupervisorDir
@@ -315,6 +318,25 @@ function Get-RpaMachineFacts {
       $code = [RpaAccounts]::CheckPassword($domain, $account.Name, $Parameters.UserPassword)
       if ($code -eq 1326) { $facts.UserPasswordWrong = $true }
       elseif ($code -ne 0 -and $code -ne 1385) { $facts.UserPasswordProblem = (New-Object ComponentModel.Win32Exception $code).Message }
+    }
+    # Moving an install with automatic sign-in for this user to -Unattended without -UserPassword: the password stored
+    # for automatic sign-in is read into memory and tried the same way; only the outcome is kept here.
+    $moving = ($Parameters.Unattended -or $keepsUnattended) -and $install -and $install.autoSignIn -eq $true -and $facts.InstalledForUser
+    if ($moving -and -not $Parameters.UserPassword) {
+      $stored = Read-RpaAutoSignInPassword
+      if (-not $stored) { $facts.AutoSignInPassword = 'missing' }
+      else {
+        try {
+          $domain = '.'
+          if ($account.IsDomain) { $domain = $account.Domain }
+          $code = [RpaAccounts]::CheckPassword($domain, $account.Name, $stored)
+        } finally { $stored.Dispose() }
+        if ($code -eq 1326) { $facts.AutoSignInPassword = 'wrong' }
+        else {
+          $facts.AutoSignInPassword = 'ok'
+          if ($code -ne 0 -and $code -ne 1385) { $facts.AutoSignInPasswordProblem = (New-Object ComponentModel.Win32Exception $code).Message }
+        }
+      }
     }
   }
 
@@ -925,6 +947,115 @@ public static class RpaProbe {
 '@
 }
 
+# What moving from automatic sign-in to -Unattended needs, compiled on its own (a PowerShell window that loaded the
+# helpers of an earlier installer has the other types already): reading an LSA secret into a SecureString (RpaLsaRead),
+# and the Windows sessions of a user and their sign-out (RpaSessions).
+function Add-RpaMoveTypes {
+  if ('RpaSessions' -as [type]) { return }
+  Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Security;
+public static class RpaLsaRead {
+  [StructLayout(LayoutKind.Sequential)]
+  struct UnicodeString { public ushort Length; public ushort MaximumLength; public IntPtr Buffer; }
+  [StructLayout(LayoutKind.Sequential)]
+  struct ObjectAttributes { public int Length; public IntPtr RootDirectory; public IntPtr ObjectName; public uint Attributes; public IntPtr SecurityDescriptor; public IntPtr SecurityQualityOfService; }
+  [DllImport("advapi32.dll")] static extern uint LsaOpenPolicy(IntPtr systemName, ref ObjectAttributes attributes, uint access, out IntPtr policy);
+  [DllImport("advapi32.dll")] static extern uint LsaRetrievePrivateData(IntPtr policy, ref UnicodeString key, out IntPtr data);
+  [DllImport("advapi32.dll")] static extern uint LsaFreeMemory(IntPtr buffer);
+  [DllImport("advapi32.dll")] static extern uint LsaClose(IntPtr policy);
+  [DllImport("advapi32.dll")] static extern int LsaNtStatusToWinError(uint status);
+  const uint PolicyGetPrivateInformation = 0x4;
+  const uint StatusObjectNameNotFound = 0xC0000034;
+  // The secret as a read-only SecureString, without a NUL at its end; null when it is missing or empty. The plain
+  // text exists only in the memory LSA returns, which is wiped before it is freed.
+  public static SecureString Read(string key) {
+    ObjectAttributes attributes = new ObjectAttributes();
+    attributes.Length = Marshal.SizeOf(typeof(ObjectAttributes));
+    IntPtr policy;
+    uint status = LsaOpenPolicy(IntPtr.Zero, ref attributes, PolicyGetPrivateInformation, out policy);
+    if (status != 0) throw new Win32Exception(LsaNtStatusToWinError(status));
+    UnicodeString k = new UnicodeString();
+    k.Buffer = Marshal.StringToHGlobalUni(key);
+    k.Length = (ushort)(key.Length * 2);
+    k.MaximumLength = (ushort)(key.Length * 2 + 2);
+    IntPtr data = IntPtr.Zero;
+    try {
+      status = LsaRetrievePrivateData(policy, ref k, out data);
+      if (status == StatusObjectNameNotFound) return null;
+      if (status != 0) throw new Win32Exception(LsaNtStatusToWinError(status));
+      if (data == IntPtr.Zero) return null;
+      UnicodeString value = (UnicodeString)Marshal.PtrToStructure(data, typeof(UnicodeString));
+      if (value.Buffer == IntPtr.Zero) return null;
+      int count = value.Length / 2;
+      while (count > 0 && Marshal.ReadInt16(value.Buffer, (count - 1) * 2) == 0) count--;
+      SecureString secret = new SecureString();
+      for (int i = 0; i < count; i++) secret.AppendChar((char)Marshal.ReadInt16(value.Buffer, i * 2));
+      Marshal.Copy(new byte[value.Length], 0, value.Buffer, value.Length);
+      secret.MakeReadOnly();
+      if (secret.Length == 0) { secret.Dispose(); return null; }
+      return secret;
+    } finally {
+      if (data != IntPtr.Zero) LsaFreeMemory(data);
+      Marshal.FreeHGlobal(k.Buffer);
+      LsaClose(policy);
+    }
+  }
+}
+public static class RpaSessions {
+  [StructLayout(LayoutKind.Sequential)]
+  struct SessionInfo { public int SessionId; public IntPtr WinStationName; public int State; }
+  [DllImport("wtsapi32.dll", SetLastError = true)] static extern bool WTSEnumerateSessions(IntPtr server, int reserved, int version, out IntPtr info, out int count);
+  [DllImport("wtsapi32.dll", SetLastError = true, EntryPoint = "WTSQuerySessionInformationW")] static extern bool WTSQuerySessionInformation(IntPtr server, int session, int infoClass, out IntPtr buffer, out int bytes);
+  [DllImport("wtsapi32.dll")] static extern void WTSFreeMemory(IntPtr memory);
+  [DllImport("wtsapi32.dll", SetLastError = true)] static extern bool WTSLogoffSession(IntPtr server, int session, bool wait);
+  const int UserName = 5, DomainName = 7;
+  // The ids of the sessions in which domain\user is signed in, in any state.
+  public static int[] OfUser(string domain, string user) {
+    IntPtr info;
+    int count;
+    if (!WTSEnumerateSessions(IntPtr.Zero, 0, 1, out info, out count)) throw new Win32Exception(Marshal.GetLastWin32Error());
+    List<int> ids = new List<int>();
+    try {
+      int size = Marshal.SizeOf(typeof(SessionInfo));
+      for (int i = 0; i < count; i++) {
+        SessionInfo session = (SessionInfo)Marshal.PtrToStructure(new IntPtr(info.ToInt64() + i * size), typeof(SessionInfo));
+        if (string.Equals(Query(session.SessionId, UserName), user, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(Query(session.SessionId, DomainName), domain, StringComparison.OrdinalIgnoreCase)) ids.Add(session.SessionId);
+      }
+    } finally {
+      WTSFreeMemory(info);
+    }
+    return ids.ToArray();
+  }
+  static string Query(int session, int infoClass) {
+    IntPtr buffer;
+    int bytes;
+    if (!WTSQuerySessionInformation(IntPtr.Zero, session, infoClass, out buffer, out bytes)) return "";
+    try { return Marshal.PtrToStringUni(buffer) ?? ""; } finally { WTSFreeMemory(buffer); }
+  }
+  // Signs a session out and returns when it is gone.
+  public static void SignOut(int session) {
+    if (!WTSLogoffSession(IntPtr.Zero, session, true)) throw new Win32Exception(Marshal.GetLastWin32Error());
+  }
+}
+'@
+}
+
+# Signs every session of the bot user out (the console session automatic sign-in made, and any other), so that the
+# RPA Supervisor, which refuses runs while a session it did not make is there, can sign it in for each run. Programs
+# in those sessions end the way they end at any sign-out.
+function Close-RpaBotSessions([hashtable]$Run) {
+  Add-RpaMoveTypes
+  foreach ($id in @([RpaSessions]::OfUser($Run.Account.Domain, $Run.Account.Name))) {
+    Write-Host ('    sign out session {0}' -f $id)
+    [RpaSessions]::SignOut($id)
+  }
+}
+
 # A standard local user (member of Users only) whose password never expires. Without -UserPassword the password is
 # random, is made here and is stored only for automatic sign-in or for the RPA Supervisor (the plan refuses a new user
 # with none of the three).
@@ -1417,8 +1548,10 @@ function Undo-RpaFailedRun([hashtable]$Run) {
     Write-Host '  undo: put back the settings this run changed'
     $failed = @(Restore-RpaSignInChanges $Run.NewChanges $false)
   }
-  $result = @{ NotPutBack = @($failed | ForEach-Object { $_.Text }); UserKept = $null }
   $newIds = @($Run.NewChanges | ForEach-Object { Get-RpaChangeId $_ })
+  # A run that moved from automatic sign-in turns it on again, with the password it kept in memory.
+  if ($Run.AutoSignInTurnedOff) { $failed += @(Enable-RpaAutoSignInAgain $Run) }
+  $result = @{ NotPutBack = @($failed | ForEach-Object { $_.Text }); UserKept = $null }
   if ($failed.Count -gt 0) {
     $leftIds = @($failed | Where-Object { $_.Change } | ForEach-Object { Get-RpaChangeId $_.Change })
     $Run.Install.signInChanges = @($Run.Install.signInChanges | Where-Object { $id = Get-RpaChangeId $_; ($newIds -notcontains $id) -or ($leftIds -contains $id) })
@@ -1550,6 +1683,9 @@ function Invoke-RpaInstallPlan {
         }
         'turn on Remote Desktop' { Enable-RpaRemoteDesktop $run }
         "store the bot user's password for the supervisor" { Set-RpaSupervisorPassword $run }
+        'keep the automatic sign-in password for the supervisor' { Copy-RpaAutoSignInPassword $run }
+        'turn off automatic sign-in' { Disable-RpaAutoSignIn $run }
+        'sign the bot user out' { Close-RpaBotSessions $run }
         'register the supervisor service' {
           Register-RpaSupervisor $run
           Wait-RpaFirstSignIn $run $runnerPort

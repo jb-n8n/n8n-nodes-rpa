@@ -54,7 +54,7 @@ BeforeAll {
       DataDirEntries = $null
       DataFiles = @{ 'policy.json' = New-PathState 'missing'; 'token' = New-PathState 'missing'; 'browser-token' = New-PathState 'missing' }
       TaskFolderOwner = $null; PublicNetwork = $false
-      IsServer = $true; RemoteDesktopDenied = $false; RemoteDesktopServiceDisabled = $false; RemoteDesktopPort = 3389; InstalledIdleSeconds = $null; InstalledMode = $null; InstalledSupervisorSecret = $false; InstalledUnattendedChanges = $false
+      AutoSignInPassword = $null; IsServer = $true; RemoteDesktopDenied = $false; RemoteDesktopServiceDisabled = $false; RemoteDesktopPort = 3389; InstalledIdleSeconds = $null; InstalledMode = $null; InstalledSupervisorSecret = $false; InstalledUnattendedChanges = $false
       SupervisorDir = "$($script:DataDir)\supervisor"; SupervisorDirState = New-PathState 'missing'
     }
     foreach ($key in $Change.Keys) { $facts[$key] = $Change[$key] }
@@ -1033,10 +1033,11 @@ Describe 'Get-RpaInstallPlan' {
       $plan.Refusals | Should -BeExactly @('-Unattended needs a local user of this machine as the bot user; CORP\svc-rpa is a domain user.')
     }
 
-    It 'refuses it over an install that turned automatic sign-in on' {
-      $facts = New-InstalledFacts @{ InstalledAutoSignInUser = 'rpa-runner'; InstalledAutoSignInForUser = $true }
-      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true; UserPassword = New-TestPassword }) -Facts $facts
-      $plan.Refusals | Should -BeExactly @('Automatic sign-in is set up for rpa-runner, and with -Unattended nobody may be signed in by Windows itself. Run Uninstall-Rpa.ps1 first, which turns automatic sign-in off, then install with -Unattended.')
+    It 'refuses it over an install that turned automatic sign-in on for another user' {
+      $facts = New-InstalledFacts @{ InstalledAutoSignInUser = 'rpa-runner'; InstalledAutoSignInForUser = $false; InstalledForUser = $false; UserExists = $true }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ User = 'bot2'; Unattended = $true; UserPassword = New-TestPassword }) -Facts $facts
+      $plan.Refusals | Should -Contain 'Automatic sign-in is set up for rpa-runner, and with -Unattended nobody may be signed in by Windows itself. Run Uninstall-Rpa.ps1 first, which turns automatic sign-in off, then install with -Unattended.'
+      $plan.Steps.Count | Should -Be 0
     }
 
     It 'makes a random password for a user it creates, and needs -UserPassword for an existing user' {
@@ -1174,6 +1175,81 @@ Describe 'Get-RpaInstallPlan' {
       # An upgrade of an unattended install has said it all before; a signed-in install says nothing of it.
       @((Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true }) -Facts (New-UnattendedFacts)).Notice).Count | Should -Be 0
       @((Get-RpaInstallPlan -Parameters (New-TestParameters @{ UserPassword = New-TestPassword }) -Facts (New-TestFacts)).Notice).Count | Should -Be 0
+    }
+
+    Context 'over an install with automatic sign-in for the same bot user' {
+      BeforeAll {
+        # A 0.2.0 install with -AutoSignIn: no mode recorded, the password only in the secret for automatic sign-in.
+        function New-AutoSignInFacts([hashtable]$Change = @{}) {
+          $facts = New-InstalledFacts @{ InstalledAutoSignInUser = 'rpa-runner'; InstalledAutoSignInForUser = $true; AutoSignInPassword = 'ok'; RemoteDesktopDenied = $true }
+          foreach ($key in $Change.Keys) { $facts[$key] = $Change[$key] }
+          $facts
+        }
+      }
+
+      It 'keeps the password stored for automatic sign-in, turns automatic sign-in off and signs the bot user out, in this order' {
+        $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true }) -Facts (New-AutoSignInFacts)
+        $plan.Refusals.Count | Should -Be 0
+        $plan.Steps | Should -BeExactly @(
+          'stop running services'
+          'copy program files'
+          'protect the data directory'
+          'add the runner firewall rule'
+          'add the browser firewall rule'
+          'register the runner task'
+          'register the browser task'
+          'write install.json'
+          'keep the automatic sign-in password for the supervisor'
+          'turn off automatic sign-in'
+          'allow the bot user to sign in through Remote Desktop'
+          'turn on Remote Desktop'
+          'sign the bot user out'
+          'register the supervisor service'
+          'point the firewall rules at the supervisor'
+          'start tasks'
+        )
+        $plan.Steps | Should -Not -Contain "store the bot user's password for the supervisor"
+        $known = InModuleScope RpaInstall { $script:KnownSteps }
+        foreach ($step in $plan.Steps) { $known | Should -Contain $step }
+      }
+
+      It 'with -UserPassword stores the given password, and still turns automatic sign-in off' {
+        $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true; UserPassword = New-TestPassword }) -Facts (New-AutoSignInFacts @{ AutoSignInPassword = $null })
+        $plan.Refusals.Count | Should -Be 0
+        $plan.Steps[8..9] | Should -BeExactly @("store the bot user's password for the supervisor", 'turn off automatic sign-in')
+        $plan.Steps | Should -Not -Contain 'keep the automatic sign-in password for the supervisor'
+        $plan.Steps | Should -Contain 'sign the bot user out'
+        $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true; UserPassword = New-TestPassword }) -Facts (New-AutoSignInFacts @{ UserPasswordWrong = $true })
+        $plan.Refusals | Should -BeExactly @('The password given for rpa-runner is not correct.')
+      }
+
+      It 'refuses before anything changes when the stored password is <Why>' -ForEach @(
+        @{ Why = 'missing or empty'; State = 'missing'; Text = 'Automatic sign-in of rpa-runner has no stored password that the installer can read, so -Unattended cannot keep it. Give the password of rpa-runner with -UserPassword, or install for a new bot user with -User.' }
+        @{ Why = 'not accepted'; State = 'wrong'; Text = 'Windows does not accept the password stored for automatic sign-in of rpa-runner any more, so -Unattended cannot keep it. Give the password of rpa-runner with -UserPassword, or install for a new bot user with -User.' }
+      ) {
+        $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true }) -Facts (New-AutoSignInFacts @{ AutoSignInPassword = $State })
+        $plan.Refusals | Should -BeExactly @($Text)
+        $plan.Steps.Count | Should -Be 0
+      }
+
+      It 'says that automatic sign-in goes off, that the password stays the same and that the bot user is signed out, and never the password' {
+        $password = New-MadeUpPassword
+        $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true }) -Facts (New-AutoSignInFacts)
+        $plan.Notice | Should -Contain '  - Automatic sign-in of rpa-runner is turned off, and the settings -AutoSignIn changed go back to what they were.'
+        $plan.Notice | Should -Contain '  - The password of rpa-runner stays the same: the one stored for automatic sign-in is stored for the RPA Supervisor'
+        $plan.Notice | Should -Contain '    instead, so no program of rpa-runner loses data it protects with that password.'
+        $plan.Notice | Should -Contain '  - rpa-runner is signed out now (every session of rpa-runner), so that the RPA Supervisor can sign it in for each run.'
+        ($plan.Notice -join "`n") | Should -Not -Match 'An administrator of this machine'
+        $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true; UserPassword = $password.Secure }) -Facts (New-AutoSignInFacts)
+        (($plan.Notice + $plan.Steps + $plan.Refusals + $plan.Warnings) -join "`n").Contains($password.Text) | Should -BeFalse
+      }
+
+      It 'leaves an upgrade without -Unattended as it is: automatic sign-in stays' {
+        $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-AutoSignInFacts)
+        $plan.Refusals.Count | Should -Be 0
+        foreach ($step in 'turn off automatic sign-in', 'keep the automatic sign-in password for the supervisor', 'sign the bot user out') { $plan.Steps | Should -Not -Contain $step }
+        $plan.Unattended | Should -BeFalse
+      }
     }
 
     It 'with -NoBrowser names only the runner port' {
@@ -2478,6 +2554,88 @@ Describe 'A failed switch to -Unattended' {
     $kept = Get-Content -Raw -LiteralPath $file | ConvertFrom-Json
     $kept.mode | Should -BeExactly 'signedIn'
     foreach ($field in 'idleSeconds', 'runnerInnerPort', 'browserInnerPort', 'listenAddresses') { $kept.PSObject.Properties.Name | Should -Not -Contain $field }
+  }
+}
+
+Describe 'Moving an install with automatic sign-in to -Unattended' {
+  BeforeAll {
+    # What install.json records of -AutoSignIn: the stored password and one registry value.
+    function New-AutoSignInChanges {
+      @(
+        [ordered]@{ kind = 'secret'; key = 'DefaultPassword'; name = '' }
+        [ordered]@{ kind = 'registry'; key = 'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'; name = 'AutoAdminLogon'; existed = $false }
+      ) | ForEach-Object { New-Object psobject -Property $_ }
+    }
+  }
+
+  It 'keeps the password stored for automatic sign-in for the supervisor, in memory only' {
+    $password = New-MadeUpPassword
+    $env:RPA_TEST_SECRET = $password.Text
+    Mock -ModuleName RpaInstall Read-RpaAutoSignInPassword { $s = New-Object Security.SecureString; foreach ($c in $env:RPA_TEST_SECRET.ToCharArray()) { $s.AppendChar($c) }; $s }
+    Mock -ModuleName RpaInstall Set-RpaSupervisorPassword { }
+    $run = @{ Password = $null }
+    try { InModuleScope RpaInstall -Parameters @{ Run = $run } { Copy-RpaAutoSignInPassword $Run } } finally { $env:RPA_TEST_SECRET = $null }
+    Should -Invoke -ModuleName RpaInstall Set-RpaSupervisorPassword -Times 1 -Exactly
+    $run.Password | Should -BeOfType [Security.SecureString]
+    $run.Password.Length | Should -Be $password.Text.Length
+
+    Mock -ModuleName RpaInstall Read-RpaAutoSignInPassword { }
+    { InModuleScope RpaInstall -Parameters @{ Run = @{ Password = $null } } { Copy-RpaAutoSignInPassword $Run } } |
+      Should -Throw -ExpectedMessage 'The password stored for automatic sign-in is missing or empty; nothing of it was kept.'
+  }
+
+  It 'turns automatic sign-in off from its records and keeps those of -Unattended' {
+    $env:RPA_TEST_ORDER = ''
+    Mock -ModuleName RpaInstall Restore-RpaSignInChange { $env:RPA_TEST_ORDER += '{0}:{1};' -f $Change.kind, $Change.key }
+    $file = Join-Path $TestDrive 'turn-off.json'
+    $group = New-Object psobject -Property ([ordered]@{ kind = 'group'; key = 'S-1-5-32-555'; name = 'S-1-5-21-1-2-3-1001'; value = 'rpa-runner' })
+    $run = @{ Layout = @{ InstallFile = $file }; Install = [ordered]@{ version = '0.0.0'; autoSignIn = $true; mode = 'unattended'; signInChanges = @(New-AutoSignInChanges) + @($group) } }
+    try { InModuleScope RpaInstall -Parameters @{ Run = $run } { Disable-RpaAutoSignIn $Run 6>$null } }
+    finally { $order = $env:RPA_TEST_ORDER; $env:RPA_TEST_ORDER = $null }
+    $order | Should -BeExactly 'registry:HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon;secret:DefaultPassword;'
+    $run.AutoSignInTurnedOff | Should -BeTrue
+    $kept = Get-Content -Raw -LiteralPath $file | ConvertFrom-Json
+    $kept.autoSignIn | Should -BeFalse
+    @($kept.signInChanges | ForEach-Object { $_.kind }) | Should -BeExactly @('group')
+  }
+
+  It 'a failed conversion turns automatic sign-in on again, with its stored password, and goes back to the signed-in mode' {
+    Mock -ModuleName RpaInstall Restore-RpaSignInChanges { @() }
+    Mock -ModuleName RpaInstall Set-RpaSignInPassword { }
+    Mock -ModuleName RpaInstall Enable-RpaAutoSignIn { }
+    Mock -ModuleName RpaInstall Set-RpaDesktopUnlocked { }
+    $file = Join-Path $TestDrive 'failed-conversion.json'
+    $before = '{ "version": "0.2.0", "user": "rpa-runner", "runnerPort": 8765, "browserPort": 3000, "browser": true, "autoSignIn": true, "signInChanges": [ { "kind": "secret", "key": "DefaultPassword", "name": "" } ] }' | ConvertFrom-Json
+    $supervisor = New-Object psobject -Property ([ordered]@{ kind = 'secret'; key = 'L$RpaRunnerBotPassword'; name = '' })
+    $run = @{
+      Layout = @{ InstallFile = $file }; Account = @{ Display = 'rpa-runner'; Name = 'rpa-runner' }; Sid = 'S-1-5-21-1-2-3-1001'; Password = (New-TestPassword)
+      Upgrade = $true; AutoSignInBefore = $true; Before = $before; NewChanges = @($supervisor); CreatedUser = $false; WroteInstallFile = $true; AutoSignInTurnedOff = $true
+      Install = [ordered]@{ version = '0.3.0'; user = 'rpa-runner'; runnerPort = 8765; browserPort = 3000; browser = $true; autoSignIn = $false; mode = 'unattended'
+        idleSeconds = 15; runnerInnerPort = 18765; browserInnerPort = 13000; listenAddresses = @('0.0.0.0'); signInChanges = @($supervisor) }
+    }
+    $result = InModuleScope RpaInstall -Parameters @{ Run = $run } { Undo-RpaFailedRun $Run 6>$null }
+    @($result.NotPutBack).Count | Should -Be 0
+    Should -Invoke -ModuleName RpaInstall Set-RpaSignInPassword -Times 1 -Exactly
+    Should -Invoke -ModuleName RpaInstall Enable-RpaAutoSignIn -Times 1 -Exactly
+    Should -Invoke -ModuleName RpaInstall Set-RpaDesktopUnlocked -Times 1 -Exactly
+    $kept = Get-Content -Raw -LiteralPath $file | ConvertFrom-Json
+    $kept.autoSignIn | Should -BeTrue
+    $kept.mode | Should -BeExactly 'signedIn'
+    @($kept.signInChanges | Where-Object { $_.key -eq 'L$RpaRunnerBotPassword' }).Count | Should -Be 0
+  }
+
+  It 'says what it could not turn on again, and keeps going' {
+    Mock -ModuleName RpaInstall Restore-RpaSignInChanges { @() }
+    Mock -ModuleName RpaInstall Set-RpaSignInPassword { throw 'Access is denied.' }
+    Mock -ModuleName RpaInstall Enable-RpaAutoSignIn { }
+    Mock -ModuleName RpaInstall Set-RpaDesktopUnlocked { }
+    $run = @{
+      Layout = @{ InstallFile = (Join-Path $TestDrive 'failed-again.json') }; Account = @{ Display = 'rpa-runner'; Name = 'rpa-runner' }; Password = (New-TestPassword)
+      Upgrade = $true; AutoSignInBefore = $true; Before = $null; NewChanges = @(); CreatedUser = $false; WroteInstallFile = $true; AutoSignInTurnedOff = $true
+      Install = [ordered]@{ version = '0.3.0'; user = 'rpa-runner'; autoSignIn = $false; mode = 'signedIn'; signInChanges = @() }
+    }
+    $result = InModuleScope RpaInstall -Parameters @{ Run = $run } { Undo-RpaFailedRun $Run 6>$null }
+    $result.NotPutBack | Should -BeExactly @('automatic sign-in of rpa-runner, which this run had turned off: Access is denied.')
   }
 }
 

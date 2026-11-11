@@ -121,6 +121,13 @@ function Get-RpaUnattendedNotice([string]$User, [int]$RunnerPort, [int]$BrowserP
     ('    and signs it out again {0} s after the last connection. {1}' -f $IdleSeconds, $inner)
   )
   if ($BrowserPort) { $lines += '    at port {0} and {1}.' -f ($RunnerPort + $script:InnerPortOffset), ($BrowserPort + $script:InnerPortOffset) }
+  if ($Steps -contains 'turn off automatic sign-in') {
+    $lines += '  - Automatic sign-in of {0} is turned off, and the settings -AutoSignIn changed go back to what they were.' -f $User
+  }
+  if ($Steps -contains 'keep the automatic sign-in password for the supervisor') {
+    $lines += '  - The password of {0} stays the same: the one stored for automatic sign-in is stored for the RPA Supervisor' -f $User
+    $lines += '    instead, so no program of {0} loses data it protects with that password.' -f $User
+  }
   $lines += '  - {0} is added to the group Remote Desktop Users, unless it is a member already.' -f $User
   if ($Steps -contains 'turn on Remote Desktop') {
     $lines += '  - Remote Desktop is turned on (it is off now). The installer turns on no firewall rule for Remote Desktop: the RPA'
@@ -137,6 +144,9 @@ function Get-RpaUnattendedNotice([string]$User, [int]$RunnerPort, [int]$BrowserP
       $lines += '  - The firewall rules for port {0} let connections in to the RPA Supervisor instead of the runner and the' -f $ports
       $lines += '    browser.'
     } else { $lines += '  - The firewall rule for port {0} lets connections in to the RPA Supervisor instead of the runner.' -f $ports }
+  }
+  if ($Steps -contains 'sign the bot user out') {
+    $lines += '  - {0} is signed out now (every session of {0}), so that the RPA Supervisor can sign it in for each run.' -f $User
   }
   $lines += '  - While someone is signed in as {0}, at the console or over Remote Desktop, runs are refused.' -f $User
   $lines += '  Uninstall-Rpa.ps1 puts these settings back to what they were.'
@@ -179,6 +189,9 @@ function Get-RpaInstallPlan {
   $unattended = [bool]$Parameters.Unattended -or ($wasUnattended -and -not $Parameters.UnattendedGiven)
   $idleSeconds = [int]$Parameters.IdleSeconds
   if ($wasUnattended -and -not $Parameters.IdleSecondsGiven -and $null -ne $Facts.InstalledIdleSeconds) { $idleSeconds = [int]$Facts.InstalledIdleSeconds }
+  # An install with automatic sign-in for this same bot user moves to -Unattended with the password it has: the one
+  # stored for automatic sign-in (or -UserPassword), so that no program of the bot user loses what it protects with it.
+  $convert = $unattended -and $upgrade -and [bool]$Facts.InstalledAutoSignInForUser -and [bool]$Facts.UserExists
   # The password an earlier run with -Unattended stored for this same user stays, while install.json records it.
   $secretKept = $unattended -and $wasUnattended -and [bool]$Facts.InstalledForUser -and [bool]$Facts.UserExists -and [bool]$Facts.InstalledSupervisorSecret
   # A local user that does not exist is created, on a first install and on an upgrade (someone removed it since).
@@ -288,10 +301,16 @@ function Get-RpaInstallPlan {
         $refusals.Add(('-Unattended needs a local user of this machine as the bot user; {0} is a domain user.' -f $user))
       }
       # Windows would sign the bot user in by itself, and the supervisor refuses a session it did not create.
-      elseif ($upgrade -and $Facts.InstalledAutoSignInUser) {
+      elseif ($upgrade -and $Facts.InstalledAutoSignInUser -and -not $convert) {
         $refusals.Add(('Automatic sign-in is set up for {0}, and with -Unattended nobody may be signed in by Windows itself. Run Uninstall-Rpa.ps1 first, which turns automatic sign-in off, then install with -Unattended.' -f $Facts.InstalledAutoSignInUser))
       }
-      elseif ($Facts.UserExists -and -not $hasPassword -and -not $secretKept) {
+      elseif ($convert -and -not $hasPassword -and $Facts.AutoSignInPassword -eq 'missing') {
+        $refusals.Add(('Automatic sign-in of {0} has no stored password that the installer can read, so -Unattended cannot keep it. Give the password of {0} with -UserPassword, or install for a new bot user with -User.' -f $user))
+      }
+      elseif ($convert -and -not $hasPassword -and $Facts.AutoSignInPassword -eq 'wrong') {
+        $refusals.Add(('Windows does not accept the password stored for automatic sign-in of {0} any more, so -Unattended cannot keep it. Give the password of {0} with -UserPassword, or install for a new bot user with -User.' -f $user))
+      }
+      elseif ($Facts.UserExists -and -not $hasPassword -and -not $secretKept -and -not $convert) {
         $refusals.Add(('-Unattended for the existing user {0} needs -UserPassword: the RPA Supervisor signs {0} in with it. A password the installer generated earlier is not known to anyone: set a new password for {0} and pass it, or remove {0} so the installer creates it again. After a new password the runner cannot read its certificate: remove it and put the new fingerprint into the n8n credential (docs/install/windows.md, section 10).' -f $user))
       }
       elseif ($Facts.UserExists -and $hasPassword -and $Facts.UserPasswordWrong -and -not $autoSignIn) {
@@ -382,6 +401,9 @@ function Get-RpaInstallPlan {
     if ($autoSignIn -and $Facts.UserExists -and $Facts.UserPasswordExpires) {
       $warnings.Add(("{0}'s password expires; automatic sign-in stops working when it does." -f $user))
     }
+    if ($convert -and -not $hasPassword -and $Facts.AutoSignInPasswordProblem) {
+      $warnings.Add(('The password stored for automatic sign-in of {0} could not be checked: {1}' -f $user, $Facts.AutoSignInPasswordProblem))
+    }
     if ($unattended -and $Facts.UserExists -and $Facts.UserPasswordExpires) {
       $warnings.Add(("{0}'s password expires; when it does, the RPA Supervisor cannot sign {0} in until a new one is stored with Install-Rpa.ps1 -Unattended -UserPassword." -f $user))
     }
@@ -431,10 +453,18 @@ function Get-RpaInstallPlan {
     }
     # After install.json, so that the uninstaller knows about each of them even when one fails. The service starts
     # once its folder, the group membership, Remote Desktop and the password are there.
+    # Moving from automatic sign-in: the password is stored for the supervisor while Windows still has it, then
+    # automatic sign-in goes off, and its console session is signed out before the supervisor's first sign-in.
     if ($unattended) {
+      if ($convert) {
+        if ($hasPassword) { $steps.Add("store the bot user's password for the supervisor") }
+        else { $steps.Add('keep the automatic sign-in password for the supervisor') }
+        $steps.Add('turn off automatic sign-in')
+      }
       $steps.Add('allow the bot user to sign in through Remote Desktop')
       if ($Facts.RemoteDesktopDenied) { $steps.Add('turn on Remote Desktop') }
-      if (-not $secretKept -or $hasPassword) { $steps.Add("store the bot user's password for the supervisor") }
+      if (-not $convert -and (-not $secretKept -or $hasPassword)) { $steps.Add("store the bot user's password for the supervisor") }
+      if ($convert) { $steps.Add('sign the bot user out') }
       $steps.Add('register the supervisor service')
       if ($firewall) { $steps.Add('point the firewall rules at the supervisor') }
     }
