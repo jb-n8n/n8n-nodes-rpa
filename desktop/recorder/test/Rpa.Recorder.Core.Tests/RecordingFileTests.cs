@@ -85,6 +85,31 @@ public class RecordingFileTests
     }
 
     [Fact]
+    public void A_recording_of_more_than_400_events_is_refused_when_saved()
+    {
+        // Each click on one window is an event, after the window's scope event.
+        var clicks = Enumerable.Range(1, RecordingFile.MaxEvents).Select(i => (Observation)Click(i, El("Button", $"btn{i}", $"Button {i}"))).ToArray();
+        Assert.Equal(RecordingFile.MaxEvents, Record(clicks[..^1]).ToFile("Test").Events.Count);
+        var e = Assert.Throws<InvalidOperationException>(() => Record(clicks).ToFile("Test"));
+        Assert.StartsWith("a recording holds at most 400 events; this one has 401", e.Message);
+    }
+
+    [Fact]
+    public void The_recording_limits_are_the_importers_and_the_step_parsers()
+    {
+        // The engine's importers (recording.ts and the files beside it, which it may share constants with) and its step
+        // parser, read in place.
+        var engine = string.Concat(Directory.GetFiles(RepoPath("packages", "engine", "src", "import"), "*.ts").Order(StringComparer.Ordinal).Select(File.ReadAllText))
+            + RepoFile("packages", "engine", "src", "steps", "parse.ts");
+        Assert.Matches($@"\bRECORDING_FORMAT = '{RecordingFile.Format}';", engine);
+        Assert.Matches($@"\bMAX_RECORDING_EVENTS = {RecordingFile.MaxEvents};", engine);
+        Assert.Matches($@"\bMAX_UIA_TEXT = {Texts.MaxText};", engine);
+        Assert.Matches($@"\bMAX_START_VALUE = {Session.MaxStartValueLength};", engine);
+        Assert.Matches($@"\bsteps\.length > {RecordingFile.MaxSteps}\)", engine);
+        Assert.Matches($@"\bargs\.length <= {Session.MaxArgs} && args\.every\(\(a\) => typeof a === 'string' && a\.length <= {Session.MaxArgLength} ", engine);
+    }
+
+    [Fact]
     public void An_app_whose_path_is_not_a_program_is_refused()
     {
         Assert.Throws<ArgumentException>(() => Record(new AppStarted(At(0), @"C:\Apps\run.bat", [], Window)));

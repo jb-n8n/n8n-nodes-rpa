@@ -36,6 +36,7 @@ on:
       - "packages/engine/src/desktop/stable-ids.ts"
       - "packages/engine/src/import/recording.ts"
       - "packages/engine/src/steps/desktop-vocabulary.ts"
+      - "packages/engine/src/steps/parse.ts"
       - ".github/workflows/desktop.yml"
   push:
     branches: [main]
@@ -51,6 +52,7 @@ on:
       - "packages/engine/src/desktop/stable-ids.ts"
       - "packages/engine/src/import/recording.ts"
       - "packages/engine/src/steps/desktop-vocabulary.ts"
+      - "packages/engine/src/steps/parse.ts"
       - ".github/workflows/desktop.yml"
   workflow_dispatch:
   # For a workflow that needs the package. Any job of the calling run can upload an artifact of the same name, with a

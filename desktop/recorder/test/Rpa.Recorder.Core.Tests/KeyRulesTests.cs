@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+using Rpa.Runner.Core.Policy;
 using static Rpa.Recorder.Core.Tests.Fakes;
 
 namespace Rpa.Recorder.Core.Tests;
@@ -125,6 +127,31 @@ public class KeyRulesTests
         }
         Assert.Equal("Ctrl+Alt+Delete", Event(Delete, true, true, false, Grid));
         Assert.Equal("Ctrl+Alt+F5", Event(F5, true, true, false, Grid));
+    }
+
+    [Fact]
+    public void Every_key_event_the_recorder_writes_is_a_chord_the_runner_reads_back_with_a_key_name_of_the_engine()
+    {
+        // The engine's key names (KEY_NAMES in desktop-vocabulary.ts), besides letters, digits and F1 to F24.
+        var ts = RepoFile("packages", "engine", "src", "steps", "desktop-vocabulary.ts");
+        var names = Regex.Matches(Regex.Match(ts, @"const KEY_NAMES\b[^{]*\{(?<b>[^}]*)\}").Groups["b"].Value, @":\s*'(?<n>[A-Za-z]+)'")
+            .Select(m => m.Groups["n"].Value).ToHashSet();
+        Assert.Contains("PageDown", names);
+        var written = 0;
+        for (var vk = 0; vk < 256; vk++)
+        {
+            if (KeyRules.KeyName(vk) is not { } key) continue;
+            Assert.True(names.Contains(key) || Regex.IsMatch(key, "^([A-Z0-9]|F([1-9]|1[0-9]|2[0-4]))$"), key);
+            foreach (var (ctrl, alt, shift) in new[] { (false, false, false), (true, false, false), (false, true, false), (false, false, true),
+                         (true, true, false), (true, false, true), (false, true, true), (true, true, true) })
+            {
+                if (KeyRules.Kind(vk, ctrl, alt) is KeyKind.Modifier or KeyKind.Shell or KeyKind.Printable) continue;
+                var chord = KeyRules.Chord(ctrl, alt, shift, key);
+                Assert.Equal(chord, KeyChord.Parse(chord).ToString());
+                written++;
+            }
+        }
+        Assert.True(written > 100, $"{written} chords");
     }
 
     [Fact]
