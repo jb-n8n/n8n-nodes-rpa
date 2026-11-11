@@ -74,8 +74,15 @@ export function desktopLocator(target: UiaTarget): DesktopLocator {
   return kept.length ? { ...primary, fallbacks: kept } : primary;
 }
 
-/** The exported file's name as an anchored pattern (expectFile.pattern). */
-export const filePattern = (file: string): string => `^${file.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}$`;
+/**
+ * The exported file's name as an anchored pattern (expectFile.pattern). A name without an extension also matches with
+ * one extension: a Save dialog adds its file type's extension itself (line-items is saved as line-items.csv). A name
+ * with an extension matches only itself.
+ */
+export const filePattern = (file: string): string => {
+  const name = file.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+  return /[^.]\.[^.]+$/.test(file) ? `^${name}$` : `^${name}(?:\\.[^.]+)?$`;
+};
 
 const sameExe = (a: string | undefined, b: string): boolean => {
   if (a === undefined) return true;
