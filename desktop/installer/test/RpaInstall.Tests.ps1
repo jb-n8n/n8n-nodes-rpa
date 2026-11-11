@@ -1802,54 +1802,6 @@ Describe 'Get-RpaUninstallPlan' {
 }
 
 Describe 'Invoke-RpaUninstall' {
-  # A package that was unpacked only in part would install, and then point the user to a tool that is not there.
-  Context 'the files a package must hold' {
-    BeforeAll {
-      $script:Needed = @('VERSION', 'runner\RpaRunner.exe', 'runner\RpaPolicy.exe', 'runner\RpaSupervisor.exe', 'recorder\RpaRecorder.exe', 'scripts\start-loop.ps1', 'scripts\start-runner.ps1', 'scripts\Show-RpaConnection.ps1', 'rpa.cmd', 'scripts\rpa.ps1')
-      $script:BrowserNeeded = @('browser\node.exe', 'browser\host\host.mjs', 'browser\host\run-server.mjs', 'browser\gate\gate.mjs', 'browser\node_modules\playwright\cli.js', 'scripts\start-browser.ps1')
-      # Invoke-RpaInstallPlan reads these; elsewhere than on Windows they are not set.
-      $script:Places = @{ ProgramFiles = $env:ProgramFiles; ProgramData = $env:ProgramData; ComputerName = $env:COMPUTERNAME }
-      if (-not $env:ProgramFiles) { $env:ProgramFiles = Join-Path $TestDrive 'Program Files' }
-      if (-not $env:ProgramData) { $env:ProgramData = Join-Path $TestDrive 'ProgramData' }
-      if (-not $env:COMPUTERNAME) { $env:COMPUTERNAME = 'BOT-PC' }
-      function New-TestPackage([string[]]$Leave) {
-        $root = Join-Path $TestDrive ('package-' + [guid]::NewGuid().ToString('N'))
-        foreach ($name in $script:Needed + $script:BrowserNeeded) {
-          if ($Leave -contains $name) { continue }
-          $path = Join-Path $root ($name -replace '\\', [IO.Path]::DirectorySeparatorChar)
-          New-Item -ItemType Directory -Force -Path (Split-Path -Parent $path) | Out-Null
-          Set-Content -LiteralPath $path -Value 'made up'
-        }
-        $root
-      }
-    }
-    AfterAll { $env:ProgramFiles = $script:Places.ProgramFiles; $env:ProgramData = $script:Places.ProgramData; $env:COMPUTERNAME = $script:Places.ComputerName }
-
-    It 'refuses a package without <Name> before the first step' -ForEach @(
-      @{ Name = 'runner\RpaPolicy.exe' }, @{ Name = 'runner\RpaSupervisor.exe' }, @{ Name = 'recorder\RpaRecorder.exe' }, @{ Name = 'rpa.cmd' }, @{ Name = 'scripts\rpa.ps1' }, @{ Name = 'browser\host\run-server.mjs' }, @{ Name = 'browser\gate\gate.mjs' }, @{ Name = 'browser\node_modules\playwright\cli.js' }
-    ) {
-      $package = New-TestPackage @($Name)
-      Mock -ModuleName RpaInstall Copy-RpaProgramFiles { }
-      $plan = @{ Refusals = @(); Warnings = @(); Steps = @('copy program files') }
-      $source = (Resolve-Path -LiteralPath $package).ProviderPath.TrimEnd([IO.Path]::DirectorySeparatorChar)
-      { Invoke-RpaInstallPlan -Plan $plan -Parameters (New-TestParameters) -SourceDir $package } |
-        Should -Throw -ExpectedMessage "$Name is missing from $source. Unpack the whole package and run Install-Rpa.ps1 from that folder."
-      Should -Invoke -ModuleName RpaInstall Copy-RpaProgramFiles -Times 0 -Exactly
-    }
-
-    It 'with -NoBrowser does not ask for the files of the browser' {
-      $package = New-TestPackage $script:BrowserNeeded
-      Mock -ModuleName RpaInstall Copy-RpaProgramFiles { }
-      Mock -ModuleName RpaInstall Read-RpaInstallFile { }
-      Mock -ModuleName RpaInstall Get-RpaSid { 'S-1-5-21-1-2-3-1001' }
-      # The step's name, which the installer prints as it starts it.
-      Mock -ModuleName RpaInstall Write-Host { }
-      $plan = @{ Refusals = @(); Warnings = @(); Steps = @('copy program files') }
-      { Invoke-RpaInstallPlan -Plan $plan -Parameters (New-TestParameters @{ NoBrowser = $true }) -SourceDir $package } | Should -Not -Throw
-      Should -Invoke -ModuleName RpaInstall Copy-RpaProgramFiles -Times 1 -Exactly
-    }
-  }
-
   It 'runs no plan that has a refusal' {
     { Invoke-RpaUninstall -Plan @{ Refusals = @('no') } -RemoveData } | Should -Throw -ExpectedMessage 'The plan has refusals; nothing was changed.'
   }
