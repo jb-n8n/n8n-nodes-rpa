@@ -419,10 +419,11 @@ function Get-RpaSid([hashtable]$Account) {
 }
 
 # Ends the two tasks and everything started from the install directory: the RPA Supervisor (when its service runs this
-# install's program, stopped as a service first, which signs its session out; a process ended otherwise would be started again by Windows a minute later), the
-# runner, the browser host, its browser, the demo app, and the start scripts (also when someone started them by hand),
-# which would otherwise start the programs again while their files are replaced. The tasks are switched off until they
-# are registered again or removed; the service stays stopped until it is registered again or removed.
+# install's program, stopped as a service first, which signs its session out; a process ended otherwise would be started
+# again by Windows a minute later), the runner, the browser host, its browser, the demo app, and the start scripts (also
+# when someone started them by hand), which would otherwise start the programs again while their files are replaced. The
+# tasks are switched off until they are registered again or removed; the service stays stopped until it is registered
+# again or removed.
 function Stop-RpaServices([string]$InstallDir) {
   if ((Get-RpaServicePath $script:SupervisorService) -ieq (Get-RpaSupervisorPath $InstallDir)) { Stop-Service -Name $script:SupervisorService -Force }
   foreach ($name in $script:RunnerTask, $script:BrowserTask) {
@@ -1080,7 +1081,7 @@ function Close-RpaBotSessions([hashtable]$Run) {
 
 # A standard local user (member of Users only) whose password never expires. Without -UserPassword the password is
 # random, is made here and is stored only for automatic sign-in or for the RPA Supervisor (the plan refuses a new user
-# with none of the three).
+# without -UserPassword, -AutoSignIn or -Unattended, except on Windows Server, where such an install is unattended).
 # Returns the password as a SecureString for that step.
 function New-RpaUser([hashtable]$Account, [Security.SecureString]$Password) {
   if (-not $Password) {
@@ -1594,10 +1595,10 @@ function Test-RpaUnattendedChange($Change) {
   $false
 }
 
-# The step 'put back what -Unattended changed', for an install with -Unattended:$false over one with -Unattended: puts back what
-# install.json records of -Unattended (the firewall rules, the service, the stored password, Remote Desktop, the group
-# membership), the last first, and keeps in install.json only the records of what it could not put back. Those fail
-# the step, so that the next run or Uninstall-Rpa.ps1 tries them again.
+# The step 'put back what -Unattended changed', for an install with -Unattended:$false over one with -Unattended: puts
+# back what install.json records of -Unattended (the firewall rules, the service, the stored password, Remote Desktop,
+# the group membership), the last first, and keeps in install.json only the records of what it could not put back. Those
+# fail the step, so that the next run or Uninstall-Rpa.ps1 tries them again.
 function Undo-RpaUnattended([hashtable]$Run) {
   $changes = @($Run.Install.signInChanges | Where-Object { $_ -and (Test-RpaUnattendedChange $_) })
   if ($changes.Count -eq 0) { return }

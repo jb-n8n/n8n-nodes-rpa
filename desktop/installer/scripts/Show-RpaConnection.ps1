@@ -16,11 +16,11 @@
 # token=<hidden: run with -ShowTokens>, and the script says so. The token lines and the connection lines with a token
 # are written through the host's own writer, not through a cmdlet or the pipeline, and a token is read inside the
 # function that makes its line, so that no command's parameters carry a token (PowerShell's module logging records
-# those). What remains: a transcript records what the window shows, a program that runs this script and reads its
-# output (a remote command tool, for example) keeps that output, and a PowerShell command that calls this script in
-# its own session gets those lines on the screen, not as output. Everything else is written to the pipeline. The runner's fingerprint comes from its start line in logs\runner.out.log; the browser's
-# is the SHA-256 of its certificate (browser-cert.pem). The bot user can write both files, so the fingerprints are
-# what this machine's bot user reports.
+# those). What remains: a transcript records what the window shows, a program that runs this script and reads its output
+# (a remote command tool, for example) keeps that output, and a PowerShell command that calls this script in its own
+# session gets those lines on the screen, not as output. Everything else is written to the pipeline. The runner's
+# fingerprint comes from its start line in logs\runner.out.log; the browser's is the SHA-256 of its certificate
+# (browser-cert.pem). The bot user can write both files, so the fingerprints are what this machine's bot user reports.
 #
 # In unattended mode (Install-Rpa.ps1 -Unattended) it also shows whether the service RPA Supervisor runs, the bot
 # user's sessions (quser.exe), the supervisor's last failure from supervisor-state.json and whether that failure blocks

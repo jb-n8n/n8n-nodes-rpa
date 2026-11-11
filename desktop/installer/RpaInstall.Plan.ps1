@@ -161,14 +161,14 @@ function Test-RpaNoModeGiven([hashtable]$Parameters) {
 
 # Decides what an install does. -Parameters holds Install-Rpa.ps1's parameters (User, UserPassword, RunnerPort,
 # BrowserPort, NoBrowser, NoFirewall, AllowFrom, AllowFromAnyAddress, IncludePublicNetwork, AutoSignIn, Unattended,
-# UnattendedGiven, IdleSeconds, IdleSecondsGiven, Force); -Facts is what Get-RpaMachineFacts returns. With a refusal there are no steps: the installer
-# changes nothing. Questions are what the installer has confirmed with YES before the first step (with -Force they are
-# warnings). AllowFrom in the result is what the firewall rules let in: addresses and ranges, or the one word any, or
-# nothing without rules; PublicNetwork says whether the rules also apply on networks Windows treats as Public. Notice
-# is what -Unattended changes, in lines to show and confirm before the first step, when an earlier run has not set it
-# up already; without a sign-in mode its first two lines say that the install is unattended for that reason.
-# Unattended and IdleSeconds are the mode and idle time the install gets: an upgrade keeps them from the record unless
-# -Unattended or -IdleSeconds is given.
+# UnattendedGiven, IdleSeconds, IdleSecondsGiven, Force); -Facts is what Get-RpaMachineFacts returns. With a refusal
+# there are no steps: the installer changes nothing. Questions are what the installer has confirmed with YES before the
+# first step (with -Force they are warnings). AllowFrom in the result is what the firewall rules let in: addresses and
+# ranges, or the one word any, or nothing without rules; PublicNetwork says whether the rules also apply on networks
+# Windows treats as Public. Notice is what -Unattended changes, in lines to show and confirm before the first step, when
+# an earlier run has not set it up already; without a sign-in mode its first two lines say that the install is
+# unattended for that reason. Unattended and IdleSeconds are the mode and idle time the install gets: an upgrade keeps
+# them from the record unless -Unattended or -IdleSeconds is given.
 function Get-RpaInstallPlan {
   param(
     [Parameter(Mandatory = $true)][hashtable]$Parameters,
@@ -195,7 +195,7 @@ function Get-RpaInstallPlan {
   # signed-in mode. The idle time stays what the install recorded unless -IdleSeconds is given.
   $unattended = [bool]$Parameters.Unattended -or ($wasUnattended -and -not $Parameters.UnattendedGiven)
   # Without a mode, a first install for a new local bot user on Windows Server is unattended; on Windows 10 or 11 it is
-  # refused as before, with the sentence that names -AutoSignIn.
+  # refused, with the sentence that names -AutoSignIn.
   $defaultMode = (Test-RpaNoModeGiven $Parameters) -and -not $upgrade -and -not $Facts.UserExists -and -not $Facts.UserIsDomain -and [bool]$Facts.IsServer
   if ($defaultMode) { $unattended = $true }
   $idleSeconds = [int]$Parameters.IdleSeconds
@@ -410,7 +410,8 @@ function Get-RpaInstallPlan {
     if ($upgrade -and $Facts.RunnerRunning) {
       $text = 'The runner is running; a run in progress will fail.'
       # A move from automatic sign-in always finds the runner running (Windows signed the bot user in), and signs the
-      # bot user out anyway, which its notice says: a refusal here would hide that notice and its question behind -Force.
+      # bot user out anyway, which its notice says: a refusal here would hide that notice and its question behind
+      # -Force.
       if ($Parameters.Force -or $convert) { $warnings.Add($text) } else { $refusals.Add($text + ' Use -Force to continue.') }
     }
     # A mistyped -User would otherwise move the install to that name, or create a user of that name, without a word.

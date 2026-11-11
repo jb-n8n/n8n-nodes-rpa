@@ -7,8 +7,9 @@
 # which it makes on its first start), RPA_BROWSER_PORT (from install.json) and PLAYWRIGHT_BROWSERS_PATH (the browser
 # that came with the package). In unattended mode (install.json's mode, from Install-Rpa.ps1 -Unattended) the RPA
 # Supervisor listens on the browser's port and passes each connection on, so the host listens on 127.0.0.1 only
-# (RPA_BROWSER_BIND), at browserInnerPort; this task then starts when the supervisor signs the bot user in. Its output goes to %ProgramData%\RPA Runner\logs\browser.out.log and browser.err.log
-# (the previous run's in browser.*.1.log). The loop is start-loop.ps1.
+# (RPA_BROWSER_BIND), at browserInnerPort; this task then starts when the supervisor signs the bot user in. Its output
+# goes to %ProgramData%\RPA Runner\logs\browser.out.log and browser.err.log (the previous run's in browser.*.1.log). The
+# loop is start-loop.ps1.
 $ErrorActionPreference = 'Stop'
 $installDir = Split-Path -Parent $PSScriptRoot
 $dataDir = Join-Path $env:ProgramData 'RPA Runner'
