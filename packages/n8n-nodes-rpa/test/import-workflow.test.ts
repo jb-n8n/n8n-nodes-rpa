@@ -141,32 +141,17 @@ function lint(w: WorkflowJson): void {
       if (key === 'options') for (const o of Object.keys(value as Record<string, unknown>)) expect(optionNames).toContain(o);
     }
   }
-  // Each Run steps repairs with its own Chat model and sends Repaired Steps (output 1) to its own Approve steps.
+  // Runs as generated: no repair branch, so no Chat model (a credential) and no Approve steps (a workflow to pick); each
+  // browser Run steps' note says how to add it. Only the Data output is connected.
   const runs = w.nodes.filter((x) => x.type === NODE_TYPE);
   for (const n of runs) {
-    expect(n.parameters.aiRepair, n.name).toBe(true);
-    expect(typeof n.parameters.goal, n.name).toBe('string');
-    const chat = models(w, n.name);
-    expect(chat, n.name).toHaveLength(1);
-    expect(byName(w, chat[0]).type).toBe(CHAT);
-    const outs = targets(w, n.name);
-    expect(outs.length, n.name).toBeLessThanOrEqual(2);
-    expect(outs[1], n.name).toHaveLength(1);
-    expect(byName(w, outs[1][0]).type).toBe(EXECUTE);
-    expect(outs[0] ?? [], n.name).not.toContain(outs[1][0]);
+    expect(n.parameters.aiRepair, n.name).toBe(false);
+    expect(n.parameters, n.name).not.toHaveProperty('goal');
+    expect(models(w, n.name), n.name).toEqual([]);
+    expect(targets(w, n.name).length, n.name).toBeLessThanOrEqual(1);
+    if (!n.credentials) expect(n.notes, n.name).toContain('To let it repair itself when the site changes:\n1. Connect a chat model to its Model input (after step 2).\n2. Turn on AI Repair here and write the Goal in plain words.\n3. Connect its Repaired Steps output to an Execute Workflow node that calls RPA: 3 Approve steps.');
   }
-  for (const n of w.nodes.filter((x) => x.type === CHAT)) {
-    expect(n.parameters).toEqual(CHAT_PARAMETERS);
-    // A sub-node: one ai_languageModel connection to one Run steps, no main connection, nothing comes in.
-    expect(Object.keys(w.connections[n.name] ?? {})).toEqual(['ai_languageModel']);
-    expect(w.connections[n.name].ai_languageModel?.flat()).toHaveLength(1);
-  }
-  for (const n of w.nodes.filter((x) => x.type === EXECUTE)) {
-    expect(n.parameters).toEqual(APPROVE_PARAMETERS);
-    expect(w.connections[n.name], n.name).toBeUndefined();
-  }
-  expect(w.nodes.filter((x) => x.type === CHAT)).toHaveLength(runs.length);
-  expect(w.nodes.filter((x) => x.type === EXECUTE)).toHaveLength(runs.length);
+  expect(w.nodes.filter((x) => x.type === CHAT || x.type === EXECUTE)).toEqual([]);
   // Data Tables: only known tables and columns.
   for (const n of w.nodes.filter((x) => x.type === 'n8n-nodes-base.dataTable')) {
     const p = n.parameters as { dataTableId: { value: string }; filters?: { conditions: { keyName: string }[] } };
@@ -204,8 +189,6 @@ describe('buildWorkflow', () => {
       ['On a schedule', 'n8n-nodes-base.scheduleTrigger'],
       ['Get active steps (sap-report-1)', 'n8n-nodes-base.dataTable'],
       ['Use Browser Chrome: SAP Logon', NODE_TYPE],
-      ['Chat model (sap-report-1)', CHAT],
-      ['Approve steps (sap-report-1)', EXECUTE],
       ['Upload line items to S3', 'n8n-nodes-base.awsS3'],
       ['If many line items', 'n8n-nodes-base.if'],
       ['Send SMTP Mail Message', 'n8n-nodes-base.emailSend'],
@@ -220,9 +203,8 @@ describe('buildWorkflow', () => {
     expect(byName(w, 'On a schedule').notes).toBe('Set the time, then turn this node on and publish the workflow. Until then the bot runs only when you click Execute.');
     expect(content(byName(w, 'About this import'))).toContain('**On a schedule** is off: set the time, turn it on and publish the workflow.');
     expect(targets(w, 'Get active steps (sap-report-1)')).toEqual([['Use Browser Chrome: SAP Logon']]);
-    // Data (0) still feeds the next node; Repaired Steps (1) goes to Approve steps; the Chat model is the Model input.
-    expect(targets(w, 'Use Browser Chrome: SAP Logon')).toEqual([['Upload line items to S3'], ['Approve steps (sap-report-1)']]);
-    expect(w.connections['Chat model (sap-report-1)']).toEqual({ ai_languageModel: [[{ node: 'Use Browser Chrome: SAP Logon', type: 'ai_languageModel', index: 0 }]] });
+    // Data (0) feeds the next node; there is no repair branch.
+    expect(targets(w, 'Use Browser Chrome: SAP Logon')).toEqual([['Upload line items to S3']]);
     expect(targets(w, 'Upload line items to S3')).toEqual([['If many line items']]);
     expect(targets(w, 'If many line items')).toEqual([['Send SMTP Mail Message'], ['Delay']]);
     expect(targets(w, 'Send SMTP Mail Message')).toEqual([['Notify the region']]);
@@ -240,15 +222,14 @@ describe('buildWorkflow', () => {
       filters: { conditions: [{ keyName: 'name', condition: 'eq', keyValue: 'sap-report-1' }, { keyName: 'status', condition: 'eq', keyValue: 'active' }] },
       returnAll: false, limit: 1, orderBy: true, orderByColumn: 'version', orderByDirection: 'DESC',
     });
-    // Run steps: signed steps from that row, Name and Expected Version, AI Repair on with a Goal.
+    // Run steps: signed steps from that row, Name and Expected Version, AI Repair off (it runs as generated).
     expect(byName(w, 'Use Browser Chrome: SAP Logon').parameters).toEqual({
       operation: 'runSteps',
       steps: "={{ $json.steps ?? '' }}",
       requireSignedSteps: true,
       signature: '={{ $json.signature }}',
       approvedBy: '={{ $json.approvedBy }}',
-      aiRepair: true,
-      goal: 'Do what the imported steps do: sap-report-1',
+      aiRepair: false,
       // The run variables the steps type, empty for the person to fill in (none is secret here).
       options: { name: 'sap-report-1', expectedVersion: '={{ $json.version }}', variables: { values: [{ name: 'company', value: '' }, { name: 'from', value: '' }, { name: 'to', value: '' }] } },
     });
@@ -375,16 +356,15 @@ describe('buildWorkflow', () => {
     const workflow = new Workflow({ nodes: structuredClone(w.nodes) as unknown as INode[], connections: w.connections as unknown as IConnections, nodeTypes, active: false });
     const run = workflow.getNode('Use Browser Chrome: SAP Logon');
     expect(run?.parameters).toMatchObject({
-      operation: 'runSteps', steps: "={{ $json.steps ?? '' }}", requireSignedSteps: true, signature: '={{ $json.signature }}', approvedBy: '={{ $json.approvedBy }}', aiRepair: true,
+      operation: 'runSteps', steps: "={{ $json.steps ?? '' }}", requireSignedSteps: true, signature: '={{ $json.signature }}', approvedBy: '={{ $json.approvedBy }}', aiRepair: false,
       options: { name: 'sap-report-1', expectedVersion: '={{ $json.version }}' },
     });
     for (const [from, byType] of Object.entries(w.connections)) {
       expect(workflow.getNode(from)).not.toBeNull();
       for (const outs of Object.values(byType)) for (const out of outs ?? []) for (const c of out) expect(workflow.getNode(c.node)).not.toBeNull();
     }
-    // n8n sees the Chat model as Run steps' Model input, and Approve steps after Run steps.
-    expect(workflow.getParentNodes('Use Browser Chrome: SAP Logon', 'ai_languageModel')).toEqual(['Chat model (sap-report-1)']);
-    expect(workflow.getChildNodes('Use Browser Chrome: SAP Logon')).toContain('Approve steps (sap-report-1)');
+    // No Model input and no repair branch: the workflow runs as generated.
+    expect(workflow.getParentNodes('Use Browser Chrome: SAP Logon', 'ai_languageModel')).toEqual([]);
     // Every working node is reachable from the trigger, the Chat model through the Run steps it serves; no sticky is connected.
     const reached = new Set(workflow.getChildNodes('Run the bot'));
     for (const n of working(w).filter((x) => !['Run the bot', 'On a schedule'].includes(x.name) && x.type !== CHAT)) expect(reached, n.name).toContain(n.name);
@@ -614,91 +594,27 @@ describe('buildWorkflow', () => {
     expect(content(byName(w, `${rest} more activities`))).toContain('see the report');
     expect(w.nodes.map((n) => n.name)).not.toContain('After 0');
   });
-  it('layout: the gold Pick sticky and each node (box and label) of a browser pair do not overlap anything else', () => {
-    type Box = { name: string; x1: number; y1: number; x2: number; y2: number };
-    // An n8n node is about 100 x 100, its label sits under it, centred, about 40 high and at most about 200 wide.
-    const boxes = (w: WorkflowJson): { node: Box[]; sticky: Box[] } => {
-      const node: Box[] = [];
-      const sticky: Box[] = [];
-      for (const n of w.nodes) {
-        const [x, y] = n.position;
-        if (n.type === STICKY) {
-          const { width, height } = n.parameters as { width: number; height: number };
-          sticky.push({ name: n.name, x1: x, y1: y, x2: x + width, y2: y + height });
-        } else {
-          const lw = Math.min(200, 7 * n.name.length + 10);
-          node.push({ name: n.name, x1: x, y1: y, x2: x + 100, y2: y + 100 });
-          node.push({ name: `${n.name} (label)`, x1: x + 50 - lw / 2, y1: y + 100, x2: x + 50 + lw / 2, y2: y + 140 });
-        }
-      }
-      return { node, sticky };
-    };
-    const hit = (a: Box, b: Box) => a.x1 < b.x2 && b.x1 < a.x2 && a.y1 < b.y2 && b.y1 < a.y2;
+  it('each browser Run steps runs as generated: no Chat model, no Approve steps, AI Repair off, and a note that says how to add self-repair', () => {
     const w = buildWorkflow(flowOf([
       { kind: 'browser', sequence: 1, displayName: 'Log in' },
       { kind: 'http', url: 'https://api.example.com/', displayName: 'Call' },
       { kind: 'if', expression: 'x', then: [{ kind: 'browser', sequence: 2, displayName: 'Export' }], else: [], displayName: 'If x' },
-    ]), [draft('m-1'), draft('m-2')], { name: 'm' });
-    for (const workflow of [w, imported().json]) {
-      const { node, sticky } = boxes(workflow);
-      const picks = sticky.filter((b) => b.name.startsWith('Pick RPA: 3 Approve steps'));
-      expect(picks.length).toBeGreaterThan(0);
-      for (const pick of picks) for (const n of node) expect(hit(pick, n), `${pick.name} overlaps ${n.name}`).toBe(false);
-      for (const [i, a] of node.entries()) for (const b of node.slice(i + 1)) {
-        if (/^(Chat model|Approve steps) \(/.test(a.name) || /^(Chat model|Approve steps) \(/.test(b.name)) expect(hit(a, b), `${a.name} overlaps ${b.name}`).toBe(false);
-      }
-    }
-  });
-  it('each Run steps heals with its own Chat model and sends Repaired Steps to its own Approve steps', () => {
-    const w = buildWorkflow(flowOf([
-      { kind: 'browser', sequence: 1, displayName: 'Log in' },
-      { kind: 'http', url: 'https://api.example.com/', displayName: 'Call' },
-      { kind: 'if', expression: 'x', then: [{ kind: 'browser', sequence: 2, displayName: 'Export' }], else: [], displayName: 'If x' },
-      { kind: 'wait', seconds: 1, displayName: 'Approve steps' },
     ]), [draft('m-1'), draft('m-2')], { name: 'm' });
     lint(w);
-    // One Chat model, one Approve steps and one gold sticky per Run steps: an n8n sub-node connects to one parent.
-    for (const [run, d] of [['Log in', 'm-1'], ['Export', 'm-2']]) {
-      expect(models(w, run)).toEqual([`Chat model (${d})`]);
-      expect(w.connections[`Chat model (${d})`]).toEqual({ ai_languageModel: [[{ node: run, type: 'ai_languageModel', index: 0 }]] });
-      expect(byName(w, run).parameters).toMatchObject({ aiRepair: true, goal: `Do what the imported steps do: ${d}` });
-      expect(byName(w, run).notes).toMatch(/Goal/);
-      expect(byName(w, run).notes).toMatch(/Chat model/);
-      const approve = byName(w, `Approve steps (${d})`);
-      expect(targets(w, run)[1]).toEqual([approve.name]);
-      expect(approve).toMatchObject({ type: EXECUTE, typeVersion: 1.2, parameters: APPROVE_PARAMETERS });
-      expect(approve.notes).toMatch(/RPA: 3 Approve steps/);
-      const pick = byName(w, `Pick RPA: 3 Approve steps (${d})`);
-      expect(pick.type).toBe(STICKY);
-      expect((pick.parameters as { color: number }).color).toBe(COLOUR.gold);
-      expect(content(pick)).toContain(`**Approve steps (${d})**`);
-      expect(content(pick)).toContain('**RPA: 3 Approve steps**');
-      // Near its Run steps: below it, left of the next column.
-      for (const n of [byName(w, `Chat model (${d})`), approve, pick]) {
-        expect(n.position[1]).toBeGreaterThan(byName(w, run).position[1]);
-        expect(n.position[0]).toBeGreaterThanOrEqual(byName(w, run).position[0] - 100);
-        expect(n.position[0]).toBeLessThan(byName(w, run).position[0] + 200);
-      }
+    for (const run of ['Log in', 'Export']) {
+      expect(byName(w, run).parameters).toMatchObject({ aiRepair: false });
+      expect(targets(w, run)).toHaveLength(run === 'Log in' ? 1 : 0);
+      expect(String(byName(w, run).notes).split('\n').slice(1)).toEqual([
+        'To let it repair itself when the site changes:', '1. Connect a chat model to its Model input (after step 2).',
+        '2. Turn on AI Repair here and write the Goal in plain words.', '3. Connect its Repaired Steps output to an Execute Workflow node that calls RPA: 3 Approve steps.',
+      ]);
     }
-    // Data still goes on: Log in → Call; the If's true branch → Export → the wait after the If.
-    expect(targets(w, 'Log in')[0]).toEqual(['Call']);
-    expect(targets(w, 'If x')).toEqual([['Get active steps (m-2)'], ['Approve steps']]);
-    expect(targets(w, 'Export')[0]).toEqual(['Approve steps']);
-    // A project node already called Approve steps keeps that name; the generator's are labelled with their draft.
-    expect(byName(w, 'Approve steps').type).toBe('n8n-nodes-base.wait');
-    // The Chat model and Approve steps match template 2's node shapes (template 2 picks its approval workflow by name only).
-    const t2 = (type: string) => TEMPLATE_2.nodes.find((n) => n.type === type)!;
-    expect([t2(CHAT).typeVersion, t2(CHAT).parameters]).toEqual([1.5, CHAT_PARAMETERS]);
-    expect([t2(EXECUTE).typeVersion, t2(EXECUTE).parameters]).toEqual([1.2, APPROVE_PARAMETERS]);
-    expect(TEMPLATE_2.connections['Chat model']).toEqual({ ai_languageModel: [[{ node: 'Run steps', type: 'ai_languageModel', index: 0 }]] });
-    // No credential anywhere: Set once names the Chat models and the Approve steps to finish.
-    expect(JSON.stringify(w)).not.toMatch(/"credentials"|anthropicApi/);
-    const setOnce = content(byName(w, 'Set once'));
-    expect(setOnce).toContain('**Chat model** (your model provider): **Chat model (m-1)**, **Chat model (m-2)**');
-    expect(setOnce).toContain('**Approve steps (m-1)**, **Approve steps (m-2)**: choose **RPA: 3 Approve steps**');
-    expect(content(byName(w, 'About this import'))).toMatch(/AI Repair is on/);
+    // Nothing in the file asks for a credential or a workflow beyond what Set once names.
+    const set = content(byName(w, 'Set once'));
+    expect(set).toContain('- **RPA Browser**, **RPA Site Login** and **RPA Step Signing**');
+    expect(set).not.toMatch(/Chat model|choose \*\*RPA: 3/);
+    expect(content(byName(w, 'About this import'))).toContain('AI Repair is off: each Run steps\' note says how to let it repair itself when the site changes');
   });
-
   it('an import that took its code from a workflow gives each Run steps the same One-Time Code Workflow, and Code Timeout when it was not the default', () => {
     const flow = flowOf([{ kind: 'browser', sequence: 1, displayName: 'Log in' }, { kind: 'browser', sequence: 2, displayName: 'Export' }]);
     const runOptions = (w: WorkflowJson, run: string) => (byName(w, run).parameters as { options: Record<string, unknown> }).options;
@@ -742,31 +658,28 @@ describe('buildWorkflow', () => {
     expect(content(byName(w, 'Fill in the variables (d)'))).toContain('Options → Variables: `company` (starts as `2000`), `odd`. Secret: `password`');
   });
 
-  it('the Goal is never project text that could be an expression', () => {
+  it('no project text reaches a Run steps parameter: no Goal is written, and a name that holds {{ stays text', () => {
     for (const name of ['a{{ $env.X }}', 'b}}{{', 'c']) {
       const w = buildWorkflow(flowOf([{ kind: 'browser', sequence: 1, displayName: '={{ $env.AWS_SECRET_ACCESS_KEY }}' }]), [draft(`${name}-1`)], { name });
       lint(w);
       const run = w.nodes.find((n) => n.type === NODE_TYPE)!;
-      const goal = run.parameters.goal as string;
-      expect(goal.startsWith('=')).toBe(false);
-      expect(goal).not.toContain('{{');
-      expect(goal).not.toContain('$env');
-      expect(goal).toBe(name === 'c' ? 'Do what the imported steps do: c-1' : 'Do what the imported steps do.');
+      expect(run.parameters).not.toHaveProperty('goal');
+      // The Name is a literal (it never starts with "="), so n8n reads it as text.
+      expect((run.parameters.options as { name: string }).name).toBe(`${name}-1`);
     }
   });
 
-  it('the cap counts a browser pair with its Chat model, Approve steps and sticky, and never draws half of one', () => {
-    const total = 200;
+  it('the cap counts a browser pair as its two nodes and never draws half of one', () => {
+    const total = 300;
     const flow = flowOf(Array.from({ length: total }, (_, i): FlowNode => ({ kind: 'browser', sequence: i + 1, displayName: `Browser ${i + 1}` })));
     const w = buildWorkflow(flow, Array.from({ length: total }, (_, i) => draft(`cap-${i + 1}`)), { name: 'cap' });
     lint(w);
-    // The trigger and 99 pairs of five nodes: a 100th would take the workflow past MAX_WORKFLOW_NODES.
+    // The two triggers and 249 pairs of two nodes: a 250th would take the workflow past MAX_WORKFLOW_NODES.
     const runs = w.nodes.filter((n) => n.type === NODE_TYPE);
-    expect(runs).toHaveLength(99);
-    expect(w.nodes.filter((n) => n.type === 'n8n-nodes-base.dataTable')).toHaveLength(99);
-    expect(w.nodes.filter((n) => n.name.startsWith('Pick RPA: 3 Approve steps'))).toHaveLength(99);
+    expect(runs).toHaveLength(249);
+    expect(w.nodes.filter((n) => n.type === 'n8n-nodes-base.dataTable')).toHaveLength(249);
     expect(w.nodes.length).toBeLessThanOrEqual(MAX_WORKFLOW_NODES + 3);
-    expect(content(byName(w, '101 more activities'))).toContain('see the report');
+    expect(content(byName(w, '51 more activities'))).toContain('see the report');
     // After a pair that did not fit, nothing smaller is drawn out of order.
     const mixed = buildWorkflow(flowOf([
       ...Array.from({ length: 497 }, (_, i): FlowNode => ({ kind: 'wait', seconds: 1, displayName: `W ${i}` })),

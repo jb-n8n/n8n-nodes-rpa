@@ -2,8 +2,8 @@
 // recording's one desktop node, or, for the other sources, one browser or desktop pair per step list. It starts with a
 // manual trigger and a Schedule Trigger that is switched off (set the time, then publish).
 // Each browser sequence n becomes Get active steps (playwright_steps, name <name>-n) feeding Run steps with signed steps
-// required and AI Repair on, as in template 2: its own Chat model and its Repaired Steps output into its own
-// Approve steps, whose workflow the user picks. Each desktop sequence n becomes Get active steps feeding a Run steps on
+// required and AI Repair off, so the workflow runs as generated: no Chat model credential and no approval workflow to
+// pick first; the Run steps note says how to add self-repair. Each desktop sequence n becomes Get active steps feeding a Run steps on
 // the RPA Desktop Runner credential (named by type, no secret), with signed steps required, AI Repair off (desktop steps
 // have none yet) and the variables its steps type, empty for the user to fill in (secrets from a secret source). Everything else follows a fixed table of n8n 2.41 node types. Text from the project is
 // never evaluated: it goes into literal parameters only when n8n cannot read it as an expression, and otherwise into
@@ -81,8 +81,6 @@ const T = {
   emailSend: ['n8n-nodes-base.emailSend', 2.1],
   wait: ['n8n-nodes-base.wait', 1.1],
   if: ['n8n-nodes-base.if', 2.2],
-  chatModel: ['@n8n/n8n-nodes-langchain.lmChatAnthropic', 1.5],
-  executeWorkflow: ['n8n-nodes-base.executeWorkflow', 1.2],
 } as const satisfies Record<string, readonly [string, number]>;
 
 const STEPS_TABLE = 'playwright_steps';
@@ -93,8 +91,8 @@ const BRANCH = 200;
 const HTTP_METHODS = new Set(['DELETE', 'GET', 'HEAD', 'OPTIONS', 'PATCH', 'POST', 'PUT']);
 const MAX_NAME = 95;
 const APPROVE_WORKFLOW = 'RPA: 3 Approve steps';
-/** The nodes one browser pair draws: Get active steps, Run steps, its Chat model, its Approve steps and their sticky. */
-const PAIR_NODES = 5;
+/** The nodes one browser pair draws: Get active steps and Run steps. */
+const PAIR_NODES = 2;
 /** The nodes one desktop pair draws: Get active steps, Run steps and the variables sticky. */
 const DESKTOP_PAIR_NODES = 3;
 /**
@@ -183,8 +181,6 @@ class Builder {
   readonly s3Nodes: string[] = [];
   readonly emailNodes: string[] = [];
   readonly httpNodes: string[] = [];
-  readonly chatNodes: string[] = [];
-  readonly approveNodes: string[] = [];
   readonly draftNames: string[] = [];
   readonly desktopRunNodes: string[] = [];
   readonly desktopDraftNames: string[] = [];
@@ -440,42 +436,29 @@ class Builder {
         });
         this.connect(tails, get);
         const run = this.nodeName(n.displayName, `Run steps (${draftName})`);
-        const chat = this.unique(`Chat model (${draftName})`);
-        const approve = this.unique(`Approve steps (${draftName})`);
         const runX = x + STEP;
-        // The draft name comes from the import's Name, which may hold "{{": then the Goal names no draft.
-        const goal = literal(`Do what the imported steps do: ${draftName}`) ?? 'Do what the imported steps do.';
         const vars = stepVariables(draft.script);
+        // Runs as generated: no repair branch (a Chat model and an Approve steps would need a credential and a workflow
+        // picked first). The note says how to add it.
         this.add(T.rpa, run, [runX, y], {
           operation: 'runSteps',
           steps: "={{ $json.steps ?? '' }}",
           requireSignedSteps: true,
           signature: '={{ $json.signature }}',
           approvedBy: '={{ $json.approvedBy }}',
-          aiRepair: true,
-          goal,
+          aiRepair: false,
           options: { name: draftName, expectedVersion: '={{ $json.version }}', ...this.codeOptions(), ...this.runOptions(true), ...this.variablesOption(vars.all, new Set(vars.secret)) },
         }, {
-          notes: `Runs the signed steps ${draftName} (${plural(draft.script.steps.length, 'step')} ${FROM[this.source].steps} "${line(n.displayName, 120)}"). Pick RPA Browser, RPA Site Login and RPA Step Signing here. AI Repair is on: rewrite the Goal in plain words (what the data is), pick a credential on ${chat}, and repaired steps go to ${approve}. For a site on your own network, turn on Options → Allow Private Network here.${vars.secret.length ? ` ${vars.secret.join(', ')}: put ${vars.secret.length === 1 ? 'it' : 'them'} in an RPA Secret Variables credential (type rpaSecretVariablesApi, field Variables) and select it here.` : ''}`,
+          notes: [
+            `Runs the signed steps ${draftName} (${plural(draft.script.steps.length, 'step')} ${FROM[this.source].steps} "${line(n.displayName, 120)}"). Pick RPA Browser, RPA Site Login and RPA Step Signing here. For a site on your own network, turn on Options → Allow Private Network here.${vars.secret.length ? ` ${vars.secret.join(', ')}: put ${vars.secret.length === 1 ? 'it' : 'them'} in an RPA Secret Variables credential (type rpaSecretVariablesApi, field Variables) and select it here.` : ''}`,
+            'To let it repair itself when the site changes:',
+            '1. Connect a chat model to its Model input (after step 2).',
+            `2. Turn on AI Repair here and write the Goal in plain words.`,
+            `3. Connect its Repaired Steps output to an Execute Workflow node that calls ${APPROVE_WORKFLOW}.`,
+          ].join('\n'),
         });
         this.connect([{ node: get, output: 0 }], run);
         this.runNodes.push(run);
-        // Below Run steps and left of the next column, where an If's or an inline sticky starts (x - 60, x - 40). The two labels sit
-        // side by side (centres 210 apart) and the sticky starts below them (a node is 100 high, its label about 40 more).
-        this.add(T.chatModel, chat, [runX - 80, y + 160], { model: { __rl: true, mode: 'id', value: 'claude-sonnet-5-5' }, options: {} });
-        this.connect([{ node: chat, output: 0 }], run, 'ai_languageModel');
-        this.chatNodes.push(chat);
-        this.add(T.executeWorkflow, approve, [runX + 130, y + 160], {
-          source: 'database',
-          workflowId: { __rl: true, mode: 'list', value: '', cachedResultName: APPROVE_WORKFLOW },
-          mode: 'once',
-          options: { waitForSubWorkflow: false },
-        }, { notes: `Pick the workflow ${APPROVE_WORKFLOW}. Fire and forget: the approval waits for a person; this run finishes now.` });
-        this.connect([{ node: run, output: 1 }], approve);
-        this.approveNodes.push(approve);
-        this.sticky(`Pick ${APPROVE_WORKFLOW} (${draftName})`,
-          `### Pick the approval workflow (gold)\nIn **${md(approve)}**, pick **${APPROVE_WORKFLOW}**: repaired steps wait there for a person.`,
-          COLOUR.gold, [runX - 80, y + 320], 300, 100);
         this.lastFile = downloadProperty(draft);
         return { tails: [{ node: run, output: 0 }], x: x + 2 * STEP };
       }
@@ -598,7 +581,7 @@ class Builder {
         const end = Math.max(body.x, x + STEP);
         this.sticky(`Loop: ${line(n.displayName, 80) || 'For Each'}`,
           `### Loop: ${md(n.displayName, 120)} (grey)\nUiPath looped over ${code(n.expression)}. n8n runs each node once per item, so the loop's body is inline here. Make sure the items that reach it are the ones to loop over.${this.hasBrowser([n.body]) ? ` ${RUNS_ONCE}` : ''}`,
-          // A browser pair's Chat model, Approve steps and sticky reach 420 below its row.
+          // Room below the row for a pair's labels.
           COLOUR.grey, [x - 60, y - 160 - BRANCH * d], end - x, 330 + 2 * BRANCH * d + (this.hasBrowser([n.body]) ? 270 : 0));
         return { tails: body.tails, x: end };
       }
@@ -653,7 +636,7 @@ export function buildWorkflow(flow: UiPathFlow, drafts: Draft[], opts: BuildWork
     '### About this import (grey: leave as is)',
     `Imported from ${from.origin} ${code(project, 120)}: ${summary}.`,
     b.draftNames.length
-      ? `${uipath ? 'Each browser sequence is' : 'The browser steps are'} **Get active steps** → **Run steps**. AI Repair is on: when a page no longer matches, the Run steps' **Chat model** repairs the run and its Repaired Steps output goes to **Approve steps** (**${APPROVE_WORKFLOW}**, which emails the approver). Run steps runs only the newest signed, active version of its steps (${b.draftNames.slice(0, 3).map((d) => code(d)).join(', ')}${b.draftNames.length > 3 ? ', …' : ''}) from ${STEPS_TABLE}: approve them on the review page of **${IMPORT_FORM}**; until a version is approved, Run steps stops with "Steps is empty".`
+      ? `${uipath ? 'Each browser sequence is' : 'The browser steps are'} **Get active steps** → **Run steps**, which runs only the newest signed, active version of its steps (${b.draftNames.slice(0, 3).map((d) => code(d)).join(', ')}${b.draftNames.length > 3 ? ', …' : ''}) from ${STEPS_TABLE}: approve them on the review page of **${IMPORT_FORM}**; until a version is approved, Run steps stops with "Steps is empty". AI Repair is off: each Run steps' note says how to let it repair itself when the site changes (a chat model, AI Repair, **${APPROVE_WORKFLOW}**).`
       : '',
     b.desktopDraftNames.length
       ? `${uipath ? 'Each desktop sequence is' : 'The desktop steps are'} **Get active steps** → **Run steps** on the **RPA Desktop Runner**: it runs only the newest signed, active version of its steps (${b.desktopDraftNames.slice(0, 3).map((d) => code(d)).join(', ')}${b.desktopDraftNames.length > 3 ? ', …' : ''}) from ${STEPS_TABLE}. Desktop steps are not replayed at import and have no AI repair yet: approve them on the review page of **${IMPORT_FORM}**, ticking the steps that save, send or submit.`
@@ -669,13 +652,11 @@ export function buildWorkflow(flow: UiPathFlow, drafts: Draft[], opts: BuildWork
     b.runNodes.length ? `- **RPA Browser**, **RPA Site Login** and **RPA Step Signing**: ${listed(b.runNodes)}` : '',
     b.desktopRunNodes.length ? `- **RPA Desktop Runner** and **RPA Step Signing**: ${listed(b.desktopRunNodes)}` : '',
     b.secretVariables.size ? `- ${SECRET_VARIABLES}, holding ${[...b.secretVariables].slice(0, 10).map((v) => code(v, 60)).join(', ')}: on the Run steps that name them (their notes say which)` : '',
-    b.chatNodes.length ? `- **Chat model** (your model provider): ${listed(b.chatNodes)}` : '',
     b.credentials && !b.desktopRunNodes.length ? '- UiPath credential lookups (green notes in the flow): the RPA Site Login on Run steps holds that login' : '',
     b.credentials && b.desktopRunNodes.length ? `- UiPath credential lookups (green notes in the flow): desktop steps type the sign-in from their Run steps' Variables (a password from ${SECRET_VARIABLES}); browser steps use the RPA Site Login on their Run steps` : '',
     b.s3Nodes.length ? `- **AWS**: ${listed(b.s3Nodes)}` : '',
     b.emailNodes.length ? `- **SMTP**: ${listed(b.emailNodes)}` : '',
     b.httpNodes.length ? `- HTTP authentication, if the endpoint needs it: ${listed(b.httpNodes)}` : '',
-    b.approveNodes.length ? `\n${listed(b.approveNodes)}: choose **${APPROVE_WORKFLOW}**.` : '',
   ].filter(Boolean).join('\n');
   const before = b.nodes.length;
   b.sticky('About this import', about, COLOUR.grey, [-80, top], 460, 360, true);

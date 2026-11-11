@@ -577,22 +577,23 @@ describe('3-approve-steps.json', () => {
       changeList: 'Step 1: Wait for the window\nStep 2: Click Save <b>',
       safetyFlags: ['desktop app: "ErpDemo.exe"', 'candidate write: step 2 (Click Save, then $& close) may save, post or submit: list 2 in Write Steps if it does (…)', 'candidate write: step 7 (Press Enter) may save, post or submit: list 7 in Write Steps if it does (…)'],
       steps: { surface: 'desktop', app: { exe: 'ErpDemo.exe' }, steps: [
-        { intent: 'Wait for the window', waitFor: {} }, { intent: 'Click Save <b>', click: {} }, { intent: 'Type into User name', fill: { value: '{{var.username}}' } },
+        { intent: 'Wait for the window', waitFor: {} }, { intent: 'Click Save <b>', click: {} }, { intent: 'Type into User name', fill: { field: { uia: { path: [{ name: 'User name' }] } }, value: '{{var.username}}' } },
+        { intent: 'Type into Date to', fill: { field: { uia: { path: [{ controlType: 'Edit', name: 'Date to' }] } }, value: '2026-11-30' } },
         { intent: 'Read the count', read: { as: 'out_count' } }, { intent: 'Return the file', expectFile: { pattern: 'x' } },
       ] },
     };
     const $ = (name: string) => ({ item: { json: name === 'Settings' ? { approvalTimeoutHours: 72 } : received } });
     const message = render(String(ask.message), { $ });
     // The short view first: what it does besides reading, then one short sentence per step with its marks.
-    expect(message.split('\n\nClick Review and decide')[0]).toBe('Desktop steps v1 for erp-1, for your approval.\nOpens ErpDemo.exe on the desktop runner.\nReturns a file to n8n: step 5.\n'
-      + 'Not tried by the import: read every step before you approve.\n\nThe steps:\n1. Wait for the window\n2. Click Save &lt;b&gt;\n3. Type into User name (variable username)\n4. Read the count (gives its text to n8n as out_count)\n5. Return the file (returns a file)');
+    expect(message.split('\n\nClick Review and decide')[0]).toBe('Desktop steps v1 for erp-1, for your approval.\nOpens ErpDemo.exe on the desktop runner.\nReturns a file to n8n: step 6.\n'
+      + 'Not tried by the import: read every step before you approve.\n\nThe steps:\n1. Wait for the window\n2. Click Save &lt;b&gt;\n3. Type into User name (variable username)\n4. Type &quot;2026-11-30&quot; into Date to\n5. Read the count (gives its text to n8n as out_count)\n6. Return the file (returns a file)');
     expect(message).toContain('tick the steps that save, send or submit (none is ticked for you), then approve or reject.');
-    expect(message).toContain('leaving a step unticked does not stop it from saving unless its control is in the runner policy');
+    expect(message).toContain('Ticked steps are allowed to save or send. An unticked step is stopped only when it tries to use a control or key that your administrator has protected on the bot machine.');
     // The full detail below: the item's own change list, evidence and flags.
     expect(message).toContain('Details of every step (how each one finds its control):\nEvidence: Not replayed\nSafety flags: desktop app: &quot;ErpDemo.exe&quot;\nStep 1: Wait for the window\nStep 2: Click Save &lt;b&gt;\n');
     expect(message).not.toContain('Write steps');
     const description = render(String((ask.options as IDataObject).responseFormDescription), { $ });
-    expect(description).toBe('Steps v1 for erp-1. Tick the steps that save, send or submit, from the numbered list in the email; none is ticked for you. The runner refuses a write only on the controls and keys its policy lists: an unticked step can still save through any other control.');
+    expect(description).toBe('Steps v1 for erp-1. Tick the steps that save, send or submit, from the numbered list in the email; none is ticked for you. Ticked steps are allowed to save or send. An unticked step is stopped only when it tries to use a control or key that your administrator has protected on the bot machine.');
     const fields = jsonFormFields(String(ask.jsonOutput), { $ });
     expect(fields).toEqual([
       { fieldLabel: 'Decision', fieldType: 'dropdown', fieldOptions: { values: [{ option: 'Approve and sign' }, { option: 'Reject' }] }, requiredField: true },
@@ -1024,7 +1025,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(settings).toMatchObject({ type: 'n8n-nodes-base.set', typeVersion: 3.4 });
     expect(settings.parameters).toMatchObject({
       includeOtherFields: true,
-      assignments: { assignments: [{ name: 'approval', value: 'on this form', type: 'string' }, { name: 'approver', value: APPROVER, type: 'string' }] },
+      assignments: { assignments: [{ name: 'approval', value: 'on this form', type: 'string' }, { name: 'approver', value: APPROVER, type: 'string' }, { name: 'showDetails', value: false, type: 'boolean' }] },
     });
     // Set 3.4 passes the upload (binary bot) on unless told to strip it.
     expect(settings).not.toHaveProperty('parameters.options.stripBinary');
@@ -1147,15 +1148,22 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(repaired).toHaveLength(1);
     const item = repaired[0].json;
     const fields = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan(ran) });
-    expect(fields.map((f) => [f.fieldType, f.fieldName])).toEqual([['html', undefined], ['checkbox', 'writes_0'], ['html', undefined], ['text', 'moreWrites_0'], ['radio', 'decision_0'], ['html', undefined]]);
+    expect(fields.map((f) => [f.fieldType, f.fieldName])).toEqual([['html', undefined], ['checkbox', 'writes_0'], ['html', undefined], ['text', 'moreWrites_0'], ['radio', 'decision_0']]);
     // A short top: the name and version as the page's title, two sentences.
     const options = review.parameters.options as IDataObject;
     expect(render(String(options.formTitle), { $: nodesRan(ran) })).toBe(`${String(item.name)}, version 1`);
     expect(options.formDescription).toBe('Approve and sign: these steps are signed and run under this name. Reject: nothing is signed.');
     expect(options.buttonLabel).toBe('Submit');
-    // What it does besides reading, in short lines, then one short sentence per step, from the item's own steps.
+    // What it does besides reading, in short lines, then one short sentence per step: its verb, the value it types or
+    // chooses and its field, as the recorder's bar words it; a secret variable never shows a value.
+    const POINTER = '<p><em>How each step finds its control is in this run\'s execution in n8n (the Import steps node\'s output), and in the approval email when approval is by email.</em></p>';
     expect(fields[0].html).toBe('<p>Opens ErpDemo.exe on the desktop runner.<br>Returns a file to n8n: step 17.<br>Not tried by the import: read every step before you approve.</p><p><b>The steps</b></p><ol>'
-      + (item.steps as { steps: { intent: string }[] }).steps.map((s, i) => `<li>${escapeHtml(s.intent)}${i === 2 ? ' <em>· secret variable password</em>' : i === 16 ? ' <em>· returns a file</em>' : ''}</li>`).join('') + '</ol>');
+      + [
+        'Wait for the window ERP Demo - Sign in', 'Type &quot;clerk&quot; into User name', 'Type into Password <em>· secret variable password</em>', 'Press Enter in Password',
+        'Wait for the window ERP Demo - Line items', 'Choose &quot;2000&quot; in Company code', 'Type &quot;2026-01-20&quot; into Date from', 'Type &quot;2026-11-30&quot; into Date to',
+        'Click Search', 'Click Vendor Row 1', 'Click File', 'Wait for the window erpdemo.exe', 'Click Export...', 'Wait for the window Export line items',
+        'Save line-items.csv into the run&#39;s export folder', 'Click Save', 'Return the exported file line-items.csv <em>· returns a file</em>',
+      ].map((l) => `<li>${l}</li>`).join('') + `</ol>${POINTER}`);
     expect((item.steps as { steps: unknown[] }).steps).toHaveLength(17);
     // The candidate writes are asked, not explained twice: ticked to start with (the person here recorded or imported the bot).
     expect(fields[1]).toEqual({
@@ -1165,10 +1173,14 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(fields[0].html).not.toContain('candidate');
     expect(fields[3]).toMatchObject({ fieldLabel: 'Any other step that saves, sends or submits (its number, optional)', placeholder: '7, 9' });
     expect(fields[3]).not.toHaveProperty('requiredField');
-    expect(fields[2].html).toBe('<p><em>A ticked step is signed as a write, so the desktop runner lets it use the write controls and keys its policy lists; it refuses a write only on those.</em></p>');
+    expect(fields[2].html).toBe('<p><em>Ticked steps are allowed to save or send. An unticked step is stopped only when it tries to use a control or key that your administrator has protected on the bot machine.</em></p>');
     expect(fields[4]).toEqual({ fieldLabel: 'Decision', fieldName: 'decision_0', fieldType: 'radio', fieldOptions: { values: [{ option: 'Approve and sign' }, { option: 'Reject' }] }, requiredField: true });
-    // Below the decision, the full detail: the item's own texts, escaped, in the page's small grey style (<em>).
-    expect(fields[5].html).toBe('<h4>Details of every step (how each one finds its control)</h4>'
+    // The page ends at the decision. Settings → showDetails puts the full detail (the item's own texts, escaped, small and
+    // grey) back, above the question, in place of the pointer.
+    expect(settingsJson().showDetails).toBe(false);
+    const detailed = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan({ ...ran, Settings: [[{ json: { ...settingsJson(), showDetails: true } }]] }) });
+    expect(detailed.map((f) => f.fieldType)).toEqual(['html', 'checkbox', 'html', 'text', 'radio']);
+    expect(detailed[0].html).toBe(String(fields[0].html).replace(POINTER, '') + '<h4>Details of every step (how each one finds its control)</h4>'
       + `<p><em><b>Safety flags:</b> ${escapeHtml(String(item.safetyLine))}</em></p>`
       + `<p><em><b>Evidence:</b> ${escapeHtml(String(item.evidenceLine))}</em></p>`
       + `<p><em><b>The steps:</b><br>${escapeHtml(String(item.changeList)).split('\n').join('<br>')}</em></p>`);
@@ -1220,11 +1232,11 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const ran = { Settings: [[{ json: settingsJson() }]], 'Import steps': [data, two] } as Record<string, INodeExecutionData[][]>;
     const fields = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan(ran) });
     const html = fields.filter((f) => f.fieldType === 'html').map((f) => String(f.html));
-    expect(html.map((h) => h.slice(0, 4))).toEqual(['<h3>', '<p><', '<h3>', '<p><', '<h4>']);
+    expect(html.map((h) => h.slice(0, 4))).toEqual(['<h3>', '<p><', '<h3>', '<p><']);
     expect(html[0]).toMatch(/^<h3>1 of 2: line-item-export, version 1<\/h3><p>Opens ErpDemo.exe/);
     expect(html[2]).toMatch(/^<h3>2 of 2: second&lt;b&gt;, version 1<\/h3>/);
-    // The details name each step list.
-    expect(html[4]).toContain('<p><b>second&lt;b&gt;</b></p><p><em><b>Safety flags:</b>');
+    // The page ends at the last decision: no detail block after it.
+    expect(fields.at(-1)).toMatchObject({ fieldType: 'radio', fieldName: 'decision_1' });
     expect(render(String((review.parameters.options as IDataObject).formTitle), { $: nodesRan(ran) })).toBe('Review 2 step lists');
     expect(fields.filter((f) => f.fieldType === 'radio').map((f) => [f.fieldName, f.fieldLabel])).toEqual([['decision_0', `${String(two[0].json.name)}: Decision`], ['decision_1', 'second<b>: Decision']]);
     const ticks = fields.find((f) => f.fieldName === 'writes_1');
@@ -1246,6 +1258,8 @@ describe('5-import-a-bot.json (the first-day import)', () => {
         { intent: 'Open the list', goto: 'https://a.example/list' }, { intent: 'Sign in', signIn: {} },
         { intent: 'Type the export password', fill: { field: { css: '#p' }, value: '{{var.exportPassword}}', secret: true } },
         { intent: 'Pick <b>Status</b>', select: { field: { css: '#s' }, value: '{{var.status}}' } }, { intent: 'Download the report', download: {} },
+        // A typed value the intent does not say: the short list shows it.
+        { intent: 'Type the note', fill: { field: { css: '#n' }, value: 'hello <b>' } },
       ] },
       safetyFlags: ['host: a.example\' <script>', 'form submission: POST a.example/send', 'download step', 'secret fill: a step types the run variable {{var.exportPassword}}'],
       safetyLine: 'host: a.example\' <script>; …', evidenceLine: '7 rows <img src=x onerror=alert(1)>; compared with the repair run: 0 missing, 0 extra',
@@ -1253,21 +1267,23 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     };
     const ran = { Settings: [[{ json: settingsJson() }]], 'Import steps': [[{ json: { report: { steps: 2, items: [] }, drafts: [] } }], [{ json: item }]] } as Record<string, INodeExecutionData[][]>;
     const fields = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan(ran) });
-    expect(fields.map((f) => f.fieldType)).toEqual(['html', 'radio', 'html']);
+    expect(fields.map((f) => f.fieldType)).toEqual(['html', 'radio']);
+    const POINTER = '<p><em>How each step finds its control is in this run\'s execution in n8n (the Import steps node\'s output), and in the approval email when approval is by email.</em></p>';
     expect(fields[0].html).toBe('<p>Opens a.example&#39; &lt;script&gt;.<br>Signs in with the RPA Site Login.<br>Submits a form: POST a.example/send.<br>Returns a file to n8n: step 5.<br>'
       + 'secret fill: a step types the run variable {{var.exportPassword}}<br>7 rows &lt;img src=x onerror=alert(1)&gt;.</p>'
       + '<p><b>⚠ Left out by the import:</b><br>step 4, Pick &lt;b&gt;Status&lt;/b&gt;<br>step 9, Wait</p>'
       + '<p><b>The steps</b></p><ol><li>Open the list</li><li>Sign in <em>· signs in with the RPA Site Login</em></li><li>Type the export password <em>· secret variable exportPassword</em></li>'
-      + '<li>Pick &lt;b&gt;Status&lt;/b&gt; <em>· variable status</em></li><li>Download the report <em>· returns a file</em></li></ol>');
-    expect(fields[2].html).toBe('<h4>Details of every step (how each one finds its control)</h4><p><em><b>Safety flags:</b> host: a.example&#39; &lt;script&gt;; …</em></p>'
+      + '<li>Pick &lt;b&gt;Status&lt;/b&gt; <em>· variable status</em></li><li>Download the report <em>· returns a file</em></li><li>Type the note: &quot;hello &lt;b&gt;&quot;</li></ol>' + POINTER);
+    const detailed = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan({ ...ran, Settings: [[{ json: { ...settingsJson(), showDetails: true } }]] }) });
+    expect(detailed[0].html).toBe(String(fields[0].html).replace(POINTER, '') + '<h4>Details of every step (how each one finds its control)</h4><p><em><b>Safety flags:</b> host: a.example&#39; &lt;script&gt;; …</em></p>'
       + '<p><em><b>Left out by the import (the source does these, the steps do not):</b><br>step 4, Pick &lt;b&gt;Status&lt;/b&gt;<br>step 9, Wait</em></p>'
       + '<p><em><b>Evidence (as reported by the run):</b> 7 rows &lt;img src=x onerror=alert(1)&gt;; compared with the repair run: 0 missing, 0 extra</em></p>'
       + '<p><em><b>What changed (as reported by the run):</b><br>Added: Open the list<br>Added: Read &quot;rows&quot; $&amp; $$</em></p>'
       + '<p><em>Screenshots of the replay are in this execution in n8n, on the Repaired Steps output of Import steps.</em></p>');
-    const notRun = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan({ ...ran, 'Import steps': [ran['Import steps'][0], [{ json: { ...item, evidenceLine: NOT_REPLAYED_LINE, attachmentNames: '', leftOutList: undefined } }]] }) });
+    const notRun = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan({ Settings: [[{ json: { ...settingsJson(), showDetails: true } }]], 'Import steps': [ran['Import steps'][0], [{ json: { ...item, evidenceLine: NOT_REPLAYED_LINE, attachmentNames: '', leftOutList: undefined } }]] }) });
     expect(notRun[0].html).toContain('<br>Not run by the import: check every step, each form&#39;s target and each download before you approve.</p><p><b>The steps</b></p><ol>');
-    expect(notRun[2].html).toContain(`<b>Evidence:</b> ${escapeHtml(NOT_REPLAYED_LINE)}</em></p><p><em><b>What changed (as written; these steps were never run):</b>`);
-    expect(notRun[2].html).not.toContain('Screenshots');
+    expect(notRun[0].html).toContain(`<b>Evidence:</b> ${escapeHtml(NOT_REPLAYED_LINE)}</em></p><p><em><b>What changed (as written; these steps were never run):</b>`);
+    expect(notRun[0].html).not.toContain('Screenshots');
   });
 
   it('a recording\'s marks name its secret variables from the import (Data drafts), never a value', async () => {

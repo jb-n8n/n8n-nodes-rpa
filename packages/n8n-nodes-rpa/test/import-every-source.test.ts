@@ -69,6 +69,15 @@ function workflowOf(item: INodeExecutionData): WorkflowJson {
   expect(text).not.toContain('allowPrivateNetwork');
   expect(wf.nodes.find((n) => n.type === 'n8n-nodes-base.scheduleTrigger')).toMatchObject({ disabled: true });
   expect(wf.nodes.filter((n) => n.type === 'n8n-nodes-base.manualTrigger')).toHaveLength(1);
+  // It runs as generated: no node that needs a credential or a workflow the person has not been told to pick. The only
+  // credentials are the RPA node's, which Set once names; no Chat model and no Execute Workflow.
+  expect(wf.nodes.filter((n) => n.type.startsWith('@n8n/n8n-nodes-langchain.') || n.type === 'n8n-nodes-base.executeWorkflow')).toEqual([]);
+  const setOnce = String(wf.nodes.find((n) => n.name === 'Set once')?.parameters.content);
+  for (const n of wf.nodes.filter((x) => x.type === 'n8n-nodes-rpa.playwright')) {
+    expect(n.parameters.aiRepair, n.name).toBe(false);
+    expect(setOnce, n.name).toContain(`**RPA Step Signing**`);
+    expect(setOnce, n.name).toContain(n.name.length <= 100 ? `**${n.name}**` : '**');
+  }
   return wf;
 }
 const runNodes = (wf: WorkflowJson) => wf.nodes.filter((n) => n.type === 'n8n-nodes-rpa.playwright');
