@@ -59,7 +59,7 @@ on:
   workflow_call:
     outputs:
       package-artifact:
-        description: The name of the artifact that holds rpa-windows-x64.zip and rpa-windows-x64.zip.sha256
+        description: The name of the artifact that holds rpa-windows-x64.zip, rpa-windows-x64.zip.sha256 and Get-Rpa.ps1
         value: ${{ jobs.windows.outputs.package-artifact }}
       package-artifact-id:
         description: The id of that artifact in the calling run; download it by this id
@@ -317,6 +317,7 @@ jobs:
           $zip = "$env:OUT\package\rpa-windows-x64.zip"
           $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()
           if ([IO.File]::ReadAllText("$zip.sha256") -ne "$hash  rpa-windows-x64.zip") { throw "rpa-windows-x64.zip.sha256 does not name the zip's SHA-256 $hash" }
+          if ([IO.File]::ReadAllText("$env:OUT\package\Get-Rpa.ps1") -notmatch "(?m)^\`$PackageSha256 = '$hash'\r?`$") { throw "Get-Rpa.ps1 does not name the zip's SHA-256 $hash" }
           "rpa-windows-x64.zip SHA-256 $hash"
           "sha256=$hash" | Out-File -Append -Encoding ascii -LiteralPath $env:GITHUB_OUTPUT
 
@@ -773,7 +774,8 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
-      # The package that was installed above, as a zip with its SHA-256; its id and digest are outputs of the job.
+      # The package that was installed above, as a zip with its SHA-256, and the Get-Rpa.ps1 that names both; the
+      # artifact's id and digest are outputs of the job.
       # Kept 7 days for a pull request (it is about 570 MB), 30 otherwise.
       - name: Upload the Windows package
         id: upload-package
@@ -783,6 +785,7 @@ jobs:
           path: |
             out/package/rpa-windows-x64.zip
             out/package/rpa-windows-x64.zip.sha256
+            out/package/Get-Rpa.ps1
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
           if-no-files-found: error
           compression-level: 0

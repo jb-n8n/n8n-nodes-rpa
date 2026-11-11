@@ -6,8 +6,15 @@
 #
 #   Invoke-Pester desktop/installer/test
 
+BeforeDiscovery {
+  # The connection lines the installer and the node's credentials share (packages/n8n-nodes-rpa/test/fixtures).
+  $script:LineSamples = @((Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot '../../../packages/n8n-nodes-rpa/test/fixtures/connection-lines.json') | ConvertFrom-Json).samples |
+      ForEach-Object { @{ description = $_.description; kind = $_.kind; address = $_.address; port = $_.port; token = $_.token; fingerprint = $_.fingerprint; line = $_.line } })
+}
+
 BeforeAll {
   $script:InstallerDir = Split-Path -Parent $PSScriptRoot
+  $script:LinesFile = Join-Path $PSScriptRoot '../../../packages/n8n-nodes-rpa/test/fixtures/connection-lines.json'
   Import-Module (Join-Path $script:InstallerDir 'RpaInstall.psd1') -Force
   # The module is three script files that its manifest loads into one module.
   $script:ModuleFiles = @('RpaInstall.psd1', 'RpaInstall.Plan.ps1', 'RpaInstall.SignIn.ps1', 'RpaInstall.Machine.ps1')
@@ -2804,6 +2811,18 @@ Describe 'Moving an install with automatic sign-in to -Unattended' {
     @($kept.signInChanges | ForEach-Object { $_.key }) | Should -BeExactly @('RPA Supervisor', 'DefaultPassword')
   }
 
+  It 'Install-Rpa.ps1 ends with the short commands, and after an unattended install with the connection lines and when its own sign-in ends' {
+    $source = Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir 'Install-Rpa.ps1')
+    $closing = $source.Substring($source.IndexOf("Write-Host 'RPA is installed.'"))
+    $closing | Should -Match ([regex]::Escape("`$rpa = Join-Path `$layout.InstallDir 'rpa.cmd'"))
+    $closing | Should -Match ([regex]::Escape("Write-Host ('  & `"{0}`" connection' -f `$rpa)"))
+    $closing | Should -Match ([regex]::Escape("Write-Host ('For how the supervisor is doing: & `"{0}`" status' -f `$rpa)"))
+    $closing | Should -Match ([regex]::Escape("Write-Host ('The installer signed {0} in once, to check the runner; that session ends by itself {1} s after the check (the idle time).' -f `$User, `$plan.IdleSeconds)"))
+    $closing | Should -Match ([regex]::Escape("& (Join-Path (Join-Path `$layout.InstallDir 'scripts') 'Show-RpaConnection.ps1') | Out-Host"))
+    # No 110-character command any more.
+    $closing | Should -Not -Match 'ExecutionPolicy Bypass -File'
+  }
+
   It 'Install-Rpa.ps1 says after a failed move that the bot user stays signed out until the next start' {
     $source = Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir 'Install-Rpa.ps1')
     $source | Should -Match ([regex]::Escape("if (`$_.Exception.Data['SignedOut'])"))
@@ -3339,6 +3358,152 @@ Describe 'Show-RpaConnection.ps1' {
     ($script:Output -join "`n") | Should -Not -Match 'Mode:|Supervisor'
   }
 
+  Context 'the connection lines' {
+    BeforeAll {
+      # The script's own functions, defined here, for the parts that need no install.
+      $ast = [Management.Automation.Language.Parser]::ParseFile($script:ShowScript, [ref]$null, [ref]$null)
+      foreach ($function in $ast.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
+        . ([scriptblock]::Create($function.Extent.Text))
+      }
+      $script:Lines = Get-Content -Raw -LiteralPath $script:LinesFile | ConvertFrom-Json
+      $script:Hidden = '<hidden: run with -ShowTokens>'
+      # A fingerprint as the script reads it: upper-case pairs joined by colons.
+      function ConvertTo-Pairs([string]$Hex) { (($Hex.ToUpperInvariant() -split '(..)') | Where-Object { $_ }) -join ':' }
+      $script:TokenFile = Join-Path $script:Root 'line-token'
+      $script:Machine = [Net.Dns]::GetHostName()
+      $script:Hint = '& "{0}" connection -ShowTokens' -f (Join-Path $script:MadeUpInstall 'rpa.cmd')
+    }
+
+    It 'the shared samples hold at least six lines: a name, an IPv6 address, another port, an install without the browser' {
+      $script:Lines.hiddenToken | Should -BeExactly $script:Hidden
+      @($script:Lines.samples).Count | Should -BeGreaterOrEqual 6
+      @($script:Lines.samples | Where-Object { $_.address -match '^[A-Za-z]' }).Count | Should -BeGreaterThan 0
+      @($script:Lines.samples | Where-Object { $_.line -match '://\[[0-9a-f:]+\]:' }).Count | Should -BeGreaterThan 0
+      @($script:Lines.samples | Where-Object { 8765, 3000 -notcontains $_.port }).Count | Should -BeGreaterThan 0
+      @($script:Lines.samples | Where-Object { $_.description -match '-NoBrowser' }).Count | Should -BeGreaterThan 0
+    }
+
+    It 'makes each line of the shared samples: <description>' -ForEach $script:LineSamples {
+      [IO.File]::WriteAllText($script:TokenFile, $token + "`r`n")
+      $made = Get-ConnectionLine $kind (Get-ConnectionHost $address) $port (ConvertTo-Pairs $fingerprint) $script:TokenFile $true
+      $made.Problem | Should -BeNullOrEmpty
+      $made.Line | Should -BeExactly $line
+      $made = Get-ConnectionLine $kind (Get-ConnectionHost $address) $port (ConvertTo-Pairs $fingerprint) $script:TokenFile $false
+      $made.Line | Should -BeExactly ($line.Replace("token=$token", "token=$($script:Hidden)"))
+    }
+
+    It 'makes the hidden lines of the shared samples without reading a token' {
+      Remove-Item -LiteralPath $script:TokenFile -ErrorAction SilentlyContinue
+      foreach ($sample in $script:Lines.hidden) {
+        $source = @($script:Lines.samples | Where-Object { $sample.line -eq $_.line.Replace("token=$($_.token)", "token=$($script:Hidden)") })
+        $source.Count | Should -Be 1
+        (Get-ConnectionLine $sample.kind (Get-ConnectionHost $source[0].address) $source[0].port (ConvertTo-Pairs $source[0].fingerprint) $script:TokenFile $false).Line | Should -BeExactly $sample.line
+      }
+    }
+
+    It 'takes a host name, an IPv4 address or an IPv6 address, and nothing else, for -Address' {
+      Get-ConnectionHost 'RPA-BOT-01' | Should -BeExactly 'RPA-BOT-01'
+      Get-ConnectionHost 'rpa.corp.example' | Should -BeExactly 'rpa.corp.example'
+      Get-ConnectionHost '203.0.113.10' | Should -BeExactly '203.0.113.10'
+      Get-ConnectionHost 'fd00::20' | Should -BeExactly '[fd00::20]'
+      Get-ConnectionHost '[fd00::20]' | Should -BeExactly '[fd00::20]'
+      foreach ($bad in '', 'a b', 'host/path', 'host#x', 'user@host', 'host:8765', 'host?x', '-host', 'host-', '256.1.1.1', 'fe80::1%3', '[fd00::20', 'fd00::g', 'a&b', '"host"') {
+        Get-ConnectionHost $bad | Should -BeNullOrEmpty -Because $bad
+      }
+    }
+
+    It 'says what is wrong with a token that cannot go into a line, and never the token' {
+      [IO.File]::WriteAllText($script:TokenFile, 'made up&token')
+      $made = Get-ConnectionLine 'runner' 'RPA-BOT-01' 8765 (ConvertTo-Pairs ('ab' * 32)) $script:TokenFile $true
+      $made.Line | Should -BeNullOrEmpty
+      $made.Problem | Should -BeExactly 'the token holds a character that a connection line cannot carry; use the Token field'
+      Remove-Item -LiteralPath $script:TokenFile
+      $made = Get-ConnectionLine 'runner' 'RPA-BOT-01' 8765 (ConvertTo-Pairs ('ab' * 32)) $script:TokenFile $true
+      $made.Line | Should -BeNullOrEmpty
+      $made.Problem | Should -BeExactly 'the token cannot be read (see the Runner token line)'
+    }
+
+    It "prints a line for each program with the machine's name and the token hidden, above the separate lines, and says so" {
+      $runner = 'rpa-runner://{0}:{1}/rpa/v1#token={2}&fingerprint={3}' -f $script:Machine, $script:RunnerPort, $script:Hidden, $script:RunnerFingerprint.Replace(':', '').ToLowerInvariant()
+      $browser = 'rpa-browser://{0}:{1}/#token={2}&fingerprint={3}' -f $script:Machine, $script:BrowserPort, $script:Hidden, $script:BrowserFingerprint.Replace(':', '').ToLowerInvariant()
+      $output = $script:Output
+      $at = [array]::IndexOf($output, 'Runner connection line, for the Connection Line of the RPA Desktop Runner credential:')
+      $at | Should -Be 0
+      $output[$at + 1] | Should -BeExactly $runner
+      $at = [array]::IndexOf($output, 'Browser connection line, for the Connection Line of the RPA Browser credential:')
+      $at | Should -BeGreaterThan ([array]::IndexOf($output, "Runner fingerprint: $($script:RunnerFingerprint)"))
+      $output[$at + 1] | Should -BeExactly $browser
+      [array]::IndexOf($output, "Browser fingerprint: $($script:BrowserFingerprint)") | Should -BeGreaterThan ($at + 1)
+      $output | Should -Contain ('The tokens are hidden in the lines (token={0}). For the lines to paste, run as an administrator: {1}' -f $script:Hidden, $script:Hint)
+      $output[-1] | Should -BeExactly 'Where n8n reaches this machine by another name or address (a NAT, a tunnel), add -Address <that name or address>.'
+    }
+
+    It 'puts the address given with -Address into the lines, and into the command it names' {
+      $output = @(& $script:ShowScript -Address 'fd00::20')
+      $output[1] | Should -BeLike ('rpa-runner://`[fd00::20`]:{0}/rpa/v1#token=*' -f $script:RunnerPort)
+      @($output | Where-Object { $_ -like 'rpa-browser://`[fd00::20`]:*' }).Count | Should -Be 1
+      $output | Should -Contain ('The tokens are hidden in the lines (token={0}). For the lines to paste, run as an administrator: {1} -Address fd00::20' -f $script:Hidden, $script:Hint)
+      ($output -join "`n") | Should -Not -Match 'add -Address'
+    }
+
+    It 'refuses an -Address that is not a host name or an IP address, and prints nothing else' {
+      $output = @(& $script:ShowScript -Address 'evil.example/#token=x')
+      $output | Should -BeExactly @('-Address: evil.example/#token=x is not a host name, an IPv4 address or an IPv6 address.')
+      $LASTEXITCODE | Should -Be 1
+    }
+
+    It 'says that a line is not known yet while its fingerprint is not' {
+      Set-Content -LiteralPath $script:RunnerLog -Value 'nothing yet'
+      try {
+        $output = @(& $script:ShowScript)
+        $output | Should -Contain 'Runner connection line: not known yet (the program has not started)'
+        @($output | Where-Object { $_ -like 'rpa-runner://*' }).Count | Should -Be 0
+      } finally {
+        Set-Content -LiteralPath $script:RunnerLog -Value (New-StartLine $script:RunnerFingerprint)
+      }
+    }
+
+    # PowerShell's module logging records the parameters of every command, so a token must not be one.
+    It 'writes a line with a token through the host, and reads the token inside the function that makes the line' {
+      $source = Get-Content -Raw -LiteralPath $script:ShowScript
+      $source | Should -Match ([regex]::Escape('if ($ShowTokens) { $Host.UI.WriteLine($made.Line) } else { Write-Output $made.Line }'))
+      $source | Should -Match ([regex]::Escape('function Get-ConnectionLine([string]$Kind, [string]$HostName, [int]$Port, [string]$Fingerprint, [string]$TokenFile, [bool]$WithToken)'))
+    }
+
+    It 'prints both lines with their tokens with -ShowTokens, in the output of powershell.exe' -Skip:($env:OS -ne 'Windows_NT') {
+      $output = @(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script:ShowScript -ShowTokens -Address 203.0.113.10)
+      $LASTEXITCODE | Should -Be 0
+      $output | Should -Contain ('rpa-runner://203.0.113.10:{0}/rpa/v1#token={1}&fingerprint={2}' -f $script:RunnerPort, $script:RunnerToken, $script:RunnerFingerprint.Replace(':', '').ToLowerInvariant())
+      $output | Should -Contain ('rpa-browser://203.0.113.10:{0}/#token={1}&fingerprint={2}' -f $script:BrowserPort, $script:BrowserToken, $script:BrowserFingerprint.Replace(':', '').ToLowerInvariant())
+      ($output -join "`n") | Should -Not -Match 'tokens are hidden'
+    }
+  }
+
+  Context 'rpa status' {
+    It 'says whether each program listens, the mode and the sessions, and nothing n8n is given' {
+      $output = @(& $script:ShowScript -Status)
+      $LASTEXITCODE | Should -Be 0
+      $output | Should -Contain ('Runner: listening on port {0}' -f $script:RunnerPort)
+      $output | Should -Contain "Browser: not listening yet. It starts within a minute of the bot user's sign-in: run this again. If it stays like this, read $(Join-Path $script:LogDir 'browser.err.log')"
+      $output | Should -Contain 'Mode: signed in. The runner and the browser run while rpa-runner is signed in.'
+      @($output | Where-Object { $_ -like 'Sessions of rpa-runner: *' -or $_ -like 'Session of rpa-runner: *' }).Count | Should -BeGreaterThan 0
+      ($output -join "`n") | Should -Not -Match 'URL|fingerprint|connection line|rpa-runner://|rpa-browser://|token'
+    }
+
+    It 'names automatic sign-in as the mode of an install that has it' {
+      $file = Join-Path $script:MadeUpInstall 'install.json'
+      Set-Content -LiteralPath $file -Value ($script:InstallJson -replace '"autoSignIn":\s*false', '"autoSignIn": true') -Encoding UTF8
+      try { @(& $script:ShowScript -Status) | Should -Contain 'Mode: automatic sign-in. Windows signs rpa-runner in at every start of this machine.' }
+      finally { Set-Content -LiteralPath $file -Value $script:InstallJson -Encoding UTF8 }
+    }
+
+    It 'refuses -ShowTokens and -Address, which are for the connection lines' {
+      @(& $script:ShowScript -Status -ShowTokens) | Should -BeExactly @('-Status shows no connection values: give it without -ShowTokens and -Address.')
+      $LASTEXITCODE | Should -Be 1
+      @(& $script:ShowScript -Status -Address 'RPA-BOT-01') | Should -BeExactly @('-Status shows no connection values: give it without -ShowTokens and -Address.')
+    }
+  }
+
   # The RPA Supervisor is not registered where these tests run (it is registered only by an install with -Unattended).
   Context 'in unattended mode' {
     BeforeAll {
@@ -3416,6 +3581,93 @@ Describe 'Show-RpaConnection.ps1' {
   }
 }
 
+# The short commands: rpa.cmd in the install folder runs scripts\rpa.ps1, which runs Show-RpaConnection.ps1 or
+# RpaPolicy.exe. In a made-up install both are stand-ins that print what they were given, one argument per line.
+Describe 'The rpa command' {
+  BeforeAll {
+    $script:RpaRoot = Join-Path ([IO.Path]::GetTempPath()) ('rpa-cmd-' + [guid]::NewGuid().ToString('N'))
+    $install = Join-Path $script:RpaRoot 'RPA Runner'
+    $scripts = Join-Path $install 'scripts'
+    $runner = Join-Path $install 'runner'
+    New-Item -ItemType Directory -Force -Path $scripts, $runner | Out-Null
+    Copy-Item -LiteralPath (Join-Path $script:InstallerDir 'rpa.cmd') -Destination $install
+    Copy-Item -LiteralPath (Join-Path (Join-Path $script:InstallerDir 'scripts') 'rpa.ps1') -Destination $scripts
+    $script:RpaScript = Join-Path $scripts 'rpa.ps1'
+    $script:RpaCmd = Join-Path $install 'rpa.cmd'
+    # rpa.cmd starts it with -File, which reads -ShowTokens and -Address as parameters: so do these tests.
+    $script:Shell = (Get-Process -Id $PID).Path
+    Set-Content -LiteralPath (Join-Path $scripts 'Show-RpaConnection.ps1') -Value @'
+param([switch]$ShowTokens, [string]$Address, [switch]$Status)
+'Show-RpaConnection.ps1'
+foreach ($name in @($PSBoundParameters.Keys | Sort-Object)) { '-{0} {1}' -f $name, $PSBoundParameters[$name] }
+exit 4
+'@
+    # A stand-in for RpaPolicy.exe that prints each argument in brackets and exits with 3, as the tool does when the
+    # answer is no.
+    $script:PolicyTool = Join-Path $runner 'RpaPolicy.exe'
+    if ($env:OS -eq 'Windows_NT') {
+      Add-Type -OutputType ConsoleApplication -OutputAssembly $script:PolicyTool -TypeDefinition @'
+public static class Program {
+  public static int Main(string[] args) { foreach (string arg in args) System.Console.WriteLine("[" + arg + "]"); return 3; }
+}
+'@
+    } else {
+      [IO.File]::WriteAllText($script:PolicyTool, "#!/bin/sh`nfor a in `"`$@`"; do printf '[%s]\n' `"`$a`"; done`nexit 3`n")
+      & chmod +x $script:PolicyTool
+    }
+    $script:Usage = @(
+      'Usage:'
+      '  rpa connection [-ShowTokens] [-Address <name or address>]   the lines and values for the n8n credentials'
+      '  rpa status                                                 the programs, the mode and the sessions'
+      '  rpa policy apply <file>                                    RpaPolicy.exe apply <file>: shows the change and asks'
+    )
+  }
+  AfterAll { Remove-Item -LiteralPath $script:RpaRoot -Recurse -Force -ErrorAction SilentlyContinue }
+
+  It 'rpa <Typed> runs <What>' -ForEach @(
+    @{ Typed = 'connection'; Arguments = @('connection'); What = 'Show-RpaConnection.ps1'; Expected = @('Show-RpaConnection.ps1'); Code = 4 }
+    @{ Typed = 'connection -ShowTokens -Address fd00::20'; Arguments = @('connection', '-ShowTokens', '-Address', 'fd00::20'); What = 'Show-RpaConnection.ps1 -ShowTokens -Address fd00::20'; Expected = @('Show-RpaConnection.ps1', '-Address fd00::20', '-ShowTokens True'); Code = 4 }
+    @{ Typed = 'status'; Arguments = @('status'); What = 'Show-RpaConnection.ps1 -Status'; Expected = @('Show-RpaConnection.ps1', '-Status True'); Code = 4 }
+    @{ Typed = 'policy apply <a path with spaces and = , ; & ^ %>'; Arguments = @('policy', 'apply', 'C:\Users\a b\RPA recordings\x=1,2;3&4^5%6.json'); What = 'RpaPolicy.exe apply with the path as one argument'; Expected = @('[apply]', '[C:\Users\a b\RPA recordings\x=1,2;3&4^5%6.json]'); Code = 3 }
+  ) {
+    $output = @(& $script:Shell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script:RpaScript @Arguments)
+    $output | Should -BeExactly $Expected
+    $LASTEXITCODE | Should -Be $Code
+  }
+
+  It 'says how it is used for <Why>, and runs nothing' -ForEach @(
+    @{ Why = 'no command'; Arguments = @() }
+    @{ Why = 'another command'; Arguments = @('install') }
+    @{ Why = 'policy without apply'; Arguments = @('policy', 'show', 'x.json') }
+    @{ Why = 'policy apply without a file'; Arguments = @('policy', 'apply') }
+    @{ Why = 'connection with more words'; Arguments = @('connection', 'now') }
+    @{ Why = 'status with -ShowTokens'; Arguments = @('status', '-ShowTokens') }
+    @{ Why = 'policy with -Address'; Arguments = @('policy', 'apply', 'x.json', '-Address', 'h') }
+  ) {
+    $output = @(& $script:Shell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script:RpaScript @Arguments)
+    $output | Should -BeExactly $script:Usage
+    $LASTEXITCODE | Should -Be 1
+  }
+
+  It 'rpa.cmd hands its arguments over as they were typed, to Windows PowerShell by its full path' {
+    $text = [IO.File]::ReadAllText((Join-Path $script:InstallerDir 'rpa.cmd'))
+    $text | Should -Match ([regex]::Escape('"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\rpa.ps1" %*'))
+    $text | Should -Match ([regex]::Escape('exit /b %ERRORLEVEL%'))
+    # Each argument split out again (%1, shift) would split a path at = , and ; and drop its quotes.
+    $text | Should -Not -Match '%~?[1-9]|\bshift\b|\bgoto\b|^:'
+    @([IO.File]::ReadAllBytes((Join-Path $script:InstallerDir 'rpa.cmd')) | Where-Object { $_ -gt 127 }).Count | Should -Be 0
+  }
+
+  It 'rpa.cmd in cmd.exe passes a quoted path with spaces, = , and ; to the policy tool as one argument' -Skip:($env:OS -ne 'Windows_NT') {
+    $output = @(& (Join-Path ([Environment]::SystemDirectory) 'cmd.exe') /d /c ('"{0}" policy apply "C:\Users\a b\RPA recordings\x=1,2;3.json"' -f $script:RpaCmd))
+    $output | Should -BeExactly @('[apply]', '[C:\Users\a b\RPA recordings\x=1,2;3.json]')
+    $LASTEXITCODE | Should -Be 3
+    $output = @(& (Join-Path ([Environment]::SystemDirectory) 'cmd.exe') /d /c ('"{0}" connection -ShowTokens' -f $script:RpaCmd))
+    $output | Should -BeExactly @('Show-RpaConnection.ps1', '-ShowTokens True')
+    $LASTEXITCODE | Should -Be 4
+  }
+}
+
 # What start-runner.ps1 and start-browser.ps1 hand to their program, read from a made-up install: a start-loop.ps1 in
 # its place prints the program's settings instead of starting it. Each runs in a PowerShell of its own.
 Describe 'The start scripts' {
@@ -3476,11 +3728,11 @@ Describe 'The installer scripts' {
     $newTokens.Count | Should -Be 0
   }
 
-  It 'are all there: the installer, the uninstaller, the module (a manifest and three files) and the four installed scripts' {
-    foreach ($name in @('Install-Rpa.ps1', 'Uninstall-Rpa.ps1') + $script:ModuleFiles) { Join-Path $script:InstallerDir $name | Should -Exist }
-    # What a package holds beside Install-Rpa.ps1: exactly these.
-    @(Get-ChildItem -LiteralPath $script:InstallerDir -File | ForEach-Object { $_.Name } | Sort-Object) | Should -BeExactly (@('Install-Rpa.ps1', 'Uninstall-Rpa.ps1') + $script:ModuleFiles | Sort-Object)
-    foreach ($name in 'start-loop.ps1', 'start-runner.ps1', 'start-browser.ps1', 'Show-RpaConnection.ps1') { Join-Path (Join-Path $script:InstallerDir 'scripts') $name | Should -Exist }
+  It 'are all there: the installer, the uninstaller, the module (a manifest and three files), rpa.cmd, the five installed scripts and Get-Rpa.ps1' {
+    foreach ($name in @('Install-Rpa.ps1', 'Uninstall-Rpa.ps1', 'rpa.cmd') + $script:ModuleFiles) { Join-Path $script:InstallerDir $name | Should -Exist }
+    # What a package holds beside Install-Rpa.ps1: exactly these. Get-Rpa.ps1 is published beside the zip, not in it.
+    @(Get-ChildItem -LiteralPath $script:InstallerDir -File | ForEach-Object { $_.Name } | Sort-Object) | Should -BeExactly (@('Install-Rpa.ps1', 'Uninstall-Rpa.ps1', 'rpa.cmd', 'Get-Rpa.ps1') + $script:ModuleFiles | Sort-Object)
+    foreach ($name in 'start-loop.ps1', 'start-runner.ps1', 'start-browser.ps1', 'Show-RpaConnection.ps1', 'rpa.ps1') { Join-Path (Join-Path $script:InstallerDir 'scripts') $name | Should -Exist }
   }
 
   It 'the manifest loads the three files into one module and exports what the scripts and these tests call' {
@@ -3578,7 +3830,7 @@ Describe 'The installer scripts' {
     $said | Should -BeGreaterThan $source.IndexOf("Write-Host 'RPA is installed.'")
     $source.IndexOf("  if (`$NoBrowser) { Write-Host 'The runner token is new and the browser token is removed: the earlier bot user could read them.' }", $said) | Should -BeGreaterThan $said
     $source.IndexOf("  else { Write-Host 'Both tokens are new: the earlier bot user could read the old ones.' }", $said) | Should -BeGreaterThan $said
-    $source.IndexOf("  Write-Host 'Update the n8n credentials with the new tokens, which Show-RpaConnection.ps1 -ShowTokens shows.'", $said) | Should -BeGreaterThan $said
+    $source.IndexOf("  Write-Host ('Update the n8n credentials with the new tokens, which & `"{0}`" connection -ShowTokens shows.' -f `$rpa)", $said) | Should -BeGreaterThan $said
   }
 
   It 'says that it is checking before it reads the files of a package' {
@@ -3699,6 +3951,180 @@ Describe 'The installer scripts' {
       $output[0] | Should -BeExactly "Checking the package's files..."
       $output[1] | Should -Match ([regex]::Escape("$($script:Leaf)\package can be changed by $($script:Users). $($script:Unpack)") + '$')
       $output[2] | Should -BeExactly 'Nothing was changed.'
+    }
+  }
+}
+
+# Get-Rpa.ps1, published beside the zip: what it decides, from its own functions (dot-sourced, the script does nothing
+# else), and the unpack from a made-up zip in a temporary folder.
+Describe 'Get-Rpa.ps1' {
+  BeforeAll {
+    $script:GetRpa = Join-Path $script:InstallerDir 'Get-Rpa.ps1'
+    . $script:GetRpa
+    $script:GetRoot = Join-Path ([IO.Path]::GetTempPath()) ('rpa-get-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $script:GetRoot | Out-Null
+    Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+
+    # A zip of the package's shape: rpa-windows-x64\VERSION, an Install-Rpa.ps1 and whatever -Entries adds, and its
+    # .sha256 file as Stage.ps1 writes it (or with -Sha256).
+    function New-TestZip([string]$Name, [string]$Version = '0.3.0', [string[]]$Entries = @(), [string]$Sha256) {
+      $folder = Join-Path $script:GetRoot ('zip-' + [guid]::NewGuid().ToString('N'))
+      New-Item -ItemType Directory -Path $folder | Out-Null
+      $zip = Join-Path $folder $Name
+      $archive = [IO.Compression.ZipFile]::Open($zip, 'Create')
+      try {
+        foreach ($entry in @('rpa-windows-x64/VERSION', 'rpa-windows-x64/Install-Rpa.ps1') + $Entries) {
+          $writer = New-Object IO.StreamWriter ($archive.CreateEntry($entry).Open())
+          try { if ($entry -like '*VERSION') { $writer.Write($Version + "`r`n") } else { $writer.Write("'made up'") } } finally { $writer.Dispose() }
+        }
+      } finally { $archive.Dispose() }
+      if (-not $Sha256) { $Sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant() }
+      [IO.File]::WriteAllText($zip + '.sha256', ('{0}  rpa-windows-x64.zip' -f $Sha256))
+      @{ Zip = $zip; Sha = $zip + '.sha256'; Hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant() }
+    }
+    $script:NoAttestation = { param($Zip, $Version) $null }
+    $script:Other = 'ab' * 32
+  }
+  AfterAll { Remove-Item -LiteralPath $script:GetRoot -Recurse -Force -ErrorAction SilentlyContinue }
+
+  It 'dot-sourced, defines its functions and does nothing else' {
+    Get-Command Expand-RpaPackage, Get-RpaInstallArguments, Get-RpaPublishedHash -CommandType Function | Should -HaveCount 3
+  }
+
+  It 'downloads from the release it belongs to, at an address written in the script' {
+    Get-RpaDownloadUrl '0.3.0' 'rpa-windows-x64.zip' | Should -BeExactly 'https://github.com/jb-n8n/n8n-nodes-rpa/releases/download/desktop-v0.3.0/rpa-windows-x64.zip'
+    Get-RpaDownloadUrl '0.3.0' 'rpa-windows-x64.zip.sha256' | Should -BeExactly 'https://github.com/jb-n8n/n8n-nodes-rpa/releases/download/desktop-v0.3.0/rpa-windows-x64.zip.sha256'
+    # Only the script's own values: no parameter names an address, and the copy in the repository names no release.
+    $ast = [Management.Automation.Language.Parser]::ParseFile($script:GetRpa, [ref]$null, [ref]$null)
+    @($ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath }) | Should -Not -Contain 'Url'
+    $source = Get-Content -Raw -LiteralPath $script:GetRpa
+    ([regex]::Matches($source, "(?m)^\`$Version = ''$")).Count | Should -Be 1
+    ([regex]::Matches($source, "(?m)^\`$PackageSha256 = ''$")).Count | Should -Be 1
+    @([regex]::Matches($source, 'Invoke-WebRequest')).Count | Should -Be 2
+    @([regex]::Matches($source, 'Invoke-WebRequest -UseBasicParsing -Uri \(Get-RpaDownloadUrl \$Version ')).Count | Should -Be 2
+  }
+
+  It 'takes the parameters of Install-Rpa.ps1, with their types and checks, and two of its own' {
+    $own = [Management.Automation.Language.Parser]::ParseFile($script:GetRpa, [ref]$null, [ref]$null).ParamBlock.Parameters
+    $installer = [Management.Automation.Language.Parser]::ParseFile((Join-Path $script:InstallerDir 'Install-Rpa.ps1'), [ref]$null, [ref]$null).ParamBlock.Parameters
+    $texts = @($own | ForEach-Object { $_.Extent.Text })
+    foreach ($parameter in $installer) { $texts | Should -Contain $parameter.Extent.Text }
+    @($own | ForEach-Object { $_.Name.VariablePath.UserPath } | Where-Object { @($installer | ForEach-Object { $_.Name.VariablePath.UserPath }) -notcontains $_ }) | Should -BeExactly @('Zip', 'AttestationChecked')
+  }
+
+  It 'passes on to Install-Rpa.ps1 exactly what it was given, a password as the same SecureString, and -Unattended:$false as given' {
+    $paramBlock = [Management.Automation.Language.Parser]::ParseFile($script:GetRpa, [ref]$null, [ref]$null).ParamBlock.Extent.Text
+    $capture = [scriptblock]::Create("[CmdletBinding()]`n$paramBlock`n`$PSBoundParameters")
+    $installerBlock = [Management.Automation.Language.Parser]::ParseFile((Join-Path $script:InstallerDir 'Install-Rpa.ps1'), [ref]$null, [ref]$null).ParamBlock.Extent.Text
+    $fake = [scriptblock]::Create("[CmdletBinding()]`n$installerBlock`n" + '$PSBoundParameters.Keys | Sort-Object | ForEach-Object { "{0}={1}" -f $_, (@($PSBoundParameters[$_]) -join ",") }; if ($UserPassword) { [object]::ReferenceEquals($UserPassword, $script:Secure) }')
+    $script:Secure = New-Object Security.SecureString
+    $bound = & $capture -AllowFrom 10.0.0.5, 10.0.0.6 -Unattended:$false -UserPassword $script:Secure -IdleSeconds 30 -Zip 'C:\x.zip' -AttestationChecked -Force
+    $arguments = Get-RpaInstallArguments $bound
+    @($arguments.Keys | Sort-Object) | Should -BeExactly @('AllowFrom', 'Force', 'IdleSeconds', 'Unattended', 'UserPassword')
+    & $fake @arguments | Should -BeExactly @('AllowFrom=10.0.0.5,10.0.0.6', 'Force=True', 'IdleSeconds=30', 'Unattended=False', 'UserPassword=System.Security.SecureString', 'True')
+    # Nothing given, nothing passed: Install-Rpa.ps1 keeps its own defaults.
+    (Get-RpaInstallArguments (& $capture)).Count | Should -Be 0
+  }
+
+  It 'shows what it passes on without the password' {
+    $arguments = [ordered]@{ AllowFrom = @('10.0.0.5', '10.0.0.6'); UserPassword = (New-Object Security.SecureString); Unattended = [switch]$false; NoBrowser = [switch]$true; RunnerPort = 9000; User = 'bot 2' }
+    Format-RpaInstallArguments $arguments | Should -BeExactly "-User 'bot 2' -UserPassword (given) -RunnerPort 9000 -AllowFrom 10.0.0.5,10.0.0.6 -NoBrowser -Unattended:`$false"
+  }
+
+  It 'reads the SHA-256 at the start of a .sha256 file, and nothing else' {
+    Get-RpaPublishedHash ('{0}  rpa-windows-x64.zip' -f ('AB' * 32)) | Should -BeExactly ('ab' * 32)
+    Get-RpaPublishedHash ("{0} *rpa-windows-x64.zip`r`nmore" -f ('ab' * 32)) | Should -BeExactly ('ab' * 32)
+    foreach ($bad in '', 'abc  rpa-windows-x64.zip', ('{0}0  rpa-windows-x64.zip' -f ('ab' * 32)), ('  {0}' -f ('ab' * 32)), ('g' * 64)) { Get-RpaPublishedHash $bad | Should -BeNullOrEmpty }
+  }
+
+  Context 'the unpack' {
+    It 'unpacks a zip whose SHA-256 is the one beside it into <root>\<version>, and says which version' {
+      $zip = New-TestZip 'rpa-windows-x64.zip'
+      $root = Join-Path $script:GetRoot 'ok'
+      $result = Expand-RpaPackage $zip.Zip $zip.Sha '' '' $root $script:NoAttestation
+      $result.Version | Should -BeExactly '0.3.0'
+      $result.Hash | Should -BeExactly $zip.Hash
+      $result.Package | Should -BeExactly (Join-Path (Join-Path $root '0.3.0') 'rpa-windows-x64')
+      Join-Path $result.Package 'Install-Rpa.ps1' | Should -Exist
+    }
+
+    It 'with the version and the SHA-256 the release wrote into the script, needs the zip to have both' {
+      $zip = New-TestZip 'rpa-windows-x64.zip'
+      $root = Join-Path $script:GetRoot 'named'
+      (Expand-RpaPackage $zip.Zip $zip.Sha $zip.Hash '0.3.0' $root $script:NoAttestation).Version | Should -BeExactly '0.3.0'
+      $root = Join-Path $script:GetRoot 'named-other'
+      { Expand-RpaPackage $zip.Zip $zip.Sha $script:Other '0.3.0' $root $script:NoAttestation } | Should -Throw -ExpectedMessage ("The SHA-256 of $($zip.Zip) is $($zip.Hash), and this Get-Rpa.ps1 of release 0.3.0 names $($script:Other). Nothing was unpacked: do not use this zip.")
+      Test-Path -LiteralPath $root | Should -BeFalse
+      { Expand-RpaPackage $zip.Zip $zip.Sha '' '0.4.0' $root $script:NoAttestation } | Should -Throw -ExpectedMessage ("$($zip.Zip) holds version 0.3.0, and this Get-Rpa.ps1 is for version 0.4.0. Nothing was unpacked.")
+      Test-Path -LiteralPath $root | Should -BeFalse
+    }
+
+    It 'stops before anything is unpacked when <Why>' -ForEach @(
+      @{ Why = 'the SHA-256 differs from the one beside the zip'; Sha256 = 'cd' * 32; Entries = @(); Expected = 'The SHA-256 of {0} is {1}, and {2} says {3}: the zip is not the file published beside it. Nothing was unpacked: do not use this zip.' }
+      @{ Why = 'the .sha256 file holds no SHA-256'; Sha256 = 'not-a-hash'; Entries = @(); Expected = '{2} does not start with a SHA-256 (64 hexadecimal digits). Nothing was unpacked.' }
+      @{ Why = 'an entry is outside the package folder'; Sha256 = ''; Entries = @('rpa-windows-x64/../../evil.ps1'); Expected = '{0} holds rpa-windows-x64/../../evil.ps1, which is not inside rpa-windows-x64\. Nothing was unpacked: do not use this zip.' }
+      @{ Why = 'an entry is beside the package folder'; Sha256 = ''; Entries = @('evil.ps1'); Expected = '{0} holds evil.ps1, which is not inside rpa-windows-x64\. Nothing was unpacked: do not use this zip.' }
+      @{ Why = 'an entry names a drive'; Sha256 = ''; Entries = @('rpa-windows-x64/C:evil.ps1'); Expected = '{0} holds rpa-windows-x64/C:evil.ps1, which is not inside rpa-windows-x64\. Nothing was unpacked: do not use this zip.' }
+    ) {
+      $zip = New-TestZip 'rpa-windows-x64.zip' -Entries $Entries -Sha256 $Sha256
+      $root = Join-Path $script:GetRoot ('stop-' + [guid]::NewGuid().ToString('N'))
+      { Expand-RpaPackage $zip.Zip $zip.Sha '' '' $root $script:NoAttestation } | Should -Throw -ExpectedMessage ($Expected -f $zip.Zip, $zip.Hash, $zip.Sha, $Sha256)
+      Test-Path -LiteralPath $root | Should -BeFalse
+    }
+
+    It 'stops before anything is unpacked when the attestation check refuses, and gives that check the version and the zip' {
+      $zip = New-TestZip 'rpa-windows-x64.zip'
+      $root = Join-Path $script:GetRoot 'attest'
+      $script:Asked = $null
+      $refuse = { param($Zip, $Version) $script:Asked = '{0} {1}' -f $Zip, $Version; 'made-up refusal.' }
+      { Expand-RpaPackage $zip.Zip $zip.Sha '' '' $root $refuse } | Should -Throw -ExpectedMessage 'made-up refusal. Nothing was unpacked.'
+      $script:Asked | Should -BeExactly ('{0} 0.3.0' -f $zip.Zip)
+      Test-Path -LiteralPath $root | Should -BeFalse
+    }
+
+    It 'does not unpack into a folder that is there already' {
+      $zip = New-TestZip 'rpa-windows-x64.zip'
+      $root = Join-Path $script:GetRoot 'there'
+      New-Item -ItemType Directory -Path (Join-Path $root '0.3.0') | Out-Null
+      $folder = Join-Path $root '0.3.0'
+      { Expand-RpaPackage $zip.Zip $zip.Sha '' '' $root $script:NoAttestation } | Should -Throw -ExpectedMessage ("$folder exists already. To install from it, run $(Join-Path (Join-Path $folder 'rpa-windows-x64') 'Install-Rpa.ps1') with the same parameters; to unpack again, remove $folder first.")
+      @(Get-ChildItem -LiteralPath $folder).Count | Should -Be 0
+    }
+
+    It 'hashes and unpacks the zip through one handle that nobody can write through meanwhile' {
+      $zip = New-TestZip 'rpa-windows-x64.zip'
+      $root = Join-Path $script:GetRoot 'held'
+      $swap = { param($Zip, $Version) try { [IO.File]::OpenWrite($Zip).Dispose(); 'the zip could be opened for writing.' } catch { $null } }
+      if ($env:OS -eq 'Windows_NT') { (Expand-RpaPackage $zip.Zip $zip.Sha '' '' $root $swap).Version | Should -BeExactly '0.3.0' }
+      $source = Get-Content -Raw -LiteralPath $script:GetRpa
+      $source | Should -Match ([regex]::Escape("[IO.File]::Open(`$ZipPath, 'Open', 'Read', 'Read')"))
+    }
+  }
+
+  Context 'Stage.ps1' {
+    BeforeAll {
+      $script:Stage = Join-Path (Join-Path $script:InstallerDir 'build') 'Stage.ps1'
+      $ast = [Management.Automation.Language.Parser]::ParseFile($script:Stage, [ref]$null, [ref]$null)
+      $function = $ast.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-ReleaseGetRpa' }, $false)
+      . ([scriptblock]::Create($function[0].Extent.Text))
+    }
+
+    It 'writes the version and the SHA-256 of the zip into the Get-Rpa.ps1 it publishes, and changes nothing else' {
+      $source = Get-Content -Raw -LiteralPath $script:GetRpa
+      $hash = 'ab' * 32
+      $made = Get-ReleaseGetRpa $source '0.3.0' $hash
+      $made | Should -BeExactly ($source.Replace("`$Version = ''", "`$Version = '0.3.0'").Replace("`$PackageSha256 = ''", "`$PackageSha256 = '$hash'"))
+      $made | Should -Not -BeExactly $source
+      { Get-ReleaseGetRpa ($source.Replace("`$Version = ''", '')) '0.3.0' $hash } | Should -Throw -ExpectedMessage "Get-Rpa.ps1 does not hold the line `$Version = '' exactly once."
+      { Get-ReleaseGetRpa $source '0.3' $hash } | Should -Throw
+      { Get-ReleaseGetRpa $source '0.3.0' 'abc' } | Should -Throw
+    }
+
+    It 'puts rpa.cmd and scripts\rpa.ps1 into the package, and Get-Rpa.ps1 beside the zip' {
+      $source = Get-Content -Raw -LiteralPath $script:Stage
+      $source | Should -Match ([regex]::Escape("'RpaInstall.SignIn.ps1', 'RpaInstall.Machine.ps1', 'rpa.cmd') `$stage"))
+      $source | Should -Match ([regex]::Escape("'Show-RpaConnection.ps1', 'rpa.ps1') (Join-Path `$stage 'scripts')"))
+      $source | Should -Match ([regex]::Escape("Get-ReleaseGetRpa (Get-Content -Raw -LiteralPath (Join-Path `$installer 'Get-Rpa.ps1')) `$version `$hash"))
     }
   }
 }

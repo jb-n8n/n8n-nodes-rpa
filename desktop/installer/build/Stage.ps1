@@ -1,11 +1,13 @@
-# Stages the Windows package: one folder that Install-Rpa.ps1 installs from, and a zip of it with its SHA-256.
+# Stages the Windows package: one folder that Install-Rpa.ps1 installs from, a zip of it with its SHA-256, and the
+# Get-Rpa.ps1 that is published beside the zip, with the version and the zip's SHA-256 written into it.
 # The desktop workflow (.github/workflows/desktop.yml) runs it, and it can be run by hand on a Windows machine with
 # Windows PowerShell 5.1 or PowerShell 7, from a checkout of this repository:
 #
 #   .\Stage.ps1 -Out <dir> -RunnerDir <dir> -PolicyToolDir <dir> -RecorderDir <dir> -ErpDemoDir <dir>
 #
-#   -Out            where the package goes: <Out>\rpa-windows-x64\ (the tree below), <Out>\rpa-windows-x64.zip and
-#                   <Out>\rpa-windows-x64.zip.sha256. What is there under those three names is replaced.
+#   -Out            where the package goes: <Out>\rpa-windows-x64\ (the tree below), <Out>\rpa-windows-x64.zip,
+#                   <Out>\rpa-windows-x64.zip.sha256 and <Out>\Get-Rpa.ps1. What is there under those four names is
+#                   replaced.
 #   -RunnerDir      the folder with the published RpaRunner.exe (dotnet publish desktop/runner/src/Rpa.Runner) and
 #                   RpaSupervisor.exe (dotnet publish desktop/runner/src/Rpa.Supervisor, into the same folder)
 #   -PolicyToolDir  the folder with the published RpaPolicy.exe (dotnet publish
@@ -20,12 +22,12 @@
 #
 #   rpa-windows-x64\
 #     Install-Rpa.ps1  Uninstall-Rpa.ps1  RpaInstall.psd1  RpaInstall.Plan.ps1  RpaInstall.SignIn.ps1
-#     RpaInstall.Machine.ps1  LICENSE  VERSION
+#     RpaInstall.Machine.ps1  rpa.cmd  LICENSE  VERSION
 #     runner\    RpaRunner.exe  RpaSupervisor.exe  RpaPolicy.exe  *.dll (their native libraries)  policy.example.json
 #     recorder\  RpaRecorder.exe  *.dll (its native libraries)
 #     browser\   node.exe  LICENSE-node.txt  host\{host.mjs,run-server.mjs}  gate\{gate.mjs,ecs.mjs,selfsigned.mjs}
 #                node_modules\ (playwright)  ms-playwright\ (Chromium)  ms-playwright.sha256
-#     scripts\   start-loop.ps1  start-runner.ps1  start-browser.ps1  Show-RpaConnection.ps1
+#     scripts\   start-loop.ps1  start-runner.ps1  start-browser.ps1  Show-RpaConnection.ps1  rpa.ps1
 #     erp-demo\  v1\  v2\
 #
 # What comes from the network, and what it is checked against:
@@ -77,6 +79,17 @@ $DownloadVariablePrefixes = @('npm_config_playwright_', 'npm_package_config_play
 $repo = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..\..')).ProviderPath
 $installer = Join-Path $repo 'desktop\installer'
 $browserSource = Join-Path $repo 'images\browser'
+
+# desktop\installer\Get-Rpa.ps1 as it is published beside the zip: the same text with the version and the zip's
+# SHA-256 written into its two empty lines for them.
+function Get-ReleaseGetRpa([string]$Source, [string]$Version, [string]$Sha256) {
+  if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw ('{0} is not a version.' -f $Version) }
+  if ($Sha256 -notmatch '^[0-9a-f]{64}$') { throw ('{0} is not a SHA-256.' -f $Sha256) }
+  foreach ($line in "`$Version = ''", "`$PackageSha256 = ''") {
+    if (([regex]::Matches($Source, ('(?m)^{0}\r?$' -f [regex]::Escape($line)))).Count -ne 1) { throw ('Get-Rpa.ps1 does not hold the line {0} exactly once.' -f $line) }
+  }
+  $Source.Replace("`$Version = ''", ("`$Version = '{0}'" -f $Version)).Replace("`$PackageSha256 = ''", ("`$PackageSha256 = '{0}'" -f $Sha256))
+}
 
 function Get-Sha256([string]$File) {
   (Get-FileHash -Algorithm SHA256 -LiteralPath $File).Hash.ToLowerInvariant()
@@ -165,12 +178,13 @@ $stage = Join-Path $Out $PackageName
 $zip = Join-Path $Out ($PackageName + '.zip')
 $work = Join-Path $Out 'stage-work'
 foreach ($old in $stage, $work) { if (Test-Path -LiteralPath $old) { [IO.Directory]::Delete($old, $true) } }
-foreach ($old in $zip, ($zip + '.sha256')) { if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old -Force } }
+$getRpa = Join-Path $Out 'Get-Rpa.ps1'
+foreach ($old in $zip, ($zip + '.sha256'), $getRpa) { if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old -Force } }
 New-Item -ItemType Directory -Path $stage, $work | Out-Null
 
 Write-Host 'The installer, the license and the version'
-Copy-Named $installer @('Install-Rpa.ps1', 'Uninstall-Rpa.ps1', 'RpaInstall.psd1', 'RpaInstall.Plan.ps1', 'RpaInstall.SignIn.ps1', 'RpaInstall.Machine.ps1') $stage
-Copy-Named (Join-Path $installer 'scripts') @('start-loop.ps1', 'start-runner.ps1', 'start-browser.ps1', 'Show-RpaConnection.ps1') (Join-Path $stage 'scripts')
+Copy-Named $installer @('Install-Rpa.ps1', 'Uninstall-Rpa.ps1', 'RpaInstall.psd1', 'RpaInstall.Plan.ps1', 'RpaInstall.SignIn.ps1', 'RpaInstall.Machine.ps1', 'rpa.cmd') $stage
+Copy-Named (Join-Path $installer 'scripts') @('start-loop.ps1', 'start-runner.ps1', 'start-browser.ps1', 'Show-RpaConnection.ps1', 'rpa.ps1') (Join-Path $stage 'scripts')
 Copy-Named $repo @('LICENSE') $stage
 $properties = Get-Content -Raw -LiteralPath (Join-Path $repo 'desktop\Directory.Build.props')
 if ($properties -notmatch '<Version>(\d+\.\d+\.\d+)</Version>') { throw 'desktop\Directory.Build.props names no <Version>.' }
@@ -245,6 +259,7 @@ Write-Host 'The zip'
 [IO.Compression.ZipFile]::CreateFromDirectory($stage, $zip, [IO.Compression.CompressionLevel]::Optimal, $true)
 $hash = Get-Sha256 $zip
 [IO.File]::WriteAllText(($zip + '.sha256'), ('{0}  {1}.zip' -f $hash, $PackageName), [Text.Encoding]::ASCII)
+[IO.File]::WriteAllText($getRpa, (Get-ReleaseGetRpa (Get-Content -Raw -LiteralPath (Join-Path $installer 'Get-Rpa.ps1')) $version $hash), [Text.Encoding]::ASCII)
 
 $files = @(Get-ChildItem -LiteralPath $stage -Recurse -File)
 $bytes = ($files | Measure-Object -Property Length -Sum).Sum
