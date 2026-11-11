@@ -1,0 +1,103 @@
+{
+  "about": [
+    "The connection lines the Windows installer and Show-RpaConnection.ps1 print, one per program, for the Connection Line field of the RPA Desktop Runner and RPA Browser credentials. The installer's Pester tests and the node's tests read this file.",
+    "rpa-runner://<address>:<port>/rpa/v1#token=<token>&fingerprint=<64 hex> and rpa-browser://<address>:<port>/#token=<token>&fingerprint=<64 hex>. An IPv6 address is in brackets. The fingerprint is the SHA-256 of the certificate as 64 lower-case hexadecimal digits, without colons. The token is the installer's own (letters, digits, - and _), as it is.",
+    "url is the URL that the line stands for, as the separate URL line prints it. Without -ShowTokens the token is the placeholder in hiddenToken, which is not a token: a credential refuses such a line.",
+    "Every token and fingerprint here is made up for these tests; none is a secret."
+  ],
+  "hiddenToken": "<hidden: run with -ShowTokens>",
+  "samples": [
+    {
+      "description": "A machine name, the default ports: the runner",
+      "kind": "runner",
+      "address": "RPA-BOT-01",
+      "port": 8765,
+      "token": "sample_runner-token-not-a-secret-000000000000001",
+      "fingerprint": "8b9673b0b33bf0d8559c19b08a1c3e5ceb510aae3b0f4705640c12a38ff6bf7c",
+      "url": "wss://RPA-BOT-01:8765/rpa/v1",
+      "line": "rpa-runner://RPA-BOT-01:8765/rpa/v1#token=sample_runner-token-not-a-secret-000000000000001&fingerprint=8b9673b0b33bf0d8559c19b08a1c3e5ceb510aae3b0f4705640c12a38ff6bf7c"
+    },
+    {
+      "description": "A machine name, the default ports: the browser",
+      "kind": "browser",
+      "address": "RPA-BOT-01",
+      "port": 3000,
+      "token": "sample_browser-token-not-a-secret-00000000000001",
+      "fingerprint": "c648340f89113f80c42abe84f4dece98ca5d035c84158522230e4e2f383f2e94",
+      "url": "wss://RPA-BOT-01:3000",
+      "line": "rpa-browser://RPA-BOT-01:3000/#token=sample_browser-token-not-a-secret-00000000000001&fingerprint=c648340f89113f80c42abe84f4dece98ca5d035c84158522230e4e2f383f2e94"
+    },
+    {
+      "description": "An install without the browser (-NoBrowser) prints the runner line only; a DNS name",
+      "kind": "runner",
+      "address": "rpa-bot-02.corp.example",
+      "port": 8765,
+      "token": "sample_runner-token-not-a-secret-000000000000002",
+      "fingerprint": "96a0091c373f414706d4c5efd51971d5d36978bb6faa73ccefab579280f56800",
+      "url": "wss://rpa-bot-02.corp.example:8765/rpa/v1",
+      "line": "rpa-runner://rpa-bot-02.corp.example:8765/rpa/v1#token=sample_runner-token-not-a-secret-000000000000002&fingerprint=96a0091c373f414706d4c5efd51971d5d36978bb6faa73ccefab579280f56800"
+    },
+    {
+      "description": "An IPv6 address (-Address fd00::20), in brackets in the line: the runner",
+      "kind": "runner",
+      "address": "fd00::20",
+      "port": 8765,
+      "token": "sample_runner-token-not-a-secret-000000000000003",
+      "fingerprint": "5dd5b77a06c63955fd3f1a46fd48249a5783f5b56f10fc868f8c618ca1cc7d91",
+      "url": "wss://[fd00::20]:8765/rpa/v1",
+      "line": "rpa-runner://[fd00::20]:8765/rpa/v1#token=sample_runner-token-not-a-secret-000000000000003&fingerprint=5dd5b77a06c63955fd3f1a46fd48249a5783f5b56f10fc868f8c618ca1cc7d91"
+    },
+    {
+      "description": "An IPv6 address (-Address fd00::20), in brackets in the line: the browser",
+      "kind": "browser",
+      "address": "fd00::20",
+      "port": 3000,
+      "token": "sample_browser-token-not-a-secret-00000000000003",
+      "fingerprint": "88ac8fccdf7c9c720473cf44a31028e5ced55d1c4a6675de5f92fa709d2e25f0",
+      "url": "wss://[fd00::20]:3000",
+      "line": "rpa-browser://[fd00::20]:3000/#token=sample_browser-token-not-a-secret-00000000000003&fingerprint=88ac8fccdf7c9c720473cf44a31028e5ced55d1c4a6675de5f92fa709d2e25f0"
+    },
+    {
+      "description": "An IPv4 address and other ports (-RunnerPort 9876 -BrowserPort 4443): the runner",
+      "kind": "runner",
+      "address": "203.0.113.10",
+      "port": 9876,
+      "token": "sample_runner-token-not-a-secret-000000000000004",
+      "fingerprint": "b1e1089ffa8b9b41080dd82ca16a97e9af7a80c185ee51d5c08650d19ad208bc",
+      "url": "wss://203.0.113.10:9876/rpa/v1",
+      "line": "rpa-runner://203.0.113.10:9876/rpa/v1#token=sample_runner-token-not-a-secret-000000000000004&fingerprint=b1e1089ffa8b9b41080dd82ca16a97e9af7a80c185ee51d5c08650d19ad208bc"
+    },
+    {
+      "description": "An IPv4 address and other ports (-RunnerPort 9876 -BrowserPort 4443): the browser",
+      "kind": "browser",
+      "address": "203.0.113.10",
+      "port": 4443,
+      "token": "sample_browser-token-not-a-secret-00000000000004",
+      "fingerprint": "a82e444bd3ceb7ce3acc8fc3f9a8180fdf8c9aa311e5a345daac47a9f4cb792b",
+      "url": "wss://203.0.113.10:4443",
+      "line": "rpa-browser://203.0.113.10:4443/#token=sample_browser-token-not-a-secret-00000000000004&fingerprint=a82e444bd3ceb7ce3acc8fc3f9a8180fdf8c9aa311e5a345daac47a9f4cb792b"
+    },
+    {
+      "description": "The local end of a tunnel (-Address host.docker.internal, local port 38765 forwarded to 8765)",
+      "kind": "runner",
+      "address": "host.docker.internal",
+      "port": 38765,
+      "token": "sample_runner-token-not-a-secret-000000000000005",
+      "fingerprint": "37c0cf960e5a7ba3648c7d4cad9a51c77000bf217104f579f40bf96f8ac2fc46",
+      "url": "wss://host.docker.internal:38765/rpa/v1",
+      "line": "rpa-runner://host.docker.internal:38765/rpa/v1#token=sample_runner-token-not-a-secret-000000000000005&fingerprint=37c0cf960e5a7ba3648c7d4cad9a51c77000bf217104f579f40bf96f8ac2fc46"
+    }
+  ],
+  "hidden": [
+    {
+      "description": "Without -ShowTokens: a machine name, the default ports: the runner",
+      "kind": "runner",
+      "line": "rpa-runner://RPA-BOT-01:8765/rpa/v1#token=<hidden: run with -ShowTokens>&fingerprint=8b9673b0b33bf0d8559c19b08a1c3e5ceb510aae3b0f4705640c12a38ff6bf7c"
+    },
+    {
+      "description": "Without -ShowTokens: a machine name, the default ports: the browser",
+      "kind": "browser",
+      "line": "rpa-browser://RPA-BOT-01:3000/#token=<hidden: run with -ShowTokens>&fingerprint=c648340f89113f80c42abe84f4dece98ca5d035c84158522230e4e2f383f2e94"
+    }
+  ]
+}

@@ -12,11 +12,11 @@
 #
 # Who is not trusted: the bot user (and anything running as it) and every other standard user. The bot user can create
 # files in the data directory and change what is in logs\. So the installer refuses a link or junction where it expects
-# the data directory, logs\, policy-backups\, policy.json or a token, refuses one of those that someone other than
-# Administrators or SYSTEM owns (logs\ it takes over instead) and a file of those names that has a second name (a
-# hard link), passes /L to every icacls call, and removes folders through handles (Remove-RpaTree), which removes a
-# link or junction inside as the link itself and does not enter it. A data directory that is there when the user of
-# the install is new to it (a first install, another -User) is used only when everything in it belongs to
+# the data directory, logs\, policy-backups\, policy-changes\, policy.json or a token, refuses one of those that someone
+# other than Administrators or SYSTEM owns (logs\ it takes over instead) and a file of those names that has a second
+# name (a hard link), passes /L to every icacls call, and removes folders through handles (Remove-RpaTree), which
+# removes a link or junction inside as the link itself and does not enter it. A data directory that is there when the
+# user of the install is new to it (a first install, another -User) is used only when everything in it belongs to
 # Administrators, to SYSTEM or to that user, which must have been there already.
 #
 # Secrets: New-RpaSecret returns a new secret to its caller. No other function returns one in plain text, and none
@@ -82,8 +82,8 @@ function Get-RpaDataLinkRefusal($Entries) {
 # that account was there before the run, else nothing. A link and a file with a second name are refused, the first of
 # them by name, and so is the first entry that could not be read (a folder that cannot be listed: what is in it is not
 # known). Everything else must belong to Administrators, to SYSTEM or to that account (its logs, certificates and
-# exports), and in policy-backups\ to Administrators or SYSTEM only; what does not is refused once, with the number
-# of entries and the first of them.
+# exports), and in policy-backups\ and policy-changes\ to Administrators or SYSTEM only; what does not is refused once,
+# with the number of entries and the first of them.
 function Get-RpaDataEntryRefusals([string]$DataDir, $Entries, [string]$OwnSid) {
   $refusals = @()
   if (-not $Entries) { return $refusals }
@@ -153,6 +153,12 @@ function Get-RpaUnattendedNotice([string]$User, [int]$RunnerPort, [int]$BrowserP
   $lines
 }
 
+# Whether Install-Rpa.ps1 was given no sign-in mode: none of -Unattended (also not -Unattended:$false), -AutoSignIn
+# and -UserPassword. A first install for a new local bot user on Windows Server is then an unattended install.
+function Test-RpaNoModeGiven([hashtable]$Parameters) {
+  -not $Parameters.Unattended -and -not $Parameters.UnattendedGiven -and -not $Parameters.AutoSignIn -and $null -eq $Parameters.UserPassword
+}
+
 # Decides what an install does. -Parameters holds Install-Rpa.ps1's parameters (User, UserPassword, RunnerPort,
 # BrowserPort, NoBrowser, NoFirewall, AllowFrom, AllowFromAnyAddress, IncludePublicNetwork, AutoSignIn, Unattended,
 # UnattendedGiven, IdleSeconds, IdleSecondsGiven, Force); -Facts is what Get-RpaMachineFacts returns. With a refusal there are no steps: the installer
@@ -160,8 +166,9 @@ function Get-RpaUnattendedNotice([string]$User, [int]$RunnerPort, [int]$BrowserP
 # warnings). AllowFrom in the result is what the firewall rules let in: addresses and ranges, or the one word any, or
 # nothing without rules; PublicNetwork says whether the rules also apply on networks Windows treats as Public. Notice
 # is what -Unattended changes, in lines to show and confirm before the first step, when an earlier run has not set it
-# up already. Unattended and IdleSeconds are the mode and idle time the install gets: an upgrade keeps them from the
-# record unless -Unattended or -IdleSeconds is given.
+# up already; without a sign-in mode its first two lines say that the install is unattended for that reason.
+# Unattended and IdleSeconds are the mode and idle time the install gets: an upgrade keeps them from the record unless
+# -Unattended or -IdleSeconds is given.
 function Get-RpaInstallPlan {
   param(
     [Parameter(Mandatory = $true)][hashtable]$Parameters,
@@ -187,6 +194,10 @@ function Get-RpaInstallPlan {
   # An upgrade keeps the recorded mode, as it keeps automatic sign-in: only -Unattended:$false goes back to the
   # signed-in mode. The idle time stays what the install recorded unless -IdleSeconds is given.
   $unattended = [bool]$Parameters.Unattended -or ($wasUnattended -and -not $Parameters.UnattendedGiven)
+  # Without a mode, a first install for a new local bot user on Windows Server is unattended; on Windows 10 or 11 it is
+  # refused as before, with the sentence that names -AutoSignIn.
+  $defaultMode = (Test-RpaNoModeGiven $Parameters) -and -not $upgrade -and -not $Facts.UserExists -and -not $Facts.UserIsDomain -and [bool]$Facts.IsServer
+  if ($defaultMode) { $unattended = $true }
   $idleSeconds = [int]$Parameters.IdleSeconds
   if ($wasUnattended -and -not $Parameters.IdleSecondsGiven -and $null -ne $Facts.InstalledIdleSeconds) { $idleSeconds = [int]$Facts.InstalledIdleSeconds }
   # An install with automatic sign-in for this same bot user moves to -Unattended with the password it has: the one
@@ -374,6 +385,9 @@ function Get-RpaInstallPlan {
       # The policy tool keeps its backups here and trusts the folder; the bot user could have made it first.
       $backupsRefusal = Get-RpaPathRefusal $Facts.PolicyBackupsDir $Facts.PolicyBackupsState $true
       if ($backupsRefusal) { $refusals.Add($backupsRefusal) }
+      # The same for the folder it copies a change file into before it applies it.
+      $changesRefusal = Get-RpaPathRefusal $Facts.PolicyChangesDir $Facts.PolicyChangesState $true
+      if ($changesRefusal) { $refusals.Add($changesRefusal) }
       # The bot user keeps its own files in the data directory (logs, the certificates, exports), so an upgrade for
       # the same user does not judge who owns them; a link, or a file with a second name, is refused on every run.
       # Whenever the user of the install is new to the data directory (a first install, a user this run creates, an
@@ -489,6 +503,12 @@ function Get-RpaInstallPlan {
     $shownBrowserPort = 0
     if ($browser) { $shownBrowserPort = $browserPort }
     $notice = @(Get-RpaUnattendedNotice $user $runnerPort $shownBrowserPort $idleSeconds $steps.ToArray())
+    if ($defaultMode) {
+      $notice = @(
+        'No sign-in mode was given, so this install is unattended (-Unattended): the default on Windows Server for a new bot'
+        'user. The other choices: -AutoSignIn (Windows keeps the bot user signed in), or -UserPassword (a person signs it in).'
+      ) + $notice
+    }
   } elseif ($back -and $steps.Count -gt 0) {
     $notice = @('-Unattended:$false changes how this machine works:')
     if ($steps -contains 'keep the supervisor password for automatic sign-in') {

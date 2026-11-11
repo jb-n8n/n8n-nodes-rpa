@@ -51,7 +51,9 @@
 #                  needs no -UserPassword: it keeps the password stored for automatic sign-in (tried first), turns
 #                  automatic sign-in off and signs the bot user out. An upgrade keeps unattended mode and its idle
 #                  time without -Unattended; Uninstall-Rpa.ps1, and an install with -Unattended:$false, put these
-#                  back.
+#                  back. Given none of -Unattended, -AutoSignIn and -UserPassword, a first install for a new bot user
+#                  on Windows Server is an unattended install, and its list says so first; on Windows 10 and 11 it is
+#                  refused.
 #   -Force         Do not ask (about -AutoSignIn, -Unattended, or another -User than the one of the install), and
 #                  upgrade even while the runner is running (a run in progress fails).
 #
@@ -370,25 +372,36 @@ else {
 }
 Write-Host ('  Remove:    {0}' -f (Join-Path $layout.InstallDir 'Uninstall-Rpa.ps1'))
 Write-Host ''
+# The short command in the install folder (rpa.cmd), by its full path: nothing puts the install folder on PATH.
+$rpa = Join-Path $layout.InstallDir 'rpa.cmd'
 if ($plan.Steps -contains 'remove the old tokens') {
   if ($NoBrowser) { Write-Host 'The runner token is new and the browser token is removed: the earlier bot user could read them.' }
   else { Write-Host 'Both tokens are new: the earlier bot user could read the old ones.' }
-  Write-Host 'Update the n8n credentials with the new tokens, which Show-RpaConnection.ps1 -ShowTokens shows.'
+  Write-Host ('Update the n8n credentials with the new tokens, which & "{0}" connection -ShowTokens shows.' -f $rpa)
 }
 $autoSignIn = $plan.Steps -contains 'turn on automatic sign-in'
 if ($plan.Unattended) {
-  Write-Host ('Nobody needs to be signed in: the RPA Supervisor signs {0} in for each run. Run Show-RpaConnection.ps1, as an' -f $User)
-  Write-Host 'administrator, for what the n8n credentials need and for how the supervisor is doing:'
+  Write-Host ('Nobody needs to be signed in: the RPA Supervisor signs {0} in for each run.' -f $User)
+  if ($plan.Steps -contains 'register the supervisor service') {
+    Write-Host ('The installer signed {0} in once, to check the runner; that session ends by itself {1} s after the check (the idle time).' -f $User, $plan.IdleSeconds)
+  }
+  # What the n8n credentials need, as rpa connection shows it (the tokens hidden). The installer prints no secret.
+  Write-Host ''
+  try { & (Join-Path (Join-Path $layout.InstallDir 'scripts') 'Show-RpaConnection.ps1') | Out-Host }
+  catch { Write-Host ('The connection lines could not be shown ({0}). Run: & "{1}" connection' -f $_.Exception.Message, $rpa) }
+  Write-Host ''
+  Write-Host ('For how the supervisor is doing: & "{0}" status' -f $rpa)
+  Write-Host ('While someone is signed in as {0}, runs are refused: sign {0} out after looking at something.' -f $User)
 }
-elseif ($autoSignIn) {
-  $starts = 'the runner and the browser'
-  if ($NoBrowser) { $starts = 'the runner' }
-  Write-Host ('Automatic sign-in is on. Restart this machine now (Restart-Computer): Windows then signs {0} in and starts {1}. About a minute after its desktop shows, run Show-RpaConnection.ps1:' -f $User, $starts)
+else {
+  if ($autoSignIn) {
+    $starts = 'the runner and the browser'
+    if ($NoBrowser) { $starts = 'the runner' }
+    Write-Host ('Automatic sign-in is on. Restart this machine now (Restart-Computer): Windows then signs {0} in and starts {1}. About a minute after its desktop shows, run:' -f $User, $starts)
+  }
+  else { Write-Host ('Sign in as {0}, then run:' -f $User) }
+  Write-Host ('  & "{0}" connection' -f $rpa)
+  if (-not $autoSignIn -and -not $upgrade) { Write-Host ('If {0} is already signed in, sign out and sign in again.' -f $User) }
 }
-else { Write-Host ('Sign in as {0}, then run Show-RpaConnection.ps1:' -f $User) }
-# Windows PowerShell by its full path, so that the line does not depend on what is found along PATH where it is typed.
-Write-Host ('  {0} -ExecutionPolicy Bypass -File "{1}"' -f (Join-Path $PSHOME 'powershell.exe'), (Join-Path (Join-Path $layout.InstallDir 'scripts') 'Show-RpaConnection.ps1'))
-if ($plan.Unattended) { Write-Host ('While someone is signed in as {0}, runs are refused: sign {0} out after looking at something.' -f $User) }
-elseif (-not $autoSignIn -and -not $upgrade) { Write-Host ('If {0} is already signed in, sign out and sign in again.' -f $User) }
 # The exit code of a run that finished, whatever the last Windows tool it ran left in $LASTEXITCODE.
 exit 0

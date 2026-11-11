@@ -43,6 +43,8 @@ function Get-RpaLayout {
     DataDir       = $dataDir
     LogDir        = Join-Path $dataDir 'logs'
     BackupsDir    = Join-Path $dataDir 'policy-backups'
+    # Where the policy tool copies a change file before it applies it; made and trusted like policy-backups\.
+    ChangesDir    = Join-Path $dataDir 'policy-changes'
     # The RPA Supervisor's log and state: SYSTEM and Administrators only.
     SupervisorDir = Join-Path $dataDir 'supervisor'
   }
@@ -122,11 +124,12 @@ function Get-RpaTaskOwner([string]$Name) {
 #               list, and an entry can go away between the listing and the read. What is inside is then not known.
 #   Owners      for each owner other than Administrators and SYSTEM: its SID and name, how many entries it owns
 #               (Number), the first of them (First) and when the walk met it (Order)
-#   Backups     the same for what is inside policy-backups\, where only Administrators and SYSTEM may own anything
+#   Backups     the same for what is inside policy-backups\ and policy-changes\, where only Administrators and SYSTEM
+#               may own anything
 #   Accounts    every owner other than Administrators and SYSTEM of anything in the tree, as SID = name
-# policy.json, the tokens and the folder policy-backups\ are judged under their own names by the plan and are not
-# counted in Owners; logs\ itself is taken over whoever owns it. An owner that cannot be read counts as an account
-# without a SID.
+# policy.json, the tokens and the folders policy-backups\ and policy-changes\ are judged under their own names by the
+# plan and are not counted in Owners; logs\ itself is taken over whoever owns it. An owner that cannot be read counts as
+# an account without a SID.
 function Get-RpaDataEntries([string]$DataDir) {
   Add-RpaNativeTypes
   $unknown = 'someone whose name cannot be read'
@@ -150,7 +153,7 @@ function Get-RpaDataEntries([string]$DataDir) {
       $isFolder = [bool]($entry.Attributes -band [IO.FileAttributes]::Directory)
       $top = $directory.Path -eq $DataDir
       # Judged under its own name by the plan.
-      $named = $top -and ((@($script:DataFiles.Keys) + 'policy-backups' + 'logs') -contains $entry.Name)
+      $named = $top -and ((@($script:DataFiles.Keys) + 'policy-backups' + 'policy-changes' + 'logs') -contains $entry.Name)
       $sid = ''
       $name = $unknown
       $trusted = $false
@@ -180,7 +183,7 @@ function Get-RpaDataEntries([string]$DataDir) {
           if ($links -gt 1 -and -not $result.Link) { $result.Link = @{ Path = $path; IsLink = $false; Links = $links } }
         }
       }
-      if ($isFolder) { $pending.Push(@{ Path = $path; InBackups = ($directory.InBackups -or ($top -and $entry.Name -eq 'policy-backups')); Owner = $name }) }
+      if ($isFolder) { $pending.Push(@{ Path = $path; InBackups = ($directory.InBackups -or ($top -and @('policy-backups', 'policy-changes') -contains $entry.Name)); Owner = $name }) }
     }
   }
   $result.Owners = @($owners.Values)
@@ -238,9 +241,11 @@ function Get-RpaMachineFacts {
     DataDir                    = $layout.DataDir
     LogDir                     = $layout.LogDir
     PolicyBackupsDir           = $layout.BackupsDir
+    PolicyChangesDir           = $layout.ChangesDir
     DataDirState               = $null
     LogDirState                = $null
     PolicyBackupsState         = $null
+    PolicyChangesState         = $null
     DataDirEntries             = $null
     DataFiles                  = @{}
     TaskFolderOwner            = $null
@@ -356,8 +361,9 @@ function Get-RpaMachineFacts {
   }
 
   $ports = @([int]$Parameters.RunnerPort, [int]$Parameters.BrowserPort)
-  # With -Unattended the runner and the browser listen behind the RPA Supervisor, at their port + 10000.
-  if ($Parameters.Unattended -or ($install -and $install.mode -eq 'unattended' -and -not $Parameters.UnattendedGiven)) { $ports += @($ports | ForEach-Object { $_ + $script:InnerPortOffset } | Where-Object { $_ -le 65535 }) }
+  # With -Unattended the runner and the browser listen behind the RPA Supervisor, at their port + 10000; also without a
+  # sign-in mode, which can make the install unattended.
+  if ($Parameters.Unattended -or (Test-RpaNoModeGiven $Parameters) -or ($install -and $install.mode -eq 'unattended' -and -not $Parameters.UnattendedGiven)) { $ports += @($ports | ForEach-Object { $_ + $script:InnerPortOffset } | Where-Object { $_ -le 65535 }) }
   foreach ($port in $ports) {
     $listener = Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($listener) {
@@ -369,6 +375,7 @@ function Get-RpaMachineFacts {
   $facts.DataDirState = Get-RpaPathState $layout.DataDir
   $facts.LogDirState = Get-RpaPathState $layout.LogDir
   $facts.PolicyBackupsState = Get-RpaPathState $layout.BackupsDir
+  $facts.PolicyChangesState = Get-RpaPathState $layout.ChangesDir
   $facts.SupervisorDirState = Get-RpaPathState $layout.SupervisorDir
   foreach ($name in $script:DataFiles.Keys) { $facts.DataFiles[$name] = Get-RpaPathState (Join-Path $layout.DataDir $name) }
   # Everything else that is in a data directory that is there already.
@@ -1109,7 +1116,8 @@ function Remove-RpaUser([hashtable]$Account, [string]$Sid) {
 #                  certificates, exports\), which it then owns; it cannot change or delete what it did not create
 #   logs\          the same, and the bot user may change and delete what is in it
 #   a file         SYSTEM and Administrators in full; the bot user may read (policy.json and the tokens)
-#   backups        SYSTEM and Administrators in full and nobody else (policy-backups\, which the policy tool uses);
+#   backups        SYSTEM and Administrators in full and nobody else (policy-backups\ and policy-changes\, which
+#                  the policy tool uses);
 #                  the same for a file only administrators may read (the list the uninstaller leaves)
 # Administrators own all of them: the runner refuses a policy whose file or folder anyone else owns.
 function Get-RpaAccessRules([string]$Kind, [string]$Sid) {
@@ -1161,14 +1169,15 @@ function Assert-RpaDataUnlinked([hashtable]$Layout) {
   foreach ($name in $script:DataFiles.Keys) { Assert-RpaPathUsable (Join-Path $Layout.DataDir $name) $true }
 }
 
-# %ProgramData%\RPA Runner, logs\ and policy-backups\. One that is missing is created with its owner and rules. One
-# that is there is used only when it is no link and, for the data directory and policy-backups\, Administrators or
-# SYSTEM own it; the rules of the data directory and of logs\ are then replaced, and policy-backups\ is left to the
-# policy tool. Directly before each of these two is given its rules, everything in the data directory is looked at
-# again for a link and a file with a second name, on every run. With -Judge (the user of the install is new to the
-# data directory) everything that was in it already is also judged by owner, once only administrators and the bot
-# user can put anything into it; -OwnSid is that user when it was there before this run. policy.json and the tokens
-# get their rules again on every run, which also gives another -User its read access.
+# %ProgramData%\RPA Runner, logs\, policy-backups\ and policy-changes\. One that is missing is created with its owner
+# and rules. One that is there is used only when it is no link and, for the data directory, policy-backups\ and
+# policy-changes\, Administrators or SYSTEM own it; the rules of the data directory and of logs\ are then replaced, and
+# policy-backups\ and policy-changes\ are left to the policy tool. Directly before each of these two is given its rules,
+# everything in the data directory is looked at again for a link and a file with a second name, on every run. With
+# -Judge (the user of the install is new to the data directory) everything that was in it already is also judged by
+# owner, once only administrators and the bot user can put anything into it; -OwnSid is that user when it was there
+# before this run. policy.json and the tokens get their rules again on every run, which also gives another -User its
+# read access.
 function Protect-RpaDataDirectory([hashtable]$Layout, [string]$Sid, [bool]$Judge, [string]$OwnSid) {
   foreach ($folder in @(@{ Path = $Layout.DataDir; Kind = 'directory'; CheckOwner = $true }, @{ Path = $Layout.LogDir; Kind = 'logs'; CheckOwner = $false })) {
     $rules = Get-RpaAccessRules $folder.Kind $Sid
@@ -1184,6 +1193,8 @@ function Protect-RpaDataDirectory([hashtable]$Layout, [string]$Sid, [bool]$Judge
   }
   New-RpaProtectedFolder $Layout.BackupsDir (Get-RpaAccessRules 'backups' $Sid)
   Assert-RpaPathUsable $Layout.BackupsDir $true
+  New-RpaProtectedFolder $Layout.ChangesDir (Get-RpaAccessRules 'backups' $Sid)
+  Assert-RpaPathUsable $Layout.ChangesDir $true
   foreach ($name in $script:DataFiles.Keys) {
     $path = Join-Path $Layout.DataDir $name
     if (-not (Get-RpaPathState $path).Exists) { continue }

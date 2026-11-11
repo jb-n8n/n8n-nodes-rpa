@@ -16,4 +16,5 @@ regexes = [
   '''^n8n-api-key-0123456789-abcdefghij$''',
   '''^env\.N8N_API_KEY$''',
   '''^cz1TSUQ6QU5PTjp2aGNhbGxzX0RFVl8wMDo$''',
+  '''^sample_(runner|browser)-token-not-a-secret-0+[1-5]$''',
 ]

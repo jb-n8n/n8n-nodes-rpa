@@ -1,4 +1,5 @@
-# Publishes the Windows package (rpa-windows-x64.zip and its SHA-256) as the GitHub Release desktop-v<version> when a
+# Publishes the Windows package (rpa-windows-x64.zip, its SHA-256 and Get-Rpa.ps1, which downloads, checks, unpacks
+# and installs it) as the GitHub Release desktop-v<version> when a
 # desktop-v<version> tag is pushed and a reviewer of the desktop-release environment approves it. The package is the
 # one the desktop workflow builds, installs and drives: this workflow calls desktop.yml and publishes the artifact it
 # uploads. The package is not code-signed; the release carries the zip's SHA-256 and a build attestation, which shows
@@ -21,14 +22,16 @@
 #   package by the artifact id, not by name: another job of this run could upload an artifact of the same name, with a
 #   .sha256 file that matches its own zip. The download action compares the archive with the digest GitHub recorded
 #   for that artifact at upload, when there is one, and fails the step on a difference. Then it checks the package:
-#   exactly the two files, the zip's SHA-256 equal to package-sha256 (not to the .sha256 file in the artifact), the
-#   .sha256 file exactly '<package-sha256>  rpa-windows-x64.zip', the version in the zip equal to the tag's.
+#   exactly the three files, the zip's SHA-256 equal to package-sha256 (not to the .sha256 file in the artifact), the
+#   .sha256 file exactly '<package-sha256>  rpa-windows-x64.zip', the version in the zip equal to the tag's, and
+#   Get-Rpa.ps1 naming that version and package-sha256 once each.
 # - release (needs all four; only for a pushed desktop-v tag; environment desktop-release, so it waits for a reviewer;
 #   contents/id-token/attestations write): no checkout, no repository code, nothing run from the artifact. It downloads
 #   the package by the same id and the notes by the id the check job reports (not by name), checks the package again
 #   as verify does and the notes against the check job's notes-sha256, checks that the tag still names this
-#   run's commit and has no release (a draft included), attests the zip and creates the release desktop-v<version>,
-#   neither a draft nor a prerelease, and not marked latest (the repository's latest release stays the npm package's).
+#   run's commit and has no release (a draft included), attests the zip and Get-Rpa.ps1 and creates the release
+#   desktop-v<version>, neither a draft nor a prerelease, and not marked latest (the repository's latest release stays
+#   the npm package's).
 # Dry run: a manual run (Run workflow, on main) never publishes. Its check uses the version of
 # desktop/Directory.Build.props in place of a tag; the environment check, the build and verify run as for a tag, and
 # release is skipped, so nothing is attested or published.
@@ -185,8 +188,8 @@ jobs:
           set -euo pipefail
           shopt -s nullglob dotglob
           files=(*)
-          test "${#files[@]}" -eq 2 || { echo "::error::expected two files in the artifact, found ${#files[@]}"; exit 1; }
-          for f in rpa-windows-x64.zip rpa-windows-x64.zip.sha256; do
+          test "${#files[@]}" -eq 3 || { echo "::error::expected three files in the artifact, found ${#files[@]}"; exit 1; }
+          for f in rpa-windows-x64.zip rpa-windows-x64.zip.sha256 Get-Rpa.ps1; do
             [ -f "$f" ] && [ ! -L "$f" ] || { echo "::error::the artifact holds no regular file $f"; exit 1; }
           done
           actual="$(sha256sum rpa-windows-x64.zip | cut -d' ' -f1)"
@@ -196,6 +199,8 @@ jobs:
           test "${BASH_REMATCH[1]}" = "$PACKAGE_SHA256" || { echo "::error::rpa-windows-x64.zip.sha256 says ${BASH_REMATCH[1]}, not $PACKAGE_SHA256, the hash desktop.yml computed (package-sha256)"; exit 1; }
           packaged="$(unzip -p rpa-windows-x64.zip 'rpa-windows-x64[/\\]VERSION' | tr -d '\r\n')" || { echo "::error::rpa-windows-x64.zip holds no rpa-windows-x64/VERSION"; exit 1; }
           test "$packaged" = "$VERSION" || { echo "::error::the package's VERSION is '${packaged}', not ${VERSION}"; exit 1; }
+          test "$(tr -d '\r' < Get-Rpa.ps1 | grep -cxF "\$Version = '${VERSION}'")" -eq 1 || { echo "::error::Get-Rpa.ps1 does not name the version ${VERSION} once"; exit 1; }
+          test "$(tr -d '\r' < Get-Rpa.ps1 | grep -cxF "\$PackageSha256 = '${PACKAGE_SHA256}'")" -eq 1 || { echo "::error::Get-Rpa.ps1 does not name the zip's SHA-256 ${PACKAGE_SHA256} once"; exit 1; }
           echo "rpa-windows-x64.zip ${VERSION}, SHA-256 ${actual}"
 
   release:
@@ -268,8 +273,8 @@ jobs:
           version="${BASH_REMATCH[1]}"
           test "$version" = "$CHECKED_VERSION" || { echo "::error::the tag's version ${version} is not the checked version ${CHECKED_VERSION}"; exit 1; }
           files=(*)
-          test "${#files[@]}" -eq 2 || { echo "::error::expected two files in the artifact, found ${#files[@]}"; exit 1; }
-          for f in rpa-windows-x64.zip rpa-windows-x64.zip.sha256; do
+          test "${#files[@]}" -eq 3 || { echo "::error::expected three files in the artifact, found ${#files[@]}"; exit 1; }
+          for f in rpa-windows-x64.zip rpa-windows-x64.zip.sha256 Get-Rpa.ps1; do
             [ -f "$f" ] && [ ! -L "$f" ] || { echo "::error::the artifact holds no regular file $f"; exit 1; }
           done
           actual="$(sha256sum rpa-windows-x64.zip | cut -d' ' -f1)"
@@ -279,6 +284,8 @@ jobs:
           test "${BASH_REMATCH[1]}" = "$PACKAGE_SHA256" || { echo "::error::rpa-windows-x64.zip.sha256 says ${BASH_REMATCH[1]}, not $PACKAGE_SHA256, the hash desktop.yml computed (package-sha256)"; exit 1; }
           packaged="$(unzip -p rpa-windows-x64.zip 'rpa-windows-x64[/\\]VERSION' | tr -d '\r\n')" || { echo "::error::rpa-windows-x64.zip holds no rpa-windows-x64/VERSION"; exit 1; }
           test "$packaged" = "$version" || { echo "::error::the package's VERSION is '${packaged}', not ${version}"; exit 1; }
+          test "$(tr -d '\r' < Get-Rpa.ps1 | grep -cxF "\$Version = '${version}'")" -eq 1 || { echo "::error::Get-Rpa.ps1 does not name the version ${version} once"; exit 1; }
+          test "$(tr -d '\r' < Get-Rpa.ps1 | grep -cxF "\$PackageSha256 = '${PACKAGE_SHA256}'")" -eq 1 || { echo "::error::Get-Rpa.ps1 does not name the zip's SHA-256 ${PACKAGE_SHA256} once"; exit 1; }
           notes=("$RUNNER_TEMP"/notes/*)
           test "${#notes[@]}" -eq 1 || { echo "::error::expected one file in the notes artifact, found ${#notes[@]}"; exit 1; }
           [ -f "$RUNNER_TEMP/notes/release-notes.md" ] && [ ! -L "$RUNNER_TEMP/notes/release-notes.md" ] || { echo "::error::the notes artifact holds no regular file release-notes.md"; exit 1; }
@@ -304,9 +311,12 @@ jobs:
             exit 1
           fi
       # Storage records need an organization-owned repository and artifact-metadata: write; this posture grants neither.
+      # Get-Rpa.ps1 is attested too: it names the zip's SHA-256, so checking its attestation covers the zip.
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: ${{ runner.temp }}/release/rpa-windows-x64.zip
+          subject-path: |
+            ${{ runner.temp }}/release/rpa-windows-x64.zip
+            ${{ runner.temp }}/release/Get-Rpa.ps1
           create-storage-record: false
       # Not a draft, not a prerelease, and --latest=false: the npm package's release stays the repository's latest.
       - name: Create the GitHub Release
@@ -341,8 +351,10 @@ jobs:
             echo
             echo "The attestation shows which workflow of this repository attested the zip, from which tag and commit. It does not show that the commit was reviewed, or that the zip is what the source code would build elsewhere."
             echo
+            echo "${tick}Get-Rpa.ps1${tick} does the download, the hash check, the unpack and the install in one command, in an administrator Windows PowerShell: ${tick}.\\Get-Rpa.ps1 -AllowFrom <n8n address>${tick}. It checks the attestation too where the GitHub CLI is installed and signed in, and otherwise says that it did not; ${tick}-RequireAttestation${tick} makes that check mandatory. It names the zip's SHA-256 and is attested too, so the command above run on ${tick}Get-Rpa.ps1${tick} covers the zip."
+            echo
             echo "Details: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${tag}/desktop/README.md#releasing-the-windows-package"
           } > "$RUNNER_TEMP/notes/notes.md"
-          gh release create "$tag" rpa-windows-x64.zip rpa-windows-x64.zip.sha256 \
+          gh release create "$tag" rpa-windows-x64.zip rpa-windows-x64.zip.sha256 Get-Rpa.ps1 \
             --repo "$GITHUB_REPOSITORY" --verify-tag --latest=false \
             --title "RPA Windows package ${VERSION}" --notes-file "$RUNNER_TEMP/notes/notes.md"
