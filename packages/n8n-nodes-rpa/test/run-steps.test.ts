@@ -1004,3 +1004,43 @@ describe('a forced password change (signIn.changePassword)', () => {
     );
   });
 });
+
+describe('Run Steps: RPA Secret Variables', () => {
+  const SECRET = 'Vault-pw-8c2e';
+  const secretCred = (...values: { name: string; value: string }[]) => ({ rpaSecretVariablesApi: { variables: { values } } });
+  const withSecrets = (options: Record<string, unknown>, ...values: { name: string; value: string }[]) =>
+    ctx({ params: params({}, options), credentials: { ...ALL, ...secretCred(...values) }, credentialIds: { ...IDS, rpaSecretVariablesApi: 'secret-1' }, continueOnFail: true });
+  it('merges the pairs into the run variables and names them as secret; Options → Variables stay plain', async () => {
+    const engine = fakeEngine(() => scriptOk());
+    await executeRunSteps(withSecrets({ variables: { values: [{ name: 'from', value: '2026-01-01' }] } }, { name: 'pw', value: SECRET }), engine);
+    expect(engine.calls[0]).toMatchObject({ vars: { from: '2026-01-01', pw: SECRET }, secretVars: ['pw'] });
+  });
+  it('without the credential no variable is secret', async () => {
+    const engine = fakeEngine(() => scriptOk());
+    await executeRunSteps(ctx(), engine);
+    expect(engine.calls[0].secretVars).toBeUndefined();
+  });
+  it('a name in both places is a configuration error that names the variable, never its value, before the engine runs', async () => {
+    const engine = fakeEngine(() => scriptOk());
+    const [data] = await executeRunSteps(withSecrets({ variables: { values: [{ name: 'pw', value: 'plain-one' }] } }, { name: 'pw', value: SECRET }), engine);
+    expect(errorOf(data[0])).toBe('Variable "pw" is set both in Options → Variables and in the RPA Secret Variables credential: keep it in one of them.');
+    expect(details(data[0])).toMatchObject({ configError: true });
+    expect(engine.calls).toHaveLength(0);
+    expect(JSON.stringify(data)).not.toContain(SECRET);
+    expect(JSON.stringify(data)).not.toContain('plain-one');
+  });
+  it('a value shorter than 4 characters is a configuration error without the value', async () => {
+    const engine = fakeEngine(() => scriptOk());
+    const [data] = await executeRunSteps(withSecrets({}, { name: 'pin', value: '9x1' }), engine);
+    expect(errorOf(data[0])).toContain('The secret variable "pin" in the RPA Secret Variables credential is shorter than 4 characters');
+    expect(JSON.stringify(data)).not.toContain('9x1');
+    expect(engine.calls).toHaveLength(0);
+  });
+  it('a variable nobody supplied fails as before, and the message says where a secret goes', async () => {
+    const engine = fakeEngine(() => taskFail('incomplete', 'Type the password: missing input "pw"'));
+    const [data] = await executeRunSteps(ctx({ continueOnFail: true }), engine);
+    expect(errorOf(data[0])).toBe(
+      'incomplete: Type the password: missing input "pw" (a secret goes in an RPA Secret Variables credential, any other value in Options → Variables)',
+    );
+  });
+});

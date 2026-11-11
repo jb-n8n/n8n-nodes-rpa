@@ -49,14 +49,27 @@ const ctx = (credentials: HarnessOptions['credentials'], p: Record<string, unkno
 const details = (json: IDataObject) => json.details as IDataObject;
 
 describe('RPA Desktop Runner credential', () => {
-  it('asks for the runner URL, the token (masked) and the certificate fingerprint, all required', () => {
+  it('asks for the Connection Line (masked), or the runner URL, the token (masked) and the certificate fingerprint, none required by itself', () => {
     const c = new RpaDesktopRunnerApi();
     expect({ name: c.name, displayName: c.displayName }).toEqual({ name: 'rpaDesktopRunnerApi', displayName: 'RPA Desktop Runner' });
     const fields = c.properties.filter((p) => p.type !== 'notice');
-    expect(fields.map((p) => [p.name, p.displayName, p.required, p.typeOptions?.password === true])).toEqual([
-      ['url', 'Runner URL', true, false], ['token', 'Token', true, true], ['fingerprint', 'Certificate Fingerprint', true, false],
+    expect(fields.map((p) => [p.name, p.displayName, p.required === true, p.typeOptions?.password === true])).toEqual([
+      ['connectionLine', 'Connection Line', false, true], ['url', 'Runner URL', false, false], ['token', 'Token', false, true], ['fingerprint', 'Certificate Fingerprint', false, false],
     ]);
-    expect(fields[0].placeholder).toBe('wss://runner.example.com:8765');
+    expect(fields[1].placeholder).toBe('wss://runner.example.com:8765');
+  });
+
+  it('the credential test works with the Connection Line alone, and says what is wrong with a line without repeating it', async () => {
+    runner = await FakeRunner.start();
+    const { host } = new URL(runner.endpoint.url);
+    const hex = runner.endpoint.fingerprint.replace(/:/g, '');
+    const line = `rpa-runner://${host}/rpa/v1#token=${runner.endpoint.token}&fingerprint=${hex}`;
+    expect(await desktopRunnerTestResult({ connectionLine: line }, engine)).toEqual({ status: 'OK', message: 'Connected to the desktop runner (session interactive)' });
+    const wrongKind = await desktopRunnerTestResult({ connectionLine: line.replace('rpa-runner://', 'rpa-browser://').replace('/rpa/v1#', '/#') }, engine);
+    expect(wrongKind.status).toBe('Error');
+    expect(wrongKind.message).toContain("is the browser's line (rpa-browser://)");
+    expect(wrongKind.message).not.toContain(runner.endpoint.token);
+    expect(runner.tcpConnections).toBe(1);
   });
 
   it('the credential test connects (pinned), calls hello and reports the session', async () => {
@@ -150,6 +163,35 @@ describe('Run Steps routes by the steps\' surface', () => {
     const [drift] = await executeRunSteps(ctx(creds, params(missing)), eng);
     expect(drift[0].json.error).toBe('drift_detected: Click Help: no element matched Button #btnHelp in window "ERP Demo - Sign in"');
     expect(details(drift[0].json)).toMatchObject({ code: 'drift_detected', lane: 'script', stepIntent: 'Click Help', submitted: false });
+  });
+});
+
+describe('desktop steps with the RPA Secret Variables credential', () => {
+  const secretCreds = (runnerEndpoint: object) => ({
+    rpaDesktopRunnerApi: { ...runnerEndpoint }, playwrightScriptSigningApi: { secretKey: KEY },
+    rpaSecretVariablesApi: { variables: { values: [{ name: 'password', value: DEMO_PASSWORD }] } },
+  });
+  const onlyUser = { saveTrace: 'never', variables: { values: [{ name: 'user', value: DEMO_USER }] }, timeout: 2000 };
+  it('signed steps type the password from the credential; nothing in the output shows it', async () => {
+    runner = await FakeRunner.start();
+    const [data] = await executeRunSteps(ctx(secretCreds(runner.endpoint), { ...params(DESKTOP_STEPS), options: onlyUser }), fakeEngine(() => scriptOk()));
+    expect(data[0].json.error).toBeUndefined();
+    const typed = runner.requests.filter((q) => q.method === 'act').flatMap((q) => ((q.params.segments ?? []) as { text?: string }[]).map((x) => x.text ?? ''));
+    expect(typed).toContain(DEMO_PASSWORD);
+    expect(JSON.stringify(data)).not.toContain(DEMO_PASSWORD);
+  });
+  it('unsigned steps cannot type it: policy_violation, nothing typed', async () => {
+    runner = await FakeRunner.start();
+    const unsignedParams = { ...params(DESKTOP_STEPS), requireSignedSteps: false, signature: '', approvedBy: '', options: onlyUser };
+    const [data] = await executeRunSteps(ctx(secretCreds(runner.endpoint), unsignedParams), fakeEngine(() => scriptOk()));
+    expect(data[0].json.error).toBe('policy_violation: Type the password: Unsigned steps cannot type a secret variable. Sign them with Sign Steps; Allow Unsigned Writes does not cover it.');
+    expect(JSON.stringify(runner.requests)).not.toContain(DEMO_PASSWORD);
+  });
+  it('a password nobody supplied fails as a missing variable, and the message says where a secret goes', async () => {
+    runner = await FakeRunner.start();
+    const creds = { rpaDesktopRunnerApi: { ...runner.endpoint }, playwrightScriptSigningApi: { secretKey: KEY } };
+    const [data] = await executeRunSteps(ctx(creds, { ...params(DESKTOP_STEPS), options: onlyUser }), fakeEngine(() => scriptOk()));
+    expect(data[0].json.error).toContain('missing input "password" (a secret goes in an RPA Secret Variables credential, any other value in Options → Variables)');
   });
 });
 

@@ -6,7 +6,7 @@ import type { Engine } from '../engine.js';
 import { configNodeError, stepsRunError, type FailureDetails } from '../errors.js';
 import { configErrorItem, dataItem, failureItem } from '../output.js';
 import { credentialId, errorMessage, isObject } from './common.js';
-import type { ItemOutcome, RunStepsParams } from './runSteps.js';
+import { withVariableHint, type ItemOutcome, type RunStepsParams } from './runSteps.js';
 
 export const DESKTOP_STEPS_NEED_RUNNER_CREDENTIAL =
   'These are desktop steps (surface "desktop"): they run on a desktop runner. Attach an RPA Desktop Runner credential.';
@@ -64,14 +64,14 @@ export async function runDesktopStepsItem(ctx: NodeContext, engine: Engine, i: n
   let r: TaskResult;
   try {
     r = await engine.runDesktopTask({
-      script: raw, trust, runner, vars: p.vars, budgetMs: p.common.maxSeconds * 1000, defaultStepTimeoutMs: p.common.timeoutMs, ...(signal ? { signal } : {}),
+      script: raw, trust, runner, vars: p.vars, ...(p.secretVars.length ? { secretVars: p.secretVars } : {}), budgetMs: p.common.maxSeconds * 1000, defaultStepTimeoutMs: p.common.timeoutMs, ...(signal ? { signal } : {}),
     });
   } catch (error) {
     return configError(errorMessage(error));
   }
   if (!r.ok) {
     if (r.configError) return configError(r.message);
-    const item = await failureItem(ctx, r, id, paired);
+    const item = await failureItem(ctx, { ...r, message: withVariableHint(r.message) }, id, paired);
     return { kind: 'error', item, error: stepsRunError(node, item.json.details as FailureDetails, i) };
   }
   try {

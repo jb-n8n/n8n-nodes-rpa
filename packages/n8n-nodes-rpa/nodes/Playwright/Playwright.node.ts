@@ -3,7 +3,9 @@ import {
   type INodeExecutionData, type INodeType, type INodeTypeDescription,
 } from 'n8n-workflow';
 import type { NodeContext } from './context.js';
-import { browserTestResult, desktopRunnerTestResult, redisTestResult, scriptSigningResult, siteLoginTestResult } from './credential-tests.js';
+import {
+  browserTestResult, desktopRunnerTestResult, redisTestResult, scriptSigningResult, secretVariablesTestResult, siteLoginTestResult,
+} from './credential-tests.js';
 import { properties, SUBTITLE } from './description/index.js';
 import { INPUTS_EXPRESSION, OUTPUTS_EXPRESSION } from './description/io.js';
 import { loadEngine, type Engine } from './engine.js';
@@ -52,6 +54,8 @@ export class Playwright implements INodeType {
       { name: 'playwrightRedisApi', displayName: 'RPA Redis', required: false, testedBy: 'guardRedisTest', displayOptions: { show: { operation: ['runSteps', 'importSteps'] } } },
       // Desktop steps (surface "desktop") run on a desktop runner; Run Steps refuses them without this credential.
       { name: 'rpaDesktopRunnerApi', displayName: 'RPA Desktop Runner', required: false, testedBy: 'desktopRunnerTest', displayOptions: { show: { operation: ['runSteps'] } } },
+      // Secret run variables, browser and desktop runs alike (operations/runSteps.ts withSecretVariables).
+      { name: 'rpaSecretVariablesApi', displayName: 'RPA Secret Variables', required: false, testedBy: 'secretVariablesTest', displayOptions: { show: { operation: ['runSteps'] } } },
     ],
     properties,
   };
@@ -72,6 +76,9 @@ export class Playwright implements INodeType {
       },
       async desktopRunnerTest(this: ICredentialTestFunctions, credential: ICredentialsDecrypted): Promise<INodeCredentialTestResult> {
         return await desktopRunnerTestResult(credential.data ?? {}, await loadEngine());
+      },
+      async secretVariablesTest(this: ICredentialTestFunctions, credential: ICredentialsDecrypted): Promise<INodeCredentialTestResult> {
+        return secretVariablesTestResult(credential.data ?? {});
       },
     },
   };

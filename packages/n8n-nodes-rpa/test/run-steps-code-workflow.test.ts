@@ -49,10 +49,13 @@ describe('One-Time Code Workflow options', () => {
     const opts = optionsProperty.options as { name: string; displayName: string; default: unknown; type: string; displayOptions?: unknown }[];
     const wf = opts.find((o) => o.name === 'codeWorkflowId');
     const timeout = opts.find((o) => o.name === 'codeTimeout');
-    expect(wf).toMatchObject({ displayName: 'One-Time Code Workflow', type: 'string', default: '', displayOptions: { show: { '/operation': ['runSteps', 'importSteps'] } } });
+    // n8n's workflow selector, as its Execute Workflow node uses: by list or by ID, never an expression.
     expect(wf).toMatchObject({
-      placeholder: 'e.g. 4nQkZp2r8XyT1bLm (from the workflow\'s address, after /workflow/)',
-      description: 'ID of the published workflow that supplies the sign-in code when the steps\' sign-in takes its code from a workflow ("source": "workflow"). It starts with an Execute Workflow Trigger, receives requestedAt and must return exactly one item with a code field of 6 to 10 digits. Publish it before the first run. In Import Steps, setting it makes a recorded sign-in take its code from this workflow, even when the Site Login has a TOTP Secret; a step document keeps its own sign-in, so in a step document also set \"source\": \"workflow\" in its totp. The approved steps then need the same workflow here in Run Steps.',
+      displayName: 'One-Time Code Workflow', type: 'workflowSelector', default: '', noDataExpression: true, displayOptions: { show: { '/operation': ['runSteps', 'importSteps'] } },
+    });
+    expect(wf).not.toHaveProperty('placeholder');
+    expect(wf).toMatchObject({
+      description: 'The published workflow that supplies the sign-in code when the steps\' sign-in takes its code from a workflow ("source": "workflow"): pick it from the list, or give its ID (the part of its address after /workflow/). It starts with an Execute Workflow Trigger, receives requestedAt and must return exactly one item with a code field of 6 to 10 digits. Publish it before the first run. In Import Steps, setting it makes a recorded sign-in take its code from this workflow, even when the Site Login has a TOTP Secret; a step document keeps its own sign-in, so in a step document also set \"source\": \"workflow\" in its totp. The approved steps then need the same workflow here in Run Steps. Must be set directly, not with an expression.',
     });
     expect(timeout).toMatchObject({ displayName: 'Code Timeout (Seconds)', type: 'number', default: 120, displayOptions: { show: { '/operation': ['runSteps', 'importSteps'] } } });
   });
@@ -62,6 +65,32 @@ describe('One-Time Code Workflow options', () => {
     expect(p).toMatchObject({ codeWorkflowId: '', codeTimeoutMs: 120_000 });
     const set = readRunStepsParams(harness({ params: params({ codeWorkflowId: '  wf-9 ', codeTimeout: 30 }), credentials: CREDS }), 0);
     expect(set).toMatchObject({ codeWorkflowId: 'wf-9', codeTimeoutMs: 30_000 });
+  });
+
+  it('a workflow picked from the list or by ID, and a plain ID saved before the picker, all give the same workflow ID', () => {
+    const read = (codeWorkflowId: unknown) => readRunStepsParams(harness({ params: params({ codeWorkflowId }), credentials: CREDS }), 0).codeWorkflowId;
+    expect(read({ __rl: true, mode: 'list', value: 'wf-code-1', cachedResultName: 'Read the code' })).toBe('wf-code-1');
+    expect(read({ __rl: true, mode: 'id', value: ' wf-code-1 ' })).toBe('wf-code-1');
+    expect(read('wf-code-1')).toBe('wf-code-1');
+    expect(read({ __rl: true, mode: 'list', value: '' })).toBe('');
+  });
+
+  it('an expression is refused, in the picker\'s value or as a plain value, before anything runs', async () => {
+    for (const codeWorkflowId of [{ __rl: true, mode: 'id', value: '={{ $json.workflow }}' }, '={{ $json.workflow }}', { value: 'wf-code-1' }]) {
+      const engine = fakeEngine(() => scriptOk());
+      const [data] = await executeRunSteps(harness({
+        params: params({ codeWorkflowId }), credentials: CREDS, credentialIds: { playwrightBrowserApi: 'b-1', playwrightSiteLoginApi: 's-1' }, continueOnFail: true,
+      }), engine);
+      expect(data[0].json.error, JSON.stringify(codeWorkflowId)).toBe('One-Time Code Workflow must be set directly, not with an expression.');
+      expect(engine.calls).toHaveLength(0);
+    }
+  });
+
+  it('a workflow picked from the list is the one the code provider runs', async () => {
+    const { h, calls } = ctx(returning([{ json: { code: CODE } }]), { params: params({ codeWorkflowId: { __rl: true, mode: 'list', value: 'wf-code-7', cachedResultName: 'Code' } }) });
+    const engine = fakeEngine(async (input) => { await input.codeProvider!({ requestedAt: '2026-10-30T10:00:00.000Z' }); return scriptOk(); });
+    await executeRunSteps(h, engine);
+    expect(calls.map((c) => c.info)).toEqual([{ id: 'wf-code-7' }]);
   });
 
   it('without a workflow the engine gets no codeProvider (it refuses steps that need one)', async () => {

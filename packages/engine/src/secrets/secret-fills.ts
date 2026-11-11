@@ -51,6 +51,29 @@ export function secretFillVariables(steps: readonly Step[]): Set<string> {
 }
 
 /**
+ * Secret variables (TaskInput.secretVars; in n8n, the RPA Secret Variables credential): their values join the run's masker
+ * as the run starts, whether or not a step uses them. Messages, the log, outputs, traces, page text and the chat model see
+ * [secret] in their place, and renderVars refuses every template that renders one (a locator, a plain fill, a URL, a
+ * condition). A secret fill still types one: the value becomes a known secret fill value (secretFillValues), unless the
+ * masker already held it (a Site Login secret, a token, the signing key), which no secret fill may type. Idempotent per
+ * masker.
+ */
+export function registerSecretVars(names: readonly string[] | undefined, vars: Record<string, string>, masker: Masker): void {
+  const known = secretFillValues(masker);
+  const values: string[] = [];
+  for (const name of names ?? []) {
+    const value = Object.hasOwn(vars, name) ? vars[name] : undefined;
+    if (typeof value !== 'string' || value === '' || known.has(value) || values.includes(value)) continue;
+    values.push(value);
+  }
+  if (!values.length) return;
+  // Checked against what the masker held before any of these values joined it.
+  const typable = values.filter((v) => !masker.containsSecret(v));
+  masker.add(values);
+  for (const v of typable) known.add(v);
+}
+
+/**
  * At run start: the value of every variable a fill.secret step names goes into the run's masker, so the steps before the
  * secret fill (a locator or plain fill rendering it, a page error showing it) never show it, and refuse to render it.
  * Each value is checked as the secret fill checks it (renderVars against the masker before any is added: never a Site

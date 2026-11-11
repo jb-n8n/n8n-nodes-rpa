@@ -9,6 +9,7 @@ import { maskViolations, type Masker } from '../secrets/mask.js';
 import { msUntilNextWindow } from '../secrets/totp.js';
 import { stopTrace } from '../trace/trace.js';
 import { installInterrupts } from '../steps/interrupts.js';
+import { secretFillValues } from '../secrets/secret-fills.js';
 import { screenshotMasks } from '../steps/masks.js';
 import { sleep } from '../steps/poll.js';
 import { hostOf, isLoginPage, shownMessage } from '../steps/urls.js';
@@ -221,7 +222,7 @@ async function proveInner(input: ProveInput): Promise<ProveResult> {
     };
     const run = await runSteps(ctx, steps, undefined, { label: 'Proof' });
     await session.idle();
-    const shot = () => ctx.page.screenshot({ fullPage: true, mask: screenshotMasks(ctx.page, input.secrets) }).catch(() => undefined);
+    const shot = () => ctx.page.screenshot({ fullPage: true, mask: screenshotMasks(ctx.page, input.secrets, secretFillValues(masker)) }).catch(() => undefined);
     if (blockedIn(session.violations)) return await finishBlocked(run.state.rows);
     if (cancelled) { reasons.push('prove cancelled'); return finish(run.state.rows, null); }
     if (timedOut) { reasons.push(`prove ran out of time after ${input.budgetMs} ms`); return finish(run.state.rows, null); }

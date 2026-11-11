@@ -46,7 +46,7 @@ export function rawParameter(ctx: NodeContext, path: string): unknown {
 
 const expressionRefused = (label: string): ConfigError => new ConfigError(`${label} must be set directly, not with an expression.`);
 /** An expression as a raw text parameter holds it: "=…", or "{{" (n8n strips the "=" of a noDataExpression parameter). */
-const isExpressionText = (raw: unknown): boolean => typeof raw === 'string' && (raw.startsWith('=') || raw.includes('{{'));
+export const isExpressionText = (raw: unknown): boolean => typeof raw === 'string' && (raw.startsWith('=') || raw.includes('{{'));
 
 /**
  * The raw (unresolved) parameter at a dotted path, for a security setting that must be a literal. Throws

@@ -10,10 +10,11 @@ import type { TaskFailure } from '../lane/task.js';
 import { hasSignature, type TrustInput, type TrustResult } from '../lane/trust.js';
 import {
   DESKTOP_UNSIGNED_WRITES, desktopNotInteractive, inputTooLong, nameMismatch, RUNNER_BUSY, runnerAppMissing, SIGNATURE_INVALID, SIGNATURE_WITHOUT_KEY,
-  UNSIGNED_REQUIRED, versionMismatch,
+  UNSIGNED_REQUIRED, UNSIGNED_SECRET_VARIABLE, versionMismatch,
 } from '../messages.js';
 import { createMasker, type Masker } from '../secrets/mask.js';
 import { MAX_RENDERED } from '../secrets/render.js';
+import { registerSecretVars } from '../secrets/secret-fills.js';
 import { scriptHash, verifyScript } from '../sign.js';
 import { FILE_CHECK_FAILED_PREFIX } from '../steps/file-check.js';
 import { runBinaryProblem } from '../steps/limits.js';
@@ -37,6 +38,12 @@ export interface DesktopTaskInput {
   /** The RPA Desktop Runner credential. */
   runner: RunnerEndpoint;
   vars?: Record<string, string>;
+  /**
+   * The names in `vars` whose values are secrets (in n8n, the RPA Secret Variables credential): masked from the run start
+   * like the token, refused by every template except a fill whose value is exactly that one {{var.name}}, and typed only
+   * by signed steps.
+   */
+  secretVars?: string[];
   budgetMs?: number;
   defaultStepTimeoutMs?: number;
   signal?: AbortSignal;
@@ -121,7 +128,7 @@ function codeOf(err: unknown, message: string): ErrorCode {
   ) {
     return 'runner_unavailable';
   }
-  if (err instanceof PolicyRefusedError) return 'policy_violation';
+  if (err instanceof PolicyRefusedError || message.endsWith(UNSIGNED_SECRET_VARIABLE)) return 'policy_violation';
   if (
     err instanceof ElementNotFoundError || err instanceof ElementNotUniqueError || err instanceof ElementCannotActError || err instanceof RunnerTimeoutError
     || err instanceof DesktopDriftError
@@ -177,7 +184,12 @@ function maskedOutputs(outputs: StepOutput[], script: DesktopScript, secrets: (s
  */
 export async function runDesktopTask(input: DesktopTaskInput): Promise<DesktopTaskResult> {
   const t0 = Date.now();
-  const secrets = [input.runner?.token, input.trust.key];
+  const vars = input.vars ?? {};
+  // The step context's masker: the token, the key and the secret variables, which only a signed fill of exactly one of
+  // them may type (registerSecretVars). Every other masker of the run is built from `secrets`, which holds them all.
+  const stepMasker = createMasker([input.runner?.token, input.trust.key]);
+  registerSecretVars(input.secretVars, vars, stepMasker);
+  const secrets: (string | undefined)[] = [...stepMasker.secrets];
   let surface: DesktopSurface | undefined;
   /** A failure. `message` is masked for secrets here; a message that can carry runner text is masked for typed values first. */
   const fail = (code: ErrorCode, message: string, extra: Partial<TaskFailure> = {}): TaskFailure => {
@@ -266,8 +278,8 @@ export async function runDesktopTask(input: DesktopTaskInput): Promise<DesktopTa
     }
 
     const ctx: StepContext = {
-      page: NO_PAGE, surface, script: script as unknown as Script, policy: NO_NETWORK, vars: input.vars ?? {},
-      masker: createMasker(secrets), defaultTimeoutMs: input.defaultStepTimeoutMs ?? 8000, violations: [],
+      page: NO_PAGE, surface, script: script as unknown as Script, policy: NO_NETWORK, vars,
+      masker: stepMasker, defaultTimeoutMs: input.defaultStepTimeoutMs ?? 8000, violations: [], signed: gate.signed,
     };
     const desktop = surface;
     desktop.trackStep(() => ctx.stepIndex);

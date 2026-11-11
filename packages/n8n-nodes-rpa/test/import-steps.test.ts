@@ -261,7 +261,7 @@ describe('Import Steps: the description', () => {
     // The same entries as Run Steps: the same names, help, limits and rules.
     expect(wf).toBe(optionsFor('runSteps').find((o) => o.name === 'codeWorkflowId'));
     expect(timeout).toBe(optionsFor('runSteps').find((o) => o.name === 'codeTimeout'));
-    expect(wf).toMatchObject({ displayName: 'One-Time Code Workflow', type: 'string', default: '', displayOptions: { show: { '/operation': ['runSteps', 'importSteps'] } } });
+    expect(wf).toMatchObject({ displayName: 'One-Time Code Workflow', type: 'workflowSelector', default: '', displayOptions: { show: { '/operation': ['runSteps', 'importSteps'] } } });
     expect(timeout).toMatchObject({ displayName: 'Code Timeout (Seconds)', type: 'number', default: 120, typeOptions: { minValue: 1, maxValue: 300 } });
   });
 
@@ -607,6 +607,15 @@ describe('Import Steps: execution', () => {
     const NO_SEED = { ...CREDS, playwrightSiteLoginApi: { ...siteLoginData(SITE), totpSecret: '' } };
     const signInOf = (script: Script) => script.steps.find((s): s is Extract<Script['steps'][number], { signIn: unknown }> => 'signIn' in s);
 
+    it('an expression as the One-Time Code Workflow is refused, as in Run Steps, before anything is imported', async () => {
+      const engine = importEngine(async (input) => proved(input));
+      const ctx = nodeContext({
+        params: params({}, { codeWorkflowId: { __rl: true, mode: 'id', value: '={{ $json.wf }}' } }), items: [fileItem(CHROME)], credentials: NO_SEED as never, continueOnFail: true,
+      }) as Harness;
+      const [data] = await run(engine, {}, ctx);
+      expect(data[0].json.error).toBe('One-Time Code Workflow must be set directly, not with an expression.');
+      expect(engine.imports).toHaveLength(0);
+    });
     it('an import whose sign-in asks for a code runs with the code from the workflow and imports totp.source "workflow"', async () => {
       const subs: unknown[] = [];
       const codes: string[] = [];

@@ -199,10 +199,10 @@ describe('Run Steps and Sign Steps fields', () => {
       hint: 'Not sure? Paste one real ID into regex101.com and describe its shape: digits \\d, letters [A-Z], repeats {4}.',
     });
   });
-  it('marks every literal-only parameter noDataExpression (Require Signed Steps, Approver Allowlist, Allow Private Network, Allow Unsigned Writes, Deliver Unconfirmed Rows, Login Breaker Reset Key)', () => {
+  it('marks every literal-only parameter noDataExpression (Require Signed Steps, Approver Allowlist, Allow Private Network, Allow Unsigned Writes, Deliver Unconfirmed Rows, Login Breaker Reset Key, One-Time Code Workflow)', () => {
     expect(field('requireSignedSteps').noDataExpression).toBe(true);
     expect(field('approverAllowlist').noDataExpression).toBe(true); // literal-only at run time too (signSteps.ts literalRaw)
-    for (const name of ['allowPrivateNetwork', 'allowUnsignedWrites', 'deliverUnconfirmed', 'breakerResetKey']) expect(option(name).noDataExpression, name).toBe(true);
+    for (const name of ['allowPrivateNetwork', 'allowUnsignedWrites', 'deliverUnconfirmed', 'breakerResetKey', 'codeWorkflowId']) expect(option(name).noDataExpression, name).toBe(true);
     expect(option('breakerResetKey').description).toMatch(/not an expression/);
   });
   it('Allow Unsigned Writes says what it hands over', () => {
@@ -304,8 +304,8 @@ describe('dynamic inputs and outputs', () => {
 
 describe('credentials', () => {
   const shown = (operation: string) => (d.credentials ?? []).filter((c) => NodeHelpers.displayParameter({ operation }, c, null, d)).map((c) => c.name);
-  it('Browser on every operation except Sign Steps; Site Login on Run, Sign and Import Steps; Step Signing only on Run and Sign Steps; Redis on Run and Import Steps; Desktop Runner only on Run Steps', () => {
-    expect(shown('runSteps')).toEqual(['playwrightBrowserApi', 'playwrightSiteLoginApi', 'playwrightScriptSigningApi', 'playwrightRedisApi', 'rpaDesktopRunnerApi']);
+  it('Browser on every operation except Sign Steps; Site Login on Run, Sign and Import Steps; Step Signing only on Run and Sign Steps; Redis on Run and Import Steps; Desktop Runner and Secret Variables only on Run Steps', () => {
+    expect(shown('runSteps')).toEqual(['playwrightBrowserApi', 'playwrightSiteLoginApi', 'playwrightScriptSigningApi', 'playwrightRedisApi', 'rpaDesktopRunnerApi', 'rpaSecretVariablesApi']);
     expect(shown('signSteps')).toEqual(['playwrightSiteLoginApi', 'playwrightScriptSigningApi']);
     expect(shown('importSteps')).toEqual(['playwrightBrowserApi', 'playwrightSiteLoginApi', 'playwrightRedisApi']); // no signing key: Sign Steps signs
     expect(shown('screenshot')).toEqual(['playwrightBrowserApi']); // quick operations take no Site Login
@@ -313,7 +313,7 @@ describe('credentials', () => {
   it('no credential is marked required (runtime checks per operation: Run Steps needs RPA Browser or RPA Desktop Runner by the steps\' surface)', () => {
     expect((d.credentials ?? []).map((c) => [c.name, c.required])).toEqual([
       ['playwrightBrowserApi', false], ['playwrightSiteLoginApi', false], ['playwrightScriptSigningApi', false], ['playwrightRedisApi', false],
-      ['rpaDesktopRunnerApi', false],
+      ['rpaDesktopRunnerApi', false], ['rpaSecretVariablesApi', false],
     ]);
   });
 });

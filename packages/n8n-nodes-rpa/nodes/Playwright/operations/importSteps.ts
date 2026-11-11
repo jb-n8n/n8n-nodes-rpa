@@ -115,7 +115,7 @@ function readImportParams(ctx: NodeContext, i: number): ImportParams {
     expectedFile: get('expectedFile', {}),
     vars: variablesOption(ctx.getNodeParameter('options.variables', i, {})),
     breakerResetKey,
-    ...codeWorkflowOptions((option) => field(ctx.getNodeParameter('options', i, {}), option)),
+    ...codeWorkflowOptions(ctx, (option) => field(ctx.getNodeParameter('options', i, {}), option)),
     common,
   };
 }
