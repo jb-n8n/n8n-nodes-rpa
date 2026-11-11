@@ -64,6 +64,12 @@ public class BarTests
         Assert.Equal(BarPart.ValuesPage, BarText.Parts(BarStage.Values));
         Assert.Equal(BarPart.ValuesPage, BarText.Parts(BarStage.Values, stepSelected: true));
 
+        // The empty list says what comes there wherever it shows, from the very first Ready on (decided from the parts:
+        // before the window is shown, every control in it reads as hidden).
+        Assert.Equal([true, true, true, true, false, true, true], Enum.GetValues<BarStage>().Select(s => BarText.ShowsEmptyList(BarText.Parts(s), 0)));
+        Assert.False(BarText.ShowsEmptyList(BarText.Parts(BarStage.Ready), 1));
+        Assert.False(BarText.ShowsEmptyList(BarText.Parts(BarStage.Recording), 3));
+
         // The list keeps at least six rows wherever it shows steps.
         Assert.Equal([0, 0, 6, 6, 0, 6, 6], Enum.GetValues<BarStage>().Select(BarText.MinListRows));
 
@@ -96,6 +102,8 @@ public class BarTests
         Assert.Equal("Use an app that is already open", DialogText.OpenTitle);
         Assert.Equal(("Delete step", "Make variable…", "Make secret…"), (BarText.DeleteStep, BarText.MakeVariable, BarText.MakeSecret));
         Assert.Equal("Earlier notices", DialogText.NoticesTitle);
+        // A screen reader names the list and the values page by these, not after a label near them.
+        Assert.Equal(("Recorded steps", "Values that can change"), (BarText.ListName, ValuesPage.AreaName));
         Assert.Equal("Record another", DialogText.StartOverUnsaved(2).Title);
         Assert.Equal(BarText.RecordAnother, DialogText.StartOverUnsaved(2).Title);
         // No label is written in capitals.

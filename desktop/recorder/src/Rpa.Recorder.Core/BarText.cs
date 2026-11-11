@@ -53,6 +53,12 @@ public static class BarText
     public const string ReadHint = "Point at a value in the app and press F9 to read it on every run.";
     /// <summary>The empty list before anything is recorded.</summary>
     public const string EmptyList = "The steps appear here once the app is recording.";
+    /// <summary>The list's accessible name: without one, Windows names it after a label near it.</summary>
+    public const string ListName = "Recorded steps";
+
+    /// <summary>Whether the empty list shows <see cref="EmptyList"/>: wherever the stage shows the list and there are no
+    /// steps. Decided from the stage's parts, so it holds before the window is first shown.</summary>
+    public static bool ShowsEmptyList(BarPart parts, int steps) => parts.HasFlag(BarPart.List) && steps == 0;
 
     /// <summary>The two sentences of Ready. On a small screen (<paramref name="narrow"/>, see
     /// <see cref="BarLayout.WidthFor"/>) the second also says that the bar can be moved.</summary>

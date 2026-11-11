@@ -189,6 +189,9 @@ internal sealed class RecorderBar : Form
         _readyText.Margin = new Padding(0, BarLayout.Group, 0, 0);
         Buttons(_recordRow, BarLayout.Space, _pause, _finish);
         _recordRow.Margin = new Padding(0, BarLayout.Space, 0, 0);
+        // Named here: WinForms otherwise names an unnamed control after a label before it (the values page's hidden intro).
+        _list.AccessibleName = BarText.ListName;
+        _valuesArea.AccessibleName = ValuesPage.AreaName;
         _listArea.Controls.Add(_list);
         _listArea.Controls.Add(_empty);
         _empty.BringToFront();
@@ -340,7 +343,8 @@ internal sealed class RecorderBar : Form
         var values = parts.HasFlag(BarPart.ValuesPage);
         _listArea.Visible = parts.HasFlag(BarPart.List) || values;
         _list.Visible = parts.HasFlag(BarPart.List);
-        _empty.Visible = _list.Visible && _shown.Count == 0;
+        // From the parts, not _list.Visible: before the bar is first shown, Visible reads false for every control in it.
+        _empty.Visible = BarText.ShowsEmptyList(parts, _shown.Count);
         _valuesArea.Visible = _valuesIntro.Visible = _valuesButtons.Visible = values;
         _valuesProblem.Visible = values && _valuesProblem.Text.Length > 0;
         _saveBlock.Visible = parts.HasFlag(BarPart.SaveBlock);
@@ -538,6 +542,8 @@ internal sealed class RecorderBar : Form
     private void EndRecording()
     {
         _capture.Stop();
+        // A step selected while recording would stay selected, and Finished and Saved would open with the step actions.
+        _list.ClearSelected();
         if (_name.Text.Trim().Length == 0) _name.Text = SaveNames.SuggestedName(_capture.ProgramPath);
         ShowStage(BarStage.Finished);
         _name.Focus();

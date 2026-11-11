@@ -36,6 +36,8 @@ public sealed record ValueRow(int Index, RecordedStep Step, ValueKind Kind, stri
 public static class ValuesPage
 {
     public const string Question = "Which of these change from run to run?";
+    /// <summary>The page's accessible name: without one, Windows names it after a label near it.</summary>
+    public const string AreaName = "Values that can change";
     public const string Intro = "Tick each value that changes: it becomes a variable with the name under it. On each run n8n supplies it, " +
                                 "starting with the value recorded here. A value left unticked stays as recorded.";
     public const string NameLabel = "Variable name";
