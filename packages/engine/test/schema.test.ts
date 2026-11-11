@@ -168,11 +168,11 @@ describe('the step-document JSON Schema', () => {
     expect(step.properties.timeoutMs.maximum).toBe(MAX_STEP_TIMEOUT_MS);
   });
 
-  it('every template, README example and import fixture draft validates against the step schema', () => {
+  it('every template, steps reference example and import fixture draft validates against the step schema', () => {
     const helpers = [baselineScript(URL_BASE), reportScript(URL_BASE), webguiScript(URL_BASE), fioriScript(URL_BASE), erpScript(URL_BASE), { startUrl: URL_BASE, steps: SIGN_IN_STEPS }];
     const docs: { at: string; doc: unknown }[] = [
       ...templateDocuments(),
-      ...jsonBlocks('README.md').map((doc, i) => ({ at: `README block ${i}`, doc })),
+      ...['README.md', 'docs/reference/steps.md', 'docs/guides/move-a-bot.md'].flatMap((page) => jsonBlocks(page).map((doc, i) => ({ at: `${page} block ${i}`, doc }))),
       ...jsonBlocks('docs/onboarding/sap-lookalike.md').map((doc, i) => ({ at: `sap-lookalike block ${i}`, doc })),
       ...fixtureDrafts(),
       ...helpers.map((doc, i) => ({ at: `test helper ${i}`, doc })),
@@ -180,7 +180,7 @@ describe('the step-document JSON Schema', () => {
     ];
     // Templates map their steps from the playwright_steps Data Table, so none carries a literal document today.
     expect(templateDocuments()).toEqual([]);
-    expect(jsonBlocks('README.md').length).toBeGreaterThanOrEqual(1);
+    expect(jsonBlocks('docs/reference/steps.md').length).toBeGreaterThanOrEqual(5);
     // chrome and playwright: one draft each per variant; uipath: one per browser sequence per variant.
     expect(fixtureDrafts().length).toBeGreaterThanOrEqual(6);
     for (const { at, doc } of docs) {
@@ -368,7 +368,7 @@ describe('the step-document JSON Schema', () => {
     }
   });
 
-  it('the rules the schema cannot express are the known gaps (the README lists them)', () => {
+  it('the rules the schema cannot express are the known gaps (docs/reference/steps.md lists them)', () => {
     const doc = (...steps: unknown[]) => ({ startUrl: URL_BASE, steps });
     const gaps: [string, unknown][] = [
       // 1. regular expressions are only checked to be non-empty strings
@@ -392,11 +392,11 @@ describe('the step-document JSON Schema', () => {
       expect(validateDocument(d), `the schema now rejects ${what}: move it to the invalid sample`).toBe(true);
     }
     // 4, the other way round: the schema is stricter. WHATWG URL parsing reads `http:host` as http://host/, which
-    // parseScript accepts; the schema's pattern wants the two slashes (the README says so).
+    // parseScript accepts; the schema's pattern wants the two slashes (docs/reference/steps.md says so).
     for (const startUrl of ['http:erp.example.com/start', 'HTTPS:erp.example.com']) {
       const d = { startUrl, steps: [{ intent: 'x', click: loc }] };
       expect(parses(d), `parseScript refuses ${startUrl}`).toBe(true);
-      expect(validateDocument(d), `the schema now accepts ${startUrl}: drop the "stricter" sentence from the README`).toBe(false);
+      expect(validateDocument(d), `the schema now accepts ${startUrl}: drop the "stricter" sentence from docs/reference/steps.md`).toBe(false);
     }
   });
 });
