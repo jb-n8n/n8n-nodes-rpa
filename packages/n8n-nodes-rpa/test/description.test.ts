@@ -168,6 +168,11 @@ describe('Run Steps and Sign Steps fields', () => {
     expect(field('writeSteps')).toMatchObject({ displayName: 'Write Steps', type: 'string', default: '', placeholder: '7, 9', hint: 'Desktop steps only. Leave empty when no step saves, posts or submits.' });
     expect(field('approved')).toMatchObject({ displayName: 'Approved', type: 'boolean', default: false, hint: 'Off records a rejection' });
     expect(field('approverId').displayName).toBe('Approved By');
+    // Optional in the editor: with one address on the allowlist, an empty Approved By is that address (signSteps.ts).
+    expect(field('approverId').required).not.toBe(true);
+    expect(field('approverId').description).toBe(
+      'Who decided: an address on the Approver Allowlist. Leave it empty when the allowlist holds one address: that address is recorded. With more than one, it is required.',
+    );
     expect(field('approverAllowlist').displayName).toBe('Approver Allowlist');
   });
   it('declares the Run Steps and Sign Steps options with their names, operations and limits', () => {

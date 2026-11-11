@@ -19,7 +19,7 @@
     },
     {
       "parameters": {
-        "content": "### Set once (green)\n1. Keep **Authentication** on: pick or create a Basic Auth credential on **Import a bot**.\n2. Pick **RPA Browser**, and **RPA Site Login** when the bot signs in, on **Import steps**.\n3. Pick **RPA Step Signing**, and the same **RPA Site Login**, on **Sign steps**.\n4. Type your address in **Settings → approver** and the same in **Sign steps → Approver Allowlist**.\n5. For a site on your own network (the sandbox), turn on **Options → Allow Private Network** in **Import steps**.\n6. Publish, then open the form.",
+        "content": "### Set once (green)\n1. Keep **Authentication** on: pick or create a Basic Auth credential on **Import a bot**.\n2. Pick **RPA Browser**, and **RPA Site Login** when the bot signs in, on **Import steps**.\n3. Pick **RPA Step Signing**, and the same **RPA Site Login**, on **Sign steps**.\n4. Type your address once, in **Sign steps → Approver Allowlist**: it is recorded as the approver.\n5. For a site on your own network (the sandbox), turn on **Options → Allow Private Network** in **Import steps**.\n6. Publish, then open the form.",
         "height": 300,
         "width": 480,
         "color": 4
@@ -140,12 +140,6 @@
               "type": "string"
             },
             {
-              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005c2",
-              "name": "approver",
-              "value": "approver@example.com",
-              "type": "string"
-            },
-            {
               "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005c8",
               "name": "showDetails",
               "value": false,
@@ -164,7 +158,7 @@
         220,
         0
       ],
-      "notes": "approval: \"on this form\" (the person who imports reviews and approves on the next page) or \"by email\" (RPA: 3 Approve steps asks a second person). approver: who approves, recorded with the signed steps; type the same address in Sign steps → Approver Allowlist. showDetails: true puts each step list's full detail (how each step finds its control) on the review page, above the question."
+      "notes": "approval: \"on this form\" (the person who imports reviews and approves on the next page) or \"by email\" (RPA: 3 Approve steps asks a second person). showDetails: true puts each step list's full detail (how each step finds its control) on the review page, above the question."
     },
     {
       "parameters": {
@@ -590,7 +584,6 @@
       "parameters": {
         "operation": "signSteps",
         "approved": "={{ $('Review and approve').first().json['decision_' + $itemIndex] === 'Approve and sign' }}",
-        "approverId": "={{ $('Settings').first().json.approver }}",
         "approverAllowlist": "approver@example.com",
         "writeSteps": "={{ [].concat($('Review and approve').first().json['writes_' + $itemIndex] ?? []).map((l) => (/^Step (\\d+):/.exec(String(l)) ?? [])[1]).filter((n) => n).concat(String($('Review and approve').first().json['moreWrites_' + $itemIndex] ?? '')).join(' ').trim() }}"
       },
@@ -603,7 +596,7 @@
         -220
       ],
       "onError": "continueErrorOutput",
-      "notes": "Item n is step list n of the review page: its Decision, and for desktop steps the ticked steps and the numbers typed under them. Approver Allowlist: type the address of Settings → approver here (it cannot be an expression). Outputs: the active or rejected record (0), error (1)."
+      "notes": "Item n is step list n of the review page: its Decision, and for desktop steps the ticked steps and the numbers typed under them. Approver Allowlist: your address, typed here once (it cannot be an expression); with one address there, Approved By can stay empty and that address is recorded as the approver. Outputs: the active or rejected record (0), error (1)."
     },
     {
       "parameters": {

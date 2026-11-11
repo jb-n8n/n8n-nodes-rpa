@@ -963,11 +963,11 @@ describe('5-import-a-bot.json (the first-day import)', () => {
    * The review page answered with `answer` (n8n gives each field under its fieldName), then Step lists, Step lists to sign
    * (one item per list, Split Out) and Sign steps with its parameters resolved per item, as n8n resolves them.
    */
-  async function signAfterReview(ran: Record<string, INodeExecutionData[][]>, answer: IDataObject) {
+  async function signAfterReview(ran: Record<string, INodeExecutionData[][]>, answer: IDataObject, over: IDataObject = {}) {
     const after = { ...ran, [REVIEW]: [[{ json: { ...answer, submittedAt: '2026-11-11T10:00:00.000Z', formMode: 'production' } }]] };
     const { lists } = evaluate(String(byName(t, 'Step lists').parameters.jsonOutput), { $: nodesRan(after) }) as { lists: IDataObject[] };
     expect(byName(t, 'Step lists to sign').parameters).toEqual({ fieldToSplitOut: 'lists', options: {} });
-    const sign = byName(t, 'Sign steps').parameters;
+    const sign = { ...byName(t, 'Sign steps').parameters, ...over };
     const params = (i: number) => Object.fromEntries(Object.entries(sign).map(([k, v]) => [k, typeof v === 'string' && v.startsWith('=') ? evaluate(v, { $: nodesRan(after), $itemIndex: i }) : v]));
     const ctx = harness({ params, rawParameters: sign, items: lists.map((json) => ({ json })), credentials: { playwrightScriptSigningApi: { secretKey: 'k'.repeat(32) } }, continueOnFail: true });
     const out = await executeSignSteps(ctx, importEngine(() => NOT_ADOPTABLE), () => new Date('2026-11-11T10:00:01.000Z'));
@@ -1037,13 +1037,14 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     for (const n of t.nodes) expect(n, n.name).not.toHaveProperty('credentials');
   });
 
-  it('approves on this form by default: Settings holds approval "on this form" and the approver; only "by email" hands over to RPA: 3', () => {
+  it('approves on this form by default: Settings holds approval "on this form" (the approver is typed once, in Sign steps); only "by email" hands over to RPA: 3', () => {
     const settings = byName(t, 'Settings');
     expect(settings).toMatchObject({ type: 'n8n-nodes-base.set', typeVersion: 3.4 });
     expect(settings.parameters).toMatchObject({
       includeOtherFields: true,
-      assignments: { assignments: [{ name: 'approval', value: 'on this form', type: 'string' }, { name: 'approver', value: APPROVER, type: 'string' }, { name: 'showDetails', value: false, type: 'boolean' }] },
+      assignments: { assignments: [{ name: 'approval', value: 'on this form', type: 'string' }, { name: 'showDetails', value: false, type: 'boolean' }] },
     });
+    expect(settings.notes).not.toContain('approver');
     // Set 3.4 passes the upload (binary bot) on unless told to strip it.
     expect(settings).not.toHaveProperty('parameters.options.stripBinary');
     const cond = (name: string) => (byName(t, name).parameters as { conditions: { conditions: { leftValue: string }[] } }).conditions.conditions[0].leftValue;
@@ -1068,7 +1069,10 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const signed = byName(t, 'Signed?').parameters as { conditions: { conditions: { leftValue: string; rightValue: string; operator: unknown }[] } };
     expect(signed.conditions.conditions).toEqual([expect.objectContaining({ leftValue: '={{ $json.status }}', rightValue: 'active', operator: { type: 'string', operation: 'equals' } })]);
     const sign = byName(t, 'Sign steps');
-    expect(sign).toMatchObject({ type: NODE_TYPE, onError: 'continueErrorOutput', parameters: { operation: 'signSteps', approverAllowlist: APPROVER, approverId: "={{ $('Settings').first().json.approver }}" } });
+    expect(sign).toMatchObject({ type: NODE_TYPE, onError: 'continueErrorOutput', parameters: { operation: 'signSteps', approverAllowlist: APPROVER } });
+    // The approver typed once: Approved By is left empty, so Sign Steps records the allowlist's one address.
+    expect(sign.parameters).not.toHaveProperty('approverId');
+    expect(sign.notes).toContain('Approver Allowlist: your address, typed here once');
     expect(loadInN8n(sign).outputs).toEqual(['Success', 'Error']);
     // The allowlist is a literal: Sign Steps refuses an expression there, so item data cannot choose who may approve.
     expect(String(sign.parameters.approverAllowlist).startsWith('=')).toBe(false);
@@ -1235,9 +1239,10 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const refused = await signAfterReview(ran, { writes_0: [], moreWrites_0: '99', decision_0: 'Approve and sign' });
     expect(refused.signed).toEqual([]);
     expect(String(refused.errors[0].error)).toBe('Sign Steps refused: Write Steps: there is no step 99 (the steps are numbered 1 to 17)');
-    const other = await signAfterReview({ ...ran, Settings: [[{ json: { approval: 'on this form', approver: 'someone-else@example.com' } }]] }, { decision_0: 'Approve and sign' });
-    expect(other.signed).toEqual([]);
-    expect(String(other.errors[0].error)).toContain('Approved By is not on the Approver Allowlist');
+    // With a second address on the allowlist, Approved By must say which one decided: an empty one is refused.
+    const two = await signAfterReview(ran, { decision_0: 'Approve and sign' }, { approverAllowlist: `${APPROVER}, someone-else@example.com` });
+    expect(two.signed).toEqual([]);
+    expect(String(two.errors[0].error)).toBe('Sign Steps refused: Approved By is empty, and the Approver Allowlist holds more than one address: set Approved By to the one who decided');
   });
 
   it('several step lists: one block each, named, with its own decision; item n of Sign steps takes the answers of block n', async () => {
@@ -1460,7 +1465,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const set = sticky(t, 'Set once').content;
     expectChecklist(set);
     for (const s of ['Keep **Authentication** on', 'Basic Auth credential on **Import a bot**', '**RPA Browser**', '**RPA Site Login**', '**RPA Step Signing**',
-      '**Settings → approver**', '**Sign steps → Approver Allowlist**', '**Options → Allow Private Network**', 'Publish']) expect(set, s).toContain(s);
+      '**Sign steps → Approver Allowlist**', '**Options → Allow Private Network**', 'Publish']) expect(set, s).toContain(s);
+    expect(set).toContain('Type your address once, in **Sign steps → Approver Allowlist**');
+    expect(set).not.toContain('Settings → approver');
     // The default path needs no other template.
     expect(set).not.toContain('RPA: 3');
     const email = sticky(t, 'Approval by email').content;

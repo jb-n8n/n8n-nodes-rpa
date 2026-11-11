@@ -16,6 +16,7 @@ export const WRITE_STEPS_BROWSER = 'Write Steps applies to desktop steps only: c
 export const NOT_REPAIRED_STEPS = 'The input item is not a Repaired steps item from Run Steps (it has no digest). Only Repaired steps items can be signed.';
 export const MISSING_NAME_OR_VERSION = 'The Repaired steps item has no name or version.';
 export const APPROVER_NOT_ALLOWED = 'Approved By is not on the Approver Allowlist';
+export const APPROVER_NEEDED = 'Approved By is empty, and the Approver Allowlist holds more than one address: set Approved By to the one who decided';
 export const SIGN_NEEDS_KEY = 'Sign Steps needs an RPA Step Signing credential';
 export const SHOWN_TEXT_CHANGED = 'the evidence, change list or safety line changed after it was reviewed';
 export const RECORD_HOLDS_SECRET = 'the Repaired steps contain a credential secret';
@@ -307,7 +308,11 @@ async function signOne(ctx: NodeContext, engine: Engine, i: number, json: IDataO
     literalRaw(ctx, 'approverAllowlist', 'Approver Allowlist');
     // Read here, inside the try: a parameter whose expression fails is a configuration error item, never a raw throw.
     approverId = asString(ctx.getNodeParameter('approverId', i, '')).trim();
-    allowlist = splitList(asString(ctx.getNodeParameter('approverAllowlist', i, ''))).map((a) => a.toLowerCase());
+    const listed = splitList(asString(ctx.getNodeParameter('approverAllowlist', i, '')));
+    allowlist = listed.map((a) => a.toLowerCase());
+    // The approver typed once: with one address on the (literal) allowlist, an empty Approved By is that address, as
+    // the allowlist spells it. Any Approved By that is given must still be on the allowlist (below).
+    if (!approverId && new Set(allowlist).size === 1) approverId = listed[0];
     // An unknown answer (for example a send-and-wait that timed out) is a rejection, never an approval.
     approved = asBoolean(ctx.getNodeParameter('approved', i, false), false);
     // Desktop steps only: the steps the approver declares writes. An expression (the approval form's answer) is expected.
@@ -336,6 +341,7 @@ async function signOne(ctx: NodeContext, engine: Engine, i: number, json: IDataO
   if (siteLoginId === '') return refuse([SITE_LOGIN_NO_ID]);
   if (!p.digest) return refuse([NOT_REPAIRED_STEPS]);
   if (p.name === null || p.version === null) return refuse([MISSING_NAME_OR_VERSION]);
+  if (!approverId && allowlist.length > 1) return refuse([APPROVER_NEEDED]);
   if (!approverId || !allowlist.includes(approverId.toLowerCase())) return refuse([APPROVER_NOT_ALLOWED]);
   if (!approved) {
     // Template 3 marks the row with this hash rejected, so the hash must be the hash of these steps.

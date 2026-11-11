@@ -182,14 +182,20 @@ describe('v2 credential types', () => {
       'an SAP user that can only display', 'not *', 'Forms It May Submit']) expect(reads?.description, text).toContain(text);
     expect(reads?.description).not.toMatch(/any text|Playwright/);
   });
-  it('RPA Step Signing: Signing Key with the openssl hint', () => {
+  it('RPA Step Signing: Signing Key with a hint that needs no terminal', () => {
     const key = new PlaywrightScriptSigningApi().properties.find((p) => p.name === 'secretKey');
-    expect(key).toMatchObject({ displayName: 'Signing Key', hint: 'Generate one: openssl rand -hex 32', typeOptions: { password: true } });
+    expect(key).toMatchObject({
+      displayName: 'Signing Key', hint: 'Let your password manager generate a password of 32 or more characters, and paste it here', typeOptions: { password: true }, required: true,
+    });
+    // n8n has no way to generate a credential value (n8n-workflow ICredentialType and INodePropertyTypeOptions): no terminal command either.
+    expect(JSON.stringify(new PlaywrightScriptSigningApi().properties)).not.toMatch(/openssl|terminal/);
   });
   it('RPA Step Signing opens with one notice that says what the key is for', () => {
     const [first, ...rest] = new PlaywrightScriptSigningApi().properties;
     expect(first).toMatchObject({ type: 'notice', default: '' });
-    expect(first.displayName).toMatch(/openssl rand -hex 32/);
+    expect(first.displayName).toBe(
+      'Sign Steps signs Repaired steps with this key, and Run Steps refuses steps whose signature does not match it. Use 32 or more random characters, for example a password your password manager generates.',
+    );
     expect(rest.filter((p) => p.type === 'notice')).toEqual([]);
   });
   it('package.json registers exactly the v2 credentials', () => {
@@ -307,7 +313,7 @@ describe('v2 credential tests', () => {
   });
   it('Step Signing: a key of 31 characters is refused, 32 accepted', () => {
     expect(scriptSigningResult({ secretKey: 'k'.repeat(31) })).toEqual({
-      status: 'Error', message: 'The Step Signing key must be at least 32 characters (generate one with: openssl rand -hex 32)',
+      status: 'Error', message: 'The Step Signing key must be at least 32 characters (let your password manager generate a password of 32 or more characters)',
     });
     expect(scriptSigningResult({ secretKey: 'k'.repeat(32) })).toEqual({ status: 'OK', message: 'Signing key accepted' });
   });
