@@ -55,8 +55,8 @@ public class BarTests
         Assert.Equal(BarPart.List, BarText.Parts(BarStage.Starting));
         Assert.Equal(BarPart.RecordButtons | BarPart.List | BarPart.ReadHint | BarPart.StepActions, BarText.Parts(BarStage.Recording));
         Assert.Equal(BarPart.RecordButtons | BarPart.List | BarPart.ReadHint | BarPart.StepActions, BarText.Parts(BarStage.Paused));
-        Assert.Equal(BarPart.List | BarPart.StepActions | BarPart.SaveBlock, BarText.Parts(BarStage.Finished));
-        // Once saved, the step actions show only for a selected step: they belong to editing.
+        // Once finished, the step actions show only for a selected step: they belong to editing.
+        Assert.Equal(BarPart.List | BarPart.SaveBlock, BarText.Parts(BarStage.Finished));
         Assert.Equal(BarPart.List | BarPart.NextSteps, BarText.Parts(BarStage.Saved));
         Assert.Equal(BarPart.List | BarPart.StepActions | BarPart.NextSteps, BarText.Parts(BarStage.Saved, stepSelected: true));
         Assert.Equal(BarPart.List | BarPart.StepActions | BarPart.SaveBlock, BarText.Parts(BarStage.Finished, stepSelected: true));
@@ -119,6 +119,11 @@ public class BarTests
         Assert.Equal("Earlier notices", DialogText.NoticesTitle);
         // A screen reader names the list and the values page by these, not after a label near them.
         Assert.Equal(("Recorded steps", "Values that can change"), (BarText.ListName, ValuesPage.AreaName));
+        // And the panes around the list and around the step buttons, which would otherwise take a hidden label's name.
+        Assert.Equal("Step actions", BarText.StepActionsName);
+        Assert.Equal(BarText.ListName, BarText.ListAreaName(BarText.Parts(BarStage.Recording)));
+        Assert.Equal(BarText.ListName, BarText.ListAreaName(BarText.Parts(BarStage.Finished)));
+        Assert.Equal(ValuesPage.AreaName, BarText.ListAreaName(BarText.Parts(BarStage.Values)));
         Assert.Equal("Record another", DialogText.StartOverUnsaved(2).Title);
         Assert.Equal(BarText.RecordAnother, DialogText.StartOverUnsaved(2).Title);
         // No label is written in capitals.
