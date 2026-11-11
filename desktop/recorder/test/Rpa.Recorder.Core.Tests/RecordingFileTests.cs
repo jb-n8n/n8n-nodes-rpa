@@ -97,10 +97,11 @@ public class RecordingFileTests
     [Fact]
     public void The_recording_limits_are_the_importers_and_the_step_parsers()
     {
-        // The engine's importers (recording.ts and the files beside it, which it may share constants with) and its step
-        // parser, read in place.
+        // The engine's importers (recording.ts and the files beside it, which it may share constants with), its step
+        // parser and the desktop vocabulary both of them use, read in place.
         var engine = string.Concat(Directory.GetFiles(RepoPath("packages", "engine", "src", "import"), "*.ts").Order(StringComparer.Ordinal).Select(File.ReadAllText))
-            + RepoFile("packages", "engine", "src", "steps", "parse.ts");
+            + RepoFile("packages", "engine", "src", "steps", "parse.ts")
+            + RepoFile("packages", "engine", "src", "steps", "desktop-vocabulary.ts");
         Assert.Matches($@"\bRECORDING_FORMAT = '{RecordingFile.Format}';", engine);
         Assert.Matches($@"\bMAX_RECORDING_EVENTS = {RecordingFile.MaxEvents};", engine);
         Assert.Matches($@"\bMAX_UIA_TEXT = {Texts.MaxText};", engine);
