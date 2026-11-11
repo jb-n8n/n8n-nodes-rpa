@@ -65,6 +65,12 @@ function checkToken(token: string): string {
   return token;
 }
 
+/** The connection was closed or reset before the TLS handshake finished: no byte of the protocol had been sent. */
+class EndedBeforeSecureError extends RunnerConnectError {}
+/** What is left of the connect time must be at least this for the one more try. */
+const RETRY_MIN_MS = 1_000;
+const SECOND_ATTEMPT_NOTE = 'The first attempt ended before the secure connection was set up, so a second attempt was made.';
+
 /** Opens TLS and resolves once the handshake finished, before anything is written. */
 function openTls(addr: RunnerAddress, timeoutMs: number, signal?: AbortSignal): Promise<TLSSocket> {
   return new Promise((resolve, reject) => {
@@ -81,7 +87,10 @@ function openTls(addr: RunnerAddress, timeoutMs: number, signal?: AbortSignal): 
       if (err) { socket.destroy(); reject(err); } else resolve(socket);
     };
     const onSecure = () => done();
-    const onError = (e: Error) => done(new RunnerConnectError(runnerUnreachable(addr.shown, e.message.split('\n')[0].slice(0, 200))));
+    const onError = (e: Error) => {
+      const why = runnerUnreachable(addr.shown, e.message.split('\n')[0].slice(0, 200));
+      done((e as NodeJS.ErrnoException).code === 'ECONNRESET' ? new EndedBeforeSecureError(why) : new RunnerConnectError(why));
+    };
     const onAbort = () => done(new RunnerConnectError(runnerUnreachable(addr.shown, 'cancelled')));
     const timer = setTimeout(() => done(new RunnerConnectError(runnerUnreachable(addr.shown, `no answer within ${Math.round(timeoutMs / 1000)} s`))), timeoutMs);
     socket.once('secureConnect', onSecure);
@@ -149,7 +158,21 @@ export async function connectRunner(endpoint: RunnerEndpoint, opts: { timeoutMs?
   const pinned = Buffer.from(normalizeFingerprint(endpoint.fingerprint).replace(/:/g, ''), 'hex');
   const token = checkToken(endpoint.token);
   const timeoutMs = opts.timeoutMs ?? RUNNER_CONNECT_TIMEOUT_MS;
-  const socket = await openTls(addr, timeoutMs, opts.signal);
+  const started = Date.now();
+  let socket: TLSSocket;
+  try {
+    socket = await openTls(addr, timeoutMs, opts.signal);
+  } catch (first) {
+    // Ended before the handshake finished, so nothing was sent: one more try with the time that is left. A refused
+    // connection, a timeout, a cancel and every failure after the handshake are not retried.
+    const left = timeoutMs - (Date.now() - started);
+    if (!(first instanceof EndedBeforeSecureError) || opts.signal?.aborted || left < RETRY_MIN_MS) throw first;
+    try {
+      socket = await openTls(addr, left, opts.signal);
+    } catch (second) {
+      throw second instanceof RunnerConnectError ? new RunnerConnectError(`${second.message} ${SECOND_ATTEMPT_NOTE}`) : second;
+    }
+  }
   const raw = socket.getPeerCertificate(false)?.raw;
   const presented = raw ? createHash('sha256').update(raw).digest() : Buffer.alloc(0);
   if (presented.length !== pinned.length || !timingSafeEqual(presented, pinned)) {
