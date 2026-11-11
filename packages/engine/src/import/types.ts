@@ -81,7 +81,7 @@ export interface DesktopDraft {
 /**
  * `desktopDrafts`: UiPath desktop sequences, a desktop step document or a desktop recording, apart from the browser
  * drafts (only when there are any). `flow`: the workflow around the drafts, for a UiPath project and for a desktop
- * recording (one desktop node, sequence 1, whose draft is `<name>-1`).
+ * recording (one desktop node, sequence 1, whose draft is `<name>`, the recording's one step list).
  */
 export interface ImportResult { drafts: Draft[]; desktopDrafts?: DesktopDraft[]; report: ImportReport; flow?: UiPathFlow }
 
