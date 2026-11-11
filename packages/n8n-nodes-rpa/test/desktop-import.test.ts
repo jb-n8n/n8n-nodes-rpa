@@ -194,12 +194,18 @@ describe('approving imported desktop steps: Sign Steps with Write Steps', () => 
 });
 
 describe('RPA: 5 Import a bot with a desktop project', () => {
-  it('the completion page counts the desktop step lists waiting for approval without a replay', async () => {
+  it('with approval by email, the completion page counts the desktop step lists waiting for approval without a replay', async () => {
     const t = JSON.parse(readFileSync(new URL('../templates/5-import-a-bot.json', import.meta.url), 'utf8')) as { nodes: { name: string; parameters: Record<string, unknown> }[] };
     const message = String(t.nodes.find((n) => n.name === 'Imported')!.parameters.completionMessage);
-    const render = (text: string, $json: unknown) => text.replace(/^=/, '').replace(/\{\{(.+?)\}\}/gs, (_, code: string) => String(new Function('$json', `return (${code});`)($json)));
     const { data } = await importSample();
-    const shown = render(message, data[0].json);
+    // $('<node>') as n8n gives it: Import steps ran, the review page did not, Settings say by email and Approve steps names its workflow.
+    const ran: Record<string, { json: unknown }[][]> = { 'Import steps': [data], Settings: [[{ json: { approval: 'by email' } }]] };
+    const $ = (name: string) => ({
+      isExecuted: name in ran, params: name === 'Approve steps' ? { workflowId: { value: 'wf-3' } } : {},
+      first: (branch = 0) => ran[name][branch][0], all: (branch = 0) => ran[name][branch] ?? [],
+    });
+    const render = (text: string) => text.replace(/^=/, '').replace(/\{\{(.+?)\}\}/gs, (_, code: string) => String(new Function('$', `return (${code});`)($)));
+    const shown = render(message);
     expect(shown).toContain('\n1 desktop step list is waiting for approval in RPA: 3 Approve steps, not replayed: review every step');
     expect(shown).not.toContain('passed the replay');
   });

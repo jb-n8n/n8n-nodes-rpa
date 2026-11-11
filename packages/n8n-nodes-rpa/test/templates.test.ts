@@ -58,6 +58,8 @@ const SUPERSEDE_UP_TO = "={{ $('Repaired steps received').item.json.baseVersion 
 const AI_REPAIR = "={{ $('Get pending').all().filter(i => i.json.hash && DateTime.fromISO(i.json.expiresAt) > $now).length === 0 }}";
 const EXPIRES_AT = "={{ $now.plus({ hours: $('Settings').item.json.approvalTimeoutHours }).toISO() }}";
 const APPROVER = 'approver@example.com';
+/** Template 3 takes the approver from its Settings everywhere except the Approver Allowlist, which must be typed. */
+const SETTINGS_APPROVER = "={{ $('Settings').item.json.approver }}";
 
 function byName(t: Template, name: string): TemplateNode {
   const n = t.nodes.find((x) => x.name === name);
@@ -74,6 +76,24 @@ const columnsOf: Record<string, string[]> = { [STEPS_TABLE]: STEPS_TABLE_COLUMNS
 function evaluate(expression: string, scope: Record<string, unknown>): unknown {
   const code = expression.replace(/^=\{\{/, '').replace(/\}\}$/, '');
   return new Function(...Object.keys(scope), `return (${code});`)(...Object.values(scope)) as unknown;
+}
+/**
+ * A JSON-mode form's fields as n8n 2.45 builds them (Form utils parseJsonFormFields): the expression must not hold "{{" or
+ * "}}" inside (n8n cuts it there), and its text is put in place with String.replace, so the text must hold no "$" (the
+ * templates write it as \u0024) for "$&" or "$$" in step text not to change what the page shows.
+ */
+function jsonFormFields(expression: string, scope: Record<string, unknown>): { fieldLabel?: string; fieldName?: string; fieldType?: string; html?: string; defaultValue?: string; fieldOptions?: { values: { option: string }[] }; requiredField?: boolean; placeholder?: string }[] {
+  expect(expression.replace(/^=\{\{/, '').replace(/\}\}$/, '')).not.toMatch(/\{\{|\}\}/);
+  const text = String(evaluate(expression, scope));
+  expect(text).not.toContain('$');
+  return JSON.parse(text) as ReturnType<typeof jsonFormFields>;
+}
+/** A Set once sticky is a checklist: a heading, then at most six numbered lines. */
+function expectChecklist(content: string) {
+  const [heading, ...lines] = content.split('\n');
+  expect(heading).toMatch(/^### Set once/);
+  expect(lines.length).toBeLessThanOrEqual(6);
+  lines.forEach((l, i) => expect(l).toMatch(new RegExp(`^${i + 1}\\. `)));
 }
 /** Renders a text parameter with {{ … }} parts. */
 function render(text: string, scope: Record<string, unknown>): string {
@@ -156,6 +176,15 @@ describe.each(Object.keys(FILES) as (keyof typeof FILES)[])('%s is a well-formed
       for (const s of p.columns?.schema ?? []) expect(known).toContain(s.id);
     }
   });
+  it('no sticky covers a working node and no two working nodes overlap (a node is about 100 by 100 on the canvas)', () => {
+    const working = t.nodes.filter((n) => n.type !== STICKY);
+    for (const st of t.nodes.filter((n) => n.type === STICKY)) {
+      const [x, y] = st.position;
+      const { width = 240, height = 160 } = st.parameters as { width?: number; height?: number };
+      for (const n of working) expect(n.position[0] + 100 > x && n.position[0] < x + width && n.position[1] + 100 > y && n.position[1] < y + height, `${st.name} covers ${n.name}`).toBe(false);
+    }
+    for (const a of working) for (const b of working) if (a !== b) expect(Math.abs(a.position[0] - b.position[0]) < 100 && Math.abs(a.position[1] - b.position[1]) < 100, `${a.name} and ${b.name}`).toBe(false);
+  });
   it('uses v1 execution order', () => {
     expect(t.settings).toMatchObject({ executionOrder: 'v1' });
   });
@@ -190,6 +219,11 @@ describe('1-create-tables.json', () => {
     expect(targets(t, 'Run once')).toEqual([['Create steps table']]);
     expect(targets(t, 'Create steps table')).toEqual([['Create run log table']]);
     expect(t.nodes.map((n) => n.name).sort()).toEqual(['About this workflow', 'Create run log table', 'Create steps table', 'Run once']);
+  });
+  it('says that it is optional: templates 5 and 3 create the tables when they are missing', () => {
+    const about = sticky(t, 'About this workflow').content;
+    expect(about.split('\n')[0]).toBe('### Create the RPA Data Tables (optional; grey: leave as is)');
+    expect(about).toContain('**RPA: 5 Import a bot** and **RPA: 3 Approve steps** create these tables when they are missing');
   });
 });
 
@@ -380,20 +414,35 @@ describe('3-approve-steps.json', () => {
     for (const field of ['evidenceLine', 'changeList', 'safetyLine', 'hash']) expect(String(email.html)).toContain(`$json.${field}`);
     expect(String(email.html)).toContain('color:#b00020');
   });
-  it('trigger → email → Settings → Mark pending → Desktop steps? → Ask for approval (desktop: form → Desktop answer) → Timed out? (yes → Record expiry, no → Repaired steps to sign → Sign steps)', () => {
-    expect(targets(t, 'Repaired steps received')).toEqual([['Email repaired steps']]);
-    expect(targets(t, 'Email repaired steps')).toEqual([['Settings']]);
-    expect(targets(t, 'Settings')).toEqual([['Mark pending']]);
-    expect(targets(t, 'Mark pending')).toEqual([['Desktop steps?']]);
-    expect(targets(t, 'Desktop steps?')).toEqual([['Ask for approval (desktop steps)'], ['Ask for approval']]);
+  it('trigger → Settings → (first) the tables and Mark pending, (then) Desktop steps? → one desktop email, or the review email and Ask for approval → Timed out? → Sign steps', () => {
+    expect(targets(t, 'Repaired steps received')).toEqual([['Settings']]);
+    // v1 order runs the topmost child's branch first: the tables exist and the row is pending before an email goes out.
+    expect(targets(t, 'Settings')).toEqual([['Create steps table', 'Desktop steps?']]);
+    expect(byName(t, 'Create steps table').position[1]).toBeLessThan(byName(t, 'Desktop steps?').position[1]);
+    expect(targets(t, 'Create steps table')).toEqual([['Create run log table']]);
+    expect(targets(t, 'Create run log table')).toEqual([['Mark pending']]);
+    expect(targets(t, 'Mark pending')).toEqual([]);
+    // Desktop steps: one email (its form asks for the writes). Browser steps: the review email with the screenshots, then Approve / Reject.
+    expect(targets(t, 'Desktop steps?')).toEqual([['Ask for approval (desktop steps)'], ['Email repaired steps']]);
+    expect(targets(t, 'Email repaired steps')).toEqual([['Ask for approval']]);
     expect(targets(t, 'Ask for approval')).toEqual([['Timed out?']]);
     expect(targets(t, 'Ask for approval (desktop steps)')).toEqual([['Desktop answer']]);
     expect(targets(t, 'Desktop answer')).toEqual([['Timed out?']]);
     expect(targets(t, 'Timed out?')).toEqual([['Record expiry'], ['Repaired steps to sign']]);
     expect(targets(t, 'Repaired steps to sign')).toEqual([['Sign steps']]);
+    // Settings keeps the item (and its screenshots, which Set 3.4 passes on) for the review email, and adds the approver.
     expect(byName(t, 'Settings').parameters).toMatchObject({
-      assignments: { assignments: [{ name: 'name', value: "={{ $('Repaired steps received').item.json.name }}" }, { name: 'approvalTimeoutHours', value: 72, type: 'number' }] },
+      includeOtherFields: true,
+      assignments: { assignments: [
+        { name: 'name', value: "={{ $('Repaired steps received').item.json.name }}" }, { name: 'approvalTimeoutHours', value: 72, type: 'number' },
+        { name: 'approver', value: APPROVER, type: 'string' },
+      ] },
     });
+    expect(byName(t, 'Settings')).not.toHaveProperty('parameters.options.stripBinary');
+  });
+  it('creates both Data Tables when they are missing, with the columns of template 1', () => {
+    const t1 = load('1-create-tables.json');
+    for (const name of ['Create steps table', 'Create run log table']) expect(byName(t, name).parameters).toEqual(byName(t1, name).parameters);
   });
   it('Mark pending upserts by hash: status pending, expiresAt now + approvalTimeoutHours', () => {
     const p = table(byName(t, 'Mark pending'));
@@ -416,7 +465,7 @@ describe('3-approve-steps.json', () => {
     expect(table(byName(t, 'Save signed steps')).columns?.value).toEqual({
       status: 'active', steps: '={{ $json.steps }}', hash: '={{ $json.hash }}', signature: '={{ $json.signature }}', approvedBy: '={{ $json.approvedBy }}', approvedAt: '={{ $json.approvedAt }}',
     });
-    expect(table(byName(t, 'Record rejection')).columns?.value).toEqual({ status: 'rejected', approvedBy: APPROVER, approvedAt: '={{ $now.toISO() }}' });
+    expect(table(byName(t, 'Record rejection')).columns?.value).toEqual({ status: 'rejected', approvedBy: SETTINGS_APPROVER, approvedAt: '={{ $now.toISO() }}' });
   });
   it('Supersede older versions runs after Save signed steps: every other active row of the same name up to the new version becomes superseded (I1)', () => {
     expect(targets(t, 'Save signed steps')).toEqual([['Supersede older versions', 'Email signed steps']]);
@@ -442,7 +491,7 @@ describe('3-approve-steps.json', () => {
   });
   it('Email signed steps confirms what was signed, naming the steps signed as writes for desktop steps (I2)', () => {
     const p = byName(t, 'Email signed steps').parameters as { operation: string; toEmail: string; subject: string; text: string; emailFormat: string };
-    expect(p).toMatchObject({ operation: 'send', toEmail: APPROVER, emailFormat: 'text' });
+    expect(p).toMatchObject({ operation: 'send', toEmail: SETTINGS_APPROVER, emailFormat: 'text' });
     const signed = { name: 'erp-1', version: 1, hash: 'h1', approvedBy: APPROVER, approvedAt: '2026-10-29T12:00:00.000Z', writeLine: 'Signed as writes: step 16 (Click Save)' };
     const scope = (json: IDataObject) => ({ $: (name: string) => { expect(name).toBe('Sign steps'); return { item: { json } }; } });
     expect(render(p.subject, scope(signed))).toBe('Signed: steps v1 for erp-1 are active');
@@ -468,7 +517,7 @@ describe('3-approve-steps.json', () => {
     const sign = byName(t, 'Sign steps');
     expect(sign).toMatchObject({ type: NODE_TYPE, onError: 'continueErrorOutput' });
     expect(sign.parameters).toEqual({
-      operation: 'signSteps', approved: "={{ $('Timed out?').item.json.data.approved }}", approverId: APPROVER, approverAllowlist: APPROVER,
+      operation: 'signSteps', approved: "={{ $('Timed out?').item.json.data.approved }}", approverId: SETTINGS_APPROVER, approverAllowlist: APPROVER,
       writeSteps: "={{ $('Timed out?').item.json.data.writeSteps ?? '' }}",
     });
     expect(nodeOutputs('signSteps', undefined)).toHaveLength(1);
@@ -502,14 +551,14 @@ describe('3-approve-steps.json', () => {
     const sign = byName(t, 'Sign steps').parameters;
     const run = async (approved: boolean) => {
       // Browser steps: Ask for approval's answer has no writeSteps, so the expression gives ''.
-      const params = { ...sign, approved, writeSteps: '' };
+      const params = { ...sign, approved, approverId: APPROVER, writeSteps: '' };
       const ctx = harness({ params, rawParameters: sign, items: [{ json: restored }], credentials: { playwrightScriptSigningApi: { secretKey: 'k'.repeat(32) } } });
       return (await executeSignSteps(ctx, engine, () => new Date('2026-10-07T09:30:00.000Z')))[0][0].json;
     };
     expect(await run(false)).toMatchObject({ status: 'rejected', name: 'example-feed', version: 2, hash: received.hash, approvedBy: APPROVER });
     expect(await run(true)).toMatchObject({ status: 'active', name: 'example-feed', version: 2, hash: received.hash, approvedBy: APPROVER });
   });
-  it('desktop steps get a form (Decision, Write steps); Desktop answer gives Sign steps approved and writeSteps, or no data on a timeout', () => {
+  it('desktop steps get one email whose form has Decision and the candidate writes as tick boxes, none ticked; Desktop answer gives Sign steps approved and the ticked and typed numbers', () => {
     const branch = byName(t, 'Desktop steps?').parameters as { conditions: { conditions: { leftValue: string }[] } };
     const isDesktop = (steps: unknown) => evaluate(branch.conditions.conditions[0].leftValue, { $: () => ({ item: { json: { steps } } }) });
     expect(isDesktop({ surface: 'desktop', app: { exe: 'ErpDemo.exe' }, steps: [] })).toBe(true);
@@ -517,28 +566,40 @@ describe('3-approve-steps.json', () => {
     expect(isDesktop(undefined)).toBe(false);
     const ask = byName(t, 'Ask for approval (desktop steps)').parameters;
     expect(ask).toMatchObject({
-      operation: 'sendAndWait', responseType: 'customForm', toEmail: APPROVER,
-      formFields: { values: [{ fieldLabel: 'Decision', fieldType: 'dropdown', fieldOptions: { values: [{ option: 'Approve' }, { option: 'Reject' }] }, requiredField: true }, { fieldLabel: 'Write steps' }] },
-      options: { limitWaitTime: byName(t, 'Ask for approval').parameters.options && (byName(t, 'Ask for approval').parameters.options as { limitWaitTime: unknown }).limitWaitTime },
+      operation: 'sendAndWait', responseType: 'customForm', defineForm: 'json', toEmail: SETTINGS_APPROVER,
+      options: { limitWaitTime: (byName(t, 'Ask for approval').parameters.options as { limitWaitTime: unknown }).limitWaitTime },
     });
-    expect(String(ask.message)).toContain('The import never marks a step as a write: in Write steps, list the numbers of the steps that save, post or submit');
-    // I2: the numbered change list is in the message and the candidates' numbers on the form; I3: what listing does, plainly.
+    expect(ask).not.toHaveProperty('formFields');
+    expect(String(ask.subject)).toMatch(/^=Approve desktop steps v\{\{/);
+    // I2: the numbered change list is in the message and the candidates on the form; I3: what ticking does, plainly.
     const received = {
       version: 1, name: 'erp-1', hash: 'h', digest: 'd', evidenceLine: 'Not replayed', safetyLine: 'desktop app: "ErpDemo.exe"',
-      changeList: 'Step 1: Wait for the window\nStep 2: Click Save <b>', safetyFlags: ['desktop app: "ErpDemo.exe"', 'candidate write: step 2 (Click Save) may save, post or submit: list 2 in Write Steps if it does (…)'],
+      changeList: 'Step 1: Wait for the window\nStep 2: Click Save <b>',
+      safetyFlags: ['desktop app: "ErpDemo.exe"', 'candidate write: step 2 (Click Save, then $& close) may save, post or submit: list 2 in Write Steps if it does (…)', 'candidate write: step 7 (Press Enter) may save, post or submit: list 7 in Write Steps if it does (…)'],
     };
     const $ = (name: string) => ({ item: { json: name === 'Settings' ? { approvalTimeoutHours: 72 } : received } });
     const message = render(String(ask.message), { $ });
-    expect(message).toContain('The steps, numbered as Write steps counts them:\nStep 1: Wait for the window\nStep 2: Click Save &lt;b&gt;\n');
-    expect(message).toContain('leaving a step unlisted does not stop it from saving unless its control is in the runner policy');
-    expect(message).not.toContain('Only listed steps may use');
+    expect(message).toContain('The steps:\nStep 1: Wait for the window\nStep 2: Click Save &lt;b&gt;\n');
+    expect(message).toContain('tick the steps that save, send or submit (the safety flags name the candidates); none is ticked for you.');
+    expect(message).toContain('leaving a step unticked does not stop it from saving unless its control is in the runner policy');
+    expect(message).not.toContain('Write steps');
     const description = render(String((ask.options as IDataObject).responseFormDescription), { $ });
-    expect(description).toContain('from the numbered list in the email (candidates: step 2)');
-    expect(description).toContain('an unlisted step can still save through any other control');
-    expect(render(String((ask.options as IDataObject).responseFormDescription), { $: () => ({ item: { json: { ...received, safetyFlags: [] } } }) })).toContain('(candidates: none)');
+    expect(description).toBe('Steps v1 for erp-1. Tick the steps that save, send or submit, from the numbered list in the email; none is ticked for you. The runner refuses a write only on the controls and keys its policy lists: an unticked step can still save through any other control.');
+    const fields = jsonFormFields(String(ask.jsonOutput), { $ });
+    expect(fields).toEqual([
+      { fieldLabel: 'Decision', fieldType: 'dropdown', fieldOptions: { values: [{ option: 'Approve' }, { option: 'Reject' }] }, requiredField: true },
+      // A second person decides unprompted: no defaultValue, so nothing is ticked.
+      { fieldLabel: 'Steps that save, send or submit', fieldType: 'checkbox', fieldOptions: { values: [{ option: 'Step 2: Click Save; then $& close' }, { option: 'Step 7: Press Enter' }] } },
+      { fieldLabel: 'Any other step that saves, sends or submits (its number)', fieldType: 'text', placeholder: '7, 9' },
+    ]);
+    // No candidate: no tick boxes.
+    expect(jsonFormFields(String(ask.jsonOutput), { $: () => ({ item: { json: { ...received, safetyFlags: [] } } }) }).map((f) => f.fieldLabel)).toEqual(['Decision', 'Any other step that saves, sends or submits (its number)']);
+    // send-and-wait answers are keyed by label (emailSend 2.1); a checkbox answers with the labels ticked.
     const answer = String(byName(t, 'Desktop answer').parameters.jsonOutput);
-    expect(evaluate(answer, { $json: { data: { Decision: 'Approve', 'Write steps': '16', respondedAt: 'x' } } })).toEqual({ data: { approved: true, writeSteps: '16' } });
-    expect(evaluate(answer, { $json: { data: { Decision: 'Reject', respondedAt: 'x' } } })).toEqual({ data: { approved: false, writeSteps: '' } });
+    const data = (d: IDataObject) => ({ $json: { data: { ...d, respondedAt: 'x' } } });
+    expect(evaluate(answer, data({ Decision: 'Approve', 'Steps that save, send or submit': ['Step 7: Press Enter'], 'Any other step that saves, sends or submits (its number)': '9' }))).toEqual({ data: { approved: true, writeSteps: '7 9' } });
+    expect(evaluate(answer, data({ Decision: 'Approve', 'Steps that save, send or submit': [], 'Any other step that saves, sends or submits (its number)': '' }))).toEqual({ data: { approved: true, writeSteps: '' } });
+    expect(evaluate(answer, data({ Decision: 'Reject' }))).toEqual({ data: { approved: false, writeSteps: '' } });
     expect(evaluate(answer, { $json: { name: 'feed', hash: 'h' } })).toEqual({});
     const timedOut = (byName(t, 'Timed out?').parameters as { conditions: { conditions: { leftValue: string }[] } }).conditions.conditions[0].leftValue;
     expect(evaluate(timedOut, { $json: {} })).toBe(true);
@@ -548,23 +609,24 @@ describe('3-approve-steps.json', () => {
     expect(evaluate(String(sign.writeSteps), fromTimedOut({ data: { approved: true, respondedAt: 'x' } }))).toBe('');
     expect(evaluate(String(sign.approved), fromTimedOut({ data: { approved: true, writeSteps: '' } }))).toBe(true);
   });
-  it('uses one approver address in every approver field', () => {
-    const emails = new Set<string>();
-    let fields = 0;
+  it('types the approver address in Settings and in the Approver Allowlist only; every other approver field reads Settings', () => {
+    const typed: string[] = [];
     for (const n of t.nodes.filter((x) => x.type !== STICKY)) {
       const { fromEmail: _sender, ...rest } = n.parameters; // the sender is not an approver
-      const found = JSON.stringify(rest).match(/[^\s,'"<>\\]+@[^\s,'"<>\\]+/g) ?? [];
-      fields += found.length;
-      for (const e of found) emails.add(e);
+      for (const e of JSON.stringify(rest).match(/[^\s,'"<>\\]+@[^\s,'"<>\\]+/g) ?? []) typed.push(`${n.name}: ${e}`);
     }
-    expect(fields).toBeGreaterThanOrEqual(5); // both emails, Approved By, the allowlist, approvedBy on the rejection
-    expect([...emails]).toEqual([APPROVER]);
+    expect(typed.sort()).toEqual([`Settings: ${APPROVER}`, `Sign steps: ${APPROVER}`]);
+    expect(byName(t, 'Sign steps').parameters.approverAllowlist).toBe(APPROVER);
+    for (const name of ['Email repaired steps', 'Ask for approval', 'Ask for approval (desktop steps)', 'Email signed steps']) expect(byName(t, name).parameters.toEmail, name).toBe(SETTINGS_APPROVER);
+    expect(byName(t, 'Sign steps').parameters.approverId).toBe(SETTINGS_APPROVER);
   });
   it('the stickies explain the pending lifecycle, configuration refusals and one approval per version', () => {
     expect(sticky(t, 'About this workflow').color).toBe(COLOUR.grey);
     expect(sticky(t, 'Set once').color).toBe(COLOUR.green);
     const notes = JSON.stringify(t.nodes.filter((n) => n.type === STICKY));
     for (const s of ['pending', 'expired', 'rejected', 'missing credential', 'one Repaired steps item per version']) expect(notes).toContain(s);
+    expectChecklist(sticky(t, 'Set once').content);
+    for (const s of ['**Settings → approver**', '**Sign steps → Approver Allowlist**', 'SMTP', '**RPA Step Signing**']) expect(sticky(t, 'Set once').content).toContain(s);
   });
 });
 
@@ -634,7 +696,8 @@ describe('template 3 approval email', () => {
     const t = load('3-approve-steps.json');
     expect(String(byName(t, 'Email repaired steps').parameters.subject)).toMatch(/^=1 of 2, review: steps v\{\{ \$json\.version \}\} for /);
     expect(String(byName(t, 'Ask for approval').parameters.subject)).toMatch(/^=2 of 2, approve steps v/);
-    expect(String(byName(t, 'Ask for approval (desktop steps)').parameters.subject)).toMatch(/^=2 of 2, approve desktop steps v/);
+    // Desktop steps get one email.
+    expect(String(byName(t, 'Ask for approval (desktop steps)').parameters.subject)).toMatch(/^=Approve desktop steps v/);
   });
 });
 
@@ -846,18 +909,70 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     return zip(entries);
   }
   const completion = (name: string) => byName(t, name).parameters as { operation: string; respondWith: string; completionTitle: string; completionMessage: string; inputDataFieldName?: string };
+  const REVIEW = 'Review and approve';
+  const review = byName(t, REVIEW);
+  const settingsJson = () => Object.fromEntries((byName(t, 'Settings').parameters as { assignments: { assignments: { name: string; value: string }[] } }).assignments.assignments.map((a) => [a.name, a.value])) as IDataObject;
+  /** `$('<node>')` as an n8n expression sees it: the node's outputs in this execution (by output index) and its parameters. */
+  function nodesRan(ran: Record<string, INodeExecutionData[][]>) {
+    return (name: string) => {
+      const outputs = ran[name];
+      const ran_ = () => {
+        if (!outputs) throw new Error(`${name} has not run`);
+        return outputs;
+      };
+      return { isExecuted: outputs !== undefined, params: byName(t, name).parameters, first: (branch = 0) => ran_()[branch]?.[0], all: (branch = 0) => ran_()[branch] ?? [] };
+    };
+  }
+  const escapeHtml = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] ?? c);
+  /** The ERP Demo recording imported on the form, and what the review page's expressions see. */
+  async function importedRecording() {
+    const rec = readFileSync(new URL('../../engine/test/fixtures/import/recording-erp/erp.rpa-recording.json', import.meta.url));
+    const [data, repaired] = await runImport(formItem('RPA recording', rec), () => {
+      throw new Error('a recording is never adopted in a browser');
+    });
+    expect(data[0].json.error).toBeUndefined();
+    return { data, repaired, ran: { Settings: [[{ json: { ...formItem('RPA recording', rec).json, ...settingsJson() } }]], 'Import steps': [data, repaired] } as Record<string, INodeExecutionData[][]> };
+  }
+  /**
+   * The review page answered with `answer` (n8n gives each field under its fieldName), then Step lists, Step lists to sign
+   * (one item per list, Split Out) and Sign steps with its parameters resolved per item, as n8n resolves them.
+   */
+  async function signAfterReview(ran: Record<string, INodeExecutionData[][]>, answer: IDataObject) {
+    const after = { ...ran, [REVIEW]: [[{ json: { ...answer, submittedAt: '2026-11-11T10:00:00.000Z', formMode: 'production' } }]] };
+    const { lists } = evaluate(String(byName(t, 'Step lists').parameters.jsonOutput), { $: nodesRan(after) }) as { lists: IDataObject[] };
+    expect(byName(t, 'Step lists to sign').parameters).toEqual({ fieldToSplitOut: 'lists', options: {} });
+    const sign = byName(t, 'Sign steps').parameters;
+    const params = (i: number) => Object.fromEntries(Object.entries(sign).map(([k, v]) => [k, typeof v === 'string' && v.startsWith('=') ? evaluate(v, { $: nodesRan(after), $itemIndex: i }) : v]));
+    const ctx = harness({ params, rawParameters: sign, items: lists.map((json) => ({ json })), credentials: { playwrightScriptSigningApi: { secretKey: 'k'.repeat(32) } }, continueOnFail: true });
+    const out = await executeSignSteps(ctx, importEngine(() => NOT_ADOPTABLE), () => new Date('2026-11-11T10:00:01.000Z'));
+    const items = out[0].map((i) => i.json);
+    return { lists, signed: items.filter((j) => j.error === undefined), errors: items.filter((j) => j.error !== undefined) };
+  }
 
-  it('the import template wires the form, Import steps and approval', () => {
+  it('the import template wires the form, Settings, Import steps, the review page and Sign steps; approval by email is a switched-off hand-off', () => {
     expect(form).toMatchObject({ type: 'n8n-nodes-base.formTrigger', typeVersion: 2.5 });
     expect(imp).toMatchObject({ type: NODE_TYPE, typeVersion: 1, onError: 'continueErrorOutput' });
-    expect(targets(t, 'Import a bot')).toEqual([['Import steps']]);
+    expect(targets(t, 'Import a bot')).toEqual([['Settings']]);
+    expect(targets(t, 'Settings')).toEqual([['Import steps']]);
     // No chat model ships with it: a recording, a step document and a UiPath desktop sequence never use one, and n8n
-    // would not publish the form while a model node has no credential. The Set once sticky says how to add one.
+    // would not publish the form while a model node has no credential. The README says how to add one.
     expect(t.nodes.filter((n) => n.type.startsWith('@n8n/n8n-nodes-langchain.'))).toEqual([]);
     expect(Object.values(t.connections).filter((c) => 'ai_languageModel' in c)).toEqual([]);
-    // Data → Workflow file? → a completion page; Repaired Steps → Approve steps; error (index 2) → its own completion page.
+    // Data → Approve on this form? (the review path, or straight to the last page); Repaired Steps → Approval by email?; error (index 2) → its own page.
     expect(nodeOutputs('importSteps', imp.parameters.aiRepair)).toHaveLength(2);
-    expect(targets(t, 'Import steps')).toEqual([['Workflow file?'], ['Approve steps'], ['Import failed']]);
+    expect(targets(t, 'Import steps')).toEqual([['Approve on this form?'], ['Approval by email?'], ['Import failed']]);
+    expect(targets(t, 'Approval by email?')).toEqual([['Approve steps'], []]);
+    expect(targets(t, 'Approve on this form?')).toEqual([['Create steps table'], ['Workflow file?']]);
+    expect(targets(t, 'Create steps table')).toEqual([['Create run log table']]);
+    expect(targets(t, 'Create run log table')).toEqual([[REVIEW]]);
+    // v1 order runs the topmost child's branch to its end first: every step list is signed and saved before the last page.
+    expect(targets(t, REVIEW)).toEqual([['Step lists', 'Workflow file?']]);
+    expect(byName(t, 'Step lists').position[1]).toBeLessThan(byName(t, 'Workflow file?').position[1]);
+    expect(targets(t, 'Step lists')).toEqual([['Step lists to sign']]);
+    expect(targets(t, 'Step lists to sign')).toEqual([['Sign steps']]);
+    expect(targets(t, 'Sign steps')).toEqual([['Signed?'], []]);
+    expect(targets(t, 'Signed?')).toEqual([['Save signed steps'], ['Record rejection']]);
+    expect(targets(t, 'Save signed steps')).toEqual([['Supersede older versions']]);
     expect(targets(t, 'Workflow file?')).toEqual([['Imported, with the workflow file'], ['Imported']]);
     // Template 2's hand-off into "RPA: 3 Approve steps", fire and forget, but once for each item: a UiPath project gives
     // one Repaired Steps item per step list, and each needs its own approval. In n8n 2.41 (ExecuteWorkflow.node.ts,
@@ -869,17 +984,78 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(approve.parameters).toEqual({ ...feedApprove.parameters, mode: 'each', options: { waitForSubWorkflow: false } });
     expect(feedApprove.parameters.mode).toBe('once'); // template 2 keeps "once"
     expect(approve.notes).toContain('every step list gets its own approval execution');
-    // v1 order runs the topmost child first: Approve steps before the completion pages, which pause the run until the browser resumes it.
-    expect(byName(t, 'Approve steps').position[1]).toBeLessThan(Math.min(...['Workflow file?', 'Import failed'].map((n) => byName(t, n).position[1])));
+    // Off: n8n publishes a workflow only when an enabled Execute Workflow node names its workflow, and the default path needs none.
+    expect(approve).toMatchObject({ disabled: true });
+    expect(byName(t, 'Approve on this form?')).not.toHaveProperty('disabled');
+    // v1 order runs the topmost child first: the hand-off before the review page and the last pages, which pause the run.
+    expect(byName(t, 'Approval by email?').position[1]).toBeLessThan(Math.min(...['Approve on this form?', 'Import failed'].map((n) => byName(t, n).position[1])));
     const working = t.nodes.filter((n) => n.type !== STICKY).map((n) => n.name).sort();
-    expect(working).toEqual(['Approve steps', 'Import a bot', 'Import failed', 'Import steps', 'Imported', 'Imported, with the workflow file', 'Workflow file?']);
-    expect(t.nodes.filter((n) => n.type === COMPLETION).map((n) => n.typeVersion)).toEqual([2.5, 2.5, 2.5]);
-    // A Form Ending page pauses the run until the browser loads it; a closed tab must not leave the execution waiting for ever.
+    expect(working).toEqual([
+      'Approval by email?', 'Approve on this form?', 'Approve steps', 'Create run log table', 'Create steps table', 'Import a bot', 'Import failed', 'Import steps',
+      'Imported', 'Imported, with the workflow file', 'Record rejection', REVIEW, 'Save signed steps', 'Settings', 'Sign steps', 'Signed?', 'Step lists', 'Step lists to sign',
+      'Supersede older versions', 'Workflow file?',
+    ]);
+    expect(t.nodes.filter((n) => n.type === COMPLETION).map((n) => n.typeVersion)).toEqual([2.5, 2.5, 2.5, 2.5]);
+    // A form page pauses the run until the browser loads it; a closed tab must not leave the execution waiting for ever.
     for (const n of t.nodes.filter((x) => x.type === COMPLETION)) {
       expect(n.parameters, n.name).toMatchObject({ limitWaitTime: true, limitType: 'afterTimeInterval', resumeAmount: 1, resumeUnit: 'hours' });
     }
     // Credentials slots stay empty: nothing in the file names a credential.
     for (const n of t.nodes) expect(n, n.name).not.toHaveProperty('credentials');
+  });
+
+  it('approves on this form by default: Settings holds approval "on this form" and the approver; only "by email" hands over to RPA: 3', () => {
+    const settings = byName(t, 'Settings');
+    expect(settings).toMatchObject({ type: 'n8n-nodes-base.set', typeVersion: 3.4 });
+    expect(settings.parameters).toMatchObject({
+      includeOtherFields: true,
+      assignments: { assignments: [{ name: 'approval', value: 'on this form', type: 'string' }, { name: 'approver', value: APPROVER, type: 'string' }] },
+    });
+    // Set 3.4 passes the upload (binary bot) on unless told to strip it.
+    expect(settings).not.toHaveProperty('parameters.options.stripBinary');
+    const cond = (name: string) => (byName(t, name).parameters as { conditions: { conditions: { leftValue: string }[] } }).conditions.conditions[0].leftValue;
+    const scope = (approval: string, lists: number) => ({ $: nodesRan({ Settings: [[{ json: { approval } }]], 'Import steps': [[{ json: {} }], Array.from({ length: lists }, () => ({ json: {} }))] }) });
+    for (const [approval, lists, byEmail, onForm] of [['on this form', 1, false, true], ['by email', 1, true, false], ['on this form', 0, false, false], ['anything else', 2, false, true]] as const) {
+      expect(evaluate(cond('Approval by email?'), scope(approval, lists)), approval).toBe(byEmail);
+      expect(evaluate(cond('Approve on this form?'), scope(approval, lists)), approval).toBe(onForm);
+    }
+  });
+
+  it('creates both Data Tables when they are missing, with the columns of template 1, before the review page', () => {
+    const t1 = load('1-create-tables.json');
+    for (const name of ['Create steps table', 'Create run log table']) expect(byName(t, name).parameters).toEqual(byName(t1, name).parameters);
+  });
+
+  it('nothing reaches Save signed steps except an active record on the success output of Sign steps; Sign steps\' allowlist is typed', () => {
+    const into = (node: string) => Object.entries(t.connections).flatMap(([from, byType]) => (byType.main ?? []).flatMap((out, index) => out.filter((c) => c.node === node).map(() => [from, index])));
+    expect(into('Save signed steps')).toEqual([['Signed?', 0]]);
+    expect(into('Signed?')).toEqual([['Sign steps', 0]]);
+    expect(into('Record rejection')).toEqual([['Signed?', 1]]);
+    expect(into('Supersede older versions')).toEqual([['Save signed steps', 0]]);
+    const signed = byName(t, 'Signed?').parameters as { conditions: { conditions: { leftValue: string; rightValue: string; operator: unknown }[] } };
+    expect(signed.conditions.conditions).toEqual([expect.objectContaining({ leftValue: '={{ $json.status }}', rightValue: 'active', operator: { type: 'string', operation: 'equals' } })]);
+    const sign = byName(t, 'Sign steps');
+    expect(sign).toMatchObject({ type: NODE_TYPE, onError: 'continueErrorOutput', parameters: { operation: 'signSteps', approverAllowlist: APPROVER, approverId: "={{ $('Settings').first().json.approver }}" } });
+    expect(loadInN8n(sign).outputs).toEqual(['Success', 'Error']);
+    // The allowlist is a literal: Sign Steps refuses an expression there, so item data cannot choose who may approve.
+    expect(String(sign.parameters.approverAllowlist).startsWith('=')).toBe(false);
+    // Save writes the record Sign steps gave, as active; the rejection writes a rejected row with no steps and no signature.
+    expect(table(byName(t, 'Save signed steps'))).toMatchObject({ resource: 'row', operation: 'insert', dataTableId: { mode: 'name', value: STEPS_TABLE } });
+    expect(table(byName(t, 'Save signed steps')).columns?.value).toEqual({
+      name: '={{ $json.name }}', version: '={{ $json.version }}', steps: '={{ $json.steps }}', hash: '={{ $json.hash }}', signature: '={{ $json.signature }}',
+      approvedBy: '={{ $json.approvedBy }}', approvedAt: '={{ $json.approvedAt }}', status: 'active',
+    });
+    expect(table(byName(t, 'Record rejection')).columns?.value).toEqual({
+      name: '={{ $json.name }}', version: '={{ $json.version }}', hash: '={{ $json.hash }}', status: 'rejected', approvedBy: '={{ $json.approvedBy }}', approvedAt: '={{ $json.approvedAt }}',
+    });
+    const supersede = table(byName(t, 'Supersede older versions'));
+    expect(supersede).toMatchObject({ resource: 'row', operation: 'update', dataTableId: { value: STEPS_TABLE }, matchType: 'allConditions', columns: { value: { status: 'superseded' } } });
+    expect(supersede.filters?.conditions).toEqual([
+      { keyName: 'name', condition: 'eq', keyValue: '={{ $json.name }}' },
+      { keyName: 'status', condition: 'eq', keyValue: 'active' },
+      { keyName: 'version', condition: 'lte', keyValue: "={{ $('Step lists to sign').item.json.baseVersion === null ? 2147483647 : $('Step lists to sign').item.json.version }}" },
+      { keyName: 'id', condition: 'neq', keyValue: '={{ $json.id }}' },
+    ]);
   });
 
   it('the form asks for the bot file, its source, a name, and optionally the file it downloads', () => {
@@ -923,22 +1099,50 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(fromDoc[0].json.drafts).toEqual([expect.objectContaining({ name: 'line-item-export', adopted: false })]);
   });
 
-  it('an RPA recording uploaded on the form goes to approval not replayed, with the workflow file, and the approval says where it came from', async () => {
-    const rec = readFileSync(new URL('../../engine/test/fixtures/import/recording-erp/erp.rpa-recording.json', import.meta.url));
-    const [data, repaired] = await runImport(formItem('RPA recording', rec), () => {
-      throw new Error('a recording is never adopted in a browser');
-    });
-    expect(data[0].json.error).toBeUndefined();
+  it('an RPA recording: the review page shows its steps and ticks its candidate writes; Sign steps signs exactly the ticked and typed writes', async () => {
+    const { data, repaired, ran } = await importedRecording();
     expect(data[0].json.report).toMatchObject({ source: 'recording', steps: 17 });
     expect(data[0].binary?.workflow).toMatchObject({ fileName: 'line-item-export.workflow.json' });
-    const ifParams = byName(t, 'Workflow file?').parameters as { conditions: { conditions: { leftValue: string }[] } };
-    expect(evaluate(ifParams.conditions.conditions[0].leftValue, { $json: data[0].json })).toBe(true);
-    const page = render(completion('Imported, with the workflow file').completionMessage, { $json: data[0].json, $binary: data[0].binary });
-    // No browser step list: no replay sentence, and one desktop list in the singular.
-    expect(page).toContain('removed as secrets.\n1 desktop step list is waiting for approval in RPA: 3 Approve steps, not replayed: review every step and list the steps that save, post or submit in Write steps.\n');
-    expect(page).not.toContain('passed the replay');
     expect(repaired).toHaveLength(1);
     const item = repaired[0].json;
+    const fields = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan(ran) });
+    expect(fields.map((f) => [f.fieldType, f.fieldName])).toEqual([['html', undefined], ['checkbox', 'writes_0'], ['text', 'moreWrites_0'], ['radio', 'decision_0']]);
+    // The item's own texts, escaped: the name, the safety line, the evidence line and every numbered step.
+    const html = String(fields[0].html);
+    expect(html).toContain(`<h3>${escapeHtml(String(item.name))}, version 1</h3>`);
+    expect(html).toContain(`<b>Safety flags (what these steps do besides reading pages):</b> ${escapeHtml(String(item.safetyLine))}</p>`);
+    expect(html).toContain(`<b>Evidence:</b> ${escapeHtml(String(item.evidenceLine))}</p>`);
+    expect(html).toContain(`<b>The steps:</b><br>${escapeHtml(String(item.changeList)).split('\n').join('<br>')}</p>`);
+    expect(String(item.changeList).split('\n')).toHaveLength(17);
+    expect(html).not.toContain('Left out');
+    // The person approving here recorded or imported the bot: the candidate writes are ticked to start with.
+    expect(fields[1]).toEqual({
+      fieldLabel: 'Which of these steps save, send or submit?', fieldName: 'writes_0', fieldType: 'checkbox',
+      fieldOptions: { values: [{ option: 'Step 4: Press Enter in Password' }, { option: 'Step 16: Click Save' }] }, defaultValue: 'Step 4: Press Enter in Password,Step 16: Click Save',
+    });
+    expect(fields[2]).toMatchObject({ fieldLabel: 'Any other step that saves, sends or submits (its number, optional)', placeholder: '7, 9' });
+    expect(fields[2]).not.toHaveProperty('requiredField');
+    expect(fields[3]).toEqual({ fieldLabel: 'Decision', fieldName: 'decision_0', fieldType: 'radio', fieldOptions: { values: [{ option: 'Approve' }, { option: 'Reject' }] }, requiredField: true });
+    expect(render(String((review.parameters.options as IDataObject).formDescription), { $: nodesRan(ran) })).toContain('\n\nDesktop steps: the steps that may save, send or submit are ticked. Untick a step that does not, and add any other by its number.');
+
+    // Step 4 unticked, step 9 typed: exactly steps 9 and 16 are signed as writes.
+    const approved = await signAfterReview(ran, { writes_0: ['Step 16: Click Save'], moreWrites_0: '9', decision_0: 'Approve' });
+    expect(approved.lists).toEqual([item]);
+    expect(approved.signed).toHaveLength(1);
+    expect(approved.signed[0]).toMatchObject({ status: 'active', name: item.name, version: 1, approvedBy: APPROVER, writeLine: 'Signed as writes: step 9 (Click Search), step 16 (Click Save)' });
+    const steps = JSON.parse(String(approved.signed[0].steps)) as { steps: { write?: boolean }[] };
+    expect(steps.steps.flatMap((s, i) => (s.write ? [i + 1] : []))).toEqual([9, 16]);
+    // Everything unticked: no write.
+    const none = await signAfterReview(ran, { writes_0: [], moreWrites_0: null, decision_0: 'Approve' });
+    expect(none.signed[0]).toMatchObject({ status: 'active', writeLine: 'Signed as writes: none (no step was listed in Write Steps)' });
+    // Reject: a rejected record, nothing signed.
+    const rejected = await signAfterReview(ran, { writes_0: ['Step 16: Click Save'], decision_0: 'Reject' });
+    expect(rejected.signed).toEqual([expect.objectContaining({ status: 'rejected', name: item.name, steps: '', signature: '', approvedBy: APPROVER })]);
+    // A decision the form did not send (n8n gives null): a rejection too.
+    expect((await signAfterReview(ran, { decision_0: null })).signed[0]).toMatchObject({ status: 'rejected' });
+    // The page was not answered in time: it gives its input item on, with no decision, and no step list reaches Sign steps.
+    expect(evaluate(String(byName(t, 'Step lists').parameters.jsonOutput), { $: nodesRan({ ...ran, [REVIEW]: [[{ json: { name: 'steps table' } }]] }) })).toEqual({ lists: [] });
+    // The template 3 path keeps its texts for the same item.
     const t3 = load('3-approve-steps.json');
     const ask = render(String(byName(t3, 'Ask for approval (desktop steps)').parameters.message), {
       $: (name: string) => ({ item: { json: name === 'Settings' ? { approvalTimeoutHours: 72 } : item } }),
@@ -946,6 +1150,57 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(ask).toContain('Evidence: Not replayed: desktop steps imported from a recording are reviewed as written');
     expect(sticky(t3, 'About this workflow').content).toContain('Desktop steps (imported from UiPath or a recording, or from a step document; not replayed)');
     expect(sticky(t, 'About this workflow').content).toContain('an **RPA recording** saved by the RPA recorder on the Windows machine');
+  });
+
+  it('a Sign steps refusal signs nothing and the last page names the reason; an approver not on the allowlist is refused', async () => {
+    const { ran } = await importedRecording();
+    const refused = await signAfterReview(ran, { writes_0: [], moreWrites_0: '99', decision_0: 'Approve' });
+    expect(refused.signed).toEqual([]);
+    expect(String(refused.errors[0].error)).toBe('Sign Steps refused: Write Steps: there is no step 99 (the steps are numbered 1 to 17)');
+    const other = await signAfterReview({ ...ran, Settings: [[{ json: { approval: 'on this form', approver: 'someone-else@example.com' } }]] }, { decision_0: 'Approve' });
+    expect(other.signed).toEqual([]);
+    expect(String(other.errors[0].error)).toContain('Approved By is not on the Approver Allowlist');
+  });
+
+  it('several step lists: one block each, named, with its own decision; item n of Sign steps takes the answers of block n', async () => {
+    const { data, repaired } = await importedRecording();
+    // A candidate whose intent holds a comma and angle brackets: n8n compares the ticked-to-start labels with the options
+    // after its JSON-form escaping of < and > (not applied to options) and splits the start value at commas.
+    const flag = 'candidate write: step 3 (Save, then <b>close</b>) may save, post or submit: list 3 in Write Steps if it does (…)';
+    const two = [repaired[0], { json: { ...repaired[0].json, name: 'second<b>', safetyFlags: [...(repaired[0].json.safetyFlags as string[]), flag] } }];
+    const ran = { Settings: [[{ json: settingsJson() }]], 'Import steps': [data, two] } as Record<string, INodeExecutionData[][]>;
+    const fields = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan(ran) });
+    const html = fields.filter((f) => f.fieldType === 'html').map((f) => String(f.html));
+    expect(html[0]).toMatch(/^<h3>Step list 1 of 2: /);
+    expect(html[1]).toMatch(/^<h3>Step list 2 of 2: second&lt;b&gt;, version /);
+    expect(fields.filter((f) => f.fieldType === 'radio').map((f) => [f.fieldName, f.fieldLabel])).toEqual([['decision_0', `${String(two[0].json.name)}: Decision`], ['decision_1', 'second<b>: Decision']]);
+    const ticks = fields.find((f) => f.fieldName === 'writes_1');
+    expect(ticks?.fieldOptions?.values.map((v) => v.option)).toEqual(['Step 4: Press Enter in Password', 'Step 16: Click Save', 'Step 3: Save; then \u2039b\u203aclose\u2039/b\u203a']);
+    expect(ticks?.defaultValue?.split(',')).toEqual(ticks?.fieldOptions?.values.map((v) => v.option));
+    expect(ticks?.fieldLabel).toBe('second<b>: Which of these steps save, send or submit?');
+    const sign = byName(t, 'Sign steps').parameters;
+    const answer = { decision_0: 'Reject', decision_1: 'Approve', writes_1: ['Step 3: x'], moreWrites_1: '5' };
+    const at = (i: number) => evaluate(String(sign.approved), { $: nodesRan({ ...ran, [REVIEW]: [[{ json: answer }]] }), $itemIndex: i });
+    expect([at(0), at(1)]).toEqual([false, true]);
+    expect(evaluate(String(sign.writeSteps), { $: nodesRan({ ...ran, [REVIEW]: [[{ json: answer }]] }), $itemIndex: 1 })).toBe('3 5');
+    expect(evaluate(String(sign.writeSteps), { $: nodesRan({ ...ran, [REVIEW]: [[{ json: answer }]] }), $itemIndex: 0 })).toBe('');
+  });
+
+  it('browser steps on the review page: evidence as reported by the run, left-out steps, where the screenshots are, and no write question', async () => {
+    const item = { name: 'feed<i>', version: 1, steps: { startUrl: 'https://example.com/', steps: [] }, safetyLine: 'host: a.example\' <script>', evidenceLine: '7 rows <img src=x onerror=alert(1)>',
+      changeList: 'Added: Open the list\nAdded: Read "rows" $& $$', leftOutList: 'step 4, Pick <b>Status</b>\nstep 9, Wait', attachmentNames: 'after' };
+    const ran = { Settings: [[{ json: settingsJson() }]], 'Import steps': [[{ json: { report: { steps: 2, items: [] }, drafts: [] } }], [{ json: item }]] } as Record<string, INodeExecutionData[][]>;
+    const fields = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan(ran) });
+    expect(fields.map((f) => f.fieldType)).toEqual(['html', 'radio']);
+    expect(fields[0].html).toBe('<h3>feed&lt;i&gt;, version 1</h3><p><b>Safety flags (what these steps do besides reading pages):</b> host: a.example&#39; &lt;script&gt;</p>'
+      + '<p><b>Left out by the import (the source does these, the steps do not):</b><br>step 4, Pick &lt;b&gt;Status&lt;/b&gt;<br>step 9, Wait</p>'
+      + '<p><b>Evidence (as reported by the run):</b> 7 rows &lt;img src=x onerror=alert(1)&gt;</p>'
+      + '<p><b>What changed (as reported by the run):</b><br>Added: Open the list<br>Added: Read &quot;rows&quot; $&amp; $$</p>'
+      + '<p>Screenshots of the replay are not shown on this page: they are in this execution in n8n, on the Repaired Steps output of Import steps.</p>');
+    const notRun = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan({ ...ran, 'Import steps': [ran['Import steps'][0], [{ json: { ...item, evidenceLine: NOT_REPLAYED_LINE, attachmentNames: '', leftOutList: undefined } }]] }) });
+    expect(notRun[0].html).toContain(`<b>Evidence:</b> ${escapeHtml(NOT_REPLAYED_LINE)}</p><p><b>What changed (as written; these steps were never run):</b>`);
+    expect(notRun[0].html).not.toContain('Screenshots');
+    expect(render(String((review.parameters.options as IDataObject).formDescription), { $: nodesRan(ran) })).not.toContain('Desktop steps');
   });
 
   it('an import with an untranslated step puts it into leftOut and both emails show it', async () => {
@@ -974,46 +1229,67 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     }
   });
 
-  it('the Form completion page reports what was imported; a UiPath import also returns the workflow file (n8n 2.41 Form Ending: Return Binary File)', async () => {
+  it('the last page reports what was imported and, after the review page, what was signed; a UiPath import also returns the workflow file (n8n Form Ending: Return Binary File)', async () => {
     const shown = completion('Imported');
     expect(shown).toMatchObject({ operation: 'completion', respondWith: 'text', completionTitle: 'Imported' });
     const [data] = await runImport(formItem('Chrome Recorder', CHROME), () => NOT_ADOPTABLE);
-    const message = render(shown.completionMessage, { $json: data[0].json });
+    const page = (message: string, ran: Record<string, INodeExecutionData[][]>) => render(message, { $: nodesRan({ Settings: [[{ json: settingsJson() }]], ...ran }) });
+    const message = page(shown.completionMessage, { 'Import steps': [data, []] });
     // The fixture's report: 9 steps, one recorder step not translated, three typed values (username, password, code) removed.
     const items = (data[0].json.report as { items: { kind: string }[] }).items;
     expect(items.filter((i) => i.kind === 'untranslated')).toHaveLength(1);
     expect(items.filter((i) => i.kind === 'secret')).toHaveLength(3);
     expect(message).toContain('Imported: 9 steps; 1 not translated, 3 removed as secrets.');
     expect(message).toContain('removed as secrets.\n0 of 1 step list passed the replay.\n');
-    // A step document that writes goes to approval without a replay, and the page says so, without a replay sentence.
-    const notReplayed = { report: { steps: 3, items: [] }, drafts: [{ name: 'line-item-export', adopted: false, forApproval: true }] };
-    const written = render(shown.completionMessage, { $json: notReplayed });
-    expect(written).toContain('removed as secrets.\n1 browser step list is waiting for approval in RPA: 3 Approve steps, not replayed because the steps submit a form, download through a form, type a secret or change a password: check every step, the target of each form and each download.\n');
-    expect(written).not.toContain('passed the replay');
-    expect(written).not.toContain('desktop step list');
-    // Each count in the singular or the plural, and "there too" once the workflow was named.
+    // Approval by email: the step lists wait in RPA: 3 (each count in the singular or the plural, "there too" once the workflow was named).
+    const email = (drafts: Record<string, unknown>[]) => page(shown.completionMessage, {
+      Settings: [[{ json: { ...settingsJson(), approval: 'by email' } }]], 'Import steps': [[{ json: { report: { steps: 9, items: [] }, drafts } }], []],
+    }).split('\n')[1];
     const draft = (over: Record<string, unknown>) => ({ name: 'n', adopted: false, ...over });
-    const lines = (drafts: Record<string, unknown>[]) => render(shown.completionMessage, { $json: { report: { steps: 9, items: [] }, drafts } }).split('\n')[1];
-    expect(lines([draft({ adopted: true })])).toBe('1 of 1 step list passed the replay and is waiting for approval in RPA: 3 Approve steps.');
-    expect(lines([draft({ adopted: true }), draft({ adopted: true }), draft({}), draft({ surface: 'desktop', forApproval: true }), draft({ surface: 'desktop', forApproval: true })]))
-      .toBe('2 of 3 step lists passed the replay and are waiting for approval in RPA: 3 Approve steps. 2 desktop step lists are waiting there too, not replayed: review every step and list the steps that save, post or submit in Write steps.');
-    expect(lines([draft({}), draft({ forApproval: true }), draft({ forApproval: true })]))
+    // Approve steps names no workflow in the file: the page says that nothing was sent.
+    expect(email([draft({ adopted: true })])).toBe('Nothing was sent for approval: Settings say approval by email, but Approve steps names no workflow. Follow the sticky Approval by email, or set approval to on this form.');
+    const setUp = (drafts: Record<string, unknown>[]) => render(shown.completionMessage, {
+      $: (name: string) => (name === 'Approve steps'
+        ? { ...nodesRan({})(name), params: { workflowId: { __rl: true, mode: 'list', value: 'wf-3' } } }
+        : nodesRan({ Settings: [[{ json: { ...settingsJson(), approval: 'by email' } }]], 'Import steps': [[{ json: { report: { steps: 9, items: [] }, drafts } }], []] })(name)),
+    }).split('\n')[1];
+    expect(setUp([draft({ adopted: true })])).toBe('1 of 1 step list passed the replay and is waiting for approval in RPA: 3 Approve steps.');
+    expect(setUp([draft({ adopted: true }), draft({ adopted: true }), draft({}), draft({ surface: 'desktop', forApproval: true }), draft({ surface: 'desktop', forApproval: true })]))
+      .toBe('2 of 3 step lists passed the replay and are waiting for approval in RPA: 3 Approve steps. 2 desktop step lists are waiting there too, not replayed: review every step and tick the steps that save, send or submit.');
+    expect(setUp([draft({}), draft({ forApproval: true }), draft({ forApproval: true })]))
       .toBe('0 of 1 step list passed the replay. 2 browser step lists are waiting for approval in RPA: 3 Approve steps, not replayed because the steps submit a form, download through a form, type a secret or change a password: check every step, the target of each form and each download.');
-    expect(lines([draft({ surface: 'desktop', forApproval: true }), draft({ forApproval: true })]))
-      .toBe('1 desktop step list is waiting for approval in RPA: 3 Approve steps, not replayed: review every step and list the steps that save, post or submit in Write steps. 1 browser step list is waiting there too, not replayed because the steps submit a form, download through a form, type a secret or change a password: check every step, the target of each form and each download.');
+    expect(setUp([draft({ surface: 'desktop', forApproval: true }), draft({ forApproval: true })]))
+      .toBe('1 desktop step list is waiting for approval in RPA: 3 Approve steps, not replayed: review every step and tick the steps that save, send or submit. 1 browser step list is waiting there too, not replayed because the steps submit a form, download through a form, type a secret or change a password: check every step, the target of each form and each download.');
+    // After the review page: one line per step list, from Sign steps' outputs, escaped.
+    const reviewed = (signed: IDataObject[], refused: IDataObject[], drafts = [draft({ adopted: true }), draft({})]) => page(shown.completionMessage, {
+      'Import steps': [[{ json: { report: { steps: 9, items: [] }, drafts } }], []], [REVIEW]: [[{ json: { decision_0: 'Approve' } }]],
+      'Sign steps': [signed.map((json) => ({ json })), refused.map((json) => ({ json }))],
+    }).split('\n').slice(1, -1);
+    expect(reviewed([
+      { status: 'active', name: 'erp<1>', version: 1, writeLine: 'Signed as writes: step 16 (Click Save)' }, { status: 'active', name: 'feed', version: 1 }, { status: 'rejected', name: 'other', version: 1 },
+    ], [{ error: 'Sign Steps refused: the steps do not match the hash that was reviewed', details: { name: 'bad', version: 1 } }, { error: 'Sign Steps needs an RPA Step Signing credential', details: { name: null } }])).toEqual([
+      '1 of 2 step lists passed the replay.',
+      'Approved and signed: erp&lt;1&gt; v1 is now the version that runs under that name. Signed as writes: step 16 (Click Save).',
+      'Approved and signed: feed v1 is now the version that runs under that name.',
+      'Rejected: other v1. Nothing was signed.',
+      'Not signed: bad v1. Sign Steps refused: the steps do not match the hash that was reviewed',
+      'Not signed. Sign Steps needs an RPA Step Signing credential',
+    ]);
+    expect(reviewed([], [], [draft({ surface: 'desktop', forApproval: true })])).toEqual(['Nothing was signed: the review page was not answered in time.']);
     // Both pages say the same about the step lists.
     expect(completion('Imported, with the workflow file').completionMessage.split('\n')[1]).toBe(shown.completionMessage.split('\n')[1]);
     const ifParams = byName(t, 'Workflow file?').parameters as { conditions: { conditions: { leftValue: string; operator: unknown }[] } };
     expect(ifParams.conditions.conditions).toEqual([expect.objectContaining({ operator: { type: 'boolean', operation: 'true', singleValue: true } })]);
-    expect(evaluate(ifParams.conditions.conditions[0].leftValue, { $json: data[0].json })).toBe(false);
+    expect(evaluate(ifParams.conditions.conditions[0].leftValue, { $: nodesRan({ 'Import steps': [data, []] }) })).toBe(false);
 
     const withFile = completion('Imported, with the workflow file');
     expect(withFile).toMatchObject({ operation: 'completion', respondWith: 'returnBinary', inputDataFieldName: 'workflow', completionTitle: 'Imported' });
     const uipath = uipathZip();
     const [ui] = await runImport(formItem('UiPath project', uipath), () => NOT_ADOPTABLE);
     expect(ui[0].binary?.workflow).toMatchObject({ mimeType: 'application/json', fileName: 'line-item-export.workflow.json' });
-    expect(evaluate(ifParams.conditions.conditions[0].leftValue, { $json: ui[0].json })).toBe(true);
-    const uiMessage = render(withFile.completionMessage, { $json: ui[0].json, $binary: ui[0].binary });
+    // n8n's Return Binary File looks for the field on the page's parent nodes: Import steps is one of them on both paths.
+    expect(evaluate(ifParams.conditions.conditions[0].leftValue, { $: nodesRan({ 'Import steps': [ui, []] }) })).toBe(true);
+    const uiMessage = page(withFile.completionMessage, { 'Import steps': [ui, []] });
     expect(uiMessage).toMatch(/^Imported: \d+ steps; \d+ not translated, \d+ removed as secrets\./);
     expect(uiMessage).toContain('line-item-export.workflow.json');
     expect(uiMessage).toContain('Import from file');
@@ -1030,29 +1306,28 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(shown).toContain('\nDetails, including the import report when there is one, are in the error output of Import steps in this execution.');
   });
 
-  it('has the stickies: About (grey), Set once (green, credential map, form security), Why approval (grey)', () => {
+  it('has the stickies: About (grey), Set once (green, a checklist), Approval by email (grey, the option), Why approval (grey)', () => {
     expect(sticky(t, 'About this workflow').color).toBe(COLOUR.grey);
     expect(sticky(t, 'Set once').color).toBe(COLOUR.green);
+    expect(sticky(t, 'Approval by email').color).toBe(COLOUR.grey);
     expect(sticky(t, 'Why approval').color).toBe(COLOUR.grey);
     const form = (byName(t, 'Import a bot').parameters as { formDescription?: string }).formDescription ?? '';
     expect(form).toContain('a step document that submits a form, downloads through a form, types a secret or changes a password is not run at all and goes to approval marked not replayed');
-    // The approval emails name a recording's steps <name>-1, a name the person did not type.
+    expect(form).toContain('shown to you for approval on the next page');
+    // The review page names a recording's steps <name>-1, a name the person did not type.
     expect(form).toContain('The steps of an RPA recording are named after your Name with -1 at the end (line-item-export-1)');
     const about = sticky(t, 'About this workflow').content;
-    for (const s of ['Chrome Recorder', 'Playwright code', 'UiPath', 'RPA: 3 Approve steps', 'RPA: 2 Data feed', 'each step list gets its own approval',
+    for (const s of ['Chrome Recorder', 'Playwright code', 'UiPath', 'RPA: 2 Data feed', 'each step list gets its own approval',
       '**step document**', 'this is how hand-written steps get approved and signed']) expect(about, s).toContain(s);
     const set = sticky(t, 'Set once').content;
-    for (const s of ['**Import a bot**: a Basic Auth credential', '**RPA Browser**: Import steps', '**RPA Site Login**', '**Chat model**', 'RPA: 3 Approve steps',
-      '**Options → Allow Private Network**', 'Keep **Authentication** on', 'login breaker', 'chat model',
-      'A step document with `{{var.name}}` values needs each one under **Options → Variables** in **Import steps**',
-      'nor does a step document that goes to approval not replayed: nothing of it runs',
-      // n8n publishes the form only after the workflow Approve steps calls is published.
-      'import **RPA: 3 Approve steps** and publish it first',
-      // No model ships: how to add one, and what it does.
-      'turn on **AI Repair** in **Import steps**', 'repairs an imported browser step that no longer finds its element']) {
-      expect(set, s).toContain(s);
-    }
+    expectChecklist(set);
+    for (const s of ['Keep **Authentication** on', 'Basic Auth credential on **Import a bot**', '**RPA Browser**', '**RPA Site Login**', '**RPA Step Signing**',
+      '**Settings → approver**', '**Sign steps → Approver Allowlist**', '**Options → Allow Private Network**', 'Publish']) expect(set, s).toContain(s);
+    // The default path needs no other template.
+    expect(set).not.toContain('RPA: 3');
+    const email = sticky(t, 'Approval by email').content;
+    for (const s of ['**RPA: 3 Approve steps**', 'publish it', 'In **Approve steps**, choose **RPA: 3 Approve steps**, then turn the node on', 'set `approval` to `by email`']) expect(email, s).toContain(s);
     const why = sticky(t, 'Why approval').content;
-    for (const s of ['never', 'Sign Steps', 'password']) expect(why, s).toContain(s);
+    for (const s of ['never', 'Sign Steps', 'password', 'the review page ticks the steps that may save, send or submit']) expect(why, s).toContain(s);
   });
 });

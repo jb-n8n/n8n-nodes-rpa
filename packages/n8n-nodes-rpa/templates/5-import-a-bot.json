@@ -3,7 +3,7 @@
   "nodes": [
     {
       "parameters": {
-        "content": "### Import a bot (grey: leave as is)\nTurns a bot you already have into steps for approval. Open the form (**Execute workflow**, or the production URL once published) and upload one of:\n- a **Chrome Recorder** export: Chrome DevTools → Recorder → Export → JSON\n- **Playwright code** from `npx playwright codegen` (JavaScript or TypeScript)\n- a **UiPath** project as a .zip, or one .xaml workflow\n- a **step document** you wrote, as Run Steps takes it (JSON): this is how hand-written steps get approved and signed\n- an **RPA recording** saved by the RPA recorder on the Windows machine (.rpa-recording.json)\n\n**Import steps** builds a draft, runs it once and replays it in a fresh browser. What passes goes to **RPA: 3 Approve steps**; desktop steps from a UiPath project, a step document or an RPA recording go there without a replay, and so do browser steps from a step document that submit a form, download through a form, type a secret or change a password (they are never run), and each step list gets its own approval (a UiPath project can give several). The form's last page says what was imported; a UiPath project or an RPA recording also downloads the rest of the bot as an n8n workflow. After approval, run the steps with Run Steps as **RPA: 2 Data feed** does, with `name` in **Settings** set to the Name you typed in the form.",
+        "content": "### Import a bot (grey: leave as is)\nTurns a bot you already have into signed steps. Open the form (**Execute workflow**, or the production URL once published) and upload one of:\n- a **Chrome Recorder** export: Chrome DevTools → Recorder → Export → JSON\n- **Playwright code** from `npx playwright codegen` (JavaScript or TypeScript)\n- a **UiPath** project as a .zip, or one .xaml workflow\n- a **step document** you wrote, as Run Steps takes it (JSON): this is how hand-written steps get approved and signed\n- an **RPA recording** saved by the RPA recorder on the Windows machine (.rpa-recording.json)\n\n**Import steps** builds a draft, runs it once and replays it in a fresh browser. Desktop steps (a UiPath project, a step document or an RPA recording) are not replayed, and neither are browser steps from a step document that submit a form, download through a form, type a secret or change a password. The next page of the form shows every step list with its safety flags, evidence and numbered steps, and each step list gets its own approval there: Approve or Reject. **Sign steps** signs what was approved, and the last page says what was signed; a UiPath project or an RPA recording also downloads the rest of the bot as an n8n workflow. Run the steps with Run Steps as **RPA: 2 Data feed** does, with `name` in **Settings** set to the name the last page shows.",
         "height": 400,
         "width": 520,
         "color": 7
@@ -19,8 +19,8 @@
     },
     {
       "parameters": {
-        "content": "### Set once (green)\nRun **RPA: 1 Create tables (run once)**, and import **RPA: 3 Approve steps** and publish it first: n8n publishes this form only after the workflow **Approve steps** calls is published. Then pick credentials:\n- **Import a bot**: a Basic Auth credential, the user name and password people type to open the form. Create one with **Credential → + Create new credential → Basic Auth** on the node.\n- **RPA Browser**: Import steps (a UiPath project or a step document with only desktop steps needs none, nor does an RPA recording, nor does a step document that goes to approval not replayed: nothing of it runs)\n- **RPA Site Login**: Import steps, when the bot signs in. Use the same one on **Sign steps** in workflow 3: the signature binds it.\n- **Chat model** (optional, not in this template): a model repairs an imported browser step that no longer finds its element. To add one, turn on **AI Repair** in **Import steps**, click **+** on its **Model** input and pick a chat model with its credential. Without one, such a step fails the import, which names the step that drifted. A recording, a step document's desktop steps and a UiPath desktop sequence never use a model.\n\nIn **Approve steps**, choose **RPA: 3 Approve steps**. For a site on your own network (the sandbox), turn on **Options → Allow Private Network** in **Import steps**. A step document with `{{var.name}}` values needs each one under **Options → Variables** in **Import steps**: the import runs the steps with those values.\n\nKeep **Authentication** on: an anonymous form could start logins with the attached Site Login (login breaker trips) and spend on the chat model, when one is attached.",
-        "height": 560,
+        "content": "### Set once (green)\n1. Keep **Authentication** on: pick or create a Basic Auth credential on **Import a bot**.\n2. Pick **RPA Browser**, and **RPA Site Login** when the bot signs in, on **Import steps**.\n3. Pick **RPA Step Signing**, and the same **RPA Site Login**, on **Sign steps**.\n4. Type your address in **Settings → approver** and the same in **Sign steps → Approver Allowlist**.\n5. For a site on your own network (the sandbox), turn on **Options → Allow Private Network** in **Import steps**.\n6. Publish, then open the form.",
+        "height": 300,
         "width": 480,
         "color": 4
       },
@@ -35,13 +35,29 @@
     },
     {
       "parameters": {
-        "content": "### Why approval (grey)\nA recording is someone's clicks, not a reviewed automation. Imported steps never submit a form or post, the replay blocks writes, and no rows or files from it are delivered. A typed password, PIN or code is never imported: the sign-in becomes one `signIn` step that types the RPA Site Login's values. The steps run on a schedule only after a person approves them and **Sign Steps** signs exactly the steps that were proven, or, for a step document that writes or types a secret, the steps as written, which were never run and say so. Desktop steps are never marked as writes by the import: the approver lists the steps that save, post or submit, and only those may use the desktop runner's write controls.",
+        "content": "### Why approval (grey)\nA recording is someone's clicks, not a reviewed automation. Imported steps never submit a form or post, the replay blocks writes, and no rows or files from it are delivered. A typed password, PIN or code is never imported: the sign-in becomes one `signIn` step that types the RPA Site Login's values. The steps run on a schedule only after a person approves them and **Sign Steps** signs exactly the steps that were shown, or, for a step document that writes or types a secret, the steps as written, which were never run and say so. Desktop steps are never marked as writes by the import: the review page ticks the steps that may save, send or submit, the person unticks any that does not, and only the ticked steps may use the desktop runner's write controls.",
         "height": 400,
         "width": 440,
         "color": 7
       },
       "id": "3d6f1a20-7b4c-4e8a-9c11-000000000503",
       "name": "Why approval",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1440,
+        -800
+      ]
+    },
+    {
+      "parameters": {
+        "content": "### Approval by email (optional, grey)\nTo have a second person approve each step list by email instead:\n1. Import **RPA: 3 Approve steps**, set it up (its Set once note) and publish it.\n2. In **Approve steps**, choose **RPA: 3 Approve steps**, then turn the node on.\n3. In **Settings**, set `approval` to `by email`.",
+        "height": 220,
+        "width": 440,
+        "color": 7
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000525",
+      "name": "Approval by email",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
@@ -53,7 +69,7 @@
       "parameters": {
         "authentication": "basicAuth",
         "formTitle": "Import a bot",
-        "formDescription": "Upload a Chrome Recorder export (JSON), Playwright code (JavaScript or TypeScript), a UiPath project (ZIP or XAML), a step document you wrote (JSON) or an RPA recording (.rpa-recording.json). The steps are replayed in a fresh browser and sent for approval, and desktop steps go to approval without a replay; a step document that submits a form, downloads through a form, types a secret or changes a password is not run at all and goes to approval marked not replayed. The steps of an RPA recording are named after your Name with -1 at the end (line-item-export-1), as are a UiPath project's (-1, -2 and so on): the approval emails use that name. Nothing runs on a schedule until a person approves it.",
+        "formDescription": "Upload a Chrome Recorder export (JSON), Playwright code (JavaScript or TypeScript), a UiPath project (ZIP or XAML), a step document you wrote (JSON) or an RPA recording (.rpa-recording.json). The steps are replayed in a fresh browser and shown to you for approval on the next page, and desktop steps without a replay; a step document that submits a form, downloads through a form, types a secret or changes a password is not run at all and goes to approval marked not replayed. The steps of an RPA recording are named after your Name with -1 at the end (line-item-export-1), as are a UiPath project's (-1, -2 and so on): the review page uses that name. Nothing runs on a schedule until a person approves it.",
         "formFields": {
           "values": [
             {
@@ -124,6 +140,37 @@
     },
     {
       "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005c1",
+              "name": "approval",
+              "value": "on this form",
+              "type": "string"
+            },
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005c2",
+              "name": "approver",
+              "value": "approver@example.com",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000512",
+      "name": "Settings",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        0
+      ],
+      "notes": "approval: \"on this form\" (the person who imports reviews and approves on the next page) or \"by email\" (RPA: 3 Approve steps asks a second person). approver: who approves, recorded with the signed steps; type the same address in Sign steps → Approver Allowlist."
+    },
+    {
+      "parameters": {
         "operation": "importSteps",
         "source": "={{ ({ 'Chrome Recorder': 'chrome', 'Playwright code': 'playwright', 'UiPath project': 'uipath', 'Step document': 'steps', 'RPA recording': 'recording' })[$json.source] ?? '' }}",
         "inputFrom": "binary",
@@ -143,11 +190,46 @@
       "type": "n8n-nodes-rpa.playwright",
       "typeVersion": 1,
       "position": [
-        260,
+        440,
         0
       ],
       "onError": "continueErrorOutput",
       "notes": "Outputs: Data (0), Repaired Steps (1), error (2)."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005b2",
+              "leftValue": "={{ $('Settings').first().json.approval === 'by email' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000513",
+      "name": "Approval by email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        -320
+      ],
+      "notes": "Only with approval \"by email\": each step list goes to RPA: 3 Approve steps."
     },
     {
       "parameters": {
@@ -168,10 +250,535 @@
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.2,
       "position": [
-        560,
-        -200
+        880,
+        -320
       ],
-      "notes": "Fire and forget, once for each item: every step list gets its own approval execution, which waits for a person; this run finishes now."
+      "notes": "Off until you set up approval by email (sticky Approval by email). Fire and forget, once for each item: every step list gets its own approval execution, which waits for a person; this run finishes now.",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005b3",
+              "leftValue": "={{ $('Settings').first().json.approval !== 'by email' && $('Import steps').all(1).length > 0 }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000514",
+      "name": "Approve on this form?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        0
+      ],
+      "notes": "Any approval value other than \"by email\" approves on this form. No step list to approve: straight to the last page."
+    },
+    {
+      "parameters": {
+        "resource": "table",
+        "operation": "create",
+        "tableName": "playwright_steps",
+        "columns": {
+          "column": [
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "version",
+              "type": "number"
+            },
+            {
+              "name": "steps",
+              "type": "string"
+            },
+            {
+              "name": "hash",
+              "type": "string"
+            },
+            {
+              "name": "signature",
+              "type": "string"
+            },
+            {
+              "name": "approvedBy",
+              "type": "string"
+            },
+            {
+              "name": "approvedAt",
+              "type": "string"
+            },
+            {
+              "name": "status",
+              "type": "string"
+            },
+            {
+              "name": "expiresAt",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {
+          "createIfNotExists": true
+        }
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000515",
+      "name": "Create steps table",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "table",
+        "operation": "create",
+        "tableName": "playwright_runs",
+        "columns": {
+          "column": [
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "lane",
+              "type": "string"
+            },
+            {
+              "name": "version",
+              "type": "number"
+            },
+            {
+              "name": "hash",
+              "type": "string"
+            },
+            {
+              "name": "confirmed",
+              "type": "boolean"
+            },
+            {
+              "name": "rowCount",
+              "type": "number"
+            },
+            {
+              "name": "durationMs",
+              "type": "number"
+            },
+            {
+              "name": "llmTokens",
+              "type": "number"
+            },
+            {
+              "name": "code",
+              "type": "string"
+            },
+            {
+              "name": "executionId",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {
+          "createIfNotExists": true
+        }
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000516",
+      "name": "Create run log table",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1100,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "page",
+        "defineForm": "json",
+        "jsonOutput": "={{ JSON.stringify(((lists, e) => lists.flatMap((l, k) => ((desktop, notRun, candidates, who) => [{ fieldType: 'html', html: '<h3>' + (lists.length > 1 ? 'Step list ' + (k + 1) + ' of ' + lists.length + ': ' : '') + e(l.name) + ', version ' + e(l.version) + '</h3>' + '<p><b>Safety flags (what these steps do besides reading pages):</b> ' + e(l.safetyLine) + '</p>' + (String(l.leftOutList ?? '') ? '<p><b>Left out by the import (the source does these, the steps do not):</b><br>' + e(l.leftOutList).split('\\n').join('<br>') + '</p>' : '') + '<p><b>Evidence' + (notRun ? '' : ' (as reported by the run)') + ':</b> ' + e(l.evidenceLine) + '</p>' + '<p><b>' + (desktop ? 'The steps:' : notRun ? 'What changed (as written; these steps were never run):' : 'What changed (as reported by the run):') + '</b><br>' + e(l.changeList).split('\\n').join('<br>') + '</p>' + (String(l.attachmentNames ?? '') ? '<p>Screenshots of the replay are not shown on this page: they are in this execution in n8n, on the Repaired Steps output of Import steps.</p>' : '') }].concat(candidates.length ? [{ fieldLabel: who + 'Which of these steps save, send or submit?', fieldName: 'writes_' + k, fieldType: 'checkbox', fieldOptions: { values: candidates.map((c) => ({ option: c })) }, defaultValue: candidates.join(',') }] : [], desktop ? [{ fieldLabel: who + (candidates.length ? 'Any other step that saves, sends or submits (its number, optional)' : 'Steps that save, send or submit (their numbers, optional)'), fieldName: 'moreWrites_' + k, fieldType: 'text', placeholder: '7, 9' }] : [], [{ fieldLabel: who + 'Decision', fieldName: 'decision_' + k, fieldType: 'radio', fieldOptions: { values: [{ option: 'Approve' }, { option: 'Reject' }] }, requiredField: true }]))(l.steps?.surface === 'desktop', l.steps?.surface === 'desktop' || String(l.evidenceLine ?? '').startsWith('Not replayed:'), l.steps?.surface === 'desktop' ? (l.safetyFlags ?? []).map((f) => /^candidate write: step (\\d+) \\((.*)\\) may save, post or submit: list \\d+ in Write Steps/.exec(String(f))).filter((m) => m).map((m) => 'Step ' + m[1] + ': ' + m[2].split(',').join(';').split('<').join('‹').split('>').join('›')) : [], lists.length > 1 ? String(l.name ?? '') + ': ' : '')))($('Import steps').all(1).map((i) => i.json), (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]))).split('$').join('\\\\u0024') }}",
+        "limitWaitTime": true,
+        "limitType": "afterTimeInterval",
+        "resumeAmount": 1,
+        "resumeUnit": "hours",
+        "options": {
+          "formTitle": "Review and approve",
+          "formDescription": "=Read each step list below, then approve or reject it. Approve: exactly these steps are signed, and n8n runs them under their name without asking again, until you approve another version. Reject: nothing is signed; the version in use, if any, stays in use.{{ $('Import steps').all(1).some((i) => i.json.steps?.surface === 'desktop') ? '\\n\\nDesktop steps: the steps that may save, send or submit are ticked. Untick a step that does not, and add any other by its number. Ticked steps are signed as writes, so the desktop runner lets them use the write controls and keys its policy lists. The runner refuses a write only on those: an unticked step can still save through a control its policy does not list.' : '' }}",
+          "buttonLabel": "Submit decision"
+        }
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000517",
+      "name": "Review and approve",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        1320,
+        -120
+      ],
+      "notes": "One block per step list on Repaired Steps: its name, safety flags, left-out steps, evidence and numbered steps, then the write steps (desktop) and Approve or Reject. The run pauses here until the person submits, at most 1 hour; without an answer nothing is signed."
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ { lists: $('Review and approve').first().json.decision_0 === undefined ? [] : $('Import steps').all(1).map((i) => i.json) } }}",
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000518",
+      "name": "Step lists",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1540,
+        -220
+      ],
+      "notes": "The Repaired steps items exactly as Import steps gave them, in the order the review page showed them. None when the page was not answered in time."
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "lists",
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000519",
+      "name": "Step lists to sign",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        1760,
+        -220
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "signSteps",
+        "approved": "={{ $('Review and approve').first().json['decision_' + $itemIndex] === 'Approve' }}",
+        "approverId": "={{ $('Settings').first().json.approver }}",
+        "approverAllowlist": "approver@example.com",
+        "writeSteps": "={{ [].concat($('Review and approve').first().json['writes_' + $itemIndex] ?? []).map((l) => (/^Step (\\d+):/.exec(String(l)) ?? [])[1]).filter((n) => n).concat(String($('Review and approve').first().json['moreWrites_' + $itemIndex] ?? '')).join(' ').trim() }}"
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000520",
+      "name": "Sign steps",
+      "type": "n8n-nodes-rpa.playwright",
+      "typeVersion": 1,
+      "position": [
+        1980,
+        -220
+      ],
+      "onError": "continueErrorOutput",
+      "notes": "Item n is step list n of the review page: its Decision, and for desktop steps the ticked steps and the numbers typed under them. Approver Allowlist: type the address of Settings → approver here (it cannot be an expression). Outputs: the active or rejected record (0), error (1)."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005b4",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "active",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000521",
+      "name": "Signed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2200,
+        -280
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "insert",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "playwright_steps"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "name": "={{ $json.name }}",
+            "version": "={{ $json.version }}",
+            "steps": "={{ $json.steps }}",
+            "hash": "={{ $json.hash }}",
+            "signature": "={{ $json.signature }}",
+            "approvedBy": "={{ $json.approvedBy }}",
+            "approvedAt": "={{ $json.approvedAt }}",
+            "status": "active"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "name",
+              "displayName": "name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "version",
+              "displayName": "version",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "steps",
+              "displayName": "steps",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "hash",
+              "displayName": "hash",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "signature",
+              "displayName": "signature",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "approvedBy",
+              "displayName": "approvedBy",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "approvedAt",
+              "displayName": "approvedAt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000522",
+      "name": "Save signed steps",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        2420,
+        -340
+      ],
+      "notes": "Writes the signed steps as an active row, from Sign steps' record only."
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "update",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "playwright_steps"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "name",
+              "condition": "eq",
+              "keyValue": "={{ $json.name }}"
+            },
+            {
+              "keyName": "status",
+              "condition": "eq",
+              "keyValue": "active"
+            },
+            {
+              "keyName": "version",
+              "condition": "lte",
+              "keyValue": "={{ $('Step lists to sign').item.json.baseVersion === null ? 2147483647 : $('Step lists to sign').item.json.version }}"
+            },
+            {
+              "keyName": "id",
+              "condition": "neq",
+              "keyValue": "={{ $json.id }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "status": "superseded"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000523",
+      "name": "Supersede older versions",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        2640,
+        -340
+      ],
+      "notes": "Every other active row of the same name becomes superseded (an import is a first version, so whatever its version), so the steps just approved are what runs under that name."
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "insert",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "playwright_steps"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "name": "={{ $json.name }}",
+            "version": "={{ $json.version }}",
+            "hash": "={{ $json.hash }}",
+            "status": "rejected",
+            "approvedBy": "={{ $json.approvedBy }}",
+            "approvedAt": "={{ $json.approvedAt }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "name",
+              "displayName": "name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "version",
+              "displayName": "version",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "hash",
+              "displayName": "hash",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "approvedBy",
+              "displayName": "approvedBy",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "approvedAt",
+              "displayName": "approvedAt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000524",
+      "name": "Record rejection",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        2420,
+        -180
+      ],
+      "notes": "A rejected step list: a rejected row, with no steps and no signature. A step list Sign steps refused writes no row; the last page names the reason."
     },
     {
       "parameters": {
@@ -185,7 +792,7 @@
           "conditions": [
             {
               "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005b1",
-              "leftValue": "={{ Boolean($json.workflowName) }}",
+              "leftValue": "={{ Boolean($('Import steps').first(0).json.workflowName) }}",
               "rightValue": "",
               "operator": {
                 "type": "boolean",
@@ -203,17 +810,17 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        560,
-        0
+        1540,
+        160
       ],
-      "notes": "A UiPath import carries the rest of the bot as binary workflow."
+      "notes": "A UiPath project or an RPA recording carries the rest of the bot as binary workflow on the Data output of Import steps."
     },
     {
       "parameters": {
         "operation": "completion",
         "respondWith": "returnBinary",
         "completionTitle": "Imported",
-        "completionMessage": "=Imported: {{ $json.report.steps }} steps; {{ $json.report.items.filter(i => i.kind === 'untranslated').length }} not translated, {{ $json.report.items.filter(i => i.kind === 'secret').length }} removed as secrets.\n{{ ((r, a, d, n) => [r ? a + ' of ' + r + (r === 1 ? ' step list' : ' step lists') + ' passed the replay' + (a === 0 ? '.' : (a === 1 ? ' and is' : ' and are') + ' waiting for approval in RPA: 3 Approve steps.') : '', d ? d + (d === 1 ? ' desktop step list is' : ' desktop step lists are') + ' waiting ' + (a ? 'there too' : 'for approval in RPA: 3 Approve steps') + ', not replayed: review every step and list the steps that save, post or submit in Write steps.' : '', n ? n + (n === 1 ? ' browser step list is' : ' browser step lists are') + ' waiting ' + (a || d ? 'there too' : 'for approval in RPA: 3 Approve steps') + ', not replayed because the steps submit a form, download through a form, type a secret or change a password: check every step, the target of each form and each download.' : ''].filter(part => part).join(' '))($json.drafts.filter(d => d.surface !== 'desktop' && !d.forApproval).length, $json.drafts.filter(d => d.adopted).length, $json.drafts.filter(d => d.forApproval && d.surface === 'desktop').length, $json.drafts.filter(d => d.forApproval && d.surface !== 'desktop').length) }}\nYour browser downloads {{ $binary.workflow.fileName }}: the rest of the bot as an n8n workflow. Open it in n8n with Import from file; stickies mark what was not translated.",
+        "completionMessage": "=Imported: {{ $('Import steps').first(0).json.report.steps }} steps; {{ $('Import steps').first(0).json.report.items.filter(i => i.kind === 'untranslated').length }} not translated, {{ $('Import steps').first(0).json.report.items.filter(i => i.kind === 'secret').length }} removed as secrets.\n{{ $('Review and approve').isExecuted ? ((drafts, signed, refused, e) => [((r, a) => r ? a + ' of ' + r + (r === 1 ? ' step list' : ' step lists') + ' passed the replay.' : '')(drafts.filter((d) => d.surface !== 'desktop' && !d.forApproval).length, drafts.filter((d) => d.adopted).length)].concat(signed.map((s) => s.status === 'active' ? 'Approved and signed: ' + e(s.name) + ' v' + e(s.version) + ' is now the version that runs under that name.' + (s.writeLine ? ' ' + e(s.writeLine) + '.' : '') : 'Rejected: ' + e(s.name) + ' v' + e(s.version) + '. Nothing was signed.'), refused.map((f) => 'Not signed' + (f.details && f.details.name ? ': ' + e(f.details.name) + ' v' + e(f.details.version) : '') + '. ' + e(f.error)), signed.length + refused.length ? [] : ['Nothing was signed: the review page was not answered in time.']).filter((x) => x).join('\\n'))($('Import steps').first(0).json.drafts, $('Sign steps').isExecuted ? $('Sign steps').all(0).map((i) => i.json) : [], $('Sign steps').isExecuted ? $('Sign steps').all(1).map((i) => i.json) : [], (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c])) : $('Settings').first().json.approval === 'by email' && !$('Approve steps').params.workflowId?.value ? 'Nothing was sent for approval: Settings say approval by email, but Approve steps names no workflow. Follow the sticky Approval by email, or set approval to on this form.' : ((r, a, d, n) => [r ? a + ' of ' + r + (r === 1 ? ' step list' : ' step lists') + ' passed the replay' + (a === 0 ? '.' : (a === 1 ? ' and is' : ' and are') + ' waiting for approval in RPA: 3 Approve steps.') : '', d ? d + (d === 1 ? ' desktop step list is' : ' desktop step lists are') + ' waiting ' + (a ? 'there too' : 'for approval in RPA: 3 Approve steps') + ', not replayed: review every step and tick the steps that save, send or submit.' : '', n ? n + (n === 1 ? ' browser step list is' : ' browser step lists are') + ' waiting ' + (a || d ? 'there too' : 'for approval in RPA: 3 Approve steps') + ', not replayed because the steps submit a form, download through a form, type a secret or change a password: check every step, the target of each form and each download.' : ''].filter(part => part).join(' '))($('Import steps').first(0).json.drafts.filter(d => d.surface !== 'desktop' && !d.forApproval).length, $('Import steps').first(0).json.drafts.filter(d => d.adopted).length, $('Import steps').first(0).json.drafts.filter(d => d.forApproval && d.surface === 'desktop').length, $('Import steps').first(0).json.drafts.filter(d => d.forApproval && d.surface !== 'desktop').length) }}\nYour browser downloads {{ $('Import steps').first(0).binary.workflow.fileName }}: the rest of the bot as an n8n workflow. Open it in n8n with Import from file; stickies mark what was not translated.",
         "inputDataFieldName": "workflow",
         "limitWaitTime": true,
         "limitType": "afterTimeInterval",
@@ -226,17 +833,17 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        820,
-        -80
+        1760,
+        80
       ],
-      "notes": "The run pauses here until the browser shows this page, at most 1 hour."
+      "notes": "The run pauses here until the browser shows this page, at most 1 hour. The file comes from the Data output of Import steps."
     },
     {
       "parameters": {
         "operation": "completion",
         "respondWith": "text",
         "completionTitle": "Imported",
-        "completionMessage": "=Imported: {{ $json.report.steps }} steps; {{ $json.report.items.filter(i => i.kind === 'untranslated').length }} not translated, {{ $json.report.items.filter(i => i.kind === 'secret').length }} removed as secrets.\n{{ ((r, a, d, n) => [r ? a + ' of ' + r + (r === 1 ? ' step list' : ' step lists') + ' passed the replay' + (a === 0 ? '.' : (a === 1 ? ' and is' : ' and are') + ' waiting for approval in RPA: 3 Approve steps.') : '', d ? d + (d === 1 ? ' desktop step list is' : ' desktop step lists are') + ' waiting ' + (a ? 'there too' : 'for approval in RPA: 3 Approve steps') + ', not replayed: review every step and list the steps that save, post or submit in Write steps.' : '', n ? n + (n === 1 ? ' browser step list is' : ' browser step lists are') + ' waiting ' + (a || d ? 'there too' : 'for approval in RPA: 3 Approve steps') + ', not replayed because the steps submit a form, download through a form, type a secret or change a password: check every step, the target of each form and each download.' : ''].filter(part => part).join(' '))($json.drafts.filter(d => d.surface !== 'desktop' && !d.forApproval).length, $json.drafts.filter(d => d.adopted).length, $json.drafts.filter(d => d.forApproval && d.surface === 'desktop').length, $json.drafts.filter(d => d.forApproval && d.surface !== 'desktop').length) }}\nThe full report, and the reason for any step list that could not be proved, is on the Data output of Import steps in this execution.",
+        "completionMessage": "=Imported: {{ $('Import steps').first(0).json.report.steps }} steps; {{ $('Import steps').first(0).json.report.items.filter(i => i.kind === 'untranslated').length }} not translated, {{ $('Import steps').first(0).json.report.items.filter(i => i.kind === 'secret').length }} removed as secrets.\n{{ $('Review and approve').isExecuted ? ((drafts, signed, refused, e) => [((r, a) => r ? a + ' of ' + r + (r === 1 ? ' step list' : ' step lists') + ' passed the replay.' : '')(drafts.filter((d) => d.surface !== 'desktop' && !d.forApproval).length, drafts.filter((d) => d.adopted).length)].concat(signed.map((s) => s.status === 'active' ? 'Approved and signed: ' + e(s.name) + ' v' + e(s.version) + ' is now the version that runs under that name.' + (s.writeLine ? ' ' + e(s.writeLine) + '.' : '') : 'Rejected: ' + e(s.name) + ' v' + e(s.version) + '. Nothing was signed.'), refused.map((f) => 'Not signed' + (f.details && f.details.name ? ': ' + e(f.details.name) + ' v' + e(f.details.version) : '') + '. ' + e(f.error)), signed.length + refused.length ? [] : ['Nothing was signed: the review page was not answered in time.']).filter((x) => x).join('\\n'))($('Import steps').first(0).json.drafts, $('Sign steps').isExecuted ? $('Sign steps').all(0).map((i) => i.json) : [], $('Sign steps').isExecuted ? $('Sign steps').all(1).map((i) => i.json) : [], (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c])) : $('Settings').first().json.approval === 'by email' && !$('Approve steps').params.workflowId?.value ? 'Nothing was sent for approval: Settings say approval by email, but Approve steps names no workflow. Follow the sticky Approval by email, or set approval to on this form.' : ((r, a, d, n) => [r ? a + ' of ' + r + (r === 1 ? ' step list' : ' step lists') + ' passed the replay' + (a === 0 ? '.' : (a === 1 ? ' and is' : ' and are') + ' waiting for approval in RPA: 3 Approve steps.') : '', d ? d + (d === 1 ? ' desktop step list is' : ' desktop step lists are') + ' waiting ' + (a ? 'there too' : 'for approval in RPA: 3 Approve steps') + ', not replayed: review every step and tick the steps that save, send or submit.' : '', n ? n + (n === 1 ? ' browser step list is' : ' browser step lists are') + ' waiting ' + (a || d ? 'there too' : 'for approval in RPA: 3 Approve steps') + ', not replayed because the steps submit a form, download through a form, type a secret or change a password: check every step, the target of each form and each download.' : ''].filter(part => part).join(' '))($('Import steps').first(0).json.drafts.filter(d => d.surface !== 'desktop' && !d.forApproval).length, $('Import steps').first(0).json.drafts.filter(d => d.adopted).length, $('Import steps').first(0).json.drafts.filter(d => d.forApproval && d.surface === 'desktop').length, $('Import steps').first(0).json.drafts.filter(d => d.forApproval && d.surface !== 'desktop').length) }}\nThe full report, and the reason for any step list that could not be proved, is on the Data output of Import steps in this execution.",
         "limitWaitTime": true,
         "limitType": "afterTimeInterval",
         "resumeAmount": 1,
@@ -248,8 +855,8 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        820,
-        100
+        1760,
+        240
       ],
       "notes": "The run pauses here until the browser shows this page, at most 1 hour."
     },
@@ -270,14 +877,25 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        560,
-        240
+        660,
+        320
       ],
       "notes": "The run pauses here until the browser shows this page, at most 1 hour."
     }
   ],
   "connections": {
     "Import a bot": {
+      "main": [
+        [
+          {
+            "node": "Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Settings": {
       "main": [
         [
           {
@@ -292,14 +910,14 @@
       "main": [
         [
           {
-            "node": "Workflow file?",
+            "node": "Approve on this form?",
             "type": "main",
             "index": 0
           }
         ],
         [
           {
-            "node": "Approve steps",
+            "node": "Approval by email?",
             "type": "main",
             "index": 0
           }
@@ -307,6 +925,137 @@
         [
           {
             "node": "Import failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Approval by email?": {
+      "main": [
+        [
+          {
+            "node": "Approve steps",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Approve on this form?": {
+      "main": [
+        [
+          {
+            "node": "Create steps table",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Workflow file?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create steps table": {
+      "main": [
+        [
+          {
+            "node": "Create run log table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create run log table": {
+      "main": [
+        [
+          {
+            "node": "Review and approve",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Review and approve": {
+      "main": [
+        [
+          {
+            "node": "Step lists",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Workflow file?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Step lists": {
+      "main": [
+        [
+          {
+            "node": "Step lists to sign",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Step lists to sign": {
+      "main": [
+        [
+          {
+            "node": "Sign steps",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign steps": {
+      "main": [
+        [
+          {
+            "node": "Signed?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Signed?": {
+      "main": [
+        [
+          {
+            "node": "Save signed steps",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Record rejection",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save signed steps": {
+      "main": [
+        [
+          {
+            "node": "Supersede older versions",
             "type": "main",
             "index": 0
           }
