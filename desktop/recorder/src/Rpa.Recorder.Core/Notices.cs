@@ -20,4 +20,6 @@ public static class Notices
         $"The application took longer than 200 ms to describe \"{step}\", so the step was recorded as it was then. Check it, and delete it if it is wrong.";
 
     public const string NotStarted = "The program did not show a window within 30 seconds.";
+
+    public static string DidNotStart(string reason) => $"The program did not start: {reason}";
 }

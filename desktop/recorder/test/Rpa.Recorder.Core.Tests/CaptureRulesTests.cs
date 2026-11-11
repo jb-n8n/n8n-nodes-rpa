@@ -56,7 +56,7 @@ public class CaptureRulesTests
             "Check All companies",
             "Click Vendor Row 1 (found by its row position: check it)",
             "Click OK",
-            "Read 6 line items as out_Count",
+            "Read lblCount as out_Count",
         ], s.Steps.Select(StepText.Sentence));
         Assert.DoesNotContain(s.Steps.Select(StepText.Sentence), x => x.Contains(typed));
 

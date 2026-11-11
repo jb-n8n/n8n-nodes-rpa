@@ -38,6 +38,10 @@ internal sealed class Capture : IDisposable
     private ProcessWait? _appHandle;
     private RegisteredWaitHandle? _appWait;
 
+    // The recorded application's top-level window that last had the person's input: the bar gives it the activation back
+    // after its own actions, so the person's next click acts in the app instead of only activating its window.
+    private volatile IntPtr _lastAppWindow;
+
     private sealed class ProcessWait : WaitHandle
     {
         public ProcessWait(Microsoft.Win32.SafeHandles.SafeWaitHandle handle) => SafeWaitHandle = handle;
@@ -84,33 +88,44 @@ internal sealed class Capture : IDisposable
     {
         // The session's own check of the program and its arguments, on a session that is thrown away.
         new Session().Add(new AppStarted(DateTimeOffset.Now, path, args, new WindowFacts("", "", "")));
-        var start = new ProcessStartInfo(path) { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(path) ?? "" };
-        foreach (var arg in args) start.ArgumentList.Add(arg);
-        Process? process;
         var at = DateTimeOffset.Now;
-        try { process = Process.Start(start); }
+        ProcessWait process;
+        int processId;
+        try
+        {
+            // Started without the recorder's handles: a program that held the recorder's standard output open would
+            // keep whoever reads it waiting after the recorder ends.
+            var (handle, id) = Native.Start(path, args, Path.GetDirectoryName(path));
+            (process, processId) = (new ProcessWait(handle), id);
+        }
         catch (Win32Exception e) when (e.NativeErrorCode == 740) // ERROR_ELEVATION_REQUIRED
         {
             Notify(NoticeKind.Elevated, Notices.Elevated);
             return false;
         }
-        if (process is null) return false;
-        var window = IntPtr.Zero;
-        for (var waited = 0; waited < 30000 && window == IntPtr.Zero && !process.HasExited; waited += 100)
+        catch (Win32Exception e)
         {
-            window = Native.TopLevelWindows().FirstOrDefault(h => Native.ProcessOf(h) == process.Id);
+            Notify(NoticeKind.NotStarted, Notices.DidNotStart(e.Message));
+            return false;
+        }
+        var window = IntPtr.Zero;
+        for (var waited = 0; waited < 30000 && window == IntPtr.Zero && !process.WaitOne(0); waited += 100)
+        {
+            window = Native.TopLevelWindows().FirstOrDefault(h => Native.ProcessOf(h) == processId);
             if (window == IntPtr.Zero) Thread.Sleep(100);
         }
         if (window == IntPtr.Zero)
         {
+            process.Dispose();
             Notify(NoticeKind.NotStarted, Notices.NotStarted);
             return false;
         }
         lock (_gate) _session.Add(new AppStarted(at, path, args, UiaWorker.Window(window)));
         ProgramPath = path;
-        AppProcessId = process.Id;
-        _scope = ScopeOf(process.Id, path);
-        Watch((uint)process.Id);
+        AppProcessId = processId;
+        _lastAppWindow = window;
+        _scope = ScopeOf(processId, path);
+        Watch(process);
         Begin();
         return true;
     }
@@ -128,8 +143,11 @@ internal sealed class Capture : IDisposable
         }
         ProgramPath = Native.ImagePath(process);
         AppProcessId = (int)process;
+        _lastAppWindow = window;
         _scope = ScopeOf((int)process, ProgramPath);
-        Watch(process);
+        var handle = Native.OpenToWatch(process);
+        if (handle is null) _scope.AppExited(DateTimeOffset.Now);
+        else Watch(new ProcessWait(handle));
         Begin();
         return true;
     }
@@ -142,14 +160,13 @@ internal sealed class Capture : IDisposable
     }
 
     /// <summary>
-    /// Holds the recorded process open and tells the scope when it exits. A process that cannot be held counts as exited
-    /// at once: its id alone is then never in scope (another process of its program file still is).
+    /// Holds the recorded process open (its handle) and tells the scope when it exits. A process that cannot be held
+    /// counts as exited at once (Attach): its id alone is then never in scope (another process of its program file
+    /// still is).
     /// </summary>
-    private void Watch(uint processId)
+    private void Watch(ProcessWait process)
     {
-        var handle = Native.OpenToWatch(processId);
-        if (handle is null) { _scope?.AppExited(DateTimeOffset.Now); return; }
-        _appHandle = new ProcessWait(handle);
+        _appHandle = process;
         var scope = _scope;
         _appWait = ThreadPool.RegisterWaitForSingleObject(_appHandle, (_, _) => scope?.AppExited(DateTimeOffset.Now), null, Timeout.Infinite, executeOnlyOnce: true);
     }
@@ -191,6 +208,14 @@ internal sealed class Capture : IDisposable
         _watchTimer = null;
         _hooks.Dispose();
         Changed?.Invoke();
+    }
+
+    /// <summary>Gives the activation back to the recorded application's window that last had the person's input (the bar
+    /// is the foreground program when it calls this, so Windows allows it).</summary>
+    public void GiveFocusBack()
+    {
+        var window = _lastAppWindow;
+        if (window != IntPtr.Zero && Native.IsWindow(window) && Native.IsWindowVisible(window)) Native.SetForegroundWindow(window);
     }
 
     /// <summary>Runs something on the session (the bar's delete and mark actions), then tells the bar.</summary>
@@ -274,7 +299,10 @@ internal sealed class Capture : IDisposable
         if (!InScope(under)) { OtherProgram(); return; }
         var job = Stopwatch.StartNew();
         var at = DateTimeOffset.Now;
-        _worker.Post(() => Mouse(at, job, x, y)).Wait(BudgetMs);
+        // Held only until the element is described and the field being left is read; the rest comes after.
+        var described = new ManualResetEventSlim(false);
+        _worker.Post(() => Mouse(at, job, described, x, y));
+        described.Wait(BudgetMs);
     }
 
     private bool OnKeyDown(int vk, bool ctrl, bool alt, bool shift)
@@ -316,28 +344,38 @@ internal sealed class Capture : IDisposable
 
     // ---- The worker's thread. ----
 
-    private void Mouse(DateTimeOffset at, Stopwatch job, int x, int y)
+    /// <summary>
+    /// A mouse-down. What must come before the click goes on is done first: the element's description (with its toggle
+    /// state) and reading the field the click leaves; then <paramref name="described"/> lets the input go on. A step is
+    /// late only when that part took longer than the budget. Its locator's matches are counted after, in the window as
+    /// it is then; when the element is gone by then, it counts as 1 (recorded with what there is).
+    /// </summary>
+    private void Mouse(DateTimeOffset at, Stopwatch job, ManualResetEventSlim described, int x, int y)
     {
-        var top = Native.GetAncestor(Native.WindowFromPoint(new Native.POINT { X = x, Y = y }), Native.GA_ROOT);
-        var process = Native.ProcessOf(top);
-        if (process == _ownProcess) return;
-        if (IsElevated(process)) { Notify(NoticeKind.Elevated, Notices.Elevated); return; }
-        Described? d;
-        try { d = _worker.At(x, y); }
-        catch (Exception e) when (e is UnauthorizedAccessException || (e is COMException c && c.HResult == unchecked((int)0x80070005)))
+        try
         {
-            Notify(NoticeKind.Elevated, Notices.Elevated);
-            return;
+            var top = Native.GetAncestor(Native.WindowFromPoint(new Native.POINT { X = x, Y = y }), Native.GA_ROOT);
+            var process = Native.ProcessOf(top);
+            if (process == _ownProcess) return;
+            if (IsElevated(process)) { Notify(NoticeKind.Elevated, Notices.Elevated); return; }
+            Described? d;
+            try { d = _worker.At(x, y); }
+            catch (Exception e) when (e is UnauthorizedAccessException || (e is COMException c && c.HResult == unchecked((int)0x80070005)))
+            {
+                Notify(NoticeKind.Elevated, Notices.Elevated);
+                return;
+            }
+            if (d is null || d.ProcessId == _ownProcess || !InScope(d.ProcessId)) return;
+            _lastAppWindow = top;
+            var window = UiaWorker.WindowOf(d, top);
+            var down = new MouseDown(at, window, d.Facts, 1);
+            LeaveField(down);
+            var late = job.ElapsedMilliseconds > BudgetMs;
+            described.Set();
+            var matches = _worker.CountMatches(window, LocatorRules.Condition(d.Facts), d.ProcessId);
+            Add(down with { Matches = matches == 0 ? 1 : matches }, late, d.Facts);
         }
-        if (d is null || d.ProcessId == _ownProcess || !InScope(d.ProcessId)) return;
-        var window = UiaWorker.WindowOf(d, top);
-        var down = new MouseDown(at, window, d.Facts, 1);
-        LeaveField(down);
-        var matches = _worker.CountMatches(window, LocatorRules.Condition(d.Facts), d.ProcessId);
-        var late = job.ElapsedMilliseconds > BudgetMs;
-        // Counted after the click went on, the element may be gone: recorded as it is, for the person to check.
-        if (late && matches == 0) matches = 1;
-        Add(down with { Matches = matches }, late, d.Facts);
+        finally { described.Set(); }
     }
 
     /// <summary>A key on the focused element: typing (<paramref name="chord"/> null) or a key event.</summary>
@@ -345,6 +383,7 @@ internal sealed class Capture : IDisposable
     {
         var d = _worker.Focused();
         if (d is null || d.ProcessId == _ownProcess || !InScope(d.ProcessId)) return;
+        _lastAppWindow = Native.GetAncestor(Native.GetForegroundWindow(), Native.GA_ROOT);
         var window = UiaWorker.WindowOf(d, Native.GetForegroundWindow());
         var typing = kind == KeyKind.Printable || KeyRules.IsTyping(kind, KeyRules.Field(d.Facts));
         var key = new KeyDown(at, window, d.Facts, typing ? "" : chord ?? "", typing);

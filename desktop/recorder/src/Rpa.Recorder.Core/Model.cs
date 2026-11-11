@@ -80,6 +80,9 @@ public sealed record RecordedStep(StepKind Kind, DateTimeOffset At, string Label
     public string? Chord { get; init; }
     public string? As { get; init; }
     public bool Positional { get; init; }
+    /// <summary>A read whose element has no stable id, so it is found by the text it shows now: the bar asks the person
+    /// to check it. Not saved in the file.</summary>
+    public bool FoundByText { get; init; }
     /// <summary>A click that was a double-click.</summary>
     public bool Double { get; init; }
 

@@ -256,8 +256,9 @@ public class SessionTests
         var s = Record(Click(1, Ok));
         s.AddRead(count, Window, "out_ResultCount");
         var read = s.Steps[1];
-        Assert.Equal((StepKind.Read, "out_ResultCount", "6 line items"), (read.Kind, read.As, read.Label));
-        Assert.Equal([new RecordedCondition("Text", "lblResultCount", "6 line items")], read.Target!.Path);
+        // The label's text is the value read, not what finds it: the step names it by its id.
+        Assert.Equal((StepKind.Read, "out_ResultCount", "lblResultCount", false), (read.Kind, read.As, read.Label, read.FoundByText));
+        Assert.Equal([new RecordedCondition("Text", "lblResultCount", null)], read.Target!.Path);
         Assert.Throws<ArgumentException>(() => s.AddRead(count, Window, "out_ResultCount"));
         Assert.Throws<ArgumentException>(() => s.AddRead(count, Window, "out result"));
     }

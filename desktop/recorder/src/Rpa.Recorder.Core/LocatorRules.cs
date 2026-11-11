@@ -30,6 +30,23 @@ public static partial class LocatorRules
         return new(WindowRules.Window(window), path);
     }
 
+    /// <summary>
+    /// A read step's target. What a read takes is often the element's name itself (a label that says "6 line items"), so
+    /// an element with a stable id is found by its control type and id alone. With no stable id the name stays (it is
+    /// all there is), and <paramref name="byText"/> says so.
+    /// </summary>
+    public static RecordedTarget ReadTarget(WindowFacts window, ElementFacts element, out bool byText)
+    {
+        var target = Target(window, element, 1);
+        var own = target.Path[^1];
+        byText = own.AutomationId is null && own.Name is not null;
+        return own.AutomationId is null ? target : target with { Path = [.. target.Path.SkipLast(1), own with { Name = null }] };
+    }
+
+    /// <summary>How a read step names its element: by its stable id, else by its control type, never by its text.</summary>
+    public static string ReadLabel(ElementFacts element) => Texts.Label(
+        StableIds.IsStable(element.AutomationId) && Texts.Matchable(element.AutomationId) is { } id ? id : element.ControlType);
+
     [GeneratedRegex(@"\bRow [0-9]+\b")] private static partial Regex RowPosition();
 
     /// <summary>Whether the target finds its element by a name that carries a row position ("Vendor Row 1"): on a later

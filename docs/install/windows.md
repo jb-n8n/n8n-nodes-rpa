@@ -1140,16 +1140,23 @@ If something below differs on your machine, report it as a problem (section 11, 
    while anyone is signed in as the bot user, at the console or over Remote Desktop, so no run can start meanwhile;
    sign the bot user out when you are done. Make sure the app can be started by this user and that it opens in a
    state you can start from again (the signed-out state, a fresh document).
-2. **Start the recorder.** Run `C:\Program Files\RPA Runner\recorder\RpaRecorder.exe`. A small window, **RPA
-   Recorder**, stays on top. Choose **Start a program...** and pick the app's `.exe`, then type its arguments if it
-   needs any (leave the box empty otherwise), or choose **Record an open window...** to record an app that is already
-   running. A program that shows no window within 30 seconds is reported as `The program did not show a window within 30
-   seconds.`
+2. **Start the recorder.** Run `C:\Program Files\RPA Runner\recorder\RpaRecorder.exe`. A narrow window, **RPA
+   Recorder**, opens at the top right of the screen and stays on top. Drag it aside or resize it if it covers the app;
+   clicks on it are never recorded. Choose **Start a program...** and pick the app's `.exe`, then type its arguments if
+   it needs any (leave the box empty otherwise), or choose **Record an open window...** to record an app that is
+   already running. That list shows the titled windows of other programs; it leaves out Windows' own desktop and
+   taskbar, windows Windows keeps hidden, and the recorder's own. A program that shows no window within 30 seconds is
+   reported as `The program did not show a window within 30 seconds.`
 3. **Do the work in the app,** as you want the bot to do it, once and without detours. The bar lists each step as a
-   sentence (`Click Sign in`, `Type "clerk" into User name`, `Choose Net 30 in Payment terms`). **Pause** stops the
+   sentence (`Click Sign in`, `Type "clerk" into User name`, `Choose "2000" in Company code`). **Pause** stops the
    recording and **Resume** starts it again, for something you do not want in the flow. **F9** reads a value: point at
    a field or a label in the app and press F9; the recorder asks for the run output name, and adds a step that reads
-   that element on each run. F9 does not reach the app.
+   that element on each run. F9 does not reach the app. The step names the element by its automation id (`Read
+   lblResultCount as out_ResultCount`), not by the text it shows now, because that text is the value it reads. An
+   element with no stable id is found by its text; the bar then adds `(found by the text it shows now: check it)`.
+   After you use the bar (Delete, Mark as..., the F9 question, Pause, Resume), the recorder gives the app its focus
+   back. If a click in the app still did nothing (it only brought the app's window to the front), click again, and
+   delete the extra step on the bar.
 4. **Correct what went wrong.** Select a step on the bar and choose **Delete**: the step goes, with what was folded into
    it. The saved file is what the list on the bar shows. A step
    that ends in `[check this step]` was recorded while the app was slow to describe its control (the bar then says
@@ -1161,11 +1168,15 @@ If something below differs on your machine, report it as a problem (section 11, 
    **Mark as variable...** and name the run variable; the step then uses `{{var.<name>}}` and the recorded value is
    removed. Select the typing of a password or any other secret and choose **Mark as secret...**: the step types a
    secret run variable, and the typed value is removed from the recording. Mark a field you are not sure about
-   as secret: removing the value costs you one variable, and a value that stays in the file is in your n8n.
+   as secret: removing the value costs you one variable, and a value that stays in the file is in your n8n. A value
+   typed into a field the recorder did not recognise as a password box was read when you left the field: marking it
+   secret removes it from the list and from the file, but it can stay in the recorder's memory until the recorder is
+   closed, so close the recorder after you save (step 6). A field the recorder recognises as a password box is never
+   read at all.
 6. **Stop and save.** Choose **Stop**, type a name in **Name of the recording**, choose **Save...** and pick a folder. It
    writes two files there: `<name>.rpa-recording.json` and `<name>.policy-change.json` (characters Windows does not
    allow in a file name become `_`). It asks before it replaces files of the same names. The recorder applies no policy
-   itself.
+   itself. Then close the recorder.
 7. **Sign the bot user out** if this machine runs with `-Unattended`, and give the desktop back to whoever uses it.
 
 ### Allow the app, then import the recording

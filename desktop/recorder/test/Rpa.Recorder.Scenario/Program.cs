@@ -81,6 +81,9 @@ internal static class Program
             Check($"{pass}: the person performs the flow", flowed, () => failure);
             process.StandardInput.Close();
             var ended = process.WaitForExit(60000);
+            // End ERP Demo before reading the rest of the recorder's output: a program that held the recorder's standard
+            // output (as one started with it would) keeps it from ever reaching its end. By its process id.
+            try { Process.GetProcessById(appProcess).Kill(); } catch (ArgumentException) { } catch (InvalidOperationException) { }
             var printed = process.StandardOutput.ReadToEnd();
             process.WaitForExit();
             Check($"{pass}: the recorder saves and ends when its input closes", ended && process.ExitCode == 0 && printed.StartsWith("saved ", StringComparison.Ordinal),

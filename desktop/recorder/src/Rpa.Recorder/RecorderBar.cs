@@ -29,9 +29,12 @@ internal sealed class RecorderBar : Form
         Text = "RPA Recorder";
         TopMost = true;
         FormBorderStyle = FormBorderStyle.SizableToolWindow;
+        // Narrow, at the top right of the working area, so that it covers as little of the app as it can on a small
+        // screen; it can be dragged and resized.
         StartPosition = FormStartPosition.Manual;
-        Location = new Point(Screen.PrimaryScreen?.WorkingArea.Right - 520 ?? 0, 40);
-        Size = new Size(500, 460);
+        Size = new Size(360, 460);
+        var area = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1024, 768);
+        Location = new Point(Math.Max(area.Left, area.Right - Width - 8), area.Top + 8);
 
         var top = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true };
         top.Controls.AddRange([_startProgram, _startWindow, _pause, _stop, _save]);
@@ -57,13 +60,16 @@ internal sealed class RecorderBar : Form
         _pause.Click += (_, _) => TogglePause();
         _stop.Click += (_, _) => { _capture.Stop(); _stopped = true; UpdateButtons(); };
         _save.Click += (_, _) => Save();
-        _delete.Click += (_, _) => { if (Selected() is { } i) _capture.Use(s => { s.Delete(i); return 0; }); };
+        _delete.Click += (_, _) => { if (Selected() is { } i) _capture.Use(s => { s.Delete(i); return 0; }); BackToApp(); };
         _variable.Click += (_, _) => Mark(secret: false);
         _secret.Click += (_, _) => Mark(secret: true);
         _capture.Changed += () => BeginInvoke(Refresh);
         _capture.Noticed += n => BeginInvoke(() => Say($"{n.At:HH:mm:ss} {n.Text}"));
         _capture.ReadRequested += (element, window) => BeginInvoke(() => AskRead(element, window));
         FormClosed += (_, _) => _capture.Dispose();
+        // TopMost set before the handle exists does not survive FormBorderStyle.SizableToolWindow (the window has no
+        // WS_EX_TOPMOST on Windows Server 2022): set it again once the bar is shown, so that it stays on top of the app.
+        Shown += (_, _) => { TopMost = false; TopMost = true; };
         UpdateButtons();
     }
 
@@ -87,7 +93,7 @@ internal sealed class RecorderBar : Form
     {
         var own = (uint)Environment.ProcessId;
         var windows = Native.TopLevelWindows()
-            .Where(h => Native.ProcessOf(h) != own && Native.TitleOf(h).Length > 0)
+            .Where(h => OpenWindows.IsOffered(Native.TitleOf(h), Native.ClassOf(h), Native.IsCloaked(h), Native.ProcessOf(h) == own))
             .Select(h => (Handle: h, Text: $"{Native.TitleOf(h)} ({UiaWorker.ExeOf(Native.ProcessOf(h))})"))
             .ToList();
         using var dialog = new Form { Text = "Record an open window", Size = new Size(460, 360), StartPosition = FormStartPosition.CenterParent, TopMost = true };
@@ -106,6 +112,7 @@ internal sealed class RecorderBar : Form
     {
         _capture.Pause(_capture.Recording);
         _pause.Text = _capture.Recording ? "Pause" : "Resume";
+        BackToApp();
     }
 
     private void Mark(bool secret)
@@ -115,17 +122,23 @@ internal sealed class RecorderBar : Form
         var name = Ask(secret ? "Mark as secret" : "Mark as variable",
             secret ? "The run variable that holds this secret. The typed value is removed from the recording." : "The run variable this value comes from on each run.",
             StepText.SuggestedName(step));
-        if (name is null) return;
-        try { _capture.Use(s => { if (secret) s.MarkSecret(i, name); else s.MarkVariable(i, name); return 0; }); }
-        catch (Exception e) when (e is ArgumentException or InvalidOperationException) { MessageBox.Show(this, e.Message, Text); }
+        if (name is not null)
+        {
+            try { _capture.Use(s => { if (secret) s.MarkSecret(i, name); else s.MarkVariable(i, name); return 0; }); }
+            catch (Exception e) when (e is ArgumentException or InvalidOperationException) { MessageBox.Show(this, e.Message, Text); }
+        }
+        BackToApp();
     }
 
     private void AskRead(ElementFacts element, WindowFacts window)
     {
-        var name = Ask("Read value", $"Read \"{LocatorRules.Label(element)}\" into this run output:", "out_" + SecretRules.VariableName(element));
-        if (name is null) return;
-        try { _capture.AddRead(element, window, name); }
-        catch (ArgumentException e) { MessageBox.Show(this, e.Message, Text); }
+        var name = Ask("Read value", $"Read {LocatorRules.ReadLabel(element)} into this run output:", StepText.SuggestedReadName(element));
+        if (name is not null)
+        {
+            try { _capture.AddRead(element, window, name); }
+            catch (ArgumentException e) { MessageBox.Show(this, e.Message, Text); }
+        }
+        BackToApp();
     }
 
     private void Save()
@@ -164,6 +177,14 @@ internal sealed class RecorderBar : Form
         _startProgram.Enabled = _startWindow.Enabled = !_started;
         _pause.Enabled = _stop.Enabled = _started && !_stopped;
         _save.Enabled = _stopped;
+    }
+
+    /// <summary>After a bar action while recording, the app gets the activation back: the person's next click there acts,
+    /// instead of only activating the app's window (which would be recorded as a click). Typing the recording's name and
+    /// Save keep the focus in the bar.</summary>
+    private void BackToApp()
+    {
+        if (_started && !_stopped) _capture.GiveFocusBack();
     }
 
     private int? Selected() => _steps.SelectedIndex >= 0 ? _steps.SelectedIndex : null;

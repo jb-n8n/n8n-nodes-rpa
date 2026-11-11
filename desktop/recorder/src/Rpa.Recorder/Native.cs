@@ -47,6 +47,22 @@ internal static class Native
     [DllImport("kernel32.dll")] private static extern bool CloseHandle(IntPtr handle);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern bool QueryFullProcessImageName(IntPtr process, uint flags, StringBuilder name, ref uint size);
     [DllImport("user32.dll")] public static extern uint GetDoubleClickTime();
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
+    [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hwnd);
+    [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out int value, int size);
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct STARTUPINFO
+    {
+        public int cb;
+        public string? lpReserved, lpDesktop, lpTitle;
+        public int dwX, dwY, dwXSize, dwYSize, dwXCountChars, dwYCountChars, dwFillAttribute, dwFlags;
+        public short wShowWindow, cbReserved2;
+        public IntPtr lpReserved2, hStdInput, hStdOutput, hStdError;
+    }
+    [StructLayout(LayoutKind.Sequential)] private struct PROCESS_INFORMATION { public IntPtr hProcess, hThread; public int dwProcessId, dwThreadId; }
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool CreateProcess(string applicationName, StringBuilder commandLine, IntPtr processAttributes, IntPtr threadAttributes,
+        bool inheritHandles, uint creationFlags, IntPtr environment, string? currentDirectory, ref STARTUPINFO startupInfo, out PROCESS_INFORMATION processInformation);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool GetProcessTimes(IntPtr process, out long creation, out long exit, out long kernel, out long user);
     [DllImport("ntdll.dll")] private static extern int NtQueryInformationProcess(IntPtr process, int infoClass, ref PROCESS_BASIC_INFORMATION info, int length, out int returned);
     [StructLayout(LayoutKind.Sequential)]
@@ -102,6 +118,25 @@ internal static class Native
         }
         finally { CloseHandle(process); }
     }
+
+    /// <summary>
+    /// Starts a program with none of the recorder's handles: not its standard input, output or error (a program started
+    /// with them would keep them open after the recorder ends), nor any other. Returns the process's handle, which is
+    /// signalled when it exits and keeps its id from being given to another process, and its id. Win32Exception when it
+    /// does not start (740: it needs administrator rights).
+    /// </summary>
+    public static (Microsoft.Win32.SafeHandles.SafeWaitHandle Process, int Id) Start(string path, IReadOnlyList<string> args, string? directory)
+    {
+        var startup = new STARTUPINFO { cb = Marshal.SizeOf<STARTUPINFO>() };
+        var commandLine = new StringBuilder(Rpa.Recorder.Core.CommandLine.Join(path, args));
+        if (!CreateProcess(path, commandLine, IntPtr.Zero, IntPtr.Zero, false, 0, IntPtr.Zero, directory, ref startup, out var started))
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        CloseHandle(started.hThread);
+        return (new Microsoft.Win32.SafeHandles.SafeWaitHandle(started.hProcess, ownsHandle: true), started.dwProcessId);
+    }
+
+    /// <summary>Whether Windows keeps a window out of sight (DWMWA_CLOAKED), as it does its text input host.</summary>
+    public static bool IsCloaked(IntPtr hwnd) => DwmGetWindowAttribute(hwnd, 14, out var cloaked, sizeof(int)) == 0 && cloaked != 0;
 
     /// <summary>
     /// A handle to a process that is signalled when it exits (SYNCHRONIZE, with the least query access). While it is

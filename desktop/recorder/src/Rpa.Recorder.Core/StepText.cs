@@ -20,11 +20,18 @@ public static class StepText
             StepKind.Read => $"Read {step.Label} as {step.As}",
             _ => step.Label,
         };
-        return step.Positional ? sentence + " (found by its row position: check it)" : sentence;
+        if (step.Positional) sentence += " (found by its row position: check it)";
+        else if (step.FoundByText) sentence += " (found by the text it shows now: check it)";
+        return sentence;
     }
 
     /// <summary>A variable name for the step's value, from its element's label (Date from gives <c>date_from</c>).</summary>
     public static string SuggestedName(RecordedStep step) => SecretRules.VariableName(new ElementFacts("", "", step.Label, "", false, false, "", []));
+
+    /// <summary>A run output name for a read of the element, from its stable id, else its control type (never from the
+    /// text it shows, which is the value read).</summary>
+    public static string SuggestedReadName(ElementFacts element) =>
+        "out_" + SecretRules.VariableName(new ElementFacts("", "", LocatorRules.ReadLabel(element), "", false, false, "", []));
 
     private static string Shown(string value, bool secret)
     {

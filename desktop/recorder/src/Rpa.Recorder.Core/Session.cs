@@ -206,7 +206,11 @@ public sealed class Session
     {
         CheckName(name);
         if (_steps.Any(s => s.Kind == StepKind.Read && s.As == name)) throw new ArgumentException($"another read already gives {name}", nameof(name));
-        _steps.Add(Step(StepKind.Read, DateTimeOffset.Now, window, element, 1) with { As = name });
+        var target = LocatorRules.ReadTarget(window, element, out var byText);
+        _steps.Add(new RecordedStep(StepKind.Read, DateTimeOffset.Now, LocatorRules.ReadLabel(element))
+        {
+            Target = target, As = name, FoundByText = byText, Positional = LocatorRules.IsPositional(target), ElementId = element.RuntimeId,
+        });
     }
 
     /// <summary>The recording file named <paramref name="name"/>: the steps, with a scope wherever the window changes.</summary>
