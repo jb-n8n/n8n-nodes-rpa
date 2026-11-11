@@ -29,6 +29,11 @@ export type ImportEvent =
   | ({ at: string; kind: 'select'; target: Candidate[]; label: string; value: string | string[]; secure?: true; hints: string[] } & Gated)
   | ({ at: string; kind: 'check'; target: Candidate[]; label: string; checked: boolean } & Gated)
   | { at: string; kind: 'enter'; label: string }
+  /**
+   * One key chord a browser `press` step accepts (steps/browser-keys.ts), in its spelling (`Shift+Tab`). An empty
+   * `target`: the element that has the focus. Enter alone is never one: it is `enter`, which a sign-in takes as its submit.
+   */
+  | ({ at: string; kind: 'press'; key: string; target: Candidate[]; label: string } & Gated)
   | ({ at: string; kind: 'waitFor'; target: Candidate[]; label: string } & Gated)
   | { at: string; kind: 'expectUrl'; path: string }
   | { at: string; kind: 'report'; item: ImportItem }

@@ -15,6 +15,7 @@ import { readDesktopSelector, type DesktopSelectorRead } from './uipath-desktop-
 import { readSelector } from './uipath-selector.js';
 import type { UiaTarget, WindowSel } from '../types.js';
 import { parseXml, type XmlNode } from './xml.js';
+import { browserKeyProblem } from '../steps/browser-keys.js';
 import { canonicalChord } from '../steps/desktop-vocabulary.js';
 
 /** An upload larger than this is refused before anything is read. */
@@ -590,7 +591,11 @@ const NESTED_PROPS = new Set([...BODY_PROPS, 'Then', 'Else', 'Try', 'Finally', '
 /** Elements that only hold activities: countIn counts what is inside them, not them. */
 const STRUCTURE = new Set(['Sequence', 'ActivityAction', 'ActivityFunc', 'Catch', 'FlowStep', 'Transition']);
 /** Browser events a condition may gate (an Enter is a sign-in's submit or no step at all). */
-const GATED_EVENTS: ReadonlySet<ImportEvent['kind']> = new Set(['goto', 'click', 'hover', 'fill', 'select', 'check', 'waitFor']);
+const GATED_EVENTS: ReadonlySet<ImportEvent['kind']> = new Set(['goto', 'click', 'hover', 'fill', 'select', 'check', 'waitFor', 'press']);
+/** Send Hotkey and Keyboard Shortcuts, classic and modern: key chords. */
+const HOTKEYS = new Set(['SendHotkey', 'NSendHotkey', 'KeyboardShortcuts', 'NKeyboardShortcuts']);
+/** A Keyboard Shortcuts value presses at most this many chords. */
+const MAX_SHORTCUT_CHORDS = 20;
 /** Check App State attributes that may say it waits for something else than its element to appear (names unverified). */
 const CHECK_MODES = ['Mode', 'CheckType', 'WaitFor'];
 const EACH_STEP_CHECKS = 'Each step checks again just before it runs, so a step that makes the element show or go away changes which of the later steps run';
@@ -1060,16 +1065,11 @@ class Walker {
     const isType = name === 'NTypeInto' || name === 'TypeInto' || name === 'TypeSecureText';
     const isSelect = name === 'NSelectItem' || name === 'SelectItem';
     const isCheck = name === 'NCheck' || name === 'Check';
-    const isHotkey = name === 'SendHotkey';
     const isHover = name === 'NHover' || name === 'Hover';
-    if (!isClick && !isType && !isSelect && !isCheck && !isHotkey && !isHover) {
+    if (HOTKEYS.has(name)) return this.browserKeys(el, ctx);
+    if (!isClick && !isType && !isSelect && !isCheck && !isHover) {
       const inner = this.body(el).length;
       return this.untranslated(el, ctx, `this activity has no step equivalent in this release${inner ? `: the ${inner === 1 ? '1 activity' : `${inner} activities`} inside ${inner === 1 ? 'was' : 'were'} not imported` : ''}`);
-    }
-    if (isHotkey) {
-      const key = (this.lit(el, 'Key', ctx) ?? '').toLowerCase();
-      if (key === 'enter' || key === 'return') return [this.event({ at, kind: 'enter', label }, ctx)];
-      return this.untranslated(el, ctx, 'a keyboard shortcut is not a step: add a click on what it does');
     }
 
     const target = this.target(el, ctx);
@@ -1128,6 +1128,43 @@ class Walker {
     }
     hints.push(`${UNRESOLVED}the activity types no text`);
     return [this.event(e, ctx)];
+  }
+
+  /** The chords a Send Hotkey (Key, KeyModifiers) or Keyboard Shortcuts (Shortcuts) presses, canonical; or why not. */
+  private chords(el: XmlNode, ctx: Ctx): { chords: string[] } | { error: string } {
+    if (local(el.name).includes('KeyboardShortcuts')) {
+      // Studio writes the value as a string literal (`["[d(hk)]…"]`); a bare `[d(hk)]…` reads like an expression but is the value itself.
+      const raw = el.attrs.Shortcuts ?? '';
+      return shortcutChords(this.lit(el, 'Shortcuts', ctx) ?? (/^\[[dku]\(/.test(raw) ? raw : ''));
+    }
+    const c = canonicalChord(this.lit(el, 'Key', ctx) ?? '', this.lit(el, 'KeyModifiers', ctx) ?? '');
+    return 'error' in c ? c : { chords: [c.chord] };
+  }
+
+  /**
+   * A Send Hotkey or Keyboard Shortcuts in a browser: a press step per chord, on the activity's target or, without a
+   * selector, the element that has the focus. Enter alone stays the `enter` event (a sign-in's submit). A chord the
+   * press step refuses makes the whole activity not translated, with the step's own reason.
+   */
+  private browserKeys(el: XmlNode, ctx: Ctx): Item[] {
+    const name = local(el.name);
+    const at = this.at(el, ctx);
+    const read = this.chords(el, ctx);
+    if ('error' in read) return this.untranslated(el, ctx, read.error);
+    const problem = read.chords.map((c) => (c === 'Enter' ? null : browserKeyProblem(c))).find((p) => p !== null);
+    if (problem) return this.untranslated(el, ctx, `a press step's key ${problem}`);
+    let target: Candidate[] = [];
+    if (hasSelector(el)) {
+      const t = this.target(el, ctx);
+      if (t.desktop) return this.desktopActivity(el, ctx);
+      if (!t.candidates.length) {
+        this.add(at, 'dropped', displayOf(el), `${name}: ${t.problem ?? 'no usable target'}`);
+        return [];
+      }
+      for (const issue of t.issues) this.add(at, 'converted', displayOf(el), issue);
+      target = t.candidates;
+    }
+    return read.chords.map((key) => this.event(key === 'Enter' ? { at, kind: 'enter', label: intentLabel(el.attrs.DisplayName ?? '') } : { at, kind: 'press', key, target, label: '' }, ctx));
   }
 
   // -------------------------------------------------------------------------------------------------------------------
@@ -1284,7 +1321,7 @@ class Walker {
     const isType = name === 'NTypeInto' || name === 'TypeInto' || name === 'TypeSecureText' || name === 'SetText' || name === 'NSetText';
     const isSelect = name === 'NSelectItem' || name === 'SelectItem';
     const isCheck = name === 'NCheck' || name === 'Check';
-    const isHotkey = name === 'SendHotkey';
+    const isHotkey = HOTKEYS.has(name);
     const isRead = name === 'NGetText' || name === 'GetText' || name === 'GetValue' || name === 'GetFullText' || name === 'GetVisibleText';
     if (!isClick && !isType && !isSelect && !isCheck && !isHotkey && !isRead) {
       const inner = this.body(el).length;
@@ -1298,9 +1335,9 @@ class Walker {
     const target = 'target' in t ? t.target : undefined;
 
     if (isHotkey) {
-      const chord = canonicalChord(this.lit(el, 'Key', ctx) ?? '', this.lit(el, 'KeyModifiers', ctx) ?? '');
-      if ('error' in chord) return skip('untranslated', chord.error);
-      return [item({ at, kind: 'key', ...(target ? { target } : {}), label: '', chord: chord.chord })];
+      const read = this.chords(el, ctx);
+      if ('error' in read) return skip('untranslated', read.error);
+      return read.chords.map((chord) => item({ at, kind: 'key', ...(target ? { target } : {}), label: '', chord }));
     }
     if (!target) return skip('dropped', 'the activity has no target the import can read');
     if (isClick) {
@@ -1859,6 +1896,44 @@ function savePathFile(expr: string, csharp: boolean): string | undefined {
   if (lit === undefined) return undefined;
   const file = lit.split(/[\\/]/).pop() ?? '';
   return file.trim() && !file.includes('{') ? file : undefined;
+}
+
+/**
+ * A Keyboard Shortcuts value (`[d(hk)][d(ctrl)][k(s)][u(ctrl)][u(hk)]`, or `[d(ctrl)]c[u(ctrl)]` with a plain character)
+ * as canonical chords: `[d(x)]` holds a modifier down, `[u(x)]` lets it go, `[k(x)]` or a character presses a key with
+ * the modifiers held (`hk` marks the shortcut and is ignored). A character with no modifier held types text, which is not
+ * a shortcut; the text is never echoed.
+ */
+function shortcutChords(text: string): { chords: string[] } | { error: string } {
+  const held: string[] = [];
+  const chords: string[] = [];
+  for (const m of text.slice(0, 1_000).matchAll(/\[([dku])\(([^()[\]]{1,20})\)\]|([^])/g)) {
+    let key: string;
+    if (m[3] !== undefined) {
+      if (!held.length) return { error: 'it types text, which a Type Into does: only key chords become steps' };
+      key = m[3];
+    } else {
+      const name = m[2].trim().toLowerCase();
+      if (m[1] === 'd') { if (name !== 'hk' && !held.includes(name)) held.push(name); continue; }
+      if (m[1] === 'u') { if (held.includes(name)) held.splice(held.indexOf(name), 1); continue; }
+      key = m[2];
+    }
+    const c = canonicalChord(key, held.join(','));
+    if ('error' in c) return c;
+    chords.push(c.chord);
+    if (chords.length > MAX_SHORTCUT_CHORDS) return { error: `the shortcut presses more than ${MAX_SHORTCUT_CHORDS} keys: add them as steps by hand` };
+  }
+  return chords.length ? { chords } : { error: 'the shortcut presses no key the import can read' };
+}
+
+/** The activity names its element by a selector or a reference (else it acts on whatever has the focus). */
+function hasSelector(el: XmlNode): boolean {
+  if (el.attrs.Selector !== undefined) return true;
+  const prop = el.children.find((c) => isProperty(c) && propertyName(c) === 'Target');
+  const t = prop ? content(prop)[0] : undefined;
+  if (!t) return false;
+  return ['FullSelectorArgument', 'Selector', 'Reference', 'FuzzySelectorArgument', 'SearchSteps', 'CVScreenId', 'ImageBase64'].some((k) => t.attrs[k] !== undefined && t.attrs[k] !== '{x:Null}')
+    || t.children.some((c) => isProperty(c) && ['FullSelectorArgument', 'Selector'].includes(propertyName(c)));
 }
 
 /**

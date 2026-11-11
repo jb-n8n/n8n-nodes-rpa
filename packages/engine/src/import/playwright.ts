@@ -6,6 +6,7 @@
 // and drops: never a report item.
 import { IMPORT_UNSUPPORTED_TARGET } from '../messages.js';
 import { MAX_SELECT_VALUES } from '../policy/validate.js';
+import { browserKeyProblem } from '../steps/browser-keys.js';
 import { cleanLabel, clickModifiers } from './draft.js';
 import type { ClickModifier } from '../types.js';
 import type { Candidate, ImportEvent, ImportItem, ImportReport } from './types.js';
@@ -46,7 +47,7 @@ const R = {
   heldOpens: 'a click with keys held that opens a new tab or starts a download is not imported: the popup and download steps click without keys',
   javascript: 'the steps do not run page JavaScript: add a waitFor on what the page shows when it is ready',
   handler: 'event handlers (dialogs, requests, routes) are not imported',
-  key: 'only Enter is imported: add a step for what this key does',
+  key: 'only keyboard.press() with a key a press step sends is imported: type text with a fill',
   wait: 'each step waits for its element itself, so a fixed or load wait is not needed',
   close: 'the run closes the browser itself when the steps end',
   firstTab: 'it runs on the first tab, but the steps continue in the new tab the popup opened',
@@ -72,6 +73,24 @@ const R = {
 } as const;
 
 const ENTER = new Set(['Enter', 'NumpadEnter']);
+/** Playwright's names for the keys whose press step spelling differs. */
+const STEP_KEY_NAMES: Readonly<Record<string, string>> = {
+  Control: 'Ctrl', ControlOrMeta: 'Ctrl', ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right', NumpadEnter: 'Enter',
+};
+const STEP_MODIFIERS = ['Ctrl', 'Alt', 'Shift'];
+
+/**
+ * A Playwright key (`Control+a`, `Shift+Tab`, `ArrowDown`) in the press step's spelling (`Ctrl+A`, `Shift+Tab`,
+ * `Down`): modifiers in the order Ctrl, Alt, Shift, a letter in upper case. undefined when a modifier repeats or is not
+ * one of those; browserKeyProblem judges the rest.
+ */
+function stepKey(key: string): string | undefined {
+  const parts = key.split('+').map((p) => STEP_KEY_NAMES[p] ?? p);
+  const last = parts.pop() ?? '';
+  if (parts.some((m) => !STEP_MODIFIERS.includes(m)) || new Set(parts).size !== parts.length) return undefined;
+  const mods = STEP_MODIFIERS.filter((m) => parts.includes(m));
+  return [...mods, /^[a-z]$/.test(last) ? last.toUpperCase() : last].join('+');
+}
 /** Keys a report item may name. Any other key (a letter, a digit, a combination) reads "a key", so a password pressed key by key is never spelled out. */
 const NAMED_KEYS = new Set(['Tab', 'Escape', 'Backspace', 'Delete', 'Home', 'End', 'PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'Insert']);
 const LOCATOR_METHODS = new Set(['getByRole', 'getByLabel', 'getByText', 'getByTestId', 'getByPlaceholder', 'getByAltText', 'getByTitle', 'locator', 'frameLocator', 'contentFrame', 'first', 'last', 'nth', 'filter', 'and', 'or']);
@@ -874,6 +893,20 @@ export function playwrightEvents(code: string, report: ImportReport): ImportEven
   let marking: Promised | undefined;
   let lastField = '';
 
+  /**
+   * A press of `key` (Playwright's spelling) as a press event in the step's spelling, or a report item with the step's own
+   * reason. A key that is not a named one is never spelled out in the report.
+   */
+  const pressKey = (at: string, key: string | undefined, argCount: number, target: Candidate[], label: string) => {
+    const what = key !== undefined && NAMED_KEYS.has(key) ? `Press ${key}` : 'Press a key';
+    if (key === undefined) return item(at, 'untranslated', what, R.value);
+    if (argCount > 1) return item(at, 'untranslated', what, R.options('press'));
+    const chord = stepKey(key);
+    const problem = chord === undefined ? browserKeyProblem('') : browserKeyProblem(chord);
+    if (chord === undefined || problem) return item(at, 'untranslated', what, `a press step's key ${problem}`);
+    events.push({ at, kind: 'press', key: chord, target, label });
+  };
+
   const click = (at: string, b: Built, modifiers?: ClickModifier[]) => {
     const e: Extract<ImportEvent, { kind: 'click' }> = { at, kind: 'click', target: targetOf(b), label: b.label, ...(modifiers ? { modifiers } : {}) };
     if (marking) { if (marking.kind === 'download') e.download = true; else e.popup = true; marking.clicked = true; marking = undefined; }
@@ -948,7 +981,7 @@ export function playwrightEvents(code: string, report: ImportReport): ImportEven
       case 'press': {
         const key = value();
         if (key !== undefined && ENTER.has(key) && args.length === 1) { events.push({ at, kind: 'enter', label: b.label || lastField }); return; }
-        return item(at, 'untranslated', key !== undefined && NAMED_KEYS.has(key) ? `Press ${key}` : 'Press a key', R.key);
+        return pressKey(at, key, args.length, targetOf(b), b.label);
       }
       case 'waitFor': {
         const props = objOf(args[0]);
@@ -1012,8 +1045,9 @@ export function playwrightEvents(code: string, report: ImportReport): ImportEven
       }
       case 'keyboard': {
         const key = strOf(second?.args?.[0]);
-        if (segs.length === 2 && second.name === 'press' && key !== undefined && ENTER.has(key)) { events.push({ at, kind: 'enter', label: lastField }); return; }
-        return item(at, 'untranslated', second?.name === 'press' && key !== undefined && NAMED_KEYS.has(key) ? `Press ${key}` : 'Use the keyboard', R.key);
+        if (segs.length === 2 && second.name === 'press' && key !== undefined && ENTER.has(key) && second.args?.length === 1) { events.push({ at, kind: 'enter', label: lastField }); return; }
+        if (segs.length === 2 && second.name === 'press') return pressKey(at, key, second.args?.length ?? 0, [], '');
+        return item(at, 'untranslated', 'Use the keyboard', R.key);
       }
       case 'close': return item(at, 'untranslated', 'Close the page', R.close);
       case 'setViewportSize': return item(at, 'dropped', 'Viewport change', R.viewport, true);

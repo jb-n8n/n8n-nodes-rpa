@@ -4,7 +4,8 @@
 // the author set an Expected File.
 import { looksGenerated } from '../agent/stable-ids.js';
 import { substituteVars } from '../compile/compile.js';
-import { IMPORT_EMPTY } from '../messages.js';
+import { IMPORT_EMPTY, PRESS_PASSWORD_REFUSED } from '../messages.js';
+import { PASSWORD_FIELD } from '../secrets/credential-field.js';
 import { createMasker } from '../secrets/mask.js';
 import { canonicalize } from '../sign.js';
 import { absoluteHttpUrl, parseScript, ScriptShapeError } from '../steps/parse.js';
@@ -110,6 +111,7 @@ export function describeEvent(e: ImportEvent): string {
     case 'check': return `${e.checked ? 'Check' : 'Uncheck'} ${named('the box')}`;
     case 'waitFor': return `Wait for ${named('the element')}`;
     case 'enter': { const n = cleanLabel(e.label); return n ? `Press Enter in ${shown(n)}` : 'Press Enter'; }
+    case 'press': { const n = nameOf(e.label, e.target); return n ? `Press ${e.key} in ${shown(n)}` : `Press ${e.key}`; }
     case 'expectUrl': return `URL check ${shown(cleanLabel(stablePath(e.path)))}`;
     case 'signIn': return e.totp ? 'Sign in with an authentication code' : 'Sign in';
     case 'report': return cleanLabel(e.item.what);
@@ -250,7 +252,8 @@ export function capEvent(e: ImportEvent): { event: ImportEvent; item?: ImportIte
       : e;
   if (when && 'when' in e && e.when) event = { ...event, when: 'visible' in e.when ? { visible: cut(when) } : { hidden: cut(when) } } as ImportEvent;
   // A step whose condition lost every candidate must not run without it.
-  const empty = (when !== undefined && when.length > 0 && cut(when).length === 0) || ('target' in event ? event.target.length === 0
+  // A press without a target (the focused element) needs none.
+  const empty = (when !== undefined && when.length > 0 && cut(when).length === 0) || ('target' in event ? event.target.length === 0 && (e.kind !== 'press' || e.target.length > 0)
     : event.kind === 'signIn' && [event.username, event.password, event.submit, ...(event.next ? [event.next] : [])].some((l) => l.length === 0));
   return { event, empty, item: { at: e.at, kind: 'dropped', what: describeEvent(event), reason: empty ? `${OVERSIZED}, and the step has no other` : OVERSIZED } };
 }
@@ -514,6 +517,19 @@ export function buildDraft(events: ImportEvent[], opts: ImportOptions, report: I
           break;
         }
         prev.expect = { ...(prev.expect ?? {}), url: path };
+        break;
+      }
+      case 'press': {
+        // No target: the key goes to the element that has the focus.
+        const target = e.target.length ? pickLocator(e.target) : undefined;
+        if (e.target.length && !target) { noLocator(e); break; }
+        // The step refuses a password field when it runs: an import never writes one that would.
+        if (PASSWORD_FIELD.test(`${e.label} ${JSON.stringify(e.target)}`)) {
+          add(e.at, 'untranslated', describeEvent(e), PRESS_PASSWORD_REFUSED);
+          lastBuilt = false;
+          break;
+        }
+        push({ intent: describeEvent(e), press: { key: e.key, ...(target ? { target } : {}) } });
         break;
       }
       case 'enter':

@@ -166,11 +166,11 @@ export function stripSecrets(input: ImportEvent[], opts: ImportOptions, report: 
   const removeWithFocus = (fields: number[]) => {
     for (const [click, field] of focusOf) if (fields.includes(field)) removed.add(click);
   };
-  /** The submit after a field: the next click (not one that focuses a field) or Enter; -1 at a goto or another field. */
+  /** The submit after a field: the next click (not one that focuses a field) or Enter; -1 at a goto or another field. A key press (Tab to the button) stays on the page. */
   const submitAfter = (from: number): number => {
     for (let k = from + 1; k < events.length; k++) {
       const e = events[k];
-      if (e.kind === 'report' || e.kind === 'expectUrl' || isPause(e)) continue;
+      if (e.kind === 'report' || e.kind === 'expectUrl' || isPause(e) || e.kind === 'press') continue;
       if (e.kind === 'click' && focusOf.has(k)) continue;
       return e.kind === 'click' || e.kind === 'enter' ? k : -1;
     }
@@ -197,7 +197,8 @@ export function stripSecrets(input: ImportEvent[], opts: ImportOptions, report: 
       }
       for (; j >= 0; j--) {
         const e = events[j];
-        if (e.kind === 'report' || isPause(e) || (e.kind === 'click' && focusOf.has(j))) continue;
+        // A key press (Tab from one field to the next) stays on the page.
+        if (e.kind === 'report' || isPause(e) || e.kind === 'press' || (e.kind === 'click' && focusOf.has(j))) continue;
         if (e.kind === 'fill' || e.kind === 'select' || e.kind === 'check') {
           if (e.kind === 'fill' && roles[j] !== 'password' && roles[j] !== 'totp') fills.push(j);
           continue;
@@ -309,6 +310,14 @@ export function stripSecrets(input: ImportEvent[], opts: ImportOptions, report: 
       const hops = twoPage ? [twoPage.next, ...twoPage.checks] : [];
       const members = [s, ...hops, ...(ts >= 0 ? [ts, ...between] : [])];
       for (const i of members) removed.add(i);
+      // A key pressed between the sign-in's fields moved between them, which signIn does itself.
+      for (let k = Math.min(...fields) + 1; k < s; k++) {
+        const e = events[k];
+        if (e.kind !== 'press' || removed.has(k)) continue;
+        removed.add(k);
+        const tab = e.key === 'Tab' || e.key === 'Shift+Tab';
+        add(e.at, 'dropped', describeEvent(e), tab ? 'it moves between the sign-in\'s fields, which the sign-in step does itself' : 'it is pressed between the sign-in\'s fields, which the sign-in step fills and submits by itself', tab);
+      }
       const checkName = (i: number, wait: string) => {
         const e = events[i];
         return e.kind === 'expectUrl' ? `URL check ${e.path}` : e.kind === 'hover' ? `Hover over ${nameOf(e.label, e.target) || 'the element'}` : wait;
