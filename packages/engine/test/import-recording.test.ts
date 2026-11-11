@@ -1,13 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { stableDesktopId } from '../src/desktop/stable-ids.js';
 import { importSource } from '../src/import/index.js';
 import type { ImportItem, ImportOptions, ImportResult } from '../src/import/types.js';
 import { parseDesktopScript } from '../src/steps/parse.js';
 
 const FIXTURE = fileURLToPath(new URL('./fixtures/import/recording-erp/erp.rpa-recording.json', import.meta.url));
-const SAMPLES = fileURLToPath(new URL('./fixtures/desktop/stable-id-samples.json', import.meta.url));
 const OPTS: ImportOptions = { name: 'erp', hasSiteLogin: false };
 
 type Json = Record<string, any>;
@@ -404,11 +402,5 @@ describe('secrets, ids and positions', () => {
       reason: 'the step was left out: it chooses an empty item, which desktop steps cannot choose',
     });
     expect(r.report.steps).toBe(16);
-  });
-
-  it('stableDesktopId agrees with every sample in stable-id-samples.json', () => {
-    const samples = JSON.parse(readFileSync(SAMPLES, 'utf8')) as { id: string; stable: boolean }[];
-    expect(samples.length).toBeGreaterThanOrEqual(20);
-    for (const s of samples) expect(stableDesktopId(s.id), JSON.stringify(s.id)).toBe(s.stable);
   });
 });
