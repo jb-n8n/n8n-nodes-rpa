@@ -187,7 +187,7 @@ describe('signIn totp.via buttons are gated', () => {
     try {
       const r = await runSteps(ctx, [signIn(true, 'seed', 10_000)]);
       if (r.ok) throw new Error('expected failure');
-      expect(r.failure.message).toBe('detected:login_failed');
+      expect(r.failure.message).toBe('detected:login_failed: the site sent the sign-in page back');
       expect(await ctx.page.getByRole('button', { name: 'Send me the code' }).isVisible()).toBe(true);
       expect(clicks.map((c) => c.text)).toEqual(['Sign in']);
       expect(paths()).toEqual(['/login']);

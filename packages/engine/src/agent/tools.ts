@@ -438,7 +438,7 @@ export class AgentTools {
     } catch (err) {
       const message = (err as Error).message;
       this.logSignIn(started, false, message);
-      if (message === `${DETECTED_PREFIX}login_failed`) {
+      if (message.startsWith(`${DETECTED_PREFIX}login_failed`)) {
         this.signInStage = 'username_rejected';
         return this.refuse('sign_in', url, 'the site rejected the username');
       }

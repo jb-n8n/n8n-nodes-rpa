@@ -2401,7 +2401,7 @@ Describe 'Show-RpaConnection.ps1' {
     Set-Content -LiteralPath $script:RunnerLog -Value ($Line -f $other)
     try {
       $output = @(& $script:ShowScript)
-      $output | Should -Contain 'Runner fingerprint: not known yet'
+      $output | Should -Contain 'Runner fingerprint: not known yet (the program has not started)'
       ($output -join "`n").Contains($other) | Should -BeFalse
     } finally {
       Set-Content -LiteralPath $script:RunnerLog -Value (New-StartLine $script:RunnerFingerprint)
@@ -2422,7 +2422,7 @@ Describe 'Show-RpaConnection.ps1' {
   }
 
   It 'says which service is not listening and where its log is' {
-    $script:Output | Should -Contain "Browser: not listening: see $(Join-Path $script:LogDir 'browser.err.log')"
+    $script:Output | Should -Contain "Browser: not listening yet. It starts within a minute of the bot user's sign-in: run this again. If it stays like this, read $(Join-Path $script:LogDir 'browser.err.log')"
     @($script:Output | Where-Object { $_ -like 'Runner: not listening*' }).Count | Should -Be 0
   }
 
@@ -2433,7 +2433,7 @@ Describe 'Show-RpaConnection.ps1' {
     Set-Content -LiteralPath $file -Value $closed -Encoding UTF8
     try {
       $output = @(& $script:ShowScript)
-      $output | Should -Contain "Runner: not listening: see $(Join-Path $script:LogDir 'runner.out.log')"
+      $output | Should -Contain "Runner: not listening yet. It starts within a minute of the bot user's sign-in: run this again. If it stays like this, read $(Join-Path $script:LogDir 'runner.out.log')"
     } finally {
       Set-Content -LiteralPath $file -Value $script:InstallJson -Encoding UTF8
     }

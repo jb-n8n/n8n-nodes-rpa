@@ -66,7 +66,7 @@ describe('signIn / detect / interrupts', () => {
     try {
       const r = await runSteps(ctx, SIGN_IN_STEPS);
       if (!r.ok) {
-        expect(r.failure.message).toBe('detected:login_failed');
+        expect(r.failure.message).toBe('detected:login_failed: the site sent the sign-in page back');
         expect(JSON.stringify(r)).not.toContain('wrong-pass-123');
       } else throw new Error('expected failure');
     } finally { await session.close(); }
@@ -188,7 +188,7 @@ describe('signIn / detect / interrupts', () => {
       const t0 = Date.now();
       const r = await runSteps({ ...ctx, defaultTimeoutMs: bound(3000) }, SIGN_IN_STEPS);
       if (r.ok) throw new Error('expected failure');
-      expect(r.failure.message).toBe('detected:login_failed');
+      expect(r.failure.message).toBe('detected:login_failed: the site sent the sign-in page back');
       expect(Date.now() - t0).toBeLessThan(bound(2500));
     } finally { await session.close(); }
   });
@@ -209,7 +209,7 @@ describe('signIn reports a rejected password itself', () => {
       const t0 = Date.now();
       const r = await runSteps({ ...ctx, defaultTimeoutMs: bound(3000) }, [HAND_SIGN_IN]);
       if (r.ok) throw new Error('expected failure');
-      expect(r.failure).toEqual({ index: 0, intent: 'Sign in', message: 'detected:login_failed' });
+      expect(r.failure).toEqual({ index: 0, intent: 'Sign in', message: 'detected:login_failed: the site sent the sign-in page back' });
       expect(r.state.submitClicked).toBe(true);
       expect(portal.state().logins).toBe(1);
       expect(Date.now() - t0).toBeLessThan(bound(2500));
@@ -221,7 +221,7 @@ describe('signIn reports a rejected password itself', () => {
     try {
       const r = await runSteps(ctx, SIGN_IN_STEPS);
       if (r.ok) throw new Error('expected failure');
-      expect(r.failure).toEqual({ index: 0, intent: 'Sign in', message: 'detected:login_failed' });
+      expect(r.failure).toEqual({ index: 0, intent: 'Sign in', message: 'detected:login_failed: the site sent the sign-in page back' });
       expect(r.state.log.map((e) => e.status)).toEqual(['failed']);
       expect(portal.state().logins).toBe(1);
     } finally { await session.close(); }
@@ -244,7 +244,7 @@ describe('signIn reports a rejected password itself', () => {
       });
       const r = await runSteps({ ...ctx, defaultTimeoutMs: bound(3000) }, [HAND_SIGN_IN]);
       if (r.ok) throw new Error('expected failure');
-      expect(r.failure.message).toBe('detected:login_failed');
+      expect(r.failure.message).toBe('detected:login_failed: the site sent the sign-in page back');
     } finally { await session.close(); }
   });
   it('a correct password on a one-page sign-in passes at once', async () => {

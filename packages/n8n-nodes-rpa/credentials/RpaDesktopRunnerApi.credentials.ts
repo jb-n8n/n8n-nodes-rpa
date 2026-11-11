@@ -12,7 +12,7 @@ export class RpaDesktopRunnerApi implements ICredentialType {
   properties: INodeProperties[] = [
     {
       displayName:
-        'The desktop runner runs on the Windows machine whose apps desktop steps drive. It prints its address and its certificate fingerprint when it starts. Run Steps uses this credential for desktop steps (surface "desktop") only.',
+        'The desktop runner runs on the Windows machine whose apps desktop steps drive. On that machine, Show-RpaConnection.ps1 -ShowTokens prints the three values below (Windows guide, section 6). Run Steps uses this credential for desktop steps (surface "desktop") only.',
       name: 'about',
       type: 'notice',
       default: '',
@@ -42,7 +42,7 @@ export class RpaDesktopRunnerApi implements ICredentialType {
       required: true,
       default: '',
       placeholder: '3A:7F:…:C2 (64 hexadecimal digits)',
-      description: "The SHA-256 fingerprint of the runner's certificate, as the runner prints it at start. A runner presenting any other certificate is refused before anything is sent.",
+      description: "The SHA-256 fingerprint of the runner's certificate, as Show-RpaConnection.ps1 prints it (the Runner fingerprint line). A runner presenting any other certificate is refused before anything is sent.",
     },
   ];
 }

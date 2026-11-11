@@ -571,6 +571,23 @@ describe('template 3 approval email', () => {
     expect(out).toContain('Review digest: d&#39;e');
     expect(out).toContain('expires after 72 hours');
   });
+
+  it('says what Approve and Reject cause, and prints the change list, so the email stands on its own', () => {
+    const withChanges = render(message, { $: (name: string) => ({ item: { json: name === 'Settings' ? { approvalTimeoutHours: 72 } : { ...item, changeList: 'step 2 now clicks "Next"\n<div>' } } }) });
+    expect(withChanges).toContain('What changed (as reported by the run):\nstep 2 now clicks &quot;Next&quot;\n&lt;div&gt;');
+    expect(out).toContain('Approve: these exact steps are signed and n8n runs them with the stored login, without asking again, until the site changes.');
+    expect(out).toContain('Reject: nothing is signed; the version in use, if any, stays in use.');
+    expect(out).not.toContain('previous email');
+    expect(out.indexOf('Approve: these exact steps')).toBeLessThan(out.indexOf('Hash:'));
+    expect(out.indexOf('Hash:')).toBeLessThan(out.indexOf('Review digest:'));
+  });
+
+  it('numbers the two emails of a request, so the order survives an inbox that lists the newest first', () => {
+    const t = load('3-approve-steps.json');
+    expect(String(byName(t, 'Email repaired steps').parameters.subject)).toMatch(/^=1 of 2, review: steps v\{\{ \$json\.version \}\} for /);
+    expect(String(byName(t, 'Ask for approval').parameters.subject)).toMatch(/^=2 of 2, approve steps v/);
+    expect(String(byName(t, 'Ask for approval (desktop steps)').parameters.subject)).toMatch(/^=2 of 2, approve desktop steps v/);
+  });
 });
 
 describe('template 3 review email', () => {
@@ -592,12 +609,16 @@ describe('template 3 review email', () => {
 
   it('names the attached screenshots from attachmentNames: both, after only (a first run), or none', () => {
     const sentence = (attachmentNames: unknown) => render(html, { $json: { ...hostile, attachmentNames } });
-    expect(sentence('before,after')).toContain('Screenshots before and after the change are attached. A second email');
+    expect(sentence('before,after')).toContain('Screenshots before and after the change are attached. The next email has the Approve and Reject buttons.');
     const first = sentence('after');
-    expect(first).toContain('A screenshot after the change is attached (a first run has no before). A second email');
+    expect(first).toContain('A screenshot after the change is attached (a first run has no before). The next email has the Approve and Reject buttons.');
     expect(first).not.toContain('Screenshots before and after');
     expect(sentence('before')).toContain('A screenshot before the change is attached.');
-    for (const none of ['', undefined]) expect(sentence(none)).toContain('No screenshots are attached. A second email');
+    for (const none of ['', undefined]) expect(sentence(none)).toContain('No screenshots are attached. The next email has the Approve and Reject buttons.');
+  });
+
+  it('says what the safety flags are', () => {
+    expect(out).toContain('Safety flags (what these steps do besides reading pages):');
   });
 
   it('shows the safety flags before any page- or model-derived text', () => {

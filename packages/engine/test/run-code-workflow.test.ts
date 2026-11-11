@@ -202,7 +202,7 @@ describe('signIn with a code from the workflow', () => {
     try {
       const r = await runSteps(ctx, WORKFLOW_STEPS);
       if (r.ok) throw new Error('expected failure');
-      expect(r.failure).toMatchObject({ index: 0, message: 'detected:login_failed' });
+      expect(r.failure).toMatchObject({ index: 0, message: 'detected:login_failed: the site sent the sign-in page back' });
       expect(classifyFailure({ violations: [], failure: r.failure })).toBe('login_failed');
       expect(provider).not.toHaveBeenCalled();
     } finally { await session.close(); }

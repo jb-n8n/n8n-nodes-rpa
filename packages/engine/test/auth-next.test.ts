@@ -193,7 +193,7 @@ describe('signIn with next', () => {
       const r = await runSteps({ ...ctx, defaultTimeoutMs: bound(3000) }, [SIGN_IN], state);
       expect(r.ok).toBe(false);
       // A username the site does not know is a rejected login (it trips the login breaker), not drift.
-      if (!r.ok) expect(r.failure.message).toBe('detected:login_failed');
+      if (!r.ok) expect(r.failure.message).toBe('detected:login_failed: the site sent the sign-in page back');
       // The re-rendered username page is recognised without waiting for the whole step timeout.
       expect(Date.now() - t0).toBeLessThan(bound(2900));
       expect(posts.map((p) => p.path)).toEqual(['/login']);
@@ -303,7 +303,7 @@ describe('signIn with next', () => {
       const state = newRunState();
       const r = await runSteps({ ...ctx, defaultTimeoutMs: bound(3000) }, [SIGN_IN], state);
       if (r.ok) throw new Error('expected failure');
-      expect(r.failure.message).toBe('detected:login_failed');
+      expect(r.failure.message).toBe('detected:login_failed: the site sent the sign-in page back');
       expect(posts.map((p) => p.path)).toEqual(['/login', '/password']);
       expect(state.submitClicked).toBe(true);
     } finally { await session.close(); }

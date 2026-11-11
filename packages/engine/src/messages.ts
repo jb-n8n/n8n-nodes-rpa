@@ -224,7 +224,7 @@ export const DESKTOP_UNSIGNED_WRITES =
 export const RUNNER_URL_NOT_SECURE = 'The desktop runner URL must start with wss://: plain ws:// is refused.';
 export const RUNNER_URL_HAS_CREDENTIALS = 'The desktop runner URL must not carry a token or a user name: put the token in the Token field.';
 export const RUNNER_FINGERPRINT_INVALID =
-  'The certificate fingerprint must be the SHA-256 fingerprint the runner prints at start: 64 hexadecimal digits, colons optional.';
+  'The certificate fingerprint must be the SHA-256 fingerprint Show-RpaConnection.ps1 prints: 64 hexadecimal digits, colons optional.';
 export const runnerUnreachable = (where: string, why: string) => `Could not connect to the desktop runner at ${where} (${why}). Is it running, and is the port open?`;
 export const runnerFingerprintMismatch = (where: string, presented: string) =>
   `The desktop runner at ${where} presented a certificate with fingerprint ${presented}, which is not the fingerprint in the RPA Desktop Runner credential. Nothing was sent.`;

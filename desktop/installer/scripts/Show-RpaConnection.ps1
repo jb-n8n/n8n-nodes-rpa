@@ -88,7 +88,7 @@ foreach ($service in $services) {
   foreach ($address in $addresses) { Write-Output ('{0} URL: wss://{1}:{2}{3}' -f $service.Name, $address, $service.Port, $service.Path) }
   # A service that has never started has no certificate yet.
   if ($service.Fingerprint) { Write-Output ('{0} fingerprint: {1}' -f $service.Name, $service.Fingerprint) }
-  else { Write-Output ('{0} fingerprint: not known yet' -f $service.Name) }
-  if ($listening -notcontains $service.Port) { Write-Output ('{0}: not listening: see {1}' -f $service.Name, $service.Log) }
+  else { Write-Output ('{0} fingerprint: not known yet (the program has not started)' -f $service.Name) }
+  if ($listening -notcontains $service.Port) { Write-Output ('{0}: not listening yet. It starts within a minute of the bot user''s sign-in: run this again. If it stays like this, read {1}' -f $service.Name, $service.Log) }
   if ($ShowTokens) { $Host.UI.WriteLine((Get-TokenLine $service.Name $service.Token)) }
 }

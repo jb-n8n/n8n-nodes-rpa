@@ -221,7 +221,7 @@ describe('signIn with pages between the password and the code (totp.via)', () =>
     const t0 = Date.now();
     const r = await runSteps(ctx, [signInStep({ via: VIA }, { timeoutMs: 30_000 })]);
     if (r.ok) throw new Error('expected failure');
-    expect(r.failure.message).toBe('detected:login_failed');
+    expect(r.failure.message).toBe('detected:login_failed: the site sent the sign-in page back');
     expect(Date.now() - t0).toBeLessThan(bound(15_000));
     expect(paths(posts)).toEqual(['/idp/login', '/idp/password']);
   });

@@ -3,17 +3,17 @@ import type { ErrorCode } from 'n8n-rpa-engine';
 
 /** What a person should do about each code. Shown as the error description in n8n. */
 export const GUIDANCE: Record<ErrorCode, string> = {
-  login_failed: 'The site rejected the username or password. The login breaker is now open: fix the RPA Site Login credential, then change Options → Login Breaker Reset Key.',
+  login_failed: 'The site rejected the username or password, and no further login is tried until you do two things: 1. correct the RPA Site Login credential; 2. type a new value (any text, such as today\'s date) in Options → Login Breaker Reset Key.',
   account_locked: 'The site says the account is locked. Unlock it with the site owner, then change Options → Login Breaker Reset Key.',
   auth_blocked: 'The site asked for a second factor this run could not answer: the first line says which. If nothing automatic can answer it (a push message, a hardware key), a person has to sign in.',
   site_down: 'The site did not answer, returned a server error, or the first page did not finish loading in time. Try again later.',
   browser_unavailable: 'The browser server could not be reached or was rejected. Check the RPA Browser credential (README: Where the browser runs).',
-  drift_detected: 'The page no longer matches the steps: an element was not found or matched more than one (desktop steps: also a control that cannot take the step\'s action, such as a fill on a button). Fix the locator, or use Run Steps with AI repair.',
+  drift_detected: 'A step did not find what it expected: an element was not found, matched more than one, or could not take the action (for example a disabled button). On a first run, correct the step\'s locator. On steps that used to work, the page or the app changed: correct the locator, or, for browser steps, use Run Steps with AI repair.',
   not_found: 'The page or the data was not found.',
   incomplete: 'Not every row the page states was read, a capture failed, a limit was hit, the run timed out, or it was cancelled.',
   script_untrusted: 'The steps are not signed by the Step Signing key, or the signature does not match their name, version, start site, Site Login, approver or the expected version. Nothing ran.',
-  policy_violation: 'The steps or the page tried something not allowed: an unlisted or private site, a write, a password field, or a secret outside sign-in. The run stopped.',
-  locked_out: 'An earlier login failed and the breaker is open: check the account, then change Options → Login Breaker Reset Key. Or a run changed the Site Login\'s password earlier in this execution: store the new password where the Site Login reads it, then run again.',
+  policy_violation: 'The run tried something its rules do not allow, and stopped; the first line says what. In a browser: an unlisted or private site, a write, a password field, or a secret outside sign-in. On a desktop: an app or a window the runner\'s policy does not allow, or a write that was not declared.',
+  locked_out: 'No login was tried, because an earlier one failed. If the account is now correct, type a new value (any text) in Options → Login Breaker Reset Key and run again. Or a run changed the Site Login\'s password earlier in this execution: store the new password where the Site Login reads it, then run again.',
   busy: 'Another run using this Site Login or desktop runner is in progress. This run was skipped.',
   password_change_failed: 'The site did not confirm the new password: its change-password page came back, or still showed when the wait for its answer ran out (then the new password may or may not be in force). The login breaker stays closed. Keep the pending password, and check the site\'s password rules and the run variable that holds it.',
   runner_unavailable: 'The desktop runner could not be reached, refused the token or the certificate, its Windows session is locked or signed out, or the app is not installed where the runner\'s policy says. Check the RPA Desktop Runner credential and the runner machine.',

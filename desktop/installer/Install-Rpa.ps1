@@ -344,10 +344,15 @@ if ($plan.Steps -contains 'remove the old tokens') {
   else { Write-Host 'Both tokens are new: the earlier bot user could read the old ones.' }
   Write-Host 'Update the n8n credentials with the new tokens, which Show-RpaConnection.ps1 -ShowTokens shows.'
 }
-if ($plan.Steps -contains 'turn on automatic sign-in') { Write-Host ('Automatic sign-in is on: Windows signs {0} in at its next start.' -f $User) }
-Write-Host ('Sign in as {0}, then run Show-RpaConnection.ps1:' -f $User)
+$autoSignIn = $plan.Steps -contains 'turn on automatic sign-in'
+if ($autoSignIn) {
+  $starts = 'the runner and the browser'
+  if ($NoBrowser) { $starts = 'the runner' }
+  Write-Host ('Automatic sign-in is on. Restart this machine now (Restart-Computer): Windows then signs {0} in and starts {1}. About a minute after its desktop shows, run Show-RpaConnection.ps1:' -f $User, $starts)
+}
+else { Write-Host ('Sign in as {0}, then run Show-RpaConnection.ps1:' -f $User) }
 # Windows PowerShell by its full path, so that the line does not depend on what is found along PATH where it is typed.
 Write-Host ('  {0} -ExecutionPolicy Bypass -File "{1}"' -f (Join-Path $PSHOME 'powershell.exe'), (Join-Path (Join-Path $layout.InstallDir 'scripts') 'Show-RpaConnection.ps1'))
-if (-not $upgrade) { Write-Host ('If {0} is already signed in, sign out and sign in again.' -f $User) }
+if (-not $autoSignIn -and -not $upgrade) { Write-Host ('If {0} is already signed in, sign out and sign in again.' -f $User) }
 # The exit code of a run that finished, whatever the last Windows tool it ran left in $LASTEXITCODE.
 exit 0

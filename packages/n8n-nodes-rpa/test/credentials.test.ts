@@ -103,6 +103,8 @@ describe('v2 credential types', () => {
     expect(notice('playwright')).toContain('docker compose up -d browser');
     expect(notice('playwright')).toContain('README: Where the browser runs');
     expect(notice('playwright')).toContain('BROWSER_TOKEN');
+    expect(notice('playwright')).toContain('Show-RpaConnection.ps1 -ShowTokens');
+    expect(notice('playwright')).toContain('Private Network Endpoint stays off');
     expect(notice('local')).toContain('npx playwright install chromium');
     expect(notice('cdp').length).toBeGreaterThan(20);
   });
@@ -120,6 +122,12 @@ describe('v2 credential types', () => {
         "Only for a browser server with its own certificate, such as the one the Windows installer sets up: paste the fingerprint it shows. Leave empty when n8n already trusts the server's certificate.",
       displayOptions: { show: { mode: ['playwright'] } },
     });
+  });
+  it('RPA Desktop Runner: says where its three values come from', () => {
+    const props = new RpaDesktopRunnerApi().properties;
+    expect(props[0].displayName).toContain('Show-RpaConnection.ps1 -ShowTokens');
+    expect(props[0].displayName).toContain('Windows guide, section 6');
+    expect(props.find((p) => p.name === 'fingerprint')?.description).toContain('Show-RpaConnection.ps1 prints');
   });
   it('RPA Site Login: the login page, the secrets and the six allowlist fields, in order', () => {
     const props = new PlaywrightSiteLoginApi().properties.filter((p) => p.type !== 'notice');

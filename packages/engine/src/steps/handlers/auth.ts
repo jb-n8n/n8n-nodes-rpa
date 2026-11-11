@@ -334,7 +334,7 @@ const signIn: Handler = async (ctx, step, state, timeout) => {
 };
 
 /** A rejected password: classified login_failed, so the login breaker opens and no repair runs. Names no typed value. */
-const PASSWORD_REJECTED = `${DETECTED_PREFIX}login_failed`;
+const PASSWORD_REJECTED = `${DETECTED_PREFIX}login_failed: the site sent the sign-in page back`;
 /** How long signIn without a code step waits after the password submit for the site to leave the login page or answer. */
 const PASSWORD_ANSWER_WAIT_MS = 15_000;
 /** How long the password field must stay gone from a loaded login page before signIn stops watching for a rejection. */
@@ -577,7 +577,7 @@ export async function submitUsername(
   // Wherever next led, a page that is not a declared login page stops the run (a fatal signin violation naming it).
   assertLoginPage(ctx);
   // The site sent the username page back: a rejected login (the login breaker trips; no repair), not drift.
-  if (moved === 'rejected') throw new Error(`${DETECTED_PREFIX}login_failed`);
+  if (moved === 'rejected') throw new Error(PASSWORD_REJECTED);
   // The password field did not appear in time: drift.
   if (moved !== 'password') throw new Error(SIGNIN_NEXT_NO_PASSWORD);
 }
