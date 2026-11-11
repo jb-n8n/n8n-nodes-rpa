@@ -1,7 +1,7 @@
 namespace Rpa.Recorder.Core;
 
 /// <summary>The kinds of notice the Windows layer gives (headless mode prints the kind, never the text).</summary>
-public enum NoticeKind { Late, HookLost, Elevated, NotStarted, OtherProgram, NotRead, TooManySteps, CtrlAltDropped }
+public enum NoticeKind { Late, HookLost, Elevated, NotStarted, OtherProgram, NotRead, TooManySteps, CtrlAltDropped, SaveKeepsFolder }
 
 /// <summary>
 /// What the recorder tells the person, on its bar's notice line (and, in headless mode, as its kind on standard error).
@@ -33,7 +33,12 @@ public static class Notices
     public static string TooManySteps(int steps) =>
         $"The recording makes about {steps} steps, and Import Steps takes at most {RecordingFile.MaxSteps}: delete steps, or record the work in shorter parts.";
 
-    public const string OtherPrograms = "Input in other programs is not recorded.";
+    /// <summary>A Save dialog was accepted with a name that is not a plain file name (a path, nothing, or one a step
+    /// cannot type), so no export step was made (<see cref="Session.TakeSaveNotice"/>).</summary>
+    public const string SaveKeepsFolder =
+        "This Save keeps the app's own folder, so the file does not come back to n8n. To get it back, type a file name in the Save dialog.";
+
+    public const string OtherPrograms ="Input in other programs is not recorded.";
 
     public const string Elevated =
         "This app runs as administrator, so the recorder cannot see inside it. Start the recorder as administrator to record it.";

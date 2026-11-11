@@ -198,6 +198,7 @@ public class BarTests
         [
             Notices.CtrlAltDropped, Notices.ProgramUnknown, Notices.PasswordNotRead, Notices.NotRead("Notes"), Notices.TooManySteps(206),
             Notices.OtherPrograms, Notices.Elevated, Notices.HookLost, Notices.Late("Search"), Notices.NotStarted, Notices.DidNotStart("Access is denied."),
+            Notices.SaveKeepsFolder,
         ];
         foreach (var text in texts)
         {

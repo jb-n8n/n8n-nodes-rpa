@@ -70,7 +70,18 @@ internal static class ErpDemoObservations
         new MouseDown(Parse("22:59:34.0412074"), SaveDialog, FileName, 1),
         Typing("22:59:35.084", SaveDialog, FileName), Typing("22:59:38.2", SaveDialog, FileName),
         new FieldLeft(Parse("22:59:43.4789525"), SaveDialog, FileName, @"C:\Users\clerk\Documents\out\line-items.csv", null),
+        // The click on Save accepts the dialog; its name box was typed into, so it is not read again.
+        new FileDialogAccepted(Parse("22:59:43.4789525"), SaveDialog, FileName, null),
         new MouseDown(Parse("22:59:43.4789525"), SaveDialog, Save, 1),
+    ];
+
+    /// <summary>The same flow, but the person keeps the name the Save dialog offers (<c>line-items</c>, its extension
+    /// hidden as Windows hides it by default) and clicks Save: the name box is read when the click accepts the dialog.</summary>
+    public static Observation[] DefaultName() =>
+    [
+        .. List()[..^6],
+        new FileDialogAccepted(Parse("22:59:35.6120417"), SaveDialog, FileName, "line-items"),
+        new MouseDown(Parse("22:59:35.6120417"), SaveDialog, Save, 1),
     ];
 
     private static KeyDown Typing(string time, WindowFacts window, ElementFacts focused) => new(Parse(time), window, focused, "", true);

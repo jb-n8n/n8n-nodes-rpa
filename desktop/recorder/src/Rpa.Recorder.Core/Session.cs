@@ -38,6 +38,12 @@ public sealed class Session
 
     private sealed record Typing(ElementFacts Field, WindowFacts Window, DateTimeOffset At, FieldKind Kind);
 
+    /// <summary>The runtime ids of the Save dialogs' file-name boxes typed into since their dialog was last accepted:
+    /// the typed name already gave its step.</summary>
+    private readonly HashSet<string> _typedNameBoxes = [];
+    private enum SaveNotice { None, Due, Given }
+    private SaveNotice _saveNotice;
+
     /// <summary>What the bar shows; a step's index is its position.</summary>
     public IReadOnlyList<RecordedStep> Steps => _steps.ToArray();
 
@@ -75,6 +81,7 @@ public sealed class Session
             case Activated activated: Activate(activated); break;
             case KeyDown key: Pressed(key); break;
             case FieldLeft left: Left(left); break;
+            case FileDialogAccepted accepted: Accepted(accepted); break;
             default: throw new ArgumentException($"unknown observation {o.GetType().Name}", nameof(o));
         }
     }
@@ -170,6 +177,7 @@ public sealed class Session
     {
         if (_typing is not { } typing || !Same(typing.Field, o.Field)) return;
         _typing = null;
+        if (FileDialogs.IsFileNameBox(typing.Window, typing.Field)) _typedNameBoxes.Add(typing.Field.RuntimeId);
         var step = Step(typing.Kind == FieldKind.DropDown ? StepKind.Select : StepKind.Fill, typing.At, typing.Window, typing.Field, 1);
         if (typing.Kind == FieldKind.DropDown)
         {
@@ -186,11 +194,47 @@ public sealed class Session
             step = step with { Value = Literal(o.Value, typing.Field) };
             // A file name typed into a Save dialog: the run saves into its own export folder.
             var file = WindowRules.FileName(step.Value);
-            if (IsFileNameBox(typing.Window, typing.Field) && step.Value == o.Value && IsFileName(file))
-                step = step with { Value = $"{{{{$exportDir}}}}\\{file}", ExportFile = file };
+            if (FileDialogs.IsFileNameBox(typing.Window, typing.Field) && step.Value == o.Value && FileDialogs.IsFileName(file))
+                step = step with { Value = ExportValue(file), ExportFile = file };
         }
         AddFolding(step, takeClickTime: true);
     }
+
+    /// <summary>Whether the Windows layer reads <paramref name="box"/> when its dialog is accepted: only a Save dialog's
+    /// file-name box (<see cref="FileDialogs.IsFileNameBox"/>) that was not typed into since that dialog opened (a typed
+    /// name gave its step when the box was left).</summary>
+    public bool ReadsNameBox(WindowFacts dialog, ElementFacts box) =>
+        FileDialogs.IsFileNameBox(dialog, box) && !SecretRules.IsSecret(box) && !_typedNameBoxes.Contains(box.RuntimeId);
+
+    /// <summary>
+    /// A Save dialog accepted with the name its box holds: the same export step a typed name gives, so the run saves into
+    /// its own export folder. A name typed into the box gave its step already. A name that is not a plain file name (a
+    /// path, nothing, a name a step cannot type) or that was not read makes no step: the file stays where the app puts
+    /// it, and the bar says so once (<see cref="TakeSaveNotice"/>).
+    /// </summary>
+    private void Accepted(FileDialogAccepted o)
+    {
+        if (!FileDialogs.IsFileNameBox(o.Window, o.Field)) return;
+        if (_typedNameBoxes.Remove(o.Field.RuntimeId)) return;
+        var name = SecretRules.IsSecret(o.Field) ? null : o.Value;
+        if (name is null || !FileDialogs.IsFileName(name) || name.Contains("{{"))
+        {
+            if (_saveNotice == SaveNotice.None) _saveNotice = SaveNotice.Due;
+            return;
+        }
+        _steps.Add(Step(StepKind.Fill, o.At, o.Window, o.Field, 1) with { Value = ExportValue(name), ExportFile = name });
+    }
+
+    /// <summary>True once in a recording, after a Save dialog was accepted without an export step: the bar then shows
+    /// <see cref="Notices.SaveKeepsFolder"/>.</summary>
+    public bool TakeSaveNotice()
+    {
+        if (_saveNotice != SaveNotice.Due) return false;
+        _saveNotice = SaveNotice.Given;
+        return true;
+    }
+
+    private static string ExportValue(string file) => $"{{{{$exportDir}}}}\\{file}";
 
     /// <summary>
     /// Adds a fill or a select, folding into it the click on its element just before it (a fill then starts at that
@@ -347,13 +391,4 @@ public sealed class Session
         if (!SecretRules.IsVariableName(name))
             throw new ArgumentException("A variable's name starts with a letter or _, holds only letters, digits and _, and has at most 64 characters.", nameof(name));
     }
-
-    /// <summary>The file-name box of a common file dialog: control 1001 inside the dialog's FileNameControlHost combo box,
-    /// in a <c>#32770</c> window. Any other dialog's control 1001 is an ordinary field.</summary>
-    private static bool IsFileNameBox(WindowFacts window, ElementFacts field) =>
-        window.ClassName == "#32770" && field.AutomationId == "1001" && field.Ancestors.Any(a => a.AutomationId == "FileNameControlHost");
-
-    /// <summary>A file name without a folder, as the importer takes it (FILE_NAME in recording.ts).</summary>
-    private static bool IsFileName(string name) =>
-        name.Length is > 0 and <= 255 && name is not "." and not ".." && !name.Any(c => c is '\\' or '/' or ':' or '*' or '?' or '"' or '<' or '>' or '|' || char.IsControl(c));
 }
