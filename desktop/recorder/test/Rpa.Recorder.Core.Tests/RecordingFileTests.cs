@@ -85,6 +85,31 @@ public class RecordingFileTests
     }
 
     [Fact]
+    public void A_recording_of_more_than_400_events_is_refused_when_saved()
+    {
+        // Each click on one window is an event, after the window's scope event.
+        var clicks = Enumerable.Range(1, RecordingFile.MaxEvents).Select(i => (Observation)Click(i, El("Button", $"btn{i}", $"Button {i}"))).ToArray();
+        Assert.Equal(RecordingFile.MaxEvents, Record(clicks[..^1]).ToFile("Test").Events.Count);
+        var e = Assert.Throws<InvalidOperationException>(() => Record(clicks).ToFile("Test"));
+        Assert.StartsWith("a recording holds at most 400 events; this one has 401", e.Message);
+    }
+
+    [Fact]
+    public void The_recording_limits_are_the_importers_and_the_step_parsers()
+    {
+        // The engine's importers (recording.ts and the files beside it, which it may share constants with) and its step
+        // parser, read in place.
+        var engine = string.Concat(Directory.GetFiles(RepoPath("packages", "engine", "src", "import"), "*.ts").Order(StringComparer.Ordinal).Select(File.ReadAllText))
+            + RepoFile("packages", "engine", "src", "steps", "parse.ts");
+        Assert.Matches($@"\bRECORDING_FORMAT = '{RecordingFile.Format}';", engine);
+        Assert.Matches($@"\bMAX_RECORDING_EVENTS = {RecordingFile.MaxEvents};", engine);
+        Assert.Matches($@"\bMAX_UIA_TEXT = {Texts.MaxText};", engine);
+        Assert.Matches($@"\bMAX_START_VALUE = {Session.MaxStartValueLength};", engine);
+        Assert.Matches($@"\bsteps\.length > {RecordingFile.MaxSteps}\)", engine);
+        Assert.Matches($@"\bargs\.length <= {Session.MaxArgs} && args\.every\(\(a\) => typeof a === 'string' && a\.length <= {Session.MaxArgLength} ", engine);
+    }
+
+    [Fact]
     public void An_app_whose_path_is_not_a_program_is_refused()
     {
         Assert.Throws<ArgumentException>(() => Record(new AppStarted(At(0), @"C:\Apps\run.bat", [], Window)));
@@ -143,7 +168,7 @@ public class RecordingFileTests
     public void A_variable_keeps_the_value_that_was_recorded_as_its_start_value_except_a_secret()
     {
         var s = Record(ErpDemoObservations.List());
-        int Index(string intentStart) => s.Steps.Select((step, i) => (step, i)).First(x => StepText.Sentence(x.step).StartsWith(intentStart, StringComparison.Ordinal)).i;
+        int Index(string intentStart) => s.Steps.Select((step, i) => (step, i)).First(x => StepText.Action(x.step).StartsWith(intentStart, StringComparison.Ordinal)).i;
         var company = Index("Choose");
         var dateFrom = Index("Type \"2026-01-20\"");
         s.MarkVariable(company, "in_CompanyCode");
@@ -180,7 +205,7 @@ public class RecordingFileTests
     private static (Session Session, int Company, int DateFrom) ErpWithVariables()
     {
         var s = Record(ErpDemoObservations.List());
-        int Index(string start) => s.Steps.Select((step, i) => (step, i)).First(x => StepText.Sentence(x.step).StartsWith(start, StringComparison.Ordinal)).i;
+        int Index(string start) => s.Steps.Select((step, i) => (step, i)).First(x => StepText.Action(x.step).StartsWith(start, StringComparison.Ordinal)).i;
         return (s, Index("Choose"), Index("Type \"2026-01-20\""));
     }
 
@@ -249,5 +274,42 @@ public class RecordingFileTests
         s.MarkVariable(1, "plain");
         Assert.Empty(s.ToFile("Test").Variables);
         Assert.DoesNotContain("Same-Value-1", s.ToFile("Test").ToJson());
+    }
+
+    [Fact]
+    public void The_recording_says_about_how_many_steps_it_makes()
+    {
+        Assert.Equal(17, Record(ErpDemoObservations.List()).ToFile("ERP Demo line items").EstimatedSteps);
+        var many = new Session();
+        for (var i = 0; i < 205; i++) many.Add(Click(i, El("Button", "btnNext", "Next")));
+        var file = many.ToFile("Long");
+        Assert.True(file.EstimatedSteps > RecordingFile.MaxSteps);
+        Assert.Equal("The recording makes about 206 steps, and Import Steps takes at most 200: delete steps, or record the work in shorter parts.",
+            Notices.TooManySteps(file.EstimatedSteps));
+    }
+
+    [Fact]
+    public void A_recording_of_an_open_window_names_the_attached_program()
+    {
+        var s = new Session();
+        s.Attach(@"C:\Apps\Orders.exe");
+        s.Add(Click(1, El("Button", "btnOk", "OK"), window: new("helper.exe", "Helper", "HelperWindow")));
+        var file = s.ToFile("Test");
+        Assert.Equal(("Orders.exe", 0), (file.Exe, file.Args.Count));
+        Assert.DoesNotContain(file.Events, e => e.Kind == StepKind.Launch);
+        Assert.Throws<ArgumentException>(() => s.ToPolicyChange(@"C:\Apps\Other.exe", new string('a', 64)));
+        Assert.Equal("Orders.exe", s.ToPolicyChange(@"C:\Apps\Orders.exe", new string('a', 64)).Exe);
+        Assert.Throws<InvalidOperationException>(() => s.Attach(@"C:\Apps\Orders.exe"));
+        Assert.Throws<ArgumentException>(() => new Session().Attach(@"C:\Apps\run.bat"));
+    }
+
+    [Fact]
+    public void Arguments_the_importer_would_refuse_are_refused_at_start()
+    {
+        var tooMany = Enumerable.Range(0, 51).Select(i => $"a{i}").ToArray();
+        var e = Assert.Throws<ArgumentException>(() => Record(new AppStarted(At(0), @"C:\Apps\app.exe", tooMany, Window)));
+        Assert.StartsWith("A recording takes at most 50 arguments of at most 1000 characters each", e.Message);
+        Assert.Throws<ArgumentException>(() => Record(new AppStarted(At(0), @"C:\Apps\app.exe", [new string('x', 1001)], Window)));
+        Assert.Single(Record(new AppStarted(At(0), @"C:\Apps\app.exe", Enumerable.Range(0, 50).Select(i => new string('x', 1000)).ToArray(), Window)).Steps);
     }
 }

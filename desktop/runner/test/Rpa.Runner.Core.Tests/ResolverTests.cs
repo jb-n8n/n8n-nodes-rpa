@@ -49,15 +49,35 @@ public sealed class ResolverTests : IDisposable
         _w.Add(second);
         // index 0 within each list: two matches.
         var e = _h.Err("resolve", Resolve(Harness.T(new { controlType = "ListItem", index = 0 })), RpcErrors.NotUniqueCode);
-        Assert.Contains("matched 2", e["message"]!.GetValue<string>());
+        Assert.Contains("found 2 list items", e["message"]!.GetValue<string>());
     }
 
     [Fact]
     public void Several_visible_matches_are_not_unique_with_the_count()
     {
         var e = _h.Err("resolve", Resolve(Harness.T(new { controlType = "Button" })), RpcErrors.NotUniqueCode);
-        Assert.Contains("matched 3", e["message"]!.GetValue<string>());
+        Assert.Contains("found 3 buttons", e["message"]!.GetValue<string>());
         Assert.Equal("not_unique", e["data"]!["name"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void The_failure_texts_name_what_the_targets_last_condition_found()
+    {
+        var copy = new Target(null, [new Cond("Button", null, "Copy", null, null)], []);
+        var buttons = new Target(new WindowSel("erpdemo.exe", "ERP Demo - Line items", null, null, null), [new Cond("Button", null, null, null, null)], []);
+        var boxes = new Target(null, [new Cond("Pane", "grpFilter", null, null, null), new Cond("Edit", "txtFrom", null, null, null)], []);
+        var checks = new Target(null, [new Cond("CheckBox", null, null, null, null)], []);
+        const string add = "Add what tells them apart to the step's target: the window, a parent with an automationId, or a condition such as";
+        const string hint = "If a person can click it, target an enabled element inside it, or use key steps (Tab, Space).";
+        Assert.Equal($"not_unique: found 2 buttons named \"Copy\". {add} automationId or className. Target: {{controlType=\"Button\", name=\"Copy\"}}",
+            RpcErrors.NotUnique(2, copy).Message);
+        Assert.Equal($"not_unique: found 7 buttons. {add} name, automationId or className. " +
+            "Target: {exe=\"erpdemo.exe\", title=\"ERP Demo - Line items\"} :: {controlType=\"Button\"}", RpcErrors.NotUnique(7, buttons).Message);
+        Assert.Equal($"not_unique: found 2 text boxes with the id \"txtFrom\". {add} name or className. " +
+            "Target: {controlType=\"Pane\", automationId=\"grpFilter\"} > {controlType=\"Edit\", automationId=\"txtFrom\"}", RpcErrors.NotUnique(2, boxes).Message);
+        Assert.StartsWith("not_unique: found 2 check boxes. ", RpcErrors.NotUnique(2, checks).Message);
+        Assert.Equal($"timeout: found the button named \"Copy\" disabled. {hint} Target: {{controlType=\"Button\", name=\"Copy\"}}", RpcErrors.Disabled(copy).Message);
+        Assert.Equal($"timeout: found the focused element disabled. {hint}", RpcErrors.Disabled(null).Message);
     }
 
     /// <summary>Puts the harness's desktop on its fake clock, moved one second at every look at the windows, so each
@@ -76,9 +96,6 @@ public sealed class ResolverTests : IDisposable
         return looks;
     }
 
-    private const string NotUniqueHint =
-        "To match one, add the window, a parent with an automationId before it in the path (parent, then child), or another condition such as name, automationId or className.";
-
     [Fact]
     public void A_locator_that_matches_several_elements_for_3_s_is_not_unique_after_3_s_not_after_the_timeout()
     {
@@ -87,7 +104,10 @@ public sealed class ResolverTests : IDisposable
         var looks = OneSecondPerLook(h);
         var t0 = h.Time!.GetUtcNow();
         var e = h.Err("resolve", Resolve(Harness.T(new { controlType = "Button" }), 20000), RpcErrors.NotUniqueCode);
-        Assert.Equal($"not_unique: the primary target {{controlType=\"Button\"}} matched 3 visible elements. {NotUniqueHint}", e["message"]!.GetValue<string>());
+        Assert.Equal(
+            "not_unique: found 3 buttons. Add what tells them apart to the step's target: the window, a parent with an automationId, " +
+            "or a condition such as name, automationId or className. Target: {controlType=\"Button\"}",
+            e["message"]!.GetValue<string>());
         // Three on every look from the first to the one 3 s later, and no wait for the rest of the 20 s.
         Assert.Equal(TimeSpan.FromSeconds(3), looks[^1] - looks[0]);
         Assert.True(h.Time.GetUtcNow() - t0 < TimeSpan.FromSeconds(5), $"waited {h.Time.GetUtcNow() - t0}");
@@ -160,8 +180,8 @@ public sealed class ResolverTests : IDisposable
         var e = h.Err("act", new { runId = Harness.RunId, target = Harness.T(new { automationId = "btnSignIn" }), action = "click", timeoutMs = 10000 },
             RpcErrors.TimeoutCode);
         Assert.Equal(
-            "timeout: the element is disabled: the app reports it to UI Automation as not enabled ({automationId=\"btnSignIn\"}). " +
-            "If a person can click it, target an enabled element inside it, or use key steps (Tab, Space).",
+            "timeout: found the element with the id \"btnSignIn\" disabled. " +
+            "If a person can click it, target an enabled element inside it, or use key steps (Tab, Space). Target: {automationId=\"btnSignIn\"}",
             e["message"]!.GetValue<string>());
         Assert.True(time.GetUtcNow() - t0 >= TimeSpan.FromSeconds(10), $"waited {time.GetUtcNow() - t0}");
         Assert.Equal(10, tries);
@@ -267,9 +287,8 @@ public sealed class ResolverTests : IDisposable
         var e = _h.Err("resolve", Resolve(new { window = new { title = "ERP Demo - Line items" }, path = new object[] { new { automationId = "btnSignIn" } } }),
             RpcErrors.PolicyRefusedCode);
         Assert.Equal(
-            "policy_refused: the window {title=\"ERP Demo - Line items\"} belongs to a copy of \"ErpDemo.exe\" that this run did not start " +
-            "(most often one that was already open before the run), so the run will not drive it. " +
-            "Close that copy on the runner machine (or end its process), then run again.",
+            "policy_refused: found its window in a copy of ErpDemo.exe that this run did not start (most often one left open before the run). " +
+            "Close that copy on the runner machine (or end its process), then run again. Window: {title=\"ERP Demo - Line items\"}",
             e["message"]!.GetValue<string>());
     }
 

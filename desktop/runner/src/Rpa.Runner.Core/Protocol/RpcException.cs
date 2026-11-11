@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace Rpa.Runner.Core.Protocol;
 
 /// <summary>
@@ -51,10 +53,26 @@ public static class RpcErrors
                 ? $"not_found: no element matched {what} (no matching window of the run)"
                 : $"not_found: no element matched {what} in window \"{windowTitle}\"");
 
-    public static RpcException NotUnique(int count, string what) =>
+    /// <summary>The primary target matched several visible elements: what it found, what to add, then the target.</summary>
+    public static RpcException NotUnique(int count, Target target) =>
         new(NotUniqueCode, "not_unique",
-            $"not_unique: the primary target {what} matched {count} visible elements. To match one, add the window, a parent with an " +
-            "automationId before it in the path (parent, then child), or another condition such as name, automationId or className.");
+            $"not_unique: found {count} {Found(target, count)}. Add what tells them apart to the step's target: the window, a parent " +
+            $"with an automationId, or a condition such as {MissingConditions(target)}. Target: {target.Describe()}");
+
+    /// <summary>The act's element stayed disabled until the timeout: what it found, what to do instead, then the target
+    /// (none for the focused element).</summary>
+    public static RpcException Disabled(Target? target)
+    {
+        const string hint = "If a person can click it, target an enabled element inside it, or use key steps (Tab, Space).";
+        return Timeout(target is null
+            ? $"found the focused element disabled. {hint}"
+            : $"found the {Found(target, 1)} disabled. {hint} Target: {target.Describe()}");
+    }
+
+    /// <summary>The only window that matched belongs to a copy of an allowed app that this run did not start.</summary>
+    public static RpcException OtherCopy(WindowSel window, string exe) =>
+        PolicyRefused($"found its window in a copy of {exe} that this run did not start (most often one left open before the run). " +
+            $"Close that copy on the runner machine (or end its process), then run again. Window: {window}");
 
     public static RpcException ExpectedFileMissing(string why) =>
         new(ExpectedFileMissingCode, "expected_file_missing", $"expected_file_missing: {why}");
@@ -67,4 +85,35 @@ public static class RpcErrors
 
     public static RpcException InvalidParamsError(string why) =>
         new(InvalidParams, "invalid_params", $"invalid params: {why}");
+
+    /// <summary>What the target's last condition finds, as a person names it: <c>buttons named "Save"</c>,
+    /// <c>text box with the id "txtFrom"</c>, <c>elements</c>.</summary>
+    private static string Found(Target target, int count)
+    {
+        var last = target.Path[^1];
+        var word = ControlWord(last.ControlType);
+        var noun = count == 1 ? word : Regex.IsMatch(word, "(s|x|ch|sh)$") ? word + "es" : word + "s";
+        if (last.Name is not null) return $"{noun} named {Describe.Quote(last.Name)}";
+        if (last.AutomationId is not null) return $"{noun} with the id {Describe.Quote(last.AutomationId)}";
+        return noun;
+    }
+
+    /// <summary>A UI Automation control type as a person names it: Button is button, Edit is text box, CheckBox is check box.</summary>
+    private static string ControlWord(string? controlType) => controlType?.ToLowerInvariant() switch
+    {
+        null => "element",
+        "edit" => "text box",
+        "hyperlink" => "link",
+        "text" => "label",
+        _ => Regex.Replace(controlType, "([a-z])([A-Z])", "$1 $2").ToLowerInvariant(),
+    };
+
+    /// <summary>The conditions the target's last condition does not use yet: <c>name, automationId or className</c>.</summary>
+    private static string MissingConditions(Target target)
+    {
+        var last = target.Path[^1];
+        var missing = new[] { last.Name is null ? "name" : null, last.AutomationId is null ? "automationId" : null, "className" }
+            .OfType<string>().ToList();
+        return missing.Count > 1 ? $"{string.Join(", ", missing.Take(missing.Count - 1))} or {missing[^1]}" : missing[0];
+    }
 }

@@ -281,7 +281,7 @@ internal sealed class RecorderBar : Form
         return label;
     }
 
-    /// <summary>Labels wrap at the bar's width; the notice line is two lines high. Both follow the window's size and
+    /// <summary>Labels wrap at the bar's width; the notice line is one line high. Both follow the window's size and
     /// the screen's scaling.</summary>
     private void FitSizes()
     {

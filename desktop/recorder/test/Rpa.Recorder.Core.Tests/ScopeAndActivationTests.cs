@@ -56,7 +56,7 @@ public class ScopeAndActivationTests
 
         var box = El("CheckBox", "chkAll", "All companies") with { IsChecked = false };
         var s = Record(new Activated(At(1), Window, box), new Activated(At(2), Window, El("Button", "btnOk", "OK")), new Activated(At(3), Window, El("RadioButton", "optDaily", "Daily") with { IsChecked = false }));
-        Assert.Equal(["Check All companies", "Click OK", "Click Daily"], s.Steps.Select(StepText.Sentence));
+        Assert.Equal(["Check All companies", "Click OK", "Click Daily"], s.Steps.Select(step => StepText.Action(step)));
         Assert.True(s.Steps[0].Checked);
     }
 
@@ -108,7 +108,7 @@ public class ScopeAndActivationTests
         s.Add(new MouseDown(At(1).AddMilliseconds(300), Window, row, 1));
         var step = Assert.Single(s.Steps);
         Assert.Equal((StepKind.Click, true, At(1)), (step.Kind, step.Double, step.At));
-        Assert.Equal("Double-click Acme Paper Co", StepText.Sentence(step));
+        Assert.Equal("Double-click Acme Paper Co", StepText.Action(step));
         // A third click is a click of its own.
         s.Add(new MouseDown(At(1).AddMilliseconds(500), Window, row, 1));
         Assert.Equal(2, s.Steps.Count);

@@ -45,7 +45,8 @@ if ($Command -eq 'status' -and -not $Action -and -not $File -and $given.Count -e
   exit $LASTEXITCODE
 }
 if ($Command -eq 'policy' -and $Action -eq 'apply' -and $File -and $given.Count -eq 0) {
-  # The tool is started as a program of its own, which reads a relative path against another folder: give it the full path.
+  # The tool is started as a program of its own, which reads a relative path against another folder: give it the full
+  # path.
   try { $full = Get-RpaTypedPath $File } catch { Write-Output $_.Exception.Message; exit 1 }
   & (Join-Path (Join-Path $installDir 'runner') 'RpaPolicy.exe') apply $full
   exit $LASTEXITCODE

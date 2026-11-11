@@ -7,7 +7,8 @@ namespace Rpa.Recorder.Scenario;
 
 /// <summary>
 /// The recorder end to end on a real desktop: starts RpaRecorder.exe headless on ERP Demo, performs the reference flow
-/// with synthetic input, closes the recorder and checks what it saved.
+/// with synthetic input, closes the recorder and checks what it saved. <c>--recorder</c> is the scenario build of
+/// RpaRecorder.exe (published with <c>-p:RecorderScenario=true</c>); the package's build refuses headless.
 /// <code>Rpa.Recorder.Scenario --recorder &lt;RpaRecorder.exe&gt; --app &lt;ErpDemo.exe&gt; --golden &lt;erp.rpa-recording.json&gt; --out &lt;folder&gt;</code>
 /// Pass 1 (v1) must equal the golden recording apart from timestamps; pass 2 (<c>--ui v2</c>) must be a valid recording
 /// with the v2 controls. In neither may the demo password occur in a file the recorder wrote or in what it printed.

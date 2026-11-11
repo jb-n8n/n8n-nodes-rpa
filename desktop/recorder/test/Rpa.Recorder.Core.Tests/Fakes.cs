@@ -63,10 +63,13 @@ internal static class Fakes
     }
 
     /// <summary>A file of the repository, read in place.</summary>
-    public static string RepoFile(params string[] parts)
+    public static string RepoFile(params string[] parts) => File.ReadAllText(RepoPath(parts));
+
+    /// <summary>The path of a file or folder of the repository.</summary>
+    public static string RepoPath(params string[] parts)
     {
         var root = typeof(Fakes).Assembly.GetCustomAttributes<AssemblyMetadataAttribute>().Single(a => a.Key == "RepoRoot").Value!;
-        return File.ReadAllText(Path.Combine([root, .. parts]));
+        return Path.Combine([root, .. parts]);
     }
 
     public static DateTimeOffset Parse(string time) =>

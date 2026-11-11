@@ -14,6 +14,13 @@
     <ProjectReference Include="..\..\src\Rpa.Runner.Core\Rpa.Runner.Core.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <!-- Where the repository is, for a test that reads a file the install guide gives (docs/install/samples). -->
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>RepoRoot</_Parameter1>
+      <_Parameter2>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)/../../../..'))</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
+  <ItemGroup>
     <Using Include="Xunit" />
   </ItemGroup>
 </Project>

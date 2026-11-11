@@ -111,10 +111,10 @@ function Get-RpaChangeText($Change) {
   ('{0} {1} {2}' -f $Change.kind, $Change.key, $Change.name).Trim()
 }
 
-# The list Uninstall-Rpa.ps1 leaves behind (uninstall-leftovers.json) when it could not put a setting back: what an earlier list held
-# (-Existing, or nothing) and, for each failure, the record install.json had for the setting (what it was before the
-# install), why it was not put back, for which bot user and when. A setting that is listed already keeps its first
-# entry, which holds the older "before".
+# The list Uninstall-Rpa.ps1 leaves behind (uninstall-leftovers.json) when it could not put a setting back: what an
+# earlier list held (-Existing, or nothing) and, for each failure, the record install.json had for the setting (what it
+# was before the install), why it was not put back, for which bot user and when. A setting that is listed already keeps
+# its first entry, which holds the older "before".
 function Add-RpaLeftovers($Existing, [object[]]$Failed, [string]$User, [string]$At) {
   $entries = @()
   if ($Existing -and $Existing.notPutBack) { $entries = @($Existing.notPutBack) }
@@ -246,10 +246,10 @@ function Set-RpaSignInPassword([hashtable]$Run) {
 }
 
 # The bot user's password for the RPA Supervisor, which reads it for each sign-in: in the LSA secret
-# L$RpaRunnerBotPassword, the same way as the one for automatic sign-in. The password is the SecureString the run
-# holds (-UserPassword, or the one made for a user the run created); it does not go into a command's parameters, a
-# file or the output. The step that registers the service comes after this one and starts the service again, which it needs
-# to use a password stored again.
+# L$RpaRunnerBotPassword, the same way as the one for automatic sign-in. The password is the SecureString the run holds
+# (-UserPassword, or the one made for a user the run created); it does not go into a command's parameters, a file or the
+# output. The step that registers the service comes after this one and starts the service again, which it needs to use a
+# password stored again.
 function Set-RpaSupervisorPassword([hashtable]$Run) {
   if (-not $Run.Password) { throw 'There is no password to store for the RPA Supervisor.' }
   Add-RpaNativeTypes

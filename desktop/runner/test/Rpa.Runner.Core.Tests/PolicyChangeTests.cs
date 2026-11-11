@@ -72,6 +72,28 @@ public class PolicyChangeTests
     }
 
     [Fact]
+    public void The_install_guides_sample_change_is_accepted()
+    {
+        // docs/install/samples/erp-demo-policy-change.json, the change the Windows guide has an administrator apply. Its
+        // path is the installed demo's under Program Files; elsewhere than on Windows it is moved under this platform's
+        // root, as the policy takes only absolute local paths.
+        var root = typeof(PolicyChangeTests).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyMetadataAttribute), false)
+            .Cast<System.Reflection.AssemblyMetadataAttribute>().Single(a => a.Key == "RepoRoot").Value!;
+        var sample = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(root, "docs", "install", "samples", "erp-demo-policy-change.json")))!;
+        const string Installed = @"C:\Program Files\RPA Runner\erp-demo\v1\ErpDemo.exe";
+        Assert.Equal(Installed, sample["allowedApps"]![0]!["path"]!.GetValue<string>());
+        var path = OperatingSystem.IsWindows() ? Installed : Path.Combine(Root, "RPA Runner", "erp-demo", "v1", "ErpDemo.exe");
+        sample["allowedApps"]![0]!["path"] = path;
+
+        var result = PolicyChange.Apply("""{ "allowedApps": [], "maxFileBytes": 20971520 }""", sample.ToJsonString());
+        Assert.DoesNotContain(result.Summary, line => line.StartsWith("WARNING", StringComparison.Ordinal));
+        var policy = RunnerPolicy.Parse(result.Json);
+        Assert.Equal(("ErpDemo.exe", path), (Assert.Single(policy.AllowedApps).Exe, policy.AllowedApps[0].Path));
+        Assert.Equal(new RunnerPolicy.WriteControl("ErpDemo.exe", "btnPost"), Assert.Single(policy.WriteControls));
+        Assert.Equal(["Ctrl+S", "F11"], policy.GatedKeys.Select(k => k.ToString()));
+    }
+
+    [Fact]
     public void Keeps_the_current_policy_s_other_settings()
     {
         var current = $$"""

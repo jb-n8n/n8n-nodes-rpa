@@ -3,7 +3,7 @@ using static Rpa.Recorder.Core.Tests.Fakes;
 namespace Rpa.Recorder.Core.Tests;
 
 /// <summary>The rules the Windows program follows around the session: when a field is left, the bar's sentences, the
-/// hook watch, the headless options and the saved files' names.</summary>
+/// hook watch, the headless options, the saved files' names and the windows "Use an app that is already open…" offers.</summary>
 public class CaptureRulesTests
 {
     private static readonly ElementFacts Name = El("Edit", "txtName", "Name");
@@ -54,22 +54,22 @@ public class CaptureRulesTests
             "Press Enter in Password",
             "Choose \"2000\" in Company code",
             "Check All companies",
-            "Click Vendor Row 1 (found by its row position: check it)",
+            "Click Vendor Row 1",
             "Click OK",
             "Read lblCount as out_Count",
-        ], s.Steps.Select(StepText.Sentence));
-        Assert.DoesNotContain(s.Steps.Select(StepText.Sentence), x => x.Contains(typed));
+        ], s.Steps.Select(step => StepText.Action(step)));
+        Assert.DoesNotContain(s.Steps.Select(step => StepText.Action(step)), x => x.Contains(typed));
 
         s.MarkVariable(1, "username");
-        Assert.Equal("Type the variable username into Name", StepText.Sentence(s.Steps[1]));
+        Assert.Equal("Type the variable username into Name", StepText.Action(s.Steps[1]));
         var fileName = El("Edit", "1001", "File name:", "Edit", false, false, El("ComboBox", "FileNameControlHost", "File name:"));
         var export = Record(Typed(1, fileName, new("app.exe", "Save As", "#32770")),
             Left(2, fileName, @"C:\out\report.csv", window: new("app.exe", "Save As", "#32770"))).Steps[0];
-        Assert.Equal("Save report.csv into the run's export folder (File name:)", StepText.Sentence(export));
+        Assert.Equal("Save report.csv into the run's export folder (File name:)", StepText.Action(export));
         var unchecking = Record(Click(1, box with { IsChecked = true })).Steps[0];
-        Assert.Equal("Uncheck All companies", StepText.Sentence(unchecking));
+        Assert.Equal("Uncheck All companies", StepText.Action(unchecking));
         var longValue = Record(Typed(1, Name), Left(2, Name, new string('x', 100))).Steps[0];
-        Assert.Equal($"Type \"{new string('x', 57)}...\" into Name", StepText.Sentence(longValue));
+        Assert.Equal($"Type \"{new string('x', 57)}...\" into Name", StepText.Action(longValue));
     }
 
     [Fact]
@@ -120,5 +120,19 @@ public class CaptureRulesTests
         Assert.Equal("_CON.rpa-recording.json", SaveNames.Recording("CON"));
         Assert.Equal("recording.rpa-recording.json", SaveNames.Recording(" .. "));
         Assert.Equal(new string('x', 100) + ".rpa-recording.json", SaveNames.Recording(new string('x', 200)));
+    }
+
+    [Fact]
+    public void Use_an_app_that_is_already_open_offers_only_windows_a_person_can_mean()
+    {
+        Assert.True(OpenWindows.IsOffered("ERP Demo - Sign in", "WindowsForms10.Window.8.app.0.19fd5c7_r3_ad1", cloaked: false, own: false));
+        Assert.True(OpenWindows.IsOffered("Untitled - Notepad", "Notepad", cloaked: false, own: false));
+        Assert.False(OpenWindows.IsOffered("Program Manager", "Progman", cloaked: false, own: false));
+        Assert.False(OpenWindows.IsOffered("", "WorkerW", cloaked: false, own: false));
+        Assert.False(OpenWindows.IsOffered("Taskbar", "Shell_TrayWnd", cloaked: false, own: false));
+        Assert.False(OpenWindows.IsOffered("Taskbar", "Shell_SecondaryTrayWnd", cloaked: false, own: false));
+        Assert.False(OpenWindows.IsOffered("Windows Input Experience", "Windows.UI.Core.CoreWindow", cloaked: true, own: false));
+        Assert.False(OpenWindows.IsOffered("   ", "Notepad", cloaked: false, own: false));
+        Assert.False(OpenWindows.IsOffered("RPA Recorder", "WindowsForms10.Window.8.app.0.1", cloaked: false, own: true));
     }
 }

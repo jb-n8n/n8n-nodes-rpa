@@ -56,6 +56,9 @@ public static class StepRows
         _ => "",
     };
 
+    /// <summary>The row as a screen reader says it: <c>6. Click Vendor Row 1 (Check)</c>.</summary>
+    public static string Spoken(StepRow row) => row.Mark == StepMark.None ? $"{row.Number}. {row.Text}" : $"{row.Number}. {row.Text} ({MarkText(row.Mark)})";
+
     /// <summary>
     /// The actions that fit the selected step (null: none selected), numbered <paramref name="number"/>. Any step can
     /// be deleted. A typed value or a chosen item can be a variable; only a typed value can be a secret; a secret stays

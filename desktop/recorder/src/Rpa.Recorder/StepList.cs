@@ -33,8 +33,6 @@ internal sealed class StepList : ListBox
         BorderStyle = BorderStyle.FixedSingle;
     }
 
-    public IReadOnlyList<StepRow> Rows => _rows;
-
     /// <summary>The height of a row of one line, in the list's pixels.</summary>
     public int RowHeight => Font.Height + 2 * Pad;
 
@@ -53,7 +51,7 @@ internal sealed class StepList : ListBox
         BeginUpdate();
         Items.Clear();
         // The items are the rows as a screen reader says them; drawing uses the rows themselves.
-        foreach (var row in rows) Items.Add(row.Mark == StepMark.None ? $"{row.Number}. {row.Text}" : $"{row.Number}. {row.Text} ({StepRows.MarkText(row.Mark)})");
+        foreach (var row in rows) Items.Add(StepRows.Spoken(row));
         if (selected >= 0 && rows.Count > 0) SelectedIndex = Math.Min(selected, rows.Count - 1);
         EndUpdate();
         if (rows.Count == 0) return;

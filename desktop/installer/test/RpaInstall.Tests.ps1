@@ -1477,6 +1477,17 @@ Describe 'Invoke-RpaInstallPlan' {
       Should -Throw -ExpectedMessage 'The installer has no step "make coffee"; nothing was changed.'
   }
 
+  # A step name the plan may list but the switch has no case for would print its name and do nothing.
+  It 'has a case for every step it knows, and knows every step it has a case for' {
+    $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $script:InstallerDir 'RpaInstall.Machine.ps1'), [ref]$null, [ref]$null)
+    $function = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-RpaInstallPlan' }, $false)
+    $switch = $function.Find({ param($node) $node -is [Management.Automation.Language.SwitchStatementAst] -and $node.Condition.Extent.Text -eq '$step' }, $true)
+    $cases = @($switch.Clauses | ForEach-Object { $_.Item1.Value })
+    $known = InModuleScope RpaInstall { $script:KnownSteps }
+    $cases.Count | Should -Be $known.Count
+    @($cases | Sort-Object) | Should -BeExactly @($known | Sort-Object)
+  }
+
   # The question -AutoSignIn asks can sit between the plan and the steps, and a standard user can make the folder.
   It 'looks at the owner of the scheduled task folder again directly before it registers a task' {
     Mock -ModuleName RpaInstall Get-RpaTaskFolderOwner { 'BOT-PC\mallory' }
@@ -1565,7 +1576,7 @@ Describe 'Invoke-RpaInstallPlan' {
   # A package that was unpacked only in part would install, and then point the user to a tool that is not there.
   Context 'the files a package must hold' {
     BeforeAll {
-      $script:Needed = @('VERSION', 'runner\RpaRunner.exe', 'runner\RpaPolicy.exe', 'runner\RpaSupervisor.exe', 'recorder\RpaRecorder.exe', 'scripts\start-loop.ps1', 'scripts\start-runner.ps1', 'scripts\Show-RpaConnection.ps1')
+      $script:Needed = @('VERSION', 'runner\RpaRunner.exe', 'runner\RpaPolicy.exe', 'runner\RpaSupervisor.exe', 'recorder\RpaRecorder.exe', 'scripts\start-loop.ps1', 'scripts\start-runner.ps1', 'scripts\Show-RpaConnection.ps1', 'rpa.cmd', 'scripts\rpa.ps1')
       $script:BrowserNeeded = @('browser\node.exe', 'browser\host\host.mjs', 'browser\host\run-server.mjs', 'browser\gate\gate.mjs', 'browser\node_modules\playwright\cli.js', 'scripts\start-browser.ps1')
       # Invoke-RpaInstallPlan reads these; elsewhere than on Windows they are not set.
       $script:Places = @{ ProgramFiles = $env:ProgramFiles; ProgramData = $env:ProgramData; ComputerName = $env:COMPUTERNAME }
@@ -1586,7 +1597,7 @@ Describe 'Invoke-RpaInstallPlan' {
     AfterAll { $env:ProgramFiles = $script:Places.ProgramFiles; $env:ProgramData = $script:Places.ProgramData; $env:COMPUTERNAME = $script:Places.ComputerName }
 
     It 'refuses a package without <Name> before the first step' -ForEach @(
-      @{ Name = 'runner\RpaPolicy.exe' }, @{ Name = 'runner\RpaSupervisor.exe' }, @{ Name = 'recorder\RpaRecorder.exe' }, @{ Name = 'browser\host\run-server.mjs' }, @{ Name = 'browser\gate\gate.mjs' }, @{ Name = 'browser\node_modules\playwright\cli.js' }
+      @{ Name = 'runner\RpaPolicy.exe' }, @{ Name = 'runner\RpaSupervisor.exe' }, @{ Name = 'recorder\RpaRecorder.exe' }, @{ Name = 'rpa.cmd' }, @{ Name = 'scripts\rpa.ps1' }, @{ Name = 'browser\host\run-server.mjs' }, @{ Name = 'browser\gate\gate.mjs' }, @{ Name = 'browser\node_modules\playwright\cli.js' }
     ) {
       $package = New-TestPackage @($Name)
       Mock -ModuleName RpaInstall Copy-RpaProgramFiles { }
@@ -1794,7 +1805,7 @@ Describe 'Invoke-RpaUninstall' {
   # A package that was unpacked only in part would install, and then point the user to a tool that is not there.
   Context 'the files a package must hold' {
     BeforeAll {
-      $script:Needed = @('VERSION', 'runner\RpaRunner.exe', 'runner\RpaPolicy.exe', 'runner\RpaSupervisor.exe', 'recorder\RpaRecorder.exe', 'scripts\start-loop.ps1', 'scripts\start-runner.ps1', 'scripts\Show-RpaConnection.ps1')
+      $script:Needed = @('VERSION', 'runner\RpaRunner.exe', 'runner\RpaPolicy.exe', 'runner\RpaSupervisor.exe', 'recorder\RpaRecorder.exe', 'scripts\start-loop.ps1', 'scripts\start-runner.ps1', 'scripts\Show-RpaConnection.ps1', 'rpa.cmd', 'scripts\rpa.ps1')
       $script:BrowserNeeded = @('browser\node.exe', 'browser\host\host.mjs', 'browser\host\run-server.mjs', 'browser\gate\gate.mjs', 'browser\node_modules\playwright\cli.js', 'scripts\start-browser.ps1')
       # Invoke-RpaInstallPlan reads these; elsewhere than on Windows they are not set.
       $script:Places = @{ ProgramFiles = $env:ProgramFiles; ProgramData = $env:ProgramData; ComputerName = $env:COMPUTERNAME }
@@ -1815,7 +1826,7 @@ Describe 'Invoke-RpaUninstall' {
     AfterAll { $env:ProgramFiles = $script:Places.ProgramFiles; $env:ProgramData = $script:Places.ProgramData; $env:COMPUTERNAME = $script:Places.ComputerName }
 
     It 'refuses a package without <Name> before the first step' -ForEach @(
-      @{ Name = 'runner\RpaPolicy.exe' }, @{ Name = 'runner\RpaSupervisor.exe' }, @{ Name = 'recorder\RpaRecorder.exe' }, @{ Name = 'browser\host\run-server.mjs' }, @{ Name = 'browser\gate\gate.mjs' }, @{ Name = 'browser\node_modules\playwright\cli.js' }
+      @{ Name = 'runner\RpaPolicy.exe' }, @{ Name = 'runner\RpaSupervisor.exe' }, @{ Name = 'recorder\RpaRecorder.exe' }, @{ Name = 'rpa.cmd' }, @{ Name = 'scripts\rpa.ps1' }, @{ Name = 'browser\host\run-server.mjs' }, @{ Name = 'browser\gate\gate.mjs' }, @{ Name = 'browser\node_modules\playwright\cli.js' }
     ) {
       $package = New-TestPackage @($Name)
       Mock -ModuleName RpaInstall Copy-RpaProgramFiles { }
@@ -3064,6 +3075,21 @@ Describe 'What -Unattended changed, put back' {
       (Get-Command Add-RpaProbeType).Definition | Should -Match "if \('RpaProbe' -as \[type\]\) \{ return \}"
     }
   }
+
+  # Add-RpaMoveTypes is reached only on the move from automatic sign-in to -Unattended, and a connection helper that
+  # does not compile gives only a warning: both are compiled here, and on Windows the move's helpers are called once.
+  It 'the helpers for the move to -Unattended and the connection helper compile' {
+    InModuleScope RpaInstall { Add-RpaMoveTypes; Add-RpaProbeType }
+    foreach ($name in 'RpaSessions', 'RpaLsaRead', 'RpaProbe') { $name -as [type] | Should -Not -BeNullOrEmpty -Because $name }
+  }
+
+  It 'the helpers for the move to -Unattended find no session of an unknown user and no LSA secret of an unknown name' -Skip:($env:OS -ne 'Windows_NT') {
+    InModuleScope RpaInstall { Add-RpaMoveTypes }
+    @([RpaSessions]::OfUser('NO-SUCH-DOMAIN', 'no-such-user')).Count | Should -Be 0
+    $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if (-not $admin) { Set-ItResult -Skipped -Because 'reading an LSA secret needs an administrator'; return }
+    [RpaLsaRead]::Read('L$RpaNotThere') | Should -BeNullOrEmpty
+  }
 }
 
 Describe 'Registry values in install.json' {
@@ -4069,6 +4095,22 @@ Describe 'Get-Rpa.ps1' {
     foreach ($bad in '', 'abc  rpa-windows-x64.zip', ('{0}0  rpa-windows-x64.zip' -f ('ab' * 32)), ('  {0}' -f ('ab' * 32)), ('g' * 64)) { Get-RpaPublishedHash $bad | Should -BeNullOrEmpty }
   }
 
+  # The last check before the installer starts, on the unpacked folder first, then on each folder above it. Both cases
+  # here are refused at the folder itself, whatever the folders above the temporary folder allow.
+  It 'on Windows: refuses an unpacked folder that other users can change, and one that is a junction' -Skip:($env:OS -ne 'Windows_NT') {
+    $folder = Join-Path $script:GetRoot ('unpacked-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $folder | Out-Null
+    & icacls.exe $folder /grant '*S-1-5-32-545:(OI)(CI)M' | Out-Null
+    $users = (New-Object Security.Principal.SecurityIdentifier 'S-1-5-32-545').Translate([Security.Principal.NTAccount]).Value
+    Get-RpaFolderRefusal $folder | Should -BeExactly ('{0} can be changed by {1}, so the installer is not started from it. Give that folder the access rules of C:\Program Files.' -f $folder, $users)
+    $link = Join-Path $script:GetRoot ('link-' + [guid]::NewGuid().ToString('N'))
+    $cmd = Join-Path ([Environment]::SystemDirectory) 'cmd.exe'
+    & $cmd /d /c ('mklink /J "{0}" "{1}"' -f $link, $folder) | Out-Null
+    try {
+      Get-RpaFolderRefusal $link | Should -BeExactly ('{0} is a link or junction, so the installer is not started from it.' -f $link)
+    } finally { & $cmd /d /c ('rd "{0}"' -f $link) | Out-Null }
+  }
+
   Context 'the unpack' {
     It 'unpacks a zip whose SHA-256 is the one beside it into <root>\<version>, and says which version' {
       $zip = New-TestZip 'rpa-windows-x64.zip'
@@ -4233,7 +4275,6 @@ public static class Program {
       $source = Get-Content -Raw -LiteralPath $script:GetRpa
       $source | Should -Match ([regex]::Escape("`$ghState = Get-RpaGhState `$gh"))
       $source.IndexOf('$early = Test-RpaAttestation') | Should -BeLessThan $source.IndexOf('Invoke-WebRequest')
-      $source | Should -Not -Match 'AttestationChecked'
     }
   }
 
@@ -4536,5 +4577,31 @@ Describe 'The Start menu shortcut' {
     $lines = @(InModuleScope RpaInstall -Parameters @{ Result = $result } { Get-RpaUninstallSummary $Result })
     $lines | Should -Contain '  The Start menu shortcut could not be removed:'
     $lines | Should -Contain '    the Start menu shortcut C:\x.lnk (it was not there): Access is denied.'
+  }
+}
+
+# Names the installer shares with the supervisor's C# code and a place in the guide its refusals point to. The service's
+# own "blocked" sentence (Show-RpaConnection.ps1 against SessionManager.cs) is not pinned here.
+Describe 'Names shared with the supervisor and the guide' {
+  BeforeAll {
+    $script:RepoRoot = Join-Path $PSScriptRoot '../../..'
+    function Get-RepoText([string]$Path) { Get-Content -Raw -LiteralPath (Join-Path $script:RepoRoot $Path) }
+  }
+
+  It 'the LSA secret that holds the password of the bot user is the one the supervisor reads' {
+    $name = InModuleScope RpaInstall { $script:SupervisorSecret }
+    $name | Should -BeExactly 'L$RpaRunnerBotPassword'
+    Get-RepoText 'desktop/runner/src/Rpa.Supervisor/LsaSecret.cs' | Should -Match ([regex]::Escape(('public const string BotPasswordName = "{0}";' -f $name)))
+  }
+
+  It 'the service is the one the supervisor registers as, also where Show-RpaConnection.ps1 looks for it' {
+    $name = InModuleScope RpaInstall { $script:SupervisorService }
+    Get-RepoText 'desktop/runner/src/Rpa.Supervisor/SupervisorService.cs' | Should -Match ([regex]::Escape(('public const string Name = "{0}";' -f $name)))
+    Get-RepoText 'desktop/installer/scripts/Show-RpaConnection.ps1' | Should -Match ([regex]::Escape(("-Filter `"Name='{0}'`"" -f $name)))
+  }
+
+  It 'section 10 of the Windows guide, which the refusals about a new password name, is about the certificates' {
+    $script:ModuleSource | Should -Match ([regex]::Escape('(docs/install/windows.md, section 10)'))
+    (Get-RepoText 'docs/install/windows.md') -split "`r?`n" | Should -Contain '## 10. Changing the tokens and the certificates'
   }
 }

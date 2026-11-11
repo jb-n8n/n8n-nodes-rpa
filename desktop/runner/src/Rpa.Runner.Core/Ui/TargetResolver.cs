@@ -107,7 +107,7 @@ public sealed class TargetResolver
     public sealed record Attempt(Resolution? Winner, int PrimaryCount, string? PrimaryWindowTitle, Target Target)
     {
         public RpcException Failure() => PrimaryCount > 1
-            ? RpcErrors.NotUnique(PrimaryCount, Target.Describe())
+            ? RpcErrors.NotUnique(PrimaryCount, Target)
             : RpcErrors.NotFound(Target.Describe(), PrimaryWindowTitle);
     }
 

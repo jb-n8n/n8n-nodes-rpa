@@ -12,7 +12,7 @@ namespace Rpa.Recorder.Core;
 /// </summary>
 public static partial class StableIds
 {
-    private const string Space = @"[\t\n\v\f\r    -     　﻿]";
+    private const string Space = @"[\t\n\v\f\r \u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]";
 
     [GeneratedRegex(Space)] private static partial Regex HasSpace();
     [GeneratedRegex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}")] private static partial Regex GuidShape();
