@@ -39,6 +39,19 @@ public interface IPolicyFiles
     /// <summary>Creates the backup folder, for administrators only.</summary>
     void CreateBackupFolder(string folder);
 
+    /// <summary>What is wrong with an existing folder for change copies, as for the backup folder
+    /// (<see cref="BackupFolderProblems"/>). Empty when the tool would use it.</summary>
+    IReadOnlyList<string> ChangeFolderProblems(string folder);
+
+    /// <summary>Creates the folder for change copies, for administrators only.</summary>
+    void CreateChangeFolder(string folder);
+
+    /// <summary>
+    /// Creates a copy of a change file as a new file with this content (it fails when something has the name), with
+    /// the owner and the access rules the folder for change copies gives. Nothing is left when this fails.
+    /// </summary>
+    void CreateChangeCopy(string path, byte[] content);
+
     /// <summary>
     /// Creates a backup as a new file with this content (it fails when something has the name), with the owner and
     /// the access rules the backup folder gives. Nothing is left when this fails.
@@ -137,8 +150,9 @@ public sealed record PolicyConsole(IReadOnlyList<bool>? OtherProcesses, bool Tak
 
 /// <summary>
 /// The policy tool's commands: <c>show</c>, <c>apply</c> and <c>allow-app</c>. A change is shown as plain lines and
-/// written only after a yes (or with <c>--yes</c>). Exit codes: 0 applied or nothing to change, 1 refused or invalid,
-/// 2 usage, 3 declined at the prompt.
+/// written only after a yes (or with <c>--yes</c>). <c>apply</c> first copies the change file into a folder of its own
+/// (<see cref="ChangeFolder"/>) and works from that copy. Exit codes: 0 applied or nothing to change, 1 refused or
+/// invalid, 2 usage, 3 declined at the prompt.
 /// </summary>
 public static class PolicyCommand
 {
@@ -163,7 +177,8 @@ public static class PolicyCommand
                RpaPolicy apply <change.json> [--yes] [--policy <path>]
                RpaPolicy allow-app <path-to-exe> [--pin-hash] [--yes] [--policy <path>]
           show          Print the policy file
-          apply         Add what a change file lists to the policy
+          apply         Add what a change file lists to the policy (from a copy the tool keeps in
+                        policy-changes beside the policy file)
           allow-app     Add an application to the policy's allowedApps
           --pin-hash    Also pin the application file's SHA-256
           --yes         Do not ask before writing (only from an administrator console)
@@ -207,6 +222,28 @@ public static class PolicyCommand
         var backup = $"{stem}.bak";
         for (var n = 2; taken(backup); n++) backup = $"{stem}-{n}.bak";
         return backup;
+    }
+
+    /// <summary>The folder where <c>apply</c> keeps a copy of each change file it is given, <c>policy-changes</c>
+    /// beside the policy file. It is the tool's own, for administrators only, as the backup folder is.</summary>
+    public static string ChangeFolder(string policyPath) =>
+        Path.Combine(Path.GetDirectoryName(Path.GetFullPath(policyPath)) ?? "", "policy-changes");
+
+    /// <summary>
+    /// <c>&lt;name&gt;.&lt;yyyyMMdd-HHmmss&gt;.json</c> in the change folder, where the name is the change file's without
+    /// <c>.json</c> (at most 100 characters, a character Windows refuses in a file name, such as the colon of a stream,
+    /// as <c>_</c>), or with <c>-2</c>, <c>-3</c> and so on before <c>.json</c>: the first of these names that is not
+    /// taken.
+    /// </summary>
+    public static string ChangeCopyPath(string policyPath, string changeFileName, DateTimeOffset now, Func<string, bool> taken)
+    {
+        var name = changeFileName.EndsWith(".json", StringComparison.OrdinalIgnoreCase) ? changeFileName[..^5] : changeFileName;
+        name = new string(name.Select(c => c is '<' or '>' or ':' or '"' or '/' or '\\' or '|' or '?' or '*' || char.IsControl(c) ? '_' : c).ToArray());
+        if (name.Length > 100) name = name[..100];
+        var stem = Path.Combine(ChangeFolder(policyPath), $"{name}.{now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture)}");
+        var copy = $"{stem}.json";
+        for (var n = 2; taken(copy); n++) copy = $"{stem}-{n}.json";
+        return copy;
     }
 
     /// <summary>
@@ -295,7 +332,7 @@ public static class PolicyCommand
         return arguments.Command switch
         {
             "show" => Show(arguments.PolicyPath, output, files),
-            "apply" => Change(ChangeFile(arguments.Target!, files), arguments, input, output, files, restartRunner, console),
+            "apply" => Change(CopiedChange(arguments.Target!, arguments.PolicyPath, files), arguments, input, output, files, restartRunner, console),
             _ => Change(AllowApp(arguments, files), arguments, input, output, files, restartRunner, console),
         };
     }
@@ -413,11 +450,10 @@ public static class PolicyCommand
     }
 
     /// <summary>
-    /// The change file's text. A UNC or device path is refused on its text, before anything is opened. The size is
-    /// checked before the file is read, and no more than the limit is read whatever the size says. The text is read
-    /// as UTF-8 unless the file starts with the byte order mark of another encoding.
+    /// The change file's bytes. A UNC or device path is refused on its text, before anything is opened. The size is
+    /// checked before the file is read, and no more than the limit is read whatever the size says.
     /// </summary>
-    private static string ChangeFile(string path, IPolicyFiles files)
+    private static byte[] ChangeFile(string path, IPolicyFiles files)
     {
         var full = RunnerPolicy.IsUncOrDevice(path) ? path : Path.GetFullPath(path);
         if (RunnerPolicy.IsUncOrDevice(full)) throw new RunnerPolicy.InvalidPolicyException("the change file must be on a local drive");
@@ -426,7 +462,52 @@ public static class PolicyCommand
         var bytes = new byte[MaxChangeFileBytes + 1];
         var read = file.Content.ReadAtLeast(bytes, bytes.Length, throwOnEndOfStream: false);
         if (read > MaxChangeFileBytes) throw new RunnerPolicy.InvalidPolicyException("the change file is larger than 256 KiB");
-        return Text(bytes, read);
+        return bytes[..read];
+    }
+
+    /// <summary>
+    /// The text of the change that <c>apply</c> shows and applies. The change file is read once (<see cref="ChangeFile"/>)
+    /// and copied as a new file into the change folder, which the tool creates for administrators only when it is
+    /// missing and uses only when it can trust it, looked at after it was created (as the backup folder); then the copy
+    /// is read. The change file may sit in a folder its user can change: what it holds after the copy changes nothing.
+    /// The copy stays, as a record of what the tool was given. The text is read as UTF-8 unless it starts with the
+    /// byte order mark of another encoding.
+    /// </summary>
+    private static string CopiedChange(string path, string policyPath, IPolicyFiles files)
+    {
+        var bytes = ChangeFile(path, files);
+        var folder = ChangeFolder(policyPath);
+        Copying(folder, () => { if (files.Kind(folder) == PathKind.None) files.CreateChangeFolder(folder); });
+        switch (files.Kind(folder))
+        {
+            case PathKind.Folder when files.ChangeFolderProblems(folder) is { Count: > 0 } problems:
+                throw new RunnerPolicy.InvalidPolicyException($"the change folder cannot be trusted: {string.Join("; ", problems)}; an administrator must check and remove it");
+            case PathKind.Folder:
+                break;
+            default:
+                throw new RunnerPolicy.InvalidPolicyException($"{folder} exists and is not a folder; an administrator must check and remove it");
+        }
+        var copy = ChangeCopyPath(policyPath, Path.GetFileName(path), DateTimeOffset.Now, name => files.Kind(name) != PathKind.None);
+        byte[]? copied = null;
+        Copying(folder, () =>
+        {
+            files.CreateChangeCopy(copy, bytes);
+            copied = files.ReadBytes(copy) ?? throw new IOException("the copy is not there");
+        });
+        return Text(copied!, copied!.Length);
+    }
+
+    /// <summary>Runs a step of the copy; a failure says that nothing was changed.</summary>
+    private static void Copying(string folder, Action step)
+    {
+        try
+        {
+            step();
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            throw new IOException($"The change file could not be copied to {folder}: {e.Message.TrimEnd('.')}. Nothing was changed.", e);
+        }
     }
 
     /// <summary>

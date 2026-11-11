@@ -116,10 +116,35 @@ public class PolicyCommandTests
 
         public IReadOnlyList<string> BackupFolderProblems(string folder) => BackupProblems.GetValueOrDefault(folder, []);
 
+        /// <summary>What is wrong with the folder for change copies; nothing unless a test puts it here.</summary>
+        public Dictionary<string, string[]> ChangeProblems { get; } = [];
+
+        public IReadOnlyList<string> ChangeFolderProblems(string folder) => ChangeProblems.GetValueOrDefault(folder, []);
+
+        /// <summary>The copies apply made of change files, by path (kept apart from the other files, so that the tests
+        /// of the policy's own files see only those).</summary>
+        public Dictionary<string, byte[]> Copies { get; } = [];
+
+        /// <summary>When set, writing a copy fails with it.</summary>
+        public Exception? CopyFailure { get; set; }
+
+        /// <summary>Runs after a copy was written.</summary>
+        public Action<string>? AfterCopy { get; set; }
+
+        public void CreateChangeFolder(string folder) => Folders.Add(folder);
+
+        public void CreateChangeCopy(string path, byte[] content)
+        {
+            if (CopyFailure is not null) throw CopyFailure;
+            if (Kind(path) != PathKind.None) throw new IOException("The file exists.");
+            Copies[path] = content.ToArray();
+            AfterCopy?.Invoke(path);
+        }
+
         public PathKind Kind(string path)
         {
             Looked.Add(path);
-            var kind = Folders.Contains(path) ? PathKind.Folder : Text.ContainsKey(path) || Bytes.ContainsKey(path) ? PathKind.File : PathKind.None;
+            var kind = Folders.Contains(path) ? PathKind.Folder : Text.ContainsKey(path) || Bytes.ContainsKey(path) || Copies.ContainsKey(path) ? PathKind.File : PathKind.None;
             if (AfterLook is { } after && Steps.Count > 0 && Steps[^1].StartsWith("replace", StringComparison.Ordinal))
             {
                 AfterLook = null;
@@ -132,6 +157,7 @@ public class PolicyCommandTests
         {
             Reads.Add(path);
             if (Text.ContainsKey(path) && Failures.TryGetValue("read", out var failure)) throw failure;
+            if (Copies.TryGetValue(path, out var copy)) return copy;
             return Bytes.TryGetValue(path, out var bytes) ? bytes : Text.TryGetValue(path, out var text) ? Encoding.UTF8.GetBytes(text) : null;
         }
 
@@ -326,6 +352,110 @@ public class PolicyCommandTests
         Assert.Equal(Starter, tool.Files.Text[backup]);
         Assert.Equal(write.Json, tool.Files.Text[PolicyPath]);
         Assert.DoesNotContain(tool.Files.Text.Keys, name => name.EndsWith(".tmp", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Apply_first_copies_the_change_file_into_its_own_folder_and_applies_the_copy()
+    {
+        // The change file may be in a folder its user can change (Documents, where the recorder saves): the tool works
+        // from a copy in a folder of its own that only administrators can change.
+        var tool = new Tool();
+        var before = DateTimeOffset.Now;
+        Assert.Equal(0, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Equal($"{Changing()}\n{AllowErp}\n{OneApp}\n{Prompt}{Updated}\n", tool.Output);
+        var folder = PolicyCommand.ChangeFolder(PolicyPath);
+        Assert.Equal(Path.Combine(Path.GetDirectoryName(PolicyPath)!, "policy-changes"), folder);
+        Assert.Contains(folder, tool.Files.Folders);
+        var copy = Assert.Single(tool.Files.Copies);
+        Assert.Contains(copy.Key, new[] { before, DateTimeOffset.Now }.Select(time => PolicyCommand.ChangeCopyPath(PolicyPath, "change.json", time, _ => false)));
+        Assert.Equal(Change, Encoding.UTF8.GetString(copy.Value));
+        // The change file itself is opened once, as before, and the copy is what is read for the summary.
+        Assert.Single(tool.Files.Opened);
+        Assert.Contains(copy.Key, tool.Files.Reads);
+
+        // Each apply keeps its own copy.
+        Assert.Equal(0, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Equal(2, tool.Files.Copies.Count);
+    }
+
+    [Fact]
+    public void What_is_shown_and_applied_is_the_copy_and_a_change_file_changed_meanwhile_changes_nothing()
+    {
+        var other = $$"""{ "allowedApps": [{ "exe": "Other.exe", "path": {{J(Path.Combine(Root, "Other", "Other.exe"))}} }] }""";
+        var tool = new Tool();
+        // Whoever owns the folder of the change file changes it while the administrator reads the summary.
+        tool.AtPrompt = () => tool.Files.Text[ChangePath] = other;
+        Assert.Equal(0, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Equal(ErpPath, Assert.Single(RunnerPolicy.Parse(Assert.Single(tool.Files.Writes).Json).AllowedApps).Path);
+        Assert.Equal(Change, Encoding.UTF8.GetString(Assert.Single(tool.Files.Copies).Value));
+
+        // The summary and the write come from the copy as it is in the tool's folder.
+        var read = new Tool();
+        read.Files.AfterCopy = path => read.Files.Copies[path] = Encoding.UTF8.GetBytes(other);
+        Assert.Equal(0, read.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Contains("Allow app \"Other.exe\"", read.Output);
+        Assert.Equal("Other.exe", Assert.Single(RunnerPolicy.Parse(Assert.Single(read.Files.Writes).Json).AllowedApps).Exe);
+    }
+
+    [Fact]
+    public void A_change_folder_that_cannot_be_trusted_stops_apply_before_the_summary()
+    {
+        // The runner's user may be able to create the folder before the tool does.
+        var folder = PolicyCommand.ChangeFolder(PolicyPath);
+        var tool = new Tool();
+        tool.Files.Folders.Add(folder);
+        tool.Files.ChangeProblems[folder] = [@"PC\bot owns the change folder"];
+        Assert.Equal(1, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Equal(R(@"the change folder cannot be trusted: PC\bot owns the change folder; an administrator must check and remove it") + "\n", tool.Output);
+        Assert.Equal("y\n", tool.Unread);
+        Assert.Empty(tool.Files.Copies);
+        Assert.Empty(tool.Files.Writes);
+
+        var planted = new Tool();
+        planted.Files.Text[folder] = "planted";
+        Assert.Equal(1, planted.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Equal($"{R($"{folder} exists and is not a folder; an administrator must check and remove it")}\n", planted.Output);
+        Assert.Empty(planted.Files.Copies);
+        Assert.Empty(planted.Files.Writes);
+    }
+
+    [Fact]
+    public void A_copy_that_cannot_be_written_stops_apply_with_nothing_changed()
+    {
+        var tool = new Tool();
+        tool.Files.CopyFailure = new UnauthorizedAccessException("Access to the path is denied.");
+        Assert.Equal(1, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Equal(R($"The change file could not be copied to {PolicyCommand.ChangeFolder(PolicyPath)}: Access to the path is denied. Nothing was changed.") + "\n", tool.Output);
+        Assert.Empty(tool.Files.Writes);
+        Assert.Equal(0, tool.Restarts);
+    }
+
+    [Fact]
+    public void Nothing_is_copied_for_a_change_file_that_is_refused_or_for_allow_app()
+    {
+        var tool = new Tool();
+        Assert.Equal(1, tool.Run("y\n", "apply", Path.Combine(Root, "changes", "missing.json"), "--policy", PolicyPath));
+        tool.Files.Text[ChangePath] = new string(' ', (int)PolicyCommand.MaxChangeFileBytes + 1);
+        Assert.Equal(1, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Equal(0, tool.Run("y\n", "allow-app", ErpPath, "--policy", PolicyPath));
+        Assert.Empty(tool.Files.Copies);
+        Assert.DoesNotContain(PolicyCommand.ChangeFolder(PolicyPath), tool.Files.Folders);
+    }
+
+    [Fact]
+    public void A_copy_is_named_after_the_change_file_and_the_time_and_never_replaces_another()
+    {
+        var at = new DateTimeOffset(2026, 11, 11, 14, 47, 0, TimeSpan.Zero);
+        var folder = PolicyCommand.ChangeFolder(PolicyPath);
+        Assert.Equal(Path.Combine(folder, "erp.policy-change.20261111-144700.json"), PolicyCommand.ChangeCopyPath(PolicyPath, "erp.policy-change.json", at, _ => false));
+        Assert.Equal(Path.Combine(folder, "notes.txt.20261111-144700.json"), PolicyCommand.ChangeCopyPath(PolicyPath, "notes.txt", at, _ => false));
+        var first = Path.Combine(folder, "a.20261111-144700.json");
+        Assert.Equal(Path.Combine(folder, "a.20261111-144700-2.json"), PolicyCommand.ChangeCopyPath(PolicyPath, "a.JSON", at, name => name == first));
+        Assert.Equal(Path.Combine(folder, new string('x', 100) + ".20261111-144700.json"), PolicyCommand.ChangeCopyPath(PolicyPath, new string('x', 150) + ".json", at, _ => false));
+        // A name that holds a stream (change.json:more) or another character Windows refuses in a file name is not
+        // taken as it is: the copy is one plain file.
+        Assert.Equal(Path.Combine(folder, "change.json_more.20261111-144700.json"), PolicyCommand.ChangeCopyPath(PolicyPath, "change.json:more", at, _ => false));
+        Assert.Equal(Path.Combine(folder, "a_b_c.20261111-144700.json"), PolicyCommand.ChangeCopyPath(PolicyPath, "a?b\u0001c.json", at, _ => false));
     }
 
     [Theory]
