@@ -84,7 +84,7 @@ export const runStepsProperties: INodeProperties[] = [
     default: '',
     placeholder: 'https://example.com/account',
     description:
-      "The site this run may visit, and where it starts when the steps do not say. Required without a Site Login; with one, it must be one of the credential's Sites the Browser May Open.",
+      "Browser steps only: where the run starts when the steps do not say, and the site it may visit. Required without a Site Login; with one, it must be one of the credential's Sites the Browser May Open.",
     displayOptions: runSteps,
   },
   {

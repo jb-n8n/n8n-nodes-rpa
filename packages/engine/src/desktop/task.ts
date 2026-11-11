@@ -23,6 +23,7 @@ import { sleep } from '../steps/poll.js';
 import { newRunState, runSteps, type StepContext } from '../steps/run.js';
 import type { DesktopScript, ErrorCode, PortalPolicy, RunState, Script, Step, StepLogEntry, StepOutput } from '../types.js';
 import { connectRunner, RUNNER_CONNECT_TIMEOUT_MS, type Lease, type RunnerClient, type RunnerEndpoint } from './client.js';
+import { desktopFailureText } from './failure-text.js';
 import {
   DesktopUnavailableError, ElementCannotActError, ElementNotFoundError, ElementNotUniqueError, ExpectedFileMissingError, NoRunError, PolicyRefusedError, PROTOCOL_VERSION,
   RunnerBusyError, RunnerConnectError, RunnerDisconnectedError, RunnerTimeoutError,
@@ -297,7 +298,8 @@ export async function runDesktopTask(input: DesktopTaskInput): Promise<DesktopTa
       const cause = desktop.errors.get(res.failure.index);
       const code = codeOf(cause, res.failure.message);
       const lost = lease?.error || cause instanceof NoRunError ? ` (${LEASE_LOST})` : '';
-      return fail(code, `${shownFailure(res.failure.intent, failure.message)}${lost}`, base);
+      const found = desktopFailureText(res.failure.index, res.failure.intent, cause);
+      return fail(code, `${found !== undefined ? m.mask(found) : shownFailure(res.failure.intent, failure.message)}${lost}`, base);
     }
     const tail = { ...ids, log: maskedLog(res.state.log, outputMasker(secrets, surface)), ...(res.state.submitted ? { submitted: true } : {}) };
     const o = override();

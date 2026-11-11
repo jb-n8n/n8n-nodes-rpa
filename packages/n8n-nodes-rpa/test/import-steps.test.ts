@@ -660,7 +660,7 @@ describe('Import Steps: execution', () => {
       expect(error).toBeInstanceOf(NodeOperationError);
       expect((error as NodeOperationError).message).toBe(`auth_blocked: ${message}`);
       expect((error as NodeOperationError).description).toBe(
-        'auth_blocked: The site asked for a one-time code and the RPA Site Login has no TOTP Secret. Put the authenticator\'s seed in the Site Login, or take the code from a workflow: set Options → One-Time Code Workflow (in Run Steps or in a step document, also set "source": "workflow" in the sign-in step).',
+        'auth_blocked: The site asked for a one-time code and the RPA Site Login has no TOTP Secret. Put the authenticator\'s seed in its TOTP Secret. To take the code from a workflow instead, set Options → One-Time Code Workflow (steps you wrote also need "source": "workflow" in the sign-in step).',
       );
       expect(engine.adoptions[0]).not.toHaveProperty('codeProvider');
     });
@@ -682,7 +682,7 @@ describe('Import Steps: execution', () => {
         'auth_blocked: Sign in with an authentication code: detected:mfa_code: the one-time code workflow failed: it is not published: open the workflow set in Options → One-Time Code Workflow and click Publish (Workflow is not active and cannot be executed.)',
       );
       expect((error as NodeOperationError).description).toBe(
-        'auth_blocked: The sign-in needed a one-time code from the One-Time Code Workflow and did not get one: the first line says why. Run that workflow by itself until it returns one item with a code field, publish it, then run again.',
+        'auth_blocked: The One-Time Code Workflow gave no code; the first line says why. Run that workflow by itself until it returns one item with a code field, publish it, then run again.',
       );
     });
 

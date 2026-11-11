@@ -9,7 +9,8 @@ import { INPUTS_EXPRESSION, nodeInputs, nodeOutputs, OUTPUTS_EXPRESSION } from '
 import { OPERATIONS, properties, SUBTITLE, URL_HINT } from '../nodes/Playwright/description/index.js';
 import { ALL_OPERATIONS, ID_PATTERN_OPTION, QUICK_OPERATIONS } from '../nodes/Playwright/description/options.js';
 import { STEPS_PLACEHOLDER, UNSIGNED_NOTICE } from '../nodes/Playwright/description/runSteps.js';
-import { GUIDANCE } from '../nodes/Playwright/errors.js';
+import { CODE_WORKFLOW_GUIDANCE, GUIDANCE, guidanceFor, LOGIN_PAGE_GUIDANCE, NO_TOTP_SECRET_GUIDANCE, PASSWORD_CHANGED_GUIDANCE } from '../nodes/Playwright/errors.js';
+import { SITE_LOGIN_PASSWORD_CHANGED, siteLoginLockedOut } from '../nodes/Playwright/execute.js';
 import { COMPILERS, quickFieldNames, type QuickOp } from '../nodes/Playwright/operations/quick.js';
 import { executeRunSteps, readRunStepsParams } from '../nodes/Playwright/operations/runSteps.js';
 import { DISPATCH, Playwright } from '../nodes/Playwright/Playwright.node.js';
@@ -205,6 +206,17 @@ describe('Run Steps and Sign Steps fields', () => {
     for (const name of ['allowPrivateNetwork', 'allowUnsignedWrites', 'deliverUnconfirmed', 'breakerResetKey', 'codeWorkflowId']) expect(option(name).noDataExpression, name).toBe(true);
     expect(option('breakerResetKey').description).toMatch(/not an expression/);
   });
+  it('the options a new user sets say the common case first: Start URL, Variables, Login Breaker Reset Key', () => {
+    expect(field('startUrl').description).toBe(
+      "Browser steps only: where the run starts when the steps do not say, and the site it may visit. Required without a Site Login; with one, it must be one of the credential's Sites the Browser May Open.",
+    );
+    expect(option('variables').description).toBe(
+      'Values for {{var.name}} in the steps. In Run Steps, a password or another secret goes in an RPA Secret Variables credential instead: a value here is masked only where a secret fill or a desktop step types it.',
+    );
+    expect(option('breakerResetKey').description).toBe(
+      "With a Site Login, a failed login stops further logins until its username, password or TOTP Secret is changed, which gets one try. If the login was right, or the account is unlocked now, change this value (for example to today's date) to allow the next login. Type it, not an expression: a login that fails stays blocked for the rest of the execution.",
+    );
+  });
   it('Allow Unsigned Writes says what it hands over', () => {
     expect(option('allowUnsignedWrites').description).toBe(
       'Whether unsigned steps may sign in, submit a form or download through a form. With this on, whoever can set the steps drives the Site Login and, on a login page that copies typed values into the page, can read its password out through step outcomes. Turn it on only when everyone who can set the steps is trusted with that credential. Must be set directly, not with an expression.',
@@ -327,21 +339,40 @@ describe('wording and guidance', () => {
   });
   it('GUIDANCE is the guidance table, verbatim', () => {
     expect(GUIDANCE).toEqual({
-      login_failed: 'The site rejected the username or password, so no further login is tried with them. Correct the username or password in the RPA Site Login credential: the next run then tries once (a changed TOTP Secret counts as a changed login too; a breaker that opened in 0.2.0 or earlier still needs a new reset key). If they were right and something else was wrong, type a new value (any text, such as today\'s date) in Options → Login Breaker Reset Key.',
+      login_failed: 'The site rejected the username or password. Correct them in the RPA Site Login credential: the next run tries once more. If they were right, type a new value (any text, such as today\'s date) in Options → Login Breaker Reset Key.',
       account_locked: 'The site says the account is locked. Unlock it with the site owner, then change Options → Login Breaker Reset Key.',
-      auth_blocked: 'The site asked for a second factor this run could not answer: the first line says which. If nothing automatic can answer it (a push message, a hardware key), a person has to sign in.',
+      auth_blocked: 'The site asked for a second factor that this run could not answer; the first line says which. A push message or a hardware key needs a person to sign in.',
       site_down: 'The site did not answer, returned a server error, or the first page did not finish loading in time. Try again later.',
       browser_unavailable: 'The browser server could not be reached or was rejected. Check the RPA Browser credential (README: Where the browser runs).',
-      drift_detected: 'A step did not find what it expected: an element was not found, matched more than one, or could not take the action (for example a disabled button). On a first run, correct the step\'s locator. On steps that used to work, the page or the app changed: correct the locator, or, for browser steps, use Run Steps with AI repair.',
+      drift_detected: 'A step did not find what it expected; the first line says which step and what it found. Correct that step, or record it again, and approve the new version. Browser steps can also repair themselves with AI Repair.',
       not_found: 'The page or the data was not found.',
       incomplete: 'Not every row the page states was read, a capture failed, a limit was hit, the run timed out, or it was cancelled.',
-      script_untrusted: 'The steps are not signed by the Step Signing key, or the signature does not match their name, version, start site, Site Login, approver or the expected version. Nothing ran.',
-      policy_violation: 'The run tried something its rules do not allow, and stopped; the first line says what. In a browser: an unlisted or private site, a write, a password field, or a secret outside sign-in. On a desktop: an app or a window the runner\'s policy does not allow, or a write that was not declared.',
-      locked_out: 'No login was tried, because an earlier one failed. If the site rejected the username or password, correct it in the RPA Site Login credential and run again: a changed login (username, password or TOTP Secret) gets one try, but a breaker that opened in 0.2.0 or earlier still needs a new reset key. If the login was right, or the account has been unlocked, type a new value (any text) in Options → Login Breaker Reset Key and run again. Or a run changed the Site Login\'s password earlier in this execution: store the new password where the Site Login reads it, then run again.',
+      script_untrusted: 'Nothing ran: the steps are not signed, or their signature does not fit this node (another Step Signing key, Site Login, name, version or start site). Approve the steps again, or set the node up as it was when they were signed.',
+      policy_violation: 'The run tried something its rules do not allow and stopped; the first line says what. If that was meant, allow it where the first line says. A desktop step that saves or sends must be marked as a write when its steps are approved.',
+      locked_out: 'No login was tried, because an earlier login with this Site Login failed. Correct the username or password in the RPA Site Login credential and run again: a changed login gets one try. If the login was right, or the account is unlocked now, type a new value (any text) in Options → Login Breaker Reset Key.',
       busy: 'Another run using this Site Login or desktop runner is in progress. This run was skipped.',
       password_change_failed: 'The site did not confirm the new password: its change-password page came back, or still showed when the wait for its answer ran out (then the new password may or may not be in force). The login breaker stays closed. Keep the pending password, and check the site\'s password rules and the run variable that holds it.',
-      runner_unavailable: 'The desktop runner could not be reached, refused the token or the certificate, its Windows session is locked or signed out, or the app is not installed where the runner\'s policy says. Check the RPA Desktop Runner credential and the runner machine. On a machine installed with -Unattended nobody needs to be signed in: check that the runner\'s address is reachable from n8n, then run Show-RpaConnection.ps1 and read supervisor.log on that machine.',
+      runner_unavailable: 'n8n could not use the desktop runner; the first line says why. Check the RPA Desktop Runner credential, then run rpa status on the runner machine.',
     });
+  });
+  it('the guidance for a cause the first line names: the code workflow, no TOTP Secret, an unlisted login page, a password changed in this execution', () => {
+    expect(CODE_WORKFLOW_GUIDANCE).toBe('The One-Time Code Workflow gave no code; the first line says why. Run that workflow by itself until it returns one item with a code field, publish it, then run again.');
+    expect(NO_TOTP_SECRET_GUIDANCE).toBe(
+      'The site asked for a one-time code and the RPA Site Login has no TOTP Secret. Put the authenticator\'s seed in its TOTP Secret. To take the code from a workflow instead, set Options → One-Time Code Workflow (steps you wrote also need "source": "workflow" in the sign-in step).',
+    );
+    expect(LOGIN_PAGE_GUIDANCE).toBe(
+      'The sign-in stopped at an address that is not listed as a login page. Add the address the first line names to Pages Where the Password May Be Typed in the RPA Site Login, then run again.',
+    );
+    expect(PASSWORD_CHANGED_GUIDANCE).toBe('A run changed this Site Login\'s password earlier in this execution. Store the new password where the Site Login reads it, then run again.');
+    const notListed = 'Sign in: signIn refused: the username field\'s form posts to example.com/login, which is not listed in the Site Login under Pages Where the Password May Be Typed.';
+    expect(guidanceFor('policy_violation', notListed)).toBe(LOGIN_PAGE_GUIDANCE);
+    expect(guidanceFor('policy_violation', 'Blocked: the page tried to open cdn.other.com, which is not allowed.')).toBe(GUIDANCE.policy_violation);
+    expect(guidanceFor('locked_out', SITE_LOGIN_PASSWORD_CHANGED)).toBe(PASSWORD_CHANGED_GUIDANCE);
+    expect(guidanceFor('locked_out', siteLoginLockedOut('example.com'))).toBe(GUIDANCE.locked_out);
+    // No message names a version: the history of the breaker is in the changelog.
+    for (const text of [...Object.values(GUIDANCE), CODE_WORKFLOW_GUIDANCE, NO_TOTP_SECRET_GUIDANCE, LOGIN_PAGE_GUIDANCE, PASSWORD_CHANGED_GUIDANCE]) {
+      expect(text, text).not.toMatch(/\d+\.\d+\.\d+/);
+    }
   });
 });
 

@@ -49,7 +49,7 @@ export const startSiteMismatch = (signed: string, expected: string) => `the sign
 
 // Network guard. Golden: tests assert them verbatim.
 export const browserUnreachable = (url: string) =>
-  `Could not connect to the browser server at ${url}. Is it running? With the compose stack: docker compose up -d browser. On a Windows install: is the bot account signed in? Installed with -Unattended, nobody needs to be: check that this address is reachable, then run Show-RpaConnection.ps1 and read supervisor.log on that machine (README: Where the browser runs).`;
+  `Could not connect to the browser server at ${url}. Is it running? With the compose stack: docker compose up -d browser; on a Windows machine, run rpa status there (README: Where the browser runs).`;
 export const browserVersionMismatch = (server: string, client: string) =>
   `The browser server is version ${server} but this node needs ${client}. Use image mcr.microsoft.com/playwright:v${client}.`;
 export const CHROMIUM_MISSING = 'Chromium not found. Run: npx playwright install chromium';
@@ -240,6 +240,18 @@ export const runnerAppMissing = (exe: string) =>
   `the desktop runner could not start ${exe}: it is not installed at the path the runner's policy names (allowedApps[].path). Install it there or correct the policy`;
 export const desktopNotInteractive = (locked: boolean) =>
   locked ? 'the desktop runner\'s Windows session is locked: unlock it or sign the runner user in again' : 'the desktop runner is not in an interactive Windows session';
+// A failed desktop step, led by the step and what it found (desktop/failure-text.ts); the runner's target comes last.
+type ShownStep = { number: number; intent: string };
+const stepLead = (s: ShownStep): string => `Step ${s.number} (${s.intent})`;
+/** `found`: `2 buttons named "Save"`; `conditions`: the ones the target does not use yet, `name, automationId or className`. */
+export const desktopNotUnique = (s: ShownStep, found: string, conditions: string, target: string): string =>
+  `${stepLead(s)} found ${found}. Add what tells them apart to the step's target: the window, a parent with an automationId, or a condition such as ${conditions}. Target: ${target}`;
+/** `element`: `the button named "Post"`; `hint`: the runner's own advice. */
+export const desktopDisabled = (s: ShownStep, element: string, hint: string, target: string): string =>
+  `${stepLead(s)} found ${element} disabled. ${hint} Target: ${target}`;
+export const desktopOtherCopy = (s: ShownStep, exe: string, window: string): string =>
+  `${stepLead(s)} found its window in a copy of ${exe} that this run did not start (most often one left open before the run). Close that copy on the runner machine, then run again. Window: ${window}`;
+
 /** The credential test's success message, with the Windows session's state as the runner reports it. */
 export const runnerConnected = (session: { interactive?: boolean; locked?: boolean }) =>
   `Connected to the desktop runner (session ${session?.locked ? 'locked' : session?.interactive ? 'interactive' : 'not interactive'})`;

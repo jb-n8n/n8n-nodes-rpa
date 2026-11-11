@@ -38,7 +38,7 @@ function operation(name: string): string {
 
 // Hard-coded (not imported): the README must say exactly what the node says.
 const GOLDEN_MESSAGES = [
-  'Could not connect to the browser server at ws://browser:3000/. Is it running? With the compose stack: docker compose up -d browser. On a Windows install: is the bot account signed in? Installed with -Unattended, nobody needs to be: check that this address is reachable, then run Show-RpaConnection.ps1 and read supervisor.log on that machine (README: Where the browser runs).',
+  'Could not connect to the browser server at ws://browser:3000/. Is it running? With the compose stack: docker compose up -d browser; on a Windows machine, run rpa status there (README: Where the browser runs).',
   'The browser server is version X but this node needs Y. Use image mcr.microsoft.com/playwright:vY.',
   'Chromium not found. Run: npx playwright install chromium',
   'URL must start with http:// or https:// (got "file:").',

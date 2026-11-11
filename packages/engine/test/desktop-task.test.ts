@@ -285,26 +285,47 @@ describe('desktop task: refusals and runner errors', () => {
     expect({ code: expectFails.code, message: expectFails.message }).toEqual({ code: 'drift_detected', message: 'Sign in: expected UI Automation Edit #txtSearch to be visible within 0.3 s' });
   });
 
-  it('the runner\'s own texts for a locator that matches several elements, a disabled element and a copy of the app it did not start reach the error unchanged', async () => {
+  it('a locator that matches several elements, a disabled element and a copy of the app the run did not start: the step, what it found, what to do, then the runner\'s target', async () => {
     // Copies of what desktop/runner sends (RpcErrors.NotUnique, RetryableActionException.Disabled, WindowScope.RunWindows).
     const notUnique = 'not_unique: the primary target {controlType="Button", name="Copy"} matched 2 visible elements. To match one, add the window, '
       + 'a parent with an automationId before it in the path (parent, then child), or another condition such as name, automationId or className.';
+    const sevenButtons = 'not_unique: the primary target {exe="erpdemo.exe", title="ERP Demo - Line items"} :: {controlType="Button"} matched 7 visible elements. '
+      + 'To match one, add the window, a parent with an automationId before it in the path (parent, then child), or another condition such as name, automationId or className.';
+    const twoBoxes = 'not_unique: the primary target {controlType="Pane", automationId="grpFilter"} > {controlType="Edit", automationId="txtFrom"} matched 2 visible elements. '
+      + 'To match one, add the window, a parent with an automationId before it in the path (parent, then child), or another condition such as name, automationId or className.';
     const disabled = 'timeout: the element is disabled: the app reports it to UI Automation as not enabled ({controlType="Button", automationId="btnSignIn"}). '
       + 'If a person can click it, target an enabled element inside it, or use key steps (Tab, Space).';
     const otherCopy = 'policy_refused: the window {title="ERP Demo - Sign in"} belongs to a copy of "ErpDemo.exe" that this run did not start '
       + '(most often one that was already open before the run), so the run will not drive it. Close that copy on the runner machine (or end its process), then run again.';
     runner = await FakeRunner.start();
-    const click = doc([{ intent: 'Click Copy', click: uia('btnSignIn', 'Button') }]);
-    const cases: [string, number, string, string][] = [
-      ['resolve', -32005, notUnique, 'drift_detected'],
-      ['act', -32007, disabled, 'drift_detected'],
-      ['resolve', -32003, otherCopy, 'policy_violation'],
+    const click = doc([{ intent: 'Wait', waitFor: { target: uia('txtUser') }, optional: true, timeoutMs: 300 }, { intent: 'Click Copy', click: uia('btnSignIn', 'Button') }]);
+    const cases: [string, number, string, string, string][] = [
+      ['resolve', -32005, notUnique, 'drift_detected',
+        'Step 2 (Click Copy) found 2 buttons named "Copy". Add what tells them apart to the step\'s target: the window, a parent with an automationId, '
+        + 'or a condition such as automationId or className. Target: {controlType="Button", name="Copy"}'],
+      ['resolve', -32005, sevenButtons, 'drift_detected',
+        'Step 2 (Click Copy) found 7 buttons. Add what tells them apart to the step\'s target: the window, a parent with an automationId, '
+        + 'or a condition such as name, automationId or className. Target: {exe="erpdemo.exe", title="ERP Demo - Line items"} :: {controlType="Button"}'],
+      ['resolve', -32005, twoBoxes, 'drift_detected',
+        'Step 2 (Click Copy) found 2 text boxes with the id "txtFrom". Add what tells them apart to the step\'s target: the window, a parent with an automationId, '
+        + 'or a condition such as name or className. Target: {controlType="Pane", automationId="grpFilter"} > {controlType="Edit", automationId="txtFrom"}'],
+      ['act', -32007, disabled, 'drift_detected',
+        'Step 2 (Click Copy) found the button with the id "btnSignIn" disabled. If a person can click it, target an enabled element inside it, or use key steps (Tab, Space). '
+        + 'Target: {controlType="Button", automationId="btnSignIn"}'],
+      ['resolve', -32003, otherCopy, 'policy_violation',
+        'Step 2 (Click Copy) found its window in a copy of ErpDemo.exe that this run did not start (most often one left open before the run). '
+        + 'Close that copy on the runner machine, then run again. Window: {title="ERP Demo - Sign in"}'],
     ];
-    for (const [method, code, message, shown] of cases) {
+    for (const [method, code, message, shown, text] of cases) {
       runner.errorFor = { [method]: { code, message } };
       const r = failed(await run(click));
-      expect({ code: r.code, message: r.message }).toEqual({ code: shown, message: `Click Copy: ${message}` });
+      expect({ code: r.code, message: r.message }).toEqual({ code: shown, message: text });
+      // The step log keeps the runner's own words.
+      expect(r.log?.at(-1)?.note).toBe(message);
     }
+    // A runner text of another shape reaches the error as before: the intent, then the runner's words.
+    runner.errorFor = { resolve: { code: -32005, message: 'not_unique: 3 matches' } };
+    expect(failed(await run(click)).message).toBe('Click Copy: not_unique: 3 matches');
   });
 
   it('policy_refused: a declared write control or a gated key without the write flag; with a signed write: true it runs', async () => {

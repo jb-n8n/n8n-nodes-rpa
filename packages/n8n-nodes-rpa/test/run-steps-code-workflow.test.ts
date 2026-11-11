@@ -55,7 +55,7 @@ describe('One-Time Code Workflow options', () => {
     });
     expect(wf).not.toHaveProperty('placeholder');
     expect(wf).toMatchObject({
-      description: 'The published workflow that supplies the sign-in code when the steps\' sign-in takes its code from a workflow ("source": "workflow"): pick it from the list, or give its ID (the part of its address after /workflow/). It starts with an Execute Workflow Trigger, receives requestedAt and must return exactly one item with a code field of 6 to 10 digits. Publish it before the first run. In Import Steps, setting it makes a recorded sign-in take its code from this workflow, even when the Site Login has a TOTP Secret; a step document keeps its own sign-in, so in a step document also set \"source\": \"workflow\" in its totp. The approved steps then need the same workflow here in Run Steps. Must be set directly, not with an expression.',
+      description: 'The workflow that returns the sign-in\'s one-time code when the sign-in takes it from a workflow ("source": "workflow"). It starts with an Execute Workflow Trigger, gets requestedAt and returns one item whose code field holds 6 to 10 digits; publish it first. In Import Steps, a recorded sign-in then takes its code from it (a step document sets "source" itself); give Run Steps the same workflow. Must be set directly, not with an expression.',
     });
     expect(timeout).toMatchObject({ displayName: 'Code Timeout (Seconds)', type: 'number', default: 120, displayOptions: { show: { '/operation': ['runSteps', 'importSteps'] } } });
   });
