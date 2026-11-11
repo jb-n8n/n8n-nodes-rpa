@@ -4,7 +4,7 @@ import { expectedFileProperty } from './runSteps.js';
 const importSteps = { show: { operation: ['importSteps'] } };
 
 export const IMPORT_NOTICE =
-  'Imported steps make no form submissions or writes; Requests That Only Read still pass. Each step list runs once and is replayed in a fresh browser, so allow about twice Options → Max Seconds per step list. On sites with an authenticator code, the import needs either the TOTP Secret in the Site Login or Options → One-Time Code Workflow, and Max Seconds must leave room for up to a 30 s wait. What passes comes out on Repaired Steps for approval and Sign Steps.';
+  'Imported steps make no form submissions or writes; Requests That Only Read still pass. Each step list runs once and is replayed in a fresh browser, so allow about twice Options → Max Seconds per step list. On sites with an authenticator code, the import needs either the TOTP Secret in the Site Login or Options → One-Time Code Workflow, and Max Seconds must leave room for up to a 30 s wait. What passes comes out on Repaired Steps for approval and Sign Steps. Desktop steps (from a UiPath project, a step document or an RPA recording) are not replayed: they go to approval as written.';
 
 /** Import Steps: the source, how it arrives, the steps' name and what adoption needs to prove them. */
 export const importStepsProperties: INodeProperties[] = [
@@ -24,6 +24,12 @@ export const importStepsProperties: INodeProperties[] = [
         description:
           'Steps you wrote, as Run Steps takes them: a browser step document or a desktop step set. This is how hand-written steps get approved and signed. Browser steps that submit a form, download through a form, type a secret or change a password are not run: they go to approval marked not replayed.',
       },
+      {
+        name: 'RPA Recording',
+        value: 'recording',
+        description:
+          'A .rpa-recording.json file the RPA recorder saved on the Windows machine. Its desktop steps are not replayed: they go to approval as recorded.',
+      },
     ],
     description: 'What the file holds',
     displayOptions: importSteps,
@@ -38,7 +44,8 @@ export const importStepsProperties: INodeProperties[] = [
       { name: 'Text', value: 'text', description: 'The recording, code or step document pasted as text' },
     ],
     description: 'Where the recording, code or step document comes from',
-    displayOptions: { show: { operation: ['importSteps'] }, hide: { source: ['uipath'] } },
+    // A UiPath project and an RPA recording are always a file.
+    displayOptions: { show: { operation: ['importSteps'] }, hide: { source: ['uipath', 'recording'] } },
   },
   {
     displayName: 'Input Binary Field',
@@ -56,7 +63,7 @@ export const importStepsProperties: INodeProperties[] = [
     typeOptions: { rows: 10 },
     default: '',
     description: 'The recording, code or step document as text: Chrome Recorder JSON, JavaScript or TypeScript code, or a step document as JSON',
-    displayOptions: { show: { operation: ['importSteps'], inputFrom: ['text'] }, hide: { source: ['uipath'] } },
+    displayOptions: { show: { operation: ['importSteps'], inputFrom: ['text'] }, hide: { source: ['uipath', 'recording'] } },
   },
   {
     displayName: 'Name',
@@ -65,7 +72,8 @@ export const importStepsProperties: INodeProperties[] = [
     default: '',
     required: true,
     placeholder: 'line-item-export',
-    description: 'Names the imported steps. A UiPath project with several browser sequences gives one step list per sequence, named <name>-1, <name>-2 and so on.',
+    description:
+      'Names the imported steps. A UiPath project with several browser sequences gives one step list per sequence, named <name>-1, <name>-2 and so on. An RPA recording gives one desktop step list, named <name>-1.',
     displayOptions: importSteps,
   },
   {
@@ -109,8 +117,8 @@ export const importStepsProperties: INodeProperties[] = [
     displayOptions: importSteps,
   },
   expectedFileProperty(
-    // A step document's download steps carry their own checks.
-    { show: { operation: ['importSteps'] }, hide: { source: ['steps'] } },
+    // A step document's download steps carry their own checks; a recording's Save dialog gives its expectFile step.
+    { show: { operation: ['importSteps'] }, hide: { source: ['steps', 'recording'] } },
     'Set it when the steps download a file: the click that exports becomes a download step with these checks, and the replay must download a file that passes them.',
   ),
 ];

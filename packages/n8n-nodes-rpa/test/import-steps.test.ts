@@ -204,14 +204,15 @@ describe('Import Steps: the description', () => {
     for (const p of own) expect(p.displayOptions?.show?.operation, p.name).toEqual(['importSteps']);
     expect((field('source').options as INodePropertyOptions[]).map((o) => [o.name, o.value])).toEqual([
       ['Chrome Recorder (JSON)', 'chrome'], ['Playwright Code (JavaScript or TypeScript)', 'playwright'], ['UiPath Project (ZIP or XAML)', 'uipath'],
-      ['Step Document (JSON)', 'steps'],
+      ['Step Document (JSON)', 'steps'], ['RPA Recording', 'recording'],
     ]);
     expect(field('source').default).toBe('chrome');
-    expect(field('inputFrom')).toMatchObject({ default: 'binary', displayOptions: { show: { operation: ['importSteps'] }, hide: { source: ['uipath'] } } });
+    // A UiPath project and an RPA recording are always a file.
+    expect(field('inputFrom')).toMatchObject({ default: 'binary', displayOptions: { show: { operation: ['importSteps'] }, hide: { source: ['uipath', 'recording'] } } });
     expect((field('inputFrom').options as INodePropertyOptions[]).map((o) => [o.name, o.value])).toEqual([['Binary File', 'binary'], ['Text', 'text']]);
     expect(field('binaryPropertyName')).toMatchObject({ displayName: 'Input Binary Field', default: 'data', displayOptions: { hide: { inputFrom: ['text'] } } });
     expect(field('sourceText')).toMatchObject({
-      displayName: 'Recording or Code', typeOptions: { rows: 10 }, displayOptions: { show: { operation: ['importSteps'], inputFrom: ['text'] }, hide: { source: ['uipath'] } },
+      displayName: 'Recording or Code', typeOptions: { rows: 10 }, displayOptions: { show: { operation: ['importSteps'], inputFrom: ['text'] }, hide: { source: ['uipath', 'recording'] } },
     });
     expect(field('stepsName')).toMatchObject({ displayName: 'Name', required: true, default: '' });
     expect(field('aiRepair')).toMatchObject({ displayName: 'AI Repair', type: 'boolean', default: true });
@@ -219,8 +220,8 @@ describe('Import Steps: the description', () => {
     expect(field('idPattern').displayName).toBe('ID Pattern (Regex)');
     const file = field('expectedFile');
     expect(file.displayName).toBe('Expected File (First Version)');
-    // A step document's download steps carry their own checks.
-    expect(file.displayOptions).toEqual({ show: { operation: ['importSteps'] }, hide: { source: ['steps'] } });
+    // A step document's download steps carry their own checks; a recording's Save dialog gives its expectFile step.
+    expect(file.displayOptions).toEqual({ show: { operation: ['importSteps'] }, hide: { source: ['steps', 'recording'] } });
     expect((file.options as { values: INodeProperties[] }[])[0].values.map((v) => v.displayName)).toEqual([
       'File Type', 'File Name Pattern (Regex)', 'Minimum Size (Bytes)', 'Required Columns', 'Minimum Rows',
     ]);

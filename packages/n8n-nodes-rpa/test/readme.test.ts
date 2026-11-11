@@ -366,7 +366,7 @@ describe('README', () => {
       '{ report, drafts: [{ name, steps, adopted, code?, reason?, traceRef? }], workflowName? }', '`steps: null`', '`trace-<n>`', '`details.traceRef`', '`adopted: false`', 'never on Repaired Steps',
       '`<name>.workflow.json`', '`application/json`', '**Import from file**', '**Sign Steps** take it unchanged', 'No Step Signing key',
       // A step document: steps written by hand, as data, through the import's own rules.
-      '**Step Document (JSON)**', '**Step documents.**', 'nothing in it is evaluated', 'refused with the parser\'s message', '`missing input "<name>"`',
+      '**Step Document (JSON)**', '**Step documents.**', '**RPA Recording**', '**Recordings.**', 'A UiPath project and an RPA recording are always a file', 'nothing in it is evaluated', 'refused with the parser\'s message', '`missing input "<name>"`',
       'A `signature` and `approvedBy` beside the steps are not imported', 'with the safety flags computed from the steps',
       // Steps the import cannot run go to approval as written, and the approver is told so.
       'is not run and not replayed, not even its steps before the first of those', 'so a document Sign Steps would refuse is refused here with that reason',

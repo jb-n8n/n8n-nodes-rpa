@@ -202,3 +202,126 @@ describe('RPA: 5 Import a bot with a desktop project', () => {
     expect(render(message, data[0].json)).toContain('0 of 0 step lists passed the replay and are waiting for approval in RPA: 3 Approve steps. 1 desktop step lists are waiting there too, not replayed');
   });
 });
+
+const RECORDING = fileURLToPath(new URL('../../engine/test/fixtures/import/recording-erp/erp.rpa-recording.json', import.meta.url));
+type Json = Record<string, any>;
+/** A fresh copy of the ERP Demo recording the engine's fixture holds. */
+const recording = (): Json => JSON.parse(readFileSync(RECORDING, 'utf8'));
+const recordingItem = (rec: Json): INodeExecutionData => {
+  const data = Buffer.from(JSON.stringify(rec));
+  return { json: {}, binary: { data: { data: data.toString('base64'), mimeType: 'application/json', fileName: 'erp.rpa-recording.json', bytes: data.length } } };
+};
+const recordingParams = { ...importParams, source: 'recording' };
+async function importRecording(rec: Json = recording(), over: Record<string, unknown> = {}, credentials: HarnessOptions['credentials'] = {}) {
+  const [data, repaired] = await executeImportSteps(harness({ params: { ...recordingParams, ...over }, items: [recordingItem(rec)], credentials, continueOnFail: true }), noBrowser());
+  return { data, repaired };
+}
+const RECORDING_LINE = 'Not replayed: desktop steps imported from a recording are reviewed as written (there is no desktop proof yet). Check every step, and list in Write Steps the steps that save, post or submit.';
+
+describe('Import Steps with an RPA recording', () => {
+  it('Import Steps offers RPA Recording and reads it only from a file', async () => {
+    // Input From is hidden for a recording, as for a UiPath project: a pasted text left in the node is not read.
+    const { data } = await importRecording(recording(), { inputFrom: 'text', sourceText: 'not a recording' });
+    expect(data[0].json.error).toBeUndefined();
+    expect(data[0].json.report).toMatchObject({ source: 'recording', steps: 17 });
+  });
+
+  it('a recording imports without an RPA Browser credential', async () => {
+    const { data, repaired } = await importRecording();
+    expect(data[0].json.error).toBeUndefined();
+    expect(repaired).toHaveLength(1);
+    // An Expected File left on the node is not used, so a CDP browser credential does not refuse the import either.
+    const cdp = await importRecording(recording(), { expectedFile: { file: { namePattern: '^line-items' } } }, { playwrightBrowserApi: { mode: 'cdp', wsUrl: 'wss://cdp.example.net/' } });
+    expect(cdp.data[0].json.error).toBeUndefined();
+    expect(cdp.repaired).toHaveLength(1);
+  });
+
+  it('the ERP Demo recording gives a desktop entry for approval with writeCandidates [4, 16] and a workflow file', async () => {
+    const { data, repaired } = await importRecording();
+    const json = data[0].json;
+    expect(json.drafts).toEqual([expect.objectContaining({
+      name: 'erp-1', surface: 'desktop', adopted: false, forApproval: true, writeCandidates: [4, 16], variables: ['password'], secretVariables: ['password'],
+      reason: 'Desktop steps are not replayed at import (there is no desktop proof yet): they go to approval as imported. Review every step, supply the variables in Run steps, and list the steps that save, post or submit in Write Steps when you approve.',
+    })]);
+    expect(json.workflowName).toBe('ERP Demo line items (imported from a recording)');
+    expect(data[0].binary?.workflow).toMatchObject({ mimeType: 'application/json', fileName: 'erp.workflow.json' });
+    const item = repaired[0].json;
+    expect(item).toMatchObject({ name: 'erp-1', baseVersion: null, version: 1, attachmentNames: '' });
+    expect(String(item.changeList).split('\n')).toHaveLength(17);
+    expect(String(item.safetyLine)).toContain('candidate write: step 16 (Click Save) may save, post or submit');
+  });
+
+  it('the approval evidence line for a recording says it was imported from a recording, and for a UiPath project it is unchanged', async () => {
+    const { repaired } = await importRecording();
+    expect(repaired[0].json.evidenceLine).toBe(RECORDING_LINE);
+    const uipath = await importSample();
+    expect(uipath.repaired[0].json.evidenceLine).toBe('Not replayed: desktop steps imported from UiPath are reviewed as written (there is no desktop proof yet). Check every step, and list in Write Steps the steps that save, post or submit.');
+    // Sign Steps takes the recording's item, with its line, and signs exactly the declared writes.
+    const record = await sign(repaired[0].json, { writeSteps: '4, 16' });
+    expect(record).toMatchObject({ name: 'erp-1', version: 1, status: 'active', writeLine: 'Signed as writes: step 4 (Press Enter in Password), step 16 (Click Save)' });
+    // The line is one Sign Steps knows: another text is refused.
+    expect(String((await sign({ ...repaired[0].json, evidenceLine: RECORDING_LINE.replace('a recording', 'somewhere') })).error)).toContain('changed after it was reviewed');
+  });
+
+  it('the generated workflow\'s desktop pair and name say "recording"', async () => {
+    const r = engine.importSource('recording', readFileSync(RECORDING), { name: 'erp', hasSiteLogin: false });
+    const wf = buildWorkflow(r.flow!, r.drafts, { name: 'erp', desktopDrafts: r.desktopDrafts, source: 'recording' });
+    expect(wf.name).toBe('ERP Demo line items (imported from a recording)');
+    expect(wf.description).toBe('Imported from the recording ERP Demo line items: 1 desktop step list as signed RPA steps.');
+    const run = wf.nodes.find((n) => n.type === 'n8n-nodes-rpa.playwright')!;
+    expect(run.name).toBe('ERP Demo line items');
+    expect(run.parameters).toMatchObject({ operation: 'runSteps', aiRepair: false, options: { name: 'erp-1', variables: { values: [{ name: 'password', value: '' }] } } });
+    expect(run.credentials).toEqual({ rpaDesktopRunnerApi: { id: null, name: 'RPA Desktop Runner' } });
+    expect(run.notes).toBe('Runs the signed desktop steps erp-1 (17 steps imported from the recording "ERP Demo line items") on the desktop runner. Pick the RPA Desktop Runner and RPA Step Signing credentials. Fill in the Variables; password must come from a secret source.');
+    const gold = String(wf.nodes.find((n) => n.name === 'Fill in the variables (erp-1)')!.parameters.content);
+    expect(gold).toContain('import the recording with **RPA: 5 Import a bot**');
+    const text = JSON.stringify(wf);
+    expect(text).not.toMatch(/UiPath|project/);
+  });
+
+  it('a step the recording drops (nothing left to find its element by) is listed in leftOut', async () => {
+    const rec = recording();
+    rec.events.splice(10, 0, {
+      at: '2026-11-10T22:59:31.0000000+00:00', kind: 'click', label: 'Refresh',
+      target: { window: { exe: 'erpdemo.exe', title: 'ERP Demo - Line items' }, path: [{ controlType: 'Button', automationId: '3f2a9c1e-77b0-4c1d-9a55-0123456789ab' }] },
+    });
+    const { data, repaired } = await importRecording(rec);
+    expect(data[0].json.error).toBeUndefined();
+    const line = '2026-11-10T22:59:31.0000000+00:00, Refresh: the automation id looks generated (it may change from run to run) and nothing else names the element, so this step was left out: add it by hand';
+    expect(repaired[0].json.leftOut).toEqual([line]);
+    expect(String(repaired[0].json.leftOutList)).toContain('Refresh');
+    // Converted steps (the generated id dropped, the row position) are notes, not left out.
+    expect(String(repaired[0].json.leftOutList)).not.toContain('row position');
+  });
+
+  it('a recording named ={{ $env.SECRET }} reaches the workflow file only as plain text', async () => {
+    // The engine refuses every {{$...}} template in a recording: nothing is imported and no workflow file is written.
+    const refused = recording();
+    refused.name = '={{ $env.SECRET }}';
+    const { data: none } = await importRecording(refused);
+    expect(String(none[0].json.error)).toBe("Nothing was imported: the recording is not valid, so nothing was imported: name holds a {{$...}} template: only a fill's value may hold {{$exportDir}}");
+    expect(none[0].binary?.workflow).toBeUndefined();
+    // An expression without a $ passes the engine: in the workflow file it is only text.
+    const rec = recording();
+    rec.name = '={{ process.env.SECRET }}';
+    rec.events[8].label = '={{ process.env.SECRET }}';
+    const { data } = await importRecording(rec);
+    expect(data[0].json.error).toBeUndefined();
+    const wf = JSON.parse(Buffer.from(data[0].binary!.workflow.data, 'base64').toString('utf8')) as { name: string; nodes: { name: string; parameters: Record<string, unknown>; notes?: string }[] };
+    // Every parameter n8n would read as an expression is one the generator wrote; none holds the recording's text.
+    const expressions: string[] = [];
+    const walk = (v: unknown): void => {
+      if (typeof v === 'string') { if (v.startsWith('=')) expressions.push(v); }
+      else if (Array.isArray(v)) v.forEach(walk);
+      else if (v && typeof v === 'object') Object.values(v).forEach(walk);
+    };
+    for (const n of wf.nodes) walk(n.parameters);
+    expect(expressions.length).toBeGreaterThan(0);
+    for (const e of expressions) expect(e).not.toContain('process.env');
+    for (const n of wf.nodes) expect(n.name.startsWith('='), n.name).toBe(false);
+    expect(wf.name).toBe('{{ process.env.SECRET }} (imported from a recording)');
+    // The text is still there to read, as text: in the run node's notes and the About sticky.
+    expect(wf.nodes.find((n) => n.notes?.includes('"={{ process.env.SECRET }}"'))?.name).toBe('Run steps (erp-1)');
+    expect(String(wf.nodes.find((n) => n.name === 'About this import')!.parameters.content)).toContain('`{{ process.env.SECRET }}`');
+  });
+});

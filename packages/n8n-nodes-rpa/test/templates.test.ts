@@ -783,7 +783,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
   const imp = byName(t, 'Import steps');
   type FormField = { fieldLabel: string; fieldName: string; fieldType: string; requiredField?: boolean; multipleFiles?: boolean; fieldOptions?: { values: { option: string }[] } };
   const fields = (form.parameters.formFields as { values: FormField[] }).values;
-  const SOURCES = { 'Chrome Recorder': 'chrome', 'Playwright code': 'playwright', 'UiPath project': 'uipath', 'Step document': 'steps' };
+  const SOURCES = { 'Chrome Recorder': 'chrome', 'Playwright code': 'playwright', 'UiPath project': 'uipath', 'Step document': 'steps', 'RPA recording': 'recording' };
   const COMPLETION = 'n8n-nodes-base.form';
 
   /**
@@ -917,6 +917,29 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const [fromDoc] = await runImport(formItem('Step document', steps), () => NOT_ADOPTABLE);
     expect(fromDoc[0].json.report).toMatchObject({ source: 'steps', steps: 1 });
     expect(fromDoc[0].json.drafts).toEqual([expect.objectContaining({ name: 'line-item-export', adopted: false })]);
+  });
+
+  it('an RPA recording uploaded on the form goes to approval not replayed, with the workflow file, and the approval says where it came from', async () => {
+    const rec = readFileSync(new URL('../../engine/test/fixtures/import/recording-erp/erp.rpa-recording.json', import.meta.url));
+    const [data, repaired] = await runImport(formItem('RPA recording', rec), () => {
+      throw new Error('a recording is never adopted in a browser');
+    });
+    expect(data[0].json.error).toBeUndefined();
+    expect(data[0].json.report).toMatchObject({ source: 'recording', steps: 17 });
+    expect(data[0].binary?.workflow).toMatchObject({ fileName: 'line-item-export.workflow.json' });
+    const ifParams = byName(t, 'Workflow file?').parameters as { conditions: { conditions: { leftValue: string }[] } };
+    expect(evaluate(ifParams.conditions.conditions[0].leftValue, { $json: data[0].json })).toBe(true);
+    expect(render(completion('Imported, with the workflow file').completionMessage, { $json: data[0].json, $binary: data[0].binary }))
+      .toContain('1 desktop step lists are waiting there too, not replayed');
+    expect(repaired).toHaveLength(1);
+    const item = repaired[0].json;
+    const t3 = load('3-approve-steps.json');
+    const ask = render(String(byName(t3, 'Ask for approval (desktop steps)').parameters.message), {
+      $: (name: string) => ({ item: { json: name === 'Settings' ? { approvalTimeoutHours: 72 } : item } }),
+    });
+    expect(ask).toContain('Evidence: Not replayed: desktop steps imported from a recording are reviewed as written');
+    expect(sticky(t3, 'About this workflow').content).toContain('Desktop steps (imported from UiPath or a recording, or from a step document; not replayed)');
+    expect(sticky(t, 'About this workflow').content).toContain('an **RPA recording** saved by the RPA recorder on the Windows machine');
   });
 
   it('an import with an untranslated step puts it into leftOut and both emails show it', async () => {

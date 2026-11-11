@@ -76,6 +76,9 @@ export const DESKTOP_EVIDENCE_LINE =
 /** The same for desktop steps from a step document (Import Steps → Step Document (JSON)). */
 export const DESKTOP_DOCUMENT_EVIDENCE_LINE =
   'Not replayed: desktop steps from a step document are reviewed as written (there is no desktop proof yet). Check every step, and list in Write Steps the steps that save, post or submit.';
+/** The same for desktop steps from a recording (Import Steps → RPA Recording). */
+export const DESKTOP_RECORDING_EVIDENCE_LINE =
+  'Not replayed: desktop steps imported from a recording are reviewed as written (there is no desktop proof yet). Check every step, and list in Write Steps the steps that save, post or submit.';
 /**
  * The evidence line of browser steps from a step document that go to approval without a replay (Import Steps never runs
  * steps that submit a form, download through a form, type a secret or change a password). Sign Steps accepts it only on
@@ -87,7 +90,7 @@ export const NOT_REPLAYED_EVIDENCE_LINE =
  * Every evidence line a desktop Repaired steps item may carry, one per import source that gives desktop steps. The
  * evidence does not say where the steps came from, so Sign Steps accepts any of these on a desktop item.
  */
-export const DESKTOP_EVIDENCE_LINES: readonly string[] = [DESKTOP_EVIDENCE_LINE, DESKTOP_DOCUMENT_EVIDENCE_LINE];
+export const DESKTOP_EVIDENCE_LINES: readonly string[] = [DESKTOP_EVIDENCE_LINE, DESKTOP_DOCUMENT_EVIDENCE_LINE, DESKTOP_RECORDING_EVIDENCE_LINE];
 
 /** A proposal whose steps are a desktop step set (`surface: "desktop"`, own property, as the engine routes). */
 export function isDesktopProposal(p: Proposal | DesktopProposal): p is DesktopProposal {

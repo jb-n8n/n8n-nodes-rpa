@@ -7,7 +7,7 @@ import type { NodeContext } from '../context.js';
 import type { Engine } from '../engine.js';
 import { configNodeError, errorJson, failedOnCode, guidanceFor } from '../errors.js';
 import { isBreakerCode, runGuarded, type GuardedResult } from '../execute.js';
-import { DESKTOP_DOCUMENT_EVIDENCE_LINE, DESKTOP_EVIDENCE_LINE } from '../format.js';
+import { DESKTOP_DOCUMENT_EVIDENCE_LINE, DESKTOP_EVIDENCE_LINE, DESKTOP_RECORDING_EVIDENCE_LINE } from '../format.js';
 import { isQueueMode, openGuardStore, QUEUE_NEEDS_REDIS, type GuardStoreDeps } from '../guard-store.js';
 import { workflowFile } from '../import/workflow.js';
 import { lazyChatModel } from '../model.js';
@@ -39,7 +39,7 @@ export const TEXT_TOO_LARGE = 'Recording or Code is larger than 20 MiB, so it wa
 export const NAME_REQUIRED = 'Name is required: it names the imported steps.';
 export const NAME_EQUALS = 'Name must not start with "=".';
 export const SOURCE_UNKNOWN =
-  'Source must be Chrome Recorder (JSON), Playwright Code (JavaScript or TypeScript), UiPath Project (ZIP or XAML) or Step Document (JSON)';
+  'Source must be Chrome Recorder (JSON), Playwright Code (JavaScript or TypeScript), UiPath Project (ZIP or XAML), Step Document (JSON) or RPA Recording';
 export const IMPORT_NEEDS_START = 'Import Steps needs a Start URL or a Site Login: the imported steps do not open a page first.';
 /** The repair goal when Goal is empty: the agent sees the imported steps as its base. */
 export const DEFAULT_GOAL = 'Do what the imported steps do, on the page as it is now.';
@@ -63,9 +63,13 @@ export const CHECKED_NOT_RUN =
 /** A UiPath project with browser sequences, imported without an RPA Browser credential (its desktop sequences need none). */
 export const IMPORT_BROWSER_NEEDED = 'The project has browser steps: attach an RPA Browser credential to replay them.';
 
-const SOURCES: readonly string[] = ['chrome', 'playwright', 'uipath', 'steps'];
+const SOURCES: readonly string[] = ['chrome', 'playwright', 'uipath', 'steps', 'recording'];
 /** Sources that may hold only desktop steps: the RPA Browser credential is needed only for browser steps, known after the import. */
-const MAY_BE_DESKTOP: readonly string[] = ['uipath', 'steps'];
+const MAY_BE_DESKTOP: readonly string[] = ['uipath', 'steps', 'recording'];
+/** Sources that are always a file (Input From is hidden for them). */
+const FILE_ONLY: readonly string[] = ['uipath', 'recording'];
+/** Sources whose import does not use Expected File (it is hidden for them): their download steps come from the source. */
+const NO_EXPECTED_FILE: readonly string[] = ['steps', 'recording'];
 
 interface ImportParams {
   source: ImportSource;
@@ -100,8 +104,8 @@ function readImportParams(ctx: NodeContext, i: number): ImportParams {
   const idPattern = asString(get('idPattern', '')).trim();
   return {
     source: source as ImportSource,
-    // A UiPath project is always a file (Input From is hidden for it).
-    inputFrom: source !== 'uipath' && asString(get('inputFrom', 'binary')) === 'text' ? 'text' : 'binary',
+    // A UiPath project and an RPA recording are always a file (Input From is hidden for them).
+    inputFrom: !FILE_ONLY.includes(source) && asString(get('inputFrom', 'binary')) === 'text' ? 'text' : 'binary',
     binaryPropertyName: asString(get('binaryPropertyName', 'data')).trim() || 'data',
     name,
     startUrl: asString(get('startUrl', '')).trim(),
@@ -220,8 +224,8 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
     if (!MAY_BE_DESKTOP.includes(p.source) || credentialId(ctx, CREDENTIALS.browser) !== undefined) {
       endpoint = browserConfig(await browserCredentials(ctx, i));
       // A CDP connection cannot read downloaded files: refused before anything is read. A step document's downloads carry
-      // their own checks and Expected File is not used, so it does not refuse one.
-      refuseCdpDownload(engine, endpoint, p.source !== 'steps' && expectedDownload(engine, p.expectedFile) !== undefined);
+      // their own checks and a recording runs no browser: Expected File is not used, so neither refuses one.
+      refuseCdpDownload(engine, endpoint, !NO_EXPECTED_FILE.includes(p.source) && expectedDownload(engine, p.expectedFile) !== undefined);
     }
     if (siteLoginId !== undefined) siteLogin = siteLoginConfig(await ctx.getCredentials(CREDENTIALS.siteLogin, i));
     if (siteLogin && !node.credentials?.[CREDENTIALS.redis] && isQueueMode(deps)) throw new ConfigError(QUEUE_NEEDS_REDIS);
@@ -270,12 +274,13 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
   const leftOut = leftOutOf(report);
   const withLeftOut = <P extends object>(proposal: P): P => (leftOut.length ? { ...proposal, leftOut: [...leftOut] } : proposal);
 
-  // A UiPath project's flow becomes an n8n workflow for Import from file, whatever happens to its drafts.
+  // A UiPath project's or a recording's flow becomes an n8n workflow for Import from file, whatever happens to its drafts.
   let workflow: { binary: IBinaryKeyData; name: string } | undefined;
   if (imported.flow) {
     try {
       const file = workflowFile(imported.flow, imported.drafts, {
-        name: p.name, desktopDrafts, ...(p.codeWorkflowId ? { codeWorkflow: { id: p.codeWorkflowId, timeoutSeconds: p.codeTimeoutMs / 1000 } } : {}),
+        name: p.name, desktopDrafts, source: p.source === 'recording' ? 'recording' : 'uipath',
+        ...(p.codeWorkflowId ? { codeWorkflow: { id: p.codeWorkflowId, timeoutSeconds: p.codeTimeoutMs / 1000 } } : {}),
       });
       const name = (JSON.parse(file.data.toString('utf8')) as { name: string }).name;
       workflow = { binary: { workflow: await ctx.helpers.prepareBinaryData(file.data, file.fileName, file.mimeType) }, name };
@@ -311,7 +316,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
     let problem: string | undefined;
     if (!withheld) {
       try {
-        const line = p.source === 'steps' ? DESKTOP_DOCUMENT_EVIDENCE_LINE : DESKTOP_EVIDENCE_LINE;
+        const line = p.source === 'steps' ? DESKTOP_DOCUMENT_EVIDENCE_LINE : p.source === 'recording' ? DESKTOP_RECORDING_EVIDENCE_LINE : DESKTOP_EVIDENCE_LINE;
         review = desktopRepairedStepsJson(engine, withLeftOut(engine.desktopProposal(d.script)), line);
       } catch (error) {
         problem = mask(errorMessage(error));

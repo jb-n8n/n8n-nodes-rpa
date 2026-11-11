@@ -1,4 +1,5 @@
-// A UiPath import's flow as an n8n workflow, delivered as JSON for n8n's "Import from file".
+// A UiPath import's flow, or an RPA recording's one desktop node, as an n8n workflow, delivered as JSON for n8n's
+// "Import from file".
 // Each browser sequence n becomes Get active steps (playwright_steps, name <name>-n) feeding Run steps with signed steps
 // required and AI Repair on, as in template 2: its own Chat model and its Repaired Steps output into its own
 // Approve steps, whose workflow the user picks. Each desktop sequence n becomes Get active steps feeding a Run steps on
@@ -39,7 +40,15 @@ export interface BuildWorkflowOptions {
   desktopDrafts?: DesktopDraft[];
   /** The import's One-Time Code Workflow: each browser Run steps takes its code from it too. */
   codeWorkflow?: { id: string; timeoutSeconds: number };
+  /** Where the flow came from: a UiPath project (the default) or an RPA recording. Only the texts that name it differ. */
+  source?: ImportedFrom;
 }
+export type ImportedFrom = 'uipath' | 'recording';
+/** How the generated texts name where the steps came from. */
+const FROM = {
+  uipath: { steps: 'imported from UiPath', importIt: 'import the project', workflow: 'imported from UiPath', origin: 'the UiPath project' },
+  recording: { steps: 'imported from the recording', importIt: 'import the recording', workflow: 'imported from a recording', origin: 'the recording' },
+} as const;
 
 /** The credential a desktop Run steps names, by type (CREDENTIALS.desktopRunner) and display name. */
 const DESKTOP_RUNNER_CREDENTIAL = { rpaDesktopRunnerApi: { id: null, name: 'RPA Desktop Runner' } };
@@ -163,7 +172,7 @@ class Builder {
 
   constructor(
     private readonly prefix: string, private readonly drafts: Map<string, Draft>, private readonly desktopDrafts: Map<string, DesktopDraft> = new Map(),
-    private readonly codeWorkflow?: BuildWorkflowOptions['codeWorkflow'],
+    private readonly codeWorkflow?: BuildWorkflowOptions['codeWorkflow'], readonly source: ImportedFrom = 'uipath',
   ) {}
 
   /**
@@ -331,7 +340,7 @@ class Builder {
       options: { name: draftName, expectedVersion: '={{ $json.version }}', ...(variables.length ? { variables: { values: variables } } : {}) },
     }, {
       credentials: { ...DESKTOP_RUNNER_CREDENTIAL },
-      notes: `Runs the signed desktop steps ${draftName} (${plural(draft.script.steps.length, 'step')} imported from UiPath "${line(n.displayName, 120)}") on the desktop runner. Pick the RPA Desktop Runner and RPA Step Signing credentials. Fill in the Variables${secret.size ? `; ${[...secret].join(', ')} must come from a secret source` : ''}.`,
+      notes: `Runs the signed desktop steps ${draftName} (${plural(draft.script.steps.length, 'step')} ${FROM[this.source].steps} "${line(n.displayName, 120)}") on the desktop runner. Pick the RPA Desktop Runner and RPA Step Signing credentials. Fill in the Variables${secret.size ? `; ${[...secret].join(', ')} must come from a secret source` : ''}.`,
     });
     this.connect([{ node: get, output: 0 }], run);
     this.desktopRunNodes.push(run);
@@ -340,7 +349,7 @@ class Builder {
       : 'none';
     const writes = draft.writeCandidates.length ? ` The import lists steps ${draft.writeCandidates.join(', ')} as candidate writes: when you approve, list in **Write Steps** the ones that save, post or submit.` : '';
     this.sticky(`Fill in the variables (${draftName})`,
-      `### Fill in the variables (gold)\nOn **${md(run)}**, Options → Variables: ${listedVars}. Desktop steps are approved before they run: import the project with **RPA: 5 Import a bot** and approve ${code(draftName)} in **${APPROVE_WORKFLOW}**.${writes}`,
+      `### Fill in the variables (gold)\nOn **${md(run)}**, Options → Variables: ${listedVars}. Desktop steps are approved before they run: ${FROM[this.source].importIt} with **RPA: 5 Import a bot** and approve ${code(draftName)} in **${APPROVE_WORKFLOW}**.${writes}`,
       COLOUR.gold, [runX - 80, y + 160], 320, 260);
     this.lastFile = downloadProperty(draft);
     return { tails: [{ node: run, output: 0 }], x: x + 2 * STEP };
@@ -559,33 +568,37 @@ function listed(names: string[]): string {
 }
 
 /**
- * The n8n workflow for a UiPath import's flow. `drafts` are the import's drafts, named `<opts.name>-<n>`. Throws
- * only when opts.name cannot be used as a literal name (empty, or starting with "=").
+ * The n8n workflow for a UiPath import's flow, or a recording's (opts.source). `drafts` are the import's drafts, named
+ * `<opts.name>-<n>`. Throws only when opts.name cannot be used as a literal name (empty, or starting with "=").
  */
 export function buildWorkflow(flow: UiPathFlow, drafts: Draft[], opts: BuildWorkflowOptions): WorkflowJson {
   if (opts.name.trim() === '' || opts.name.startsWith('=')) throw new Error('The Name must not be empty or start with "="');
-  const b = new Builder(opts.name, new Map(drafts.map((d) => [d.name, d])), new Map((opts.desktopDrafts ?? []).map((d) => [d.name, d])), opts.codeWorkflow);
+  const b = new Builder(opts.name, new Map(drafts.map((d) => [d.name, d])), new Map((opts.desktopDrafts ?? []).map((d) => [d.name, d])), opts.codeWorkflow, opts.source);
+  const from = FROM[b.source];
+  const recording = b.source === 'recording';
   b.add(T.manualTrigger, b.unique('Run the bot'), [0, 0], {});
   b.reserve('About this import', 'Set once');
   b.overflow(b.walk(flow.nodes, [{ node: 'Run the bot', output: 0 }], STEP, 0));
 
   const project = line(flow.name, 120).replace(/^=+/, '').trim() || opts.name;
   const desktopPart = b.desktopDraftNames.length ? ` and ${plural(b.desktopDraftNames.length, 'desktop sequence')}` : '';
-  const summary = `${plural(b.draftNames.length, 'browser sequence')}${desktopPart} as signed RPA steps, ${plural(b.others, 'other activity', 'other activities')} as n8n nodes, ${b.untranslated} not translated${b.skipped ? `, ${b.skipped.toLocaleString('en-US')} more not drawn (see the report)` : ''}`;
+  const summary = recording ? `${plural(b.desktopDraftNames.length, 'desktop step list')} as signed RPA steps` : `${plural(b.draftNames.length, 'browser sequence')}${desktopPart} as signed RPA steps, ${plural(b.others, 'other activity', 'other activities')} as n8n nodes, ${b.untranslated} not translated${b.skipped ? `, ${b.skipped.toLocaleString('en-US')} more not drawn (see the report)` : ''}`;
   // A loop, not Math.min(...positions): spreading a long array into arguments overflows the stack.
   let highest = 0;
   for (const n of b.nodes) highest = Math.min(highest, n.position[1]);
   const top = highest - 420;
   const about = [
     '### About this import (grey: leave as is)',
-    `Imported from the UiPath project ${code(project, 120)}: ${summary}.`,
+    `Imported from ${from.origin} ${code(project, 120)}: ${summary}.`,
     b.draftNames.length
       ? `Each browser sequence is **Get active steps** → **Run steps**. AI Repair is on: when a page no longer matches, the Run steps' **Chat model** repairs the run and its Repaired Steps output goes to **Approve steps**. Run steps runs only the newest signed, active version of its steps (${b.draftNames.slice(0, 3).map((d) => code(d)).join(', ')}${b.draftNames.length > 3 ? ', …' : ''}) from ${STEPS_TABLE}. Run **Import steps** on the project (template **RPA: 5 Import a bot**) and approve each Repaired steps item in **RPA: 3 Approve steps**; until a version is approved, Run steps stops with "Steps is empty".`
       : '',
     b.desktopDraftNames.length
-      ? `Each desktop sequence is **Get active steps** → **Run steps** on the **RPA Desktop Runner**: it runs only the newest signed, active version of its steps (${b.desktopDraftNames.slice(0, 3).map((d) => code(d)).join(', ')}${b.desktopDraftNames.length > 3 ? ', …' : ''}) from ${STEPS_TABLE}. Desktop steps are not replayed at import and have no AI repair yet: approve them in **${APPROVE_WORKFLOW}**, listing the steps that save, post or submit in Write Steps.`
+      ? `${recording ? 'The desktop steps are' : 'Each desktop sequence is'} **Get active steps** → **Run steps** on the **RPA Desktop Runner**: it runs only the newest signed, active version of its steps (${b.desktopDraftNames.slice(0, 3).map((d) => code(d)).join(', ')}${b.desktopDraftNames.length > 3 ? ', …' : ''}) from ${STEPS_TABLE}. Desktop steps are not replayed at import and have no AI repair yet: approve them in **${APPROVE_WORKFLOW}**, listing the steps that save, post or submit in Write Steps.`
       : '',
-    'Grey notes: not translated, rebuild by hand. Gold: fill in. Green: set once. UiPath expressions are kept as text in notes; nothing from the project runs as an n8n expression.',
+    recording
+      ? 'Gold: fill in. Green: set once. Text from the recording is kept as text; nothing from it runs as an n8n expression.'
+      : 'Grey notes: not translated, rebuild by hand. Gold: fill in. Green: set once. UiPath expressions are kept as text in notes; nothing from the project runs as an n8n expression.',
   ].filter(Boolean).join('\n\n');
   const setOnce = [
     '### Set once (green)',
@@ -607,8 +620,8 @@ export function buildWorkflow(flow: UiPathFlow, drafts: Draft[], opts: BuildWork
   b.nodes.unshift(...b.nodes.splice(before));
 
   return {
-    name: `${project} (imported from UiPath)`,
-    description: `Imported from the UiPath project ${project}: ${summary}.`,
+    name: `${project} (${from.workflow})`,
+    description: `Imported from ${from.origin} ${project}: ${summary}.`,
     nodes: b.nodes,
     connections: b.connections,
     settings: { executionOrder: 'v1' },
