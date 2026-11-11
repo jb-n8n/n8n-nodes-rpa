@@ -262,7 +262,6 @@ function Get-RpaMachineFacts {
     AutoSignInPassword         = $null
     AutoSignInPasswordProblem  = $null
     SupervisorPassword         = $null
-    SupervisorPasswordProblem  = $null
     RemoteDesktopPort          = $null
     InstalledUnattendedChanges = $false
     SupervisorDir              = $layout.SupervisorDir
@@ -358,7 +357,6 @@ function Get-RpaMachineFacts {
     if ($back -and -not $Parameters.UserPassword) {
       $checked = Test-RpaStoredPassword (Read-RpaSupervisorPassword) $account
       $facts.SupervisorPassword = $checked.State
-      $facts.SupervisorPasswordProblem = $checked.Problem
     }
   }
 
