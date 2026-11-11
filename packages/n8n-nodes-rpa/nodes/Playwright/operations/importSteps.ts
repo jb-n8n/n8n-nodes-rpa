@@ -593,8 +593,8 @@ async function adoptAll(
 /**
  * Import Steps: per input item, the recording, code, project or step document → engine.importSource → each draft
  * adopted (engine.adoptDraft) → [Data, Repaired Steps]. Repaired Steps holds one item per adopted draft, built exactly
- * as Run Steps builds it, so Sign Steps accepts it unchanged. Data holds `{ report, drafts, workflowName? }` and, for
- * UiPath, the workflow file as binary `workflow`. A configuration error, nothing imported, or every draft failed is an
+ * as Run Steps builds it, so Sign Steps accepts it unchanged. Data holds `{ report, drafts, workflowName? }` and the
+ * workflow file as binary `workflow`. A configuration error, nothing imported, or every draft failed is an
  * error item in Data (n8n's error output), as in Run Steps.
  */
 export async function executeImportSteps(ctx: NodeContext, engine: Engine, deps: ImportStepsDeps = {}): Promise<INodeExecutionData[][]> {

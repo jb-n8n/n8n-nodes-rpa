@@ -23,7 +23,7 @@ const STEPS: Script = {
     { intent: 'Read the items', extract: { scope: { css: 'main' }, idPattern: 'SKU-\\d{4}' } },
   ],
 };
-const NOT_REPAIRED = 'The input item is not a Repaired steps item from Run Steps (it has no digest). Only Repaired steps items can be signed.';
+const NOT_REPAIRED = 'The input item is not a Repaired steps item from Run Steps or Import Steps (it has no digest). Only Repaired steps items can be signed.';
 
 const engine = fakeEngine(() => {
   throw new Error('Sign Steps never opens a browser');

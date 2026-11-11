@@ -13,7 +13,7 @@ import { rejectedRecord, signedRecord, type StepsRecord } from '../rows.js';
 import { asBoolean, asString, checkMaxItems, credentialId, errorMessage, isObject, literalRaw, SITE_LOGIN_NO_ID, splitList } from './common.js';
 
 export const WRITE_STEPS_BROWSER = 'Write Steps applies to desktop steps only: clear it for browser steps.';
-export const NOT_REPAIRED_STEPS = 'The input item is not a Repaired steps item from Run Steps (it has no digest). Only Repaired steps items can be signed.';
+export const NOT_REPAIRED_STEPS = 'The input item is not a Repaired steps item from Run Steps or Import Steps (it has no digest). Only Repaired steps items can be signed.';
 export const MISSING_NAME_OR_VERSION = 'The Repaired steps item has no name or version.';
 export const APPROVER_NOT_ALLOWED = 'Approved By is not on the Approver Allowlist';
 export const APPROVER_NEEDED = 'Approved By is empty, and the Approver Allowlist holds more than one address: set Approved By to the one who decided';

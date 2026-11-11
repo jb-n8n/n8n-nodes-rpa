@@ -234,7 +234,7 @@ describe('Import Steps: the description', () => {
     ]);
     expect((OPERATIONS.options as INodePropertyOptions[]).at(-1)).toEqual({
       name: 'Import Steps', value: 'importSteps', action: 'Import steps from a recording, code or a UiPath bot',
-      description: 'Advanced: turn a Chrome Recorder export, Playwright code or a UiPath project into steps for approval',
+      description: 'Advanced: turn a Chrome Recorder export, Playwright code, a UiPath project, an RPA recording or a step document into steps for approval',
     });
     expect(Object.keys(DISPATCH)).toContain('importSteps');
   });
@@ -288,7 +288,7 @@ describe('Import Steps: the description', () => {
     for (const t of texts) expect(t, t).not.toMatch(USE_CASE_WORDS);
     expect(texts.filter((t) => /playwright/i.test(t))).toEqual([
       'Playwright Code (JavaScript or TypeScript)',
-      'Advanced: turn a Chrome Recorder export, Playwright code or a UiPath project into steps for approval',
+      'Advanced: turn a Chrome Recorder export, Playwright code, a UiPath project, an RPA recording or a step document into steps for approval',
     ]);
   });
 });

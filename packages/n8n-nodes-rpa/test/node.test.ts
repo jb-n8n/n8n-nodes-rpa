@@ -85,7 +85,7 @@ describe('RPA node', () => {
     const out = await exec(ctx);
     expect(out).toHaveLength(1);
     expect(out[0][0].json.error).toBe(
-      'Sign Steps refused: The input item is not a Repaired steps item from Run Steps (it has no digest). Only Repaired steps items can be signed.',
+      'Sign Steps refused: The input item is not a Repaired steps item from Run Steps or Import Steps (it has no digest). Only Repaired steps items can be signed.',
     );
   });
   it('execute dispatches Import Steps: an empty Name is a configuration error, before anything is read', async () => {

@@ -136,7 +136,7 @@ describe('v2 error items keep their structured fields through n8n', () => {
     const [records, errors] = throughN8n(out, input);
     expect(records).toEqual([]);
     expect(errors).toHaveLength(1);
-    const reason = 'The input item is not a Repaired steps item from Run Steps (it has no digest). Only Repaired steps items can be signed.';
+    const reason = 'The input item is not a Repaired steps item from Run Steps or Import Steps (it has no digest). Only Repaired steps items can be signed.';
     expect(errors[0].json.error).toBe(`Sign Steps refused: ${reason}`);
     expect(errors[0].json.details).toEqual({ code: null, reasons: [reason], name: FEED_NAME, version: 2 });
   });
