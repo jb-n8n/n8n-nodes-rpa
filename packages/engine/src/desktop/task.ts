@@ -4,7 +4,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { Page } from 'playwright-core';
-import { shownFailure, stripShownPrefix } from '../classify/classify.js';
+import { stripShownPrefix } from '../classify/classify.js';
 import { CANCELLED, clampBudget, laneFailure, type LaneSuccess } from '../lane/script-lane.js';
 import type { TaskFailure } from '../lane/task.js';
 import { hasSignature, type TrustInput, type TrustResult } from '../lane/trust.js';
@@ -305,10 +305,10 @@ export async function runDesktopTask(input: DesktopTaskInput): Promise<DesktopTa
       const cause = desktop.errors.get(res.failure.index);
       const code = codeOf(cause, res.failure.message);
       const lost = lease?.error || cause instanceof NoRunError ? ` (${LEASE_LOST})` : '';
-      // The runner words its own failures (what it found, what to do, its target): shown after the step, as they came.
-      const shown = cause instanceof RunnerError
-        ? desktopStepFailure(res.failure.index + 1, res.failure.intent.replace(/\s+/g, ' ').trim(), withoutRunnerCode(failure.message))
-        : shownFailure(res.failure.intent, failure.message);
+      // Every failed step starts with its number and intent. The runner's own words follow as they came (without its
+      // code); the engine's own wording follows without a limit or capture prefix, so the intent is not said twice.
+      const said = cause instanceof RunnerError ? withoutRunnerCode(failure.message) : stripShownPrefix(failure.message);
+      const shown = desktopStepFailure(res.failure.index + 1, res.failure.intent.replace(/\s+/g, ' ').trim(), said);
       return fail(code, `${shown}${lost}`, base);
     }
     const tail = { ...ids, log: maskedLog(res.state.log, outputMasker(secrets, surface)), ...(res.state.submitted ? { submitted: true } : {}) };

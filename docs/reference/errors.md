@@ -1,7 +1,8 @@
 # Errors reference
 
 A failed run is an n8n error whose message starts with a code: `<code>: <message>`. A message from a step starts with
-the step's intent, for example `Take a screenshot: No element found ...`. The error's description in n8n says what to
+the step's intent, for example `Take a screenshot: No element found ...`. A failed desktop step starts with its number
+and intent instead, for example `Step 3 (Click Save): no element matched ...`. The error's description in n8n says what to
 do. No message holds a URL query string, a token or a user name.
 
 **On the error output.** With **Settings → On Error → Continue (using error output)**, a failure goes to the node's
