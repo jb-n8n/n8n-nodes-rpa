@@ -36,7 +36,7 @@ const BETWEEN_PAGES = 'it checks the page between the username and the password,
 const HOVER_BETWEEN_PAGES = 'it is on the page between the username and the password, which signIn passes in one step (next)';
 /** A wait or a hover: neither leaves the page nor types, so the sign-in grouping steps over both. */
 const isPause = (e: ImportEvent): boolean => e.kind === 'waitFor' || e.kind === 'hover';
-const CODE_FROM_EXPRESSION = 'the code is not typed text (an expression or a variable, such as a TOTP activity\'s output): the sign-in types a fresh code from the Site Login\'s authenticator secret';
+const CODE_FROM_EXPRESSION = 'the code is not typed text (an expression or a variable, such as a TOTP activity\'s output): the sign-in types a fresh code from the Site Login\'s authenticator secret, or from the One-Time Code Workflow when one is set';
 const CODE_UNJOINED = 'the code step could not be joined to the sign-in: it must follow the sign-in\'s submit on the same page, then a click or Enter';
 const SIGN_IN_INCOMPLETE =
   'the recorded sign-in needs a username field before the password and a submit control after it, on the same page: add a signIn step to the draft';

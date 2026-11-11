@@ -218,7 +218,8 @@ const textOf = (v: Val): string => (v === undefined ? '' : 'literal' in v ? v.li
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
 /**
  * A one-time code activity (a TOTP package's Generate TOTP, Get OTP, Generate One-Time Password), by the
- * words of its name. It is never a step: the sign-in types a fresh code from the Site Login's authenticator secret.
+ * words of its name. It is never a step: the sign-in types a fresh code from the Site Login's authenticator secret, or
+ * from the One-Time Code Workflow when one is set.
  */
 const TOTP_ACTIVITY = /(^|[a-z])(Totp|TOTP|Otp|OTP|OneTimePassword)([A-Z]|$)/;
 /** A TOTP activity's inputs (its secret), never its output. */
@@ -1302,7 +1303,7 @@ class Walker {
       const v = this.arg(el, key, ctx);
       if (v && 'expr' in v && IDENT.test(v.expr)) this.totpOutputs.add(v.expr.toLowerCase());
     }
-    this.add(this.at(el, ctx), 'converted', displayOf(el), `${local(el.name)}: a one-time code is never imported: the sign-in types a fresh code from the RPA Site Login's authenticator secret (TOTP)`);
+    this.add(this.at(el, ctx), 'converted', displayOf(el), `${local(el.name)}: a one-time code is never imported: the sign-in types a fresh code from the RPA Site Login's authenticator secret (TOTP), or from the One-Time Code Workflow when one is set`);
     return [];
   }
 

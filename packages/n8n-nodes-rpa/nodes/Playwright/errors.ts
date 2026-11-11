@@ -27,7 +27,7 @@ const CODE_WORKFLOW_GUIDANCE =
  * step that found a check named mfa_totp fails with the bare `detected:mfa_totp`, which this does not match.
  */
 const NO_TOTP_SECRET_GUIDANCE =
-  'The site asked for a one-time code and the RPA Site Login has no TOTP Secret. Put the authenticator\'s seed in the Site Login, or, in Run Steps, take the code from a workflow ("source": "workflow" in the sign-in step, and Options → One-Time Code Workflow).';
+  'The site asked for a one-time code and the RPA Site Login has no TOTP Secret. Put the authenticator\'s seed in the Site Login, or take the code from a workflow: set Options → One-Time Code Workflow (in Run Steps, also set "source": "workflow" in the sign-in step).';
 
 /** The guidance for a failure: by its code, and for auth_blocked by its message, which says what could not be answered. */
 export function guidanceFor(code: ErrorCode, message: string): string {

@@ -5,7 +5,7 @@ import { noWritePolicy } from '../policy/derive.js';
 import { flattenSteps } from '../policy/validate.js';
 import { parseScript } from '../steps/parse.js';
 import type { Script } from '../types.js';
-import { laneFailure, laneMasker } from './script-lane.js';
+import { codeSettings, laneFailure, laneMasker } from './script-lane.js';
 import { runTask, type TaskFailure, type TaskInput, type TaskResult } from './task.js';
 import { isEmptySteps } from './trust.js';
 
@@ -43,7 +43,7 @@ export async function runDraft(input: DraftTaskInput): Promise<TaskResult> {
   // Built key by key: nothing else from the caller reaches the task (a stray trust or startStatus included).
   const task: TaskInput = {
     script: raw, trust: { required: false, allowUnsignedWrites: true }, policy: noWritePolicy(input.policy), endpoint: input.endpoint,
-    ...(input.secrets ? { secrets: input.secrets } : {}), ...(input.output ? { output: input.output } : {}), ...(input.vars ? { vars: input.vars } : {}),
+    ...(input.secrets ? { secrets: input.secrets } : {}), ...codeSettings(input), ...(input.output ? { output: input.output } : {}), ...(input.vars ? { vars: input.vars } : {}),
     ...(input.budgetMs !== undefined ? { budgetMs: input.budgetMs } : {}),
     ...(input.defaultStepTimeoutMs !== undefined ? { defaultStepTimeoutMs: input.defaultStepTimeoutMs } : {}),
     ...(input.viewport ? { viewport: input.viewport } : {}), ...(input.saveTrace ? { saveTrace: input.saveTrace } : {}),

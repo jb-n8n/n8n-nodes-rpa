@@ -172,9 +172,16 @@ export function readRunStepsParams(ctx: NodeContext, i: number): RunStepsParams 
     maxActions: clamp(Math.floor(asNumber(opt('maxActions'), 40)), 1, 200),
     maxTokens: clamp(Math.floor(asNumber(opt('maxTokens'), 200_000)), 1000, 1_000_000),
     breakerResetKey,
+    ...codeWorkflowOptions(opt),
+    common,
+  };
+}
+
+/** Options → One-Time Code Workflow and Code Timeout (Seconds), read the same way by Run Steps and Import Steps. */
+export function codeWorkflowOptions(opt: (name: string) => unknown): { codeWorkflowId: string; codeTimeoutMs: number } {
+  return {
     codeWorkflowId: asString(opt('codeWorkflowId')).trim(),
     codeTimeoutMs: clamp(Math.floor(asNumber(opt('codeTimeout'), 120)), 1, 300) * 1000,
-    common,
   };
 }
 
@@ -215,6 +222,13 @@ export function codeProviderFor(ctx: Pick<NodeContext, 'executeWorkflow'>, workf
     if (typeof text !== 'string' || !ONE_TIME_CODE.test(text.replace(/ /g, ''))) throw new Error(NO_CODE_FIELD);
     return text;
   };
+}
+
+/** The engine's code settings for a run: the code provider and its timeout when a One-Time Code Workflow is set, else none. */
+export function codeSettingsFor(
+  ctx: Pick<NodeContext, 'executeWorkflow'>, o: { codeWorkflowId: string; codeTimeoutMs: number },
+): { codeProvider?: CodeProvider; codeTimeoutMs?: number } {
+  return o.codeWorkflowId ? { codeProvider: codeProviderFor(ctx, o.codeWorkflowId), codeTimeoutMs: o.codeTimeoutMs } : {};
 }
 
 /** Decided once per execution from the raw parameters, so an expression-valued AI Repair keeps the Repaired Steps output. */
@@ -389,7 +403,7 @@ async function runStepsItem(ctx: NodeContext, engine: Engine, i: number, deps: R
     trust,
     policy,
     ...(siteLogin ? { secrets: siteLogin.secrets } : {}),
-    ...(p.codeWorkflowId ? { codeProvider: codeProviderFor(ctx, p.codeWorkflowId), codeTimeoutMs: p.codeTimeoutMs } : {}),
+    ...codeSettingsFor(ctx, p),
     endpoint,
     ...(p.output ? { output: p.output } : {}),
     vars: p.vars,

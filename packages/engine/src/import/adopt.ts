@@ -10,7 +10,7 @@ import { scriptHash } from '../sign.js';
 import { parseScript } from '../steps/parse.js';
 import { shownMessage } from '../steps/urls.js';
 import type { ErrorCode, OutputSpec, Script } from '../types.js';
-import { CANCELLED, clampBudget, laneFailure, laneMasker, traceOn } from '../lane/script-lane.js';
+import { CANCELLED, clampBudget, codeSettings, laneFailure, laneMasker, traceOn } from '../lane/script-lane.js';
 import { draftWrites, runDraft } from '../lane/draft.js';
 import { repairPrecondition, type TaskFailure, type TaskInput, type TaskResult } from '../lane/task.js';
 
@@ -128,11 +128,12 @@ export async function adoptDraft(input: AdoptInput): Promise<AdoptResult> {
 
   if (input.signal?.aborted) return fail('incomplete', CANCELLED);
   const script: Script = { ...draft, version: 1 };
-  // The run may have typed a sign-in code just now: the proof's full replay never types the same code again (a site may
-  // refuse a code used twice), so it waits for the next 30 s window when the sign-in has a code step.
-  const mayHaveTypedCode = !!input.secrets?.totpSecret && script.steps.some((s) => 'signIn' in s && s.signIn.totp);
+  // The run may have typed a sign-in code just now (from the TOTP secret or the code provider): the proof's full replay
+  // never types the same code again (a site may refuse a code used twice), so it waits for the next 30 s window when the
+  // sign-in has a code step. The proof asks the same code provider as the run.
+  const mayHaveTypedCode = (!!input.secrets?.totpSecret || !!input.codeProvider) && script.steps.some((s) => 'signIn' in s && s.signIn.totp);
   const prove = await proveScript({
-    script, policy, secrets: input.secrets, ...(input.vars ? { vars: input.vars } : {}), output: input.output ?? {},
+    script, policy, secrets: input.secrets, ...codeSettings(input), ...(input.vars ? { vars: input.vars } : {}), output: input.output ?? {},
     endpoint: input.endpoint, masker, budgetMs: clampBudget(input.budgetMs), agentRows: [],
     ...(input.defaultStepTimeoutMs ? { defaultStepTimeoutMs: input.defaultStepTimeoutMs } : {}),
     ...(input.signal ? { signal: input.signal } : {}), ...(input.viewport ? { viewport: input.viewport } : {}),

@@ -220,7 +220,7 @@ describe('Import Steps: the description', () => {
       'File Type', 'File Name Pattern (Regex)', 'Minimum Size (Bytes)', 'Required Columns', 'Minimum Rows',
     ]);
     expect(optionsFor('importSteps').map((o) => o.name)).toEqual([
-      'timeout', 'maxSeconds', 'viewport', 'allowedHosts', 'allowPrivateNetwork', 'variables', 'breakerResetKey', 'saveTrace', 'maxItems',
+      'timeout', 'maxSeconds', 'viewport', 'allowedHosts', 'allowPrivateNetwork', 'variables', 'codeWorkflowId', 'codeTimeout', 'breakerResetKey', 'saveTrace', 'maxItems',
     ]);
     // Credentials: the browser, the Site Login and its Redis guard store. No signing key: Sign Steps signs.
     expect((d.credentials ?? []).filter((c) => NodeHelpers.displayParameter({ operation: 'importSteps' }, c, null, d)).map((c) => c.name)).toEqual([
@@ -246,7 +246,17 @@ describe('Import Steps: the description', () => {
     }
     const notice = field('importNotice').displayName;
     for (const text of ['no form submissions or writes; Requests That Only Read still pass', 'about twice Options → Max Seconds',
-      'On sites with an authenticator code, the import needs the TOTP Secret in the Site Login (it cannot take a code from a workflow), and Max Seconds must leave room for up to a 30 s wait.']) expect(notice, text).toContain(text);
+      'On sites with an authenticator code, the import needs either the TOTP Secret in the Site Login or Options → One-Time Code Workflow, and Max Seconds must leave room for up to a 30 s wait.']) expect(notice, text).toContain(text);
+  });
+
+  it('Import Steps offers One-Time Code Workflow and Code Timeout', () => {
+    const wf = optionsFor('importSteps').find((o) => o.name === 'codeWorkflowId');
+    const timeout = optionsFor('importSteps').find((o) => o.name === 'codeTimeout');
+    // The same entries as Run Steps: the same names, help, limits and rules.
+    expect(wf).toBe(optionsFor('runSteps').find((o) => o.name === 'codeWorkflowId'));
+    expect(timeout).toBe(optionsFor('runSteps').find((o) => o.name === 'codeTimeout'));
+    expect(wf).toMatchObject({ displayName: 'One-Time Code Workflow', type: 'string', default: '', displayOptions: { show: { '/operation': ['runSteps', 'importSteps'] } } });
+    expect(timeout).toMatchObject({ displayName: 'Code Timeout (Seconds)', type: 'number', default: 120, typeOptions: { minValue: 1, maxValue: 300 } });
   });
 
   it('has the Model input when AI Repair is on (its default) and always both outputs', () => {
@@ -582,6 +592,59 @@ describe('Import Steps: execution', () => {
     const [data] = await run(engine, { params: params({ aiRepair: true }) });
     expect(engine.adoptions[0].repair).toBeUndefined();
     expect(data[0].json.error).toBe(`drift_detected: No element found for Visible Text "Line Item Report" (${NO_MODEL})`);
+  });
+
+  describe('the sign-in code', () => {
+    const CODE = '482913';
+    const NO_SEED = { ...CREDS, playwrightSiteLoginApi: { ...siteLoginData(SITE), totpSecret: '' } };
+    const signInOf = (script: Script) => script.steps.find((s): s is Extract<Script['steps'][number], { signIn: unknown }> => 'signIn' in s);
+
+    it('an import whose sign-in asks for a code runs with the code from the workflow and imports totp.source "workflow"', async () => {
+      const subs: unknown[] = [];
+      const codes: string[] = [];
+      const engine = importEngine(async (input) => {
+        codes.push(await input.codeProvider!({ requestedAt: '2026-11-10T10:00:00.000Z' }));
+        return proved(input);
+      });
+      const ctx = nodeContext({
+        params: params({}, { codeWorkflowId: ' wf-code-1 ', codeTimeout: 45 }), items: [fileItem(CHROME)], credentials: NO_SEED as never, continueOnFail: true,
+        executeWorkflow: async (info, items) => {
+          subs.push({ info, items });
+          return { executionId: 'sub-1', data: [[{ json: { code: CODE } }]] };
+        },
+      }) as Harness;
+      const [data, repaired] = await run(engine, {}, ctx);
+      expect(data[0].json.error).toBeUndefined();
+      expect(engine.imports[0][2]).toMatchObject({ codeFromWorkflow: true });
+      // The import's run asked the workflow through the provider, with Code Timeout in ms.
+      expect(engine.adoptions[0].codeTimeoutMs).toBe(45_000);
+      expect(codes).toEqual([CODE]);
+      expect(subs).toEqual([{ info: { id: 'wf-code-1' }, items: [{ json: { requestedAt: '2026-11-10T10:00:00.000Z' } }] }]);
+      // The imported sign-in, as adopted and as it goes to approval, takes its code from the workflow.
+      expect(signInOf(engine.adoptions[0].draft)?.signIn.totp).toMatchObject({ source: 'workflow' });
+      expect(signInOf(repaired[0].json.steps as unknown as Script)?.signIn.totp).toMatchObject({ source: 'workflow' });
+
+      // Without the option: no provider, and the sign-in keeps the TOTP Secret (no source).
+      const plain = importEngine((input) => proved(input));
+      await run(plain);
+      expect(plain.imports[0][2]).not.toHaveProperty('codeFromWorkflow');
+      expect(plain.adoptions[0]).not.toHaveProperty('codeProvider');
+      expect(plain.adoptions[0]).not.toHaveProperty('codeTimeoutMs');
+      expect(signInOf(plain.adoptions[0].draft)?.signIn.totp).toBeDefined();
+      expect(signInOf(plain.adoptions[0].draft)?.signIn.totp).not.toHaveProperty('source');
+    });
+
+    it('without a workflow and without a seed the import says which is missing', async () => {
+      const message = 'Sign in: detected:mfa_totp: the site asked for a one-time code and the Site Login has no TOTP Secret';
+      const engine = importEngine(() => adoptFailure('auth_blocked', message));
+      const error = await run(engine, { credentials: NO_SEED as never, continueOnFail: false }).then(() => undefined, (e: unknown) => e);
+      expect(error).toBeInstanceOf(NodeOperationError);
+      expect((error as NodeOperationError).message).toBe(`auth_blocked: ${message}`);
+      expect((error as NodeOperationError).description).toBe(
+        'auth_blocked: The site asked for a one-time code and the RPA Site Login has no TOTP Secret. Put the authenticator\'s seed in the Site Login, or take the code from a workflow: set Options → One-Time Code Workflow (in Run Steps, also set "source": "workflow" in the sign-in step).',
+      );
+      expect(engine.adoptions[0]).not.toHaveProperty('codeProvider');
+    });
   });
 
   it('ID Pattern goes to the import and the adoption as the row check', async () => {

@@ -314,7 +314,7 @@ export const OPTION_ENTRIES: INodeProperties[] = [
     placeholder: "e.g. 4nQkZp2r8XyT1bLm (from the workflow's address, after /workflow/)",
     description:
       'ID of the published workflow that supplies the sign-in code when the steps\' sign-in takes its code from a workflow ("source": "workflow"). It starts with an Execute Workflow Trigger, receives requestedAt and must return exactly one item with a code field of 6 to 10 digits. Publish it before the first run.',
-    displayOptions: only(['runSteps']),
+    displayOptions: only(['runSteps', 'importSteps']),
   },
   {
     displayName: 'Code Timeout (Seconds)',
@@ -323,7 +323,7 @@ export const OPTION_ENTRIES: INodeProperties[] = [
     default: 120,
     typeOptions: { minValue: 1, maxValue: 300 },
     description: 'How long the sign-in waits for the One-Time Code Workflow. Max Seconds still bounds the whole run.',
-    displayOptions: only(['runSteps']),
+    displayOptions: only(['runSteps', 'importSteps']),
   },
   {
     displayName: 'Login Breaker Reset Key',

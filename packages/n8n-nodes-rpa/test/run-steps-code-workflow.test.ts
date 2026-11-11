@@ -45,16 +45,16 @@ function ctx(sub: Sub, over: Partial<HarnessOptions> = {}) {
 }
 
 describe('One-Time Code Workflow options', () => {
-  it('are Run Steps options with the documented names and defaults', () => {
+  it('are Run Steps and Import Steps options with the documented names and defaults', () => {
     const opts = optionsProperty.options as { name: string; displayName: string; default: unknown; type: string; displayOptions?: unknown }[];
     const wf = opts.find((o) => o.name === 'codeWorkflowId');
     const timeout = opts.find((o) => o.name === 'codeTimeout');
-    expect(wf).toMatchObject({ displayName: 'One-Time Code Workflow', type: 'string', default: '', displayOptions: { show: { '/operation': ['runSteps'] } } });
+    expect(wf).toMatchObject({ displayName: 'One-Time Code Workflow', type: 'string', default: '', displayOptions: { show: { '/operation': ['runSteps', 'importSteps'] } } });
     expect(wf).toMatchObject({
       placeholder: 'e.g. 4nQkZp2r8XyT1bLm (from the workflow\'s address, after /workflow/)',
       description: 'ID of the published workflow that supplies the sign-in code when the steps\' sign-in takes its code from a workflow ("source": "workflow"). It starts with an Execute Workflow Trigger, receives requestedAt and must return exactly one item with a code field of 6 to 10 digits. Publish it before the first run.',
     });
-    expect(timeout).toMatchObject({ displayName: 'Code Timeout (Seconds)', type: 'number', default: 120, displayOptions: { show: { '/operation': ['runSteps'] } } });
+    expect(timeout).toMatchObject({ displayName: 'Code Timeout (Seconds)', type: 'number', default: 120, displayOptions: { show: { '/operation': ['runSteps', 'importSteps'] } } });
   });
 
   it('are read with their defaults: no workflow, 120 s', () => {

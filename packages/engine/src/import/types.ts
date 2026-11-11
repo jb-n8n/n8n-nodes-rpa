@@ -40,6 +40,8 @@ export interface ImportOptions {
   /** The attached Site Login's secrets: typed values equal to one are stripped wherever they appear. */
   secrets?: PortalSecrets;
   hasSiteLogin: boolean;
+  /** Import Steps → Options → One-Time Code Workflow is set: a recorded code becomes the sign-in's totp with source 'workflow'. */
+  codeFromWorkflow?: boolean;
 }
 /** Version 1, unsigned, accepted by parseScript. */
 export interface Draft { name: string; script: Script }

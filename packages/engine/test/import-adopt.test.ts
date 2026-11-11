@@ -10,7 +10,7 @@ import { createMasker } from '../src/secrets/mask.js';
 import { scriptHash } from '../src/sign.js';
 import { CANCELLED } from '../src/lane/script-lane.js';
 import { IMPORT_EMPTY, IMPORT_NOT_ADOPTABLE, ROWS_WITHHELD, IMPORT_PROOF_FAILED, IMPORT_REFUSES_WRITES, REPAIR_NEEDS_ID_AND_EXTRACT, UNSIGNED_REQUIRED, UNSIGNED_WRITES } from '../src/messages.js';
-import type { PortalPolicy, Script, Step } from '../src/types.js';
+import type { CodeProvider, PortalPolicy, Script, Step } from '../src/types.js';
 import { fakeModel } from './fake-model.js';
 import { ERP_CHECK, LOCAL, policyFor, SECRETS, TEST_KEY } from './helpers.js';
 
@@ -39,7 +39,9 @@ vi.mock('../src/lane/script-lane.js', async (importOriginal) => {
   return {
     ...mod,
     startScriptLane: async (input: ScriptLaneInput, opts?: Parameters<typeof mod.startScriptLane>[1]) => {
-      lane.seen.push(structuredClone({ ...input, signal: undefined }));
+      // A code provider is a function: kept as is, beside the cloned rest.
+      const { codeProvider, ...rest } = input;
+      lane.seen.push({ ...structuredClone({ ...rest, signal: undefined }), ...(codeProvider ? { codeProvider } : {}) });
       const next = lane.next;
       lane.next = undefined;
       return next ? { run: next } : mod.startScriptLane(input, opts);
@@ -293,6 +295,22 @@ describe('the adoption flow', () => {
     if (!r.ok) throw new Error(JSON.stringify(r));
     expect(prove.seen[0].script.version).toBe(1);
     expect(r.proposal.version).toBe(1);
+  });
+
+  it('a sign-in that takes its code from a workflow: the draft run and the proof both get the code provider, and the proof waits for a fresh code window', async () => {
+    const provider: CodeProvider = async () => '123456';
+    const totp = { field: { label: 'Authentication code' }, submit: { role: 'button', name: 'Verify' }, source: 'workflow' as const };
+    const draft = fileDraft();
+    draft.steps = draft.steps.map((s) => ('signIn' in s ? { ...s, signIn: { ...s.signIn, totp } } : s));
+    const { totpSecret: _seed, ...noSeed } = SECRETS;
+    lane.next = laneSuccess();
+    const before = Date.now();
+    const r = await adoptDraft(adoptInput(draft, { secrets: noSeed, codeProvider: provider, codeTimeoutMs: 45_000 }));
+    if (!r.ok) throw new Error(JSON.stringify(r));
+    expect(lane.seen[0]).toMatchObject({ codeProvider: provider, codeTimeoutMs: 45_000 });
+    expect(prove.seen[0]).toMatchObject({ codeProvider: provider, codeTimeoutMs: 45_000 });
+    expect(prove.seen[0].freshTotpAfter).toBeGreaterThanOrEqual(before);
+    expect(r.proposal.steps.steps.find((s) => 'signIn' in s)).toMatchObject({ signIn: { totp: { source: 'workflow' } } });
   });
 
   it('a failed proof reports its reason and gives no proposal', async () => {

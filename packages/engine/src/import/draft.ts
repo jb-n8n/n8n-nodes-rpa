@@ -480,9 +480,10 @@ export function buildDraft(events: ImportEvent[], opts: ImportOptions, report: I
           break;
         }
         builtSignIns.add(i);
+        const source = opts.codeFromWorkflow ? { source: 'workflow' as const } : {};
         push({
           intent: describeEvent(e),
-          signIn: { username, ...(next ? { next } : {}), password, submit, ...(field && totpSubmit ? { totp: { field, submit: totpSubmit } } : {}) },
+          signIn: { username, ...(next ? { next } : {}), password, submit, ...(field && totpSubmit ? { totp: { field, submit: totpSubmit, ...source } } : {}) },
         });
         break;
       }

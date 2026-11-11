@@ -277,6 +277,18 @@ describe('stripSecrets: sign-in', () => {
     expect(JSON.stringify(r)).not.toContain('492039');
   });
 
+  it('with codeFromWorkflow, a recorded code becomes signIn.totp with source "workflow"; a sign-in without a code is unchanged', () => {
+    const withCode = importEvents([
+      ...signInEvents(), click('Authentication code', [{ label: 'Authentication code', exact: true }]), fill('Authentication code', '492039'), click('Verify'),
+    ], { ...OPTS, codeFromWorkflow: true });
+    expect((stepsOf(withCode)[1] as S<'signIn'>).signIn.totp).toEqual({
+      field: { label: 'Authentication code', exact: true }, submit: { role: 'button', name: 'Verify' }, source: 'workflow',
+    });
+    expect(JSON.stringify(withCode)).not.toContain('492039');
+    const noCode = importEvents(signInEvents(), { ...OPTS, codeFromWorkflow: true });
+    expect((stepsOf(noCode)[1] as S<'signIn'>).signIn.totp).toBeUndefined();
+  });
+
   it('a value equal to the Site Login password in an oddly named field is stripped', () => {
     const r = importEvents([
       goto(LOGIN),

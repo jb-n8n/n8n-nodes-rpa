@@ -12,10 +12,12 @@ import { workflowFile } from '../import/workflow.js';
 import { lazyChatModel } from '../model.js';
 import { configErrorItem, desktopRepairedStepsJson, repairedStepsItem, slug } from '../output.js';
 import {
-  asBoolean, asString, BROWSER_CREDENTIAL_NEEDED, browserCredentials, checkMaxItems, credentialId, errorMessage, hasDownloadStep, literalString, readCommonOptions,
+  asBoolean, asString, BROWSER_CREDENTIAL_NEEDED, browserCredentials, checkMaxItems, credentialId, errorMessage, field, hasDownloadStep, literalString, readCommonOptions,
   refuseCdpDownload, regexOption, SITE_LOGIN_NO_ID, type CommonOptions,
 } from './common.js';
-import { expectedDownload, NO_MODEL, noteRepairRan, repairAlreadyRan, siteLoginGuard, variablesOption } from './runSteps.js';
+import {
+  codeSettingsFor, codeWorkflowOptions, expectedDownload, NO_MODEL, noteRepairRan, repairAlreadyRan, siteLoginGuard, variablesOption,
+} from './runSteps.js';
 
 /** The largest file or text Import Steps reads. The importers apply their own, smaller limits. */
 export const MAX_IMPORT_BYTES = 20 * 1024 * 1024;
@@ -64,6 +66,10 @@ interface ImportParams {
   expectedFile: unknown;
   vars: Record<string, string>;
   breakerResetKey: string;
+  /** Options → One-Time Code Workflow: the workflow ID, '' when not set. */
+  codeWorkflowId: string;
+  /** Options → Code Timeout (Seconds), in ms. */
+  codeTimeoutMs: number;
   common: CommonOptions;
 }
 
@@ -92,6 +98,7 @@ function readImportParams(ctx: NodeContext, i: number): ImportParams {
     expectedFile: get('expectedFile', {}),
     vars: variablesOption(ctx.getNodeParameter('options.variables', i, {})),
     breakerResetKey,
+    ...codeWorkflowOptions((option) => field(ctx.getNodeParameter('options', i, {}), option)),
     common,
   };
 }
@@ -222,6 +229,8 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
     ...(p.idPattern ? { idPattern: p.idPattern } : {}),
     ...(secrets ? { secrets } : {}),
     hasSiteLogin: siteLogin !== undefined,
+    // With a One-Time Code Workflow, a recorded code becomes a sign-in that takes its code from that workflow.
+    ...(p.codeWorkflowId ? { codeFromWorkflow: true } : {}),
   };
   const imported = engine.importSource(p.source, data, opts);
   const report = maskDeep<ImportReport>(imported.report, mask);
@@ -424,6 +433,8 @@ async function adoptAll(
       draft: draft.script,
       policy,
       ...(siteLogin ? { secrets: siteLogin.secrets } : {}),
+      // The run and its replay ask the One-Time Code Workflow, as Run Steps does; the engine masks each code it gets.
+      ...codeSettingsFor(ctx, p),
       endpoint,
       ...(output ? { output } : {}),
       vars: p.vars,

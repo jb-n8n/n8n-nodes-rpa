@@ -1,9 +1,12 @@
 // Import Steps against the sandbox with the real engine (a local headless browser, as integration.test.ts): the Chrome
 // SAP export recording imports, adopts, comes out on Repaired Steps, signs through Sign Steps, and the signed steps run.
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { strToU8, unzipSync, zipSync } from 'fflate';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { ICredentialDataDecryptedObject, IDataObject, INodeExecutionData } from 'n8n-workflow';
-import type { Script } from 'n8n-rpa-engine';
+import { totp, type Script } from 'n8n-rpa-engine';
 import { SANDBOX, startPortal } from 'n8n-rpa-sandbox/testing.js';
 import { loadEngine, type Engine } from '../nodes/Playwright/engine.js';
 import { resetGuardsForTests } from '../nodes/Playwright/guard.js';
@@ -83,5 +86,50 @@ describe('Import Steps against the sandbox (real engine)', () => {
     const [result] = await executeRunSteps(nodeContext({ params: run, rawParameters: run, credentials: credentials(), continueOnFail: true }), engine);
     expect(result[0].json, JSON.stringify(result[0].json).slice(0, 1500)).toMatchObject({ lane: 'script', version: 1, llmCalls: 0 });
     expect((result[0].json.files as IDataObject[]).map((f) => f.fileName)).toEqual([SEPTEMBER]);
+  }, 180_000);
+
+  it('the code is in neither the report, the Data output nor the generated workflow', async () => {
+    // The UiPath project recorded against the light web GUI: a sign-in with an authentication code, then the export.
+    const root = fileURLToPath(new URL('../../engine/test/fixtures/import/uipath-sap-light/', import.meta.url));
+    const entries: Record<string, Uint8Array> = {};
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        const path = join(dir, name);
+        if (statSync(path).isDirectory()) walk(path);
+        else entries[`SAP Line Item Export/${relative(root, path).split('\\').join('/')}`] = strToU8(readFileSync(path, 'utf8').split('http://localhost:8080').join(portal.url));
+      }
+    };
+    walk(root);
+    const project = Buffer.from(zipSync(entries));
+    portal.setState({ mfa: 'totp' });
+    // The Site Login has no TOTP Secret: the code can only come from the One-Time Code Workflow, which reads it as an
+    // authenticator app would.
+    const creds = credentials();
+    creds.playwrightSiteLoginApi = { ...creds.playwrightSiteLoginApi, totpSecret: '' };
+    const codes: string[] = [];
+    // Debug Trace Always: the proof's trace, where the code was typed, comes out on Repaired Steps and is searched too.
+    const params = { ...importParams, source: 'uipath', options: { ...importParams.options, saveTrace: 'always', codeWorkflowId: 'wf-code-1' } };
+    const out = await executeImportSteps(nodeContext({
+      params, rawParameters: params, credentials: creds, continueOnFail: true,
+      items: [{ json: {}, binary: { data: { data: project.toString('base64'), mimeType: 'application/zip', fileName: 'project.zip', bytes: project.length } } }],
+      executeWorkflow: async () => {
+        const code = totp(SECRETS.totpSecret);
+        codes.push(code);
+        return { executionId: 'sub-1', data: [[{ json: { code } }]] };
+      },
+    }), engine, { executionsMode: 'regular' });
+    const [data, repaired] = out;
+    expect(data[0].json.error, JSON.stringify(data[0].json).slice(0, 1500)).toBeUndefined();
+    expect(repaired).toHaveLength(1);
+    expect(repaired[0].json.steps).toMatchObject({ steps: expect.arrayContaining([expect.objectContaining({ signIn: expect.objectContaining({ totp: expect.objectContaining({ source: 'workflow' }) }) })]) });
+    expect(Object.keys(data[0].binary ?? {})).toContain('workflow');
+    // The import's run and its replay each asked the workflow for a code.
+    expect(codes.length).toBeGreaterThanOrEqual(2);
+    expect(Object.keys(repaired[0].binary ?? {})).toContain('trace');
+    const texts = out.flat().flatMap((i) => [JSON.stringify(i.json), ...Object.entries(i.binary ?? {}).flatMap(([key, b]) => {
+      const bytes = Buffer.from(b.data, 'base64');
+      return key === 'trace' ? Object.values(unzipSync(bytes)).map((entry) => Buffer.from(entry).toString('latin1')) : [bytes.toString('latin1')];
+    })]);
+    for (const code of codes) for (const text of texts) expect(new RegExp(`(?<![0-9])${code}(?![0-9])`).test(text)).toBe(false);
   }, 180_000);
 });
