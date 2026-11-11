@@ -57,7 +57,8 @@ BeforeAll {
       InstalledAutoSignInForUser = $false; InstalledAutoSignInUser = $null; InstalledUser = $null; InstalledForUser = $false
       UserSid = $null; EarlierUsers = @()
       DataDir = $script:DataDir; LogDir = "$($script:DataDir)\logs"; PolicyBackupsDir = "$($script:DataDir)\policy-backups"
-      DataDirState = New-PathState 'missing'; LogDirState = New-PathState 'missing'; PolicyBackupsState = New-PathState 'missing'
+      PolicyChangesDir = "$($script:DataDir)\policy-changes"
+      DataDirState = New-PathState 'missing'; LogDirState = New-PathState 'missing'; PolicyBackupsState = New-PathState 'missing'; PolicyChangesState = New-PathState 'missing'
       DataDirEntries = $null
       DataFiles = @{ 'policy.json' = New-PathState 'missing'; 'token' = New-PathState 'missing'; 'browser-token' = New-PathState 'missing' }
       TaskFolderOwner = $null; PublicNetwork = $false
@@ -73,7 +74,7 @@ BeforeAll {
     $facts = New-TestFacts @{
       Installed = $true; UserExists = $true; UserSid = $script:BotSid; InstalledUser = 'rpa-runner'; InstalledForUser = $true
       InstalledRunnerPort = 8765; InstalledBrowserPort = 3000; InstalledBrowser = $true; InstalledAllowFrom = @('10.0.0.5')
-      DataDirState = New-PathState 'ours'; LogDirState = New-PathState 'ours'; PolicyBackupsState = New-PathState 'ours'
+      DataDirState = New-PathState 'ours'; LogDirState = New-PathState 'ours'; PolicyBackupsState = New-PathState 'ours'; PolicyChangesState = New-PathState 'ours'
       DataFiles = @{ 'policy.json' = New-PathState 'ours'; 'token' = New-PathState 'ours'; 'browser-token' = New-PathState 'ours' }
     }
     foreach ($key in $Change.Keys) { $facts[$key] = $Change[$key] }
@@ -644,6 +645,30 @@ Describe 'Get-RpaInstallPlan' {
       (Get-RpaInstallPlan -Parameters $script:Parameters -Facts $facts).Refusals | Should -BeExactly @($owned)
       # One that is missing is no reason to refuse: the step that protects the data directory makes it.
       (Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-InstalledFacts @{ PolicyBackupsState = New-PathState 'missing' })).Refusals.Count | Should -Be 0
+    }
+
+    # The policy tool copies a change file into policy-changes\ before it applies it, and trusts the folder as it trusts
+    # policy-backups\: the bot user could have made it first.
+    It 'refuses a policy-changes folder that is a link, or that someone else owns, on a first install and on an upgrade' {
+      $link = 'C:\ProgramData\RPA Runner\policy-changes is a link or junction. Remove it and run the installer again.'
+      $owned = 'C:\ProgramData\RPA Runner\policy-changes exists and is owned by BOT-PC\mallory. Check what is in it, remove it, and run the installer again.'
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-InstalledFacts @{ PolicyChangesState = New-PathState 'link' })
+      $plan.Refusals | Should -BeExactly @($link)
+      $plan.Steps.Count | Should -Be 0
+      (Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-InstalledFacts @{ PolicyChangesState = New-PathState 'theirs' })).Refusals | Should -BeExactly @($owned)
+
+      $facts = New-TestFacts @{ DataDirState = New-PathState 'ours'; PolicyChangesState = New-PathState 'theirs' }
+      (Get-RpaInstallPlan -Parameters $script:Parameters -Facts $facts).Refusals | Should -BeExactly @($owned)
+      (Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-InstalledFacts @{ PolicyChangesState = New-PathState 'missing' })).Refusals.Count | Should -Be 0
+    }
+
+    It 'judges policy-changes as it judges policy-backups: the folder under its own name, what is in it owned by Administrators or SYSTEM only, created with the same rules' {
+      $script:ModuleSource | Should -Match ([regex]::Escape("ChangesDir    = Join-Path `$dataDir 'policy-changes'"))
+      $source = $script:ModuleSource
+      $source | Should -Match ([regex]::Escape("(@(`$script:DataFiles.Keys) + 'policy-backups' + 'policy-changes' + 'logs') -contains `$entry.Name"))
+      $source | Should -Match ([regex]::Escape("InBackups = (`$directory.InBackups -or (`$top -and @('policy-backups', 'policy-changes') -contains `$entry.Name))"))
+      $source | Should -Match ([regex]::Escape("New-RpaProtectedFolder `$Layout.ChangesDir (Get-RpaAccessRules 'backups' `$Sid)`n  Assert-RpaPathUsable `$Layout.ChangesDir `$true"))
+      $source | Should -Match ([regex]::Escape("`$facts.PolicyChangesState = Get-RpaPathState `$layout.ChangesDir"))
     }
 
     It 'a first install over a data directory that Administrators or SYSTEM own keeps its files and writes what is missing' {
@@ -1416,11 +1441,11 @@ Describe 'Remove-RpaOldTokens' {
 }
 
 Describe 'Protect-RpaDataDirectory' {
-  # A data directory, logs\ and policy-backups\ in a temporary folder, and a file outside it that the bot user may only
+  # A data directory, logs\, policy-backups\ and policy-changes\ in a temporary folder, and a file outside it that the bot user may only
   # read; the rules name the Users group in place of a bot user.
   It 'on a run that does not judge the data directory, refuses a second name in logs\ and leaves the other file as it was' -Skip:($env:OS -ne 'Windows_NT') {
     $root = Join-Path ([IO.Path]::GetTempPath()) ('rpa-protect-' + [guid]::NewGuid().ToString('N'))
-    $layout = @{ InstallDir = Join-Path $root 'install'; DataDir = Join-Path $root 'data'; LogDir = Join-Path (Join-Path $root 'data') 'logs'; BackupsDir = Join-Path (Join-Path $root 'data') 'policy-backups' }
+    $layout = @{ InstallDir = Join-Path $root 'install'; DataDir = Join-Path $root 'data'; LogDir = Join-Path (Join-Path $root 'data') 'logs'; BackupsDir = Join-Path (Join-Path $root 'data') 'policy-backups'; ChangesDir = Join-Path (Join-Path $root 'data') 'policy-changes' }
     New-Item -ItemType Directory -Path $layout.InstallDir, $layout.LogDir, (Join-Path $root 'elsewhere') | Out-Null
     try {
       $other = Join-Path (Join-Path $root 'elsewhere') 'other.txt'

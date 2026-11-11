@@ -12,11 +12,11 @@
 #
 # Who is not trusted: the bot user (and anything running as it) and every other standard user. The bot user can create
 # files in the data directory and change what is in logs\. So the installer refuses a link or junction where it expects
-# the data directory, logs\, policy-backups\, policy.json or a token, refuses one of those that someone other than
-# Administrators or SYSTEM owns (logs\ it takes over instead) and a file of those names that has a second name (a
-# hard link), passes /L to every icacls call, and removes folders through handles (Remove-RpaTree), which removes a
-# link or junction inside as the link itself and does not enter it. A data directory that is there when the user of
-# the install is new to it (a first install, another -User) is used only when everything in it belongs to
+# the data directory, logs\, policy-backups\, policy-changes\, policy.json or a token, refuses one of those that someone
+# other than Administrators or SYSTEM owns (logs\ it takes over instead) and a file of those names that has a second
+# name (a hard link), passes /L to every icacls call, and removes folders through handles (Remove-RpaTree), which
+# removes a link or junction inside as the link itself and does not enter it. A data directory that is there when the
+# user of the install is new to it (a first install, another -User) is used only when everything in it belongs to
 # Administrators, to SYSTEM or to that user, which must have been there already.
 #
 # Secrets: New-RpaSecret returns a new secret to its caller. No other function returns one in plain text, and none
@@ -82,8 +82,8 @@ function Get-RpaDataLinkRefusal($Entries) {
 # that account was there before the run, else nothing. A link and a file with a second name are refused, the first of
 # them by name, and so is the first entry that could not be read (a folder that cannot be listed: what is in it is not
 # known). Everything else must belong to Administrators, to SYSTEM or to that account (its logs, certificates and
-# exports), and in policy-backups\ to Administrators or SYSTEM only; what does not is refused once, with the number
-# of entries and the first of them.
+# exports), and in policy-backups\ and policy-changes\ to Administrators or SYSTEM only; what does not is refused once,
+# with the number of entries and the first of them.
 function Get-RpaDataEntryRefusals([string]$DataDir, $Entries, [string]$OwnSid) {
   $refusals = @()
   if (-not $Entries) { return $refusals }
@@ -385,6 +385,9 @@ function Get-RpaInstallPlan {
       # The policy tool keeps its backups here and trusts the folder; the bot user could have made it first.
       $backupsRefusal = Get-RpaPathRefusal $Facts.PolicyBackupsDir $Facts.PolicyBackupsState $true
       if ($backupsRefusal) { $refusals.Add($backupsRefusal) }
+      # The same for the folder it copies a change file into before it applies it.
+      $changesRefusal = Get-RpaPathRefusal $Facts.PolicyChangesDir $Facts.PolicyChangesState $true
+      if ($changesRefusal) { $refusals.Add($changesRefusal) }
       # The bot user keeps its own files in the data directory (logs, the certificates, exports), so an upgrade for
       # the same user does not judge who owns them; a link, or a file with a second name, is refused on every run.
       # Whenever the user of the install is new to the data directory (a first install, a user this run creates, an
