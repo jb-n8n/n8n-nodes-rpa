@@ -36,11 +36,7 @@ public sealed class SessionManagerTests : IDisposable
     // Advances the fake time in steps while the task runs, for waits between attempts.
     private async Task<T> Drive<T>(Task<T> task)
     {
-        for (var i = 0; i < 1000 && !task.IsCompleted; i++)
-        {
-            _time.Advance(TimeSpan.FromSeconds(1));
-            await Task.Delay(1);
-        }
+        await Wait.AdvanceUntil(_time, () => task.IsCompleted, TimeSpan.FromSeconds(1), tries: 1000, delayMs: 1);
         return await task;
     }
 

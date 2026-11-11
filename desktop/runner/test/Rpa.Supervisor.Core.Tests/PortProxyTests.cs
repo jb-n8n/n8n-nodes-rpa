@@ -41,16 +41,6 @@ public sealed class PortProxyTests : IAsyncLifetime
         return new Setup(host, manager, listen, target);
     }
 
-    // Advances the fake time in steps until the condition holds.
-    private static async Task DriveUntil(FakeTimeProvider time, Func<bool> done, TimeSpan step)
-    {
-        for (var i = 0; i < 300 && !done(); i++)
-        {
-            time.Advance(step);
-            await Task.Delay(10);
-        }
-    }
-
     private static int FreePort()
     {
         var probe = new TcpListener(IPAddress.Loopback, 0);
@@ -200,7 +190,7 @@ public sealed class PortProxyTests : IAsyncLifetime
         var client = await Connect(setup.ListenPort);
         var read = client.GetStream().ReadAsync(new byte[1]).AsTask();
 
-        await DriveUntil(time, () => read.IsCompleted, TimeSpan.FromSeconds(5));
+        await Wait.AdvanceUntil(time, () => read.IsCompleted, TimeSpan.FromSeconds(5));
 
         Assert.Equal(0, await read.WaitAsync(Patience));
         var expected = $"Nothing listened on 127.0.0.1:{setup.TargetPort} within 45 s: the runner did not start in {Bot}'s session; " +
@@ -217,21 +207,17 @@ public sealed class PortProxyTests : IAsyncLifetime
         var setup = Start(time);
         var line = $"Connection from 127.0.0.1 to port {setup.ListenPort}.";
         int Lines() => _log.Infos.Count(i => i == line);
-        async Task Until(Func<bool> done)
-        {
-            for (var i = 0; i < 500 && !done(); i++) await Task.Delay(10);
-        }
 
         await Connect(setup.ListenPort);
-        await Until(() => Lines() == 1);
+        await Wait.PollUntil(() => Lines() == 1);
         await Connect(setup.ListenPort);
-        await Until(() => setup.Host.Calls > 0); // both are accepted and wait for the session
+        await Wait.PollUntil(() => setup.Host.Calls > 0); // both are accepted and wait for the session
         await Task.Delay(200);
         Assert.Equal(1, Lines());
 
         time.Advance(TimeSpan.FromSeconds(31));
         await Connect(setup.ListenPort);
-        await Until(() => Lines() == 2);
+        await Wait.PollUntil(() => Lines() == 2);
         Assert.Equal(2, Lines());
     }
 
@@ -264,11 +250,7 @@ public sealed class PortProxyTests : IAsyncLifetime
         second.Dispose();
         await AssertEnds(secondInner);
         secondInner.Dispose();
-        for (var i = 0; i < 300 && _sessions.SignOuts.Count == 0; i++)
-        {
-            time.Advance(TimeSpan.FromSeconds(1));
-            await Task.Delay(10);
-        }
+        await Wait.AdvanceUntil(time, () => _sessions.SignOuts.Count > 0, TimeSpan.FromSeconds(1));
         Assert.Single(_sessions.SignOuts);
         Assert.Empty(_sessions.ForUser(Bot));
     }
@@ -303,7 +285,7 @@ public sealed class PortProxyTests : IAsyncLifetime
         var client = await Connect(setup.ListenPort);
         var read = client.GetStream().ReadAsync(new byte[1]).AsTask();
 
-        await DriveUntil(time, () => read.IsCompleted, TimeSpan.FromSeconds(1));
+        await Wait.AdvanceUntil(time, () => read.IsCompleted, TimeSpan.FromSeconds(1));
 
         Assert.Equal(0, await read.WaitAsync(Patience));
         Assert.StartsWith("HostExited", setup.Manager.LastFailure);
@@ -318,7 +300,7 @@ public sealed class PortProxyTests : IAsyncLifetime
     {
         var setup = Start(TimeProvider.System);
         var client = await Connect(setup.ListenPort);
-        for (var i = 0; i < 500 && setup.Host.Connections.Count == 0; i++) await Task.Delay(10);
+        await Wait.PollUntil(() => setup.Host.Connections.Count > 0);
 
         // The session's Remote Desktop connection ends before anything listens; signing in again fails.
         setup.Host.AlwaysFail = SessionFailure.NotAllowed;
@@ -345,7 +327,7 @@ public sealed class PortProxyTests : IAsyncLifetime
         // The target ends; the client stays open and says nothing.
         inner.Dispose();
         await AssertEnds(client);
-        await DriveUntil(time, () => _sessions.SignOuts.Count > 0, TimeSpan.FromSeconds(1));
+        await Wait.AdvanceUntil(time, () => _sessions.SignOuts.Count > 0, TimeSpan.FromSeconds(1));
 
         Assert.Single(_sessions.SignOuts);
         Assert.Empty(_sessions.ForUser(Bot));
@@ -354,12 +336,8 @@ public sealed class PortProxyTests : IAsyncLifetime
     // Waits until the log holds a failure that contains text, or Patience has passed.
     private async Task<string?> FailureContaining(string text)
     {
-        for (var i = 0; i < 500; i++)
-        {
-            if (_log.Failures.FirstOrDefault(f => f.Message.Contains(text)) is { Message: { } found }) return found;
-            await Task.Delay(10);
-        }
-        return null;
+        await Wait.PollUntil(() => _log.Failures.Any(f => f.Message.Contains(text)));
+        return _log.Failures.Where(f => f.Message.Contains(text)).Select(f => f.Message).FirstOrDefault();
     }
 
     [Fact]
@@ -451,7 +429,7 @@ public sealed class PortProxyTests : IAsyncLifetime
 
         time.Advance(TimeSpan.FromSeconds(31));
         await Drop();
-        for (var i = 0; i < 500 && Lines() < 2; i++) await Task.Delay(10);
+        await Wait.PollUntil(() => Lines() >= 2);
 
         Assert.Equal(2, Lines());
         Assert.EndsWith("(2 more such connections since the last such line)", _log.Failures.Last(f => f.Message.Contains("ended before")).Message);
