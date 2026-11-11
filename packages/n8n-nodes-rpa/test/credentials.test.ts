@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { createServer as createHttpServer } from 'node:http';
 import { createServer, type AddressInfo } from 'node:net';
 import { describe, expect, it, vi } from 'vitest';
+import { USE_CASE_WORDS } from 'n8n-rpa-engine';
 import type { ICredentialType, INodeProperties } from 'n8n-workflow';
 import * as engine from 'n8n-rpa-engine';
 import { bound } from '../../engine/test/timing.js';
@@ -24,7 +25,6 @@ vi.hoisted(() => {
 const SECRET_FIELDS = ['password', 'totpSecret', 'token', 'secretKey', 'connectionLine'];
 
 const V2 = [new PlaywrightBrowserApi(), new PlaywrightSiteLoginApi(), new PlaywrightScriptSigningApi(), new PlaywrightRedisApi(), new RpaDesktopRunnerApi(), new RpaSecretVariablesApi()];
-const USE_CASE_WORDS = /\b(portal|recall|notice|dealer)s?\b/i;
 type OptionLike = { name?: string; value?: unknown; description?: string };
 /** Every text a user reads in the credential dialog (never `name` or `type`, which are identifiers). */
 function texts(c: ICredentialType): string[] {

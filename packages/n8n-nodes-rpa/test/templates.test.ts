@@ -3,6 +3,8 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { deflateRawSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
+import { USE_CASE_WORDS } from 'n8n-rpa-engine';
+import { APPROVER } from './fixtures.js';
 import {
   NodeHelpers, Workflow, type IDataObject, type INodeExecutionData, type INodeParameters, type INodeProperties, type INodeTypes,
 } from 'n8n-workflow';
@@ -49,7 +51,6 @@ const load = (file: string): Template => JSON.parse(readFileSync(new URL(`../tem
 const NODE_TYPE = 'n8n-nodes-rpa.playwright';
 const STICKY = 'n8n-nodes-base.stickyNote';
 const DATA_TABLE = 'n8n-nodes-base.dataTable';
-const USE_CASE_WORDS = /\b(portal|recall|notice|dealer)s?\b/i;
 /** n8n sticky colours (design-system tokens --sticky--color--background--variant-N): 4 green, 2 gold (n8n's nearest to orange), 7 grey. */
 const COLOUR = { green: 4, gold: 2, grey: 7 } as const;
 const SETTINGS_NAME = "$('Settings').item.json.name";
@@ -57,7 +58,6 @@ const SETTINGS_NAME = "$('Settings').item.json.name";
 const SUPERSEDE_UP_TO = "={{ $('Repaired steps received').item.json.baseVersion === null ? 2147483647 : $('Repaired steps received').item.json.version }}";
 const AI_REPAIR = "={{ $('Get pending').all().filter(i => i.json.hash && DateTime.fromISO(i.json.expiresAt) > $now).length === 0 }}";
 const EXPIRES_AT = "={{ $now.plus({ hours: $('Settings').item.json.approvalTimeoutHours }).toISO() }}";
-const APPROVER = 'approver@example.com';
 /** Template 3 takes the approver from its Settings everywhere except the Approver Allowlist, which must be typed. */
 const SETTINGS_APPROVER = "={{ $('Settings').item.json.approver }}";
 

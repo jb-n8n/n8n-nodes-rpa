@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { USE_CASE_WORDS } from 'n8n-rpa-engine';
 import {
   BROWSER_CERT_NOT_TRUSTED, BROWSER_CERT_NOT_TRUSTED_CDP, BROWSER_FINGERPRINT_INVALID, BROWSER_FINGERPRINT_MISMATCH, BROWSER_FINGERPRINT_NEEDS_WSS,
   IMPORT_EMPTY, IMPORT_NEEDS_SITE_LOGIN, IMPORT_NOT_ADOPTABLE, IMPORT_PROOF_FAILED, IMPORT_REFUSES_WRITES, IMPORT_UNSUPPORTED_TARGET,
@@ -10,7 +11,6 @@ import { RUN_TABLE_COLUMNS, STEPS_TABLE_COLUMNS } from '../nodes/Playwright/rows
 
 const root = new URL('../../../', import.meta.url);
 const readme = readFileSync(new URL('README.md', root), 'utf8');
-const USE_CASE_WORDS = /\b(portal|recall|notice|dealer)s?\b/i;
 
 const HEADINGS = [
   'What it is', 'Hello world in 10 minutes', 'Operations', 'Where the browser runs', 'Safety model', 'Locators',

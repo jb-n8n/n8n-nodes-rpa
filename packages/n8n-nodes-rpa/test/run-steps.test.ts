@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { APPROVER } from './fixtures.js';
 import { NodeHelpers, NodeOperationError, type IDataObject, type INodeExecutionData } from 'n8n-workflow';
 import { isEmptySteps, MAX_BUDGET_MS, proposalDigest, scriptHash, type Proposal, type Script } from 'n8n-rpa-engine';
 import { ConfigError, MAX_SECONDS } from '../nodes/Playwright/config.js';
@@ -16,7 +17,6 @@ const KEY = 'run-steps-signing-key-0123456789abcdef';
 const TOKEN = 'tok-5d8e3a71';
 const USER = 'site-user-7c1';
 const PASS = 'site-pass-9f2';
-const APPROVER = 'approver@example.com';
 const SIGNATURE = 'ab'.repeat(32);
 const GOAL = 'Read every item; IDs look like SKU-1001.';
 const BROWSER = { mode: 'playwright', wsUrl: 'wss://browser.example.net/pw', token: TOKEN };

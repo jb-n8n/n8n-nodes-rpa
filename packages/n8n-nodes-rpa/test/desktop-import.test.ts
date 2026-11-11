@@ -3,6 +3,7 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { strToU8, zipSync } from 'fflate';
 import { afterEach, describe, expect, it } from 'vitest';
+import { APPROVER } from './fixtures.js';
 import type { IDataObject, INodeExecutionData } from 'n8n-workflow';
 import * as engine from 'n8n-rpa-engine';
 import { ERP_PASSWORD, ERP_POLICY, ERP_USER, erpCsv, erpLineItems, FakeRunner } from '../../engine/test/fake-runner.js';
@@ -17,7 +18,6 @@ import { harness, type HarnessOptions } from './harness.js';
 
 // Golden strings are written out here on purpose (tests assert them verbatim, not through the constants).
 const KEY = 'desktop-import-signing-key-0123456789';
-const APPROVER = 'approver@example.com';
 const DIR = fileURLToPath(new URL('../../engine/test/fixtures/import/uipath-erp-desktop/', import.meta.url));
 
 function sampleZip(): Buffer {

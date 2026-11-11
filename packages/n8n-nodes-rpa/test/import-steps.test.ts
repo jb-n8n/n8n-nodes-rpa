@@ -3,6 +3,7 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { deflateRawSync, inflateRawSync } from 'node:zlib';
 import { afterEach, describe, expect, it } from 'vitest';
+import { USE_CASE_WORDS } from 'n8n-rpa-engine';
 import { NodeHelpers, NodeOperationError, type IDataObject, type INodeExecutionData, type INodeProperties, type INodePropertyOptions } from 'n8n-workflow';
 import * as real from 'n8n-rpa-engine';
 import type { AdoptInput, AdoptResult, Draft, ImportResult, Script } from 'n8n-rpa-engine';
@@ -34,7 +35,6 @@ const NAME_EQUALS = 'Name must not start with "=".';
 const CDP_DOWNLOAD =
   'Downloads need the Browser Server or Local Browser mode: a Chrome DevTools Protocol (CDP) connection cannot read downloaded files. Pick an RPA Browser credential in Browser Server mode for this node.';
 const NO_MODEL = 'AI repair is on but no chat model is connected. Connect one to the Model input.';
-const USE_CASE_WORDS = /\b(portal|recall|notice|dealer)s?\b/i;
 
 const SITE = { url: 'https://erp.example.com', host: 'erp.example.com' };
 const ENGINE_FIXTURES = new URL('../../engine/test/fixtures/import/', import.meta.url);

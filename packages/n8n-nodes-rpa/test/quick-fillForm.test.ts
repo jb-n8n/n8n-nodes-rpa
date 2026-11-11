@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { USE_CASE_WORDS } from 'n8n-rpa-engine';
 import type { IDataObject, INodeProperties, INodePropertyCollection } from 'n8n-workflow';
 import { parseScript, validateScript } from 'n8n-rpa-engine';
 import { policyFor } from '../nodes/Playwright/config.js';
@@ -11,7 +12,6 @@ import { fakeEngine } from './fake-engine.js';
 import { harness } from './harness.js';
 import { assertRunnable, BROWSER, failResult, okResult, optionsFor, PAGE_URL, QUICK_COMMON_OPTIONS, quickParams } from './quick-fixtures.js';
 
-const USE_CASE_WORDS = /\b(portal|recall|notice|dealer)s?\b/i;
 const FIELDS = { field: [{ findBy: 'label', label: 'Name', value: 'Ada Lovelace' }, { findBy: 'label', label: 'Message', value: 'Hello there' }] };
 const SEND = { locator: { findBy: 'role', role: 'button', roleName: 'Send' } };
 const q = (over: IDataObject = {}, options: IDataObject = {}): QuickParams =>

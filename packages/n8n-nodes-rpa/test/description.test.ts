@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
+import { USE_CASE_WORDS } from 'n8n-rpa-engine';
 import {
   NodeHelpers, Workflow, type INodeCredentialDescription, type INodeParameters, type INodeProperties, type INodePropertyOptions, type INodeType, type INodeTypes,
 } from 'n8n-workflow';
@@ -19,7 +20,6 @@ import { harness } from './harness.js';
 
 const node = new Playwright();
 const d = node.description;
-const USE_CASE_WORDS = /\b(portal|recall|notice|dealer)s?\b/i;
 const AI_REPAIR_EXPRESSION = "={{ $('Get pending').all().filter(i => i.json.hash && DateTime.fromISO(i.json.expiresAt) > $now).length === 0 }}";
 const MAIN = { type: 'main', displayName: '' };
 const MODEL = { type: 'ai_languageModel', displayName: 'Model', maxConnections: 1, required: false };
