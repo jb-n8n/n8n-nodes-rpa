@@ -79,8 +79,8 @@ describe('Import Steps with a UiPath desktop project', () => {
     expect(item.secretVariables).toEqual(['password']);
     // For the review page: Enter in the password field signs in, so it starts unticked there. Only a recording marks the
     // steps its import added (a UiPath project's waits come from its own activities).
-    expect(json.drafts).toEqual([expect.objectContaining({ signInKeys: [4] })]);
-    expect((json.drafts as IDataObject[])[0]).not.toHaveProperty('addedSteps');
+    expect(item.writeCandidates).toEqual([{ step: 4, intent: 'Press Enter in Password', signsIn: true }, { step: 16, intent: 'Click Save' }]);
+    expect((item.reviewSteps as IDataObject[]).filter((r) => r.added)).toEqual([]);
   });
 
   it('a project with browser steps still needs the RPA Browser credential', async () => {
@@ -269,9 +269,8 @@ describe('Import Steps with an RPA recording', () => {
     expect(String(item.safetyLine)).toContain('candidate write: step 16 (Click Save) may save, post or submit');
     // For the review page: the key that signs in (step 4, Enter in Password) and the steps the import added (the waits for
     // each window, the returned file). Shown only: neither is signed or reviewed.
-    expect((json.drafts as IDataObject[])[0]).toMatchObject({ signInKeys: [4], addedSteps: [1, 5, 12, 14, 17] });
-    expect(item).not.toHaveProperty('signInKeys');
-    expect(item).not.toHaveProperty('addedSteps');
+    expect(item.writeCandidates).toEqual([{ step: 4, intent: 'Press Enter in Password', signsIn: true }, { step: 16, intent: 'Click Save' }]);
+    expect((item.reviewSteps as IDataObject[]).flatMap((r, i) => (r.added ? [i + 1] : []))).toEqual([1, 5, 12, 14, 17]);
   });
 
   it('the approval evidence line for a recording says it was imported from a recording, and for a UiPath project it is unchanged', async () => {

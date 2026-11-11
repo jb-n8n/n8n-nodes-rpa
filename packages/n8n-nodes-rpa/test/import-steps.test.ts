@@ -20,7 +20,7 @@ import {
   executeImportSteps, IMPORT_NEEDS_START, MAX_IMPORT_BYTES, NOT_TRIED_CANCELLED, SOURCE_UNKNOWN, STEPS_WITHHELD,
 } from '../nodes/Playwright/operations/importSteps.js';
 import { executeSignSteps } from '../nodes/Playwright/operations/signSteps.js';
-import { fullSafetyFlags } from '../nodes/Playwright/format.js';
+import { fullSafetyFlags, reviewSteps } from '../nodes/Playwright/format.js';
 import { repairedStepsJson } from '../nodes/Playwright/output.js';
 import type { WorkflowJson } from '../nodes/Playwright/import/workflow.js';
 import { DISPATCH, Playwright } from '../nodes/Playwright/Playwright.node.js';
@@ -322,12 +322,15 @@ describe('Import Steps: execution', () => {
     expect(input).not.toHaveProperty('trust');
     expect(JSON.stringify(input.draft)).not.toContain(SECRETS.password);
 
-    // Repaired Steps: exactly the item Run Steps emits for the same proposal, with what the import left out.
+    // Repaired Steps: exactly the item Run Steps emits for the same proposal, with what the import left out, plus its steps
+    // as the review page lists them (shown only).
     expect(repaired).toHaveLength(1);
     const proposal = (await proved(input)) as Extract<AdoptResult, { ok: true }>;
     const leftOut = (data[0].json.report as { items: { kind: string; at: string; what: string; reason: string }[] }).items
       .filter((i) => i.kind === 'untranslated' || (i.kind === 'dropped' && !(i as { notNeeded?: true }).notNeeded)).map((i) => `${i.at}, ${i.what}: ${i.reason}`);
-    expect(repaired[0].json).toEqual(repairedStepsJson(engine, { ...proposal.proposal, leftOut }, 'after'));
+    expect(repaired[0].json).toEqual({
+      ...repairedStepsJson(engine, { ...proposal.proposal, leftOut }, 'after'), reviewSteps: reviewSteps(proposal.proposal.steps.steps, { desktop: false }),
+    });
     expect(repaired[0].json).toMatchObject({ name: 'sap-export', baseVersion: null, version: 1 });
     expect(repaired[0].binary?.after).toMatchObject({ mimeType: 'image/png', fileName: 'after-v1.png' });
     expect(repaired[0].pairedItem).toEqual([{ item: 0 }]);

@@ -156,3 +156,77 @@ export function signInKeySteps(steps: readonly DesktopStep[], secretVariables: r
 export function importAddedSteps(steps: readonly DesktopStep[]): number[] {
   return steps.flatMap((s, i) => ('waitFor' in s || 'expectFile' in s ? [i + 1] : []));
 }
+
+/** One step as the review page lists it: its sentence, its marks (variables, a returned file, a sign-in), and whether the import added it. */
+export interface ReviewStep { text: string; marks: string[]; added?: true }
+/** A candidate write as the review page asks about it; `signsIn`: a key pressed in a secret field (signInKeySteps), asked unticked. */
+export interface ReviewWrite { step: number; intent: string; signsIn?: true }
+
+type Json = Record<string, unknown>;
+const asJson = (v: unknown): Json => (typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Json) : {});
+/** A value that is one of the steps' `{{var.name}}` templates (spaces allowed, as the engine renders them). */
+const holdsVariable = (v: unknown): boolean => /\{\{\s*var\./.test(String(v ?? ''));
+/** Every `{{var.name}}` in a step, once, in order. */
+const stepVariables = (s: unknown): string[] =>
+  [...new Set([...(JSON.stringify(s ?? null) ?? '').matchAll(/\{\{\s*var\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g)].map((m) => m[1]))];
+
+/** The name of a desktop target's own (last) condition, or ''. */
+function targetName(t: unknown): string {
+  const path = asJson(asJson(t).uia).path;
+  if (!Array.isArray(path) || !path.length) return '';
+  const own = asJson(path[path.length - 1]);
+  return String(own.name ?? own.automationId ?? '');
+}
+
+/** A desktop step's sentence: its verb, the value it types or chooses (never a variable's) and its field, as the recorder's bar words it. */
+function desktopSentence(s: Json): string {
+  const fill = s.fill === undefined ? undefined : asJson(s.fill);
+  const select = s.select === undefined ? undefined : asJson(s.select);
+  const key = s.key === undefined ? undefined : asJson(s.key);
+  const check = s.check === undefined ? undefined : asJson(s.check);
+  const field = targetName(fill?.field ?? select?.field ?? key?.target ?? check?.field) || String(s.intent ?? '');
+  if (fill) {
+    const file = /^\{\{\$exportDir\}\}[\\/](.+)$/.exec(String(fill.value ?? ''));
+    if (file) return `Save ${file[1]} into the run's export folder`;
+    return holdsVariable(fill.value) ? `Type into ${field}` : `Type "${String(fill.value)}" into ${field}`;
+  }
+  if (select) return holdsVariable(select.option) ? `Choose an item in ${field}` : `Choose "${String(select.option)}" in ${field}`;
+  if (key) return `Press ${String(key.key)}${field ? ` in ${field}` : ''}`;
+  if (check) return `${check.checked === false ? 'Uncheck ' : 'Check '}${field}`;
+  return String(s.intent ?? '');
+}
+
+/** A browser step's sentence: its intent, and a typed value the intent does not say (never a secret's or a variable's). */
+function browserSentence(s: Json): string {
+  const intent = String(s.intent ?? '');
+  const fill = s.fill === undefined ? undefined : asJson(s.fill);
+  return fill && !fill.secret && typeof fill.value === 'string' && !holdsVariable(fill.value) && !intent.includes(fill.value) ? `${intent}: "${fill.value}"` : intent;
+}
+
+/**
+ * For the review page only (shown, never signed or reviewed): each step's short sentence and marks. A desktop step names
+ * a variable secret when the import says so (`secretVariables`); a browser step, when it is a secret fill or a password
+ * change. `startValues`: a recording's start values; `added`: the step numbers (from 1) the import added.
+ */
+export function reviewSteps(
+  steps: readonly unknown[], o: { desktop: boolean; secretVariables?: readonly string[]; startValues?: Readonly<Record<string, string>>; added?: readonly number[] },
+): ReviewStep[] {
+  return steps.map((raw, j) => {
+    const s = asJson(raw);
+    const secret = (v: string): boolean =>
+      (o.desktop ? (o.secretVariables ?? []).includes(v) : Boolean(asJson(s.fill).secret) || Boolean(asJson(s.signIn).changePassword));
+    const marks = [
+      ...stepVariables(raw).map((v) => (secret(v) ? `secret variable ${v}` : `variable ${v}${o.startValues?.[v] !== undefined ? `, starts as ${o.startValues[v]}` : ''}`)),
+      ...(s.expectFile || s.download ? ['returns a file'] : []),
+      ...(s.read && asJson(s.read).as ? [`gives its text to n8n as ${String(asJson(s.read).as)}`] : []),
+      ...(s.signIn ? ['signs in with the RPA Site Login'] : []),
+    ];
+    return { text: o.desktop ? desktopSentence(s) : browserSentence(s), marks, ...((o.added ?? []).includes(j + 1) ? { added: true as const } : {}) };
+  });
+}
+
+/** For the review page only: a desktop step list's candidate writes (desktopWriteCandidates), each with its intent on one line. */
+export function reviewWrites(steps: readonly DesktopStep[], candidates: readonly number[], secretVariables: readonly string[]): ReviewWrite[] {
+  const signsIn = signInKeySteps(steps, secretVariables);
+  return candidates.map((n) => ({ step: n, intent: oneLine(steps[n - 1]?.intent ?? ''), ...(signsIn.includes(n) ? { signsIn: true as const } : {}) }));
+}

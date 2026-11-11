@@ -7,7 +7,9 @@ import type { NodeContext } from '../context.js';
 import type { Engine } from '../engine.js';
 import { configNodeError, errorJson, failedOnCode, guidanceFor } from '../errors.js';
 import { isBreakerCode, noteRepairRan, repairAlreadyRan, runGuarded, siteLoginGuard, type GuardedResult } from '../execute.js';
-import { DESKTOP_DOCUMENT_EVIDENCE_LINE, DESKTOP_EVIDENCE_LINE, DESKTOP_RECORDING_EVIDENCE_LINE, importAddedSteps, signInKeySteps } from '../format.js';
+import {
+  DESKTOP_DOCUMENT_EVIDENCE_LINE, DESKTOP_EVIDENCE_LINE, DESKTOP_RECORDING_EVIDENCE_LINE, importAddedSteps, reviewSteps, reviewWrites,
+} from '../format.js';
 import { isQueueMode, openGuardStore, QUEUE_NEEDS_REDIS, type GuardStoreDeps } from '../guard-store.js';
 import { workflowFile } from '../import/workflow.js';
 import { lazyChatModel } from '../model.js';
@@ -22,8 +24,6 @@ import { signingPolicy } from './signSteps.js';
 
 /** The largest file or text Import Steps reads. The importers apply their own, smaller limits. */
 export const MAX_IMPORT_BYTES = 20 * 1024 * 1024;
-/** `{ [key]: numbers }`, or nothing when there are none. */
-const nonEmpty = (key: string, numbers: number[]): IDataObject => (numbers.length ? { [key]: numbers } : {});
 /** The most drafts one input item adopts, one after another: each can take about twice Max Seconds. */
 export const MAX_ADOPTIONS = 10;
 /** How long the proof may wait for a fresh authenticator code window (engine adopt.ts, freshTotpAfter). */
@@ -319,7 +319,15 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
     if (!withheld) {
       try {
         const line = source === 'steps' ? DESKTOP_DOCUMENT_EVIDENCE_LINE : source === 'recording' ? DESKTOP_RECORDING_EVIDENCE_LINE : DESKTOP_EVIDENCE_LINE;
-        review = desktopRepairedStepsJson(engine, withLeftOut(engine.desktopProposal(d.script)), line, d.secretVariables);
+        review = {
+          ...desktopRepairedStepsJson(engine, withLeftOut(engine.desktopProposal(d.script)), line, d.secretVariables),
+          // Shown on the review page only; neither the digest nor the signature covers them.
+          reviewSteps: reviewSteps(d.script.steps, {
+            desktop: true, secretVariables: d.secretVariables, ...(d.startValues ? { startValues: d.startValues } : {}),
+            ...(source === 'recording' ? { added: importAddedSteps(d.script.steps) } : {}),
+          }) as unknown as IDataObject[],
+          writeCandidates: reviewWrites(d.script.steps, engine.desktopWriteCandidates(d.script), d.secretVariables) as unknown as IDataObject[],
+        };
       } catch (error) {
         problem = mask(errorMessage(error));
       }
@@ -335,10 +343,6 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
       secretVariables: [...d.secretVariables],
       // A recording's start values (never a secret's), for the review page and the generated workflow.
       ...(d.startValues && Object.keys(d.startValues).length ? { startValues: { ...d.startValues } } : {}),
-      // For the review page only (step numbers; never signed): the keys that sign in start unticked, and a recording's
-      // steps that the import added are shown apart.
-      ...nonEmpty('signInKeys', signInKeySteps(d.script.steps, d.secretVariables)),
-      ...(source === 'recording' ? nonEmpty('addedSteps', importAddedSteps(d.script.steps)) : {}),
       reason: withheld ? STEPS_WITHHELD : problem ?? DESKTOP_FOR_APPROVAL,
     };
     return { entry, review };
@@ -403,11 +407,20 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
 
   const repaired: INodeExecutionData[] = [];
   for (const o of outcomes) {
-    if (o.kind === 'adopted') repaired.push({ ...(await repairedStepsItem(ctx, engine, withLeftOut(o.proposal))), pairedItem: paired });
-    if (o.kind === 'forApproval') repaired.push({ json: o.review, pairedItem: paired });
+    if (o.kind === 'adopted') {
+      const item = await repairedStepsItem(ctx, engine, withLeftOut(o.proposal));
+      repaired.push({ ...item, json: withReviewSteps(item.json), pairedItem: paired });
+    }
+    if (o.kind === 'forApproval') repaired.push({ json: withReviewSteps(o.review), pairedItem: paired });
   }
   for (const o of desktopOut) if (o.review) repaired.push({ json: o.review, pairedItem: paired });
   return { kind: 'ok', data: { json: fields, pairedItem: paired, ...binaryField }, repaired };
+}
+
+/** A browser Repaired steps item with its steps as the review page lists them (shown only, never signed or reviewed). */
+function withReviewSteps(json: IDataObject): IDataObject {
+  const steps = (json.steps as { steps?: unknown } | null)?.steps;
+  return { ...json, reviewSteps: reviewSteps(Array.isArray(steps) ? steps : [], { desktop: false }) as unknown as IDataObject[] };
 }
 
 /**

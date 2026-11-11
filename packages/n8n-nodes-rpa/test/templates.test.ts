@@ -3,7 +3,7 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { deflateRawSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
-import { NOT_REPLAYED_EVIDENCE_LINE } from '../nodes/Playwright/format.js';
+import { NOT_REPLAYED_EVIDENCE_LINE, reviewSteps } from '../nodes/Playwright/format.js';
 import { USE_CASE_WORDS } from 'n8n-rpa-engine';
 import { APPROVER } from './fixtures.js';
 import {
@@ -1198,11 +1198,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       fieldLabel: 'Which of these steps save, send or submit?', fieldName: 'writes_0', fieldType: 'checkbox',
       fieldOptions: { values: [{ option: 'Step 4: Press Enter in Password' }, { option: 'Step 16: Click Save' }] }, defaultValue: 'Step 16: Click Save',
     });
-    // Without the hints (an Import steps output from before them), every candidate starts ticked and no step is grey.
-    const bare = (data[0].json.drafts as IDataObject[]).map(({ signInKeys: _k, addedSteps: _a, ...d }) => d);
-    const older = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan({ ...ran, 'Import steps': [[{ json: { ...data[0].json, drafts: bare } }], repaired] }) });
-    expect(older[1].defaultValue).toBe('Step 4: Press Enter in Password,Step 16: Click Save');
-    expect(older[0].html).not.toMatch(/<i>|recorded steps/);
+    // The page places what Import steps built (reviewSteps, writeCandidates); it reads nothing from Data's drafts.
+    const noDrafts = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan({ ...ran, 'Import steps': [[{ json: { ...data[0].json, drafts: [] } }], repaired] }) });
+    expect(noDrafts).toEqual(fields);
     expect(fields[0].html).not.toContain('candidate');
     expect(fields[3]).toMatchObject({ fieldLabel: 'Any other step that saves, sends or submits (its number, optional)', placeholder: '7, 9' });
     expect(fields[3]).not.toHaveProperty('requiredField');
@@ -1261,8 +1259,8 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const { data, repaired } = await importedRecording();
     // A candidate whose intent holds a comma and angle brackets: n8n compares the ticked-to-start labels with the options
     // after its JSON-form escaping of < and > (not applied to options) and splits the start value at commas.
-    const flag = 'candidate write: step 3 (Save, then <b>close</b>) may save, post or submit';
-    const two = [repaired[0], { json: { ...repaired[0].json, name: 'second<b>', safetyFlags: [...(repaired[0].json.safetyFlags as string[]), flag] } }];
+    const candidate = { step: 3, intent: 'Save, then <b>close</b>' };
+    const two = [repaired[0], { json: { ...repaired[0].json, name: 'second<b>', writeCandidates: [...(repaired[0].json.writeCandidates as IDataObject[]), candidate] } }];
     const ran = { Settings: [[{ json: settingsJson() }]], 'Import steps': [data, two] } as Record<string, INodeExecutionData[][]>;
     const fields = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan(ran) });
     const html = fields.filter((f) => f.fieldType === 'html').map((f) => String(f.html));
@@ -1275,7 +1273,8 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(fields.filter((f) => f.fieldType === 'radio').map((f) => [f.fieldName, f.fieldLabel])).toEqual([['decision_0', `${String(two[0].json.name)}: Decision`], ['decision_1', 'second<b>: Decision']]);
     const ticks = fields.find((f) => f.fieldName === 'writes_1');
     expect(ticks?.fieldOptions?.values.map((v) => v.option)).toEqual(['Step 4: Press Enter in Password', 'Step 16: Click Save', 'Step 3: Save; then \u2039b\u203aclose\u2039/b\u203a']);
-    expect(ticks?.defaultValue?.split(',')).toEqual(ticks?.fieldOptions?.values.map((v) => v.option));
+    // Ticked to start with, but the key that signs in: the second list carries its own hints.
+    expect(ticks?.defaultValue?.split(',')).toEqual(['Step 16: Click Save', 'Step 3: Save; then \u2039b\u203aclose\u2039/b\u203a']);
     expect(ticks?.fieldLabel).toBe('second<b>: Which of these steps save, send or submit?');
     const sign = byName(t, 'Sign steps').parameters;
     const answer = { decision_0: 'Reject', decision_1: 'Approve and sign', writes_1: ['Step 3: x'], moreWrites_1: '5' };
@@ -1299,7 +1298,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       safetyLine: 'host: a.example\' <script>; …', evidenceLine: '7 rows <img src=x onerror=alert(1)>; compared with the repair run: 0 missing, 0 extra',
       changeList: 'Added: Open the list\nAdded: Read "rows" $& $$', leftOutList: 'step 4, Pick <b>Status</b>\nstep 9, Wait',
     };
-    const ran = { Settings: [[{ json: settingsJson() }]], 'Import steps': [[{ json: { report: { steps: 2, items: [] }, drafts: [] } }], [{ json: item }]] } as Record<string, INodeExecutionData[][]>;
+    // As Import steps builds it from the steps.
+    const withLines = { ...item, reviewSteps: reviewSteps(item.steps.steps, { desktop: false }) };
+    const ran = { Settings: [[{ json: settingsJson() }]], 'Import steps': [[{ json: { report: { steps: 2, items: [] }, drafts: [] } }], [{ json: withLines }]] } as Record<string, INodeExecutionData[][]>;
     const fields = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan(ran) });
     expect(fields.map((f) => f.fieldType)).toEqual(['html', 'radio']);
     const POINTER = '<p><em>How each step finds its control is in this run\'s execution in n8n (the Import steps node\'s output), and in the approval email when approval is by email.</em></p>';
@@ -1314,21 +1315,24 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       + '<p><em><b>Evidence (as reported by the run):</b> 7 rows &lt;img src=x onerror=alert(1)&gt;; compared with the repair run: 0 missing, 0 extra</em></p>'
       + '<p><em><b>What changed (as reported by the run):</b><br>Added: Open the list<br>Added: Read &quot;rows&quot; $&amp; $$</em></p>'
       + '<p><em>Screenshots of the replay are in this execution in n8n, on the Repaired Steps output of Import steps.</em></p>');
-    const notRun = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan({ Settings: [[{ json: { ...settingsJson(), showDetails: true } }]], 'Import steps': [ran['Import steps'][0], [{ json: { ...item, evidenceLine: NOT_REPLAYED_LINE, attachmentNames: '', leftOutList: undefined } }]] }) });
+    const notRun = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan({ Settings: [[{ json: { ...settingsJson(), showDetails: true } }]], 'Import steps': [ran['Import steps'][0], [{ json: { ...withLines, evidenceLine: NOT_REPLAYED_LINE, attachmentNames: '', leftOutList: undefined } }]] }) });
     expect(notRun[0].html).toContain('<br>Not run by the import: check every step, each form&#39;s target and each download before you approve.</p><p><b>The steps</b></p><ol>');
     expect(notRun[0].html).toContain(`<b>Evidence:</b> ${escapeHtml(NOT_REPLAYED_LINE)}</em></p><p><em><b>What changed (as written; these steps were never run):</b>`);
     expect(notRun[0].html).not.toContain('Screenshots');
+    // A variable written with spaces gets its mark too (the page's own regex used to miss it).
+    expect(reviewSteps([{ intent: 'Type the note', fill: { field: { label: 'Note' }, value: '{{ var.note }}' } }], { desktop: false }))
+      .toEqual([{ text: 'Type the note', marks: ['variable note'] }]);
+    expect(reviewSteps([{ intent: 'Pick', select: { field: { uia: { path: [{ controlType: 'ComboBox', name: 'Plant' }] } }, option: '{{ var.plant }}' } }], { desktop: true }))
+      .toEqual([{ text: 'Choose an item in Plant', marks: ['variable plant'] }]);
   });
 
-  it('a recording\'s marks name its secret variables from the import (Data drafts), never a value', async () => {
-    const { ran } = await importedRecording();
+  it('a recording\'s marks name its secret variables from the import, never a value', async () => {
+    const { repaired, ran } = await importedRecording();
     const data = ran['Import steps'][0][0].json as { drafts: IDataObject[] };
     expect(data.drafts[0]).toMatchObject({ surface: 'desktop', secretVariables: ['password'] });
+    expect((repaired[0].json.reviewSteps as IDataObject[])[2]).toEqual({ text: 'Type into Password', marks: ['secret variable password'] });
     const fields = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan(ran) });
     expect(fields[0].html).toContain('<li>Type into Password <em>· secret variable password</em></li>');
-    // Without the draft's list, the same variable is a plain variable: the mark follows the import's own data.
-    const without = { ...ran, 'Import steps': [[{ json: { ...data, drafts: [] } }], ran['Import steps'][1]] };
-    expect(jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan(without) })[0].html).toContain('<li>Type into Password <em>· variable password</em></li>');
   });
 
   it('an import with an untranslated step puts it into leftOut and both emails show it', async () => {
