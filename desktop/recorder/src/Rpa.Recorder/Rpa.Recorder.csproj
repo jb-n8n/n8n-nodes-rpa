@@ -12,6 +12,14 @@
     <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
+  <!-- Recording without the bar (Headless.cs, for the scenario test) is only in the build published with
+       -p:RecorderScenario=true. The package's RpaRecorder.exe is published without it and refuses headless. -->
+  <PropertyGroup Condition="'$(RecorderScenario)' == 'true'">
+    <DefineConstants>$(DefineConstants);RECORDER_SCENARIO</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(RecorderScenario)' != 'true'">
+    <Compile Remove="Headless.cs" />
+  </ItemGroup>
   <ItemGroup>
     <PackageReference Include="FlaUI.UIA3" Version="5.0.0" />
   </ItemGroup>

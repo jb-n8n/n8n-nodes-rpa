@@ -8,7 +8,7 @@ namespace Rpa.Recorder;
 /// test: starts the program, records without the bar until standard input closes, and saves the two files into the
 /// folder (an existing file is not replaced). Standard output says <c>ready &lt;process id&gt;</c> once it records and
 /// <c>saved &lt;number of steps&gt;</c> at the end; standard error gets each notice as its kind and time only. No log
-/// file is written.
+/// file is written. Compiled only into the scenario test's build (-p:RecorderScenario=true), never into the package.
 /// </summary>
 internal static class Headless
 {

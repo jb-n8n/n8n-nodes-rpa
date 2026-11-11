@@ -5,8 +5,9 @@
 #   (v1 and v2) plus a release zip, and the protocol scenario: the published runner started with a policy and a
 #   random token, and a test client driving the demo app through it end to end (sign in, search, read, export to the
 #   run's export dir, retrieve the file, end the run) plus the refusals (401, busy, policy, not found, not unique,
-#   lease expiry); the recorder core's unit tests, and the recorder scenario: RpaRecorder.exe records the reference
-#   flow a stand-in for a person performs with synthetic input, checked against the engine's golden recording;
+#   lease expiry); the recorder core's unit tests, and the recorder scenario: RpaRecorder.exe (its scenario build, the
+#   only one with --headless) records the reference flow a stand-in for a person performs with synthetic input,
+#   checked against the engine's golden recording;
 # - the Windows package: the installer's tests, the browser host's and the gate's tests, the package staged by
 #   desktop/installer/build/Stage.ps1, then installed from its zip for a new standard user, the policy changed with
 #   the installed policy tool, the installed runner and browser started and driven (the same scenario; a browser
@@ -190,6 +191,10 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           dotnet publish desktop/recorder/src/Rpa.Recorder @single '-p:EnableCompressionInSingleFile=true' -o "$env:OUT\rpa-recorder"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          # The recorder scenario's own build, with --headless (recording without the bar). The package gets the build
+          # above, which refuses it.
+          dotnet publish desktop/recorder/src/Rpa.Recorder @single '-p:EnableCompressionInSingleFile=true' '-p:RecorderScenario=true' -o "$env:OUT\rpa-recorder-scenario"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           foreach ($ui in 'v1', 'v2') {
             dotnet publish desktop/erp-demo @single '-p:IncludeNativeLibrariesForSelfExtract=true' '-p:EnableCompressionInSingleFile=true' "-p:ErpDemoUi=$ui" -o "$env:OUT\erp-demo\$ui"
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
@@ -250,7 +255,7 @@ jobs:
         timeout-minutes: 10
         run: |
           dotnet desktop/recorder/test/Rpa.Recorder.Scenario/bin/Release/net8.0-windows/Rpa.Recorder.Scenario.dll `
-            --recorder "$env:OUT\rpa-recorder\RpaRecorder.exe" --app "$env:OUT\erp-demo\v1\ErpDemo.exe" `
+            --recorder "$env:OUT\rpa-recorder-scenario\RpaRecorder.exe" --app "$env:OUT\erp-demo\v1\ErpDemo.exe" `
             --golden packages/engine/test/fixtures/import/recording-erp/erp.rpa-recording.json --out "$env:OUT\recorder-scenario"
           exit $LASTEXITCODE
 
