@@ -15,7 +15,8 @@ import {
 } from '../../messages.js';
 import { SECRET_FILL_VALUE } from '../../secrets/render.js';
 import { renderSecretValue } from '../../secrets/secret-fills.js';
-import { isLoginPage } from '../urls.js';
+import { formTarget } from '../form-target.js';
+import { isLoginPage, maskSessionSegments } from '../urls.js';
 
 type S<K extends string> = Extract<Step, Record<K, unknown>>;
 
@@ -31,23 +32,46 @@ export { isLoginPage };
 function onLoginPage(ctx: StepContext): boolean {
   return isLoginPage(ctx.policy, ctx.page.url());
 }
-/** Where a refused sign-in tells the user to list an address: the RPA Site Login field, by its display name. */
+/**
+ * Where a refused sign-in tells the user to list an address: the RPA Site Login field, by its display name
+ * (`login` in PlaywrightSiteLoginApi.credentials.ts; its name is pinned in the node package's credentials.test.ts).
+ */
 const NOT_LISTED = 'is not listed in the Site Login under Pages Where the Password May Be Typed';
-/** An address as a refusal names it: origin and path for the violation, host and path for the message, never the query. */
-function addressOf(href: string): { url: string; hostAndPath: string } {
-  try {
-    const u = new URL(href);
-    return { url: `${u.origin}${u.pathname}`, hostAndPath: `${u.host}${u.pathname}` };
-  } catch {
-    const bare = href.split(/[?#]/)[0];
-    return { url: bare, hostAndPath: bare };
-  }
+/** How a refusal names an address that is not http or https: a page chooses such text, so none of it is shown. */
+const NOT_A_WEB_ADDRESS = 'an address that is not a web address (http or https)';
+/** The longest address a refusal shows: twice this and the text around it stay inside a step's 500-character message. */
+const MAX_SHOWN_ADDRESS = 120;
+/**
+ * An address as a refusal names it. Only an http or https address is shown (`web`): host and path, never the query,
+ * with session segments (`/sap(…)/`) and path parameters (`;jsessionid=…`) masked, clipped to MAX_SHOWN_ADDRESS. `url`
+ * is the violation's: origin and path the same way, or only the scheme of an address that is not http or https.
+ */
+function addressOf(href: string): { url: string; shown: string; web: boolean } {
+  let u: URL | undefined;
+  try { u = new URL(href); } catch { /* not an address */ }
+  if (u?.protocol !== 'http:' && u?.protocol !== 'https:') return { url: u?.protocol ?? '', shown: NOT_A_WEB_ADDRESS, web: false };
+  const path = maskSessionSegments(u.pathname).replace(/;[^/]*/g, ';…');
+  const shown = `${u.host}${path}`;
+  return { url: `${u.origin}${path}`, shown: shown.length > MAX_SHOWN_ADDRESS ? `${shown.slice(0, MAX_SHOWN_ADDRESS - 1)}…` : shown, web: true };
 }
 function assertLoginPage(ctx: StepContext) {
   if (onLoginPage(ctx)) return;
-  const { url, hostAndPath } = addressOf(ctx.page.url());
+  const { url, shown, web } = addressOf(ctx.page.url());
   ctx.violations.push({ kind: 'signin', url, fatal: true });
-  throw new SignInPolicyError(`signIn refused: ${hostAndPath} ${NOT_LISTED}`);
+  throw new SignInPolicyError(web ? `signIn refused: ${shown} ${NOT_LISTED}` : `signIn refused: the page is at ${shown}, which ${NOT_LISTED}`);
+}
+/**
+ * Where the form of `locator`'s element posts (its form's action, absolute), or null outside a form. Read by formTarget,
+ * so a form field named "action" cannot hide it.
+ */
+async function formActionOf(locator: Locator): Promise<string | null> {
+  const form = (await locator.evaluateHandle((el) => (el as HTMLInputElement).form ?? null)).asElement();
+  if (!form) return null;
+  try {
+    return (await form.evaluate(formTarget, false))?.action ?? null;
+  } finally {
+    await form.dispose();
+  }
 }
 
 function inLoginList(ctx: StepContext, href: string): boolean {
@@ -60,19 +84,19 @@ async function assertFieldOnLoginPage(ctx: StepContext, locator: Locator, kind: 
     href: el.ownerDocument.location.href,
     tag: el.tagName,
     type: (el as HTMLInputElement).type,
-    form: (el as HTMLInputElement).form?.action ?? null,
   }));
   if (!inLoginList(ctx, info.href)) {
-    const { url, hostAndPath } = addressOf(info.href);
+    const { url, shown } = addressOf(info.href);
     ctx.violations.push({ kind: 'signin', url, fatal: true });
-    throw new SignInPolicyError(`signIn refused: the ${kind} field is on ${hostAndPath}, which ${NOT_LISTED}.`);
+    throw new SignInPolicyError(`signIn refused: the ${kind} field is on ${shown}, which ${NOT_LISTED}.`);
   }
-  if (info.form !== null && !inLoginList(ctx, info.form)) {
-    // The form's target is what the address bar never shows: name it, and where to list it.
-    const { url, hostAndPath } = addressOf(info.form);
+  const form = await formActionOf(locator);
+  if (form !== null && !inLoginList(ctx, form)) {
+    // The form's target is what the address bar never shows: name it, and where to list it (a web address only).
+    const { url, shown, web } = addressOf(form);
     ctx.violations.push({ kind: 'signin', url, fatal: true });
     throw new SignInPolicyError(
-      `signIn refused: the ${kind} field's form posts to ${hostAndPath}, which ${NOT_LISTED}. Add ${hostAndPath} there: the address bar never shows where a form posts.`,
+      `signIn refused: the ${kind} field's form posts to ${shown}, which ${NOT_LISTED}.${web ? ` Add ${shown} there: the address bar never shows where a form posts.` : ''}`,
     );
   }
   if (PASSWORD_KINDS.includes(kind) && !(info.tag === 'INPUT' && info.type === 'password')) throw new Error(`signIn: the ${kind} locator is not a password input`);
@@ -88,22 +112,25 @@ async function assertFieldOnLoginPage(ctx: StepContext, locator: Locator, kind: 
  * violation, like assertFieldOnLoginPage.
  */
 async function assertButtonPostsToLoginPage(ctx: StepContext, locator: Locator, kind: 'next' | 'submit' | 'via'): Promise<void> {
-  const { target, withPassword } = await locator.evaluate((el) => {
+  const { ownTarget, withPassword } = await locator.evaluate((el) => {
     const b = el as HTMLButtonElement;
     const form = b.form ?? el.closest('form');
+    // Through the prototype getter: a field named "elements" cannot hide the form's fields.
+    const elements = (f: HTMLFormElement) => Object.getOwnPropertyDescriptor(HTMLFormElement.prototype, 'elements')!.get!.call(f) as HTMLFormControlsCollection;
     return {
-      target: b.hasAttribute('formaction') && 'formAction' in b ? b.formAction : (b.form?.action ?? null),
-      withPassword: !!form && Array.from(form.elements).some((e) => e instanceof HTMLInputElement && e.type === 'password'),
+      ownTarget: b.hasAttribute('formaction') && 'formAction' in b ? b.formAction : null,
+      withPassword: !!form && Array.from(elements(form)).some((e) => e instanceof HTMLInputElement && e.type === 'password'),
     };
   });
   if (kind === 'via' && withPassword) {
     ctx.violations.push({ kind: 'signin', url: addressOf(ctx.page.url()).url, fatal: true });
     throw new SignInPolicyError('signIn refused: the via button is in a form with a password field');
   }
+  const target = ownTarget ?? await formActionOf(locator);
   if (target === null || inLoginList(ctx, target)) return;
-  const { url, hostAndPath } = addressOf(target);
+  const { url, shown } = addressOf(target);
   ctx.violations.push({ kind: 'signin', url, fatal: true });
-  throw new SignInPolicyError(`signIn refused: the ${kind} button posts to ${hostAndPath}, which ${NOT_LISTED}`);
+  throw new SignInPolicyError(`signIn refused: the ${kind} button posts to ${shown}, which ${NOT_LISTED}`);
 }
 
 /** Visible and editable now (not read-only, not disabled): an IdP may echo the username read-only on the password page. */

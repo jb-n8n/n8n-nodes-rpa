@@ -54,8 +54,8 @@ const loginPage = (error = '') => page(
       document.getElementById('later').hidden = false;
     }, 200));</script>` : ''),
 );
-const resendForm = () => (mode.resend === 'with-password'
-  ? `<form method="post" action="/send"><label for="pin">PIN</label><input id="pin" name="pin" type="password"><button type="submit">Send me the code</button></form>`
+const resendForm = () => (mode.resend === 'with-password' || mode.resend === 'with-password-elements'
+  ? `<form method="post" action="/send"><label for="pin">PIN</label><input id="pin" name="pin" type="password">${mode.resend === 'with-password-elements' ? '<input type="hidden" name="elements">' : ''}<button type="submit">Send me the code</button></form>`
   : mode.resend ? sendForm(mode.resend) : '');
 const codePage = () => page(`<form method="post" action="/mfa"><label for="code">Code</label><input id="code" name="otc"><button type="submit">Verify</button></form>${resendForm()}`);
 
@@ -212,8 +212,10 @@ describe('the retry after a rejected workflow code clicks the send button again 
   for (const [resend, message] of [
     ['/elsewhere/send', () => `signIn refused: the via button posts to ${host}/elsewhere/send, which is not listed in the Site Login under Pages Where the Password May Be Typed`],
     ['with-password', () => 'signIn refused: the via button is in a form with a password field'],
+    // A field named "elements" must not hide the form's fields from the check.
+    ['with-password-elements', () => 'signIn refused: the via button is in a form with a password field'],
   ] as const) {
-    it(`a send button on the code page ${resend === 'with-password' ? 'in a form with a password field' : 'that posts off the login pages'} is refused, not clicked`, async () => {
+    it(`a send button on the code page ${resend === '/elsewhere/send' ? 'that posts off the login pages' : `in a form with a password field (${resend})`} is refused, not clicked`, async () => {
       mode.resend = resend;
       const { ctx, clicks } = await at(NO_SEED);
       const asked: CodeRequest[] = [];

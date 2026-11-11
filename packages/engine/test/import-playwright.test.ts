@@ -799,6 +799,34 @@ describe('Playwright code', () => {
     ]);
   });
 
+  it('a multi-select with a Site Login value among its options: only that option counts as a secret elsewhere', () => {
+    const r = importSource('playwright', test([
+      "  await page.goto('https://portal.example.com/');", // 4
+      `  await page.getByLabel('Owner').selectOption(['${SECRETS.username}', 'Closed']);`, // 5
+      "  await page.getByLabel('Notes').fill('Closed');", // 6
+      `  await page.getByLabel('Comment').fill('by ${SECRETS.username}');`, // 7
+      "  await page.getByRole('button', { name: 'Search' }).click();", // 8
+    ].join('\n')), { name: 'plain', hasSiteLogin: true, secrets: SECRETS });
+    expect(stepsOf(r).slice(1)).toEqual([
+      { intent: 'Type into Notes', fill: { field: { label: 'Notes' }, value: 'Closed' } },
+      { intent: 'Click Search', click: { role: 'button', name: 'Search' } },
+    ]);
+    expect(r.report.items.filter((i) => i.kind === 'secret').map((i) => i.at)).toEqual(['line 5', 'line 7']);
+  });
+
+  it('a selectOption whose options are variables or expressions says they must be written out as text', () => {
+    const r = importSource('playwright', test([
+      "  await page.goto('https://portal.example.com/');", // 4
+      "  await page.getByLabel('Status').selectOption([status, 'Closed']);", // 5
+      "  await page.getByLabel('Status').selectOption(status);", // 6
+      "  await page.getByRole('button', { name: 'Search' }).click();", // 7
+    ].join('\n')), PLAIN);
+    expect(r.report.items.map((i) => [i.at, i.kind, i.reason])).toEqual([
+      ['line 5', 'untranslated', 'the value must be written out as text'],
+      ['line 6', 'untranslated', 'the value must be written out as text'],
+    ]);
+  });
+
   it('a multi-select that holds a Site Login secret is removed and reported, like a select', () => {
     const r = importSource('playwright', test([
       "  await page.goto('https://portal.example.com/');", // 4

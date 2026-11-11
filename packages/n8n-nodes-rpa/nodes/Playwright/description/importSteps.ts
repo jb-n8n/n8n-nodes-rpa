@@ -4,7 +4,7 @@ import { expectedFileProperty } from './runSteps.js';
 const importSteps = { show: { operation: ['importSteps'] } };
 
 export const IMPORT_NOTICE =
-  'Imported steps make no form submissions or writes; Requests That Only Read still pass. Each step list runs once and is replayed in a fresh browser, so allow about twice Options → Max Seconds per step list. On sites with an authenticator code, the import needs the TOTP Secret in the Site Login (it cannot yet take a code from a workflow), and Max Seconds must leave room for up to a 30 s wait. What passes comes out on Repaired Steps for approval and Sign Steps.';
+  'Imported steps make no form submissions or writes; Requests That Only Read still pass. Each step list runs once and is replayed in a fresh browser, so allow about twice Options → Max Seconds per step list. On sites with an authenticator code, the import needs the TOTP Secret in the Site Login (it cannot take a code from a workflow), and Max Seconds must leave room for up to a 30 s wait. What passes comes out on Repaired Steps for approval and Sign Steps.';
 
 /** Import Steps: the source, how it arrives, the steps' name and what adoption needs to prove them. */
 export const importStepsProperties: INodeProperties[] = [

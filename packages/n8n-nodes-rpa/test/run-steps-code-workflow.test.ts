@@ -153,6 +153,11 @@ describe('codeProviderFor', () => {
     );
   });
 
+  it('another "not active" error is not taken for an unpublished workflow', async () => {
+    const err = await ask(async () => { throw new Error('Account is not active'); }).catch((e: Error) => e);
+    expect((err as Error).message).toBe('it stopped with an error: Account is not active');
+  });
+
   it('a failing workflow: digit groups with spaces in them are removed too', async () => {
     const err = await ask(async () => { throw new Error('Node "Parse" failed on 482 913 and 12 34 56, item 7'); }).catch((e: Error) => e);
     expect((err as Error).message).toBe('it stopped with an error: Node "Parse" failed on [number] and [number], item 7');

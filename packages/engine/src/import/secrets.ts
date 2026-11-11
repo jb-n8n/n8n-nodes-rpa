@@ -150,11 +150,14 @@ export function stripSecrets(input: ImportEvent[], opts: ImportOptions, report: 
 
   const removed = new Set<number>(emptied);
   const typedSecrets: { value: string; wholeNumber: boolean }[] = [];
+  /** An option of a multi-select that is a secret by its value: a Site Login value, or one that holds a known secret. */
+  const secretOption = (v: string) => slValues.some((s) => equalsSecret(v, s)) || masker.containsSecret(v);
   const strip = (i: number, reason = NEVER_IMPORTED) => {
     const e = events[i] as Typed;
     if (removed.has(i)) return;
     removed.add(i);
-    for (const value of valuesOf(e)) {
+    // A multi-select's other options are not secrets: only the options that are one count as typed secrets elsewhere.
+    for (const value of Array.isArray(e.value) ? e.value.filter(secretOption) : [e.value]) {
       if (value) typedSecrets.push({ value, wholeNumber: roles[i] === 'totp' });
       if (value && roles[i] === 'totp') typedSecrets.push({ value: compactCode(value), wholeNumber: true });
     }
@@ -344,7 +347,7 @@ export function stripSecrets(input: ImportEvent[], opts: ImportOptions, report: 
   // 2. Every other credential field and Site Login value.
   events.forEach((e, i) => {
     if (removed.has(i) || (e.kind !== 'fill' && e.kind !== 'select')) return;
-    if (roles[i] || valuesOf(e).some((v) => slValues.some((s) => equalsSecret(v, s)) || masker.containsSecret(v))) strip(i);
+    if (roles[i] || valuesOf(e).some(secretOption)) strip(i);
     else if (capped.has(i)) strip(i, CAPPED_VALUE);
   });
   // 3. Values typed into credential fields are secrets too, wherever else they appear (the username typed twice).

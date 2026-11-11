@@ -920,7 +920,8 @@ export function playwrightEvents(code: string, report: ImportReport): ImportEven
         if (v?.k === 'arr') {
           if (!v.items.length) return item(at, 'untranslated', what, R.selectNone);
           const texts = v.items.map(strOf);
-          if (texts.some((t) => t === undefined)) return item(at, 'untranslated', what, R.selectForm);
+          if (v.items.some((x) => x.k === 'obj')) return item(at, 'untranslated', what, R.selectForm);
+          if (texts.some((t) => t === undefined)) return item(at, 'untranslated', what, R.value);
           if (texts.length > MAX_SELECT_VALUES) return item(at, 'untranslated', what, R.selectMany(texts.length));
           events.push({ at, kind: 'select', target: targetOf(b), label: b.label, value: texts as string[], hints: b.hints });
           lastField = b.label;
@@ -928,7 +929,7 @@ export function playwrightEvents(code: string, report: ImportReport): ImportEven
         }
         const props = objOf(v);
         const chosen = v?.k === 'str' ? v.v : props && props.size === 1 ? strOf(props.get('label') ?? props.get('value')) : undefined;
-        if (chosen === undefined) return item(at, 'untranslated', what, R.selectForm);
+        if (chosen === undefined) return item(at, 'untranslated', what, v && v.k !== 'obj' ? R.value : R.selectForm);
         events.push({ at, kind: 'select', target: targetOf(b), label: b.label, value: chosen, hints: b.hints });
         lastField = b.label;
         return;

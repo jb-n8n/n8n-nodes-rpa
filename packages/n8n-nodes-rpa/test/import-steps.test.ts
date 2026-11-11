@@ -246,7 +246,7 @@ describe('Import Steps: the description', () => {
     }
     const notice = field('importNotice').displayName;
     for (const text of ['no form submissions or writes; Requests That Only Read still pass', 'about twice Options → Max Seconds',
-      'On sites with an authenticator code, the import needs the TOTP Secret in the Site Login (it cannot yet take a code from a workflow), and Max Seconds must leave room for up to a 30 s wait.']) expect(notice, text).toContain(text);
+      'On sites with an authenticator code, the import needs the TOTP Secret in the Site Login (it cannot take a code from a workflow), and Max Seconds must leave room for up to a 30 s wait.']) expect(notice, text).toContain(text);
   });
 
   it('has the Model input when AI Repair is on (its default) and always both outputs', () => {
