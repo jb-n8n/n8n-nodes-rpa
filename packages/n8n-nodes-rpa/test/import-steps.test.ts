@@ -564,7 +564,7 @@ describe('Import Steps: execution', () => {
     const [data] = await run(engine, { params: params({ source: 'uipath', stepsName: 'sap-report' }) });
     expect(engine.adoptions).toHaveLength(1);
     expect((details(data[0]).drafts as IDataObject[]).map((x) => x.code)).toEqual(['login_failed', 'locked_out']);
-    expect(String(data[0].json.error)).toMatch(/^None of the 2 imported step lists could be adopted\. sap-report-1: login_failed: /);
+    expect(String(data[0].json.error)).toMatch(/^None of the 2 imported step lists could be replayed\. sap-report-1: login_failed: /);
     // The same execution's next import with that Site Login is locked out too, before any import.
     const next = importEngine((input) => proved(input));
     const [locked] = await run(next);
@@ -572,14 +572,14 @@ describe('Import Steps: execution', () => {
     expect((details(locked[0]).drafts as IDataObject[])[0]).toMatchObject({ code: 'locked_out' });
   });
 
-  it('adopts at most 10 drafts per import; the rest are reported, not tried', async () => {
+  it('replays at most 10 drafts per import; the rest are reported, not tried', async () => {
     const engine = importEngine((input) => proved(input), uipathResult(12));
     const [data, repaired] = await run(engine, { params: params({ source: 'uipath', stepsName: 'sap-report' }) });
     expect(engine.adoptions).toHaveLength(10);
     expect(repaired).toHaveLength(10);
     const rest = drafts(data[0]).slice(10);
     expect(rest.map((x) => x.name)).toEqual(['sap-report-11', 'sap-report-12']);
-    for (const x of rest) expect(x).toMatchObject({ adopted: false, reason: 'not tried: an import adopts at most 10 step lists' });
+    for (const x of rest) expect(x).toMatchObject({ adopted: false, reason: 'not tried: an import replays at most 10 step lists' });
   });
 
   it('AI Repair with a model heals a drift; one repair per execution, so a later draft gets none', async () => {
@@ -819,7 +819,7 @@ describe('Import Steps: execution', () => {
     // Several drafts, all failed: the first failure's are `screenshot` and `trace`, the others' `trace-<n>`.
     const allFailed = importEngine(drift, uipathResult(2));
     const [error] = await run(allFailed, { params: params({ source: 'uipath', stepsName: 'sap-report', options: { variables: VARIABLES, saveTrace: 'onFailure' } }) });
-    expect(String(error[0].json.error)).toMatch(/^None of the 2 imported step lists could be adopted\./);
+    expect(String(error[0].json.error)).toMatch(/^None of the 2 imported step lists could be replayed\./);
     expect(Object.keys(error[0].binary ?? {}).sort()).toEqual(['screenshot', 'trace', 'trace-1', 'workflow']);
     expect((details(error[0]).drafts as IDataObject[]).map((x) => x.traceRef)).toEqual(['trace', 'trace-1']);
   });

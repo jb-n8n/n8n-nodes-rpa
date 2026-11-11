@@ -48,12 +48,12 @@ export const SOURCE_NOT_DETECTED =
 export const IMPORT_NEEDS_START = 'Import Steps needs a Start URL or a Site Login: the imported steps do not open a page first.';
 /** The repair goal when Goal is empty: the agent sees the imported steps as its base. */
 export const DEFAULT_GOAL = 'Do what the imported steps do, on the page as it is now.';
-export const NOT_TRIED_LIMIT = `not tried: an import adopts at most ${MAX_ADOPTIONS} step lists`;
+export const NOT_TRIED_LIMIT = `not tried: an import replays at most ${MAX_ADOPTIONS} step lists`;
 export const NOT_TRIED_CANCELLED = 'not tried: the execution was cancelled';
 /** A step list after one that failed on its one-time code: another sign-in would ask for (or type) another code. */
 export const NOT_TRIED_CODE = (name: string, reason: string) => `not tried: ${name} failed on its one-time code (${reason})`;
 export const NOTHING_IMPORTED = (reason: string) => `Nothing was imported: ${reason}`;
-export const NONE_ADOPTED = (n: number, first: string) => `None of the ${n} imported step lists could be adopted. ${first}`;
+export const NONE_ADOPTED = (n: number, first: string) => `None of the ${n} imported step lists could be replayed. ${first}`;
 /** Why a draft's steps are null on Data: they carry a Site Login value (defence in depth behind the importer's own stripping). */
 export const STEPS_WITHHELD = 'The steps are not shown: they contain a value of the RPA Site Login.';
 /** A desktop draft on Data: it goes to approval as imported, without a replay. */
@@ -403,7 +403,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
     const what = `${first.code ? `${first.code}: ` : ''}${mask(first.reason)}`;
     const message = outcomes.length === 1 ? what : NONE_ADOPTED(outcomes.length, `${first.draft.name}: ${what}`);
     const error = new NodeOperationError(node, message, {
-      itemIndex: i, description: first.code ? `${first.code}: ${first.guidance ?? guidanceFor(first.code, first.reason)}` : 'Nothing was adopted. The reasons are in details.drafts.',
+      itemIndex: i, description: first.code ? `${first.code}: ${first.guidance ?? guidanceFor(first.code, first.reason)}` : 'No step list was replayed. The reasons are in details.drafts.',
     });
     error.message = message;
     Object.assign(error.context, { code: first.code ?? null, name: p.name });
@@ -565,7 +565,7 @@ async function adoptAll(
         loginFailure: (r) => (!r.ok && isBreakerCode(r.code) ? { code: r.code, message: r.message } : undefined),
       });
     } catch (error) {
-      outcomes.push({ draft, kind: 'failed', code: 'incomplete', reason: `the adoption stopped unexpectedly: ${errorMessage(error)}` });
+      outcomes.push({ draft, kind: 'failed', code: 'incomplete', reason: `the replay stopped unexpectedly: ${errorMessage(error)}` });
       continue;
     }
     if (ran.kind === 'blocked') {

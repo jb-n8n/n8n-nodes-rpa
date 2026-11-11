@@ -381,7 +381,7 @@ class Builder {
     const draft = this.desktopDrafts.get(draftName);
     if (!draft) {
       this.lastFile = undefined;
-      return this.untranslatedSticky(tails, x, y, n.displayName, 'Desktop steps', `no draft named ${draftName} was built, so there are no steps to run`);
+      return this.untranslatedSticky(tails, x, y, n.displayName, 'Desktop steps', `no step list named ${draftName} was built, so there are no steps to run`);
     }
     this.desktopDraftNames.push(draftName);
     const get = this.getActiveSteps(draftName, tails, x, y);
@@ -428,7 +428,7 @@ class Builder {
         const draft = this.drafts.get(draftName);
         if (!draft) {
           this.lastFile = undefined;
-          return this.untranslatedSticky(tails, x, y, n.displayName, 'Browser steps', `no draft named ${draftName} was built, so there are no steps to run`);
+          return this.untranslatedSticky(tails, x, y, n.displayName, 'Browser steps', `no step list named ${draftName} was built, so there are no steps to run`);
         }
         this.draftNames.push(draftName);
         const get = this.getActiveSteps(draftName, tails, x, y);

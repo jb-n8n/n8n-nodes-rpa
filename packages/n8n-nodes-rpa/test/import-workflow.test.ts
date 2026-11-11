@@ -418,7 +418,7 @@ describe('buildWorkflow', () => {
     ]), [draft('n-1')], { name: 'n' });
     lint(h);
     expect(byName(h, 'Not translated: Browser').parameters).toMatchObject({ color: COLOUR.grey });
-    expect(content(byName(h, 'Not translated: Browser'))).toContain('no draft named n-2');
+    expect(content(byName(h, 'Not translated: Browser'))).toContain('no step list named n-2');
     expect(working(h).map((n) => n.name).slice(2, 4)).toEqual(['Wait', 'Wait 2']);
     for (const n of h.nodes) expect(n.name.length).toBeLessThanOrEqual(100);
     expect(targets(h, 'Run the bot')).toEqual([['Wait']]);
