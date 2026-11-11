@@ -59,7 +59,7 @@ import { stableDesktopId } from '../desktop/stable-ids.js';
 import { IMPORT_EMPTY } from '../messages.js';
 import { CREDENTIAL_FIELD } from '../secrets/credential-field.js';
 import { createMasker } from '../secrets/mask.js';
-import { stepChordProblem } from '../steps/desktop-vocabulary.js';
+import { COND_TEXT_KEYS, isText, MAX_UIA_TEXT, RESERVED, stepChordProblem, WINDOW_KEYS } from '../steps/desktop-vocabulary.js';
 import type { DesktopApp, UiaCond, UiaTarget } from '../types.js';
 import { cleanLabel, MIN_SECRET_LENGTH } from './draft.js';
 import { isObject, MAX_IMPORT_JSON_BYTES, readJson, type Json } from './read.js';
@@ -78,8 +78,6 @@ export interface RecordingFile {
 const MAX_RECORDING_BYTES = MAX_IMPORT_JSON_BYTES;
 /** A recording with more events than this is refused (the draft keeps the step parser's own limit on steps). */
 const MAX_RECORDING_EVENTS = 400;
-/** The longest text of a window or a condition, as the step parser allows. */
-const MAX_UIA_TEXT = 500;
 
 const WHAT = 'RPA recording';
 const TOO_LARGE = 'the recording is larger than 5 MiB, so it was not read';
@@ -121,8 +119,6 @@ const EVENT_KEYS = new Map<string, readonly string[]>([
   ['key', ['target', 'chord', 'positional']],
   ['read', ['target', 'as', 'positional']],
 ]);
-const WINDOW_KEYS = ['exe', 'title', 'titlePattern', 'automationId', 'className'];
-const COND_KEYS = ['controlType', 'automationId', 'name', 'className'];
 /** A program's file name: no folder, drive, wildcard or control character, ending in .exe. */
 const EXE_NAME = /^(?![ .])[^\\/:*?"<>|\p{Cc}]{0,251}\.exe$/iu;
 /** A file name without a folder (a Save dialog's file). */
@@ -130,10 +126,7 @@ const FILE_NAME = /^(?!\.{1,2}$)[^\\/:*?"<>|\p{Cc}]{1,255}$/u;
 /** A secret fill's whole value: one run variable. */
 const ONE_VARIABLE = /^\{\{\s*var\.([A-Za-z0-9_]+)\s*\}\}$/;
 const VARIABLE_NAME = /^[A-Za-z0-9_]+$/;
-/** A `{{$name}}` template, also behind extra braces or spaces, as the step parser finds it. */
-const RESERVED = /\{\{[\s{]*(\$[^}]*?)\s*\}\}/g;
 
-const isText = (v: unknown, max: number): v is string => typeof v === 'string' && v.length > 0 && v.length <= max && !/[\r\n]/.test(v);
 const isStringList = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string');
 
 /** What names a fill's field: its label, and the name and automation id of the field's own (last) condition. */
@@ -173,8 +166,8 @@ function recordingIssues(rec: Json): string[] {
       const at = `${path}.path[${i}]`;
       if (!isObject(c)) { issues.push(`${at} must be an object`); return; }
       if (Object.hasOwn(c, 'index')) issues.push(HAS_INDEX(at));
-      onlyKeys(c, [...COND_KEYS, 'index'], at);
-      for (const k of COND_KEYS) if (c[k] !== undefined) text(c, k, at, MAX_UIA_TEXT);
+      onlyKeys(c, [...COND_TEXT_KEYS, 'index'], at);
+      for (const k of COND_TEXT_KEYS) if (c[k] !== undefined) text(c, k, at, MAX_UIA_TEXT);
     });
   };
 

@@ -1,12 +1,22 @@
-// The desktop step format's shared vocabulary: which verbs may declare a write, what a read may be named, and the one
-// canonical spelling of a key chord. The parser, the UiPath importer and the desktop proposal all use these, so the
-// three cannot drift apart. A leaf module: no imports.
+// The desktop step format's shared vocabulary: which verbs may declare a write, what a read may be named, the keys and
+// text limits of a target, and the one canonical spelling of a key chord. The parser, the UiPath and recording
+// importers and the desktop proposal all use these, so they cannot drift apart. A leaf module: no imports.
 
 /** Verbs that act on the app: only these may be declared writes (`write: true`). */
 export const DESKTOP_WRITE_VERBS: ReadonlySet<string> = new Set(['click', 'doubleClick', 'fill', 'select', 'check', 'key']);
 
 /** A read step's `as`: the name its text goes by in the run outputs (Data `values`). */
 export const READ_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+
+/** The keys of a window selector, and the text keys of a target's condition. */
+export const WINDOW_KEYS = ['exe', 'title', 'titlePattern', 'automationId', 'className'];
+export const COND_TEXT_KEYS = ['controlType', 'automationId', 'name', 'className'];
+/** The longest text of a window or a condition. */
+export const MAX_UIA_TEXT = 500;
+/** A non-empty single-line string of at most `max` characters. */
+export const isText = (v: unknown, max = MAX_UIA_TEXT): v is string => typeof v === 'string' && v.length > 0 && v.length <= max && !/[\r\n]/.test(v);
+/** A `{{$name}}` template, also behind extra braces or spaces (`{{{ $name }}}`), so none slips past the check. */
+export const RESERVED = /\{\{[\s{]*(\$[^}]*?)\s*\}\}/g;
 
 /** Key names (lower case, with common aliases) to their canonical spelling. Letters, digits and F1 to F24 aside. */
 const KEY_NAMES: Readonly<Record<string, string>> = {

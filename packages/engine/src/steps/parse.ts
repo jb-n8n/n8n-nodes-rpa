@@ -6,7 +6,7 @@ import {
 import { SECRET_FILL_VALUE } from '../secrets/render.js';
 import { secretFillVariables } from '../secrets/secret-fills.js';
 import { browserKeyProblem } from './browser-keys.js';
-import { DESKTOP_WRITE_VERBS, READ_NAME, stepChordProblem } from './desktop-vocabulary.js';
+import { COND_TEXT_KEYS, DESKTOP_WRITE_VERBS, isText, MAX_UIA_TEXT, READ_NAME, RESERVED, stepChordProblem, WINDOW_KEYS } from './desktop-vocabulary.js';
 
 export class ScriptShapeError extends Error {
   constructor(public readonly issues: string[]) {
@@ -480,8 +480,6 @@ export function parseScript(input: unknown, opts: { defaultStartUrl?: string } =
 // Reserved templates. `{{$name}}` is kept apart from the steps' own `{{var.x}}` templates: the only one there is,
 // {{$exportDir}}, is the desktop runner's export directory, and it is accepted only in a desktop fill value.
 
-/** A `{{$name}}` template, also behind extra braces or spaces (`{{{ $name }}}`), so none slips past the check. */
-const RESERVED = /\{\{[\s{]*(\$[^}]*?)\s*\}\}/g;
 /** {{$exportDir}} as a fill value may write it (the same spacing renderVars accepts). */
 export const EXPORT_DIR_TOKEN = /\{\{\s*\$exportDir\s*\}\}/g;
 
@@ -566,16 +564,12 @@ function checkBrowserWriteLocators(steps: unknown, issues: string[], path = 'ste
 
 const DESKTOP_BASE_KEYS = new Set(['intent', 'optional', 'when', 'expect', 'checkpoint', 'timeoutMs', 'write']);
 const BROWSER_LOCATOR_KEYS = ['role', 'label', 'text', 'testId', 'css', 'name', 'exact', 'within', 'frame'];
-const WINDOW_KEYS = ['exe', 'title', 'titlePattern', 'automationId', 'className'];
-const COND_TEXT_KEYS = ['controlType', 'automationId', 'name', 'className'];
-const MAX_UIA_TEXT = 500;
 /**
  * The largest file an expectFile step may ask for: the desktop runner's ceiling (its policy's maxFileBytes may be at
  * most 36 MiB, so that one answer stays under the 50 MiB frame limit). The runner's policy maxFileBytes (20 MiB by
  * default) is the effective limit; a larger file is refused by the runner (policy_refused).
  */
 export const MAX_EXPECTED_FILE_BYTES = 36 * 1024 * 1024;
-const isText = (v: unknown, max = MAX_UIA_TEXT): v is string => isStr(v) && v.length <= max && !/[\r\n]/.test(v);
 
 function checkWindowSel(v: unknown, path: string, issues: string[]) {
   if (!isObj(v)) { issues.push(`${path} must be an object`); return; }
