@@ -74,11 +74,27 @@ describe('signIn / detect / interrupts', () => {
   it('refuses to sign in on a page that is not a declared login page', async () => {
     const ctx = await atLogin();
     try {
-      await ctx.page.goto(`${portal.url}/acme/p/ws`);
+      await ctx.page.goto(`${portal.url}/acme/p/ws?ticket=abc`);
       const r = await runSteps(ctx, [SIGN_IN_STEPS[0]]);
       expect(r.ok).toBe(false);
-      if (!r.ok) expect(r.failure.message).toMatch(/signIn refused/);
+      if (!r.ok) expect(r.failure.message).toBe(`signIn refused: ${new URL(portal.url).host}/acme/p/ws is not listed in the Site Login under Pages Where the Password May Be Typed`);
       expect(ctx.violations).toContainEqual(expect.objectContaining({ kind: 'signin', fatal: true }));
+    } finally { await session.close(); }
+  });
+  it('refuses a username field in a frame of a page that is not listed, and names that page', async () => {
+    const ctx = await atLogin();
+    try {
+      await ctx.page.evaluate((src) => new Promise<void>((done) => {
+        const f = document.createElement('iframe');
+        f.onload = () => { f.contentDocument!.body.innerHTML = '<input id="u" type="text">'; done(); };
+        f.src = src;
+        document.body.appendChild(f);
+      }), `${portal.url}/acme/p/ws?ticket=abc`);
+      const step: Step = { intent: 'Sign in', signIn: { ...(SIGN_IN_STEPS[0] as Extract<Step, { signIn: unknown }>).signIn, username: { css: '#u', frame: 'iframe' } } };
+      const r = await runSteps(ctx, [step]);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.failure.message).toBe(`signIn refused: the username field is on ${new URL(portal.url).host}/acme/p/ws, which is not listed in the Site Login under Pages Where the Password May Be Typed.`);
+      expect(ctx.violations).toContainEqual({ kind: 'signin', url: `${portal.url}/acme/p/ws`, fatal: true });
     } finally { await session.close(); }
   });
   it('submits credentials only once per run', async () => {
@@ -95,11 +111,12 @@ describe('signIn / detect / interrupts', () => {
   it('refuses when the login form posts off the declared login pages', async () => {
     const ctx = await atLogin();
     try {
-      await ctx.page.evaluate(() => { (document.querySelector('form') as HTMLFormElement).action = 'http://127.0.0.1:1/steal'; });
+      await ctx.page.evaluate(() => { (document.querySelector('form') as HTMLFormElement).action = 'http://127.0.0.1:1/login/user?session=abc#x'; });
       const r = await runSteps(ctx, [SIGN_IN_STEPS[0]]);
       expect(r.ok).toBe(false);
-      if (!r.ok) expect(r.failure.message).toMatch(/signIn refused/);
-      expect(ctx.violations).toContainEqual(expect.objectContaining({ kind: 'signin', fatal: true }));
+      // The form's target, not the page, is what is missing: the message names it (host and path, no query) and the setting.
+      if (!r.ok) expect(r.failure.message).toBe("signIn refused: the username field's form posts to 127.0.0.1:1/login/user, which is not listed in the Site Login under Pages Where the Password May Be Typed. Add 127.0.0.1:1/login/user there: the address bar never shows where a form posts.");
+      expect(ctx.violations).toContainEqual({ kind: 'signin', url: 'http://127.0.0.1:1/login/user', fatal: true });
     } finally { await session.close(); }
   });
   it('refuses a Sign in button that posts off the declared login pages, before it is clicked', async () => {
@@ -110,7 +127,7 @@ describe('signIn / detect / interrupts', () => {
       ctx.page.on('request', (rq) => { if (rq.method() === 'POST') posts++; });
       const r = await runSteps(ctx, [SIGN_IN_STEPS[0]]);
       expect(r.ok).toBe(false);
-      if (!r.ok) expect(r.failure.message).toBe('signIn refused: the submit button does not post to a declared login page');
+      if (!r.ok) expect(r.failure.message).toBe(`signIn refused: the submit button posts to ${new URL(portal.url).host}/acme/elsewhere, which is not listed in the Site Login under Pages Where the Password May Be Typed`);
       expect(ctx.violations).toContainEqual({ kind: 'signin', url: `${portal.url}/acme/elsewhere`, fatal: true });
       expect(posts).toBe(0);
       expect(r.state.submitClicked).toBe(false);

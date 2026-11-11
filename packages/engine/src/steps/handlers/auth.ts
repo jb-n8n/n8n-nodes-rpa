@@ -31,11 +31,23 @@ export { isLoginPage };
 function onLoginPage(ctx: StepContext): boolean {
   return isLoginPage(ctx.policy, ctx.page.url());
 }
+/** Where a refused sign-in tells the user to list an address: the RPA Site Login field, by its display name. */
+const NOT_LISTED = 'is not listed in the Site Login under Pages Where the Password May Be Typed';
+/** An address as a refusal names it: origin and path for the violation, host and path for the message, never the query. */
+function addressOf(href: string): { url: string; hostAndPath: string } {
+  try {
+    const u = new URL(href);
+    return { url: `${u.origin}${u.pathname}`, hostAndPath: `${u.host}${u.pathname}` };
+  } catch {
+    const bare = href.split(/[?#]/)[0];
+    return { url: bare, hostAndPath: bare };
+  }
+}
 function assertLoginPage(ctx: StepContext) {
   if (onLoginPage(ctx)) return;
-  const u = new URL(ctx.page.url());
-  ctx.violations.push({ kind: 'signin', url: `${u.origin}${u.pathname}`, fatal: true });
-  throw new SignInPolicyError(`signIn refused: ${u.host}${u.pathname} is not a declared login page`);
+  const { url, hostAndPath } = addressOf(ctx.page.url());
+  ctx.violations.push({ kind: 'signin', url, fatal: true });
+  throw new SignInPolicyError(`signIn refused: ${hostAndPath} ${NOT_LISTED}`);
 }
 
 function inLoginList(ctx: StepContext, href: string): boolean {
@@ -50,12 +62,18 @@ async function assertFieldOnLoginPage(ctx: StepContext, locator: Locator, kind: 
     type: (el as HTMLInputElement).type,
     form: (el as HTMLInputElement).form?.action ?? null,
   }));
-  if (!inLoginList(ctx, info.href) || (info.form !== null && !inLoginList(ctx, info.form))) {
-    const bad = inLoginList(ctx, info.href) ? (info.form as string) : info.href;
-    let url = bad;
-    try { const u = new URL(bad); url = `${u.origin}${u.pathname}`; } catch { /* keep raw */ }
+  if (!inLoginList(ctx, info.href)) {
+    const { url, hostAndPath } = addressOf(info.href);
     ctx.violations.push({ kind: 'signin', url, fatal: true });
-    throw new SignInPolicyError(`signIn refused: the ${kind} field is not on a declared login page`);
+    throw new SignInPolicyError(`signIn refused: the ${kind} field is on ${hostAndPath}, which ${NOT_LISTED}.`);
+  }
+  if (info.form !== null && !inLoginList(ctx, info.form)) {
+    // The form's target is what the address bar never shows: name it, and where to list it.
+    const { url, hostAndPath } = addressOf(info.form);
+    ctx.violations.push({ kind: 'signin', url, fatal: true });
+    throw new SignInPolicyError(
+      `signIn refused: the ${kind} field's form posts to ${hostAndPath}, which ${NOT_LISTED}. Add ${hostAndPath} there: the address bar never shows where a form posts.`,
+    );
   }
   if (PASSWORD_KINDS.includes(kind) && !(info.tag === 'INPUT' && info.type === 'password')) throw new Error(`signIn: the ${kind} locator is not a password input`);
   if (kind === 'username' && !(info.tag === 'INPUT' && ['text', 'email', 'tel', ''].includes(info.type))) throw new Error('signIn: the username locator is not a text input');
@@ -79,16 +97,13 @@ async function assertButtonPostsToLoginPage(ctx: StepContext, locator: Locator, 
     };
   });
   if (kind === 'via' && withPassword) {
-    let url = ctx.page.url();
-    try { const u = new URL(url); url = `${u.origin}${u.pathname}`; } catch { /* keep raw */ }
-    ctx.violations.push({ kind: 'signin', url, fatal: true });
+    ctx.violations.push({ kind: 'signin', url: addressOf(ctx.page.url()).url, fatal: true });
     throw new SignInPolicyError('signIn refused: the via button is in a form with a password field');
   }
   if (target === null || inLoginList(ctx, target)) return;
-  let url = target;
-  try { const u = new URL(target); url = `${u.origin}${u.pathname}`; } catch { /* keep raw */ }
+  const { url, hostAndPath } = addressOf(target);
   ctx.violations.push({ kind: 'signin', url, fatal: true });
-  throw new SignInPolicyError(`signIn refused: the ${kind} button does not post to a declared login page`);
+  throw new SignInPolicyError(`signIn refused: the ${kind} button posts to ${hostAndPath}, which ${NOT_LISTED}`);
 }
 
 /** Visible and editable now (not read-only, not disabled): an IdP may echo the username read-only on the password page. */

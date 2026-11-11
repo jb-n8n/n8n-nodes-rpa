@@ -78,7 +78,8 @@ export class PlaywrightSiteLoginApi implements ICredentialType {
       typeOptions: { rows: 2 },
       default: '',
       placeholder: 'example.com/login',
-      description: 'As host/path, one per line. Empty means the login page.',
+      description:
+        "Every address of the sign-in, as host/path, one per line: each page the address bar shows (user name, password, code) and each address a sign-in form posts to, which the address bar does not show (the run's error names it). Empty means the login page.",
     },
     {
       displayName: 'Forms It May Submit',

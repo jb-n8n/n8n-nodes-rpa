@@ -414,7 +414,9 @@ describe('README', () => {
     expect(row).toContain('(with `next`, both of its pages)');
     const pages = s.slice(s.indexOf('**Two-page sign-ins.**'));
     for (const text of ['list both the username page and the password page in **Pages Where the Password May Be Typed**', 'the username is a secret too',
-      'stops before the password is typed if that page is not listed', '"Stay signed in?" answer', 'or the POST fails `policy_violation`']) expect(pages, text).toContain(text);
+      'stops before the password is typed if that page is not listed', '"Stay signed in?" answer', 'or the POST fails `policy_violation`',
+      'The address bar does not show where a form posts: if a run stops with "signIn refused: the username field\'s form posts to <host/path> ...", add that host/path to the list.',
+    ]) expect(pages, text).toContain(text);
   });
 
   it('Import Steps builds signIn with next and names the download rule; single-page-app identity providers post the username on Next', () => {

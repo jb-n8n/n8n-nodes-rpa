@@ -130,6 +130,9 @@ describe('v2 credential types', () => {
       ['readPosts', 'Requests That Only Read'],
     ]);
     expect(props.find((p) => p.name === 'navHosts')?.description).toContain("Empty means the login page's site only");
+    expect(props.find((p) => p.name === 'login')?.description).toBe(
+      "Every address of the sign-in, as host/path, one per line: each page the address bar shows (user name, password, code) and each address a sign-in form posts to, which the address bar does not show (the run's error names it). Empty means the login page.",
+    );
     const reads = props.find((p) => p.name === 'readPosts');
     expect(reads?.placeholder).toBe('POST example.com/sap/opu/odata/sap/ZLINEITEMS_SRV/$batch');
     for (const text of ['letters, digits and _ . ( ) = ~ -', '%3D', 'ZSRV;v=0002', 'without any check of what they send', 'On SAP the same endpoints also save data',

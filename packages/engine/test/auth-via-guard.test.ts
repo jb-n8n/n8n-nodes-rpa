@@ -162,7 +162,7 @@ describe('signIn totp.via buttons are gated', () => {
     try {
       const r = await runSteps(ctx, [signIn(true)]);
       if (r.ok) throw new Error('expected failure');
-      expect(r.failure.message).toBe('signIn refused: the via button does not post to a declared login page');
+      expect(r.failure.message).toBe(`signIn refused: the via button posts to ${host}/elsewhere/send, which is not listed in the Site Login under Pages Where the Password May Be Typed`);
       expect(ctx.violations).toContainEqual({ kind: 'signin', url: `${origin}/elsewhere/send`, fatal: true });
       expect(clicks.map((c) => c.text)).toEqual(['Sign in']);
       expect(paths()).toEqual(['/login']);
@@ -210,8 +210,8 @@ describe('signIn totp.via buttons are gated', () => {
 describe('the retry after a rejected workflow code clicks the send button again only through the via gate', () => {
   const NO_SEED: PortalSecrets = { username: SECRETS.username, password: SECRETS.password };
   for (const [resend, message] of [
-    ['/elsewhere/send', 'signIn refused: the via button does not post to a declared login page'],
-    ['with-password', 'signIn refused: the via button is in a form with a password field'],
+    ['/elsewhere/send', () => `signIn refused: the via button posts to ${host}/elsewhere/send, which is not listed in the Site Login under Pages Where the Password May Be Typed`],
+    ['with-password', () => 'signIn refused: the via button is in a form with a password field'],
   ] as const) {
     it(`a send button on the code page ${resend === 'with-password' ? 'in a form with a password field' : 'that posts off the login pages'} is refused, not clicked`, async () => {
       mode.resend = resend;
@@ -221,7 +221,7 @@ describe('the retry after a rejected workflow code clicks the send button again 
       try {
         const r = await runSteps(ctx, [signIn(true, 'workflow')]);
         if (r.ok) throw new Error('expected failure');
-        expect(r.failure.message).toBe(message);
+        expect(r.failure.message).toBe(message());
         expect(ctx.violations.some((v) => v.kind === 'signin' && v.fatal)).toBe(true);
         expect(asked).toHaveLength(1);
         expect(clicks.map((c) => c.text)).toEqual(['Sign in', 'Send me the code', 'Verify']);

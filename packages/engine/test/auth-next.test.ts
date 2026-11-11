@@ -175,7 +175,7 @@ describe('signIn with next', () => {
       const state = newRunState();
       const r = await runSteps(ctx, [SIGN_IN], state);
       expect(r.ok).toBe(false);
-      if (!r.ok) expect(r.failure.message).toBe(`signIn refused: ${host}/elsewhere/password is not a declared login page`);
+      if (!r.ok) expect(r.failure.message).toBe(`signIn refused: ${host}/elsewhere/password is not listed in the Site Login under Pages Where the Password May Be Typed`);
       expect(ctx.violations).toContainEqual({ kind: 'signin', url: `${origin}/elsewhere/password`, fatal: true });
       expect(ctx.page.url()).toContain('/elsewhere/password');
       // The password was never typed: not posted, and not in the field.
@@ -242,7 +242,7 @@ describe('signIn with next', () => {
     try {
       const r = await runSteps(ctx, [SIGN_IN]);
       expect(r.ok).toBe(false);
-      if (!r.ok) expect(r.failure.message).toBe('signIn refused: the next button does not post to a declared login page');
+      if (!r.ok) expect(r.failure.message).toBe(`signIn refused: the next button posts to ${host}/elsewhere, which is not listed in the Site Login under Pages Where the Password May Be Typed`);
       expect(ctx.violations).toContainEqual({ kind: 'signin', url: `${origin}/elsewhere`, fatal: true });
       expect(posts).toEqual([]);
     } finally { await session.close(); }
@@ -255,7 +255,7 @@ describe('signIn with next', () => {
       const state = newRunState();
       const r = await runSteps(ctx, [SIGN_IN], state);
       expect(r.ok).toBe(false);
-      if (!r.ok) expect(r.failure.message).toBe('signIn refused: the submit button does not post to a declared login page');
+      if (!r.ok) expect(r.failure.message).toBe(`signIn refused: the submit button posts to ${host}/elsewhere, which is not listed in the Site Login under Pages Where the Password May Be Typed`);
       expect(ctx.violations).toContainEqual({ kind: 'signin', url: `${origin}/elsewhere`, fatal: true });
       expect(posts.map((p) => p.path)).toEqual(['/login']);
       expect(state.submitClicked).toBe(false);

@@ -180,7 +180,7 @@ describe('signIn.changePassword', () => {
     const { session, r } = await direct([SIGN_IN], { vars: { newPassword: NEW_PW }, policy: policy(false) });
     try {
       if (r.ok) throw new Error('expected failure');
-      expect(r.failure.message).toMatch(/^signIn refused: .*\/acme\/change-password is not a declared login page$/);
+      expect(r.failure.message).toBe(`signIn refused: ${new URL(portal.url).host}/acme/change-password is not listed in the Site Login under Pages Where the Password May Be Typed`);
       expect(r.state.passwordChanged).toBeUndefined();
       for (const id of ['#current-password', '#new-password', '#confirm-password']) expect(await session.page.inputValue(id), id).toBe('');
       expect(session.violations).toEqual([expect.objectContaining({ kind: 'signin', fatal: true })]);
