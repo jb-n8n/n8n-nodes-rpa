@@ -28,6 +28,27 @@ public sealed class Session
     /// <summary>What the bar shows; a step's index is its position.</summary>
     public IReadOnlyList<RecordedStep> Steps => _steps.ToArray();
 
+    /// <summary>The field the person is typing into, until they leave it.</summary>
+    public ElementFacts? FieldBeingTyped => _typing?.Field;
+
+    /// <summary>
+    /// The field that <paramref name="next"/> leaves, or null. The Windows layer asks before it adds a mouse-down or a
+    /// key, and then adds that field's <see cref="FieldLeft"/> first, read before the input is delivered. A click inside
+    /// the field (or on a part of it) and more typing into it do not leave it; a click elsewhere, a key event and typing
+    /// into another element do.
+    /// </summary>
+    public ElementFacts? FieldLeftBy(Observation next)
+    {
+        if (_typing is not { } typing) return null;
+        var field = typing.Field;
+        return next switch
+        {
+            MouseDown m when Same(field, m.Element) || m.Element.Ancestors.Any(a => Same(field, a)) => null,
+            KeyDown { Typing: true } k when Same(field, k.Focused) => null,
+            _ => field,
+        };
+    }
+
     public void Add(Observation o)
     {
         switch (o)
@@ -54,10 +75,9 @@ public sealed class Session
     private void Clicked(MouseDown o)
     {
         var element = o.Element;
-        if (_typing is { } typing)
+        if (_typing is not null)
         {
-            // A click inside the field being typed into does not leave it.
-            if (Same(typing.Field, element) || element.Ancestors.Any(a => Same(typing.Field, a))) return;
+            if (FieldLeftBy(o) is null) return;
             _typing = null;
         }
         var combo = element.Ancestors.Select((a, i) => (a, i)).FirstOrDefault(x => x.a.ControlType == "ComboBox");
