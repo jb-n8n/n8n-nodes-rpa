@@ -38,7 +38,7 @@ function operation(name: string): string {
 
 // Hard-coded (not imported): the README must say exactly what the node says.
 const GOLDEN_MESSAGES = [
-  'Could not connect to the browser server at ws://browser:3000/. Is it running? With the compose stack: docker compose up -d browser. On a Windows install: is the bot account signed in? (README: Where the browser runs).',
+  'Could not connect to the browser server at ws://browser:3000/. Is it running? With the compose stack: docker compose up -d browser. On a Windows install: is the bot account signed in? Installed with -Unattended, nobody needs to be: check that this address is reachable, then run Show-RpaConnection.ps1 and read supervisor.log on that machine (README: Where the browser runs).',
   'The browser server is version X but this node needs Y. Use image mcr.microsoft.com/playwright:vY.',
   'Chromium not found. Run: npx playwright install chromium',
   'URL must start with http:// or https:// (got "file:").',
@@ -409,6 +409,21 @@ describe('README', () => {
       'Keep **Authentication** on', 'login breaker trips', 'spend on the chat model',
       'reverse proxy', '`proxy_read_timeout`', "Don't submit the form again", '**Executions**',
     ]) expect(first, text).toContain(text);
+  });
+
+  it('the set-up publishes workflow 3 before template 5, and template 5 needs no chat model', () => {
+    const feed = section('## The self-healing data feed');
+    expect(feed).toContain('3. Import `3-approve-steps.json` and publish it (**Publish** in the editor): n8n publishes the data feed and the form of template 5 only after the workflow their **Approve steps** calls is published.');
+    expect(feed).toContain('- **Anthropic**: your API key, for the data feed\'s **Chat model**, which builds and repairs its steps. Template 5 imports a bot without a model.');
+    const first = operation('Import Steps').slice(operation('Import Steps').indexOf('**First day: import a bot.**'));
+    for (const text of ['after workflows 1 and 3, with workflow 3 published', 'ships with **AI Repair** off and no chat model',
+      'turn on **AI Repair** in **Import steps**', 'repairs an imported browser step that no longer finds its element']) expect(first, text).toContain(text);
+  });
+
+  it('Step documents say how to change desktop steps by hand: import the steps of the active row, not run them unsigned', () => {
+    const docs = operation('Import Steps').slice(operation('Import Steps').indexOf('**Step documents.**'));
+    expect(docs).toContain('To change desktop steps by hand, copy the `steps` of the active row and import them as a step document');
+    expect(docs).toContain('run unsigned as they are, they are refused, because a signed row carries `"write": true` on the steps the approver listed');
   });
 
   it('the Run Steps reference links the step schema, says how to map it and lists what it cannot check', () => {

@@ -851,7 +851,10 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(form).toMatchObject({ type: 'n8n-nodes-base.formTrigger', typeVersion: 2.5 });
     expect(imp).toMatchObject({ type: NODE_TYPE, typeVersion: 1, onError: 'continueErrorOutput' });
     expect(targets(t, 'Import a bot')).toEqual([['Import steps']]);
-    expect(targets(t, 'Chat model', 'ai_languageModel')).toEqual([['Import steps']]);
+    // No chat model ships with it: a recording, a step document and a UiPath desktop sequence never use one, and n8n
+    // would not publish the form while a model node has no credential. The Set once sticky says how to add one.
+    expect(t.nodes.filter((n) => n.type.startsWith('@n8n/n8n-nodes-langchain.'))).toEqual([]);
+    expect(Object.values(t.connections).filter((c) => 'ai_languageModel' in c)).toEqual([]);
     // Data → Workflow file? → a completion page; Repaired Steps → Approve steps; error (index 2) → its own completion page.
     expect(nodeOutputs('importSteps', imp.parameters.aiRepair)).toHaveLength(2);
     expect(targets(t, 'Import steps')).toEqual([['Workflow file?'], ['Approve steps'], ['Import failed']]);
@@ -869,7 +872,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // v1 order runs the topmost child first: Approve steps before the completion pages, which pause the run until the browser resumes it.
     expect(byName(t, 'Approve steps').position[1]).toBeLessThan(Math.min(...['Workflow file?', 'Import failed'].map((n) => byName(t, n).position[1])));
     const working = t.nodes.filter((n) => n.type !== STICKY).map((n) => n.name).sort();
-    expect(working).toEqual(['Approve steps', 'Chat model', 'Import a bot', 'Import failed', 'Import steps', 'Imported', 'Imported, with the workflow file', 'Workflow file?']);
+    expect(working).toEqual(['Approve steps', 'Import a bot', 'Import failed', 'Import steps', 'Imported', 'Imported, with the workflow file', 'Workflow file?']);
     expect(t.nodes.filter((n) => n.type === COMPLETION).map((n) => n.typeVersion)).toEqual([2.5, 2.5, 2.5]);
     // A Form Ending page pauses the run until the browser loads it; a closed tab must not leave the execution waiting for ever.
     for (const n of t.nodes.filter((x) => x.type === COMPLETION)) {
@@ -892,8 +895,8 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(form).not.toHaveProperty('credentials');
   });
 
-  it('Import steps reads the form: Source mapped to its value, the binary bot, Name, AI Repair on, Expected File from the optional fields', () => {
-    expect(imp.parameters).toMatchObject({ operation: 'importSteps', inputFrom: 'binary', binaryPropertyName: 'bot', stepsName: '={{ $json.name }}', aiRepair: true });
+  it('Import steps reads the form: Source mapped to its value, the binary bot, Name, AI Repair off, Expected File from the optional fields', () => {
+    expect(imp.parameters).toMatchObject({ operation: 'importSteps', inputFrom: 'binary', binaryPropertyName: 'bot', stepsName: '={{ $json.name }}', aiRepair: false });
     for (const [label, value] of Object.entries(SOURCES)) expect(resolved(formItem(label, CHROME)).source).toBe(value);
     expect(resolved(formItem('Something else', CHROME)).source).toBe('');
     expect(resolved(formItem('Chrome Recorder', CHROME, { expectedFileName: '^LINEITEMS_', columns: 'Document, Amount' })).expectedFile)
@@ -902,7 +905,8 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(resolved(formItem('Chrome Recorder', CHROME, { expectedFileName: null as unknown as string })).expectedFile).toEqual({ file: { namePattern: '', requiredColumns: '' } });
     const loaded = loadInN8n(imp);
     expect(loaded.parameters).toMatchObject(imp.parameters);
-    expect(loaded.inputs).toEqual(['main', 'ai_languageModel']);
+    // AI Repair off: no Model input; the two outputs and n8n's error output stay.
+    expect(loaded.inputs).toEqual(['main']);
     expect(loaded.outputs).toEqual(['Data', 'Repaired Steps', 'Error']);
   });
 
@@ -929,8 +933,10 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(data[0].binary?.workflow).toMatchObject({ fileName: 'line-item-export.workflow.json' });
     const ifParams = byName(t, 'Workflow file?').parameters as { conditions: { conditions: { leftValue: string }[] } };
     expect(evaluate(ifParams.conditions.conditions[0].leftValue, { $json: data[0].json })).toBe(true);
-    expect(render(completion('Imported, with the workflow file').completionMessage, { $json: data[0].json, $binary: data[0].binary }))
-      .toContain('1 desktop step lists are waiting there too, not replayed');
+    const page = render(completion('Imported, with the workflow file').completionMessage, { $json: data[0].json, $binary: data[0].binary });
+    // No browser step list: no replay sentence, and one desktop list in the singular.
+    expect(page).toContain('removed as secrets.\n1 desktop step list is waiting for approval in RPA: 3 Approve steps, not replayed: review every step and list the steps that save, post or submit in Write steps.\n');
+    expect(page).not.toContain('passed the replay');
     expect(repaired).toHaveLength(1);
     const item = repaired[0].json;
     const t3 = load('3-approve-steps.json');
@@ -978,13 +984,25 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(items.filter((i) => i.kind === 'untranslated')).toHaveLength(1);
     expect(items.filter((i) => i.kind === 'secret')).toHaveLength(3);
     expect(message).toContain('Imported: 9 steps; 1 not translated, 3 removed as secrets.');
-    expect(message).toContain('0 of 1 step lists passed the replay and are waiting for approval in RPA: 3 Approve steps.');
-    // A step document that writes goes to approval without a replay, and the page says so.
+    expect(message).toContain('removed as secrets.\n0 of 1 step list passed the replay.\n');
+    // A step document that writes goes to approval without a replay, and the page says so, without a replay sentence.
     const notReplayed = { report: { steps: 3, items: [] }, drafts: [{ name: 'line-item-export', adopted: false, forApproval: true }] };
     const written = render(shown.completionMessage, { $json: notReplayed });
-    expect(written).toContain('0 of 0 step lists passed the replay');
-    expect(written).toContain(' 1 browser step lists are waiting there too, not replayed because they submit a form, download through a form, type a secret or change a password: check every step, the target of each form and each download.');
-    expect(written).not.toContain('desktop step lists');
+    expect(written).toContain('removed as secrets.\n1 browser step list is waiting for approval in RPA: 3 Approve steps, not replayed because the steps submit a form, download through a form, type a secret or change a password: check every step, the target of each form and each download.\n');
+    expect(written).not.toContain('passed the replay');
+    expect(written).not.toContain('desktop step list');
+    // Each count in the singular or the plural, and "there too" once the workflow was named.
+    const draft = (over: Record<string, unknown>) => ({ name: 'n', adopted: false, ...over });
+    const lines = (drafts: Record<string, unknown>[]) => render(shown.completionMessage, { $json: { report: { steps: 9, items: [] }, drafts } }).split('\n')[1];
+    expect(lines([draft({ adopted: true })])).toBe('1 of 1 step list passed the replay and is waiting for approval in RPA: 3 Approve steps.');
+    expect(lines([draft({ adopted: true }), draft({ adopted: true }), draft({}), draft({ surface: 'desktop', forApproval: true }), draft({ surface: 'desktop', forApproval: true })]))
+      .toBe('2 of 3 step lists passed the replay and are waiting for approval in RPA: 3 Approve steps. 2 desktop step lists are waiting there too, not replayed: review every step and list the steps that save, post or submit in Write steps.');
+    expect(lines([draft({}), draft({ forApproval: true }), draft({ forApproval: true })]))
+      .toBe('0 of 1 step list passed the replay. 2 browser step lists are waiting for approval in RPA: 3 Approve steps, not replayed because the steps submit a form, download through a form, type a secret or change a password: check every step, the target of each form and each download.');
+    expect(lines([draft({ surface: 'desktop', forApproval: true }), draft({ forApproval: true })]))
+      .toBe('1 desktop step list is waiting for approval in RPA: 3 Approve steps, not replayed: review every step and list the steps that save, post or submit in Write steps. 1 browser step list is waiting there too, not replayed because the steps submit a form, download through a form, type a secret or change a password: check every step, the target of each form and each download.');
+    // Both pages say the same about the step lists.
+    expect(completion('Imported, with the workflow file').completionMessage.split('\n')[1]).toBe(shown.completionMessage.split('\n')[1]);
     const ifParams = byName(t, 'Workflow file?').parameters as { conditions: { conditions: { leftValue: string; operator: unknown }[] } };
     expect(ifParams.conditions.conditions).toEqual([expect.objectContaining({ operator: { type: 'boolean', operation: 'true', singleValue: true } })]);
     expect(evaluate(ifParams.conditions.conditions[0].leftValue, { $json: data[0].json })).toBe(false);
@@ -1005,10 +1023,10 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const page = completion('Import failed');
     expect(page).toMatchObject({ operation: 'completion', respondWith: 'text', completionTitle: 'Nothing to approve' });
     const [data] = await runImport(formItem('Chrome Recorder', CHROME), () => failure('drift_detected', 'No element found for Visible Text "Line Item Report"'));
-    // No model is connected here, so the reason also carries the NO_MODEL hint.
-    expect(data[0].json.error).toBe('drift_detected: No element found for Visible Text "Line Item Report" (AI repair is on but no chat model is connected. Connect one to the Model input.)');
+    // AI Repair is off and no model is connected: the reason is the step's own, with no word about a model.
+    expect(data[0].json.error).toBe('drift_detected: No element found for Visible Text "Line Item Report"');
     const shown = render(page.completionMessage, { $json: data[0].json });
-    expect(shown).toMatch(/^drift_detected: No element found for Visible Text "Line Item Report" \(AI repair is on/);
+    expect(shown).toMatch(/^drift_detected: No element found for Visible Text "Line Item Report"\n/);
     expect(shown).toContain('\nDetails, including the import report when there is one, are in the error output of Import steps in this execution.');
   });
 
@@ -1018,6 +1036,8 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(sticky(t, 'Why approval').color).toBe(COLOUR.grey);
     const form = (byName(t, 'Import a bot').parameters as { formDescription?: string }).formDescription ?? '';
     expect(form).toContain('a step document that submits a form, downloads through a form, types a secret or changes a password is not run at all and goes to approval marked not replayed');
+    // The approval emails name a recording's steps <name>-1, a name the person did not type.
+    expect(form).toContain('The steps of an RPA recording are named after your Name with -1 at the end (line-item-export-1)');
     const about = sticky(t, 'About this workflow').content;
     for (const s of ['Chrome Recorder', 'Playwright code', 'UiPath', 'RPA: 3 Approve steps', 'RPA: 2 Data feed', 'each step list gets its own approval',
       '**step document**', 'this is how hand-written steps get approved and signed']) expect(about, s).toContain(s);
@@ -1025,7 +1045,11 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     for (const s of ['**Import a bot**: a Basic Auth credential', '**RPA Browser**: Import steps', '**RPA Site Login**', '**Chat model**', 'RPA: 3 Approve steps',
       '**Options → Allow Private Network**', 'Keep **Authentication** on', 'login breaker', 'chat model',
       'A step document with `{{var.name}}` values needs each one under **Options → Variables** in **Import steps**',
-      'nor does a step document that goes to approval not replayed: nothing of it runs']) {
+      'nor does a step document that goes to approval not replayed: nothing of it runs',
+      // n8n publishes the form only after the workflow Approve steps calls is published.
+      'import **RPA: 3 Approve steps** and publish it first',
+      // No model ships: how to add one, and what it does.
+      'turn on **AI Repair** in **Import steps**', 'repairs an imported browser step that no longer finds its element']) {
       expect(set, s).toContain(s);
     }
     const why = sticky(t, 'Why approval').content;

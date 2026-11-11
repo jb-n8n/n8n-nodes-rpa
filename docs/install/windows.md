@@ -56,7 +56,7 @@ Check each of these before you download anything.
 - [ ] **Windows**: 64-bit Windows 10 version 1809 (build 17763) or later, Windows 11, or Windows Server 2019 or later.
   To see the build, run `winver`, or in PowerShell `[Environment]::OSVersion.Version`; the third number is the build.
   The installer refuses an older build.
-- [ ] **Disk space**: about 2.8 GB free on drive C: about 570 MB for the download, 1.1 GB for the unpacked package
+- [ ] **Disk space**: about 3.5 GB free on drive C: about 700 MB for the download, 1.3 GB for the unpacked package
   and about as much again for the install.
 - [ ] **An administrator account** on the machine, for the install and for every change to the policy, and a way to
   work as that administrator once the bot user is signed in (section 5).
@@ -89,7 +89,7 @@ on the bot user's desktop; section 5 says how.
 
 The package is `rpa-windows-x64.zip` on the GitHub Release `desktop-v<version>` of
 [jb-n8n/n8n-nodes-rpa](https://github.com/jb-n8n/n8n-nodes-rpa/releases), next to `rpa-windows-x64.zip.sha256`.
-The zip is about 570 MB and unpacks to about 1.1 GB. It is not code-signed; what the release has instead is the zip's
+The zip is about 700 MB and unpacks to about 1.3 GB. It is not code-signed; what the release has instead is the zip's
 SHA-256 and a build attestation. Check both before you unpack it.
 
 **Download.** In the administrator PowerShell (the first line makes Windows PowerShell 5.1 use TLS 1.2, which GitHub
@@ -160,8 +160,9 @@ Get-ChildItem
 ```
 
 You should see `Install-Rpa.ps1`, `Uninstall-Rpa.ps1`, the `RpaInstall.*` files, `LICENSE`, `VERSION` and the folders
-`runner`, `browser`, `scripts` and `erp-demo`. `Get-Content VERSION` shows the version. If you unpacked the zip some
-other way (for example with Explorer), run the `Get-ChildItem ... | Unblock-File` line on that folder too.
+`runner`, `recorder`, `browser`, `scripts` and `erp-demo`. `Get-Content VERSION` shows the version. If you unpacked
+the zip some other way (for example with Explorer), run the `Get-ChildItem ... | Unblock-File` line on that folder
+too.
 
 Keep the unpacked package after the install: changing a token or a certificate (section 10) and removing the data
 directory (section 9) run from it.
@@ -198,7 +199,7 @@ The parameters:
 | Parameter | What it does |
 |---|---|
 | `-User <name>` | The bot user. Default `rpa-runner`. A local user that does not exist is created as a standard user (a member of Users, its password never expires); `DOMAIN\name` must exist already. An existing user's password is never changed, and an existing user that is an administrator is refused. |
-| `-UserPassword <SecureString>` | The password for a new local user, or, with `-AutoSignIn` or `-Unattended`, the existing user's password to store (it is tried against the account first). A new user needs `-UserPassword`, `-AutoSignIn` or `-Unattended`. |
+| `-UserPassword <SecureString>` | The password for a new local user, or, with `-AutoSignIn` or `-Unattended`, the existing user's password to store (it is tried against the account first). A new user needs `-UserPassword`, `-AutoSignIn` or `-Unattended`. With `-AutoSignIn` or `-Unattended` a new user's password is optional, and without it nobody learns the password: if a person will ever sign in as the bot user, give one you keep at the first install (section 4, [Running with nobody signed in](#running-with-nobody-signed-in)). |
 | `-RunnerPort <n>` | The runner's port. Default 8765. |
 | `-BrowserPort <n>` | The browser's port. Default 3000. |
 | `-AllowFrom <address>[,<address>...]` | The installer's two firewall rules allow these addresses in (IP addresses, or ranges such as `10.0.0.0/24`), for the two programs only, on every network type (Domain, Private and Public). `0.0.0.0/0` is refused: that is what `-AllowFromAnyAddress` is for. |
@@ -358,8 +359,8 @@ the runner does not answer, a warning with the supervisor's last failure takes t
 ### What the installer changes on the machine
 
 - **Programs** in `C:\Program Files\RPA Runner` (only administrators can change them): `runner\` (the runner and the
-  policy tool), `browser\` (Node.js, the browser host and Chromium), `scripts\`, `erp-demo\v1` and `erp-demo\v2`,
-  the uninstaller, and `install.json`, which records the parameters of the install.
+  policy tool), `recorder\` (the RPA recorder), `browser\` (Node.js, the browser host and Chromium), `scripts\`,
+  `erp-demo\v1` and `erp-demo\v2`, the uninstaller, and `install.json`, which records the parameters of the install.
 - **Data** in `C:\ProgramData\RPA Runner`, owned by Administrators: `policy.json` (allows no app yet), `token` and
   `browser-token` (48 random characters each), `logs\` and `policy-backups\` (where the policy tool keeps the
   earlier policy when it changes it), and later the certificates the runner and the browser make when they first
@@ -498,6 +499,17 @@ The bot user must be a local user of this machine: a domain user (`DOMAIN\name`)
 .\Install-Rpa.ps1 -AllowFrom <n8n address> -Unattended
 ```
 
+Nobody learns that password, so nobody can sign in as the bot user. Runs do not need it, and neither does recording
+a flow: section 12 records in an administrator's own session. If a person will ever sign in as the bot user (to
+record an app that keeps per-user settings, section 12, or to set up an app in the bot user's profile), decide it now
+and give the new user a password you keep:
+
+```powershell
+.\Install-Rpa.ps1 -AllowFrom <n8n address> -Unattended -UserPassword (Read-Host 'Password for the new user rpa-runner' -AsSecureString)
+```
+
+Later, only an administrator's new password gives you one, with the loss described below.
+
 For an existing local user, add `-UserPassword (Read-Host 'Password of rpa-runner' -AsSecureString)`; the installer
 tries the password against the account first. Before it changes anything, the installer lists what `-Unattended` does
 and asks you to type `YES` (not with `-Force`). To store a new password later, run the same command again with
@@ -545,8 +557,10 @@ password; the bot user is then signed in again at the machine's next start.
 After the service starts, the installer signs the bot user in once and waits until the runner answers. It waits at
 most 120 s, but the supervisor gives up on a connection after 90 s, so a runner that does not start is reported after
 about 90 s. Windows makes a user's profile at its first sign-in, which took 29 to 48 s on a test machine, and n8n's first
-run would wait for it otherwise. It prints how long that took. When the runner does not answer in time, it prints a
-warning with the supervisor's last failure, and the install is complete all the same.
+run would wait for it otherwise. It prints how long that took. That sign-in is signed out like every other: right
+after the install, `quser` and `Show-RpaConnection.ps1` still list the bot user's session, and it is gone after the
+idle time (15 s by default). When the runner does not answer in time, it prints a warning with the supervisor's last
+failure, and the install is complete all the same.
 
 `Uninstall-Rpa.ps1` stops and removes the service, removes the stored password, takes the bot user out of Remote
 Desktop Users when the installer put it there, and turns Remote Desktop off again when the installer turned it on
@@ -1094,13 +1108,13 @@ supervisor's log is `C:\ProgramData\RPA Runner\supervisor\supervisor.log`, and s
 
 | What you see | What it means | What to do, and the log to read |
 |---|---|---|
-| `runner_unavailable: Could not connect to the desktop runner at wss://...:8765/rpa/v1 (...). Is it running, and is the port open?` | n8n cannot reach the runner. | Is the bot user signed in? `Show-RpaConnection.ps1` says `Runner: not listening yet. ... read ...\logs\runner.out.log` when it is not running: read `runner.out.log` (the runner writes its failures there and to `runner-<yyyymmdd>.log`), `runner.err.log` and `start-runner.log`. If it listens, check the network path and the firewall rule: `Get-NetFirewallRule -Name RPA-Runner-In \| Get-NetFirewallAddressFilter` shows the addresses it lets in. |
+| `runner_unavailable: Could not connect to the desktop runner at wss://...:8765/rpa/v1 (...). Is it running, and is the port open?` | n8n cannot reach the runner. | Is the bot user signed in? With `-Unattended` nobody needs to be: check that the address is reachable from n8n, and read `Show-RpaConnection.ps1` and `supervisor.log` (section 4, [Running with nobody signed in](#running-with-nobody-signed-in)). `Show-RpaConnection.ps1` says `Runner: not listening yet. ... read ...\logs\runner.out.log` when it is not running: read `runner.out.log` (the runner writes its failures there and to `runner-<yyyymmdd>.log`), `runner.err.log` and `start-runner.log`. If it listens, check the network path and the firewall rule: `Get-NetFirewallRule -Name RPA-Runner-In \| Get-NetFirewallAddressFilter` shows the addresses it lets in. |
 | `runner_unavailable: the desktop runner's Windows session is locked: unlock it or sign the runner user in again` (or `... is not in an interactive Windows session`) | The bot user's desktop is locked or disconnected. | Sign in again, or hand the session back to the console (section 4). On Windows 10 or 11, an administrator's sign-in disconnects it (section 5). n8n's credential test succeeds on a locked session too, so it does not show this. |
 | `The desktop runner at ... refused the token. Check the Token in the RPA Desktop Runner credential.` | The token in n8n is not the runner's. | Copy the `Runner token` again (section 6). |
 | `The desktop runner at ... presented a certificate with fingerprint ..., which is not the fingerprint in the RPA Desktop Runner credential. Nothing was sent.` | A fingerprint mismatch: the certificate is not the one n8n has. | Run `Show-RpaConnection.ps1`. If its fingerprint is the one presented, the certificate was made again (section 10): if nobody changed the certificate on purpose, find out what did before you accept the new fingerprint, then put it in the credential. If not, something else answers at that address: leave the credential as it is and find out what. `runner-<yyyymmdd>.log` says `generated a new self-signed certificate` when the runner made one. |
 | `The browser server's certificate does not match the Certificate Fingerprint in the RPA Browser credential.` | The same, for the browser. | As above, with the `Browser fingerprint`. |
 | `The browser server at ... refused the token. Check the Token in the RPA Browser credential.` | The browser's token in n8n is wrong. | Copy the `Browser token` again (section 6). |
-| `Could not connect to the browser server at wss://...:3000/. Is it running? ...` (in a run: `browser_unavailable: ...`) | n8n could not connect to the browser: it is not listening, or it did not answer in time. | Is the bot user signed in? `Show-RpaConnection.ps1` says `Browser: not listening yet. ... read ...\logs\browser.err.log` when it is not listening: read `browser.err.log` and `start-browser.log`. If it listens, test again: the first connection after a sign-in can take longer. If it still fails, check the network path and the firewall rule `RPA-Browser-In`, as for the runner. |
+| `Could not connect to the browser server at wss://...:3000/. Is it running? ...` (in a run: `browser_unavailable: ...`) | n8n could not connect to the browser: it is not listening, or it did not answer in time. | Is the bot user signed in? With `-Unattended` nobody needs to be: check that the address is reachable from n8n, and read `Show-RpaConnection.ps1` and `supervisor.log`. `Show-RpaConnection.ps1` says `Browser: not listening yet. ... read ...\logs\browser.err.log` when it is not listening: read `browser.err.log` and `start-browser.log`. If it listens, test again: the first connection after a sign-in can take longer. If it still fails, check the network path and the firewall rule `RPA-Browser-In`, as for the runner. |
 | `Save as PDF needs headless Chromium` (the run fails `incomplete`) | A known limit of this install: the browser opens with a window, and Save as PDF needs a headless browser. | Run Save as PDF steps on a headless browser service, with its own RPA Browser credential (README, [Save as PDF](../../README.md#save-as-pdf)). |
 | `browser_unavailable: The browser service at wss://...:3000/ had no free browser session for 60 s. ...` | The browser on this machine serves one session at a time, and another browser run held it for the 60 s this run waited. | Start fewer browser runs at once (section 6). |
 | `busy: the desktop runner is busy with another run` | The runner runs one run at a time, and another one held it longer than this run waited (its lease plus 15 seconds). | Nothing, or run less often. `runner-<yyyymmdd>.log` shows the runs. |
@@ -1161,11 +1175,22 @@ If something below differs on your machine, report it as a problem (section 11, 
 
 ### Record a flow
 
-1. **Sign in to the machine as the bot user,** with the desktop unlocked, at a time when no run is scheduled on it:
-   the recorder, the app and the runner would share one desktop. With `-Unattended` (section 4), runs are refused
-   while anyone is signed in as the bot user, at the console or over Remote Desktop, so no run can start meanwhile;
-   sign the bot user out when you are done. Make sure the app can be started by this user and that it opens in a
-   state you can start from again (the signed-out state, a fresh document).
+1. **Sign in to the machine in your own session, as an administrator.** Recording does not need the bot user: the
+   recorder watches the app you start from its bar, and the recording and the policy change file do not depend on who
+   recorded them (a file saved in a Save dialog is recorded as saved into the run's export folder). The recorder asks
+   for no administrator rights, and the program folder keeps the access rules of `C:\Program Files`, under which every
+   user may run programs. Start the app from where the bot user will start it (an app installed for all users,
+   section 8), not from a copy in your own profile. With `-Unattended` (section 4), runs go on in the bot user's own
+   session while you record; in the signed-in modes, section 5 says what your sign-in does to the bot user's session.
+   Make sure the app opens in a state you can start from again (the signed-out state, a fresh document).
+
+   **Record as the bot user instead** when the app keeps per-user settings that the run depends on (a saved
+   connection, a server address, a layout) or asks the bot user a first-start question it does not ask you: the
+   recorder then sees the app as the run will. That needs a sign-in as the bot user with its password, which an
+   `-Unattended` install for a new user without `-UserPassword` leaves unknown to everyone (section 4,
+   [Running with nobody signed in](#running-with-nobody-signed-in)), and a time when no run is scheduled: in the
+   signed-in modes the recorder, the app and the runner would share one desktop, and with `-Unattended` runs are
+   refused while anyone is signed in as the bot user. With `-Unattended`, sign the bot user out when you are done.
 2. **Start the recorder.** Run `C:\Program Files\RPA Runner\recorder\RpaRecorder.exe`. A narrow window, **RPA
    Recorder**, opens at the top right of the screen and stays on top. Drag it aside or resize it if it covers the app;
    clicks on it are never recorded. Choose **Start a program...** and pick the app's `.exe`, then type its arguments if
@@ -1208,7 +1233,8 @@ If something below differs on your machine, report it as a problem (section 11, 
    allow in a file name become `_`). It asks before it replaces files of the same names. The recorder applies no policy
    itself. If the bar then says `The recording makes about <n> steps, and Import Steps takes at most 200 ...`, the
    import will refuse it: delete steps and save again, or record the work in shorter parts. Then close the recorder.
-7. **Sign the bot user out** if this machine runs with `-Unattended`, and give the desktop back to whoever uses it.
+7. **Sign out.** If you recorded as the bot user on a machine that runs with `-Unattended`, sign the bot user out:
+   runs are refused until then. On Windows 10 or 11, give the desktop back to the bot user (section 5).
 
 ### Allow the app, then import the recording
 
@@ -1236,7 +1262,8 @@ If something below differs on your machine, report it as a problem (section 11, 
     change file as in section 8 before you rely on that.
 11. **Run.** Supply the run variables in **Options → Variables**: the ones you marked as variables, and the secret ones
     from a secret source (an n8n external secret, or a node that reads your vault), never as text in a workflow.
-    Then run as in section 7, with the bot user signed in and its desktop unlocked.
+    Then run as in section 7, with the bot user signed in and its desktop unlocked (with `-Unattended`, with nobody
+    signed in as the bot user).
 
 ### When something fails
 

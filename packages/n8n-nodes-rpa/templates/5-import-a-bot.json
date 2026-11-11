@@ -14,13 +14,13 @@
       "typeVersion": 1,
       "position": [
         -80,
-        -560
+        -680
       ]
     },
     {
       "parameters": {
-        "content": "### Set once (green)\nRun **RPA: 1 Create tables (run once)** and import **RPA: 3 Approve steps** first, then pick credentials:\n- **Import a bot**: a Basic Auth credential, the user name and password people type to open the form. Create one with **Credential → + Create new credential → Basic Auth** on the node.\n- **RPA Browser**: Import steps (a UiPath project or a step document with only desktop steps needs none, nor does an RPA recording, nor does a step document that goes to approval not replayed: nothing of it runs)\n- **RPA Site Login**: Import steps, when the bot signs in. Use the same one on **Sign steps** in workflow 3: the signature binds it.\n- **Chat model**: your model provider. It repairs a draft that no longer matches the site.\n\nIn **Approve steps**, choose **RPA: 3 Approve steps**. For a site on your own network (the sandbox), turn on **Options → Allow Private Network** in **Import steps**. A step document with `{{var.name}}` values needs each one under **Options → Variables** in **Import steps**: the import runs the steps with those values.\n\nKeep **Authentication** on: an anonymous form could start logins with the attached Site Login (login breaker trips) and spend on the chat model.",
-        "height": 440,
+        "content": "### Set once (green)\nRun **RPA: 1 Create tables (run once)**, and import **RPA: 3 Approve steps** and publish it first: n8n publishes this form only after the workflow **Approve steps** calls is published. Then pick credentials:\n- **Import a bot**: a Basic Auth credential, the user name and password people type to open the form. Create one with **Credential → + Create new credential → Basic Auth** on the node.\n- **RPA Browser**: Import steps (a UiPath project or a step document with only desktop steps needs none, nor does an RPA recording, nor does a step document that goes to approval not replayed: nothing of it runs)\n- **RPA Site Login**: Import steps, when the bot signs in. Use the same one on **Sign steps** in workflow 3: the signature binds it.\n- **Chat model** (optional, not in this template): a model repairs an imported browser step that no longer finds its element. To add one, turn on **AI Repair** in **Import steps**, click **+** on its **Model** input and pick a chat model with its credential. Without one, such a step fails the import, which names the step that drifted. A recording, a step document's desktop steps and a UiPath desktop sequence never use a model.\n\nIn **Approve steps**, choose **RPA: 3 Approve steps**. For a site on your own network (the sandbox), turn on **Options → Allow Private Network** in **Import steps**. A step document with `{{var.name}}` values needs each one under **Options → Variables** in **Import steps**: the import runs the steps with those values.\n\nKeep **Authentication** on: an anonymous form could start logins with the attached Site Login (login breaker trips) and spend on the chat model, when one is attached.",
+        "height": 560,
         "width": 480,
         "color": 4
       },
@@ -30,7 +30,7 @@
       "typeVersion": 1,
       "position": [
         460,
-        -560
+        -680
       ]
     },
     {
@@ -46,14 +46,14 @@
       "typeVersion": 1,
       "position": [
         960,
-        -560
+        -680
       ]
     },
     {
       "parameters": {
         "authentication": "basicAuth",
         "formTitle": "Import a bot",
-        "formDescription": "Upload a Chrome Recorder export (JSON), Playwright code (JavaScript or TypeScript), a UiPath project (ZIP or XAML), a step document you wrote (JSON) or an RPA recording (.rpa-recording.json). The steps are replayed in a fresh browser and sent for approval, and desktop steps go to approval without a replay; a step document that submits a form, downloads through a form, types a secret or changes a password is not run at all and goes to approval marked not replayed. Nothing runs on a schedule until a person approves it.",
+        "formDescription": "Upload a Chrome Recorder export (JSON), Playwright code (JavaScript or TypeScript), a UiPath project (ZIP or XAML), a step document you wrote (JSON) or an RPA recording (.rpa-recording.json). The steps are replayed in a fresh browser and sent for approval, and desktop steps go to approval without a replay; a step document that submits a form, downloads through a form, types a secret or changes a password is not run at all and goes to approval marked not replayed. The steps of an RPA recording are named after your Name with -1 at the end (line-item-export-1), as are a UiPath project's (-1, -2 and so on): the approval emails use that name. Nothing runs on a schedule until a person approves it.",
         "formFields": {
           "values": [
             {
@@ -129,7 +129,7 @@
         "inputFrom": "binary",
         "binaryPropertyName": "bot",
         "stepsName": "={{ $json.name }}",
-        "aiRepair": true,
+        "aiRepair": false,
         "expectedFile": {
           "file": {
             "namePattern": "={{ $json.expectedFileName ?? '' }}",
@@ -148,24 +148,6 @@
       ],
       "onError": "continueErrorOutput",
       "notes": "Outputs: Data (0), Repaired Steps (1), error (2)."
-    },
-    {
-      "parameters": {
-        "model": {
-          "__rl": true,
-          "mode": "id",
-          "value": "claude-sonnet-5-5"
-        },
-        "options": {}
-      },
-      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000506",
-      "name": "Chat model",
-      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
-      "typeVersion": 1.5,
-      "position": [
-        260,
-        240
-      ]
     },
     {
       "parameters": {
@@ -231,7 +213,7 @@
         "operation": "completion",
         "respondWith": "returnBinary",
         "completionTitle": "Imported",
-        "completionMessage": "=Imported: {{ $json.report.steps }} steps; {{ $json.report.items.filter(i => i.kind === 'untranslated').length }} not translated, {{ $json.report.items.filter(i => i.kind === 'secret').length }} removed as secrets.\n{{ $json.drafts.filter(d => d.adopted).length }} of {{ $json.drafts.filter(d => d.surface !== 'desktop' && !d.forApproval).length }} step lists passed the replay and are waiting for approval in RPA: 3 Approve steps.{{ $json.drafts.some(d => d.forApproval && d.surface === 'desktop') ? ' ' + $json.drafts.filter(d => d.forApproval && d.surface === 'desktop').length + ' desktop step lists are waiting there too, not replayed: review every step and list the steps that save, post or submit in Write steps.' : '' }}{{ $json.drafts.some(d => d.forApproval && d.surface !== 'desktop') ? ' ' + $json.drafts.filter(d => d.forApproval && d.surface !== 'desktop').length + ' browser step lists are waiting there too, not replayed because they submit a form, download through a form, type a secret or change a password: check every step, the target of each form and each download.' : '' }}\nYour browser downloads {{ $binary.workflow.fileName }}: the rest of the bot as an n8n workflow. Open it in n8n with Import from file; stickies mark what was not translated.",
+        "completionMessage": "=Imported: {{ $json.report.steps }} steps; {{ $json.report.items.filter(i => i.kind === 'untranslated').length }} not translated, {{ $json.report.items.filter(i => i.kind === 'secret').length }} removed as secrets.\n{{ ((r, a, d, n) => [r ? a + ' of ' + r + (r === 1 ? ' step list' : ' step lists') + ' passed the replay' + (a === 0 ? '.' : (a === 1 ? ' and is' : ' and are') + ' waiting for approval in RPA: 3 Approve steps.') : '', d ? d + (d === 1 ? ' desktop step list is' : ' desktop step lists are') + ' waiting ' + (a ? 'there too' : 'for approval in RPA: 3 Approve steps') + ', not replayed: review every step and list the steps that save, post or submit in Write steps.' : '', n ? n + (n === 1 ? ' browser step list is' : ' browser step lists are') + ' waiting ' + (a || d ? 'there too' : 'for approval in RPA: 3 Approve steps') + ', not replayed because the steps submit a form, download through a form, type a secret or change a password: check every step, the target of each form and each download.' : ''].filter(part => part).join(' '))($json.drafts.filter(d => d.surface !== 'desktop' && !d.forApproval).length, $json.drafts.filter(d => d.adopted).length, $json.drafts.filter(d => d.forApproval && d.surface === 'desktop').length, $json.drafts.filter(d => d.forApproval && d.surface !== 'desktop').length) }}\nYour browser downloads {{ $binary.workflow.fileName }}: the rest of the bot as an n8n workflow. Open it in n8n with Import from file; stickies mark what was not translated.",
         "inputDataFieldName": "workflow",
         "limitWaitTime": true,
         "limitType": "afterTimeInterval",
@@ -254,7 +236,7 @@
         "operation": "completion",
         "respondWith": "text",
         "completionTitle": "Imported",
-        "completionMessage": "=Imported: {{ $json.report.steps }} steps; {{ $json.report.items.filter(i => i.kind === 'untranslated').length }} not translated, {{ $json.report.items.filter(i => i.kind === 'secret').length }} removed as secrets.\n{{ $json.drafts.filter(d => d.adopted).length }} of {{ $json.drafts.filter(d => d.surface !== 'desktop' && !d.forApproval).length }} step lists passed the replay and are waiting for approval in RPA: 3 Approve steps.{{ $json.drafts.some(d => d.forApproval && d.surface === 'desktop') ? ' ' + $json.drafts.filter(d => d.forApproval && d.surface === 'desktop').length + ' desktop step lists are waiting there too, not replayed: review every step and list the steps that save, post or submit in Write steps.' : '' }}{{ $json.drafts.some(d => d.forApproval && d.surface !== 'desktop') ? ' ' + $json.drafts.filter(d => d.forApproval && d.surface !== 'desktop').length + ' browser step lists are waiting there too, not replayed because they submit a form, download through a form, type a secret or change a password: check every step, the target of each form and each download.' : '' }}\nThe full report, and the reason for any step list that could not be proved, is on the Data output of Import steps in this execution.",
+        "completionMessage": "=Imported: {{ $json.report.steps }} steps; {{ $json.report.items.filter(i => i.kind === 'untranslated').length }} not translated, {{ $json.report.items.filter(i => i.kind === 'secret').length }} removed as secrets.\n{{ ((r, a, d, n) => [r ? a + ' of ' + r + (r === 1 ? ' step list' : ' step lists') + ' passed the replay' + (a === 0 ? '.' : (a === 1 ? ' and is' : ' and are') + ' waiting for approval in RPA: 3 Approve steps.') : '', d ? d + (d === 1 ? ' desktop step list is' : ' desktop step lists are') + ' waiting ' + (a ? 'there too' : 'for approval in RPA: 3 Approve steps') + ', not replayed: review every step and list the steps that save, post or submit in Write steps.' : '', n ? n + (n === 1 ? ' browser step list is' : ' browser step lists are') + ' waiting ' + (a || d ? 'there too' : 'for approval in RPA: 3 Approve steps') + ', not replayed because the steps submit a form, download through a form, type a secret or change a password: check every step, the target of each form and each download.' : ''].filter(part => part).join(' '))($json.drafts.filter(d => d.surface !== 'desktop' && !d.forApproval).length, $json.drafts.filter(d => d.adopted).length, $json.drafts.filter(d => d.forApproval && d.surface === 'desktop').length, $json.drafts.filter(d => d.forApproval && d.surface !== 'desktop').length) }}\nThe full report, and the reason for any step list that could not be proved, is on the Data output of Import steps in this execution.",
         "limitWaitTime": true,
         "limitType": "afterTimeInterval",
         "resumeAmount": 1,
@@ -301,17 +283,6 @@
           {
             "node": "Import steps",
             "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Chat model": {
-      "ai_languageModel": [
-        [
-          {
-            "node": "Import steps",
-            "type": "ai_languageModel",
             "index": 0
           }
         ]

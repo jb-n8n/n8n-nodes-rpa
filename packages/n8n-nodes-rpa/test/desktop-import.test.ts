@@ -199,7 +199,9 @@ describe('RPA: 5 Import a bot with a desktop project', () => {
     const message = String(t.nodes.find((n) => n.name === 'Imported')!.parameters.completionMessage);
     const render = (text: string, $json: unknown) => text.replace(/^=/, '').replace(/\{\{(.+?)\}\}/gs, (_, code: string) => String(new Function('$json', `return (${code});`)($json)));
     const { data } = await importSample();
-    expect(render(message, data[0].json)).toContain('0 of 0 step lists passed the replay and are waiting for approval in RPA: 3 Approve steps. 1 desktop step lists are waiting there too, not replayed');
+    const shown = render(message, data[0].json);
+    expect(shown).toContain('\n1 desktop step list is waiting for approval in RPA: 3 Approve steps, not replayed: review every step');
+    expect(shown).not.toContain('passed the replay');
   });
 });
 
