@@ -698,7 +698,7 @@ public sealed class ServiceTests : IDisposable
         var calls = 0;
         _h.Desktop.OnPerform = _ =>
         {
-            if (++calls < 3) throw new RetryableActionException("the element is disabled");
+            if (++calls < 3) throw RetryableActionException.Disabled();
             return null;
         };
         _h.Ok("act", Act(Id("btnSignIn"), "click", new { timeoutMs = 3000 }));
