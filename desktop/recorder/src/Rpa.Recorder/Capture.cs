@@ -8,7 +8,7 @@ using Rpa.Recorder.Core;
 
 namespace Rpa.Recorder;
 
-internal enum NoticeKind { Late, HookLost, Elevated, NotStarted }
+internal enum NoticeKind { Late, HookLost, Elevated, NotStarted, OtherProgram }
 
 /// <summary>Something the recorder tells the person. <c>Text</c> may name a step's element; it never holds typed text.</summary>
 internal sealed record Notice(NoticeKind Kind, DateTimeOffset At, string Text);
@@ -30,7 +30,9 @@ internal sealed class Capture : IDisposable
     public const int BudgetMs = 200;
     private const int F9 = 0x78;
 
-    private readonly Session _session = new();
+    // The system's double-click time, read once: two clicks on one element within it are one double-click.
+    private readonly Session _session = new() { DoubleClickMs = (int)Native.GetDoubleClickTime() };
+    private AppScope? _scope;
     private readonly object _gate = new();
     private readonly HashSet<DateTimeOffset> _late = [];
     private readonly UiaWorker _worker = new();
@@ -98,6 +100,7 @@ internal sealed class Capture : IDisposable
         lock (_gate) _session.Add(new AppStarted(at, path, args, UiaWorker.Window(window)));
         ProgramPath = path;
         AppProcessId = process.Id;
+        _scope = ScopeOf(process.Id, path);
         Begin();
         return true;
     }
@@ -115,8 +118,27 @@ internal sealed class Capture : IDisposable
         }
         ProgramPath = Native.ImagePath(process);
         AppProcessId = (int)process;
+        _scope = ScopeOf((int)process, ProgramPath);
         Begin();
         return true;
+    }
+
+    /// <summary>The recorded application: its process, and its program file as Windows names it.</summary>
+    private static AppScope ScopeOf(int processId, string? path)
+    {
+        var app = Native.Describe(processId) ?? new ProcessFacts(processId, 0, path, null);
+        return new AppScope(app, app.ImagePath ?? path);
+    }
+
+    /// <summary>Whether a process's input belongs to the recording (<see cref="AppScope"/>).</summary>
+    private bool InScope(uint processId) => _scope?.Includes((int)processId, Native.Describe) == true;
+
+    /// <summary>Input in another program: nothing of it is recorded, and the field being typed into in the recorded
+    /// application is left (it was).</summary>
+    private void OtherProgram()
+    {
+        _worker.Post(LeaveFieldNow);
+        Notify(NoticeKind.OtherProgram, Notices.OtherPrograms);
     }
 
     private void Begin()
@@ -221,7 +243,9 @@ internal sealed class Capture : IDisposable
         lock (_watch) missed = _watch.MouseDown(Environment.TickCount64);
         if (missed) HooksLost();
         if (!_recording) return;
-        if (Native.ProcessOf(Native.WindowFromPoint(new Native.POINT { X = x, Y = y })) == _ownProcess) return;
+        var under = Native.ProcessOf(Native.GetAncestor(Native.WindowFromPoint(new Native.POINT { X = x, Y = y }), Native.GA_ROOT));
+        if (under == _ownProcess) return;
+        if (!InScope(under)) { OtherProgram(); return; }
         var job = Stopwatch.StartNew();
         var at = DateTimeOffset.Now;
         _worker.Post(() => Mouse(at, job, x, y)).Wait(BudgetMs);
@@ -232,12 +256,23 @@ internal sealed class Capture : IDisposable
         if (!_recording) return false;
         var kind = KeyRules.Kind(vk, ctrl, alt);
         if (kind == KeyKind.Modifier) return false;
-        if (Native.ProcessOf(Native.GetForegroundWindow()) == _ownProcess) return false;
+        var foreground = Native.ProcessOf(Native.GetForegroundWindow());
+        if (foreground == _ownProcess) return false;
+        // Another program has the keyboard: the key goes on untouched (F9 too), and nothing of it is passed on.
+        if (!InScope(foreground)) { OtherProgram(); return false; }
         var at = DateTimeOffset.Now;
         if (_readKey && vk == F9 && !ctrl && !alt && !shift)
         {
             _worker.Post(ReadAtPointer);
             return true;
+        }
+        if (KeyRules.MayActivate(vk, ctrl, alt))
+        {
+            // Space: what a click records on a check box, radio button or button, read before the key goes on;
+            // otherwise it is a typing key like any other.
+            var space = Stopwatch.StartNew();
+            _worker.Post(() => Space(at, space)).Wait(BudgetMs);
+            return false;
         }
         if (kind == KeyKind.Printable)
         {
@@ -266,7 +301,7 @@ internal sealed class Capture : IDisposable
             Notify(NoticeKind.Elevated, Notices.Elevated);
             return;
         }
-        if (d is null || d.ProcessId == _ownProcess) return;
+        if (d is null || d.ProcessId == _ownProcess || !InScope(d.ProcessId)) return;
         var window = UiaWorker.WindowOf(d, top);
         var down = new MouseDown(at, window, d.Facts, 1);
         LeaveField(down);
@@ -281,7 +316,7 @@ internal sealed class Capture : IDisposable
     private void Key(DateTimeOffset at, Stopwatch? job, KeyKind kind, string? chord)
     {
         var d = _worker.Focused();
-        if (d is null || d.ProcessId == _ownProcess) return;
+        if (d is null || d.ProcessId == _ownProcess || !InScope(d.ProcessId)) return;
         var window = UiaWorker.WindowOf(d, Native.GetForegroundWindow());
         var typing = kind == KeyKind.Printable || KeyRules.IsTyping(kind, KeyRules.Field(d.Facts));
         var key = new KeyDown(at, window, d.Facts, typing ? "" : chord ?? "", typing);
@@ -294,13 +329,23 @@ internal sealed class Capture : IDisposable
         }
     }
 
+    private void Space(DateTimeOffset at, Stopwatch job)
+    {
+        var d = _worker.Focused();
+        if (d is null || d.ProcessId == _ownProcess || !InScope(d.ProcessId)) return;
+        if (!KeyRules.Activates(d.Facts)) { Key(at, null, KeyKind.Printable, null); return; }
+        var activated = new Activated(at, UiaWorker.WindowOf(d, Native.GetForegroundWindow()), d.Facts);
+        LeaveField(activated);
+        Add(activated, job.ElapsedMilliseconds > BudgetMs, d.Facts);
+    }
+
     private void ReadAtPointer()
     {
         if (!Native.GetCursorPos(out var point)) return;
         var top = Native.GetAncestor(Native.WindowFromPoint(point), Native.GA_ROOT);
         if (Native.ProcessOf(top) == _ownProcess) return;
         var d = _worker.At(point.X, point.Y);
-        if (d is null || d.ProcessId == _ownProcess) return;
+        if (d is null || d.ProcessId == _ownProcess || !InScope(d.ProcessId)) return;
         ReadRequested?.Invoke(d.Facts, UiaWorker.WindowOf(d, top));
     }
 
@@ -323,10 +368,12 @@ internal sealed class Capture : IDisposable
     private void Leave(ElementFacts field, DateTimeOffset at)
     {
         string? value = null, selection = null;
-        // The secret check comes first, from the field's facts: a secret field's value is never asked for.
+        // The secret check comes first, from the field's facts and its password flag read again now: a secret field's
+        // value is never asked for, and a flag that cannot be read counts as set.
         if (!SecretRules.IsSecret(field) && _fieldElement is { } live && _fieldId == field.RuntimeId)
         {
-            if (KeyRules.Field(field) == FieldKind.DropDown) selection = UiaWorker.ReadSelection(live);
+            if (SecretRules.IsSecret(field, UiaWorker.ReadPasswordFlag(live))) field = field with { IsPassword = true };
+            else if (KeyRules.Field(field) == FieldKind.DropDown) selection = UiaWorker.ReadSelection(live);
             else value = UiaWorker.ReadValue(live);
         }
         var window = _fieldWindow ?? new WindowFacts("", "", "");

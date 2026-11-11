@@ -60,6 +60,7 @@ public sealed record RecordingFile(string Name, string Exe, IReadOnlyList<string
             case StepKind.Key: o["chord"] = e.Chord; break;
             case StepKind.Read: o["as"] = e.As; break;
         }
+        if (e.Double) o["double"] = true;
         if (e.Positional) o["positional"] = true;
         return o;
     }

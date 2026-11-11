@@ -67,6 +67,15 @@ public static class KeyRules
         _ => FieldKind.None,
     };
 
+    /// <summary>Whether a key may activate the focused element: Space without Ctrl or Alt. The Windows layer then asks
+    /// <see cref="Activates"/> about the focused element; otherwise the key is what it always is.</summary>
+    public static bool MayActivate(int vk, bool ctrl, bool alt) => vk == 0x20 && !ctrl && !alt;
+
+    /// <summary>Whether Space on the focused element does what a click does: a check box, a radio button or a button
+    /// (never an element flagged as a password, which takes typed text).</summary>
+    public static bool Activates(ElementFacts focused) =>
+        !focused.IsPassword && focused.ControlType is "CheckBox" or "RadioButton" or "Button";
+
     /// <summary>Whether a key of this kind, on a focused element of this kind, is typing.</summary>
     public static bool IsTyping(KeyKind kind, FieldKind field) => kind switch
     {

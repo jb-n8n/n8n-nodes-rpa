@@ -11,7 +11,7 @@ public static class StepText
         {
             StepKind.Launch => $"Start {step.Exe}",
             StepKind.Scope => $"Wait for the window {step.Label}",
-            StepKind.Click => $"Click {step.Label}",
+            StepKind.Click => $"{(step.Double ? "Double-click" : "Click")} {step.Label}",
             StepKind.Fill when step.ExportFile is not null => $"Save {step.ExportFile} into the run's export folder ({step.Label})",
             StepKind.Fill => $"Type {Shown(step.Value!, step.Secret)} into {step.Label}",
             StepKind.Select => $"Choose {Shown(step.Option!, false)} in {step.Label}",

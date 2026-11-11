@@ -12,7 +12,9 @@ namespace Rpa.Recorder.Core;
 /// keys gives its selection when it is left.</item>
 /// <item>A click on an element with a toggle state (a check box) is a check with the state the click sets, so a later
 /// run that starts from the other state still ends where the person left it. A radio button stays a click (selecting
-/// it twice changes nothing), and a Space on a focused check box stays a key.</item>
+/// it twice changes nothing). Space on a focused check box, radio button or button (<see cref="Activated"/>) records
+/// what a click on it records.</item>
+/// <item>Two clicks on the same element within <see cref="DoubleClickMs"/> are one double-click.</item>
 /// </list>
 /// Not thread-safe: the Windows layer calls it from one thread at a time.
 /// </summary>
@@ -27,6 +29,10 @@ public sealed class Session
 
     /// <summary>What the bar shows; a step's index is its position.</summary>
     public IReadOnlyList<RecordedStep> Steps => _steps.ToArray();
+
+    /// <summary>The system's double-click time: a second click on the same element within it makes the click a
+    /// double-click. 0 (the default) folds no clicks.</summary>
+    public int DoubleClickMs { get; init; }
 
     /// <summary>The field the person is typing into, until they leave it.</summary>
     public ElementFacts? FieldBeingTyped => _typing?.Field;
@@ -55,6 +61,7 @@ public sealed class Session
         {
             case AppStarted started: Started(started); break;
             case MouseDown down: Clicked(down); break;
+            case Activated activated: Activate(activated); break;
             case KeyDown key: Pressed(key); break;
             case FieldLeft left: Left(left); break;
             default: throw new ArgumentException($"unknown observation {o.GetType().Name}", nameof(o));
@@ -94,7 +101,26 @@ public sealed class Session
         }
         // A click on a part of a ComboBox (its button) is a click on the ComboBox, which opens its list.
         var target = KeyRules.Field(element) == FieldKind.None && combo.a is not null && combo.i <= 1 ? combo.a : element;
-        _steps.Add(Step(StepKind.Click, o.At, o.Window, target, ReferenceEquals(target, element) ? o.Matches : 1));
+        var click = Step(StepKind.Click, o.At, o.Window, target, ReferenceEquals(target, element) ? o.Matches : 1);
+        // A second click on the same element within the double-click time makes the first a double-click. A check box
+        // never gets here: two clicks on it toggle it twice.
+        if (DoubleClickMs > 0 && _steps.Count > 0 && _steps[^1] is { Kind: StepKind.Click, Double: false } last && last.ElementId.Length > 0
+            && last.ElementId == click.ElementId && (o.At - last.At).TotalMilliseconds <= DoubleClickMs)
+        {
+            _steps[^1] = last with { Double = true };
+            return;
+        }
+        _steps.Add(click);
+    }
+
+    /// <summary>Space on a check box, a radio button or a button: what a click on it records (never a double-click).</summary>
+    private void Activate(Activated o)
+    {
+        _typing = null;
+        var element = o.Element;
+        _steps.Add(element.IsChecked is { } wasChecked && element.ControlType != "RadioButton"
+            ? Step(StepKind.Check, o.At, o.Window, element, 1) with { Checked = !wasChecked }
+            : Step(StepKind.Click, o.At, o.Window, element, 1));
     }
 
     private void Pressed(KeyDown o)

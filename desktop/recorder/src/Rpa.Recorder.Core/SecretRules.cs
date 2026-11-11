@@ -43,6 +43,14 @@ public static partial class SecretRules
     public static bool IsSecret(ElementFacts field) =>
         field.IsPassword || CredentialLike(field.Name) || CredentialLike(field.AutomationId);
 
+    /// <summary>The password flag as UI Automation gave it. A flag that could not be read counts as set: a field that
+    /// may be a password box is never read.</summary>
+    public static bool PasswordFlag(bool? read) => read ?? true;
+
+    /// <summary>Whether a field is secret, with its password flag read again on the live element just before its value
+    /// would be read (<paramref name="flagNow"/>, null when that read failed).</summary>
+    public static bool IsSecret(ElementFacts field, bool? flagNow) => PasswordFlag(flagNow) || IsSecret(field);
+
     private static bool CredentialLike(string text) => Redaction.IsCredentialLike(text) || CredentialField.IsMatch(text);
 
     [GeneratedRegex("[^a-z0-9]+")] private static partial Regex NotNameChars();

@@ -120,7 +120,7 @@ internal sealed class UiaWorker : IDisposable
             Safe(() => p.AutomationId.ValueOrDefault) ?? "",
             Safe(() => p.Name.ValueOrDefault) ?? "",
             Safe(() => p.ClassName.ValueOrDefault) ?? "",
-            Safe(() => p.IsPassword.ValueOrDefault),
+            SecretRules.PasswordFlag(ReadFlag(() => p.IsPassword.ValueOrDefault)),
             false,
             runtimeId is { Length: > 0 } ? string.Join(".", runtimeId) : "",
             ancestors);
@@ -175,6 +175,15 @@ internal sealed class UiaWorker : IDisposable
                 seen.Add(Safe(() => found.Properties.RuntimeId.ValueOrDefault) is { Length: > 0 } rid ? string.Join(".", rid) : Guid.NewGuid().ToString());
         }
         return seen.Count;
+    }
+
+    /// <summary>The password flag of the live element; null when it cannot be read.</summary>
+    public static bool? ReadPasswordFlag(AutomationElement field) => ReadFlag(() => field.Properties.IsPassword.ValueOrDefault);
+
+    private static bool? ReadFlag(Func<bool> read)
+    {
+        try { return read(); }
+        catch (Exception) { return null; }
     }
 
     /// <summary>A text field's text, read through its value pattern.</summary>

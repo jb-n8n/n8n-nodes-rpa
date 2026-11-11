@@ -39,6 +39,10 @@ public sealed record KeyDown(DateTimeOffset At, WindowFacts Window, ElementFacts
 /// </summary>
 public sealed record FieldLeft(DateTimeOffset At, WindowFacts Window, ElementFacts Field, string? Value, string? Selection) : Observation(At);
 
+/// <summary>Space was pressed on a focused check box, radio button or button (<see cref="KeyRules.Activates"/>): the
+/// session records what a click on it records. <c>Element.IsChecked</c> is its state before the key was delivered.</summary>
+public sealed record Activated(DateTimeOffset At, WindowFacts Window, ElementFacts Element) : Observation(At);
+
 /// <summary>The recorder started the application the person chose (<c>ExePath</c>, with <c>Args</c>) and it showed <c>Window</c>.</summary>
 public sealed record AppStarted(DateTimeOffset At, string ExePath, IReadOnlyList<string> Args, WindowFacts Window) : Observation(At);
 
@@ -76,6 +80,8 @@ public sealed record RecordedStep(StepKind Kind, DateTimeOffset At, string Label
     public string? Chord { get; init; }
     public string? As { get; init; }
     public bool Positional { get; init; }
+    /// <summary>A click that was a double-click.</summary>
+    public bool Double { get; init; }
 
     /// <summary>The runtime id of the element the step acts on, for folding a click into the step that follows it.</summary>
     internal string ElementId { get; init; } = "";

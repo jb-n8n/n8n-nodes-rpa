@@ -8,6 +8,8 @@ public static class Notices
     public const string CtrlAltShortcuts =
         "A shortcut with Ctrl+Alt and a letter or digit is not recorded: AltGr is Ctrl+Alt on many keyboards and types characters, which may be part of a password.";
 
+    public const string OtherPrograms = "Input in other programs is not recorded.";
+
     public const string Elevated =
         "This window belongs to a program that runs as administrator. The recorder cannot see inside it: start the recorder as administrator to record it.";
 
