@@ -2,6 +2,26 @@ using Microsoft.Extensions.Time.Testing;
 
 namespace Rpa.Supervisor.Core.Tests;
 
+/// <summary>The two waits the tests share. Neither fails when the condition never holds; the caller asserts.</summary>
+public static class Wait
+{
+    /// <summary>Checks the condition every delayMs of real time, at most tries times.</summary>
+    public static async Task PollUntil(Func<bool> done, int tries = 500, int delayMs = 10)
+    {
+        for (var i = 0; i < tries && !done(); i++) await Task.Delay(delayMs);
+    }
+
+    /// <summary>Advances the fake time by step, and waits delayMs of real time, until the condition holds (at most tries times).</summary>
+    public static async Task AdvanceUntil(FakeTimeProvider time, Func<bool> done, TimeSpan step, int tries = 300, int delayMs = 10)
+    {
+        for (var i = 0; i < tries && !done(); i++)
+        {
+            time.Advance(step);
+            await Task.Delay(delayMs);
+        }
+    }
+}
+
 /// <summary>The machine's sessions, in memory. Events is shared with FakeRdpHost so tests can check the order of
 /// sign-outs and sign-ins.</summary>
 public sealed class FakeSessions(List<string> events) : ISessions
@@ -39,7 +59,7 @@ public sealed class FakeSessions(List<string> events) : ISessions
     /// <summary>Waits until count sign-outs were asked for (background sign-outs in the proxy tests).</summary>
     public async Task WaitForSignOutsAsync(int count)
     {
-        for (var i = 0; i < 500 && SignOuts.Count < count; i++) await Task.Delay(10);
+        await Wait.PollUntil(() => SignOuts.Count >= count);
         Assert.Equal(count, SignOuts.Count);
     }
 }

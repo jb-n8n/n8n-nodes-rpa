@@ -36,11 +36,7 @@ public sealed class SessionManagerTests : IDisposable
     // Advances the fake time in steps while the task runs, for waits between attempts.
     private async Task<T> Drive<T>(Task<T> task)
     {
-        for (var i = 0; i < 1000 && !task.IsCompleted; i++)
-        {
-            _time.Advance(TimeSpan.FromSeconds(1));
-            await Task.Delay(1);
-        }
+        await Wait.AdvanceUntil(_time, () => task.IsCompleted, TimeSpan.FromSeconds(1), tries: 1000, delayMs: 1);
         return await task;
     }
 
@@ -186,6 +182,8 @@ public sealed class SessionManagerTests : IDisposable
         Assert.Equal(1, _host.Calls);
         Assert.Contains(reason.ToString(), manager.LastFailure);
         Assert.Contains(reason.ToString(), ReadState()["lastFailure"]!.GetValue<string>());
+        // Show-RpaConnection.ps1 detects the blocked state by this exact sentence.
+        Assert.Contains("No further sign-in is tried until the RPA Supervisor service is restarted.", ReadState()["lastFailure"]!.GetValue<string>());
     }
 
     [Fact]
