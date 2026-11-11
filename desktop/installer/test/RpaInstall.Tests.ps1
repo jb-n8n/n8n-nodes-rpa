@@ -3534,7 +3534,9 @@ Describe 'Show-RpaConnection.ps1' {
     It "says the mode, whether the service runs, the bot user's sessions, the last failure and where the log is, and no token" {
       $failure = 'UserSignedIn: rpa-runner is signed in in a session the RPA Supervisor did not create (session 2); the connection is refused.'
       Set-Content -LiteralPath $script:StateFile -Value (@{ sessionId = $null; logonTime = $null; lastFailure = $failure } | ConvertTo-Json)
-      $output = @(& $script:ShowScript)
+      # No service of that name, whatever this machine has: a function of the name the script calls stands in for the cmdlet.
+      function global:Get-CimInstance { $null }
+      try { $output = @(& $script:ShowScript) } finally { Remove-Item -LiteralPath function:\Get-CimInstance }
       $output | Should -Contain 'Mode: unattended. The RPA Supervisor signs rpa-runner in when n8n connects, and out 15 s after the last connection.'
       $output | Should -Contain "Supervisor: the service RPA Supervisor is not registered. Run Install-Rpa.ps1 -Unattended again."
       @($output | Where-Object { $_ -like 'Sessions of rpa-runner: *' -or $_ -like 'Session of rpa-runner: *' }).Count | Should -BeGreaterThan 0
@@ -4502,7 +4504,8 @@ Describe 'The Start menu shortcut' {
     Set-Content -LiteralPath $file -Value ('{{ "version": "0.3.0", "user": "rpa-runner", "autoSignIn": false, "mode": "signedIn", "signInChanges": [ {{ "kind": "shortcut", "key": {0}, "name": "" }} ] }}' -f (ConvertTo-Json $script:Lnk))
     Mock -ModuleName RpaInstall Get-RpaLayout { @{ InstallDir = $env:RPA_TEST_INSTALL_DIR; InstallFile = $env:RPA_TEST_INSTALLFILE; DataDir = 'C:\ProgramData\RPA Runner'; LeftoversFile = (Join-Path $TestDrive 'left.json') } }
     $env:RPA_TEST_INSTALL_DIR = $install
-    Mock -ModuleName RpaInstall Get-RpaSid { 'S-1-5-21-1-2-3-1001' }
+    # The recorded Windows user is not on this machine, whichever machine this is: no Kept line for it.
+    Mock -ModuleName RpaInstall Get-RpaSid { throw 'The Windows user does not exist.' }
     Mock -ModuleName RpaInstall Stop-RpaServices { }
     Mock -ModuleName RpaInstall Get-RpaUninstallFacts { @{ DataDir = 'C:\ProgramData\RPA Runner'; DataDirState = @{ Exists = $false; IsLink = $false }; Accounts = @(); RunningSids = @(); UnknownProcesses = @(); AutoSignInSid = $null } }
     Mock -ModuleName RpaInstall Remove-RpaBrowserTemp { @() }
