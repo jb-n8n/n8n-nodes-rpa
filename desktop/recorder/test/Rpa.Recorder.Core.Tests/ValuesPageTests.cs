@@ -214,8 +214,7 @@ public class ValuesPageTests
     public void The_page_asks_one_question_and_says_what_a_tick_does()
     {
         Assert.Equal("Which of these change from run to run?", BarText.Guidance(BarStage.Values));
-        Assert.Equal("Tick each value that changes: it becomes a variable with the name under it. On each run n8n supplies it, " +
-                     "starting with the value recorded here. A value left unticked stays as recorded.", ValuesPage.Intro);
+        Assert.Equal("Tick each value that changes from run to run. n8n can then set it on each run, and it starts as recorded here.", ValuesPage.Intro);
         Assert.Equal(("Continue", "Back"), (ValuesPage.Continue, ValuesPage.Back));
         Assert.Equal("Variable name", ValuesPage.NameLabel);
     }

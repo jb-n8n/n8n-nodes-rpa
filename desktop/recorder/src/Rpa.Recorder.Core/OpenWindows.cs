@@ -1,7 +1,7 @@
 namespace Rpa.Recorder.Core;
 
 /// <summary>
-/// Which windows "Use an app that is already open…" offers: windows a person can mean. Left out are windows without a title,
+/// Which windows "Use an open app…" offers: windows a person can mean. Left out are windows without a title,
 /// cloaked windows (Windows keeps them out of sight, such as its text input host), the shell's desktop and taskbar
 /// windows, and the recorder's own.
 /// </summary>

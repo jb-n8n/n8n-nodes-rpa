@@ -16,7 +16,7 @@ public enum BarColor { Neutral, Recording, Paused }
 public enum BarPart
 {
     None = 0,
-    /// <summary>Start an app… and Use an app that is already open….</summary>
+    /// <summary>Start an app… and Use an open app….</summary>
     StartButtons = 1,
     /// <summary>The two sentences about what gets recorded.</summary>
     ReadyText = 2,
@@ -40,7 +40,8 @@ public static class BarText
 {
     public const string Title = "RPA Recorder";
     public const string StartApp = "Start an app…";
-    public const string UseOpenApp = "Use an app that is already open…";
+    // Short enough to fit beside Start an app… on a bar 360 wide. Its window keeps the longer title (DialogText.OpenTitle).
+    public const string UseOpenApp = "Use an open app…";
     public const string Finish = "Finish";
     public const string DeleteStep = "Delete step";
     // Short enough that the three step actions fit one row on a bar 360 wide.
@@ -73,14 +74,17 @@ public static class BarText
 
     public static string Steps(int count) => count == 1 ? "1 step" : $"{count} steps";
 
-    /// <summary>The top line: the state in words, with the step count.</summary>
+    /// <summary>The top line: the state in words, with the step count. The values page is Almost done: Back can still
+    /// resume recording.</summary>
     public static string StateLine(BarStage stage, string? programPath, int steps) => stage switch
     {
         BarStage.Ready => "Ready",
         BarStage.Starting => $"Starting {AppName(programPath)}…",
         BarStage.Recording => $"Recording {AppName(programPath)} · {(steps == 0 ? "no steps yet" : Steps(steps))}",
         BarStage.Paused => $"Paused · {Steps(steps)}",
-        _ => $"Finished · {Steps(steps)}",
+        BarStage.Values => $"Almost done · {Steps(steps)}",
+        BarStage.Finished => $"Finished · {Steps(steps)}",
+        _ => $"Saved · {Steps(steps)}",
     };
 
     public static BarColor Color(BarStage stage) => stage switch

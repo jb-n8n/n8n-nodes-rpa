@@ -21,9 +21,9 @@ public class BarTests
         Assert.Equal("Recording ErpDemo.exe · no steps yet", BarText.StateLine(BarStage.Recording, Erp, 0));
         Assert.Equal("Paused · 9 steps", BarText.StateLine(BarStage.Paused, Erp, 9));
         Assert.Equal("Finished · 13 steps", BarText.StateLine(BarStage.Finished, Erp, 13));
-        Assert.Equal("Finished · 13 steps", BarText.StateLine(BarStage.Saved, Erp, 13));
-        // The page that asks which values change is part of finishing.
-        Assert.Equal("Finished · 13 steps", BarText.StateLine(BarStage.Values, Erp, 13));
+        Assert.Equal("Saved · 13 steps", BarText.StateLine(BarStage.Saved, Erp, 13));
+        // The page that asks which values change comes before the name and Save.
+        Assert.Equal("Almost done · 13 steps", BarText.StateLine(BarStage.Values, Erp, 13));
         Assert.Equal([BarColor.Neutral, BarColor.Neutral, BarColor.Recording, BarColor.Paused, BarColor.Neutral, BarColor.Neutral, BarColor.Neutral],
             Enum.GetValues<BarStage>().Select(BarText.Color));
     }
@@ -98,7 +98,8 @@ public class BarTests
     {
         Assert.Equal("Start an app…", BarText.StartApp);
         Assert.Equal("Start an app", DialogText.StartTitle);
-        Assert.Equal("Use an app that is already open…", BarText.UseOpenApp);
+        // Short, so that it fits beside Start an app… on a bar 360 wide; its window keeps the longer title.
+        Assert.Equal("Use an open app…", BarText.UseOpenApp);
         Assert.Equal("Use an app that is already open", DialogText.OpenTitle);
         Assert.Equal(("Delete step", "Make variable…", "Make secret…"), (BarText.DeleteStep, BarText.MakeVariable, BarText.MakeSecret));
         Assert.Equal("Earlier notices", DialogText.NoticesTitle);
@@ -247,15 +248,8 @@ public class BarTests
                 null, $"RpaPolicy.exe apply \"{change}\"", false),
             NextSteps.Allow("ErpDemo.exe", null, change, AllowState.NotDone));
 
-        // Said once, so that the longer list n8n shows does not surprise: what the import adds to the bar's steps.
-        Assert.Equal(new NextLine("2. Import the recording in n8n",
-                "Upload it in n8n's Import a bot form. n8n lists a few more steps than this bar: it adds a wait for each window.", "Show the file", null, true),
-            NextSteps.Import(returnsFile: false));
-        Assert.Equal("Upload it in n8n's Import a bot form. n8n lists a few more steps than this bar: it adds a wait for each window, and one for each file the bot returns.",
-            NextSteps.Import(returnsFile: true).Detail);
-        Assert.False(NextSteps.ReturnsFile([]));
-        Assert.True(NextSteps.ReturnsFile([new RecordedStep(StepKind.Fill, DateTimeOffset.Now, "File name:") { ExportFile = "a.csv", Value = "{{$exportDir}}\\a.csv" }]));
-        Assert.False(NextSteps.ReturnsFile([new RecordedStep(StepKind.Fill, DateTimeOffset.Now, "Notes") { Value = "a.csv" }]));
+        // The steps the import adds are said on n8n's review page, where they show.
+        Assert.Equal(new NextLine("2. Import the recording in n8n", "Upload it in n8n's Import a bot form.", "Show the file", null, true), NextSteps.Import());
     }
 
     [Fact]

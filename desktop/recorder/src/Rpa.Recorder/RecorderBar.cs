@@ -362,7 +362,7 @@ internal sealed class RecorderBar : Form
             _allowCommand.Visible = allow.Command is not null;
             _allowButton.Visible = allow.Button is not null;
             _allowButton.Enabled = allow.ButtonEnabled;
-            var import = NextSteps.Import(NextSteps.ReturnsFile(_saved ?? _shown));
+            var import = NextSteps.Import();
             _importTitle.Text = import.Title;
             _importDetail.Text = import.Detail;
         }

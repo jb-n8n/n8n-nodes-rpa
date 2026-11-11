@@ -83,7 +83,7 @@ public sealed class Session
     public const int MaxArgs = 50, MaxArgLength = 1000;
 
     /// <summary>
-    /// The recording is of a program whose window was already open (Use an app that is already open): the recording's app is that
+    /// The recording is of a program whose window was already open (Use an open app…): the recording's app is that
     /// program (<paramref name="exePath"/>, its file), with no arguments, and no launch step (the importer adds one).
     /// </summary>
     public void Attach(string exePath)

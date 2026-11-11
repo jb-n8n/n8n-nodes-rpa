@@ -27,18 +27,9 @@ public static class NextSteps
     /// a refusal or an error it still waits, so that the person can read why).</summary>
     public const string CloseOnSuccess = "--close-on-success";
 
-    /// <summary>
-    /// 2: import the recording. It also says, once, that n8n's list has more steps than the bar's: the import adds a
-    /// wait for each window and, when the bot returns a file (<paramref name="returnsFile"/>), a step for it.
-    /// </summary>
-    public static NextLine Import(bool returnsFile) => new(
-        "2. Import the recording in n8n",
-        "Upload it in n8n's Import a bot form. n8n lists a few more steps than this bar: it adds a wait for each window" +
-        (returnsFile ? ", and one for each file the bot returns." : "."),
-        ShowFile, null, true);
-
-    /// <summary>Whether the recording returns a file: a step saves one into the run's export folder.</summary>
-    public static bool ReturnsFile(IEnumerable<RecordedStep> steps) => steps.Any(s => s.ExportFile is not null);
+    /// <summary>2: import the recording. The steps the import adds (a wait for each window, one for each file the bot
+    /// returns) are said on n8n's review page, where they show.</summary>
+    public static NextLine Import() => new("2. Import the recording in n8n", "Upload it in n8n's Import a bot form.", ShowFile, null, true);
 
     /// <param name="app">The recorded program's file name.</param>
     /// <param name="tool">The policy tool (<see cref="FindPolicyTool"/>), or null when there is none to start.</param>
