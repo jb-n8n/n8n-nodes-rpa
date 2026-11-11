@@ -40,8 +40,6 @@ public class StepListTests
             "Click Search",
         ], rows.Select(r => r.Text));
         Assert.Equal([StepMark.None, StepMark.None, StepMark.Secret, StepMark.Check, StepMark.None, StepMark.Check, StepMark.None], rows.Select(r => r.Mark));
-        // The sentence the bar used to show, and the guide quotes, is unchanged.
-        Assert.Equal("Click Vendor Row 1 (found by its row position: check it)", StepText.Sentence(Flow().Steps[5]));
     }
 
     [Fact]
@@ -173,7 +171,6 @@ public class StepListTests
         Assert.Equal("Read \"two lines\" as out_result_count", StepText.Action(read, "two\r\nlines"));
         // Only a read: any other step is its sentence.
         Assert.Equal("Click Search", StepText.Action(s.Steps[6], "ignored"));
-        Assert.Equal("Read lblResultCount as out_result_count", StepText.Sentence(read));
 
         var rows = StepRows.Of(NotLate(s), step => step.Kind == StepKind.Read ? "6 line items" : null);
         Assert.Equal("Read \"6 line items\" as out_result_count", rows[^1].Text);

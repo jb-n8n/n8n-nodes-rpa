@@ -54,22 +54,22 @@ public class CaptureRulesTests
             "Press Enter in Password",
             "Choose \"2000\" in Company code",
             "Check All companies",
-            "Click Vendor Row 1 (found by its row position: check it)",
+            "Click Vendor Row 1",
             "Click OK",
             "Read lblCount as out_Count",
-        ], s.Steps.Select(StepText.Sentence));
-        Assert.DoesNotContain(s.Steps.Select(StepText.Sentence), x => x.Contains(typed));
+        ], s.Steps.Select(step => StepText.Action(step)));
+        Assert.DoesNotContain(s.Steps.Select(step => StepText.Action(step)), x => x.Contains(typed));
 
         s.MarkVariable(1, "username");
-        Assert.Equal("Type the variable username into Name", StepText.Sentence(s.Steps[1]));
+        Assert.Equal("Type the variable username into Name", StepText.Action(s.Steps[1]));
         var fileName = El("Edit", "1001", "File name:", "Edit", false, false, El("ComboBox", "FileNameControlHost", "File name:"));
         var export = Record(Typed(1, fileName, new("app.exe", "Save As", "#32770")),
             Left(2, fileName, @"C:\out\report.csv", window: new("app.exe", "Save As", "#32770"))).Steps[0];
-        Assert.Equal("Save report.csv into the run's export folder (File name:)", StepText.Sentence(export));
+        Assert.Equal("Save report.csv into the run's export folder (File name:)", StepText.Action(export));
         var unchecking = Record(Click(1, box with { IsChecked = true })).Steps[0];
-        Assert.Equal("Uncheck All companies", StepText.Sentence(unchecking));
+        Assert.Equal("Uncheck All companies", StepText.Action(unchecking));
         var longValue = Record(Typed(1, Name), Left(2, Name, new string('x', 100))).Steps[0];
-        Assert.Equal($"Type \"{new string('x', 57)}...\" into Name", StepText.Sentence(longValue));
+        Assert.Equal($"Type \"{new string('x', 57)}...\" into Name", StepText.Action(longValue));
     }
 
     [Fact]

@@ -36,7 +36,7 @@ public class BranchReviewTests
     public void A_choice_of_an_empty_item_is_not_recorded()
     {
         var blank = El("ListItem", "", "", "", false, false, El("List", "1000", "Company code"), Company);
-        Assert.Equal(["Click Company code"], Record(Click(1, Company), Click(2, blank)).Steps.Select(StepText.Sentence));
+        Assert.Equal(["Click Company code"], Record(Click(1, Company), Click(2, blank)).Steps.Select(step => StepText.Action(step)));
         Assert.Empty(Record(Typed(1, Company), Left(2, Company, null, "")).Steps);
     }
 

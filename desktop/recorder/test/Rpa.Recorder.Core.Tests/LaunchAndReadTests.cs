@@ -27,7 +27,7 @@ public class LaunchAndReadTests
         s.AddRead(count, Window, "out_ResultCount");
         var read = s.Steps[^1];
         Assert.Equal([new RecordedCondition("Text", "lblResultCount", null)], read.Target!.Path);
-        Assert.Equal("Read lblResultCount as out_ResultCount", StepText.Sentence(read));
+        Assert.Equal("Read lblResultCount as out_ResultCount", StepText.Action(read));
         Assert.Equal("out_result_count", StepText.SuggestedReadName(count));
         Assert.DoesNotContain("6 line items", s.ToFile("Test").ToJson());
     }
@@ -41,7 +41,7 @@ public class LaunchAndReadTests
         var read = s.Steps[^1];
         Assert.Equal([new RecordedCondition("DataItem", null, "Acme Paper Co")], read.Target!.Path);
         Assert.True(read.FoundByText);
-        Assert.Equal("Read DataItem as out_Vendor (found by the text it shows now: check it)", StepText.Sentence(read));
+        Assert.Equal("Read DataItem as out_Vendor", StepText.Action(read));
         Assert.Equal("out_data_item", StepText.SuggestedReadName(cell));
     }
 

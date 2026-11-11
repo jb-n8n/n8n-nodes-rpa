@@ -33,8 +33,6 @@ internal sealed class StepList : ListBox
         BorderStyle = BorderStyle.FixedSingle;
     }
 
-    public IReadOnlyList<StepRow> Rows => _rows;
-
     /// <summary>The height of a row of one line, in the list's pixels.</summary>
     public int RowHeight => Font.Height + 2 * Pad;
 

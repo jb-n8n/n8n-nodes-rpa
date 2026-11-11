@@ -143,7 +143,7 @@ public class RecordingFileTests
     public void A_variable_keeps_the_value_that_was_recorded_as_its_start_value_except_a_secret()
     {
         var s = Record(ErpDemoObservations.List());
-        int Index(string intentStart) => s.Steps.Select((step, i) => (step, i)).First(x => StepText.Sentence(x.step).StartsWith(intentStart, StringComparison.Ordinal)).i;
+        int Index(string intentStart) => s.Steps.Select((step, i) => (step, i)).First(x => StepText.Action(x.step).StartsWith(intentStart, StringComparison.Ordinal)).i;
         var company = Index("Choose");
         var dateFrom = Index("Type \"2026-01-20\"");
         s.MarkVariable(company, "in_CompanyCode");
@@ -180,7 +180,7 @@ public class RecordingFileTests
     private static (Session Session, int Company, int DateFrom) ErpWithVariables()
     {
         var s = Record(ErpDemoObservations.List());
-        int Index(string start) => s.Steps.Select((step, i) => (step, i)).First(x => StepText.Sentence(x.step).StartsWith(start, StringComparison.Ordinal)).i;
+        int Index(string start) => s.Steps.Select((step, i) => (step, i)).First(x => StepText.Action(x.step).StartsWith(start, StringComparison.Ordinal)).i;
         return (s, Index("Choose"), Index("Type \"2026-01-20\""));
     }
 

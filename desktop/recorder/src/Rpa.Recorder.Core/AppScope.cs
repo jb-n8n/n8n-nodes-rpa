@@ -12,8 +12,6 @@ public sealed class AppScope(int processId, string? programPath)
 {
     private volatile bool _exited;
 
-    public int ProcessId => processId;
-
     /// <summary>The recorded process has exited: its id may now be another program's.</summary>
     public void AppExited() => _exited = true;
 

@@ -144,21 +144,21 @@ public class BarTests
         line.Add(new BarNotice(t.AddSeconds(5), "Second", NoticeTone.Information));
         line.Add(new BarNotice(t.AddSeconds(9), "Third", NoticeTone.Check));
         Assert.Equal("Third", line.Current!.Text);
-        Assert.Equal(["Second", "First"], line.Earlier.Select(n => n.Text));
+        Assert.Equal(["Second", "First"], line.All.Skip(1).Select(n => n.Text));
         Assert.Equal("Earlier notices (2)", line.EarlierLink);
-        Assert.Equal("14:47:18  Second", NoticeLine.Listed(line.Earlier[0]));
+        Assert.Equal("14:47:18  Second", NoticeLine.Listed(line.All[1]));
         // The list behind the link holds the notice on the line too: a long one is cut there.
         Assert.Equal(["Third", "Second", "First"], line.All.Select(n => n.Text));
 
         // The same notice again replaces itself instead of filling the list.
         line.Add(new BarNotice(t.AddSeconds(20), "Third", NoticeTone.Check));
-        Assert.Equal((2, t.AddSeconds(20)), (line.Earlier.Count, line.Current!.At));
+        Assert.Equal((2, t.AddSeconds(20)), (line.All.Count - 1, line.Current!.At));
 
         for (var i = 0; i < 150; i++) line.Add(new BarNotice(t, $"n{i}", NoticeTone.Information));
-        Assert.Equal(NoticeLine.MaxKept - 1, line.Earlier.Count);
+        Assert.Equal(NoticeLine.MaxKept, line.All.Count);
         line.Clear();
         Assert.Null(line.Current);
-        Assert.Empty(line.Earlier);
+        Assert.Empty(line.All);
     }
 
     [Fact]
