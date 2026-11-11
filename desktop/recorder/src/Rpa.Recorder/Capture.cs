@@ -33,6 +33,15 @@ internal sealed class Capture : IDisposable
     // The system's double-click time, read once: two clicks on one element within it are one double-click.
     private readonly Session _session = new() { DoubleClickMs = (int)Native.GetDoubleClickTime() };
     private AppScope? _scope;
+    // The recorded process, held open while the recorder runs (so its id is not given to another program), and the wait
+    // that tells the scope when it exits.
+    private ProcessWait? _appHandle;
+    private RegisteredWaitHandle? _appWait;
+
+    private sealed class ProcessWait : WaitHandle
+    {
+        public ProcessWait(Microsoft.Win32.SafeHandles.SafeWaitHandle handle) => SafeWaitHandle = handle;
+    }
     private readonly object _gate = new();
     private readonly HashSet<DateTimeOffset> _late = [];
     private readonly UiaWorker _worker = new();
@@ -101,6 +110,7 @@ internal sealed class Capture : IDisposable
         ProgramPath = path;
         AppProcessId = process.Id;
         _scope = ScopeOf(process.Id, path);
+        Watch((uint)process.Id);
         Begin();
         return true;
     }
@@ -119,6 +129,7 @@ internal sealed class Capture : IDisposable
         ProgramPath = Native.ImagePath(process);
         AppProcessId = (int)process;
         _scope = ScopeOf((int)process, ProgramPath);
+        Watch(process);
         Begin();
         return true;
     }
@@ -128,6 +139,19 @@ internal sealed class Capture : IDisposable
     {
         var app = Native.Describe(processId) ?? new ProcessFacts(processId, 0, path, null);
         return new AppScope(app, app.ImagePath ?? path);
+    }
+
+    /// <summary>
+    /// Holds the recorded process open and tells the scope when it exits. A process that cannot be held counts as exited
+    /// at once: its id alone is then never in scope (another process of its program file still is).
+    /// </summary>
+    private void Watch(uint processId)
+    {
+        var handle = Native.OpenToWatch(processId);
+        if (handle is null) { _scope?.AppExited(DateTimeOffset.Now); return; }
+        _appHandle = new ProcessWait(handle);
+        var scope = _scope;
+        _appWait = ThreadPool.RegisterWaitForSingleObject(_appHandle, (_, _) => scope?.AppExited(DateTimeOffset.Now), null, Timeout.Infinite, executeOnlyOnce: true);
     }
 
     /// <summary>Whether a process's input belongs to the recording (<see cref="AppScope"/>).</summary>
@@ -223,6 +247,8 @@ internal sealed class Capture : IDisposable
         _watchTimer?.Dispose();
         _hooks.Dispose();
         _worker.Dispose();
+        _appWait?.Unregister(null);
+        _appHandle?.Dispose();
     }
 
     // ---- The hooks' thread: short, and never more than the budget. ----
@@ -266,7 +292,9 @@ internal sealed class Capture : IDisposable
             _worker.Post(ReadAtPointer);
             return true;
         }
-        if (KeyRules.MayActivate(vk, ctrl, alt))
+        bool typing;
+        lock (_gate) typing = _session.FieldBeingTyped is not null;
+        if (KeyRules.MayActivate(vk, ctrl, alt, typing))
         {
             // Space: what a click records on a check box, radio button or button, read before the key goes on;
             // otherwise it is a typing key like any other.

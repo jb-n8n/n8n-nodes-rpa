@@ -67,9 +67,9 @@ public class ScopeAndActivationTests
     [Fact]
     public void Space_on_a_check_box_a_radio_button_or_a_button_is_what_a_click_on_it_records()
     {
-        Assert.True(KeyRules.MayActivate(0x20, false, false));
-        Assert.False(KeyRules.MayActivate(0x20, true, false));
-        Assert.False(KeyRules.MayActivate(0x41, false, false));
+        Assert.True(KeyRules.MayActivate(0x20, false, false, fieldBeingTyped: false));
+        Assert.False(KeyRules.MayActivate(0x20, true, false, fieldBeingTyped: false));
+        Assert.False(KeyRules.MayActivate(0x41, false, false, fieldBeingTyped: false));
         foreach (var type in new[] { "CheckBox", "RadioButton", "Button" }) Assert.True(KeyRules.Activates(El(type, "x", "X")));
         foreach (var type in new[] { "Edit", "Document", "ComboBox", "DataItem", "Custom" }) Assert.False(KeyRules.Activates(El(type, "x", "X")));
         Assert.False(KeyRules.Activates(El("Button", "x", "X", password: true)));
@@ -78,6 +78,43 @@ public class ScopeAndActivationTests
         var s = Record(new Activated(At(1), Window, box), new Activated(At(2), Window, El("Button", "btnOk", "OK")), new Activated(At(3), Window, El("RadioButton", "optDaily", "Daily") with { IsChecked = false }));
         Assert.Equal(["Check All companies", "Click OK", "Click Daily"], s.Steps.Select(StepText.Sentence));
         Assert.True(s.Steps[0].Checked);
+    }
+
+    [Fact]
+    public void Space_while_typing_into_a_field_is_typing_and_does_not_ask_what_has_the_focus()
+    {
+        var name = El("Edit", "txtName", "Name");
+        var s = Record(Typed(1, name));
+        Assert.False(KeyRules.MayActivate(0x20, false, false, s.FieldBeingTyped is not null));
+        Assert.Equal(KeyKind.Printable, KeyRules.Kind(0x20, false, false));
+        s.Add(Left(2, name, "Ada Lovelace"));
+        Assert.True(KeyRules.MayActivate(0x20, false, false, s.FieldBeingTyped is not null));
+    }
+
+    [Fact]
+    public void After_the_recorded_process_exits_its_id_is_not_in_scope()
+    {
+        var scope = new AppScope(App, Program);
+        var child = new ProcessFacts(200, 100, @"C:\Apps\Helper\viewer.exe", Start.AddSeconds(5));
+        var lateChild = new ProcessFacts(300, 100, @"C:\Apps\Helper\viewer.exe", Start.AddSeconds(30));
+        var other = new ProcessFacts(100, 4, @"C:\Program Files\Chat\chat.exe", Start.AddSeconds(40));
+        Assert.True(scope.Includes(100, Processes(App, child, lateChild)));
+        scope.AppExited(Start.AddSeconds(20));
+        // The id now belongs to another program, and a process with the old parent id that started after the exit is
+        // that program's child.
+        Assert.False(scope.Includes(100, Processes(other, child, lateChild)));
+        Assert.False(scope.Includes(300, Processes(other, child, lateChild)));
+        Assert.True(scope.Includes(200, Processes(other, child, lateChild)), "a child the application started before it ended");
+    }
+
+    [Fact]
+    public void A_new_process_of_the_same_program_file_is_still_in_scope_after_that()
+    {
+        var scope = new AppScope(App, Program);
+        scope.AppExited(Start.AddSeconds(20));
+        var again = new ProcessFacts(600, 4, Program, Start.AddSeconds(30));
+        Assert.True(scope.Includes(600, Processes(again)));
+        Assert.False(scope.Includes(100, Processes(again)));
     }
 
     [Fact]

@@ -103,6 +103,16 @@ internal static class Native
         finally { CloseHandle(process); }
     }
 
+    /// <summary>
+    /// A handle to a process that is signalled when it exits (SYNCHRONIZE, with the least query access). While it is
+    /// open, Windows does not give the process's id to another process. Null when the process cannot be opened.
+    /// </summary>
+    public static Microsoft.Win32.SafeHandles.SafeWaitHandle? OpenToWatch(uint processId)
+    {
+        var process = OpenProcess(0x00100000 | PROCESS_QUERY_LIMITED_INFORMATION, false, processId);
+        return process == IntPtr.Zero ? null : new Microsoft.Win32.SafeHandles.SafeWaitHandle(process, ownsHandle: true);
+    }
+
     /// <summary>Whether a process runs elevated (as administrator). A process whose token this one may not read counts as
     /// elevated: that is what a normal user's program sees of an administrator's.</summary>
     public static bool IsElevated(uint processId)
