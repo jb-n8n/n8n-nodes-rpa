@@ -4,8 +4,8 @@ Robotic process automation (RPA) for self-hosted [n8n](https://n8n.io). Take a s
 it as a PDF, extract a table or a list, fill in and submit a form, or download a file: a URL and one or two fields, no
 code. For sites behind a login there is **Run Steps**: a signed list of browser steps that repairs itself with an AI
 chat model when the site changes, with a person approving every fix. **Import Steps** turns a Chrome Recorder export,
-Playwright code or a UiPath project into such steps. Run Steps also drives Windows desktop apps through a desktop
-runner ([Windows install guide](https://github.com/jb-n8n/n8n-nodes-rpa/blob/main/docs/install/windows.md)).
+Playwright code, a UiPath project or a step document you wrote into such steps. Run Steps also drives Windows desktop
+apps through a desktop runner ([Windows install guide](https://github.com/jb-n8n/n8n-nodes-rpa/blob/main/docs/install/windows.md)).
 
 A personal open-source project (MIT), not an official n8n product. Full documentation:
 **https://github.com/jb-n8n/n8n-nodes-rpa**
@@ -69,8 +69,8 @@ modules included).
 | Fill and Submit Form | Fills a form on the page and submits it (never a password field) |
 | Download File | The file a link or button downloads, checked by its contents |
 | Run Steps | A JSON list of browser steps, for sites behind a login, or of desktop steps for a Windows app; optional AI Repair (browser steps) |
-| Sign Steps | Signs repaired steps once a person approves them (HMAC), so Run Steps runs only what was approved |
-| Import Steps | Turns a Chrome Recorder export, Playwright code or a UiPath project into steps for approval. Values typed into password, PIN, secret and code fields, and values equal to the Site Login's username or password, are stripped, and imports never write |
+| Sign Steps | Signs repaired steps once a person approves them (HMAC), so Run Steps runs only what was approved. Steps you wrote get approved and signed through Import Steps → Step Document (JSON) |
+| Import Steps | Turns a Chrome Recorder export, Playwright code, a UiPath project or a step document you wrote into steps for approval. Values typed into password, PIN, secret and code fields, and values equal to the Site Login's username or password, are stripped, and imports never write |
 
 Each quick operation shows the steps it ran in its output, ready to paste into Run Steps. The package also ships a JSON
 Schema of the step document for editor autocomplete, at `dist/schema/steps.schema.json`
@@ -104,7 +104,7 @@ folder: download a file to your computer (on GitHub, open it and use **Download 
 | RPA: 1 Create tables | Creates the two Data Tables the feed uses (run once) |
 | RPA: 2 Data feed | The self-healing data feed: runs the newest approved steps on a schedule, repairs them with AI when the site changes |
 | RPA: 3 Approve steps | Emails the evidence of a repair, waits for a person's approval, signs the steps |
-| RPA: 5 Import a bot | A form in front of Import Steps: upload a recording, code or a UiPath project; what passes goes to approval |
+| RPA: 5 Import a bot | A form in front of Import Steps: upload a recording, code, a UiPath project or a step document; what passes goes to approval |
 
 ## When something fails
 

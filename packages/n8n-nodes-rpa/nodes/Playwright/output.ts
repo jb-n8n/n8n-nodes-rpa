@@ -4,7 +4,7 @@ import type { NodeContext } from './context.js';
 import type { Compiled, LaneSuccess } from './operations/quick/shared.js';
 import type { Engine } from './engine.js';
 import { errorJson, type FailureDetails } from './errors.js';
-import { changeList, evidenceLine, fullSafetyFlags, safetyLine } from './format.js';
+import { changeList, DESKTOP_EVIDENCE_LINE, evidenceLine, fullSafetyFlags, safetyLine } from './format.js';
 
 /** A file-name-safe form of a name (lowercase, dashes), 'rpa' when nothing is left. */
 export const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'rpa';
@@ -134,10 +134,11 @@ export function repairedStepsJson(engine: Engine, proposal: Proposal, attachment
 /**
  * The JSON of a Repaired steps item for desktop steps from an import (engine desktopProposal): the same fields as a
  * browser item, so the approval template and Sign Steps take it unchanged. Nothing was replayed: the evidence is empty,
- * the evidence line says so, and there are no screenshots. The safety flags are the engine's full list
- * (desktopSafetyFlags), which Sign Steps recomputes; the digest covers them.
+ * the evidence line (one of DESKTOP_EVIDENCE_LINES, by where the steps came from) says so, and there are no
+ * screenshots. The safety flags are the engine's full list (desktopSafetyFlags), which Sign Steps recomputes; the
+ * digest covers them.
  */
-export function desktopRepairedStepsJson(engine: Engine, proposal: DesktopProposal): IDataObject {
+export function desktopRepairedStepsJson(engine: Engine, proposal: DesktopProposal, line: string = DESKTOP_EVIDENCE_LINE): IDataObject {
   const safetyFlags = engine.desktopSafetyFlags(engine.parseDesktopScript(proposal.steps));
   const p: DesktopProposal = { ...proposal, safetyFlags };
   return {
@@ -150,7 +151,7 @@ export function desktopRepairedStepsJson(engine: Engine, proposal: DesktopPropos
     evidence: { count: p.evidence.count, total: p.evidence.total, diff: { missing: [...p.evidence.diff.missing], extra: [...p.evidence.diff.extra] } },
     changes: p.changes.map((c) => ({ was: c.was, now: c.now })),
     safetyFlags: [...safetyFlags],
-    evidenceLine: evidenceLine(p, engine),
+    evidenceLine: line,
     changeList: changeList(p),
     safetyLine: safetyLine(p),
     attachmentNames: '',

@@ -7,6 +7,7 @@ import type { NodeContext } from '../context.js';
 import type { Engine } from '../engine.js';
 import { configNodeError, errorJson, failedOnCode, guidanceFor } from '../errors.js';
 import { isBreakerCode, runGuarded, type GuardedResult } from '../execute.js';
+import { DESKTOP_DOCUMENT_EVIDENCE_LINE, DESKTOP_EVIDENCE_LINE } from '../format.js';
 import { isQueueMode, openGuardStore, QUEUE_NEEDS_REDIS, type GuardStoreDeps } from '../guard-store.js';
 import { workflowFile } from '../import/workflow.js';
 import { lazyChatModel } from '../model.js';
@@ -36,7 +37,8 @@ export const FILE_TOO_LARGE = 'The file is larger than 20 MiB, so it was not rea
 export const TEXT_TOO_LARGE = 'Recording or Code is larger than 20 MiB, so it was not read.';
 export const NAME_REQUIRED = 'Name is required: it names the imported steps.';
 export const NAME_EQUALS = 'Name must not start with "=".';
-export const SOURCE_UNKNOWN = 'Source must be Chrome Recorder (JSON), Playwright Code (JavaScript or TypeScript) or UiPath Project (ZIP or XAML)';
+export const SOURCE_UNKNOWN =
+  'Source must be Chrome Recorder (JSON), Playwright Code (JavaScript or TypeScript), UiPath Project (ZIP or XAML) or Step Document (JSON)';
 export const IMPORT_NEEDS_START = 'Import Steps needs a Start URL or a Site Login: the imported steps do not open a page first.';
 /** The repair goal when Goal is empty: the agent sees the imported steps as its base. */
 export const DEFAULT_GOAL = 'Do what the imported steps do, on the page as it is now.';
@@ -54,7 +56,9 @@ export const DESKTOP_FOR_APPROVAL =
 /** A UiPath project with browser sequences, imported without an RPA Browser credential (its desktop sequences need none). */
 export const IMPORT_BROWSER_NEEDED = 'The project has browser steps: attach an RPA Browser credential to replay them.';
 
-const SOURCES: readonly string[] = ['chrome', 'playwright', 'uipath'];
+const SOURCES: readonly string[] = ['chrome', 'playwright', 'uipath', 'steps'];
+/** Sources that may hold only desktop steps: the RPA Browser credential is needed only for browser steps, known after the import. */
+const MAY_BE_DESKTOP: readonly string[] = ['uipath', 'steps'];
 
 interface ImportParams {
   source: ImportSource;
@@ -183,7 +187,8 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
 
   const siteLoginId = credentialId(ctx, CREDENTIALS.siteLogin);
   let p: ImportParams;
-  // A UiPath project may hold only desktop sequences: then no browser runs and no RPA Browser credential is needed.
+  // A UiPath project or a step document may hold only desktop steps: then no browser runs and no RPA Browser credential
+  // is needed.
   let endpoint: BrowserEndpoint | undefined;
   let siteLogin: SiteLogin | undefined = undefined;
   let fixedPolicy: PortalPolicy | undefined = undefined;
@@ -192,7 +197,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
     // An empty id would key every id-less Site Login's breaker together ("site-login:").
     if (siteLoginId === '') throw new ConfigError(SITE_LOGIN_NO_ID);
     p = readImportParams(ctx, i);
-    if (p.source !== 'uipath' || credentialId(ctx, CREDENTIALS.browser) !== undefined) {
+    if (!MAY_BE_DESKTOP.includes(p.source) || credentialId(ctx, CREDENTIALS.browser) !== undefined) {
       endpoint = browserConfig(await browserCredentials(ctx, i));
       // A CDP connection cannot read downloaded files: refused before anything is read.
       refuseCdpDownload(engine, endpoint, expectedDownload(engine, p.expectedFile) !== undefined);
@@ -260,7 +265,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
   }
 
   if (imported.drafts.length > 0 && !endpoint) {
-    const failed = configError(credentialId(ctx, CREDENTIALS.browser) === undefined ? IMPORT_BROWSER_NEEDED : BROWSER_CREDENTIAL_NEEDED, p.name, { report, ...(workflow ? { workflowName: workflow.name } : {}) });
+    const failed = configError(p.source === 'uipath' ? IMPORT_BROWSER_NEEDED : BROWSER_CREDENTIAL_NEEDED, p.name, { report, ...(workflow ? { workflowName: workflow.name } : {}) });
     if (workflow && failed.kind === 'error') failed.item.binary = { ...workflow.binary };
     return failed;
   }
@@ -273,7 +278,8 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
     let problem: string | undefined;
     if (!withheld) {
       try {
-        review = desktopRepairedStepsJson(engine, engine.desktopProposal(d.script));
+        const line = p.source === 'steps' ? DESKTOP_DOCUMENT_EVIDENCE_LINE : DESKTOP_EVIDENCE_LINE;
+        review = desktopRepairedStepsJson(engine, engine.desktopProposal(d.script), line);
       } catch (error) {
         problem = mask(errorMessage(error));
       }
@@ -491,7 +497,7 @@ async function adoptAll(
 }
 
 /**
- * Import Steps: per input item, the recording, code or project → engine.importSource → each draft
+ * Import Steps: per input item, the recording, code, project or step document → engine.importSource → each draft
  * adopted (engine.adoptDraft) → [Data, Repaired Steps]. Repaired Steps holds one item per adopted draft, built exactly
  * as Run Steps builds it, so Sign Steps accepts it unchanged. Data holds `{ report, drafts, workflowName? }` and, for
  * UiPath, the workflow file as binary `workflow`. A configuration error, nothing imported, or every draft failed is an

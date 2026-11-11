@@ -18,6 +18,11 @@ export const importStepsProperties: INodeProperties[] = [
       { name: 'Chrome Recorder (JSON)', value: 'chrome', description: 'A recording exported from the Recorder panel of Chrome DevTools as JSON' },
       { name: 'Playwright Code (JavaScript or TypeScript)', value: 'playwright', description: 'Code from the codegen recorder, for JavaScript or TypeScript' },
       { name: 'UiPath Project (ZIP or XAML)', value: 'uipath', description: 'A UiPath project folder as a .zip, or one .xaml workflow' },
+      {
+        name: 'Step Document (JSON)',
+        value: 'steps',
+        description: 'Steps you wrote, as Run Steps takes them: a browser step document or a desktop step set. This is how hand-written steps get approved and signed.',
+      },
     ],
     description: 'What the file holds',
     displayOptions: importSteps,
@@ -29,9 +34,9 @@ export const importStepsProperties: INodeProperties[] = [
     default: 'binary',
     options: [
       { name: 'Binary File', value: 'binary', description: 'A file on the input item, for example from a Form Trigger upload' },
-      { name: 'Text', value: 'text', description: 'The recording or code pasted as text' },
+      { name: 'Text', value: 'text', description: 'The recording, code or step document pasted as text' },
     ],
-    description: 'Where the recording or code comes from',
+    description: 'Where the recording, code or step document comes from',
     displayOptions: { show: { operation: ['importSteps'] }, hide: { source: ['uipath'] } },
   },
   {
@@ -49,7 +54,7 @@ export const importStepsProperties: INodeProperties[] = [
     type: 'string',
     typeOptions: { rows: 10 },
     default: '',
-    description: 'The recording or code as text: Chrome Recorder JSON, or JavaScript or TypeScript code',
+    description: 'The recording, code or step document as text: Chrome Recorder JSON, JavaScript or TypeScript code, or a step document as JSON',
     displayOptions: { show: { operation: ['importSteps'], inputFrom: ['text'] }, hide: { source: ['uipath'] } },
   },
   {
@@ -103,7 +108,8 @@ export const importStepsProperties: INodeProperties[] = [
     displayOptions: importSteps,
   },
   expectedFileProperty(
-    importSteps,
+    // A step document's download steps carry their own checks.
+    { show: { operation: ['importSteps'] }, hide: { source: ['steps'] } },
     'Set it when the steps download a file: the click that exports becomes a download step with these checks, and the replay must download a file that passes them.',
   ),
 ];

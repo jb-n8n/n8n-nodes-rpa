@@ -720,7 +720,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
   const imp = byName(t, 'Import steps');
   type FormField = { fieldLabel: string; fieldName: string; fieldType: string; requiredField?: boolean; multipleFiles?: boolean; fieldOptions?: { values: { option: string }[] } };
   const fields = (form.parameters.formFields as { values: FormField[] }).values;
-  const SOURCES = { 'Chrome Recorder': 'chrome', 'Playwright code': 'playwright', 'UiPath project': 'uipath' };
+  const SOURCES = { 'Chrome Recorder': 'chrome', 'Playwright code': 'playwright', 'UiPath project': 'uipath', 'Step document': 'steps' };
   const COMPLETION = 'n8n-nodes-base.form';
 
   /**
@@ -849,6 +849,11 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(data[0].json.error).toBeUndefined();
     expect(data[0].json.report).toMatchObject({ source: 'chrome', steps: 9 });
     expect(data[0].json.drafts).toEqual([expect.objectContaining({ name: 'line-item-export', adopted: false })]);
+    // Steps written by hand, uploaded as a step document, take the same way.
+    const steps = Buffer.from(JSON.stringify({ startUrl: `${SITE.url}/acme/login`, steps: [{ intent: 'Open the report', goto: '/acme/reports' }] }));
+    const [fromDoc] = await runImport(formItem('Step document', steps), () => NOT_ADOPTABLE);
+    expect(fromDoc[0].json.report).toMatchObject({ source: 'steps', steps: 1 });
+    expect(fromDoc[0].json.drafts).toEqual([expect.objectContaining({ name: 'line-item-export', adopted: false })]);
   });
 
   it('the Form completion page reports what was imported; a UiPath import also returns the workflow file (n8n 2.41 Form Ending: Return Binary File)', async () => {
@@ -894,7 +899,8 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(sticky(t, 'Set once').color).toBe(COLOUR.green);
     expect(sticky(t, 'Why approval').color).toBe(COLOUR.grey);
     const about = sticky(t, 'About this workflow').content;
-    for (const s of ['Chrome Recorder', 'Playwright code', 'UiPath', 'RPA: 3 Approve steps', 'RPA: 2 Data feed', 'each step list gets its own approval']) expect(about, s).toContain(s);
+    for (const s of ['Chrome Recorder', 'Playwright code', 'UiPath', 'RPA: 3 Approve steps', 'RPA: 2 Data feed', 'each step list gets its own approval',
+      '**step document**', 'this is how hand-written steps get approved and signed']) expect(about, s).toContain(s);
     const set = sticky(t, 'Set once').content;
     for (const s of ['**Import a bot**: a Basic Auth credential', '**RPA Browser**: Import steps', '**RPA Site Login**', '**Chat model**', 'RPA: 3 Approve steps',
       '**Options → Allow Private Network**', 'Keep **Authentication** on', 'login breaker', 'chat model']) {

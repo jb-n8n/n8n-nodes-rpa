@@ -365,7 +365,14 @@ describe('README', () => {
       '**RPA Redis** (optional; needed in queue mode with a Site Login',
       '{ report, drafts: [{ name, steps, adopted, code?, reason?, traceRef? }], workflowName? }', '`steps: null`', '`trace-<n>`', '`details.traceRef`', '`adopted: false`', 'never on Repaired Steps',
       '`<name>.workflow.json`', '`application/json`', '**Import from file**', '**Sign Steps** take it unchanged', 'No Step Signing key',
+      // A step document: steps written by hand, as data, through the import's own rules.
+      '**Step Document (JSON)**', '**Step documents.**', 'nothing in it is evaluated', 'refused with the parser\'s message', '`missing input "<name>"`',
+      'A `signature` and `approvedBy` beside the steps are not imported', 'with the safety flags computed from the steps', 'such steps cannot be approved through an import',
+      '`Not replayed: desktop steps from a step document are reviewed as written', '**Step document**: the steps you wrote for Run Steps',
     ]) expect(s, text).toContain(text);
+    // Where Sign Steps and unsigned steps are described, the README says how hand-written steps get approved and signed.
+    expect(operation('Sign Steps')).toContain('Steps you wrote yourself get a Repaired steps item, and so approval and a signature, through [Import Steps](#import-steps) with **Source** **Step Document (JSON)**');
+    expect(section('## Run Steps reference')).toContain('To have steps you wrote approved and signed, import them with Import Steps → **Step Document (JSON)**');
     const row = section('## Safety model').split('\n').find((l) => l.startsWith('| Import Steps |')) ?? '';
     for (const text of ['refused before the browser opens', 'never delivered', 'never imported']) expect(row, text).toContain(text);
   });

@@ -68,9 +68,17 @@ export function evidenceLine(p: Proposal | DesktopProposal, engine: Pick<Engine,
   return oneLine(`${head}${delta}${reads}`);
 }
 
-/** The evidence line of desktop steps from an import: nothing was replayed, so the approver reviews the steps as written. */
+/** The evidence line of desktop steps from a UiPath import: nothing was replayed, so the approver reviews the steps as written. */
 export const DESKTOP_EVIDENCE_LINE =
   'Not replayed: desktop steps imported from UiPath are reviewed as written (there is no desktop proof yet). Check every step, and list in Write Steps the steps that save, post or submit.';
+/** The same for desktop steps from a step document (Import Steps → Step Document (JSON)). */
+export const DESKTOP_DOCUMENT_EVIDENCE_LINE =
+  'Not replayed: desktop steps from a step document are reviewed as written (there is no desktop proof yet). Check every step, and list in Write Steps the steps that save, post or submit.';
+/**
+ * Every evidence line a desktop Repaired steps item may carry, one per import source that gives desktop steps. The
+ * evidence does not say where the steps came from, so Sign Steps accepts any of these on a desktop item.
+ */
+export const DESKTOP_EVIDENCE_LINES: readonly string[] = [DESKTOP_EVIDENCE_LINE, DESKTOP_DOCUMENT_EVIDENCE_LINE];
 
 /** A proposal whose steps are a desktop step set (`surface: "desktop"`, own property, as the engine routes). */
 export function isDesktopProposal(p: Proposal | DesktopProposal): p is DesktopProposal {

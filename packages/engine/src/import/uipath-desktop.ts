@@ -189,15 +189,28 @@ export function buildDesktopDraft(seq: DesktopSequence, report: ImportReport): D
     add('', 'error', seq.name, `the desktop draft is not valid steps: ${issues.slice(0, 5).join('; ')}`);
     return undefined;
   }
-  const writeCandidates = desktopWriteCandidates(script);
+  return desktopDraftOf(seq.name, script, report, { atOf, secretVariables: seq.secretVariables });
+}
+
+/**
+ * A parsed desktop step set as a desktop draft named `name`, reported as every desktop import reports one: each
+ * candidate write (desktopWriteCandidates, and `alsoCandidates`, 1-based) gets a report item and none is declared; the
+ * variables are those its fills and selects type; its steps are counted. `atOf[n - 1]`: where step n came from.
+ */
+export function desktopDraftOf(
+  name: string, script: DesktopScript, report: ImportReport, o: { atOf?: string[]; secretVariables?: string[]; alsoCandidates?: number[] } = {},
+): DesktopDraft {
+  const writeCandidates = [...new Set([...desktopWriteCandidates(script), ...(o.alsoCandidates ?? [])])].sort((a, b) => a - b);
   for (const n of writeCandidates) {
-    add(atOf[n - 1] ?? '', 'candidateWrite', `Step ${n}: ${script.steps[n - 1].intent}`,
-      `this step may save, post or submit. The import never declares a write: if it writes, list ${n} in Write Steps when you approve these steps (Sign Steps); the desktop runner refuses a declared write control without it`);
+    report.items.push({
+      at: o.atOf?.[n - 1] ?? '', kind: 'candidateWrite', what: `Step ${n}: ${script.steps[n - 1].intent}`,
+      reason: `this step may save, post or submit. The import never declares a write: if it writes, list ${n} in Write Steps when you approve these steps (Sign Steps); the desktop runner refuses a declared write control without it`,
+    });
   }
   const variables = [...new Set(script.steps.flatMap((s) => {
     const text = 'fill' in s ? s.fill.value : 'select' in s ? s.select.option : '';
     return [...text.matchAll(TEMPLATE_VAR)].map((m) => m[1]);
   }))];
   report.steps += script.steps.length;
-  return { name: seq.name, script, writeCandidates, variables, secretVariables: seq.secretVariables.filter((v) => variables.includes(v)) };
+  return { name, script, writeCandidates, variables, secretVariables: (o.secretVariables ?? []).filter((v) => variables.includes(v)) };
 }

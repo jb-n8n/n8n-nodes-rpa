@@ -3,7 +3,8 @@
 import type { DownloadTemplate } from '../steps/file-check.js';
 import type { ClickModifier, DesktopScript, Locator, PortalSecrets, Script } from '../types.js';
 
-export type ImportSource = 'chrome' | 'playwright' | 'uipath';
+/** Where the steps come from: a recording, code, a UiPath project, or a step document written by hand (`steps`). */
+export type ImportSource = 'chrome' | 'playwright' | 'uipath' | 'steps';
 /** One way to find an element, as the source recorded it. A target lists them best first: the first is the primary locator. */
 export type Candidate = Locator;
 /** `at` says where in the source the event came from (a step number, a line, an activity), for the report. */
@@ -46,12 +47,13 @@ export interface ImportOptions {
 /** Version 1, unsigned, accepted by parseScript. */
 export interface Draft { name: string; script: Script }
 /**
- * A desktop draft (UiPath desktop sequences): version 1, unsigned, accepted by parseDesktopScript. Never replayed at
- * import; it goes to approval as written. `writeCandidates`: steps (1-based) that may write, for the owner to confirm.
+ * A desktop draft (a UiPath desktop sequence, or a desktop step document): version 1, unsigned, accepted by
+ * parseDesktopScript. Never replayed at import; it goes to approval as written. `writeCandidates`: steps (1-based) that
+ * may write, for the owner to confirm.
  * `variables`: the run variables its steps type; `secretVariables`: those that hold a password or another secret.
  */
 export interface DesktopDraft { name: string; script: DesktopScript; writeCandidates: number[]; variables: string[]; secretVariables: string[] }
-/** `desktopDrafts`: UiPath desktop sequences, apart from the browser drafts (present only when there are any). */
+/** `desktopDrafts`: UiPath desktop sequences or a desktop step document, apart from the browser drafts (only when there are any). */
 export interface ImportResult { drafts: Draft[]; desktopDrafts?: DesktopDraft[]; report: ImportReport; flow?: UiPathFlow }
 
 /** A UiPath workflow's shape outside the browser (the UiPath importer fills it). Literal attribute values only; expressions stay text. */

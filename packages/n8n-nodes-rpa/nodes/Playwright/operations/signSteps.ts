@@ -4,7 +4,7 @@ import { checkUrl, ConfigError, CREDENTIALS, policyFor, readPostLabelLocal, sign
 import type { NodeContext } from '../context.js';
 import type { Engine } from '../engine.js';
 import { configNodeError, errorJson } from '../errors.js';
-import { changeList, evidenceLine, fullSafetyFlags, hasDownloadStep, isFileDocument, safetyLine } from '../format.js';
+import { changeList, DESKTOP_EVIDENCE_LINES, evidenceLine, fullSafetyFlags, hasDownloadStep, isDesktopProposal, isFileDocument, safetyLine } from '../format.js';
 import { configErrorItem } from '../output.js';
 import { rejectedRecord, signedRecord, type StepsRecord } from '../rows.js';
 import { asBoolean, asString, checkMaxItems, credentialId, errorMessage, isObject, literalRaw, SITE_LOGIN_NO_ID, splitList } from './common.js';
@@ -82,6 +82,8 @@ function shownTextChanged(engine: Engine, p: Proposal | DesktopProposal, shown: 
   for (const [name, format] of Object.entries(formats) as [keyof typeof formats, (p: Any) => string][]) {
     const value = shown[name];
     if (value === undefined) continue;
+    // A desktop item's evidence line names where its steps came from, which the evidence does not record: any of them passes.
+    if (name === 'evidenceLine' && isDesktopProposal(p) && typeof value === 'string' && DESKTOP_EVIDENCE_LINES.includes(value)) continue;
     let expected: string | undefined;
     try {
       expected = format(p);
