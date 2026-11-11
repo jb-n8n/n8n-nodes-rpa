@@ -11,6 +11,8 @@
   { "id": "deadbeef", "stable": true },
   { "id": "abc1234", "stable": true },
   { "id": "Version.2.1", "stable": true },
+  { "id": "ListViewItem-0", "stable": false },
+  { "id": "ListViewItem-12", "stable": false },
   { "id": "", "stable": false },
   { "id": " ", "stable": false },
   { "id": "a b", "stable": false },

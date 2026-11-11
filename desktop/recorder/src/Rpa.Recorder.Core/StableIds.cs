@@ -19,13 +19,15 @@ public static partial class StableIds
     [GeneratedRegex("[0-9]{6,}")] private static partial Regex LongDigits();
     [GeneratedRegex(@"^[0-9]+(\.[0-9]+)+\z")] private static partial Regex Dotted();
     [GeneratedRegex("[0-9a-fA-F]{8,}")] private static partial Regex HexRun();
+    // WinForms names a list view's rows by their position: an index, not an id.
+    [GeneratedRegex(@"^ListViewItem-[0-9]+\z")] private static partial Regex ListViewRow();
     [GeneratedRegex("[0-9]")] private static partial Regex Digit();
     [GeneratedRegex("[a-fA-F]")] private static partial Regex HexLetter();
 
     public static bool IsStable(string id)
     {
         if (id.Length == 0 || HasSpace().IsMatch(id)) return false;
-        if (GuidShape().IsMatch(id) || LongDigits().IsMatch(id) || Dotted().IsMatch(id)) return false;
+        if (GuidShape().IsMatch(id) || LongDigits().IsMatch(id) || Dotted().IsMatch(id) || ListViewRow().IsMatch(id)) return false;
         return !HexRun().Matches(id).Any(run => Digit().IsMatch(run.Value) && HexLetter().IsMatch(run.Value));
     }
 }

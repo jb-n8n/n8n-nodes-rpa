@@ -9,6 +9,8 @@ export function stableDesktopId(id: string): boolean {
   if (/[0-9a-f]{8}-[0-9a-f]{4}/i.test(id)) return false;
   if (/\d{6,}/.test(id)) return false;
   if (/^\d+(\.\d+)+$/.test(id)) return false;
+  // WinForms names a list view's rows by their position: an index, not an id.
+  if (/^ListViewItem-\d+$/.test(id)) return false;
   const hex = id.match(/[0-9a-f]{8,}/gi) ?? [];
   return !hex.some((run) => /\d/.test(run) && /[a-f]/i.test(run));
 }
