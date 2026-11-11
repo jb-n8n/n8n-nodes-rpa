@@ -133,7 +133,7 @@ describe('desktop clipboard reads on the fake runner', () => {
   it('is policy_violation when the runner policy does not set clipboardRead, and the code never leaves the runner', async () => {
     const r = failed(await run(CODE_STEPS, { policy: { ...AUTH_POLICY, clipboardRead: false } }));
     expect({ code: r.code, message: r.message }).toEqual({
-      code: 'policy_violation', message: 'Read the code: policy_refused: reading the clipboard is off in the runner\'s policy (clipboardRead)',
+      code: 'policy_violation', message: 'Step 3 (Read the code): reading the clipboard is off in the runner\'s policy (clipboardRead)',
     });
     expect(runner!.clipboard).toBe(CODE);
     expect(JSON.stringify(r)).not.toContain(CODE);
@@ -144,7 +144,7 @@ describe('desktop clipboard reads on the fake runner', () => {
     runner.foregroundElsewhere = true;
     const r = failed(await run(CODE_STEPS));
     expect(r.code).toBe('policy_violation');
-    expect(r.message).toBe('Read the code: policy_refused: the clipboard is read only while a window of the run holds the foreground, and a window of "notepad.exe" holds it');
+    expect(r.message).toBe('Step 3 (Read the code): the clipboard is read only while a window of the run holds the foreground, and a window of "notepad.exe" holds it');
   });
 
   it('refuses more than the runner\'s 1000 characters', async () => {
@@ -162,7 +162,7 @@ describe('desktop clipboard reads on the fake runner', () => {
     const r = failed(await run(CODE_STEPS));
     expect({ code: r.code, message: r.message }).toEqual({
       code: 'policy_violation',
-      message: 'Read the code: policy_refused: the clipboard is read only when a process of the run put the text there, and a window of "KeePass.exe" owns it',
+      message: 'Step 3 (Read the code): the clipboard is read only when a process of the run put the text there, and a window of "KeePass.exe" owns it',
     });
     expect(JSON.stringify(r)).not.toContain(PASSWORD);
     // Text put there without an owner window (or by an application that has exited) is refused too.
@@ -170,7 +170,7 @@ describe('desktop clipboard reads on the fake runner', () => {
     runner = await FakeRunner.start({ app: 'authenticator', policy: AUTH_POLICY });
     runner.beforeClipboardRead = () => runner!.copy(PASSWORD, undefined);
     const none = failed(await run(CODE_STEPS));
-    expect(none.message).toBe('Read the code: policy_refused: the clipboard is read only when a process of the run put the text there, and no window owns the clipboard');
+    expect(none.message).toBe('Step 3 (Read the code): the clipboard is read only when a process of the run put the text there, and no window owns the clipboard');
     expect(JSON.stringify(none)).not.toContain(PASSWORD);
   });
 
@@ -179,15 +179,15 @@ describe('desktop clipboard reads on the fake runner', () => {
     runner = await FakeRunner.start({ app: 'authenticator', policy: AUTH_POLICY });
     runner.copy('hunter2-Pa55word', 'run');
     const before = failed(await run(doc([READ])));
-    expect(before.message).toBe('Read the code: policy_refused: the clipboard is read only right after an act of the run copied to it, and the run has not acted yet');
+    expect(before.message).toBe('Step 1 (Read the code): the clipboard is read only right after an act of the run copied to it, and the run has not acted yet');
     const r = failed(await run(doc([SEARCH, READ])));
     expect({ code: r.code, message: r.message }).toEqual({
-      code: 'policy_violation', message: 'Read the code: policy_refused: the clipboard has not changed since the run\'s last act, so the text is not the run\'s copy',
+      code: 'policy_violation', message: 'Step 2 (Read the code): the clipboard has not changed since the run\'s last act, so the text is not the run\'s copy',
     });
     expect(JSON.stringify([before, r])).not.toContain('hunter2');
     // A step that acts on the app between the copy and the read (a target read acts too) makes the copy not the latest act.
     const between = failed(await run(doc([SEARCH, COPY, { intent: 'Read the search', read: { target: byName('Edit', 'Search'), as: 'search' } }, READ])));
-    expect(between.message).toBe('Read the code: policy_refused: the clipboard has not changed since the run\'s last act, so the text is not the run\'s copy');
+    expect(between.message).toBe('Step 4 (Read the code): the clipboard has not changed since the run\'s last act, so the text is not the run\'s copy');
     expect(JSON.stringify(between)).not.toContain(CODE);
   });
 
@@ -196,7 +196,7 @@ describe('desktop clipboard reads on the fake runner', () => {
     runner.beforeClipboardRead = () => { runner!.clockOffsetMs += CLIPBOARD_FRESHNESS_MS + 1000; };
     const r = failed(await run(CODE_STEPS));
     expect({ code: r.code, message: r.message }).toEqual({
-      code: 'policy_violation', message: 'Read the code: policy_refused: the clipboard is read only within 10 seconds after the run\'s last act, and 11 seconds have passed',
+      code: 'policy_violation', message: 'Step 3 (Read the code): the clipboard is read only within 10 seconds after the run\'s last act, and 11 seconds have passed',
     });
     expect(JSON.stringify(r)).not.toContain(CODE);
   });
@@ -205,7 +205,7 @@ describe('desktop clipboard reads on the fake runner', () => {
     const { helperProcesses: _helpers, ...policy } = AUTH_POLICY;
     const r = failed(await run(CODE_STEPS, { policy }));
     expect(r.code).toBe('drift_detected');
-    expect(r.message).toContain('Search for the account: no element matched Edit "Search"');
+    expect(r.message).toContain('Step 1 (Search for the account): no element matched Edit "Search"');
     expect(runner!.methods()).not.toContain('clipboard.read');
   });
 
@@ -217,6 +217,6 @@ describe('desktop clipboard reads on the fake runner', () => {
 
   it('a runner older than clipboard.read is runner_unavailable with a clear message', async () => {
     const r = failed(await run(CODE_STEPS, { noClipboardMethod: true }));
-    expect({ code: r.code, message: r.message }).toEqual({ code: 'runner_unavailable', message: `Read the code: ${RUNNER_TOO_OLD_FOR_CLIPBOARD}` });
+    expect({ code: r.code, message: r.message }).toEqual({ code: 'runner_unavailable', message: `Step 3 (Read the code): ${RUNNER_TOO_OLD_FOR_CLIPBOARD}` });
   });
 });

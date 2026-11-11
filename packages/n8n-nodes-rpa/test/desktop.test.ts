@@ -161,7 +161,7 @@ describe('Run Steps routes by the steps\' surface', () => {
     expect(runner.tcpConnections).toBe(0);
     const missing = { ...DESKTOP_STEPS, steps: [{ intent: 'Click Help', click: uia('btnHelp', 'Button'), timeoutMs: 300 }] };
     const [drift] = await executeRunSteps(ctx(creds, params(missing)), eng);
-    expect(drift[0].json.error).toBe('drift_detected: Click Help: no element matched Button #btnHelp in window "ERP Demo - Sign in"');
+    expect(drift[0].json.error).toBe('drift_detected: Step 1 (Click Help): no element matched Button #btnHelp in window "ERP Demo - Sign in"');
     expect(details(drift[0].json)).toMatchObject({ code: 'drift_detected', lane: 'script', stepIntent: 'Click Help', submitted: false });
   });
 });

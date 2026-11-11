@@ -84,7 +84,7 @@ describe('running a doubleClick step', () => {
   it('sends the runner action doubleClick, and a declared write control needs write: true as for a click', async () => {
     const post = (write: boolean) => doc([...SIGN_IN, { intent: 'Double-click Post', doubleClick: uia('btnPost', 'Button'), ...(write ? { write: true } : {}) }]);
     const refused = await run(post(false));
-    expect(refused).toMatchObject({ ok: false, code: 'policy_violation', message: 'Double-click Post: Button #btnPost is a declared write control: the step must be a declared write' });
+    expect(refused).toMatchObject({ ok: false, code: 'policy_violation', message: 'Step 4 (Double-click Post): Button #btnPost is a declared write control: the step must be a declared write' });
     expect(runner!.lastApp?.posted).toBe(0);
     const ok = await run(post(true));
     expect(ok).toMatchObject({ ok: true, submitted: true });
