@@ -74,7 +74,8 @@ export function importStepsDocument(data: unknown, opts: ImportOptions, report: 
   if (!isObject(raw)) return fail(NOT_STEPS(['script must be an object']));
 
   const { signature: _signature, approvedBy: _approvedBy, ...doc } = raw;
-  if (Object.hasOwn(raw, 'signature') || Object.hasOwn(raw, 'approvedBy')) report.items.push({ at: '', kind: 'dropped', what: 'Signature', reason: SIGNATURE_DROPPED });
+  // A note, not a step left out (the approval lists dropped steps as left out).
+  if (Object.hasOwn(raw, 'signature') || Object.hasOwn(raw, 'approvedBy')) report.items.push({ at: '', kind: 'converted', what: 'Signature', reason: SIGNATURE_DROPPED });
   if ((doc.name !== undefined && doc.name !== opts.name) || (doc.version !== undefined && doc.version !== 1)) {
     report.items.push({ at: '', kind: 'converted', what: 'Name and version', reason: masker.mask(RENAMED(opts.name)) });
   }

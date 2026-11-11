@@ -242,6 +242,54 @@ describe('Sign Steps: browser steps not replayed', () => {
   });
 });
 
+describe('Sign Steps: what an import left out', () => {
+  const SHOWN = 'Sign Steps refused: the evidence, change list or safety line changed after it was reviewed';
+  const LEFT_OUT = ['line 17, Choose an option in Status: only one option, by its value or label, is imported', 'line 21, Wait for the table: a fixed wait is not imported'];
+  /** A Repaired steps item from an import that left two steps out. */
+  const withLeftOut = (): IDataObject => repairedStepsJson(engine, { ...proposalFor(STEPS), leftOut: LEFT_OUT });
+
+  it('an item carries leftOut and its shown list; the digest covers them, and Sign Steps signs it', async () => {
+    const item = withLeftOut();
+    expect(item.leftOut).toEqual(LEFT_OUT);
+    expect(item.leftOutList).toBe(LEFT_OUT.join('\n'));
+    expect(item.digest).toBe(proposalDigest({ ...proposalFor(STEPS), safetyFlags: item.safetyFlags as string[], leftOut: LEFT_OUT }));
+    expect(item.digest).not.toBe(repairedItem(STEPS).digest);
+    const rec = only(await sign(item)).json;
+    expect(rec.status, String(rec.message)).toBe('active');
+    // Nothing of it is stored with the signed steps.
+    expect(Object.keys(rec)).not.toContain('leftOut');
+  });
+
+  it('Sign Steps refuses an item whose leftOut was removed', async () => {
+    const { leftOut: _l, leftOutList: _s, ...removed } = withLeftOut();
+    expect(only(await sign(removed)).json.message).toBe('Sign Steps refused: the repaired steps changed after they were reviewed');
+    const { leftOut: _l2, ...listOnly } = withLeftOut();
+    expect(only(await sign(listOnly)).json.message).toBe(SHOWN);
+    const { leftOutList: _s2, ...valuesOnly } = withLeftOut();
+    expect(only(await sign(valuesOnly)).json.message).toBe(SHOWN);
+  });
+
+  it('Sign Steps refuses an item whose leftOut or its shown list was edited', async () => {
+    const item = withLeftOut();
+    expect(only(await sign({ ...item, leftOutList: LEFT_OUT[0] })).json.message).toBe(SHOWN);
+    expect(only(await sign({ ...item, leftOut: [LEFT_OUT[0]], leftOutList: LEFT_OUT[0] })).json.message).toBe('Sign Steps refused: the repaired steps changed after they were reviewed');
+    expect(only(await sign({ ...item, leftOut: 'line 17' })).json.message).toBe('Sign Steps refused: the left-out steps are not a list of text');
+    // A shown list on an item without leftOut is not bound to anything: refused.
+    expect(only(await sign({ ...repairedItem(STEPS), leftOutList: 'line 3, Click Delete' })).json.message).toBe(SHOWN);
+  });
+
+  it('an item without a leftOut field signs as before', async () => {
+    // Items made by the code before this change, written out: a replayed repair, a not-replayed import, a desktop import.
+    const replayed = JSON.parse(String.raw`{"name":"items","baseVersion":1,"version":2,"steps":{"name":"items","version":2,"startUrl":"https://example.com/list","steps":[{"intent":"Open the list","goto":"https://example.com/list"},{"intent":"Read the items","extract":{"scope":{"css":"main"},"idPattern":"SKU-\\d{4}"}}]},"hash":"a709c30b4469213549d1321946c47f412d9f0af76164a5fe96b0e0f207735179","digest":"1bedf8c84c9c8a0806399a13f2880413c37274f0a32938bc18dfbaf4f403e56f","evidence":{"count":3,"total":3,"diff":{"missing":[],"extra":[]}},"changes":[{"was":"Read the list (extract rows from css \"main\")","now":"Read the items (extract rows from css \"main\", ID pattern SKU-\\d{4})"}],"safetyFlags":["host: example.com"],"evidenceLine":"Proven in a fresh browser: 3 of 3 rows","changeList":"Changed: Read the list (extract rows from css \"main\") -> Read the items (extract rows from css \"main\", ID pattern SKU-\\d{4})","safetyLine":"host: example.com","attachmentNames":""}`) as IDataObject;
+    const notReplayed = JSON.parse(String.raw`{"name":"contact","baseVersion":null,"version":1,"steps":{"name":"contact","version":1,"startUrl":"https://example.com/form","steps":[{"intent":"Type the name","fill":{"field":{"label":"Name"},"value":"{{var.name}}"}},{"intent":"Send","submit":{"path":"/send","button":{"role":"button","name":"Send"}}}]},"hash":"2882750148bb4f8175de89c07945bd9fdb08b8c84ae91ec5e63852fb22418289","digest":"136b819028f48c4d5a9f6ac02138c0d70bfd6eed4d18a6d79bb45b3e219cb61a","evidence":{"count":0,"total":null,"diff":{"missing":[],"extra":[]}},"changes":[{"was":null,"now":"Type the name (fill label \"Name\" with \"{{var.name}}\")"},{"was":null,"now":"Send (submit with role \"button\" name \"Send\" to POST the start site/send)"}],"safetyFlags":["form submission: POST example.com/send","host: example.com","count unverified: the page that was read states no total"],"evidenceLine":"Not replayed: these browser steps were never run by the import, because they submit a form, download through a form, type a secret or change a password. Check every step, each form's target and each download before you approve.","changeList":"Added: Type the name (fill label \"Name\" with \"{{var.name}}\")\nAdded: Send (submit with role \"button\" name \"Send\" to POST the start site/send)","safetyLine":"form submission: POST example.com/send; host: example.com; count unverified: the page that was read states no total","attachmentNames":""}`) as IDataObject;
+    const desktop = JSON.parse(String.raw`{"name":"orders","baseVersion":null,"version":1,"steps":{"surface":"desktop","name":"orders","version":1,"app":{"exe":"ErpDemo.exe"},"steps":[{"intent":"Click Save","click":{"uia":{"path":[{"controlType":"Button","automationId":"btnSave"}]}}}]},"hash":"4eece7e6baa3a46b93062e38880109c14319aca7067668c4b98e4f648dccc8aa","digest":"b01b27a6a552e208e373d9f9e457e44cfe99b674b83572921fc46da62e6a2534","evidence":{"count":0,"total":null,"diff":{"missing":[],"extra":[]}},"changes":[{"was":null,"now":"Click Save (click \"Button\" id \"btnSave\")"}],"safetyFlags":["desktop app: \"ErpDemo.exe\"","candidate write: step 1 (Click Save) may save, post or submit: list 1 in Write Steps if it does (the desktop runner refuses a write only on the controls and keys its policy lists, so leaving a step unlisted does not stop it from saving unless its control is in the runner policy)"],"evidenceLine":"Not replayed: desktop steps imported from UiPath are reviewed as written (there is no desktop proof yet). Check every step, and list in Write Steps the steps that save, post or submit.","changeList":"Step 1: Click Save (click \"Button\" id \"btnSave\")","safetyLine":"desktop app: \"ErpDemo.exe\"; candidate write: step 1 (Click Save) may save, post or submit: list 1 in Write Steps if it does (the desktop runner refuses a write only on the controls and keys its policy lists, so leaving a step unlisted does not stop it from saving unless its control is in the runner policy)","attachmentNames":""}`) as IDataObject;
+    expect(only(await sign(replayed)).json.status).toBe('active');
+    expect(only(await sign(notReplayed)).json.status).toBe('active');
+    const rec = only(await sign(desktop, { params: params({ writeSteps: '1' }) })).json;
+    expect(rec.status, String(rec.message)).toBe('active');
+  });
+});
+
 describe('Sign Steps: refusals', () => {
   it('an item without a digest is refused (a Repaired steps item from Run Steps always carries one)', async () => {
     const { digest: _digest, ...noDigest } = repairedItem(STEPS);

@@ -373,6 +373,10 @@ describe('README', () => {
       'goes to approval as written, marked not replayed', '`secret fill: step 3 types the run variable {{var.exportPassword}}`', 'needs no RPA Browser credential',
       "the Site Login's **Forms It May Submit** and **Pages Where the Password May Be Typed**, and each declared target matched against the request the page really sends",
       'declare the `submit`, or the `download` with `via`, in a step document and import that',
+      // What an import left out reaches the approval and is bound to it.
+      'carries them as `leftOut`', '**Left out by the import (the source does these, the steps do not):**',
+      'Sign Steps refuses an item whose `leftOut` or `leftOutList` was removed or edited after the email was made',
+      'this does not stop someone who rewrites the whole item and computes a new digest',
       '`Not replayed: desktop steps from a step document are reviewed as written', '**Step document**: the steps you wrote for Run Steps',
     ]) expect(s, text).toContain(text);
     // Where Sign Steps and unsigned steps are described, the README says how hand-written steps get approved and signed.

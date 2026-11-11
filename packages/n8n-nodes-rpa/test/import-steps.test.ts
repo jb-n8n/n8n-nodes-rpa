@@ -320,10 +320,12 @@ describe('Import Steps: execution', () => {
     expect(input).not.toHaveProperty('trust');
     expect(JSON.stringify(input.draft)).not.toContain(SECRETS.password);
 
-    // Repaired Steps: exactly the item Run Steps emits for the same proposal.
+    // Repaired Steps: exactly the item Run Steps emits for the same proposal, with what the import left out.
     expect(repaired).toHaveLength(1);
     const proposal = (await proved(input)) as Extract<AdoptResult, { ok: true }>;
-    expect(repaired[0].json).toEqual(repairedStepsJson(engine, proposal.proposal, 'after'));
+    const leftOut = (data[0].json.report as { items: { kind: string; at: string; what: string; reason: string }[] }).items
+      .filter((i) => i.kind === 'untranslated' || i.kind === 'dropped').map((i) => `${i.at}, ${i.what}: ${i.reason}`);
+    expect(repaired[0].json).toEqual(repairedStepsJson(engine, { ...proposal.proposal, leftOut }, 'after'));
     expect(repaired[0].json).toMatchObject({ name: 'sap-export', baseVersion: null, version: 1 });
     expect(repaired[0].binary?.after).toMatchObject({ mimeType: 'image/png', fileName: 'after-v1.png' });
     expect(repaired[0].pairedItem).toEqual([{ item: 0 }]);
@@ -957,14 +959,19 @@ describe('Import Steps: a step document', () => {
     expect(engine.adoptions).toHaveLength(1);
     expect(engine.adoptions[0].draft).toEqual(chrome.adoptions[0].draft);
     // The same draft makes the same Repaired steps item: the safety flags come from the steps, never from the document.
+    // Only the Chrome import left steps out (the recording's waits and scrolls), so only its item lists them.
     expect(repaired).toHaveLength(1);
-    expect(repaired[0].json).toEqual(fromChrome[0].json);
+    const { leftOut: _l, leftOutList: _s, digest: _d, ...chromeRest } = fromChrome[0].json;
+    const { digest, ...docRest } = repaired[0].json;
+    expect(docRest).toEqual(chromeRest);
+    expect(repaired[0].json).not.toHaveProperty('leftOut');
+    expect(digest).toBe(real.proposalDigest(docRest as unknown as real.Proposal));
     const flags = repaired[0].json.safetyFlags as string[];
     expect(flags).toEqual(fullSafetyFlags(engine, real.parseScript(repaired[0].json.steps), { unverifiedCount: false, fieldsDropped: false }));
     expect(flags).toContain('download step');
     expect(flags.some((f) => f.includes(SITE.host))).toBe(true);
     expect(data[0].json.report).toMatchObject({ source: 'steps', steps: 9 });
-    expect((data[0].json.report as { items: IDataObject[] }).items).toContainEqual(expect.objectContaining({ kind: 'dropped', what: 'Signature' }));
+    expect((data[0].json.report as { items: IDataObject[] }).items).toContainEqual(expect.objectContaining({ kind: 'converted', what: 'Signature' }));
     expect(drafts(data[0])).toEqual([expect.objectContaining({ name: 'sap-export', adopted: true })]);
 
     // Approved, it signs as any imported item does: the earlier signature played no part.
@@ -1156,5 +1163,84 @@ describe('Import Steps: a step document', () => {
       const item = repairedStepsJson(engine, real.notReplayedProposal(script), '', { notReplayed: true });
       expect(String((await sign(engine, item)).error)).toContain(reason);
     });
+  });
+});
+
+describe('Import Steps: what an import left out', () => {
+  // The Chrome fixture's report, as the import words it: one step not translated, four kinds of steps dropped.
+  const LEFT_OUT = [
+    'step 11, Wait for a JavaScript condition: steps do not run page JavaScript: add a waitFor on what the page shows when it is ready',
+    "step 1, Viewport changes (1): the node's Viewport option sets the window size",
+    'step 21, Scrolls (1): each step scrolls to its element itself',
+    'step 3, Clicks into a field before typing (6): typing into a field focuses it, so the click before it is not needed',
+    'step 4, XPath selectors (11): XPath selectors are not imported: each step keeps its other selectors',
+    'step 4, Pierce selectors (11): pierce selectors (through shadow DOM) are not imported: each step keeps its other selectors',
+  ];
+  const sign = async (engine: Engine, json: IDataObject, writeSteps?: string) => {
+    const p = { ...signStepsParams(), ...(writeSteps !== undefined ? { writeSteps } : {}) };
+    const [out] = await executeSignSteps(nodeContext({ params: p, rawParameters: p, items: [{ json }], credentials: credentialsV2(SITE), continueOnFail: true }), engine);
+    return out[0].json;
+  };
+
+  it('an import with an untranslated step puts it into leftOut, bound by the digest, and the item signs', async () => {
+    const engine = importEngine((input) => proved(input));
+    const [data, repaired] = await run(engine);
+    const item = repaired[0].json;
+    expect(item.leftOut).toEqual(LEFT_OUT);
+    expect(item.leftOutList).toBe(LEFT_OUT.join('\n'));
+    // Never a note of another kind (a typed value removed as a secret, a converted step).
+    const report = (data[0].json.report as { items: IDataObject[] }).items;
+    expect(report.some((i) => i.kind === 'secret')).toBe(true);
+    expect(JSON.stringify(item.leftOut)).not.toContain('sign-in value');
+    const { leftOut: _l, leftOutList: _s, ...rest } = item;
+    expect(item.digest).toBe(real.proposalDigest({ ...(rest as unknown as real.Proposal), leftOut: LEFT_OUT }));
+    expect((await sign(engine, item)).status).toBe('active');
+    expect(String((await sign(engine, rest)).error)).toContain('the repaired steps changed after they were reviewed');
+  });
+
+  it('no typed value appears in leftOut', async () => {
+    // A report line that quotes a Site Login value (as a source might) is masked as the report is.
+    const withValue = () => {
+      const r = chromeDraft('sap-export');
+      return {
+        drafts: [r], report: { source: 'chrome' as const, steps: 9, items: [
+          { at: 'step 7', kind: 'untranslated' as const, what: `Type "${SECRETS.password}" into Notes`, reason: `the value ${SECRETS.username} is not imported` },
+        ] },
+      };
+    };
+    const engine = importEngine((input) => proved(input), withValue);
+    const [data, repaired] = await run(engine);
+    const text = JSON.stringify([data, repaired]);
+    for (const secret of [SECRETS.username, SECRETS.password, SECRETS.totpSecret]) expect(text).not.toContain(secret);
+    expect(repaired[0].json.leftOut).toEqual(['step 7, Type "[secret]" into Notes: the value [secret] is not imported']);
+    // The real import of the fixture types three sign-in values; none is in leftOut.
+    const [, fromFixture] = await run(importEngine((input) => proved(input)));
+    for (const secret of [SECRETS.username, SECRETS.password, SECRETS.totpSecret]) expect(JSON.stringify(fromFixture[0].json.leftOut)).not.toContain(secret);
+  });
+
+  it('a desktop item and a not-replayed item carry the left-out lines too; with none, no field', async () => {
+    const uia = (automationId: string, controlType = 'Edit') => ({ uia: { path: [{ controlType, automationId }] } });
+    const desktopScript = real.parseDesktopScript({
+      surface: 'desktop', name: 'orders', version: 1, app: { exe: 'ErpDemo.exe' }, steps: [{ intent: 'Click Save', click: uia('btnSave', 'Button') }],
+    });
+    const line = { at: 'Main.xaml', kind: 'untranslated' as const, what: 'Take a screenshot', reason: 'image activities are not imported' };
+    const engine = importEngine(() => { throw new Error('never adopted'); }, () => ({
+      drafts: [], desktopDrafts: [{ name: 'orders', script: desktopScript, writeCandidates: [1], variables: [], secretVariables: [] }],
+      report: { source: 'uipath', steps: 1, items: [line] },
+    }));
+    const [, repaired] = await run(engine, { params: params({ source: 'uipath', stepsName: 'orders', expectedFile: {} }), credentials: {} });
+    expect(repaired[0].json.leftOut).toEqual(['Main.xaml, Take a screenshot: image activities are not imported']);
+    expect((await sign(engine, repaired[0].json, '1')).status).toBe('active');
+    const { leftOut: _l, leftOutList: _s, ...removed } = repaired[0].json;
+    expect(String((await sign(engine, removed, '1')).error)).toContain('the repaired steps changed after they were reviewed');
+
+    // A step document that writes: nothing was left out, so no field.
+    const doc = { startUrl: `${SITE.url}/acme/login`, steps: [{ intent: 'Send the export', submit: { path: '/acme/reports/export', button: { role: 'button', name: 'Export CSV' } } }] };
+    const [, notReplayed] = await run(importEngine(() => { throw new Error('never adopted'); }), {
+      params: params({ source: 'steps', inputFrom: 'text', sourceText: JSON.stringify(doc), expectedFile: {} }), items: [{ json: {} }],
+    });
+    expect(notReplayed).toHaveLength(1);
+    expect(notReplayed[0].json).not.toHaveProperty('leftOut');
+    expect(notReplayed[0].json).not.toHaveProperty('leftOutList');
   });
 });

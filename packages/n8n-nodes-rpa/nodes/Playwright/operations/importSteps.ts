@@ -167,6 +167,16 @@ function maskDeep<T>(value: T, mask: (s: string) => string): T {
   return walk(plain(value)) as T;
 }
 
+/**
+ * One line per step the import did not translate or dropped (report kinds `untranslated` and `dropped`), as the report
+ * words it: where, what, and why. Notes of other kinds (converted steps, values removed as secrets) are not included.
+ */
+function leftOutOf(report: ImportReport): string[] {
+  return report.items
+    .filter((i) => i.kind === 'untranslated' || i.kind === 'dropped')
+    .map((i) => `${[i.at, i.what].filter((s) => s !== '').join(', ')}: ${i.reason}`);
+}
+
 /** Options → Name for an error item when the parameters could not be read (never throws). */
 function safeName(ctx: NodeContext, i: number): string | null {
   let name: unknown;
@@ -250,6 +260,10 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
   const imported = engine.importSource(p.source, data, opts);
   const report = maskDeep<ImportReport>(imported.report, mask);
   const desktopDrafts = imported.desktopDrafts ?? [];
+  // What the import left out, as its (masked) report words it. The report does not say which step list a line belongs
+  // to, so every item of this import carries all of them.
+  const leftOut = leftOutOf(report);
+  const withLeftOut = <P extends object>(proposal: P): P => (leftOut.length ? { ...proposal, leftOut: [...leftOut] } : proposal);
 
   // A UiPath project's flow becomes an n8n workflow for Import from file, whatever happens to its drafts.
   let workflow: { binary: IBinaryKeyData; name: string } | undefined;
@@ -281,7 +295,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
     return failed;
   }
   const outcomes: DraftOutcome[] = [
-    ...asWritten.map((draft) => forApproval(engine, draft, siteLogin, containsSecret, mask)),
+    ...asWritten.map((draft) => forApproval(engine, draft, siteLogin, containsSecret, mask, leftOut)),
     ...(endpoint && toAdopt.length ? await adoptAll(ctx, engine, i, deps, { p, endpoint, siteLogin, siteLoginId, fixedPolicy, drafts: toAdopt, masker, textMasker }) : []),
   ];
   const failed = outcomes.filter((o): o is Extract<DraftOutcome, { kind: 'failed' }> => o.kind === 'failed');
@@ -293,7 +307,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
     if (!withheld) {
       try {
         const line = p.source === 'steps' ? DESKTOP_DOCUMENT_EVIDENCE_LINE : DESKTOP_EVIDENCE_LINE;
-        review = desktopRepairedStepsJson(engine, engine.desktopProposal(d.script), line);
+        review = desktopRepairedStepsJson(engine, withLeftOut(engine.desktopProposal(d.script)), line);
       } catch (error) {
         problem = mask(errorMessage(error));
       }
@@ -371,7 +385,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
 
   const repaired: INodeExecutionData[] = [];
   for (const o of outcomes) {
-    if (o.kind === 'adopted') repaired.push({ ...(await repairedStepsItem(ctx, engine, o.proposal)), pairedItem: paired });
+    if (o.kind === 'adopted') repaired.push({ ...(await repairedStepsItem(ctx, engine, withLeftOut(o.proposal))), pairedItem: paired });
     if (o.kind === 'forApproval') repaired.push({ json: o.review, pairedItem: paired });
   }
   for (const o of desktopOut) if (o.review) repaired.push({ json: o.review, pairedItem: paired });
@@ -385,7 +399,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
  * withheld and not offered for approval, as a desktop draft's are.
  */
 function forApproval(
-  engine: Engine, draft: Draft, siteLogin: SiteLogin | undefined, containsSecret: (v: unknown) => boolean, mask: (s: string) => string,
+  engine: Engine, draft: Draft, siteLogin: SiteLogin | undefined, containsSecret: (v: unknown) => boolean, mask: (s: string) => string, leftOut: string[],
 ): DraftOutcome {
   // The Data entry says why (STEPS_WITHHELD); there is no other reason.
   if (containsSecret(draft.script)) return { draft, kind: 'notAdoptable', reason: '' };
@@ -394,7 +408,8 @@ function forApproval(
   const checked = engine.validateScript(draft.script, { policy: policy.policy, ...(siteLogin ? { secrets: siteLogin.secrets } : {}), mode: 'load' });
   if (!checked.ok) return { draft, kind: 'failed', code: 'policy_violation', reason: checked.violations.join('; ') };
   try {
-    return { draft, kind: 'forApproval', review: repairedStepsJson(engine, engine.notReplayedProposal(draft.script, mask), '', { notReplayed: true }) };
+    const proposal = engine.notReplayedProposal(draft.script, mask);
+    return { draft, kind: 'forApproval', review: repairedStepsJson(engine, leftOut.length ? { ...proposal, leftOut } : proposal, '', { notReplayed: true }) };
   } catch (error) {
     return { draft, kind: 'failed', code: 'policy_violation', reason: errorMessage(error) };
   }

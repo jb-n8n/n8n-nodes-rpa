@@ -7,7 +7,8 @@ import {
   NodeHelpers, Workflow, type IDataObject, type INodeExecutionData, type INodeParameters, type INodeProperties, type INodeTypes,
 } from 'n8n-workflow';
 import {
-  IMPORT_NOT_ADOPTABLE, importSource as realImportSource, scriptHash, type AdoptResult, type Proposal, type Script, type TaskResult,
+  buildProposal, createMasker, IMPORT_NOT_ADOPTABLE, importSource as realImportSource, proposalDigest, scriptHash, validateScript, type AdoptInput, type AdoptResult,
+  type Proposal, type Script, type TaskResult,
 } from 'n8n-rpa-engine';
 import { zip } from '../../engine/test/zip-fixtures.js';
 import { nodeOutputs } from '../nodes/Playwright/description/io.js';
@@ -362,6 +363,8 @@ describe('2-data-feed.json', () => {
   });
 });
 
+/** The heading both approval emails put over the steps an import left out. */
+const LEFT_OUT_HEADING = 'Left out by the import (the source does these, the steps do not):';
 /** The evidence line of browser steps that go to approval without a replay (format.ts), written out. */
 const NOT_REPLAYED_LINE = 'Not replayed: these browser steps were never run by the import, because they submit a form, download through a form, type a secret or change a password. Check every step, each form\'s target and each download before you approve.';
 
@@ -594,6 +597,30 @@ describe('template 3 approval email', () => {
     expect(shown).not.toContain('Proven');
   });
 
+  it('shows the left-out steps under their own heading before the evidence, escaped; with none, no heading', () => {
+    const withLeftOut = { ...item, leftOutList: 'step 4, Pick <b>Status</b>: only one option is imported\nstep 9, Wait: a fixed wait is not imported' };
+    const shown = render(message, { $: (name: string) => ({ item: { json: name === 'Settings' ? { approvalTimeoutHours: 72 } : withLeftOut } }) });
+    expect(shown).toContain(`${LEFT_OUT_HEADING}\nstep 4, Pick &lt;b&gt;Status&lt;/b&gt;: only one option is imported\nstep 9, Wait: a fixed wait is not imported\n`);
+    expect(shown.indexOf(LEFT_OUT_HEADING)).toBeLessThan(shown.indexOf('Evidence'));
+    expect(out).not.toContain('Left out');
+    const desktop = String(byName(load('3-approve-steps.json'), 'Ask for approval (desktop steps)').parameters.message);
+    const desktopShown = render(desktop, { $: (name: string) => ({ item: { json: name === 'Settings' ? { approvalTimeoutHours: 72 } : withLeftOut } }) });
+    expect(desktopShown).toContain(`${LEFT_OUT_HEADING}\nstep 4, Pick &lt;b&gt;Status&lt;/b&gt;`);
+    expect(desktopShown.indexOf(LEFT_OUT_HEADING)).toBeLessThan(desktopShown.indexOf('Evidence'));
+    expect(render(desktop, { $: (name: string) => ({ item: { json: name === 'Settings' ? { approvalTimeoutHours: 72 } : item } }) })).not.toContain('Left out');
+  });
+
+  it('the desktop approval message says what Approve and Reject cause, with the two values under that sentence', () => {
+    const desktop = String(byName(load('3-approve-steps.json'), 'Ask for approval (desktop steps)').parameters.message);
+    const shown = render(desktop, { $: (name: string) => ({ item: { json: name === 'Settings' ? { approvalTimeoutHours: 72 } : { ...item, changeList: 'Step 1: Click Save' } } }) });
+    expect(shown).not.toContain('previous email');
+    expect(shown).toContain('Reject: nothing is signed; the version in use, if any, stays in use.');
+    expect(shown).toContain('The two values below identify what you are approving; you do not need to compare them by hand.');
+    expect(shown.indexOf('Step 1: Click Save')).toBeLessThan(shown.indexOf('Hash:'));
+    expect(shown.indexOf('The two values below')).toBeLessThan(shown.indexOf('Hash:'));
+    expect(shown.indexOf('Hash:')).toBeLessThan(shown.indexOf('Review digest:'));
+  });
+
   it('numbers the two emails of a request, so the order survives an inbox that lists the newest first', () => {
     const t = load('3-approve-steps.json');
     expect(String(byName(t, 'Email repaired steps').parameters.subject)).toMatch(/^=1 of 2, review: steps v\{\{ \$json\.version \}\} for /);
@@ -643,6 +670,14 @@ describe('template 3 review email', () => {
     expect(shown).toContain(`<b>Evidence:</b> ${NOT_REPLAYED_LINE.replace(/'/g, '&#39;')}`);
     expect(shown).toContain('<b>What changed (as written; these steps were never run):</b><br>step 2 now clicks');
     expect(shown).not.toContain('as reported by the run');
+  });
+
+  it('shows the left-out steps in red under their own heading, after the safety flags and before the evidence; with none, nothing', () => {
+    const shown = render(html, { $json: { ...hostile, leftOutList: 'step 4, Pick <b>Status</b>: only one option\nstep 9, Wait' } });
+    expect(shown).toContain(`<p style="color:#b00020"><b>${LEFT_OUT_HEADING}</b><br>step 4, Pick &lt;b&gt;Status&lt;/b&gt;: only one option<br>step 9, Wait</p>`);
+    expect(shown.indexOf('Safety flags')).toBeLessThan(shown.indexOf(LEFT_OUT_HEADING));
+    expect(shown.indexOf(LEFT_OUT_HEADING)).toBeLessThan(shown.indexOf('Evidence'));
+    expect(out).not.toContain('Left out');
   });
 
   it('says the evidence and the change list are as reported by the run (Sign Steps recomputes only the safety flags)', () => {
@@ -769,14 +804,14 @@ describe('5-import-a-bot.json (the first-day import)', () => {
   const fixture = (name: string) => readFileSync(new URL(`../../engine/test/fixtures/import/${name}`, import.meta.url), 'utf8');
   const CHROME = Buffer.from(fixture('chrome-sap-export.json').split('http://localhost:8080').join(SITE.url));
   /** The real importSource; adoptDraft scripted (no browser opens). */
-  const importEngine = (adopt: () => AdoptResult): Engine => Object.assign(fakeEngine(() => {
+  const importEngine = (adopt: (input: AdoptInput) => AdoptResult): Engine => Object.assign(fakeEngine(() => {
     throw new Error('Import Steps never calls runTask');
-  }), { importSource: realImportSource, adoptDraft: async () => adopt() });
+  }), { importSource: realImportSource, adoptDraft: async (input: AdoptInput) => adopt(input) });
   const failure = (code: Extract<AdoptResult, { ok: false }>['code'], message: string, over: Partial<Extract<AdoptResult, { ok: false }>> = {}): AdoptResult => ({
     ok: false, code, message, violations: [], log: [], blockedRequests: [], durationMs: 900, lane: 'script', ...over,
   });
   const NOT_ADOPTABLE = failure('policy_violation', IMPORT_NOT_ADOPTABLE, { adoptable: false, configError: true });
-  const runImport = async (item: INodeExecutionData, adopt: () => AdoptResult) => {
+  const runImport = async (item: INodeExecutionData, adopt: (input: AdoptInput) => AdoptResult) => {
     const params = resolved(item);
     const ctx = nodeContext({
       params, rawParameters: imp.parameters, items: [item], continueOnFail: true,
@@ -873,6 +908,32 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const [fromDoc] = await runImport(formItem('Step document', steps), () => NOT_ADOPTABLE);
     expect(fromDoc[0].json.report).toMatchObject({ source: 'steps', steps: 1 });
     expect(fromDoc[0].json.drafts).toEqual([expect.objectContaining({ name: 'line-item-export', adopted: false })]);
+  });
+
+  it('an import with an untranslated step puts it into leftOut and both emails show it', async () => {
+    // The draft proved as version 1 by the real proposal builder (no browser).
+    const proved = (input: AdoptInput): AdoptResult => {
+      const script: Script = { ...input.draft, version: 1 };
+      const prove = { ok: true, rows: [], total: null, reasons: [], diff: { missing: [], extra: [] }, policyViolation: false, readPosts: [] } as unknown as Parameters<typeof buildProposal>[0]['prove'];
+      const proposal = buildProposal({ script, prove, masker: createMasker([]), safetyFlags: validateScript(script, { policy: input.policy, secrets: input.secrets, mode: 'proposal' }).safetyFlags });
+      return { ok: true, lane: 'script', proposal, digest: proposalDigest(proposal), llmCalls: 0, durationMs: 1 };
+    };
+    const [data, repaired] = await runImport(formItem('Chrome Recorder', CHROME), proved);
+    expect(data[0].json.error, JSON.stringify(data[0].json).slice(0, 800)).toBeUndefined();
+    const item = repaired[0].json;
+    const untranslated = 'step 11, Wait for a JavaScript condition: steps do not run page JavaScript: add a waitFor on what the page shows when it is ready';
+    expect(item.leftOut).toContain(untranslated);
+    const t3 = load('3-approve-steps.json');
+    const review = render(String(byName(t3, 'Email repaired steps').parameters.html), { $json: item });
+    const ask = render(String(byName(t3, 'Ask for approval').parameters.message), {
+      $: (name: string) => ({ item: { json: name === 'Settings' ? { approvalTimeoutHours: 72 } : item } }),
+    });
+    for (const shown of [review, ask]) {
+      expect(shown).toContain(LEFT_OUT_HEADING);
+      expect(shown).toContain(untranslated);
+      // Under its own heading, before the evidence.
+      expect(shown.indexOf(LEFT_OUT_HEADING)).toBeLessThan(shown.indexOf('Evidence'));
+    }
   });
 
   it('the Form completion page reports what was imported; a UiPath import also returns the workflow file (n8n 2.41 Form Ending: Return Binary File)', async () => {

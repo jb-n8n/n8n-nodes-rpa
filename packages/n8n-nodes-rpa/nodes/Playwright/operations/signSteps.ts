@@ -5,7 +5,8 @@ import type { NodeContext } from '../context.js';
 import type { Engine } from '../engine.js';
 import { configNodeError, errorJson } from '../errors.js';
 import {
-  changeList, DESKTOP_EVIDENCE_LINES, evidenceLine, fullSafetyFlags, hasDownloadStep, isDesktopProposal, isFileDocument, NOT_REPLAYED_EVIDENCE_LINE, safetyLine,
+  changeList, DESKTOP_EVIDENCE_LINES, evidenceLine, fullSafetyFlags, hasDownloadStep, isDesktopProposal, isFileDocument, leftOutList, NOT_REPLAYED_EVIDENCE_LINE,
+  safetyLine,
 } from '../format.js';
 import { configErrorItem } from '../output.js';
 import { rejectedRecord, signedRecord, type StepsRecord } from '../rows.js';
@@ -30,6 +31,7 @@ export const NOT_REPLAYED_NEEDS_FIRST_VERSION = 'steps that were not replayed mu
 export const NOT_REPLAYED_CHANGES_MISMATCH = 'the change list does not show every step of the steps, in order, as added';
 export const PROVEN_FIRST_VERSION_WRITES =
   'the evidence line says the steps were proven in a fresh browser, but a first version that submits a form, downloads through a form, types a secret or changes a password is never replayed: it must carry the not-replayed evidence line';
+export const LEFT_OUT_MALFORMED = 'the left-out steps are not a list of text';
 /** The engine's STEPS_HASH_MISMATCH wording (the engine is loaded lazily, so its constants are not imported here). */
 export const HASH_MISMATCH = 'the steps do not match the hash that was reviewed';
 /** Site Login secrets shorter than this are not looked for in records (the engine's MIN_SECRET_LEN_FOR_LITERAL_CHECK). */
@@ -47,6 +49,10 @@ export interface ParsedProposal {
   changes: IntentChange[];
   safetyFlags: string[];
   shownText: { evidenceLine?: unknown; changeList?: unknown; safetyLine?: unknown };
+  /** The steps an import left out (absent on items that have none, and on every item made before the field existed). */
+  leftOut: unknown;
+  /** The shown text of `leftOut` (format.ts leftOutList). */
+  leftOutList: unknown;
 }
 
 const wholeNumber = (v: unknown): number | null => {
@@ -80,7 +86,20 @@ export function parseRepairedSteps(json: IDataObject): ParsedProposal {
     changes: (Array.isArray(json.changes) ? json.changes : []) as unknown as IntentChange[],
     safetyFlags: Array.isArray(json.safetyFlags) ? json.safetyFlags.map(String) : [],
     shownText: { evidenceLine: json.evidenceLine, changeList: json.changeList, safetyLine: json.safetyLine },
+    leftOut: json.leftOut,
+    leftOutList: json.leftOutList,
   };
+}
+
+/**
+ * Why the item's left-out steps cannot be signed, or undefined. When the item has `leftOut` (a non-empty list of text;
+ * the digest covers it), the shown `leftOutList` must be its formatting; without it, there must be no shown list. So a
+ * list removed or edited after the email was made is refused, as long as the digest was not recomputed.
+ */
+function leftOutProblem(p: ParsedProposal): string | undefined {
+  if (p.leftOut === undefined) return p.leftOutList === undefined || p.leftOutList === '' ? undefined : SHOWN_TEXT_CHANGED;
+  if (!Array.isArray(p.leftOut) || p.leftOut.length === 0 || !p.leftOut.every((l) => typeof l === 'string')) return LEFT_OUT_MALFORMED;
+  return p.leftOutList === leftOutList({ leftOut: p.leftOut as string[] }) ? undefined : SHOWN_TEXT_CHANGED;
 }
 
 /** True when a line the item carries differs from the recomputed one. A body too malformed to format is left to the digest check. */
@@ -249,6 +268,9 @@ function fileEvidenceProblem(p: ParsedProposal): boolean {
   }
 }
 
+/** `leftOut` for the proposal the digest is checked over: only when the item has it (leftOutProblem checked its shape). */
+const leftOutOf = (p: ParsedProposal): { leftOut?: string[] } => (p.leftOut === undefined ? {} : { leftOut: p.leftOut as string[] });
+
 /** True when the item's change list is exactly `expected`: the same entries, in order. Entries are untrusted. */
 function changesExactly(changes: readonly unknown[], expected: IntentChange[]): boolean {
   return changes.length === expected.length && changes.every((c, i) => {
@@ -320,12 +342,14 @@ async function signOne(ctx: NodeContext, engine: Engine, i: number, json: IDataO
     if (!hashMatches(engine, p.steps, p.hash)) return refuse([HASH_MISMATCH]);
     return record(rejectedRecord({ name: p.name, version: p.version, hash: p.hash }, approverId, at));
   }
+  const leftOut = leftOutProblem(p);
+  if (leftOut) return refuse([leftOut]);
   if (engine.isDesktopDocument(p.steps)) return signDesktop(engine, p, { key, approverId, writeStepsText, secrets: siteSecrets, at, refuse, record });
   if (writeStepsText) return refuse([WRITE_STEPS_BROWSER]);
 
   const proposal: Proposal = {
     name: p.name, baseVersion: p.baseVersion, version: p.version, steps: p.steps as Script, hash: p.hash,
-    evidence: p.evidence, changes: p.changes, safetyFlags: p.safetyFlags, screenshots: {},
+    evidence: p.evidence, changes: p.changes, safetyFlags: p.safetyFlags, screenshots: {}, ...leftOutOf(p),
   };
   // Browser steps that went to approval without a replay (a step document that writes or types a secret).
   const notReplayed = p.shownText.evidenceLine === NOT_REPLAYED_EVIDENCE_LINE;
@@ -398,7 +422,7 @@ function signDesktop(
   if (malformedEvidence(p.evidence)) return c.refuse([EVIDENCE_MALFORMED]);
   const proposal = {
     name: p.name ?? '', baseVersion: p.baseVersion, version: p.version ?? 0, steps: p.steps, hash: p.hash,
-    evidence: p.evidence, changes: p.changes, safetyFlags: p.safetyFlags, screenshots: {},
+    evidence: p.evidence, changes: p.changes, safetyFlags: p.safetyFlags, screenshots: {}, ...leftOutOf(p),
   } as unknown as DesktopProposal;
   if (shownTextChanged(engine, proposal, p.shownText)) return c.refuse([SHOWN_TEXT_CHANGED]);
   let expected: string[] | undefined;

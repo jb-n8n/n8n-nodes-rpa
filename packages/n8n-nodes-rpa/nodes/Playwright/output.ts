@@ -4,7 +4,7 @@ import type { NodeContext } from './context.js';
 import type { Compiled, LaneSuccess } from './operations/quick/shared.js';
 import type { Engine } from './engine.js';
 import { errorJson, type FailureDetails } from './errors.js';
-import { changeList, DESKTOP_EVIDENCE_LINE, evidenceLine, fullSafetyFlags, NOT_REPLAYED_EVIDENCE_LINE, safetyLine } from './format.js';
+import { changeList, DESKTOP_EVIDENCE_LINE, evidenceLine, fullSafetyFlags, leftOutList, NOT_REPLAYED_EVIDENCE_LINE, safetyLine } from './format.js';
 
 /** A file-name-safe form of a name (lowercase, dashes), 'rpa' when nothing is left. */
 export const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'rpa';
@@ -112,7 +112,7 @@ export function repairedStepsJson(engine: Engine, proposal: Proposal, attachment
   const safetyFlags = fullSafetyFlags(engine, engine.parseScript(proposal.steps), o.notReplayed
     ? { unverifiedCount: true, fieldsDropped: false, notReplayed: true }
     : { unverifiedCount: proposal.safetyFlags.includes(engine.UNVERIFIED_COUNT_FLAG), fieldsDropped: proposal.safetyFlags.includes(engine.EXTRACT_FIELDS_DROPPED) });
-  const p: Proposal = { ...proposal, safetyFlags };
+  const p: Proposal = withLeftOut({ ...proposal, safetyFlags });
   return {
     name: p.name,
     baseVersion: p.baseVersion,
@@ -129,6 +129,7 @@ export function repairedStepsJson(engine: Engine, proposal: Proposal, attachment
     evidenceLine: o.notReplayed ? NOT_REPLAYED_EVIDENCE_LINE : evidenceLine(p, engine),
     changeList: changeList(p),
     safetyLine: safetyLine(p),
+    ...leftOutFields(p),
     attachmentNames,
   };
 }
@@ -142,7 +143,7 @@ export function repairedStepsJson(engine: Engine, proposal: Proposal, attachment
  */
 export function desktopRepairedStepsJson(engine: Engine, proposal: DesktopProposal, line: string = DESKTOP_EVIDENCE_LINE): IDataObject {
   const safetyFlags = engine.desktopSafetyFlags(engine.parseDesktopScript(proposal.steps));
-  const p: DesktopProposal = { ...proposal, safetyFlags };
+  const p: DesktopProposal = withLeftOut({ ...proposal, safetyFlags });
   return {
     name: p.name,
     baseVersion: p.baseVersion,
@@ -156,8 +157,20 @@ export function desktopRepairedStepsJson(engine: Engine, proposal: DesktopPropos
     evidenceLine: line,
     changeList: changeList(p),
     safetyLine: safetyLine(p),
+    ...leftOutFields(p),
     attachmentNames: '',
   };
+}
+
+/** The proposal with `leftOut` only when it has lines: an empty list is no field, so the digest stays as it was. */
+function withLeftOut<P extends { leftOut?: string[] }>(p: P): P {
+  const { leftOut, ...rest } = p;
+  return (leftOut?.length ? { ...rest, leftOut: [...leftOut] } : rest) as P;
+}
+
+/** `leftOut` and the shown `leftOutList` (format.ts), which Sign Steps binds to the digest; nothing when there are none. */
+function leftOutFields(p: { leftOut?: string[] }): IDataObject {
+  return p.leftOut?.length ? { leftOut: [...p.leftOut], leftOutList: leftOutList(p) } : {};
 }
 
 /** Error item for a failed or blocked run: `{ error: "<code>: <message>", message, details }` plus screenshot and trace binaries. */

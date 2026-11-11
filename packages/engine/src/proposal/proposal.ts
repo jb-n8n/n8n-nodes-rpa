@@ -32,6 +32,11 @@ export interface Proposal {
   };
   changes: IntentChange[];
   safetyFlags: string[];
+  /**
+   * An import's steps that were not translated or were dropped, one line each as its report words them. Only when there
+   * are any; the digest covers it then, and an item without it has the digest it always had.
+   */
+  leftOut?: string[];
   screenshots: { before?: Buffer; after?: Buffer };
   /** The proof run's scrubbed trace: the new steps replayed alone in a fresh browser, for the reviewer. Not part of the digest. */
   trace?: Buffer;
@@ -51,10 +56,15 @@ export interface SignedStepsRow {
 export const NO_REVIEW_DIGEST = 'the proposal has no review digest';
 export const UNVERIFIED_COUNT_FLAG = 'count unverified: the page that was read states no total';
 
-/** Digest of everything a reviewer saw (screenshots excluded); approval can be pinned to it. */
-export function proposalDigest(proposal: Pick<Proposal, 'name' | 'baseVersion' | 'version' | 'changes' | 'safetyFlags' | 'evidence'> & { steps: unknown }): string {
-  const { name, baseVersion, version, steps, changes, safetyFlags, evidence } = proposal;
-  return scriptHash({ name, baseVersion, version, steps, changes, safetyFlags, evidence });
+/**
+ * Digest of everything a reviewer saw (screenshots excluded); approval can be pinned to it. `leftOut` is covered only
+ * when the proposal has it, so a proposal without it keeps the digest it had before the field existed.
+ */
+export function proposalDigest(
+  proposal: Pick<Proposal, 'name' | 'baseVersion' | 'version' | 'changes' | 'safetyFlags' | 'evidence'> & { steps: unknown; leftOut?: unknown },
+): string {
+  const { name, baseVersion, version, steps, changes, safetyFlags, evidence, leftOut } = proposal;
+  return scriptHash({ name, baseVersion, version, steps, changes, safetyFlags, evidence, ...(leftOut !== undefined ? { leftOut } : {}) });
 }
 
 /** LCS diff of two lists compared by `key`; removals and additions between unchanged items are paired in order. */

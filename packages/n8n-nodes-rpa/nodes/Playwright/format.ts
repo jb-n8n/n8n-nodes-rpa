@@ -112,6 +112,11 @@ export function changeList(p: Proposal | DesktopProposal): string {
     .join('\n');
 }
 
+/** The steps an import left out, one per line, as the approver reads them; '' when there are none. */
+export function leftOutList(p: { leftOut?: readonly string[] }): string {
+  return (p.leftOut ?? []).map(oneLine).join('\n');
+}
+
 export function safetyLine(p: Pick<Proposal, 'safetyFlags'>): string {
   return p.safetyFlags.length ? p.safetyFlags.map(oneLine).join('; ') : 'none';
 }

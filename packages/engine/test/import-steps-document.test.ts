@@ -16,8 +16,9 @@ afterAll(async () => { await portal.close(); });
 beforeEach(() => { portal.reset(); });
 
 // Golden strings are written out here on purpose (tests assert them verbatim, not through the constants).
+// A note, not a step left out: the approval shows dropped and untranslated steps as left out.
 const SIGNATURE_DROPPED = {
-  at: '', kind: 'dropped', what: 'Signature',
+  at: '', kind: 'converted', what: 'Signature',
   reason: 'imported steps are a first version for approval, so the signature and Approved By the document carried were not imported: Sign Steps signs the steps when a person approves them',
 };
 const septemberFile = `LINEITEMS_1000_${SANDBOX.erp.from}_${SANDBOX.erp.to}.csv`;
