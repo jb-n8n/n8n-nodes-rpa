@@ -134,6 +134,10 @@ It should print a line that says the verification succeeded. With these two flag
 by another workflow or for another tag. It does not show that the commit was reviewed, nor that the zip is what the
 source code would build elsewhere.
 
+`HTTP 404` from this command means GitHub has no attestation for this file: do not use it. Check that `$version` is
+a release's version and that the download finished (check the hash again); if both are right, the file is not one
+this release published.
+
 **Unblock, then unpack.** Windows marks a downloaded file as coming from the internet, and Windows PowerShell does
 not run scripts that carry the mark under the `RemoteSigned` policy (the default on Windows Server). `Unblock-File`
 removes the mark; do it only after both checks passed. Then unpack the package into a folder that only
@@ -203,6 +207,15 @@ The parameters:
 
 A first install needs exactly one of `-AllowFrom`, `-AllowFromAnyAddress` and `-NoFirewall`.
 
+**Through a tunnel or a port forward** (an SSH forward, AWS Systems Manager port forwarding, a bastion): the
+connection arrives on the machine from the machine itself, which Windows Firewall lets in without a rule, so install
+with `-NoFirewall` and keep both ports closed in your network. In the credentials, use the tunnel's own end with the
+same path: with local port 38765 forwarded to the machine's 8765 and n8n in Docker (Docker Desktop) on the same
+computer, the Runner URL is `wss://host.docker.internal:38765/rpa/v1`, and likewise for the browser's port. The
+fingerprint check does not depend on the host name, so it holds through a tunnel. A forward that closes when idle
+(Systems Manager's does after 20 minutes) makes later runs fail `runner_unavailable` or `browser_unavailable`: for
+scheduled runs use an address that stays.
+
 ### Who can reach the ports
 
 The runner and the browser accept anyone who can reach their port and has their token:
@@ -267,9 +280,11 @@ If rpa-runner is already signed in, sign out and sign in again.
 ```
 
 The steps listed depend on the parameters (`create user` only for a new user). With `-AutoSignIn`, three more follow
-`write install.json` (`store sign-in password`, `turn on automatic sign-in`, `keep the desktop unlocked`), and the line
-`Automatic sign-in is on: Windows signs rpa-runner in at its next start.` comes before `Sign in as rpa-runner`: the
-sign-in happens when you restart the machine (`Restart-Computer`, section 4). The installer prints no secret. Exit
+`write install.json` (`store sign-in password`, `turn on automatic sign-in`, `keep the desktop unlocked`), and the last
+lines are different: `Automatic sign-in is on. Restart this machine now (Restart-Computer): Windows then signs
+rpa-runner in and starts the runner and the browser. About a minute after its desktop shows, run
+Show-RpaConnection.ps1:` and the command line, without `If rpa-runner is already signed in ...`: the sign-in happens
+when you restart the machine (section 4). The installer prints no secret. Exit
 codes: 0 installed, 1 refused or failed, 3 declined at a question. When it refuses, it says why and
 `Nothing was changed.`; fix the cause and run the same command again.
 
@@ -335,6 +350,11 @@ bots' work requires. What Windows licensing says about a machine signed in for u
 that was stored for automatic sign-in before.
 
 After the install, restart the machine (`Restart-Computer`). Windows signs the bot user in, and both programs start.
+
+What you will see on the bot user's desktop: at sign-in, a PowerShell window for some seconds (the two programs
+starting), then an ordinary desktop with nothing of RPA on it; `Show-RpaConnection.ps1` tells you both programs
+listen. During a run, the app or the browser opens by itself, works and closes. Whoever can see this screen sees what
+the apps show, one-time codes of an authenticator app included.
 
 ### Signing in by hand
 
@@ -408,11 +428,11 @@ Browser URL: wss://10.0.0.20:3000
 Browser fingerprint: 69:46:74:56:...:A3:15:2D:C3
 ```
 
-(one URL line per IPv4 address of the machine). `fingerprint: not known yet` means that program has not started yet
-as the bot user; for the runner it can also mean that its latest start failed, as the script reads the runner's
-fingerprint from the start line in its current `logs\runner.out.log`. `Runner: not listening: see <log>` and
-`Browser: not listening: see <log>` name the log to read, `logs\runner.out.log` or `logs\browser.err.log`
-(section 11).
+(one URL line per IPv4 address of the machine). `fingerprint: not known yet (the program has not started)` means that
+program has not started yet as the bot user; for the runner it can also mean that its latest start failed, as the
+script reads the runner's fingerprint from the start line in its current `logs\runner.out.log`. `Runner: not
+listening yet. It starts within a minute of the bot user's sign-in: run this again. If it stays like this, read <log>`
+(and the same for `Browser`) names the log to read, `logs\runner.out.log` or `logs\browser.err.log` (section 11).
 
 ## 5. Administrator work once the bot user is signed in
 
@@ -467,8 +487,10 @@ lines through the PowerShell host's own writer, not through a cmdlet or the pipe
 carry a token (PowerShell's module logging records those). A transcript records what the window shows, though: where
 PowerShell transcription is turned on (by Group Policy, for example), the transcript can hold the tokens. A
 run-command tool keeps the output of a command, so whoever can read its history can read both tokens. If such a tool
-is your only shell, run `-ShowTokens` there, copy the tokens into n8n, limit who can read that history, and change
-both tokens (section 10) once you have a shell that keeps no output. A token that went anywhere else is changed as in
+is your only shell for now, run `-ShowTokens` there, copy the tokens into n8n, and change both tokens (section 10)
+once you have a shell that keeps no output. If a run-command tool is the only shell you will ever have, you cannot
+avoid its history holding the tokens: limit who can read that history (in AWS, the permissions to read command
+invocations), and treat those people as holders of both tokens. A token that went anywhere else is changed as in
 section 10. When you have copied the values, close the window or run `Clear-Host`, so that the tokens do not stay on
 the screen.
 
@@ -478,11 +500,12 @@ install. A fingerprint stays the same across restarts and upgrades as long as it
 (section 10).
 
 Use an address from the URL lines that n8n reaches this machine by. If n8n reaches it through another address or a
-host name (a NAT, a DNS name), use that one with the same port and path.
+host name (a NAT, a DNS name), use that one with the same port and path. Through a tunnel or a port forward, see
+section 3, "Through a tunnel or a port forward".
 
 ### The RPA Desktop Runner credential
 
-In n8n: **Credentials → Add credential → RPA Desktop Runner**.
+In n8n: in the left sidebar, **+ → New credential → RPA Desktop Runner**.
 
 | Field | Value |
 |---|---|
@@ -496,9 +519,13 @@ the token. The test succeeds on a locked desktop too: the node's own result, `Co
 interactive)` (or `session locked`, `session not interactive`), shows only when the credential is tested through n8n's
 API. On Windows 10 or 11, give the desktop back to the bot user before a run (section 5).
 
+If the modal says `Couldn't connect with these settings`, n8n does not show the reason. To see it, use the credential
+in a run: for the runner, the sample of section 7. The run's error says which it is: not reachable, token refused, or
+another certificate.
+
 ### The RPA Browser credential
 
-In n8n: **Credentials → Add credential → RPA Browser**.
+In n8n: in the left sidebar, **+ → New credential → RPA Browser**.
 
 | Field | Value |
 |---|---|
@@ -511,6 +538,10 @@ In n8n: **Credentials → Add credential → RPA Browser**.
 Type the three values directly, not as expressions. Save. n8n tests the credential and the modal says `Connection
 tested successfully` (n8n's own text; the node's own result, `Connected to the browser server (1.63)`, shows when the
 credential is tested through n8n's API).
+
+If the modal says `Couldn't connect with these settings`, n8n does not show the reason. To see it, use the credential
+in a run: for the browser, a Screenshot of any page (or the template **RPA: 0 Connection check**). The run's error
+says which it is: not reachable, token refused, or another certificate.
 
 The browser on this machine serves one session at a time (the installer does not change that). A second browser run
 that starts while one is open waits up to 60 s for it, then fails `browser_unavailable` with `The browser service at
@@ -646,6 +677,12 @@ It shows the change and asks, as in section 7. `--pin-hash` also pins the file's
 only that exact file; run the command again after the app is updated. Give the path by the app's real location on a
 local drive, not through a link, a mapped network drive or a `subst` drive: the tool refuses those.
 
+Many apps install for one user (into that user's AppData). Installed from an administrator or a run-command shell,
+such an app lands in that administrator's or SYSTEM's profile, where the bot user cannot start it. Use the
+installer's all-users choice (for an MSI, an install folder under `C:\Program Files`), then check that the path exists
+before `allow-app`. An app that can only live in the bot user's profile needs `allowUserWritable` in a change file
+([`desktop/README.md`](../../desktop/README.md#changing-the-policy)), which the tool warns about.
+
 `allow-app` adds the app only. To declare the controls that save, post or submit (`writeControls`), the keys that do
 (`gatedKeys`), the helper processes of a web view app or clipboard reads, write a change file like the sample's and
 apply it with `RpaPolicy.exe apply <file>`. Until an app's write controls and keys are declared, the runner gates no
@@ -653,6 +690,20 @@ write in it: steps can press its Save, Post or Delete without `"write": true` an
 And an app with Open or Save dialogs gives a caller the bot user's files and a way to start other programs (see "Three
 limits to keep in mind" in [`desktop/README.md`](../../desktop/README.md#running-the-runner)), so allow only apps you
 would let n8n use as the bot user.
+
+**A web view app with a Copy button** (many current apps, and authenticator apps): allow the app, then apply a
+change file that adds the web view runtime as a helper process and turns on clipboard reads:
+
+```json
+{
+  "helperProcesses": [
+    { "exe": "msedgewebview2.exe", "pathPattern": "C:\\Program Files (x86)\\Microsoft\\EdgeWebView\\Application\\*\\msedgewebview2.exe" }
+  ],
+  "clipboardRead": true
+}
+```
+
+Apply it as in section 7 (`RpaPolicy.exe apply <file>`; `--yes` only where section 5 says it is honoured).
 
 A change only adds; to remove an entry, an administrator edits `C:\ProgramData\RPA Runner\policy.json` by hand. The
 runner reads the policy only when it starts: after editing by hand, end `RpaRunner.exe` (in the administrator shell,
@@ -810,21 +861,21 @@ the form `<code>: <message>`.
 
 | What you see | What it means | What to do, and the log to read |
 |---|---|---|
-| `runner_unavailable: Could not connect to the desktop runner at wss://...:8765/rpa/v1 (...). Is it running, and is the port open?` | n8n cannot reach the runner. | Is the bot user signed in? `Show-RpaConnection.ps1` says `Runner: not listening: see ...\logs\runner.out.log` when it is not running: read `runner.out.log` (the runner writes its failures there and to `runner-<yyyymmdd>.log`), `runner.err.log` and `start-runner.log`. If it listens, check the network path and the firewall rule: `Get-NetFirewallRule -Name RPA-Runner-In \| Get-NetFirewallAddressFilter` shows the addresses it lets in. |
+| `runner_unavailable: Could not connect to the desktop runner at wss://...:8765/rpa/v1 (...). Is it running, and is the port open?` | n8n cannot reach the runner. | Is the bot user signed in? `Show-RpaConnection.ps1` says `Runner: not listening yet. ... read ...\logs\runner.out.log` when it is not running: read `runner.out.log` (the runner writes its failures there and to `runner-<yyyymmdd>.log`), `runner.err.log` and `start-runner.log`. If it listens, check the network path and the firewall rule: `Get-NetFirewallRule -Name RPA-Runner-In \| Get-NetFirewallAddressFilter` shows the addresses it lets in. |
 | `runner_unavailable: the desktop runner's Windows session is locked: unlock it or sign the runner user in again` (or `... is not in an interactive Windows session`) | The bot user's desktop is locked or disconnected. | Sign in again, or hand the session back to the console (section 4). On Windows 10 or 11, an administrator's sign-in disconnects it (section 5). n8n's credential test succeeds on a locked session too, so it does not show this. |
 | `The desktop runner at ... refused the token. Check the Token in the RPA Desktop Runner credential.` | The token in n8n is not the runner's. | Copy the `Runner token` again (section 6). |
 | `The desktop runner at ... presented a certificate with fingerprint ..., which is not the fingerprint in the RPA Desktop Runner credential. Nothing was sent.` | A fingerprint mismatch: the certificate is not the one n8n has. | Run `Show-RpaConnection.ps1`. If its fingerprint is the one presented, the certificate was made again (section 10): if nobody changed the certificate on purpose, find out what did before you accept the new fingerprint, then put it in the credential. If not, something else answers at that address: leave the credential as it is and find out what. `runner-<yyyymmdd>.log` says `generated a new self-signed certificate` when the runner made one. |
 | `The browser server's certificate does not match the Certificate Fingerprint in the RPA Browser credential.` | The same, for the browser. | As above, with the `Browser fingerprint`. |
 | `The browser server at ... refused the token. Check the Token in the RPA Browser credential.` | The browser's token in n8n is wrong. | Copy the `Browser token` again (section 6). |
-| `Could not connect to the browser server at wss://...:3000/. Is it running? ...` (in a run: `browser_unavailable: ...`) | n8n could not connect to the browser: it is not listening, or it did not answer in time. | Is the bot user signed in? `Show-RpaConnection.ps1` says `Browser: not listening: see ...\logs\browser.err.log` when it is not listening: read `browser.err.log` and `start-browser.log`. If it listens, test again: the first connection after a sign-in can take longer. If it still fails, check the network path and the firewall rule `RPA-Browser-In`, as for the runner. |
+| `Could not connect to the browser server at wss://...:3000/. Is it running? ...` (in a run: `browser_unavailable: ...`) | n8n could not connect to the browser: it is not listening, or it did not answer in time. | Is the bot user signed in? `Show-RpaConnection.ps1` says `Browser: not listening yet. ... read ...\logs\browser.err.log` when it is not listening: read `browser.err.log` and `start-browser.log`. If it listens, test again: the first connection after a sign-in can take longer. If it still fails, check the network path and the firewall rule `RPA-Browser-In`, as for the runner. |
 | `Save as PDF needs headless Chromium` (the run fails `incomplete`) | A known limit of this install: the browser opens with a window, and Save as PDF needs a headless browser. | Run Save as PDF steps on a headless browser service, with its own RPA Browser credential (README, [Save as PDF](../../README.md#save-as-pdf)). |
 | `browser_unavailable: The browser service at wss://...:3000/ had no free browser session for 60 s. ...` | The browser on this machine serves one session at a time, and another browser run held it for the 60 s this run waited. | Start fewer browser runs at once (section 6). |
 | `busy: the desktop runner is busy with another run` | The runner runs one run at a time, and another one held it longer than this run waited (its lease plus 15 seconds). | Nothing, or run less often. `runner-<yyyymmdd>.log` shows the runs. |
 | `policy_violation: ... application "ErpDemo.exe" is not in the runner's allowedApps` | The policy does not allow the app. | Apply the change (section 7) or `allow-app` (section 8). `RpaPolicy.exe show` prints the policy. |
 | `runner_unavailable: the desktop runner could not start ErpDemo.exe: it is not installed at the path the runner's policy names (allowedApps[].path). ...` | The app is not at the path the policy names. | Correct the path with a change file, or install the app there. |
 | The installer says `Port 3000 is in use by <process>. Choose another with -RunnerPort or -BrowserPort.` | A port in use: another program listens on that port. | Stop that program, or install with another port (and use that port in the credential and the firewall). |
-| `Browser: not listening` after an install, and `browser.err.log` has `RPA browser: cannot listen on port 3000: EADDRINUSE` | A port in use, taken after the install. | As above. The runner writes an `ERROR cannot start:` line to `runner.out.log` and `runner-<yyyymmdd>.log` when it cannot start, for this or another reason. |
-| `Runner fingerprint: not known yet` | The current `runner.out.log` has no start line: the runner has not started as the bot user, or its latest start failed. | Sign the bot user in; read `runner.out.log` and `start-runner.log`. |
+| `Browser: not listening yet` after an install, and `browser.err.log` has `RPA browser: cannot listen on port 3000: EADDRINUSE` | A port in use, taken after the install. | As above. The runner writes an `ERROR cannot start:` line to `runner.out.log` and `runner-<yyyymmdd>.log` when it cannot start, for this or another reason. |
+| `Runner fingerprint: not known yet (the program has not started)` | The current `runner.out.log` has no start line: the runner has not started as the bot user, or its latest start failed. | Sign the bot user in; read `runner.out.log` and `start-runner.log`. |
 | The installer says `<path> is a link or junction. Remove it and run the installer again.` or `<path> has more than one name (a hard link). Check what it is, remove it, and run the installer again.` | The installer looks at everything in `C:\ProgramData\RPA Runner` on every run and refuses a link, a junction or a file with a second name there. The programs do not make such entries, so something else running as the bot user did. | Find out what made it. Then uninstall, sign the bot user out and uninstall again with `-RemoveData` (section 9), which removes a link as the link itself and not what it points to, and install again as in section 3 (a first install: new policy, tokens and certificates). Do not paste the path into a command: whoever made the entry chose its name. |
 | The installer says `... can be changed by <account>. Unpack the package in a folder only you or administrators can change, and run it from there.` | The package folder, or a folder above it, can be changed by someone other than administrators. | Unpack into a folder made from an administrator PowerShell under `C:\Program Files` (section 2). |
 | The installer says `Run Install-Rpa.ps1 from Windows PowerShell (powershell.exe), not PowerShell 7 (pwsh).` | Wrong PowerShell. | Use Windows PowerShell 5.1 as administrator: as in section 1 before the bot user has signed in, as in section 5 after. |

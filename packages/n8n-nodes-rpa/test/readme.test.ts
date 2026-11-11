@@ -400,7 +400,7 @@ describe('README', () => {
     const at = ref.slice(ref.indexOf('**Code from a workflow.**'));
     for (const text of ['`"source": "workflow"`', '**Execute Workflow Trigger**', '`{ requestedAt }`', 'exactly one item whose `code` is 6 to 10 digits',
       'never appears in the output, logs or errors', 'runs the workflow once more', '`auth_blocked`', 'a configuration error',
-      '(its ID). Publish that workflow first: the node starts it by its ID, and n8n 2.x refuses one that is not published ("Workflow is not active and cannot be executed"); the run then fails `auth_blocked`. The ID is the part of the workflow\'s address after /workflow/.',
+      '. Publish that workflow first: the node starts it by its ID, and n8n 2.x refuses one that is not published ("Workflow is not active and cannot be executed"); the run then fails `auth_blocked`. The ID is the part of the workflow\'s address after /workflow/.',
       'The code is in that workflow\'s own output: in its settings, turn off saving successful executions, so that n8n keeps no codes.',
     ]) expect(at, text).toContain(text);
     const row = section('## Error codes').split('\n').find((l) => l.startsWith('| `auth_blocked` |'));
