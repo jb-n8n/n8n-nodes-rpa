@@ -5,7 +5,7 @@ public enum NoticeKind { Late, HookLost, Elevated, NotStarted, OtherProgram, Not
 
 /// <summary>
 /// What the recorder tells the person, on its bar's notice line (and, in headless mode, as its kind on standard error).
-/// Each says what happened and what to do, in about two lines of the bar.
+/// Each says what happened and what to do; the bar shows it on one line, cut when longer, and whole in its tooltip.
 /// </summary>
 public static class Notices
 {

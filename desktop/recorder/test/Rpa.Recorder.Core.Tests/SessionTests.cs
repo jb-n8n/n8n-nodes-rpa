@@ -281,7 +281,7 @@ public class SessionTests
     }
 
     [Fact]
-    public void The_ERP_Demo_observation_list_gives_the_16_tidy_events_of_the_spike()
+    public void The_ERP_Demo_observation_list_gives_13_steps_and_16_tidy_events()
     {
         var s = Record(ErpDemoObservations.List());
         Assert.Equal(13, s.Steps.Count);

@@ -169,7 +169,7 @@ public class BarTests
     }
 
     [Fact]
-    public void Notices_say_what_happened_and_what_to_do_in_about_two_lines()
+    public void Notices_say_what_happened_and_what_to_do_in_at_most_140_characters()
     {
         string[] texts =
         [

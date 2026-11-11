@@ -25,7 +25,7 @@ public enum BarPart
     List = 8,
     /// <summary>The line about F9 under the list.</summary>
     ReadHint = 16,
-    /// <summary>Delete step, Make it a variable…, Make it a secret… with the line that says what they act on.</summary>
+    /// <summary>Delete step, Make variable…, Make secret… with the line that says what they act on.</summary>
     StepActions = 32,
     /// <summary>Name, the folder with Change folder…, and Save.</summary>
     SaveBlock = 64,

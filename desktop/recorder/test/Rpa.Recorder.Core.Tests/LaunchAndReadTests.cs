@@ -3,7 +3,7 @@ using static Rpa.Recorder.Core.Tests.Fakes;
 namespace Rpa.Recorder.Core.Tests;
 
 /// <summary>What the first run on a real machine asked for: the command line the recorder starts a program with, a
-/// read step that does not depend on the text it reads, and the windows "Record an open window..." offers.</summary>
+/// read step that does not depend on the text it reads, and the windows "Use an app that is already open…" offers.</summary>
 public class LaunchAndReadTests
 {
     [Fact]
@@ -46,7 +46,7 @@ public class LaunchAndReadTests
     }
 
     [Fact]
-    public void Record_an_open_window_offers_only_windows_a_person_can_mean()
+    public void Use_an_app_that_is_already_open_offers_only_windows_a_person_can_mean()
     {
         Assert.True(OpenWindows.IsOffered("ERP Demo - Sign in", "WindowsForms10.Window.8.app.0.19fd5c7_r3_ad1", cloaked: false, own: false));
         Assert.True(OpenWindows.IsOffered("Untitled - Notepad", "Notepad", cloaked: false, own: false));
