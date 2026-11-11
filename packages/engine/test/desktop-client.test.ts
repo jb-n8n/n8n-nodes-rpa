@@ -1,3 +1,5 @@
+import { createServer as createNetServer, connect as netConnect, type Server, type Socket } from 'node:net';
+import { createServer as createTlsServer } from 'node:tls';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { bound } from './timing.js';
 import { connectRunner, fingerprintOf, normalizeFingerprint, probeRunner, RUNNER_CONNECT_TIMEOUT_MS, runnerAddress } from '../src/desktop/client.js';
@@ -255,5 +257,106 @@ describe('the wait for a runner that signs a user in first', () => {
       expect(err).toBeInstanceOf(RunnerConnectError);
       expect((err as Error).message).toMatch(/\(no answer within 60 s\)\. Is it running, and is the port open\?$/);
     } finally { vi.useRealTimers(); await proxy.close(); }
+  });
+});
+
+describe('a connection that ends before its TLS handshake', () => {
+  const servers: Server[] = [];
+  const held = new Set<Socket>();
+  afterEach(async () => {
+    for (const s of held) s.destroy();
+    held.clear();
+    await Promise.all(servers.splice(0).map((s) => new Promise((r) => s.close(r))));
+  });
+
+  /** A TCP front for `targetPort`: connection n (from 1) is handled by `fate(n)`, 'close' destroys it unanswered, 'hold' keeps it silent. */
+  async function front(targetPort: number, fate: (n: number) => 'close' | 'hold' | 'pass') {
+    const seen = { count: 0 };
+    const server = createNetServer((client) => {
+      const how = fate(++seen.count);
+      if (how === 'close') { client.destroy(); return; }
+      if (how === 'hold') { held.add(client); client.on('error', () => undefined); return; }
+      const upstream = netConnect(targetPort, '127.0.0.1');
+      client.pipe(upstream); upstream.pipe(client);
+      client.on('error', () => upstream.destroy()); upstream.on('error', () => client.destroy());
+      client.on('close', () => upstream.destroy()); upstream.on('close', () => client.destroy());
+    });
+    servers.push(server);
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    return { seen, url: `wss://127.0.0.1:${(server.address() as { port: number }).port}` };
+  }
+  const SECOND = /The first attempt ended before the secure connection was set up, so a second attempt was made\./g;
+
+  it('a connection that the server closes before the handshake completes is tried once more and connects', async () => {
+    runner = await FakeRunner.start();
+    const f = await front(Number(new URL(runner.url).port), (n) => (n === 1 ? 'close' : 'pass'));
+    const client = await connectRunner({ ...runner.endpoint, url: f.url });
+    expect(f.seen.count).toBe(2);
+    expect(client.closed).toBe(false);
+    await client.close();
+  });
+  it('two such failures give the second one\'s error, which says a second attempt was made', async () => {
+    runner = await FakeRunner.start();
+    const f = await front(Number(new URL(runner.url).port), () => 'close');
+    const err = await connectRunner({ ...runner.endpoint, url: f.url }).catch((e: unknown) => e);
+    expect(f.seen.count).toBe(2);
+    expect(err).toBeInstanceOf(RunnerConnectError);
+    const message = (err as Error).message;
+    expect(message.match(SECOND)).toHaveLength(1);
+    expect(message).toContain(`${f.url}/rpa/v1`);
+    expect(message).not.toContain(runner.token);
+    expect(message).not.toContain(runner.endpoint.fingerprint);
+  });
+  it('a certificate that does not match the fingerprint is not retried', async () => {
+    runner = await FakeRunner.start();
+    const f = await front(Number(new URL(runner.url).port), () => 'pass');
+    const err = await connectRunner({ ...runner.endpoint, url: f.url, fingerprint: selfSignedCert().fingerprint }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(FingerprintMismatchError);
+    expect(f.seen.count).toBe(1);
+  });
+  it('a refused connection is not retried', async () => {
+    runner = await FakeRunner.start();
+    const url = runner.url;
+    await runner.close();
+    runner = undefined;
+    const started = Date.now();
+    const err = await connectRunner({ url, token: 't', fingerprint: selfSignedCert().fingerprint }, { timeoutMs: 5000 }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RunnerConnectError);
+    expect((err as Error).message).not.toMatch(/second attempt/);
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+  it('a failure after the handshake is not retried', async () => {
+    const cert = selfSignedCert();
+    let count = 0;
+    const server = createTlsServer({ key: cert.key, cert: cert.cert }, (socket) => { socket.on('error', () => undefined); socket.destroy(); });
+    server.on('connection', () => { count++; });
+    servers.push(server);
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const url = `wss://127.0.0.1:${(server.address() as { port: number }).port}`;
+    const err = await connectRunner({ url, token: 't', fingerprint: cert.fingerprint }, { timeoutMs: 5000 }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RunnerConnectError);
+    expect((err as Error).message).not.toMatch(/second attempt/);
+    expect(count).toBe(1);
+  });
+  it('no retry when less than a second is left', async () => {
+    runner = await FakeRunner.start();
+    const f = await front(Number(new URL(runner.url).port), (n) => (n === 1 ? 'close' : 'pass'));
+    const err = await connectRunner({ ...runner.endpoint, url: f.url }, { timeoutMs: 999 }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RunnerConnectError);
+    expect((err as Error).message).not.toMatch(/second attempt/);
+    expect(f.seen.count).toBe(1);
+  });
+  it('an abort during the retry stops it', async () => {
+    runner = await FakeRunner.start();
+    const f = await front(Number(new URL(runner.url).port), (n) => (n === 1 ? 'close' : 'hold'));
+    const controller = new AbortController();
+    const outcome = connectRunner({ ...runner.endpoint, url: f.url }, { timeoutMs: 30_000, signal: controller.signal }).catch((e: unknown) => e);
+    while (f.seen.count < 2) await sleep(10);
+    const started = Date.now();
+    controller.abort();
+    const err = await outcome;
+    expect(err).toBeInstanceOf(RunnerConnectError);
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(f.seen.count).toBe(2);
   });
 });

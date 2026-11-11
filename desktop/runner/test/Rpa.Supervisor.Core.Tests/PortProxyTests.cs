@@ -369,6 +369,112 @@ public sealed class PortProxyTests : IAsyncLifetime
         Assert.Empty(_sessions.ForUser(Bot));
     }
 
+    // Waits until the log holds a failure that contains text, or Patience has passed.
+    private async Task<string?> FailureContaining(string text)
+    {
+        for (var i = 0; i < 500; i++)
+        {
+            if (_log.Failures.FirstOrDefault(f => f.Message.Contains(text)) is { Message: { } found }) return found;
+            await Task.Delay(10);
+        }
+        return null;
+    }
+
+    [Fact]
+    public async Task A_connection_the_target_closes_before_it_answers_is_logged_with_who_closed_it_and_the_bytes()
+    {
+        var setup = Start(TimeProvider.System);
+        var target = Target(setup.TargetPort);
+        var client = await Connect(setup.ListenPort);
+        var inner = await Accept(target);
+        await client.GetStream().WriteAsync("hello"u8.ToArray());
+        await Read(inner, 5);
+
+        // The runner gives up on the handshake (Kestrel does after 10 s) and closes without a byte.
+        inner.Dispose();
+        await AssertEnds(client);
+
+        var line = await FailureContaining("ended before");
+        Assert.NotNull(line);
+        Assert.StartsWith($"A connection from 127.0.0.1 to port {setup.ListenPort} ended before the runner answered: the runner closed it ", line);
+        Assert.Contains("5 bytes came from the client and none from the runner", line);
+    }
+
+    [Fact]
+    public async Task A_connection_whose_client_does_not_answer_the_target_is_logged_when_the_client_closes_it()
+    {
+        var setup = Start(TimeProvider.System);
+        var target = Target(setup.TargetPort);
+        var client = await Connect(setup.ListenPort);
+        var inner = await Accept(target);
+        await client.GetStream().WriteAsync("hello"u8.ToArray());
+        await Read(inner, 5);
+        await inner.GetStream().WriteAsync("answer"u8.ToArray());
+        await Read(client, 6);
+
+        client.Dispose();
+        await AssertEnds(inner);
+        inner.Dispose();
+
+        var line = await FailureContaining("ended before");
+        Assert.NotNull(line);
+        Assert.StartsWith($"A connection from 127.0.0.1 to port {setup.ListenPort} ended before the client answered the runner: the client closed it ", line);
+        Assert.Contains("5 bytes came from the client and 6 from the runner", line);
+    }
+
+    [Fact]
+    public async Task A_connection_whose_two_sides_talked_is_not_logged_when_it_ends()
+    {
+        var setup = Start(TimeProvider.System);
+        var target = Target(setup.TargetPort);
+        var client = await Connect(setup.ListenPort);
+        var inner = await Accept(target);
+        await client.GetStream().WriteAsync("hello"u8.ToArray());
+        await Read(inner, 5);
+        await inner.GetStream().WriteAsync("answer"u8.ToArray());
+        await Read(client, 6);
+        await client.GetStream().WriteAsync("again"u8.ToArray());
+        await Read(inner, 5);
+
+        inner.Dispose();
+        await AssertEnds(client);
+        client.Dispose();
+        await Task.Delay(200);
+
+        Assert.DoesNotContain(_log.Failures, f => f.Message.Contains("ended before"));
+    }
+
+    [Fact]
+    public async Task Connections_that_end_before_an_answer_are_logged_at_most_once_per_30_s_and_the_next_line_counts_the_others()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-11-10T08:00:00Z"));
+        var setup = Start(time);
+        var target = Target(setup.TargetPort);
+        int Lines() => _log.Failures.Count(f => f.Message.Contains("ended before"));
+        async Task Drop()
+        {
+            var client = await Connect(setup.ListenPort);
+            var inner = await Accept(target);
+            inner.Dispose();
+            await AssertEnds(client);
+            client.Dispose();
+        }
+
+        await Drop();
+        Assert.NotNull(await FailureContaining("ended before"));
+        await Drop();
+        await Drop();
+        await Task.Delay(200);
+        Assert.Equal(1, Lines());
+
+        time.Advance(TimeSpan.FromSeconds(31));
+        await Drop();
+        for (var i = 0; i < 500 && Lines() < 2; i++) await Task.Delay(10);
+
+        Assert.Equal(2, Lines());
+        Assert.EndsWith("(2 more such connections since the last such line)", _log.Failures.Last(f => f.Message.Contains("ended before")).Message);
+    }
+
     private sealed class Deleter(string dir) : IDisposable
     {
         public void Dispose() => Directory.Delete(dir, true);
