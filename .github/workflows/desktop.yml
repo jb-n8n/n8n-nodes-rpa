@@ -421,7 +421,9 @@ jobs:
           $record = Get-Content -Raw -LiteralPath "$install\install.json" -Encoding UTF8 | ConvertFrom-Json
           $version = (Get-Content -LiteralPath "$package\VERSION" -TotalCount 1).Trim()
           Assert ($record.version -eq $version -and $record.user -eq 'rpa-ci-bot' -and $record.runnerPort -eq 8765 -and $record.browserPort -eq 3000) "install.json records version $version, the user and the ports"
-          Assert ($record.browser -eq $true -and $record.autoSignIn -eq $false -and (@($record.allowFrom) -join ',') -eq '127.0.0.1' -and $record.publicNetwork -eq $true -and @($record.signInChanges).Count -eq 0) 'install.json records the browser, no automatic sign-in and who may connect'
+          Assert ($record.browser -eq $true -and $record.autoSignIn -eq $false -and (@($record.allowFrom) -join ',') -eq '127.0.0.1' -and $record.publicNetwork -eq $true -and @($record.signInChanges | Where-Object { $_.kind -ne 'shortcut' }).Count -eq 0) 'install.json records the browser, no automatic sign-in and who may connect'
+          # The one change it does record: the recorder's Start menu shortcut, which the uninstaller removes.
+          Assert (@($record.signInChanges | Where-Object { $_.kind -eq 'shortcut' }).Count -eq 1) 'install.json records the Start menu shortcut of the recorder, and nothing else it would have to put back'
           Assert ((Get-Content -Raw -LiteralPath "$data\policy.json") -match '"allowedApps":\s*\[\s*\]') 'the new policy allows no app'
 
       # The policy tool honours --yes only when every other process attached to its console is elevated; the shell of
