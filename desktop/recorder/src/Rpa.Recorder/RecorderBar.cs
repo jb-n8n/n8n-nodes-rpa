@@ -8,9 +8,10 @@ namespace Rpa.Recorder;
 /// The recorder's bar: a window that stays on top at the top right of the screen. At the top, the state in words with
 /// a coloured dot (red while recording, amber while paused), one sentence that says what to do now, and the notice
 /// line. Below, what the stage needs: Ready offers two ways to choose the app; Recording and Paused show Pause or
-/// Resume, Finish, the numbered steps and the step actions; Finished adds the name and Save; after saving, what to do
-/// next (allow the app with the policy tool, import the recording in n8n) and Record another. Everything the bar
-/// decides or says is in Rpa.Recorder.Core (BarText, StepRows, DialogText, NoticeLine, SaveNames, NextSteps,
+/// Resume, Finish, the numbered steps and the step actions; after Finish, one page asks which recorded values change
+/// from run to run (Back returns to the list, paused); Finished adds the name and Save; after saving, what to do next
+/// (allow the app with the policy tool, import the recording in n8n) and Record another. Everything the bar decides or
+/// says is in Rpa.Recorder.Core (BarText, StepRows, ValuesPage, DialogText, NoticeLine, SaveNames, NextSteps,
 /// BarLayout); this class shows it. The bar's own windows are never recorded, and after a bar action while recording
 /// the app gets the focus back.
 /// </summary>
@@ -62,6 +63,17 @@ internal sealed class RecorderBar : Form
     private readonly Button _delete = SmallDialog.NewButton(BarText.DeleteStep);
     private readonly Button _variable = SmallDialog.NewButton(BarText.MakeVariable);
     private readonly Button _secret = SmallDialog.NewButton(BarText.MakeSecret);
+    // The values page (Values): its sentence, a scrolling table in the list's place, a problem line and Back / Continue.
+    private readonly Label _valuesIntro;
+    private readonly Panel _valuesArea = new() { Dock = DockStyle.Fill, AutoScroll = true, BorderStyle = BorderStyle.FixedSingle, Padding = new Padding(BarLayout.Space, BarLayout.Tight, BarLayout.Space, 0), Visible = false };
+    private readonly TableLayoutPanel _valuesTable = new() { ColumnCount = 3, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Dock = DockStyle.Top, Margin = Padding.Empty };
+    private readonly List<Label> _valueTexts = [];
+    private readonly Label _valuesProblem;
+    private readonly FlowLayoutPanel _valuesButtons = Row();
+    private readonly Button _back = SmallDialog.NewButton(ValuesPage.Back);
+    private readonly Button _continue = SmallDialog.NewButton(ValuesPage.Continue);
+    // The page's rows as the person left them; kept over Back, so that Finish shows the same choices again.
+    private ValueRow[]? _valueRows;
     private readonly TableLayoutPanel _saveBlock = Column();
     private readonly TextBox _name = new() { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, BarLayout.Tight) };
     private readonly Label _folderLine;
@@ -103,6 +115,9 @@ internal sealed class RecorderBar : Form
         _allowDetail = Wrap(quiet: true);
         _importTitle = Wrap();
         _importDetail = Wrap(quiet: true);
+        _valuesIntro = Wrap(ValuesPage.Intro, quiet: true);
+        _valuesProblem = Wrap();
+        _valuesProblem.ForeColor = Amber;
         Build();
         _capture = NewCapture();
 
@@ -110,6 +125,9 @@ internal sealed class RecorderBar : Form
         _useOpen.Click += (_, _) => UseOpenApp();
         _pause.Click += (_, _) => TogglePause();
         _finish.Click += (_, _) => Finish();
+        _back.Click += (_, _) => ShowStage(BarStage.Paused);
+        _continue.Click += (_, _) => ContinueFromValues();
+        _valuesArea.ClientSizeChanged += (_, _) => FitValues();
         // Once saved, selecting a step shows the step actions again.
         _list.SelectedIndexChanged += (_, _) => { if (_stage == BarStage.Saved) ShowStage(_stage); else ShowActions(); };
         _delete.Click += (_, _) => Delete();
@@ -183,6 +201,20 @@ internal sealed class RecorderBar : Form
         _actionRow.WrapContents = false;
         _actionHint.Margin = new Padding(0, BarLayout.Space, 0, 0);
 
+        _valuesIntro.Margin = new Padding(0, BarLayout.Space, 0, 0);
+        _valuesTable.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        _valuesTable.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        _valuesTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        _valuesArea.Controls.Add(_valuesTable);
+        _listArea.Controls.Add(_valuesArea);
+        _valuesProblem.Margin = new Padding(0, BarLayout.Tight, 0, 0);
+        _valuesButtons.FlowDirection = FlowDirection.RightToLeft;
+        _valuesButtons.WrapContents = false;
+        _valuesButtons.Margin = new Padding(0, BarLayout.Space, 0, 0);
+        _continue.Margin = _back.Margin = new Padding(BarLayout.Space, 0, 0, BarLayout.Tight);
+        // Right to left: Continue at the right edge, Back to its left.
+        _valuesButtons.Controls.AddRange([_continue, _back]);
+
         var nameLabel = Wrap(BarText.Name);
         nameLabel.Margin = new Padding(0, BarLayout.Group, 0, BarLayout.Tight);
         var folderRow = new TableLayoutPanel { ColumnCount = 2, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Dock = DockStyle.Fill, Margin = Padding.Empty };
@@ -203,7 +235,7 @@ internal sealed class RecorderBar : Form
         _recordAnother.Anchor = AnchorStyles.Right;
         _nextBlock.Controls.AddRange([_allowTitle, _allowDetail, _allowCommand, _allowButton, _importTitle, _importDetail, _showFile, _recordAnother]);
 
-        Control[] rows = [header, _guidance, noticeRow, _startRow, _readyText, _recordRow, _listArea, _readHint, _actionHint, _actionRow, _saveBlock, _nextBlock];
+        Control[] rows = [header, _guidance, noticeRow, _startRow, _readyText, _recordRow, _valuesIntro, _listArea, _readHint, _actionHint, _actionRow, _valuesProblem, _valuesButtons, _saveBlock, _nextBlock];
         // Each part in its own row, by number. Added without a position, a part goes into the next free cell, and a
         // TableLayoutPanel gives a hidden control no cell: the parts after a hidden one moved up into the row styles
         // of others, and the list lost its 100 % row while recording. A part at a fixed row keeps it; a hidden part's
@@ -263,6 +295,23 @@ internal sealed class RecorderBar : Form
         var noticeHeight = _notice.Font.Height + LogicalToDeviceUnits(BarLayout.Tight);
         var style = _layout.RowStyles[2];
         if ((int)style.Height != noticeHeight) style.Height = noticeHeight;
+        FitValues();
+    }
+
+    /// <summary>The values page's sentences wrap in its third column: what is left of the page's width after the tick
+    /// boxes and the numbers (both columns size to their contents, so they do not depend on it). The table lies docked
+    /// to the top of a scrolling panel, which hands it its width without the scroll bar.</summary>
+    private void FitValues()
+    {
+        if (_valueTexts.Count == 0) return;
+        var widths = _valuesTable.GetColumnWidths();
+        if (widths.Length < 3) return;
+        var width = _valuesArea.ClientSize.Width - _valuesArea.Padding.Horizontal - widths[0] - widths[1];
+        foreach (var label in _valueTexts)
+        {
+            var max = new Size(Math.Max(1, width - label.Margin.Horizontal), 0);
+            if (label.MaximumSize != max) label.MaximumSize = max;
+        }
     }
 
     protected override void OnDpiChanged(DpiChangedEventArgs e)
@@ -285,10 +334,15 @@ internal sealed class RecorderBar : Form
         _startRow.Visible = parts.HasFlag(BarPart.StartButtons);
         _readyText.Visible = parts.HasFlag(BarPart.ReadyText);
         _recordRow.Visible = parts.HasFlag(BarPart.RecordButtons);
-        _listArea.Visible = parts.HasFlag(BarPart.List);
-        _empty.Visible = _shown.Count == 0;
         _readHint.Visible = parts.HasFlag(BarPart.ReadHint);
         _actionHint.Visible = _actionRow.Visible = parts.HasFlag(BarPart.StepActions);
+        // The values page takes the list's place (its row is the one that gets the height that is left).
+        var values = parts.HasFlag(BarPart.ValuesPage);
+        _listArea.Visible = parts.HasFlag(BarPart.List) || values;
+        _list.Visible = parts.HasFlag(BarPart.List);
+        _empty.Visible = _list.Visible && _shown.Count == 0;
+        _valuesArea.Visible = _valuesIntro.Visible = _valuesButtons.Visible = values;
+        _valuesProblem.Visible = values && _valuesProblem.Text.Length > 0;
         _saveBlock.Visible = parts.HasFlag(BarPart.SaveBlock);
         _nextBlock.Visible = parts.HasFlag(BarPart.NextSteps);
         _pause.Text = BarText.PauseButton(stage);
@@ -312,6 +366,7 @@ internal sealed class RecorderBar : Form
         {
             BarText.StartApp => _startApp,
             BarText.Save => _save,
+            ValuesPage.Continue => _continue,
             NextSteps.AllowButton => _allowButton,
             NextSteps.ShowFile => _showFile,
             _ => null,
@@ -323,18 +378,31 @@ internal sealed class RecorderBar : Form
     /// <summary>
     /// When the stage or its parts change, the bar grows (<see cref="BarLayout.GrowForList"/>: down to the bottom of the
     /// working area, then up) so that the list shows <see cref="BarText.MinListRows"/> rows as high as they are
-    /// (<see cref="StepRows.ListHeight"/>). It does not grow again for every new step, so a bar the person made smaller
-    /// stays so while recording, and it never shrinks by itself. The list's row is the table's only Percent row:
-    /// whatever the bar grows by goes to it.
+    /// (<see cref="StepRows.ListHeight"/>), or the values page its rows. It does not grow again for every new step, so
+    /// a bar the person made smaller stays so while recording, and it never shrinks by itself. The list's row (or the
+    /// page's) is the table's only Percent row: whatever the bar grows by goes to it.
     /// </summary>
     private void KeepListRows(BarStage stage, BarPart parts)
     {
         var rows = BarText.MinListRows(stage);
-        if (rows == 0 || !IsHandleCreated || _grownFor == (stage, parts)) return;
+        var values = parts.HasFlag(BarPart.ValuesPage);
+        if ((rows == 0 && !values) || !IsHandleCreated || _grownFor == (stage, parts)) return;
         _grownFor = (stage, parts);
         _layout.PerformLayout();
-        var needed = StepRows.ListHeight(_list.RowHeights, rows, _list.RowHeight) + (_list.Height - _list.ClientSize.Height);
-        var grown = BarLayout.GrowForList(Bounds, _list.Height, needed, Screen.FromControl(this).WorkingArea);
+        int now, needed;
+        if (values)
+        {
+            FitValues();
+            _valuesArea.PerformLayout();
+            now = _valuesArea.Height;
+            needed = _valuesTable.Height + _valuesArea.Padding.Vertical + (_valuesArea.Height - _valuesArea.ClientSize.Height);
+        }
+        else
+        {
+            now = _list.Height;
+            needed = StepRows.ListHeight(_list.RowHeights, rows, _list.RowHeight) + (_list.Height - _list.ClientSize.Height);
+        }
+        var grown = BarLayout.GrowForList(Bounds, now, needed, Screen.FromControl(this).WorkingArea);
         if (grown != Bounds) Bounds = grown;
     }
 
@@ -436,13 +504,130 @@ internal sealed class RecorderBar : Form
         BackToApp();
     }
 
+    /// <summary>
+    /// Finish: when a step typed a value or chose an item, the values page, with the recording paused (Back returns to
+    /// the list, Resume goes on recording); otherwise the name and Save at once. Pausing reads the field being typed
+    /// into first, so the page has every value.
+    /// </summary>
     private void Finish()
+    {
+        if (_capture.Recording) _capture.Pause(true);
+        var steps = _capture.Steps().Select(s => s.Step).ToArray();
+        if (BarText.AfterFinish(steps) == BarStage.Finished)
+        {
+            EndRecording();
+            return;
+        }
+        ShowValues(ValuesPage.Rows(steps, _valueRows));
+        ShowStage(BarStage.Values);
+        var first = _valuesTable.Controls.OfType<CheckBox>().FirstOrDefault(c => c.Enabled);
+        if (first is not null) first.Focus();
+        else _continue.Focus();
+    }
+
+    /// <summary>Continue on the values page: each ticked value becomes a variable (ValuesPage.Apply), then the name and Save.</summary>
+    private void ContinueFromValues()
+    {
+        if (_valueRows is not { } rows || ValuesPage.Problem(rows) is not null) return;
+        try { _capture.Use(s => { ValuesPage.Apply(s, rows); return 0; }); }
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException) { Say(e.Message); }
+        _valueRows = null;
+        EndRecording();
+    }
+
+    private void EndRecording()
     {
         _capture.Stop();
         if (_name.Text.Trim().Length == 0) _name.Text = SaveNames.SuggestedName(_capture.ProgramPath);
         ShowStage(BarStage.Finished);
         _name.Focus();
         _name.SelectAll();
+    }
+
+    /// <summary>
+    /// The values page's rows: a tick box, the step's number and its sentence as the list says it, and under it the
+    /// variable's name (a secret: the line that says where its value comes from). The controls are made after the
+    /// window was scaled for the screen, so their spacing is given in the screen's pixels; their font is the bar's.
+    /// </summary>
+    private void ShowValues(IReadOnlyList<ValueRow> rows)
+    {
+        _valueRows = rows.ToArray();
+        _valuesTable.SuspendLayout();
+        foreach (var old in _valuesTable.Controls.Cast<Control>().ToArray()) old.Dispose();
+        _valueTexts.Clear();
+        _valuesTable.RowStyles.Clear();
+        _valuesTable.RowCount = rows.Count * 2;
+        int D(int logical) => LogicalToDeviceUnits(logical);
+        for (var i = 0; i < rows.Count; i++)
+        {
+            var at = i;
+            var row = rows[i];
+            var top = i == 0 ? 0 : D(BarLayout.Tight);
+            var tick = new CheckBox { AutoSize = true, Checked = row.Ticked, Enabled = row.CanUntick, AccessibleName = $"{row.Number}. {row.Text}", Margin = new Padding(0, top + D(2), D(BarLayout.Tight), 0) };
+            var number = new Label
+            {
+                AutoSize = true, Text = row.Number.ToString(System.Globalization.CultureInfo.InvariantCulture), UseMnemonic = false,
+                ForeColor = SystemColors.GrayText, Anchor = AnchorStyles.Top | AnchorStyles.Right, Margin = new Padding(0, top, D(BarLayout.Space), 0),
+            };
+            var text = new Label { AutoSize = true, Text = row.Text, UseMnemonic = false, Margin = new Padding(0, top, 0, 0) };
+            text.Click += (_, _) => { if (tick.Enabled) tick.Checked = !tick.Checked; };
+            _valueTexts.Add(text);
+            if (ValuesPage.Tip(row) is { } why)
+            {
+                // A disabled tick box shows no tooltip: the sentence carries it too.
+                _tip.SetToolTip(tick, why);
+                _tip.SetToolTip(text, why);
+            }
+            Control under;
+            if (row.Kind == ValueKind.Secret)
+            {
+                var note = new Label { AutoSize = true, Text = ValuesPage.SecretNote(row), UseMnemonic = false, ForeColor = SystemColors.GrayText, Margin = new Padding(0, D(BarLayout.Tight), 0, D(BarLayout.Space)) };
+                _valueTexts.Add(note);
+                under = note;
+            }
+            else
+            {
+                var name = new TextBox
+                {
+                    Text = row.Name, Dock = DockStyle.Fill, Enabled = row.NameEditable, PlaceholderText = ValuesPage.NameLabel,
+                    AccessibleName = $"{ValuesPage.NameLabel}, step {row.Number}", Margin = new Padding(0, D(BarLayout.Tight), 0, D(BarLayout.Space)),
+                };
+                _tip.SetToolTip(name, ValuesPage.NameLabel);
+                name.TextChanged += (_, _) =>
+                {
+                    if (_valueRows is not { } now) return;
+                    now[at] = now[at].WithName(name.Text);
+                    CheckValues();
+                };
+                tick.CheckedChanged += (_, _) =>
+                {
+                    if (_valueRows is not { } now) return;
+                    now[at] = now[at].WithTick(tick.Checked);
+                    name.Enabled = now[at].NameEditable;
+                    CheckValues();
+                };
+                under = name;
+            }
+            _valuesTable.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            _valuesTable.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            _valuesTable.Controls.Add(tick, 0, 2 * i);
+            _valuesTable.Controls.Add(number, 1, 2 * i);
+            _valuesTable.Controls.Add(text, 2, 2 * i);
+            _valuesTable.Controls.Add(under, 2, 2 * i + 1);
+        }
+        _valuesTable.ResumeLayout();
+        _valuesArea.AutoScrollPosition = Point.Empty;
+        CheckValues();
+    }
+
+    /// <summary>A ticked value's name is checked as it is typed: the problem shows above the buttons, and Continue waits.</summary>
+    private void CheckValues()
+    {
+        if (_valueRows is null) return;
+        var problem = ValuesPage.Problem(_valueRows);
+        _valuesProblem.Text = problem ?? "";
+        _valuesProblem.Visible = _stage == BarStage.Values && problem is not null;
+        _continue.Enabled = problem is null;
     }
 
     private void Delete()
@@ -613,6 +798,7 @@ internal sealed class RecorderBar : Form
         _shown = [];
         _saved = null;
         _savedRecording = _savedChange = null;
+        _valueRows = null;
         _allow = AllowState.NotDone;
         _name.Text = "";
         _list.ShowRows([], followNewest: false);

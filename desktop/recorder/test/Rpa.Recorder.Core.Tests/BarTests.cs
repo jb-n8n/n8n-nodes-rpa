@@ -22,7 +22,9 @@ public class BarTests
         Assert.Equal("Paused · 9 steps", BarText.StateLine(BarStage.Paused, Erp, 9));
         Assert.Equal("Finished · 13 steps", BarText.StateLine(BarStage.Finished, Erp, 13));
         Assert.Equal("Finished · 13 steps", BarText.StateLine(BarStage.Saved, Erp, 13));
-        Assert.Equal([BarColor.Neutral, BarColor.Neutral, BarColor.Recording, BarColor.Paused, BarColor.Neutral, BarColor.Neutral],
+        // The page that asks which values change is part of finishing.
+        Assert.Equal("Finished · 13 steps", BarText.StateLine(BarStage.Values, Erp, 13));
+        Assert.Equal([BarColor.Neutral, BarColor.Neutral, BarColor.Recording, BarColor.Paused, BarColor.Neutral, BarColor.Neutral, BarColor.Neutral],
             Enum.GetValues<BarStage>().Select(BarText.Color));
     }
 
@@ -58,9 +60,12 @@ public class BarTests
         Assert.Equal(BarPart.List | BarPart.NextSteps, BarText.Parts(BarStage.Saved));
         Assert.Equal(BarPart.List | BarPart.StepActions | BarPart.NextSteps, BarText.Parts(BarStage.Saved, stepSelected: true));
         Assert.Equal(BarPart.List | BarPart.StepActions | BarPart.SaveBlock, BarText.Parts(BarStage.Finished, stepSelected: true));
+        // Between Finish and the name: the page that asks which values change, in place of the list.
+        Assert.Equal(BarPart.ValuesPage, BarText.Parts(BarStage.Values));
+        Assert.Equal(BarPart.ValuesPage, BarText.Parts(BarStage.Values, stepSelected: true));
 
         // The list keeps at least six rows wherever it shows steps.
-        Assert.Equal([0, 0, 6, 6, 6, 6], Enum.GetValues<BarStage>().Select(BarText.MinListRows));
+        Assert.Equal([0, 0, 6, 6, 0, 6, 6], Enum.GetValues<BarStage>().Select(BarText.MinListRows));
 
         Assert.Equal("Pause", BarText.PauseButton(BarStage.Recording));
         Assert.Equal("Resume", BarText.PauseButton(BarStage.Paused));
@@ -73,6 +78,7 @@ public class BarTests
         Assert.Null(BarText.Primary(BarStage.Recording));
         Assert.Null(BarText.Primary(BarStage.Paused));
         Assert.Equal(BarText.Save, BarText.Primary(BarStage.Finished));
+        Assert.Equal(ValuesPage.Continue, BarText.Primary(BarStage.Values));
         Assert.Equal(NextSteps.AllowButton, BarText.Primary(BarStage.Saved, NextSteps.Allow("ErpDemo.exe", tool, change, AllowState.NotDone)));
         Assert.Equal(NextSteps.ShowFile, BarText.Primary(BarStage.Saved, NextSteps.Allow("ErpDemo.exe", tool, change, AllowState.Allowed)));
         Assert.Equal(NextSteps.ShowFile, BarText.Primary(BarStage.Saved, NextSteps.Allow("ErpDemo.exe", null, change, AllowState.NotDone)));
@@ -93,7 +99,7 @@ public class BarTests
         Assert.Equal("Record another", DialogText.StartOverUnsaved(2).Title);
         Assert.Equal(BarText.RecordAnother, DialogText.StartOverUnsaved(2).Title);
         // No label is written in capitals.
-        foreach (var text in new[] { BarText.StartApp, BarText.UseOpenApp, BarText.Finish, BarText.Save, BarText.ChangeFolder, BarText.RecordAnother, BarText.ReadHint, NextSteps.AllowButton, NextSteps.ShowFile })
+        foreach (var text in new[] { BarText.StartApp, BarText.UseOpenApp, BarText.Finish, BarText.Save, BarText.ChangeFolder, BarText.RecordAnother, BarText.ReadHint, NextSteps.AllowButton, NextSteps.ShowFile, ValuesPage.Continue, ValuesPage.Back })
             Assert.NotEqual(text.ToUpperInvariant(), text);
     }
 
