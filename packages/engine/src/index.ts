@@ -1,5 +1,10 @@
 export * from './types.js';
-export * from './messages.js';
+// The texts the node and its tests name; the rest of messages.ts is internal.
+export {
+  BROWSER_CERT_NOT_TRUSTED, BROWSER_CERT_NOT_TRUSTED_CDP, BROWSER_FINGERPRINT_INVALID, BROWSER_FINGERPRINT_MISMATCH, BROWSER_FINGERPRINT_NEEDS_WSS,
+  codeWorkflowFailed, DOWNLOAD_NEEDS_BROWSER_SERVER, IMPORT_EMPTY, IMPORT_NEEDS_SITE_LOGIN, IMPORT_NOT_ADOPTABLE, IMPORT_PROOF_FAILED,
+  IMPORT_REFUSES_WRITES, IMPORT_UNSUPPORTED_TARGET, notHttp, runnerConnected, STEPS_HASH_MISMATCH, USE_CASE_WORDS,
+} from './messages.js';
 export * from './sign.js';
 export * from './secrets/totp.js';
 export { createMasker, type Masker } from './secrets/mask.js';
