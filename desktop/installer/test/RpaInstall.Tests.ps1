@@ -18,7 +18,8 @@ BeforeAll {
   Import-Module (Join-Path $script:InstallerDir 'RpaInstall.psd1') -Force
   # The module is three script files that its manifest loads into one module.
   $script:ModuleFiles = @('RpaInstall.psd1', 'RpaInstall.Plan.ps1', 'RpaInstall.SignIn.ps1', 'RpaInstall.Machine.ps1')
-  $script:ModuleSource = ($script:ModuleFiles | ForEach-Object { Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir $_) }) -join "`n"
+  # With Unix line ends, whatever the checkout has (a Windows checkout has CRLF): the tests match across lines.
+  $script:ModuleSource = (($script:ModuleFiles | ForEach-Object { Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir $_) }) -join "`n") -replace "`r`n", "`n"
   $script:DataDir = 'C:\ProgramData\RPA Runner'
 
   # Install-Rpa.ps1 -AllowFrom 10.0.0.5 and nothing else.
@@ -4009,7 +4010,8 @@ Describe 'Get-Rpa.ps1' {
     # Only the script's own values: no parameter names an address, and the copy in the repository names no release.
     $ast = [Management.Automation.Language.Parser]::ParseFile($script:GetRpa, [ref]$null, [ref]$null)
     @($ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath }) | Should -Not -Contain 'Url'
-    $source = Get-Content -Raw -LiteralPath $script:GetRpa
+    # Unix line ends: in a Windows checkout a line ends in CRLF, and $ does not match before the CR.
+    $source = (Get-Content -Raw -LiteralPath $script:GetRpa) -replace "`r`n", "`n"
     ([regex]::Matches($source, "(?m)^\`$Version = ''$")).Count | Should -Be 1
     ([regex]::Matches($source, "(?m)^\`$PackageSha256 = ''$")).Count | Should -Be 1
     @([regex]::Matches($source, 'Invoke-WebRequest')).Count | Should -Be 2
