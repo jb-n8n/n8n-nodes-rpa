@@ -760,4 +760,53 @@ describe('Playwright code', () => {
       expect(js.events.map((e: ImportEvent) => e.kind)).toEqual(['goto']);
     }
   });
+
+  it('a selectOption with a list of texts becomes a multi-select step with exactly those options', () => {
+    const r = importSource('playwright', test([
+      "  await page.goto('https://portal.example.com/');", // 4
+      "  await page.getByLabel('Status').selectOption(['Open', 'Closed']);", // 5
+      "  await page.getByLabel('Region').selectOption(['North']);", // 6
+      "  await page.getByRole('button', { name: 'Search' }).click();", // 7
+    ].join('\n')), PLAIN);
+    expect(stepsOf(r).slice(1)).toEqual([
+      { intent: 'Choose Open, Closed in Status', select: { field: { label: 'Status' }, value: ['Open', 'Closed'] } },
+      { intent: 'Choose North in Region', select: { field: { label: 'Region' }, value: 'North' } },
+      { intent: 'Click Search', click: { role: 'button', name: 'Search' } },
+    ]);
+    expect(r.report.items).toEqual([]);
+    expect(() => parseScript(r.drafts[0].script)).not.toThrow();
+  });
+
+  it('a selectOption the step cannot carry is reported as not translated, with its reason, never dropped silently', () => {
+    const many = JSON.stringify(Array.from({ length: 51 }, (_, i) => `o${i}`));
+    const r = importSource('playwright', test([
+      "  await page.goto('https://portal.example.com/');", // 4
+      "  await page.getByLabel('Status').selectOption([{ label: 'Open' }, { label: 'Closed' }]);", // 5
+      "  await page.getByLabel('Status').selectOption(['Open', { index: 2 }]);", // 6
+      "  await page.getByLabel('Status').selectOption({ index: 2 });", // 7
+      `  await page.getByLabel('Status').selectOption(${many});`, // 8
+      "  await page.getByLabel('Status').selectOption([]);", // 9
+      "  await page.getByRole('button', { name: 'Search' }).click();", // 10
+    ].join('\n')), PLAIN);
+    expect(stepsOf(r).slice(1)).toEqual([{ intent: 'Click Search', click: { role: 'button', name: 'Search' } }]);
+    const form = 'only options named by their value or label are imported, one option or a list of texts: an { index }, or a list of { value }, { label } or { index } objects, is not';
+    expect(r.report.items).toEqual([
+      { at: 'line 5', kind: 'untranslated', what: 'Choose an option in Status', reason: form },
+      { at: 'line 6', kind: 'untranslated', what: 'Choose an option in Status', reason: form },
+      { at: 'line 7', kind: 'untranslated', what: 'Choose an option in Status', reason: form },
+      { at: 'line 8', kind: 'untranslated', what: 'Choose an option in Status', reason: 'a multi-select is imported with at most 50 options: this one chooses 51' },
+      { at: 'line 9', kind: 'untranslated', what: 'Choose an option in Status', reason: 'choosing no option (an empty list) clears the list, which is not a step' },
+    ]);
+  });
+
+  it('a multi-select that holds a Site Login secret is removed and reported, like a select', () => {
+    const r = importSource('playwright', test([
+      "  await page.goto('https://portal.example.com/');", // 4
+      `  await page.getByLabel('Status').selectOption(['Open', '${SECRETS.password}']);`, // 5
+      "  await page.getByRole('button', { name: 'Search' }).click();", // 6
+    ].join('\n')), { name: 'plain', hasSiteLogin: true, secrets: SECRETS });
+    expect(stepsOf(r).slice(1)).toEqual([{ intent: 'Click Search', click: { role: 'button', name: 'Search' } }]);
+    expect(r.report.items).toContainEqual(expect.objectContaining({ at: 'line 5', kind: 'secret' }));
+    expect(JSON.stringify(r)).not.toContain(SECRETS.password);
+  });
 });

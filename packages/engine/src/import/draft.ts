@@ -106,7 +106,7 @@ export function describeEvent(e: ImportEvent): string {
     case 'click': return `Click ${named('the element')}`;
     case 'hover': return `Hover over ${named('the element')}`;
     case 'fill': return `Type into ${named('the field')}`;
-    case 'select': return `Choose ${shown(cleanLabel(e.value) || 'an option')} in ${named('the list')}`;
+    case 'select': return `Choose ${shown(cleanLabel([e.value].flat().join(', ')) || 'an option')} in ${named('the list')}`;
     case 'check': return `${e.checked ? 'Check' : 'Uncheck'} ${named('the box')}`;
     case 'waitFor': return `Wait for ${named('the element')}`;
     case 'enter': { const n = cleanLabel(e.label); return n ? `Press Enter in ${shown(n)}` : 'Press Enter'; }
@@ -443,7 +443,7 @@ export function buildDraft(events: ImportEvent[], opts: ImportOptions, report: I
         if (!field) { noLocator(e); break; }
         if (e.kind === 'select') {
           selects.push({ step: steps.length, event: e });
-          push({ intent: describeEvent(e), select: { field, value: e.value } });
+          push({ intent: describeEvent(e), select: { field, value: Array.isArray(e.value) ? [...e.value] : e.value } });
         } else push({ intent: describeEvent(e), fill: { field, value: e.value } });
         break;
       }

@@ -42,6 +42,8 @@ const SIGN_IN_INCOMPLETE =
   'the recorded sign-in needs a username field before the password and a submit control after it, on the same page: add a signIn step to the draft';
 
 type Typed = Extract<ImportEvent, { kind: 'fill' | 'select' }>;
+/** Each value a fill or select types: one, or each option of a multi-select. */
+const valuesOf = (e: Typed): string[] => [e.value].flat();
 type Role = 'username' | 'password' | 'totp' | undefined;
 
 /** Every string a locator carries (not its role), its scope's and its fallbacks' too. */
@@ -56,7 +58,7 @@ const isCredentialField = (e: Typed): boolean => e.secure === true || fieldTexts
 /** A code typed with a separator (`123 456`, `123-456`) is still a code. */
 const compactCode = (v: string): string => v.replace(/[\s-]/g, '');
 const isTotpLabelled = (e: Typed): boolean => fieldTexts(e).some((t) => TOTP_FIELD.test(t));
-const isTotpField = (e: Typed): boolean => TOTP_VALUE.test(compactCode(e.value)) && isTotpLabelled(e);
+const isTotpField = (e: Extract<ImportEvent, { kind: 'fill' }>): boolean => TOTP_VALUE.test(compactCode(e.value)) && isTotpLabelled(e);
 /** A field typed from an expression that is the code: a TOTP activity's output, or its own texts name a code. */
 const isExpressionCodeField = (e: Typed): boolean => e.hints.includes(TOTP_OUTPUT_HINT)
   || [e.label, ...e.target.flatMap(locatorStrings)].some((t) => STRICT_TOTP_FIELD.test(t.slice(0, MAX_CANDIDATE_CHARS).trim()));
@@ -152,8 +154,10 @@ export function stripSecrets(input: ImportEvent[], opts: ImportOptions, report: 
     const e = events[i] as Typed;
     if (removed.has(i)) return;
     removed.add(i);
-    if (e.value) typedSecrets.push({ value: e.value, wholeNumber: roles[i] === 'totp' });
-    if (e.value && roles[i] === 'totp') typedSecrets.push({ value: compactCode(e.value), wholeNumber: true });
+    for (const value of valuesOf(e)) {
+      if (value) typedSecrets.push({ value, wholeNumber: roles[i] === 'totp' });
+      if (value && roles[i] === 'totp') typedSecrets.push({ value: compactCode(value), wholeNumber: true });
+    }
     reportSecret(e, reason);
   };
   const removeWithFocus = (fields: number[]) => {
@@ -293,7 +297,7 @@ export function stripSecrets(input: ImportEvent[], opts: ImportOptions, report: 
     const complete = u >= 0 && s >= 0;
     const fields = [...new Set([...earlier, u, ...ambiguous, p, ...(complete && ts >= 0 ? [t] : [])])].filter((i) => i >= 0).sort((a, b) => a - b);
     for (const i of fields) {
-      const why = i === t && isExpressionValue((original[i] as Typed).value) ? CODE_FROM_EXPRESSION : NEVER_IMPORTED;
+      const why = i === t && valuesOf(original[i] as Typed).every(isExpressionValue) ? CODE_FROM_EXPRESSION : NEVER_IMPORTED;
       strip(i, i !== u && (ambiguous.includes(i) || (earlier.includes(i) && roles[i] !== 'username')) ? AMBIGUOUS_USERNAME : why);
       joined.add(i);
     }
@@ -340,13 +344,13 @@ export function stripSecrets(input: ImportEvent[], opts: ImportOptions, report: 
   // 2. Every other credential field and Site Login value.
   events.forEach((e, i) => {
     if (removed.has(i) || (e.kind !== 'fill' && e.kind !== 'select')) return;
-    if (roles[i] || slValues.some((s) => equalsSecret(e.value, s)) || masker.containsSecret(e.value)) strip(i);
+    if (roles[i] || valuesOf(e).some((v) => slValues.some((s) => equalsSecret(v, s)) || masker.containsSecret(v))) strip(i);
     else if (capped.has(i)) strip(i, CAPPED_VALUE);
   });
   // 3. Values typed into credential fields are secrets too, wherever else they appear (the username typed twice).
   for (const { value, wholeNumber } of typedSecrets) if (value.trim().length >= MIN_SECRET_LENGTH) masker.add([value, value.trim()], { wholeNumber });
   events.forEach((e, i) => {
-    if (!removed.has(i) && (e.kind === 'fill' || e.kind === 'select') && masker.containsSecret(e.value)) strip(i);
+    if (!removed.has(i) && (e.kind === 'fill' || e.kind === 'select') && valuesOf(e).some((v) => masker.containsSecret(v))) strip(i);
   });
 
   // 4. Redact what remains.

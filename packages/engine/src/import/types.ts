@@ -13,7 +13,9 @@ export type ImportEvent =
   | { at: string; kind: 'click'; target: Candidate[]; label: string; download?: true; popup?: true; modifiers?: ClickModifier[] }
   | { at: string; kind: 'hover'; target: Candidate[]; label: string }
   /** `secure`: the source marked the typed text secret (UiPath SecureText). `hints`: selector, name, id, aria and type text the source saw, for credential detection only; never copied into steps. */
-  | { at: string; kind: 'fill' | 'select'; target: Candidate[]; label: string; value: string; secure?: true; hints: string[] }
+  | { at: string; kind: 'fill'; target: Candidate[]; label: string; value: string; secure?: true; hints: string[] }
+  /** `value` as an array: a multi-select, exactly these options (the step's select with an array value). */
+  | { at: string; kind: 'select'; target: Candidate[]; label: string; value: string | string[]; secure?: true; hints: string[] }
   | { at: string; kind: 'check'; target: Candidate[]; label: string; checked: boolean }
   | { at: string; kind: 'enter'; label: string }
   | { at: string; kind: 'waitFor'; target: Candidate[]; label: string }

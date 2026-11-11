@@ -312,7 +312,7 @@ export function importUiPath(data: Buffer | Uint8Array | string, opts: ImportOpt
     const before = report.items.length;
     const stripped = stripSecrets(all, opts, report);
     const secretAt = new Set(report.items.slice(before).filter((i) => i.kind === 'secret').map((i) => i.at));
-    for (const e of all) if ((e.kind === 'fill' || e.kind === 'select') && secretAt.has(e.at) && e.value.trim().length >= MIN_SECRET_LENGTH) typedSecrets.push(e.value);
+    for (const e of all) if ((e.kind === 'fill' || e.kind === 'select') && secretAt.has(e.at)) for (const v of [e.value].flat()) if (v.trim().length >= MIN_SECRET_LENGTH) typedSecrets.push(v);
     const parts: ImportEvent[][] = [[]];
     for (const e of stripped) {
       if (e.kind === 'goto' && e.url === BOUNDARY) parts.push([]);

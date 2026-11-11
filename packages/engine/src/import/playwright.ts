@@ -5,6 +5,7 @@
 // comment ends the parse with an `error` item. Typed values only ever reach fill/select events, which stripSecrets checks
 // and drops: never a report item.
 import { IMPORT_UNSUPPORTED_TARGET } from '../messages.js';
+import { MAX_SELECT_VALUES } from '../policy/validate.js';
 import { cleanLabel, clickModifiers } from './draft.js';
 import type { ClickModifier } from '../types.js';
 import type { Candidate, ImportEvent, ImportItem, ImportReport } from './types.js';
@@ -60,6 +61,9 @@ const R = {
   test: 'test settings, hooks and annotations are not imported',
   saved: 'the run keeps the downloaded file itself and checks it against the Expected File',
   viewport: 'the node\'s Viewport option sets the window size',
+  selectForm: 'only options named by their value or label are imported, one option or a list of texts: an { index }, or a list of { value }, { label } or { index } objects, is not',
+  selectNone: 'choosing no option (an empty list) clears the list, which is not a step',
+  selectMany: (n: number) => `a multi-select is imported with at most ${MAX_SELECT_VALUES} options: this one chooses ${n}`,
   upload: 'uploading a file is not a step',
   value: 'the value must be written out as text',
   reassigned: 'the variable is assigned again, so the import cannot tell which element it names: use one const per locator',
@@ -911,9 +915,20 @@ export function playwrightEvents(code: string, report: ImportReport): ImportEven
       case 'selectOption': {
         let v: Node | undefined = args[0];
         if (v?.k === 'arr' && v.items.length === 1) v = v.items[0];
+        if (args.length > 2) return item(at, 'untranslated', what, R.selectForm);
+        // A list of texts is a multi-select: the step's select with an array value, exactly those options.
+        if (v?.k === 'arr') {
+          if (!v.items.length) return item(at, 'untranslated', what, R.selectNone);
+          const texts = v.items.map(strOf);
+          if (texts.some((t) => t === undefined)) return item(at, 'untranslated', what, R.selectForm);
+          if (texts.length > MAX_SELECT_VALUES) return item(at, 'untranslated', what, R.selectMany(texts.length));
+          events.push({ at, kind: 'select', target: targetOf(b), label: b.label, value: texts as string[], hints: b.hints });
+          lastField = b.label;
+          return;
+        }
         const props = objOf(v);
         const chosen = v?.k === 'str' ? v.v : props && props.size === 1 ? strOf(props.get('label') ?? props.get('value')) : undefined;
-        if (chosen === undefined || args.length > 2) return item(at, 'untranslated', what, 'only one option, by its value or label, is imported');
+        if (chosen === undefined) return item(at, 'untranslated', what, R.selectForm);
         events.push({ at, kind: 'select', target: targetOf(b), label: b.label, value: chosen, hints: b.hints });
         lastField = b.label;
         return;
