@@ -64,6 +64,18 @@ $PackageName = 'rpa-windows-x64'
 # Install-Rpa.ps1's parameters, in its order: what is passed on, and how it is shown.
 $InstallParameters = @('User', 'UserPassword', 'RunnerPort', 'BrowserPort', 'AllowFrom', 'AllowFromAnyAddress', 'IncludePublicNetwork', 'NoBrowser', 'NoFirewall', 'AutoSignIn', 'Unattended', 'IdleSeconds', 'Force')
 
+# A path the person typed, as a full path: a relative one is resolved against PowerShell's current location (not the
+# process's folder, which .NET uses and which is not where the person is), as the file system would read what was
+# typed. Nothing is read as a pattern and no link is followed, so it is the path that was typed, in full. A place that
+# is not the file system (Env:, HKLM:) is refused.
+function Get-RpaTypedPath([string]$Path) {
+  $provider = $null
+  $drive = $null
+  $full = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path, [ref]$provider, [ref]$drive)
+  if ($provider.Name -ne 'FileSystem') { throw ('{0} is not a path in the file system.' -f $Path) }
+  $full
+}
+
 # A file of the release desktop-v<version>.
 function Get-RpaDownloadUrl([string]$Version, [string]$Name) {
   'https://github.com/{0}/releases/download/desktop-v{1}/{2}' -f $Repository, $Version, $Name
@@ -254,8 +266,9 @@ if ($Version -and (Test-Path -LiteralPath (Join-Path $root $Version))) {
 }
 
 if ($Zip) {
-  $zipPath = $Zip
-  $shaPath = $Zip + '.sha256'
+  # .NET resolves a relative path against the process's folder, not PowerShell's current location (cd): make it full.
+  try { $zipPath = Get-RpaTypedPath $Zip } catch { Stop-Rpa $_.Exception.Message }
+  $shaPath = $zipPath + '.sha256'
   foreach ($file in $zipPath, $shaPath) { if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { Stop-Rpa ('{0} is not there. Give -Zip the path of rpa-windows-x64.zip, with its .sha256 file beside it.' -f $file) } }
 } else {
   $download = Join-Path $env:USERPROFILE ('Downloads\rpa-{0}' -f $Version)
