@@ -58,9 +58,10 @@ public static class ValuesPage
         _ => null,
     };
 
-    /// <summary>The grey line under a variable that has a start value, or null.</summary>
+    /// <summary>The grey line under a variable that has a start value, or null. A value longer than 40 characters shows
+    /// its first 37 and three dots, so a long value without spaces does not push the line apart.</summary>
     public static string? StartsAs(ValueRow row) =>
-        row.Kind == ValueKind.Variable && row.StartValue is { } value ? $"Starts as {StepText.Quoted(value)}." : null;
+        row.Kind == ValueKind.Variable && row.StartValue is { } value ? $"Starts as \"{(value.Length > 40 ? value[..37] + "..." : value)}\"." : null;
 
     /// <summary>A typed value or a chosen item, except a file name typed into a Save dialog (it stays as recorded: the run
     /// saves into its own export folder).</summary>

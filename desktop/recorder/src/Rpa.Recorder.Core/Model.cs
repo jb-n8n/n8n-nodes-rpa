@@ -43,6 +43,14 @@ public sealed record FieldLeft(DateTimeOffset At, WindowFacts Window, ElementFac
 /// session records what a click on it records. <c>Element.IsChecked</c> is its state before the key was delivered.</summary>
 public sealed record Activated(DateTimeOffset At, WindowFacts Window, ElementFacts Element) : Observation(At);
 
+/// <summary>
+/// A common file dialog was accepted (<see cref="FileDialogs.AcceptedDialog"/>): <c>Field</c> is that dialog's file-name
+/// box and <c>Value</c> its text, read before the accepting input was delivered, or null when it was not read (the box
+/// was typed into, may be a password box, or did not answer). Added before the accepting observation. Nothing else of
+/// the dialog is read.
+/// </summary>
+public sealed record FileDialogAccepted(DateTimeOffset At, WindowFacts Window, ElementFacts Field, string? Value) : Observation(At);
+
 /// <summary>The recorder started the application the person chose (<c>ExePath</c>, with <c>Args</c>) and it showed <c>Window</c>.</summary>
 public sealed record AppStarted(DateTimeOffset At, string ExePath, IReadOnlyList<string> Args, WindowFacts Window) : Observation(At);
 

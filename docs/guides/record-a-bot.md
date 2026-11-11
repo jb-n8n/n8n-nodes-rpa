@@ -84,6 +84,9 @@ holds no step, no typed value and no file name. It starts again at 200 KB.
 - **Not recorded:** a right click and its menu (unless you then left-click a menu item), the mouse wheel, dragging,
   Ctrl+Alt with a letter or digit (on many keyboards that types characters, which may be part of a password), keys that
   belong to Windows (the Windows key, Alt+Tab, Alt+Esc, Ctrl+Esc), and choosing an empty item.
+- **A file saved through a Save dialog** comes back to n8n, whether you typed its name or kept the name the dialog
+  offers. The step saves it into the run's own export folder. When the name box holds a path or nothing, the
+  file stays where the app saves it, and the bar says so.
 - **Only the app you record.** Input in other programs, a program the app starts included, is not recorded. The bar
   says `Input in other programs is not recorded.`
 - **An app that runs as administrator** can only be recorded by a recorder started as administrator.

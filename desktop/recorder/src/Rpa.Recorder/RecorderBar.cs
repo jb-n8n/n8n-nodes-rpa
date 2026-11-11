@@ -143,8 +143,8 @@ internal sealed class RecorderBar : Form
         _finishedBack.Click += (_, _) => GoBack();
         _continue.Click += (_, _) => ContinueFromValues();
         _valuesArea.ClientSizeChanged += (_, _) => FitValues();
-        // Once saved, selecting a step shows the step actions again.
-        _list.SelectedIndexChanged += (_, _) => { if (_stage == BarStage.Saved) ShowStage(_stage); else ShowActions(); };
+        // Once finished or saved, selecting a step shows the step actions again.
+        _list.SelectedIndexChanged += (_, _) => { if (_stage is BarStage.Finished or BarStage.Saved) ShowStage(_stage); else ShowActions(); };
         _delete.Click += (_, _) => Delete();
         _secret.Click += (_, _) => MakeSecret();
         _changeFolder.Click += (_, _) => ChangeFolder();
@@ -206,6 +206,7 @@ internal sealed class RecorderBar : Form
         // Named here: WinForms otherwise names an unnamed control after a label before it (the values page's hidden intro).
         _list.AccessibleName = BarText.ListName;
         _valuesArea.AccessibleName = ValuesPage.AreaName;
+        _actionRow.AccessibleName = BarText.StepActionsName;
         _listArea.Controls.Add(_list);
         _listArea.Controls.Add(_empty);
         _empty.BringToFront();
@@ -362,6 +363,7 @@ internal sealed class RecorderBar : Form
         // The values page takes the list's place (its row is the one that gets the height that is left).
         var values = parts.HasFlag(BarPart.ValuesPage);
         _listArea.Visible = parts.HasFlag(BarPart.List) || values;
+        _listArea.AccessibleName = BarText.ListAreaName(parts);
         _list.Visible = parts.HasFlag(BarPart.List);
         // From the parts, not _list.Visible: before the bar is first shown, Visible reads false for every control in it.
         _empty.Visible = BarText.ShowsEmptyList(parts, _shown.Count);

@@ -55,6 +55,12 @@ public static class BarText
     public const string EmptyList = "The steps appear here once the app is recording.";
     /// <summary>The list's accessible name: without one, Windows names it after a label near it.</summary>
     public const string ListName = "Recorded steps";
+    /// <summary>The accessible name of the row of step buttons (Delete step, Make secret…).</summary>
+    public const string StepActionsName = "Step actions";
+
+    /// <summary>The accessible name of the pane around the list: the list's, or the values page's when it takes the
+    /// list's place. Without one, Windows names the pane after a hidden label.</summary>
+    public static string ListAreaName(BarPart parts) => parts.HasFlag(BarPart.ValuesPage) ? ValuesPage.AreaName : ListName;
 
     /// <summary>Whether the empty list shows <see cref="EmptyList"/>: wherever the stage shows the list and there are no
     /// steps. Decided from the stage's parts, so it holds before the window is first shown.</summary>
@@ -105,15 +111,15 @@ public static class BarText
         _ => $"Saved {savedFile} in {savedFolder}. Two things are left to do:",
     };
 
-    /// <summary>What the stage shows. Once saved, the step actions show only while a step is selected: they belong to
-    /// editing, and the list needs the room.</summary>
+    /// <summary>What the stage shows. Once finished or saved, the step actions show only while a step is selected: they
+    /// belong to editing, and the list needs the room.</summary>
     public static BarPart Parts(BarStage stage, bool stepSelected = false) => stage switch
     {
         BarStage.Ready => BarPart.StartButtons | BarPart.ReadyText | BarPart.List,
         BarStage.Starting => BarPart.List,
         BarStage.Recording or BarStage.Paused => BarPart.RecordButtons | BarPart.List | BarPart.ReadHint | BarPart.StepActions,
         BarStage.Values => BarPart.ValuesPage,
-        BarStage.Finished => BarPart.List | BarPart.StepActions | BarPart.SaveBlock,
+        BarStage.Finished => BarPart.List | BarPart.SaveBlock | (stepSelected ? BarPart.StepActions : BarPart.None),
         _ => BarPart.List | BarPart.NextSteps | (stepSelected ? BarPart.StepActions : BarPart.None),
     };
 
