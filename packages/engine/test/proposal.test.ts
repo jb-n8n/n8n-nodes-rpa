@@ -168,6 +168,12 @@ describe('review binding and input hardening', () => {
     expect([a, b, c].map(proposalDigest).every((x) => x !== d)).toBe(true);
     expect(proposalDigest(e)).toBe(d);
   });
+  it('leftOut is covered when present; a proposal without it keeps the digest it had before the field existed', () => {
+    const p = mk();
+    const { name, baseVersion, version, steps, changes, safetyFlags, evidence } = p;
+    expect(proposalDigest(p)).toBe(scriptHash({ name, baseVersion, version, steps, changes, safetyFlags, evidence }));
+    expect(proposalDigest({ ...p, leftOut: ['step 4, Wait'] })).not.toBe(proposalDigest(p));
+  });
   it('pins approval to the reviewed digest', () => {
     expect(ok({ reviewedDigest: proposalDigest(mk()) }).ok).toBe(true);
     const stale = ok({ reviewedDigest: 'f'.repeat(64) });
