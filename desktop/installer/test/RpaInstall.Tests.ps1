@@ -3075,6 +3075,21 @@ Describe 'What -Unattended changed, put back' {
       (Get-Command Add-RpaProbeType).Definition | Should -Match "if \('RpaProbe' -as \[type\]\) \{ return \}"
     }
   }
+
+  # Add-RpaMoveTypes is reached only on the move from automatic sign-in to -Unattended, and a connection helper that
+  # does not compile gives only a warning: both are compiled here, and on Windows the move's helpers are called once.
+  It 'the helpers for the move to -Unattended and the connection helper compile' {
+    InModuleScope RpaInstall { Add-RpaMoveTypes; Add-RpaProbeType }
+    foreach ($name in 'RpaSessions', 'RpaLsaRead', 'RpaProbe') { $name -as [type] | Should -Not -BeNullOrEmpty -Because $name }
+  }
+
+  It 'the helpers for the move to -Unattended find no session of an unknown user and no LSA secret of an unknown name' -Skip:($env:OS -ne 'Windows_NT') {
+    InModuleScope RpaInstall { Add-RpaMoveTypes }
+    @([RpaSessions]::OfUser('NO-SUCH-DOMAIN', 'no-such-user')).Count | Should -Be 0
+    $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if (-not $admin) { Set-ItResult -Skipped -Because 'reading an LSA secret needs an administrator'; return }
+    [RpaLsaRead]::Read('L$RpaNotThere') | Should -BeNullOrEmpty
+  }
 }
 
 Describe 'Registry values in install.json' {
