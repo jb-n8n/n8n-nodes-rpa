@@ -18,10 +18,11 @@ public static class StepRows
     public const string ByTextTip = "It finds its element by the text it shows now, so it may not find it once that text changes. Check it.";
     public const string LabelClickTip = "A click on a label usually does nothing. Delete this step if it was a mistake.";
 
-    public static IReadOnlyList<StepRow> Of(IReadOnlyList<(RecordedStep Step, bool Late)> steps) =>
-        steps.Select((s, i) => Row(i + 1, s.Step, s.Late)).ToArray();
+    /// <param name="seen">What a read's element showed when it was added (null: nothing known).</param>
+    public static IReadOnlyList<StepRow> Of(IReadOnlyList<(RecordedStep Step, bool Late)> steps, Func<RecordedStep, string?>? seen = null) =>
+        steps.Select((s, i) => Row(i + 1, s.Step, s.Late, seen?.Invoke(s.Step))).ToArray();
 
-    private static StepRow Row(int number, RecordedStep step, bool late)
+    private static StepRow Row(int number, RecordedStep step, bool late, string? seen)
     {
         var checks = new List<string>();
         if (late) checks.Add(LateTip);
@@ -44,7 +45,7 @@ public static class StepRows
         }
         if (checks.Count > 0) mark = StepMark.Check;
         if (valueTip is not null) checks.Add(valueTip);
-        return new StepRow(number, StepText.Action(step), mark, checks.Count > 0 ? string.Join(' ', checks) : null);
+        return new StepRow(number, StepText.Action(step, seen), mark, checks.Count > 0 ? string.Join(' ', checks) : null);
     }
 
     public static string MarkText(StepMark mark) => mark switch

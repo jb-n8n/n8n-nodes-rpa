@@ -40,8 +40,9 @@ public static class BarText
     public const string UseOpenApp = "Use an app that is already open…";
     public const string Finish = "Finish";
     public const string DeleteStep = "Delete step";
-    public const string MakeVariable = "Make it a variable…";
-    public const string MakeSecret = "Make it a secret…";
+    // Short enough that the three step actions fit one row on a bar 360 wide.
+    public const string MakeVariable = "Make variable…";
+    public const string MakeSecret = "Make secret…";
     public const string Name = "Name";
     public const string Save = "Save";
     public const string ChangeFolder = "Change folder…";
@@ -50,10 +51,12 @@ public static class BarText
     /// <summary>The empty list before anything is recorded.</summary>
     public const string EmptyList = "The steps appear here once the app is recording.";
 
-    public static readonly IReadOnlyList<string> ReadySentences =
+    /// <summary>The two sentences of Ready. On a small screen (<paramref name="narrow"/>, see
+    /// <see cref="BarLayout.WidthFor"/>) the second also says that the bar can be moved.</summary>
+    public static IReadOnlyList<string> ReadySentences(bool narrow) =>
     [
         "Your clicks and what you type in that app become steps, listed here as plain sentences.",
-        "Clicks on this window are never recorded, and password boxes are never read.",
+        "Clicks on this window are never recorded, and password boxes are never read." + (narrow ? " Drag this window if it covers the app." : ""),
     ];
 
     /// <summary>The program's file name, as the state line names the app.</summary>
@@ -89,27 +92,39 @@ public static class BarText
         _ => $"Saved {savedFile} in {savedFolder}. Two things are left to do:",
     };
 
-    public static BarPart Parts(BarStage stage) => stage switch
+    /// <summary>What the stage shows. Once saved, the step actions show only while a step is selected: they belong to
+    /// editing, and the list needs the room.</summary>
+    public static BarPart Parts(BarStage stage, bool stepSelected = false) => stage switch
     {
         BarStage.Ready => BarPart.StartButtons | BarPart.ReadyText | BarPart.List,
         BarStage.Starting => BarPart.List,
         BarStage.Recording or BarStage.Paused => BarPart.RecordButtons | BarPart.List | BarPart.ReadHint | BarPart.StepActions,
         BarStage.Finished => BarPart.List | BarPart.StepActions | BarPart.SaveBlock,
-        _ => BarPart.List | BarPart.StepActions | BarPart.NextSteps,
+        _ => BarPart.List | BarPart.NextSteps | (stepSelected ? BarPart.StepActions : BarPart.None),
     };
+
+    /// <summary>How many one-line rows the list keeps at least: the bar grows downward for them
+    /// (<see cref="BarLayout.GrowForList"/>) where the list shows steps.</summary>
+    public static int MinListRows(BarStage stage) => stage is BarStage.Ready or BarStage.Starting ? 0 : 6;
 
     public static string PauseButton(BarStage stage) => stage == BarStage.Paused ? "Resume" : "Pause";
 
     /// <summary>
     /// The text of the stage's one primary button (the window's default button), or null. While recording there is
     /// none: Enter in the bar must not finish the recording. After saving it is Allow this app… while that can be
-    /// done here, else Show the file.
+    /// done here, else Show the file; none while the policy tool waits for its answer (its button is there but
+    /// disabled), so that an Enter meant for the tool's window does nothing in the bar.
     /// </summary>
     public static string? Primary(BarStage stage, NextLine? allow = null) => stage switch
     {
         BarStage.Ready => StartApp,
         BarStage.Finished => Save,
-        BarStage.Saved => allow is { Button: { } button, ButtonEnabled: true } ? button : NextSteps.ShowFile,
+        BarStage.Saved => allow switch
+        {
+            { Button: { } button, ButtonEnabled: true } => button,
+            { Button: not null, ButtonEnabled: false } => null,
+            _ => NextSteps.ShowFile,
+        },
         _ => null,
     };
 }

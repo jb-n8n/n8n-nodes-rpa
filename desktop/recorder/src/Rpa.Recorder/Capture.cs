@@ -46,6 +46,8 @@ internal sealed class Capture : IDisposable
     }
     private readonly object _gate = new();
     private readonly HashSet<DateTimeOffset> _late = [];
+    // What a read's element showed when F9 was pressed, by the read step's time: the bar says it; the file does not.
+    private readonly Dictionary<DateTimeOffset, string> _seen = [];
     private readonly UiaWorker _worker = new();
     private readonly Hooks _hooks;
     private readonly HookWatch _watch = new();
@@ -238,7 +240,14 @@ internal sealed class Capture : IDisposable
         lock (_gate) return _session.Steps.Select(s => (s, _late.Contains(s.At))).ToArray();
     }
 
-    public void AddRead(ElementFacts element, WindowFacts window, string name) => Use(s => { s.AddRead(element, window, name); return 0; });
+    public void AddRead(ElementFacts element, WindowFacts window, string name) =>
+        Use(s => { s.AddRead(element, window, name); _seen[s.Steps[^1].At] = element.Name; return 0; });
+
+    /// <summary>What a read step's element showed when it was added, or null.</summary>
+    public string? Seen(RecordedStep step)
+    {
+        lock (_gate) return step.Kind == StepKind.Read && _seen.TryGetValue(step.At, out var text) ? text : null;
+    }
 
     /// <summary>
     /// Writes the recording file and the policy change file into the folder and returns their paths. Without

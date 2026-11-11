@@ -22,6 +22,10 @@ public sealed class NoticeLine
 
     public IReadOnlyList<BarNotice> Earlier => _all.Skip(1).ToArray();
 
+    /// <summary>Every notice kept, newest first: the list behind the link, where the one on the line (which may be cut)
+    /// can be read whole.</summary>
+    public IReadOnlyList<BarNotice> All => _all.ToArray();
+
     /// <summary>The link to the earlier notices, or null when there are none.</summary>
     public string? EarlierLink => _all.Count > 1 ? $"{DialogText.NoticesTitle} ({_all.Count - 1})" : null;
 

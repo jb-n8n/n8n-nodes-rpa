@@ -109,7 +109,7 @@ public class StepListTests
         var q = DialogText.Variable(5, steps[4]);
         Assert.Equal("Make step 5 a variable", q.Title);
         Assert.Equal("Step 5 chooses \"2000\" in Company code. On each run this value comes from the variable below (n8n supplies it).", q.Text);
-        Assert.Equal(("Variable name", "company_code", "Make it a variable"), (q.NameLabel, q.Suggested, q.Action));
+        Assert.Equal(("Variable name", "company_code", "Make variable"), (q.NameLabel, q.Suggested, q.Action));
         Assert.Equal(BarText.MakeVariable, q.Action + "…");
 
         var typed = DialogText.Variable(2, steps[1]);
@@ -131,7 +131,7 @@ public class StepListTests
         Assert.Equal("Make step 2 a secret", q.Title);
         Assert.Equal("Step 2 types \"clerk\" into User name. The typed value is removed from the recording now. " +
                      "On each run it comes from the secret variable below, which n8n supplies from an RPA Secret Variables credential.", q.Text);
-        Assert.Equal(("Secret variable name", "user_name", "Make it a secret"), (q.NameLabel, q.Suggested, q.Action));
+        Assert.Equal(("Secret variable name", "user_name", "Make secret"), (q.NameLabel, q.Suggested, q.Action));
         Assert.Equal(BarText.MakeSecret, q.Action + "…");
     }
 
@@ -156,6 +156,28 @@ public class StepListTests
             DialogText.Read(3, El("Text", "", new string('x', 80))).Text);
         Assert.Equal("Step 3 reads the text \"two lines\". On each run the bot reads it again and returns what it shows under the name below.",
             DialogText.Read(3, El("Text", "", "two\r\nlines")).Text);
+    }
+
+    [Fact]
+    public void A_read_step_on_the_bar_says_what_the_person_pointed_at()
+    {
+        var s = Flow();
+        s.AddRead(El("Text", "lblResultCount", "6 line items"), Window, "out_result_count");
+        var read = s.Steps[^1];
+        // The file keeps the id; the bar says the text the element showed when F9 was pressed.
+        Assert.Equal("lblResultCount", read.Label);
+        Assert.Equal("Read \"6 line items\" as out_result_count", StepText.Action(read, "6 line items"));
+        Assert.Equal("Read lblResultCount as out_result_count", StepText.Action(read, null));
+        Assert.Equal("Read lblResultCount as out_result_count", StepText.Action(read, "  "));
+        Assert.Equal($"Read \"{new string('x', 39)}…\" as out_result_count", StepText.Action(read, new string('x', 60)));
+        Assert.Equal("Read \"two lines\" as out_result_count", StepText.Action(read, "two\r\nlines"));
+        // Only a read: any other step is its sentence.
+        Assert.Equal("Click Search", StepText.Action(s.Steps[6], "ignored"));
+        Assert.Equal("Read lblResultCount as out_result_count", StepText.Sentence(read));
+
+        var rows = StepRows.Of(NotLate(s), step => step.Kind == StepKind.Read ? "6 line items" : null);
+        Assert.Equal("Read \"6 line items\" as out_result_count", rows[^1].Text);
+        Assert.Equal("Click Search", rows[6].Text);
     }
 
     [Fact]

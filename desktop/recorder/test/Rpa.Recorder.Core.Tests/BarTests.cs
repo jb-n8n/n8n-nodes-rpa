@@ -40,7 +40,10 @@ public class BarTests
         [
             "Your clicks and what you type in that app become steps, listed here as plain sentences.",
             "Clicks on this window are never recorded, and password boxes are never read.",
-        ], BarText.ReadySentences);
+        ], BarText.ReadySentences(narrow: false));
+        // On a small screen the bar may cover the app.
+        Assert.Equal("Clicks on this window are never recorded, and password boxes are never read. Drag this window if it covers the app.",
+            BarText.ReadySentences(narrow: true)[1]);
     }
 
     [Fact]
@@ -51,7 +54,13 @@ public class BarTests
         Assert.Equal(BarPart.RecordButtons | BarPart.List | BarPart.ReadHint | BarPart.StepActions, BarText.Parts(BarStage.Recording));
         Assert.Equal(BarPart.RecordButtons | BarPart.List | BarPart.ReadHint | BarPart.StepActions, BarText.Parts(BarStage.Paused));
         Assert.Equal(BarPart.List | BarPart.StepActions | BarPart.SaveBlock, BarText.Parts(BarStage.Finished));
-        Assert.Equal(BarPart.List | BarPart.StepActions | BarPart.NextSteps, BarText.Parts(BarStage.Saved));
+        // Once saved, the step actions show only for a selected step: they belong to editing.
+        Assert.Equal(BarPart.List | BarPart.NextSteps, BarText.Parts(BarStage.Saved));
+        Assert.Equal(BarPart.List | BarPart.StepActions | BarPart.NextSteps, BarText.Parts(BarStage.Saved, stepSelected: true));
+        Assert.Equal(BarPart.List | BarPart.StepActions | BarPart.SaveBlock, BarText.Parts(BarStage.Finished, stepSelected: true));
+
+        // The list keeps at least six rows wherever it shows steps.
+        Assert.Equal([0, 0, 6, 6, 6, 6], Enum.GetValues<BarStage>().Select(BarText.MinListRows));
 
         Assert.Equal("Pause", BarText.PauseButton(BarStage.Recording));
         Assert.Equal("Resume", BarText.PauseButton(BarStage.Paused));
@@ -67,6 +76,9 @@ public class BarTests
         Assert.Equal(NextSteps.AllowButton, BarText.Primary(BarStage.Saved, NextSteps.Allow("ErpDemo.exe", tool, change, AllowState.NotDone)));
         Assert.Equal(NextSteps.ShowFile, BarText.Primary(BarStage.Saved, NextSteps.Allow("ErpDemo.exe", tool, change, AllowState.Allowed)));
         Assert.Equal(NextSteps.ShowFile, BarText.Primary(BarStage.Saved, NextSteps.Allow("ErpDemo.exe", null, change, AllowState.NotDone)));
+        // While the policy tool waits for its answer, Enter in the bar does nothing: an Enter meant for the tool's window
+        // must not open Explorer.
+        Assert.Null(BarText.Primary(BarStage.Saved, NextSteps.Allow("ErpDemo.exe", tool, change, AllowState.Waiting)));
     }
 
     [Fact]
@@ -76,7 +88,7 @@ public class BarTests
         Assert.Equal("Start an app", DialogText.StartTitle);
         Assert.Equal("Use an app that is already open…", BarText.UseOpenApp);
         Assert.Equal("Use an app that is already open", DialogText.OpenTitle);
-        Assert.Equal(("Delete step", "Make it a variable…", "Make it a secret…"), (BarText.DeleteStep, BarText.MakeVariable, BarText.MakeSecret));
+        Assert.Equal(("Delete step", "Make variable…", "Make secret…"), (BarText.DeleteStep, BarText.MakeVariable, BarText.MakeSecret));
         Assert.Equal("Earlier notices", DialogText.NoticesTitle);
         Assert.Equal("Record another", DialogText.StartOverUnsaved(2).Title);
         Assert.Equal(BarText.RecordAnother, DialogText.StartOverUnsaved(2).Title);
@@ -129,6 +141,8 @@ public class BarTests
         Assert.Equal(["Second", "First"], line.Earlier.Select(n => n.Text));
         Assert.Equal("Earlier notices (2)", line.EarlierLink);
         Assert.Equal("14:47:18  Second", NoticeLine.Listed(line.Earlier[0]));
+        // The list behind the link holds the notice on the line too: a long one is cut there.
+        Assert.Equal(["Third", "Second", "First"], line.All.Select(n => n.Text));
 
         // The same notice again replaces itself instead of filling the list.
         line.Add(new BarNotice(t.AddSeconds(20), "Third", NoticeTone.Check));
@@ -268,6 +282,31 @@ public class BarTests
         Assert.Equal(new Rectangle(1492, 8, 420, 600), BarLayout.Initial(wide, new Size(420, 600), 8));
         // A second screen to the left of the first.
         Assert.Equal(new Rectangle(-428, 8, 420, 600), BarLayout.Initial(new Rectangle(-1920, 0, 1920, 1040), new Size(420, 600), 8));
+    }
+
+    [Fact]
+    public void On_a_screen_narrower_than_1280_the_bar_starts_narrower()
+    {
+        Assert.Equal(360, BarLayout.WidthFor(1024));
+        Assert.Equal(360, BarLayout.WidthFor(1279));
+        Assert.Equal(420, BarLayout.WidthFor(1280));
+        Assert.Equal(420, BarLayout.WidthFor(1920));
+        Assert.Equal(BarLayout.MinWidth, BarLayout.WidthFor(800));
+    }
+
+    [Fact]
+    public void The_bar_grows_downward_so_that_the_list_keeps_its_rows()
+    {
+        var area = new Rectangle(0, 0, 1920, 1040);
+        var bar = new Rectangle(1492, 8, 420, 600);
+        // The list is 100 high and needs 160: the bar grows by 60.
+        Assert.Equal(new Rectangle(1492, 8, 420, 660), BarLayout.GrowForList(bar, 100, 160, area));
+        // High enough already: nothing changes, and the bar never shrinks for it.
+        Assert.Equal(bar, BarLayout.GrowForList(bar, 200, 160, area));
+        // At most to the bottom of the working area.
+        Assert.Equal(new Rectangle(1492, 8, 420, 720), BarLayout.GrowForList(bar, 100, 400, new Rectangle(0, 0, 1024, 728)));
+        // A bar already lower than the working area's bottom is left as it is.
+        Assert.Equal(new Rectangle(0, 500, 420, 600), BarLayout.GrowForList(new Rectangle(0, 500, 420, 600), 100, 160, new Rectangle(0, 0, 1024, 728)));
     }
 
     [Fact]

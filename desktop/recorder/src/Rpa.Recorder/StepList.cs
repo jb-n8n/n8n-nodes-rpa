@@ -10,6 +10,10 @@ namespace Rpa.Recorder;
 internal sealed class StepList : ListBox
 {
     private const TextFormatFlags Flags = TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.TextBoxControl | TextFormatFlags.NoPadding;
+    // A number and a mark are one word each. Measured with WordBreak and no width, TextRenderer breaks after every
+    // character and gives the width of one ("15" measured as "5", "Variable" as "V"); drawn with it into a narrow
+    // rectangle, "15" wraps into "1" and "5". So both are measured and drawn as one line.
+    private const TextFormatFlags OneLine = TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding;
     // A list box row is at most 255 pixels high.
     private const int MaxRowHeight = 255;
     private readonly ToolTip _tip = new() { AutoPopDelay = 20000, InitialDelay = 400, ReshowDelay = 200 };
@@ -30,6 +34,9 @@ internal sealed class StepList : ListBox
     }
 
     public IReadOnlyList<StepRow> Rows => _rows;
+
+    /// <summary>The height of a row of one line, in the list's pixels.</summary>
+    public int RowHeight => Font.Height + 2 * Pad;
 
     /// <summary>Shows the rows, keeping the selected row. With <paramref name="followNewest"/> the list scrolls so that
     /// the last row is in view; otherwise it stays where it was.</summary>
@@ -70,10 +77,10 @@ internal sealed class StepList : ListBox
         var fore = selected ? SystemColors.HighlightText : SystemColors.WindowText;
         var quiet = selected ? SystemColors.HighlightText : SystemColors.GrayText;
         var (number, text, mark) = Areas(e.Bounds, row);
-        TextRenderer.DrawText(e.Graphics, row.Number.ToString(System.Globalization.CultureInfo.InvariantCulture), Font, number, quiet, Flags | TextFormatFlags.Right);
+        TextRenderer.DrawText(e.Graphics, row.Number.ToString(System.Globalization.CultureInfo.InvariantCulture), Font, number, quiet, OneLine | TextFormatFlags.Right);
         TextRenderer.DrawText(e.Graphics, row.Text, Font, text, fore, Flags);
         if (row.Mark != StepMark.None)
-            TextRenderer.DrawText(e.Graphics, StepRows.MarkText(row.Mark), MarkFont, mark, row.Mark == StepMark.Check && !selected ? RecorderBar.Amber : quiet, Flags);
+            TextRenderer.DrawText(e.Graphics, StepRows.MarkText(row.Mark), MarkFont, mark, row.Mark == StepMark.Check && !selected ? RecorderBar.Amber : quiet, OneLine);
         e.DrawFocusRectangle();
     }
 
@@ -82,8 +89,8 @@ internal sealed class StepList : ListBox
     {
         var pad = Pad;
         var digits = Math.Max(2, _rows.Count.ToString(System.Globalization.CultureInfo.InvariantCulture).Length);
-        var numberWidth = TextRenderer.MeasureText(new string('0', digits), Font, Size.Empty, Flags).Width;
-        var markWidth = row.Mark == StepMark.None ? 0 : TextRenderer.MeasureText(StepRows.MarkText(row.Mark), MarkFont, Size.Empty, Flags).Width;
+        var numberWidth = TextRenderer.MeasureText(new string('0', digits), Font, Size.Empty, OneLine).Width;
+        var markWidth = row.Mark == StepMark.None ? 0 : TextRenderer.MeasureText(StepRows.MarkText(row.Mark), MarkFont, Size.Empty, OneLine).Width;
         var top = bounds.Top + pad;
         var height = Math.Max(0, bounds.Height - 2 * pad);
         var number = new Rectangle(bounds.Left + pad, top, numberWidth, height);

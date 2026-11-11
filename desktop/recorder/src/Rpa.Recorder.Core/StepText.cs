@@ -10,14 +10,22 @@ public static partial class StepText
     /// <summary>The step's sentence, with a note when the person should check how it finds its element.</summary>
     public static string Sentence(RecordedStep step)
     {
-        var sentence = Action(step);
+        var sentence = Plain(step);
         if (step.Positional) sentence += " (found by its row position: check it)";
         else if (step.FoundByText) sentence += " (found by the text it shows now: check it)";
         return sentence;
     }
 
-    /// <summary>The step's sentence without the note to check it: the bar's list shows that note as a mark.</summary>
-    public static string Action(RecordedStep step) => step.Kind switch
+    /// <summary>
+    /// The step's sentence without the note to check it (the bar's list shows that note as a mark). A read says what
+    /// the person pointed at, <paramref name="seen"/> (the text the element showed when F9 was pressed, cut to one line
+    /// of at most 40 characters), when there was one: <c>Read "6 line items" as out_result_count</c>. That is the bar's
+    /// sentence only; the file names the element by its id, as <see cref="Sentence"/> does.
+    /// </summary>
+    public static string Action(RecordedStep step, string? seen = null) =>
+        step.Kind == StepKind.Read && Notices.Short(seen ?? "").Trim() is { Length: > 0 } text ? $"Read \"{text}\" as {step.As}" : Plain(step);
+
+    private static string Plain(RecordedStep step) => step.Kind switch
     {
         StepKind.Launch => $"Start {step.Exe}",
         StepKind.Scope => $"Wait for the window {step.Label}",
@@ -41,7 +49,7 @@ public static partial class StepText
             case StepKind.Fill: return $"types {Shown(step.Value!, step.Secret)} into {step.Label}";
             case StepKind.Select: return $"chooses {Shown(step.Option!, false)} in {step.Label}";
             default:
-                var action = Action(step);
+                var action = Plain(step);
                 return action.Length == 0 ? action : char.ToLowerInvariant(action[0]) + action[1..];
         }
     }

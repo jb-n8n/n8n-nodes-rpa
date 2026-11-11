@@ -17,6 +17,20 @@ public static class BarLayout
     /// <summary>The width of a question's text.</summary>
     public const int DialogWidth = 400;
 
+    /// <summary>The bar's starting width for a working area this wide (both at 100 %): narrower below 1280, where it
+    /// would cover much of the app.</summary>
+    public static int WidthFor(int areaWidth) => areaWidth < 1280 ? MinWidth : Width;
+
+    /// <summary>
+    /// The bar grown downward so that its list is <paramref name="needed"/> high when it is <paramref name="list"/>
+    /// high now: at most to the bottom of the working area, and never smaller than it is.
+    /// </summary>
+    public static Rectangle GrowForList(Rectangle bar, int list, int needed, Rectangle area)
+    {
+        var height = Math.Max(bar.Height, Math.Min(bar.Height + Math.Max(0, needed - list), area.Bottom - bar.Top));
+        return bar with { Height = height };
+    }
+
     /// <summary>The bar at the top right of the working area, <paramref name="gap"/> from its edges, and no larger than
     /// the working area allows.</summary>
     public static Rectangle Initial(Rectangle area, Size size, int gap)

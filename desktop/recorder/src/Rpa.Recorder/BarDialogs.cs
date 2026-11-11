@@ -5,7 +5,8 @@ namespace Rpa.Recorder;
 /// <summary>
 /// The look all of the bar's small windows share: the system font on a window background, a text column of one width,
 /// and normal-size buttons at the bottom right, the action first and then Cancel. It opens beside the bar, so that the
-/// list it is about stays in view, and stays on top like the bar. Its texts come from <see cref="DialogText"/>.
+/// list it is about stays in view, stays on top like the bar, and becomes the active window when it opens (also when
+/// the app had the foreground, as at F9), so that Enter and typing reach it. Its texts come from <see cref="DialogText"/>.
 /// </summary>
 internal abstract class SmallDialog : Form
 {
@@ -27,8 +28,9 @@ internal abstract class SmallDialog : Form
         TopMost = true;
         StartPosition = FormStartPosition.Manual;
         BackColor = SystemColors.Window;
-        AutoSize = true;
-        AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        // Not AutoSize: a form that sizes itself measures its children by their bounds, and a docked child takes its
+        // width from the form instead of giving one, so the form shrank to its title (136 pixels). The window's size
+        // is the body's own preferred size instead (Fit).
         Padding = new Padding(BarLayout.Edge);
         _body = new TableLayoutPanel { ColumnCount = 1, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Dock = DockStyle.Top, Margin = Padding.Empty };
         _body.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, BarLayout.DialogWidth));
@@ -37,7 +39,22 @@ internal abstract class SmallDialog : Form
             FlowDirection = FlowDirection.RightToLeft, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = false,
             Anchor = AnchorStyles.Right, Margin = new Padding(0, BarLayout.Group, 0, 0),
         };
-        Load += (_, _) => Location = BarLayout.Beside(_bar.Bounds, Size, Screen.FromControl(_bar).WorkingArea, LogicalToDeviceUnits(BarLayout.Space));
+        Load += (_, _) =>
+        {
+            Fit();
+            Location = BarLayout.Beside(_bar.Bounds, Size, Screen.FromControl(_bar).WorkingArea, LogicalToDeviceUnits(BarLayout.Space));
+            // A problem line that appears or wraps changes the body's height: the window follows.
+            _body.SizeChanged += (_, _) => Fit();
+        };
+        Shown += (_, _) => Native.TakeForeground(Handle);
+    }
+
+    /// <summary>The window's client area is the body's preferred size (its fixed-width column, its rows) and the padding.</summary>
+    private void Fit()
+    {
+        var body = _body.GetPreferredSize(Size.Empty);
+        var size = new Size(body.Width + Padding.Horizontal, body.Height + Padding.Vertical);
+        if (ClientSize != size) ClientSize = size;
     }
 
     /// <summary>Adds the buttons last: <paramref name="action"/> and, unless null, Cancel. The default button is
@@ -82,14 +99,19 @@ internal abstract class SmallDialog : Form
         ForeColor = quiet ? SystemColors.GrayText : SystemColors.WindowText,
     };
 
+    /// <summary>
+    /// A standard button: as high as its font makes it and at least the standard 75 wide (both scaled with the screen).
+    /// GrowAndShrink, so its size is always worked out from its text and font: a size kept from before (GrowOnly keeps
+    /// the largest one it ever had, and the default 75 x 23 is scaled along with the form) cannot make it taller.
+    /// </summary>
     internal static Button NewButton(string text) => new()
     {
-        Text = text, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowOnly, MinimumSize = new Size(88, 0), UseMnemonic = false,
-        Padding = new Padding(BarLayout.Space, 0, BarLayout.Space, 0), Margin = new Padding(BarLayout.Space, 0, 0, 0), UseVisualStyleBackColor = true,
+        Text = text, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, MinimumSize = new Size(75, 0), UseMnemonic = false,
+        Margin = new Padding(BarLayout.Space, 0, 0, 0), UseVisualStyleBackColor = true,
     };
 }
 
-/// <summary>Make it a variable…, Make it a secret… and the F9 question: what the step does, a labelled name box with a
+/// <summary>Make variable…, Make secret… and the F9 question: what the step does, a labelled name box with a
 /// suggestion, and one line with the name rule (or what is wrong with the name typed).</summary>
 internal sealed class NameDialog : SmallDialog
 {
@@ -140,7 +162,6 @@ internal sealed class StartDialog : SmallDialog
         row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _program = new TextBox { Dock = DockStyle.Fill, Margin = new Padding(0, 1, 0, 0) };
         var browse = NewButton(DialogText.Browse);
-        browse.MinimumSize = Size.Empty;
         row.Controls.Add(_program, 0, 0);
         row.Controls.Add(browse, 1, 0);
         Add(row);
@@ -162,6 +183,10 @@ internal sealed class StartDialog : SmallDialog
 
     public IReadOnlyList<string> Arguments => CommandLine.Split(_arguments.Text);
 
+    /// <summary>Picks the program. Afterwards the arguments box is the active control, not Browse…: a focused button is
+    /// the one Enter presses and the one drawn as the default, so with the focus in a box Start recording is the default
+    /// again. ActiveControl, not only Focus(): when the picker closes, Windows activates this window again and WinForms
+    /// gives the focus back to the form's active control.</summary>
     private void Browse()
     {
         using var pick = new OpenFileDialog
@@ -169,7 +194,9 @@ internal sealed class StartDialog : SmallDialog
             Title = DialogText.PickTitle, Filter = "Programs (*.exe)|*.exe", CheckFileExists = true,
             InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
         };
-        if (pick.ShowDialog(this) == DialogResult.OK) _program.Text = pick.FileName;
+        if (pick.ShowDialog(this) != DialogResult.OK) return;
+        _program.Text = pick.FileName;
+        ActiveControl = _arguments;
     }
 
     private void Check()
@@ -211,7 +238,7 @@ internal sealed class QuestionDialog : SmallDialog
     }
 }
 
-/// <summary>The earlier notices, newest first, each with its time.</summary>
+/// <summary>The notices, newest first, each with its time: the one on the bar's line (which may be cut) and the earlier ones.</summary>
 internal sealed class NoticesDialog : SmallDialog
 {
     public NoticesDialog(Form bar, IEnumerable<BarNotice> notices) : base(bar, DialogText.NoticesTitle)

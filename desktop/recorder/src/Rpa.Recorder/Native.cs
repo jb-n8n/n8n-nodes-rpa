@@ -49,6 +49,7 @@ internal static class Native
     [DllImport("user32.dll")] public static extern uint GetDoubleClickTime();
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
     [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hwnd);
+    [DllImport("user32.dll")] private static extern bool AttachThreadInput(uint attach, uint attachTo, bool on);
     [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out int value, int size);
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct STARTUPINFO
@@ -69,6 +70,23 @@ internal static class Native
     public static string ClassOf(IntPtr hwnd) { var sb = new StringBuilder(256); GetClassName(hwnd, sb, sb.Capacity); return sb.ToString(); }
     public static string TitleOf(IntPtr hwnd) { var sb = new StringBuilder(512); GetWindowText(hwnd, sb, sb.Capacity); return sb.ToString(); }
     public static uint ProcessOf(IntPtr hwnd) { GetWindowThreadProcessId(hwnd, out var pid); return pid; }
+
+    /// <summary>
+    /// Makes one of the bar's windows the active one. Windows lets a program that is not in the foreground (the bar,
+    /// while the person works in the app) only flash its window; while the bar's thread shares the foreground thread's
+    /// input state, it may activate its own window. The two are joined for this one call and parted again: no input is
+    /// sent, and nothing else of the other program is touched.
+    /// </summary>
+    public static void TakeForeground(IntPtr window)
+    {
+        var foreground = GetForegroundWindow();
+        if (foreground == window) return;
+        var other = GetWindowThreadProcessId(foreground, out _);
+        var own = GetCurrentThreadId();
+        var joined = other != 0 && other != own && AttachThreadInput(own, other, true);
+        try { SetForegroundWindow(window); }
+        finally { if (joined) AttachThreadInput(own, other, false); }
+    }
 
     public static List<IntPtr> TopLevelWindows()
     {

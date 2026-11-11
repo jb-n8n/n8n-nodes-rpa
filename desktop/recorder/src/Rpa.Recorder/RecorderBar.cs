@@ -33,6 +33,10 @@ internal sealed class RecorderBar : Form
     private string? _savedRecording, _savedChange;
     private AllowState _allow = AllowState.NotDone;
     private bool _asking;
+    // A screen narrower than 1280 at 100 % (BarLayout.WidthFor): the bar starts narrower and Ready says it can be moved.
+    private bool _narrow;
+    // The stage and parts the bar last grew for (KeepListRows): it grows when they change, not for every new step.
+    private (BarStage, BarPart)? _grownFor;
 
     private readonly TableLayoutPanel _layout = Column(fill: true);
     private readonly List<Label> _wrapping = [];
@@ -91,7 +95,7 @@ internal sealed class RecorderBar : Form
         _policyTool = NextSteps.FindPolicyTool(AppContext.BaseDirectory, Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), File.Exists);
 
         _guidance = Wrap();
-        _readyText = Wrap(string.Join(Environment.NewLine + Environment.NewLine, BarText.ReadySentences));
+        _readyText = Wrap(ReadyText());
         _readHint = Wrap(BarText.ReadHint, quiet: true);
         _actionHint = Wrap(quiet: true);
         _folderLine = Wrap(quiet: true);
@@ -106,7 +110,8 @@ internal sealed class RecorderBar : Form
         _useOpen.Click += (_, _) => UseOpenApp();
         _pause.Click += (_, _) => TogglePause();
         _finish.Click += (_, _) => Finish();
-        _list.SelectedIndexChanged += (_, _) => ShowActions();
+        // Once saved, selecting a step shows the step actions again.
+        _list.SelectedIndexChanged += (_, _) => { if (_stage == BarStage.Saved) ShowStage(_stage); else ShowActions(); };
         _delete.Click += (_, _) => Delete();
         _variable.Click += (_, _) => Mark(secret: false);
         _secret.Click += (_, _) => Mark(secret: true);
@@ -121,7 +126,11 @@ internal sealed class RecorderBar : Form
         Load += (_, _) =>
         {
             var area = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1024, 768);
-            Bounds = BarLayout.Initial(area, Size, LogicalToDeviceUnits(BarLayout.Space));
+            // The working area in 100 % pixels decides the starting width.
+            var width = BarLayout.WidthFor(area.Width * 96 / DeviceDpi);
+            _narrow = width < BarLayout.Width;
+            _readyText.Text = ReadyText();
+            Bounds = BarLayout.Initial(area, new Size(LogicalToDeviceUnits(width), Height), LogicalToDeviceUnits(BarLayout.Space));
             FitSizes();
         };
         // TopMost set before the handle exists does not always survive the window's creation (seen on Windows Server
@@ -157,10 +166,10 @@ internal sealed class RecorderBar : Form
         noticeRow.Controls.Add(_notice, 0, 0);
         noticeRow.Controls.Add(_earlier, 1, 0);
 
-        _startRow.Controls.AddRange([_startApp, _useOpen]);
+        Buttons(_startRow, _startApp, _useOpen);
         _startRow.Margin = new Padding(0, BarLayout.Space, 0, 0);
         _readyText.Margin = new Padding(0, BarLayout.Group, 0, 0);
-        _recordRow.Controls.AddRange([_pause, _finish]);
+        Buttons(_recordRow, _pause, _finish);
         _recordRow.Margin = new Padding(0, BarLayout.Space, 0, 0);
         _listArea.Controls.Add(_list);
         _listArea.Controls.Add(_empty);
@@ -168,14 +177,14 @@ internal sealed class RecorderBar : Form
         _readHint.Margin = new Padding(0, BarLayout.Tight, 0, 0);
 
         var actionRow = Row();
-        actionRow.Controls.AddRange([_delete, _variable, _secret]);
+        Buttons(actionRow, _delete, _variable, _secret);
         _actionHint.Margin = new Padding(0, BarLayout.Space, 0, 0);
         _actions.Controls.Add(_actionHint);
         _actions.Controls.Add(actionRow);
 
         var nameLabel = Wrap(BarText.Name);
         nameLabel.Margin = new Padding(0, BarLayout.Group, 0, BarLayout.Tight);
-        var folderRow = new TableLayoutPanel { ColumnCount = 2, AutoSize = true, Dock = DockStyle.Fill, Margin = Padding.Empty };
+        var folderRow = new TableLayoutPanel { ColumnCount = 2, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Dock = DockStyle.Fill, Margin = Padding.Empty };
         folderRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         folderRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _folderLine.Anchor = AnchorStyles.Left;
@@ -194,12 +203,17 @@ internal sealed class RecorderBar : Form
         _nextBlock.Controls.AddRange([_allowTitle, _allowDetail, _allowCommand, _allowButton, _importTitle, _importDetail, _showFile, _recordAnother]);
 
         Control[] rows = [header, _guidance, noticeRow, _startRow, _readyText, _recordRow, _listArea, _readHint, _actions, _saveBlock, _nextBlock];
-        foreach (var row in rows)
+        // Each part in its own row, by number. Added without a position, a part goes into the next free cell, and a
+        // TableLayoutPanel gives a hidden control no cell: the parts after a hidden one moved up into the row styles
+        // of others, and the list lost its 100 % row while recording. A part at a fixed row keeps it; a hidden part's
+        // AutoSize row is then simply 0 high.
+        _layout.RowCount = rows.Length;
+        for (var i = 0; i < rows.Length; i++)
         {
             // The list takes the height that is left; the notice line has a fixed height (FitSizes), so that a notice
             // never moves the list.
-            _layout.RowStyles.Add(row == _listArea ? new RowStyle(SizeType.Percent, 100) : row == noticeRow ? new RowStyle(SizeType.Absolute, 40) : new RowStyle(SizeType.AutoSize));
-            _layout.Controls.Add(row);
+            _layout.RowStyles.Add(rows[i] == _listArea ? new RowStyle(SizeType.Percent, 100) : rows[i] == noticeRow ? new RowStyle(SizeType.Absolute, 24) : new RowStyle(SizeType.AutoSize));
+            _layout.Controls.Add(rows[i], 0, i);
         }
         _guidance.Margin = new Padding(0, BarLayout.Tight, 0, 0);
         Controls.Add(_layout);
@@ -207,12 +221,23 @@ internal sealed class RecorderBar : Form
 
     private static TableLayoutPanel Column(bool fill = false)
     {
-        var column = new TableLayoutPanel { ColumnCount = 1, Dock = DockStyle.Fill, Margin = Padding.Empty, AutoSize = !fill };
+        // GrowAndShrink: a TableLayoutPanel that sizes itself keeps the largest size it ever had by default (GrowOnly),
+        // which left empty space under the step buttons once they stopped wrapping.
+        var column = new TableLayoutPanel { ColumnCount = 1, Dock = DockStyle.Fill, Margin = Padding.Empty, AutoSize = !fill, AutoSizeMode = AutoSizeMode.GrowAndShrink };
         column.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         return column;
     }
 
     private static FlowLayoutPanel Row() => new() { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, Dock = DockStyle.Fill, Margin = Padding.Empty };
+
+    /// <summary>A row of buttons, the first at the left edge and the others a space apart.</summary>
+    private static void Buttons(FlowLayoutPanel row, params Button[] buttons)
+    {
+        for (var i = 0; i < buttons.Length; i++) buttons[i].Margin = new Padding(i == 0 ? 0 : BarLayout.Space, 0, 0, BarLayout.Tight);
+        row.Controls.AddRange(buttons);
+    }
+
+    private string ReadyText() => string.Join(Environment.NewLine + Environment.NewLine, BarText.ReadySentences(_narrow));
 
     private Label Wrap(string text = "", bool quiet = false)
     {
@@ -233,7 +258,8 @@ internal sealed class RecorderBar : Form
             var max = new Size(Math.Max(1, width - label.Margin.Horizontal - (label.Parent is TableLayoutPanel { ColumnCount: 2 } ? _changeFolder.Width + _changeFolder.Margin.Horizontal : 0)), 0);
             if (label.MaximumSize != max) label.MaximumSize = max;
         }
-        var noticeHeight = 2 * _notice.Font.Height + LogicalToDeviceUnits(BarLayout.Tight);
+        // One line: a longer notice is cut with an ellipsis, and reads whole in its tooltip and in Earlier notices.
+        var noticeHeight = _notice.Font.Height + LogicalToDeviceUnits(BarLayout.Tight);
         var style = _layout.RowStyles[2];
         if ((int)style.Height != noticeHeight) style.Height = noticeHeight;
     }
@@ -249,7 +275,7 @@ internal sealed class RecorderBar : Form
     private void ShowStage(BarStage stage)
     {
         _stage = stage;
-        var parts = BarText.Parts(stage);
+        var parts = BarText.Parts(stage, _list.SelectedIndex >= 0);
         _dot.ForeColor = BarText.Color(stage) switch { BarColor.Recording => Red, BarColor.Paused => Amber, _ => SystemColors.GrayText };
         _state.Text = BarText.StateLine(stage, _starting ?? _capture.ProgramPath, _shown.Count);
         _guidance.Text = stage == BarStage.Saved
@@ -287,6 +313,24 @@ internal sealed class RecorderBar : Form
             _ => null,
         };
         ShowActions();
+        KeepListRows(stage, parts);
+    }
+
+    /// <summary>
+    /// When the stage or its parts change, the bar grows downward (at most to the bottom of the working area) so that
+    /// the list keeps <see cref="BarText.MinListRows"/> one-line rows: the save and next-step parts would otherwise leave
+    /// it three. It does not grow again for every new step, so a bar the person made smaller stays so while recording,
+    /// and it never shrinks by itself.
+    /// </summary>
+    private void KeepListRows(BarStage stage, BarPart parts)
+    {
+        var rows = BarText.MinListRows(stage);
+        if (rows == 0 || !IsHandleCreated || _grownFor == (stage, parts)) return;
+        _grownFor = (stage, parts);
+        _layout.PerformLayout();
+        var needed = rows * _list.RowHeight + (_list.Height - _list.ClientSize.Height);
+        var grown = BarLayout.GrowForList(Bounds, _list.Height, needed, Screen.FromControl(this).WorkingArea);
+        if (grown != Bounds) Bounds = grown;
     }
 
     private void ShowActions()
@@ -307,7 +351,7 @@ internal sealed class RecorderBar : Form
         var now = steps.Select(s => s.Step).ToArray();
         var follow = StepRows.NewestChanged(_shown, now);
         _shown = now;
-        _list.ShowRows(StepRows.Of(steps), follow);
+        _list.ShowRows(StepRows.Of(steps, _capture.Seen), follow);
         ShowStage(_stage == BarStage.Saved && StepRows.Unsaved(_saved, _shown) ? BarStage.Finished : _stage);
     }
 
@@ -497,7 +541,9 @@ internal sealed class RecorderBar : Form
         _allow = AllowState.Waiting;
         ShowStage(_stage);
         var (exit, error) = await Task.Run(() => RunPolicyTool(tool, change));
-        if (IsDisposed) return;
+        // The bar closed, or moved on to another recording (Record another) while the tool was open: its answer is
+        // about a file the bar no longer shows.
+        if (IsDisposed || _savedChange != change) return;
         _allow = AllowState.NotDone;
         if (exit is { } code)
         {
@@ -545,12 +591,20 @@ internal sealed class RecorderBar : Form
         catch (Win32Exception e) { Say(e.Message); }
     }
 
-    /// <summary>Starts over with a new recording, after asking when the steps are not saved.</summary>
+    /// <summary>
+    /// Starts over with a new recording, after asking when the steps are not saved. The question takes the foreground
+    /// when it opens (SmallDialog), also when another program had it; without a question the bar goes to Ready at once.
+    /// The stage is Ready before the list is emptied, so the list's selection change does not show Saved again on the
+    /// way; the old capture (its UI Automation thread) ends off the bar's thread.
+    /// </summary>
     private void RecordAnother()
     {
         if (StepRows.Unsaved(_saved, _shown) && !Confirm(DialogText.StartOverUnsaved(_shown.Count))) return;
-        _capture.Dispose();
+        _stage = BarStage.Ready;
+        _grownFor = null;
+        var old = _capture;
         _capture = NewCapture();
+        Task.Run(old.Dispose);
         _shown = [];
         _saved = null;
         _savedRecording = _savedChange = null;
@@ -563,7 +617,7 @@ internal sealed class RecorderBar : Form
 
     private void ShowEarlierNotices()
     {
-        using var dialog = new NoticesDialog(this, _notices.Earlier);
+        using var dialog = new NoticesDialog(this, _notices.All);
         Ask(dialog);
         BackToApp();
     }
