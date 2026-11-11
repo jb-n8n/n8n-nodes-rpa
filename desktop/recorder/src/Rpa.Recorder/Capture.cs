@@ -8,8 +8,6 @@ using Rpa.Recorder.Core;
 
 namespace Rpa.Recorder;
 
-internal enum NoticeKind { Late, HookLost, Elevated, NotStarted, OtherProgram, NotRead, TooManySteps }
-
 /// <summary>Something the recorder tells the person. <c>Text</c> may name a step's element; it never holds typed text.</summary>
 internal sealed record Notice(NoticeKind Kind, DateTimeOffset At, string Text);
 
@@ -343,8 +341,8 @@ internal sealed class Capture : IDisposable
         }
         if (kind == KeyKind.Printable)
         {
-            // Typing: no wait, and the key itself goes no further than this line.
-            _worker.Post(() => Key(at, null, KeyKind.Printable, null));
+            // Typing: no wait, and the key itself goes no further than this line (only whether Ctrl and Alt were held).
+            _worker.Post(() => Key(at, null, KeyKind.Printable, null, ctrl, alt));
             return false;
         }
         var job = Stopwatch.StartNew();
@@ -389,14 +387,17 @@ internal sealed class Capture : IDisposable
         finally { described.Set(); }
     }
 
-    /// <summary>A key on the focused element: typing (<paramref name="chord"/> null) or a key event.</summary>
-    private void Key(DateTimeOffset at, Stopwatch? job, KeyKind kind, string? chord)
+    /// <summary>A key on the focused element: typing (<paramref name="chord"/> null) or a key event. A Ctrl+Alt key
+    /// that types, dropped because no field has the focus, is said on the bar.</summary>
+    private void Key(DateTimeOffset at, Stopwatch? job, KeyKind kind, string? chord, bool ctrl = false, bool alt = false)
     {
         var d = _worker.Focused();
         if (d is null || d.ProcessId == _ownProcess || !InScope(d.ProcessId)) return;
         _lastAppWindow = Native.GetAncestor(Native.GetForegroundWindow(), Native.GA_ROOT);
         var window = UiaWorker.WindowOf(d, Native.GetForegroundWindow());
-        var typing = kind == KeyKind.Printable || KeyRules.IsTyping(kind, KeyRules.Field(d.Facts));
+        var fieldKind = KeyRules.Field(d.Facts);
+        if (Notices.ShortcutDropped(ctrl, alt, kind, fieldKind)) Notify(NoticeKind.CtrlAltDropped, Notices.CtrlAltDropped);
+        var typing = kind == KeyKind.Printable || KeyRules.IsTyping(kind, fieldKind);
         var key = new KeyDown(at, window, d.Facts, typing ? "" : chord ?? "", typing);
         LeaveField(key);
         Add(key, job is not null && !typing && job.ElapsedMilliseconds > BudgetMs, d.Facts);
