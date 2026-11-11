@@ -32,7 +32,7 @@ const CREDENTIAL_NAME = 'RPA Browser';
 const CREDENTIAL_TYPE = 'playwrightBrowserApi';
 const BROWSER_SERVER_MODE = 'playwright';
 const NODE_PACKAGE = 'n8n-nodes-rpa';
-const TEMPLATE_FILES = ['0-connection-check.json', '1-create-tables.json', '2-data-feed.json', '3-approve-steps.json', 'hello-world.json'];
+const TEMPLATE_FILES = ['0-connection-check.json', '2-data-feed.json', '3-approve-steps.json', 'hello-world.json'];
 const DEFAULT_TEMPLATES = fileURLToPath(new URL('../../packages/n8n-nodes-rpa/templates/', import.meta.url));
 const MIN_TOKEN_LENGTH = 32; // the gate refuses a shorter token
 const PAGE_LIMIT = 250; // the public API's maximum
@@ -260,8 +260,7 @@ async function main() {
   say();
   say('Next, in n8n:');
   say(`1. Open "RPA: 0 Connection check", pick the "${CREDENTIAL_NAME}" credential on the RPA node, replace the URL in "Site to check" with your login page, and run it. The screenshot proves the browser service reaches the site.`);
-  say('2. Run "RPA: 1 Create tables (run once)" once: it creates the two Data Tables.');
-  say(`3. In "RPA: 2 Data feed", "RPA: 3 Approve steps" and "RPA: Hello world", pick the credentials on each node (the sticky notes list them). The imported workflows are inactive.`);
+  say(`2. In "RPA: 2 Data feed", "RPA: 3 Approve steps" and "RPA: Hello world", pick the credentials on each node (the sticky notes list them). The imported workflows are inactive; the data feed creates the two Data Tables on its first run.`);
   if (failures.length) {
     say();
     for (const f of failures) warn(`NOT DONE: ${f}`);

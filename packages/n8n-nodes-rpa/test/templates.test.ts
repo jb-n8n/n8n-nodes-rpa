@@ -42,7 +42,6 @@ type TableParams = {
 
 const FILES = {
   '0-connection-check.json': 'RPA: 0 Connection check',
-  '1-create-tables.json': 'RPA: 1 Create tables (run once)',
   '2-data-feed.json': 'RPA: 2 Data feed',
   '3-approve-steps.json': 'RPA: 3 Approve steps',
   '5-import-a-bot.json': 'RPA: 5 Import a bot',
@@ -209,25 +208,6 @@ describe('every Data Table read and write uses the Settings name', () => {
   });
 });
 
-describe('1-create-tables.json', () => {
-  const t = load('1-create-tables.json');
-  it('creates both Data Tables with the documented columns, if they do not exist', () => {
-    const create = (name: string) => byName(t, name).parameters as { resource: string; operation: string; tableName: string; columns: { column: unknown[] }; options: IDataObject };
-    expect(create('Create steps table')).toMatchObject({ resource: 'table', operation: 'create', tableName: STEPS_TABLE, options: { createIfNotExists: true } });
-    expect(create('Create steps table').columns.column).toEqual(STEPS_TABLE_COLUMNS);
-    expect(create('Create run log table')).toMatchObject({ resource: 'table', operation: 'create', tableName: RUN_TABLE, options: { createIfNotExists: true } });
-    expect(create('Create run log table').columns.column).toEqual(RUN_TABLE_COLUMNS);
-    expect(targets(t, 'Run once')).toEqual([['Create steps table']]);
-    expect(targets(t, 'Create steps table')).toEqual([['Create run log table']]);
-    expect(t.nodes.map((n) => n.name).sort()).toEqual(['About this workflow', 'Create run log table', 'Create steps table', 'Run once']);
-  });
-  it('says that it is optional: templates 5 and 3 create the tables when they are missing', () => {
-    const about = sticky(t, 'About this workflow').content;
-    expect(about.split('\n')[0]).toBe('### Create the RPA Data Tables (optional; grey: leave as is)');
-    expect(about).toContain('**RPA: 5 Import a bot** and **RPA: 3 Approve steps** create these tables when they are missing');
-  });
-});
-
 describe('2-data-feed.json', () => {
   const t = load('2-data-feed.json');
   const run = byName(t, 'Run steps');
@@ -239,7 +219,7 @@ describe('2-data-feed.json', () => {
     expect(sticky(t, 'First run').color).toBe(COLOUR.grey);
     expect(sticky(t, 'Why signed steps').color).toBe(COLOUR.grey);
     const map = sticky(t, 'Set once').content;
-    for (const s of ['**RPA Browser**: Run steps', '**RPA Site Login**: Run steps', '**RPA Step Signing**: Run steps', '**Chat model**', '**Alert on failure**', 'RPA: 3 Approve steps', 'RPA: 1 Create tables (run once)']) {
+    for (const s of ['**RPA Browser**: Run steps', '**RPA Site Login**: Run steps', '**RPA Step Signing**: Run steps', '**Chat model**', '**Alert on failure**', 'RPA: 3 Approve steps', 'the two Data Tables are created on the first run']) {
       expect(map).toContain(s);
     }
     const checklist = sticky(t, 'Change per site').content;
@@ -256,7 +236,11 @@ describe('2-data-feed.json', () => {
   });
   it('Every 6 hours → Settings → Get pending → Get active steps → Run steps, with the chat model on the Model input', () => {
     expect(targets(t, 'Every 6 hours')).toEqual([['Settings']]);
-    expect(targets(t, 'Settings')).toEqual([['Get pending']]);
+    // The top branch first (v1 order): both Data Tables, created when they are missing, then the feed.
+    expect(targets(t, 'Settings')).toEqual([['Create steps table', 'Get pending']]);
+    expect(targets(t, 'Create steps table')).toEqual([['Create run log table']]);
+    expect(targets(t, 'Create run log table')).toEqual([]);
+    expect(byName(t, 'Create steps table').position[1]).toBeLessThan(byName(t, 'Get pending').position[1]);
     expect(targets(t, 'Get pending')).toEqual([['Get active steps']]);
     expect(targets(t, 'Get active steps')).toEqual([['Run steps']]);
     expect(targets(t, 'Chat model', 'ai_languageModel')).toEqual([['Run steps']]);
@@ -390,11 +374,13 @@ describe('2-data-feed.json', () => {
     expect(render(p.subject, scope(config))).toBe('RPA config_error on example-feed');
     expect(p.options.fileAttachments).toContain('$binary.trace');
   });
-  it('needs at most 9 working nodes: stickies, the chat model and the destination placeholder not counted', () => {
-    const working = t.nodes.filter((n) => ![STICKY, '@n8n/n8n-nodes-langchain.lmChatAnthropic', 'n8n-nodes-base.noOp'].includes(n.type)).map((n) => n.name);
+  it('needs at most 9 working nodes: stickies, the chat model, the two table creations and the destination placeholder not counted', () => {
+    const working = t.nodes
+      .filter((n) => ![STICKY, '@n8n/n8n-nodes-langchain.lmChatAnthropic', 'n8n-nodes-base.noOp'].includes(n.type) && (n.parameters as { operation?: string }).operation !== 'create')
+      .map((n) => n.name);
     expect(working.sort()).toEqual(['Alert on failure', 'Approve steps', 'Every 6 hours', 'Get active steps', 'Get pending', 'Log failed run', 'Log run', 'Run steps', 'Settings']);
-    // 16 nodes in total: 5 stickies, the chat model, the 9 working nodes and the destination placeholder.
-    expect(t.nodes).toHaveLength(16);
+    // 18 nodes in total: 5 stickies, the chat model, the 9 working nodes, the two table creations and the destination placeholder.
+    expect(t.nodes).toHaveLength(18);
     expect(t.nodes.filter((n) => n.type === STICKY)).toHaveLength(5);
     expect(t.nodes.filter((n) => n.type === 'n8n-nodes-base.noOp').map((n) => n.name)).toEqual(['Send data to destination']);
   });
@@ -441,9 +427,16 @@ describe('3-approve-steps.json', () => {
     });
     expect(byName(t, 'Settings')).not.toHaveProperty('parameters.options.stripBinary');
   });
-  it('creates both Data Tables when they are missing, with the columns of template 1', () => {
-    const t1 = load('1-create-tables.json');
-    for (const name of ['Create steps table', 'Create run log table']) expect(byName(t, name).parameters).toEqual(byName(t1, name).parameters);
+  it('creates both Data Tables with the documented columns when they are missing', () => {
+    const create = (name: string) => byName(t, name).parameters as { resource: string; operation: string; tableName: string; columns: { column: unknown[] }; options: IDataObject };
+    expect(create('Create steps table')).toMatchObject({ resource: 'table', operation: 'create', tableName: STEPS_TABLE, options: { createIfNotExists: true } });
+    expect(create('Create steps table').columns.column).toEqual(STEPS_TABLE_COLUMNS);
+    expect(create('Create run log table')).toMatchObject({ resource: 'table', operation: 'create', tableName: RUN_TABLE, options: { createIfNotExists: true } });
+    expect(create('Create run log table').columns.column).toEqual(RUN_TABLE_COLUMNS);
+    // Templates 2 and 5 create them with the same parameters.
+    for (const file of ['2-data-feed.json', '5-import-a-bot.json']) {
+      for (const name of ['Create steps table', 'Create run log table']) expect(byName(load(file), name).parameters, `${file}: ${name}`).toEqual(byName(t, name).parameters);
+    }
   });
   it('Mark pending upserts by hash: status pending, expiresAt now + approvalTimeoutHours', () => {
     const p = table(byName(t, 'Mark pending'));
@@ -1056,9 +1049,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     }
   });
 
-  it('creates both Data Tables when they are missing, with the columns of template 1, before the review page', () => {
-    const t1 = load('1-create-tables.json');
-    for (const name of ['Create steps table', 'Create run log table']) expect(byName(t, name).parameters).toEqual(byName(t1, name).parameters);
+  it('creates both Data Tables when they are missing, as template 3 does, before the review page', () => {
+    const t3 = load('3-approve-steps.json');
+    for (const name of ['Create steps table', 'Create run log table']) expect(byName(t, name).parameters).toEqual(byName(t3, name).parameters);
   });
 
   it('nothing reaches Save signed steps except an active record on the success output of Sign steps; Sign steps\' allowlist is typed', () => {

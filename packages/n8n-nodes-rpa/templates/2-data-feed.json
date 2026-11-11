@@ -16,7 +16,7 @@
     },
     {
       "parameters": {
-        "content": "### Set once (green)\nRun **RPA: 1 Create tables (run once)** first, then pick credentials:\n- **RPA Browser**: Run steps\n- **RPA Site Login**: Run steps here, Sign steps in workflow 3\n- **RPA Step Signing**: Run steps here, Sign steps in workflow 3\n- **Chat model**: your model provider\n- **Alert on failure**: your SMTP account\n\nIn **Approve steps**, choose **RPA: 3 Approve steps**.",
+        "content": "### Set once (green)\nPick credentials (the two Data Tables are created on the first run):\n- **RPA Browser**: Run steps\n- **RPA Site Login**: Run steps here, Sign steps in workflow 3\n- **RPA Step Signing**: Run steps here, Sign steps in workflow 3\n- **Chat model**: your model provider\n- **Alert on failure**: your SMTP account\n\nIn **Approve steps**, choose **RPA: 3 Approve steps**.",
         "height": 300,
         "width": 420,
         "color": 4
@@ -87,6 +87,35 @@
       "typeVersion": 3.4,
       "position": [220, 0],
       "notes": "The step list's name. Every Data Table filter and Run steps → Options → Name read it here."
+    },
+    {
+      "parameters": {
+        "resource": "table",
+        "operation": "create",
+        "tableName": "playwright_steps",
+        "columns": { "column": [{ "name": "name", "type": "string" }, { "name": "version", "type": "number" }, { "name": "steps", "type": "string" }, { "name": "hash", "type": "string" }, { "name": "signature", "type": "string" }, { "name": "approvedBy", "type": "string" }, { "name": "approvedAt", "type": "string" }, { "name": "status", "type": "string" }, { "name": "expiresAt", "type": "string" }] },
+        "options": { "createIfNotExists": true }
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000217",
+      "name": "Create steps table",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [440, -160],
+      "notes": "Creates playwright_steps and playwright_runs when they are missing. This branch runs first: it is the top one."
+    },
+    {
+      "parameters": {
+        "resource": "table",
+        "operation": "create",
+        "tableName": "playwright_runs",
+        "columns": { "column": [{ "name": "name", "type": "string" }, { "name": "lane", "type": "string" }, { "name": "version", "type": "number" }, { "name": "hash", "type": "string" }, { "name": "confirmed", "type": "boolean" }, { "name": "rowCount", "type": "number" }, { "name": "durationMs", "type": "number" }, { "name": "llmTokens", "type": "number" }, { "name": "code", "type": "string" }, { "name": "executionId", "type": "string" }] },
+        "options": { "createIfNotExists": true }
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000218",
+      "name": "Create run log table",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [660, -160]
     },
     {
       "parameters": {
@@ -297,7 +326,8 @@
   ],
   "connections": {
     "Every 6 hours": { "main": [[{ "node": "Settings", "type": "main", "index": 0 }]] },
-    "Settings": { "main": [[{ "node": "Get pending", "type": "main", "index": 0 }]] },
+    "Settings": { "main": [[{ "node": "Create steps table", "type": "main", "index": 0 }, { "node": "Get pending", "type": "main", "index": 0 }]] },
+    "Create steps table": { "main": [[{ "node": "Create run log table", "type": "main", "index": 0 }]] },
     "Get pending": { "main": [[{ "node": "Get active steps", "type": "main", "index": 0 }]] },
     "Get active steps": { "main": [[{ "node": "Run steps", "type": "main", "index": 0 }]] },
     "Chat model": { "ai_languageModel": [[{ "node": "Run steps", "type": "ai_languageModel", "index": 0 }]] },

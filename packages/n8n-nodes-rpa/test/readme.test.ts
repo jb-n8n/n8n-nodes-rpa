@@ -67,9 +67,9 @@ describe('README', () => {
     ]) expect(s, text).toContain(text);
   });
 
-  it('documents the six templates by file name and workflow name', () => {
+  it('documents the five templates by file name and workflow name', () => {
     const s = section('## The self-healing data feed');
-    for (const [f, name] of [['0-connection-check.json', 'RPA: 0 Connection check'], ['1-create-tables.json', 'RPA: 1 Create tables (run once)'],
+    for (const [f, name] of [['0-connection-check.json', 'RPA: 0 Connection check'],
       ['2-data-feed.json', 'RPA: 2 Data feed'], ['3-approve-steps.json', 'RPA: 3 Approve steps'], ['5-import-a-bot.json', 'RPA: 5 Import a bot'],
       ['hello-world.json', 'RPA: Hello world']]) {
       expect(s, f).toContain(`| \`${f}\` | \`${name}\` |`);
