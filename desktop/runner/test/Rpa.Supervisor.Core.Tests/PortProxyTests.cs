@@ -27,18 +27,20 @@ public sealed class PortProxyTests : IAsyncLifetime
         foreach (var item in _cleanup) item.Dispose();
     }
 
-    private sealed record Setup(FakeRdpHost Host, SessionManager Manager, int ListenPort, int TargetPort);
+    private sealed record Setup(FakeRdpHost Host, SessionManager Manager, int ListenPort, int TargetPort, int BrowserListenPort = 0, int BrowserTargetPort = 0);
 
-    private Setup Start(TimeProvider time, int idleSeconds = 15, int readySeconds = 45, string stateFile = "")
+    private Setup Start(TimeProvider time, int idleSeconds = 15, int readySeconds = 45, string stateFile = "", bool withBrowserHost = false)
     {
         var listen = FreePort();
         var target = FreePort();
-        var options = new SupervisorOptions(Bot, [new PortMap(listen, target)], ["127.0.0.1"], idleSeconds, readySeconds,
+        var (browserListen, browserTarget) = withBrowserHost ? (FreePort(), FreePort()) : (0, 0);
+        PortMap[] maps = withBrowserHost ? [new PortMap(listen, target), new PortMap(browserListen, browserTarget)] : [new PortMap(listen, target)];
+        var options = new SupervisorOptions(Bot, maps, ["127.0.0.1"], idleSeconds, readySeconds,
             stateFile);
         var host = new FakeRdpHost(_sessions, time, _events);
         var manager = new SessionManager(_sessions, host, new FakeRemoteDesktop(), options, _log, time);
         _proxy = new PortProxy(manager, options, _log).RunAsync(_stop.Token);
-        return new Setup(host, manager, listen, target);
+        return new Setup(host, manager, listen, target, browserListen, browserTarget);
     }
 
     private static int FreePort()
@@ -177,6 +179,33 @@ public sealed class PortProxyTests : IAsyncLifetime
         await AssertEnds(client);
         Assert.False(target.Pending());
         Assert.Contains(_log.Failures, f => f.Reason == SessionFailure.NotAllowed);
+    }
+
+    [Fact]
+    public async Task With_two_port_maps_a_browser_host_that_does_not_listen_leaves_the_runners_port_working_and_ends_its_own_connection_naming_the_browser_host()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-11-10T08:00:00Z"));
+        var setup = Start(time, readySeconds: 45, withBrowserHost: true);
+        var runner = Target(setup.TargetPort);
+
+        var client = await Connect(setup.ListenPort);
+        var inner = await Accept(runner);
+        await client.GetStream().WriteAsync(new byte[] { 1, 2, 3 });
+        Assert.Equal(new byte[] { 1, 2, 3 }, await Read(inner, 3));
+
+        var browser = await Connect(setup.BrowserListenPort);
+        var read = browser.GetStream().ReadAsync(new byte[1]).AsTask();
+        await Wait.AdvanceUntil(time, () => read.IsCompleted, TimeSpan.FromSeconds(5));
+
+        Assert.Equal(0, await read.WaitAsync(Patience));
+        var expected = $"Nothing listened on 127.0.0.1:{setup.BrowserTargetPort} within 45 s: the browser host did not start in {Bot}'s session; " +
+            $"read %ProgramData%\\RPA Runner\\logs\\browser.err.log. The connection to port {setup.BrowserListenPort} is closed.";
+        Assert.Equal(expected, setup.Manager.LastFailure);
+        Assert.Contains(_log.Failures, f => f.Reason is null && f.Message == expected);
+
+        // The runner's connection still passes bytes both ways.
+        await inner.GetStream().WriteAsync(new byte[] { 9 });
+        Assert.Equal(new byte[] { 9 }, await Read(client, 1));
     }
 
     [Fact]
