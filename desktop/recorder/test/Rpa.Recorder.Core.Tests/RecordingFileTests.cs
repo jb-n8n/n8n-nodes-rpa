@@ -81,6 +81,17 @@ public class RecordingFileTests
     }
 
     [Fact]
+    public void A_check_event_holds_the_state_it_sets()
+    {
+        var box = El("CheckBox", "1041", "Match case") with { IsChecked = false };
+        var json = JsonDocument.Parse(Record(Click(1, box)).ToFile("Test").ToJson()).RootElement;
+        var check = json.GetProperty("events")[1];
+        Assert.Equal(["at", "kind", "target", "label", "checked"], check.EnumerateObject().Select(p => p.Name));
+        Assert.Equal("check", check.GetProperty("kind").GetString());
+        Assert.True(check.GetProperty("checked").GetBoolean());
+    }
+
+    [Fact]
     public void The_app_comes_from_its_launch_with_its_arguments()
     {
         var s = Record(new AppStarted(At(0), @"C:\Apps\Orders.exe", ["--ui", "v2"], Window), Click(1, Ok));

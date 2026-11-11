@@ -171,6 +171,32 @@ public class SessionTests
     }
 
     [Fact]
+    public void A_click_on_an_unchecked_check_box_is_a_check_step_with_checked_true()
+    {
+        var box = El("CheckBox", "chkMatchCase", "Match case") with { IsChecked = false };
+        var check = Record(Click(1, box)).Steps.Single();
+        Assert.Equal((StepKind.Check, true, "Match case"), (check.Kind, check.Checked, check.Label));
+        Assert.Equal([new RecordedCondition("CheckBox", "chkMatchCase", "Match case")], check.Target!.Path);
+    }
+
+    [Fact]
+    public void A_click_on_a_checked_check_box_is_a_check_step_with_checked_false()
+    {
+        var check = Record(Click(1, El("CheckBox", "chkMatchCase", "Match case") with { IsChecked = true })).Steps.Single();
+        Assert.Equal((StepKind.Check, false), (check.Kind, check.Checked));
+        // With no toggle state to read it stays a click; a Space on a focused check box stays a key.
+        Assert.Equal(StepKind.Click, Record(Click(1, El("CheckBox", "chkMatchCase", "Match case"))).Steps.Single().Kind);
+        Assert.Equal(StepKind.Key, Record(Key(1, El("CheckBox", "chkMatchCase", "Match case") with { IsChecked = false }, "Space")).Steps.Single().Kind);
+    }
+
+    [Fact]
+    public void A_radio_button_is_a_click()
+    {
+        var radio = El("RadioButton", "optDaily", "Daily") with { IsChecked = false };
+        Assert.Equal(StepKind.Click, Record(Click(1, radio)).Steps.Single().Kind);
+    }
+
+    [Fact]
     public void Deleting_a_fill_deletes_the_click_folded_into_it()
     {
         var s = Record(Click(1, Name), Typed(2, Name), Left(3, Name, "Ada"), Click(3, Ok));

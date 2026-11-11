@@ -3,10 +3,11 @@ namespace Rpa.Recorder.Core;
 /// <summary>
 /// What UI Automation said about an element when the person acted on it. <c>RuntimeId</c> tells one element from
 /// another while the recorder runs (it is never saved); <c>HasEditChild</c> is whether a ComboBox holds an Edit (an
-/// editable ComboBox); <c>Ancestors</c> go from the nearest one up, without the desktop.
+/// editable ComboBox); <c>Ancestors</c> go from the nearest one up, without the desktop. <c>IsChecked</c> is the
+/// element's toggle state before the input was delivered: null when it has none, or one that is neither on nor off.
 /// </summary>
 public sealed record ElementFacts(string ControlType, string AutomationId, string Name, string ClassName, bool IsPassword,
-    bool HasEditChild, string RuntimeId, IReadOnlyList<ElementFacts> Ancestors);
+    bool HasEditChild, string RuntimeId, IReadOnlyList<ElementFacts> Ancestors, bool? IsChecked = null);
 
 /// <summary>The top-level window an element is in: its program's file name, its title and its window class.</summary>
 public sealed record WindowFacts(string Exe, string Title, string ClassName);
@@ -42,7 +43,7 @@ public sealed record FieldLeft(DateTimeOffset At, WindowFacts Window, ElementFac
 public sealed record AppStarted(DateTimeOffset At, string ExePath, IReadOnlyList<string> Args, WindowFacts Window) : Observation(At);
 
 /// <summary>The kinds of event in a recording file. A scope is never a step: the file has one where the window changes.</summary>
-public enum StepKind { Launch, Scope, Click, Fill, Select, Key, Read }
+public enum StepKind { Launch, Scope, Click, Fill, Select, Check, Key, Read }
 
 /// <summary>A window as a step finds it again (see <see cref="WindowRules"/>).</summary>
 public sealed record RecordedWindow(string? Exe, string? Title, string? ClassName);
@@ -56,7 +57,7 @@ public sealed record RecordedTarget(RecordedWindow Window, IReadOnlyList<Recorde
 /// <summary>
 /// One event of the recording: a step on the recorder's bar, or a scope in the file. <c>Value</c> is a fill's value
 /// (one <c>{{var.name}}</c> when <c>Secret</c>), <c>Option</c> a select's item, <c>Chord</c> a key's chord, <c>As</c> a
-/// read's output name. <c>Positional</c>: the element is found by a name that carries its row position.
+/// read's output name, <c>Checked</c> the state a check sets. <c>Positional</c>: the element is found by a name that carries its row position.
 /// </summary>
 public sealed record RecordedStep(StepKind Kind, DateTimeOffset At, string Label)
 {
@@ -70,6 +71,7 @@ public sealed record RecordedStep(StepKind Kind, DateTimeOffset At, string Label
     /// <summary>The file a fill types into a Save dialog; its value is then <c>{{$exportDir}}\&lt;file&gt;</c>.</summary>
     public string? ExportFile { get; init; }
     public bool Secret { get; init; }
+    public bool Checked { get; init; }
     public string? Option { get; init; }
     public string? Chord { get; init; }
     public string? As { get; init; }

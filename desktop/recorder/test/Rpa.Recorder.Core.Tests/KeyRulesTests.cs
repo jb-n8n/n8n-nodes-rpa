@@ -94,13 +94,37 @@ public class KeyRulesTests
         Assert.Equal(KeyKind.Printable, KeyRules.Kind(OemPlus, true, false));
     }
 
+    // AltGr is Ctrl+Alt: on many keyboards it types @, \ or { into a password, also into a password box the recorder
+    // does not take for a text field.
+
     [Fact]
-    public void Characters_typed_with_AltGr_are_typing_in_a_text_field()
+    public void Ctrl_Alt_with_a_letter_on_an_element_that_is_not_a_field_is_dropped_not_a_key_step()
     {
-        // AltGr is Ctrl+Alt: on many keyboards it types @, \ or { into a password.
-        Assert.Equal(KeyKind.EditChord, KeyRules.Kind(Q, true, true));
-        Assert.Null(Event(Q, true, true, false, TextBox));
-        Assert.Equal("Ctrl+Alt+Q", Event(Q, true, true, false, Grid));
+        foreach (var vk in new[] { Q, Digit1, Space, OemPlus })
+        {
+            Assert.Equal(KeyKind.Printable, KeyRules.Kind(vk, true, true));
+            Assert.Null(Event(vk, true, true, false, Grid));
+            Assert.Null(Event(vk, true, true, true, Grid));
+        }
+    }
+
+    [Fact]
+    public void Ctrl_Alt_with_a_letter_in_a_text_field_is_typing()
+    {
+        Assert.True(KeyRules.IsTyping(KeyRules.Kind(Q, true, true), KeyRules.Field(TextBox)));
+        Assert.True(KeyRules.IsTyping(KeyRules.Kind(Q, true, true), KeyRules.Field(El("Edit", "txtPassword", "Password", password: true))));
+    }
+
+    [Fact]
+    public void Ctrl_Alt_Delete_style_chords_with_a_non_character_key_are_unchanged()
+    {
+        foreach (var vk in new[] { Delete, Backspace, Left, Down, Home, 0x23, 0x2D, 0x21, 0x22 })
+        {
+            Assert.Equal(KeyKind.EditChord, KeyRules.Kind(vk, true, true));
+            Assert.Null(Event(vk, true, true, false, TextBox));
+        }
+        Assert.Equal("Ctrl+Alt+Delete", Event(Delete, true, true, false, Grid));
+        Assert.Equal("Ctrl+Alt+F5", Event(F5, true, true, false, Grid));
     }
 
     [Fact]

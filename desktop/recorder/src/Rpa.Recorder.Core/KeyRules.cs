@@ -5,14 +5,17 @@ public enum KeyKind
 {
     /// <summary>Ctrl, Alt, Shift, Win and the lock keys alone: ignored.</summary>
     Modifier,
-    /// <summary>A key that types a character (letters, digits, Space, punctuation, Alt with numpad digits), or a chord the
-    /// runner has no name for: typing in a field, dropped elsewhere. Never a key event.</summary>
+    /// <summary>A key that types a character (letters, digits, Space, punctuation, Alt with numpad digits), alone or with
+    /// Ctrl+Alt (AltGr types @, \ or { on many keyboards, also into a password box the recorder does not take for a text
+    /// field), or a chord the runner has no name for: typing in a field, dropped elsewhere. Never a key event, so an
+    /// application's own Ctrl+Alt+letter shortcut is not recorded.</summary>
     Printable,
     /// <summary>Backspace, Delete, Insert, the arrows, Home, End, PageUp, PageDown: typing in a field (in a drop-down list
     /// they change its selection), a key event elsewhere.</summary>
     Navigation,
-    /// <summary>The editing chords (Ctrl with A, C, V, X, Z, Y, Insert, Backspace, Delete, the arrows, Home, End) and
-    /// Ctrl+Alt chords (AltGr types characters on many keyboards): typing in a text field, a key event elsewhere.</summary>
+    /// <summary>The editing chords (Ctrl with A, C, V, X, Z, Y, Insert, Backspace, Delete, the arrows, Home, End), and
+    /// Ctrl+Alt with a key that types nothing (Backspace, Delete, Insert, the arrows, Home, End, PageUp, PageDown): typing
+    /// in a text field, a key event elsewhere.</summary>
     EditChord,
     /// <summary>Enter, Tab, Escape, F1 to F24, and the other Ctrl or Alt chords: always a key event.</summary>
     Command,
@@ -44,7 +47,7 @@ public static class KeyRules
         if (vk is 0x10 or 0x11 or 0x12 or >= 0xA0 and <= 0xA5 or 0x5B or 0x5C or 0x14 or 0x90 or 0x91) return KeyKind.Modifier;
         if (vk is 0x0D or 0x09 or 0x1B or >= 0x70 and <= 0x87) return KeyKind.Command;
         var named = KeyName(vk) is not null;
-        if (ctrl && alt) return named ? KeyKind.EditChord : KeyKind.Printable;
+        if (ctrl && alt) return vk is 0x08 or 0x2E or 0x2D or >= 0x21 and <= 0x28 ? KeyKind.EditChord : KeyKind.Printable;
         if (ctrl && vk is 0x41 or 0x43 or 0x56 or 0x58 or 0x5A or 0x59 or 0x2D or 0x08 or 0x2E or >= 0x23 and <= 0x28) return KeyKind.EditChord;
         if (ctrl || alt) return named ? KeyKind.Command : KeyKind.Printable;
         return vk is 0x08 or 0x2E or 0x2D or >= 0x21 and <= 0x28 ? KeyKind.Navigation : KeyKind.Printable;

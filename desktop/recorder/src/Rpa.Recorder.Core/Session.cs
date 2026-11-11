@@ -10,6 +10,9 @@ namespace Rpa.Recorder.Core;
 /// the select that follows. Tab and Shift+Tab fold away before a fill or a select.</item>
 /// <item>A ListItem of a ComboBox's list is a select on the ComboBox with the item's text; a drop-down list chosen by
 /// keys gives its selection when it is left.</item>
+/// <item>A click on an element with a toggle state (a check box) is a check with the state the click sets, so a later
+/// run that starts from the other state still ends where the person left it. A radio button stays a click (selecting
+/// it twice changes nothing), and a Space on a focused check box stays a key.</item>
 /// </list>
 /// Not thread-safe: the Windows layer calls it from one thread at a time.
 /// </summary>
@@ -62,6 +65,11 @@ public sealed class Session
         {
             var select = Step(StepKind.Select, o.At, o.Window, combo.a, 1) with { Option = Literal(element.Name, combo.a) };
             AddFolding(select, takeClickTime: false);
+            return;
+        }
+        if (element.IsChecked is { } wasChecked && element.ControlType != "RadioButton")
+        {
+            _steps.Add(Step(StepKind.Check, o.At, o.Window, element, o.Matches) with { Checked = !wasChecked });
             return;
         }
         // A click on a part of a ComboBox (its button) is a click on the ComboBox, which opens its list.

@@ -56,6 +56,7 @@ public sealed record RecordingFile(string Name, string Exe, IReadOnlyList<string
                 if (e.Secret) o["secret"] = true;
                 break;
             case StepKind.Select: o["option"] = e.Option; break;
+            case StepKind.Check: o["checked"] = e.Checked; break;
             case StepKind.Key: o["chord"] = e.Chord; break;
             case StepKind.Read: o["as"] = e.As; break;
         }
