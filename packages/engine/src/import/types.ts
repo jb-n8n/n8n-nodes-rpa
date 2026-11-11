@@ -28,8 +28,15 @@ export type ImportEvent =
    */
   | { at: string; kind: 'signIn'; username: Candidate[]; next?: Candidate[]; password: Candidate[]; submit: Candidate[]; totp?: { field: Candidate[]; submit: Candidate[] } };
 
-/** `candidateWrite`: a desktop step that may save, post or submit; the owner decides at approval (it is never declared by the import). */
-export interface ImportItem { at: string; kind: 'untranslated' | 'dropped' | 'converted' | 'secret' | 'error' | 'candidateWrite'; what: string; reason: string }
+/**
+ * `candidateWrite`: a desktop step that may save, post or submit; the owner decides at approval (it is never declared by
+ * the import). `notNeeded`: a `dropped` step whose absence changes nothing the bot does on the site (a viewport change,
+ * a wait or check the steps do by themselves, a click into a field before typing, logging); the approval does not list
+ * it as left out. Every other dropped step, and every untranslated one, is listed.
+ */
+export interface ImportItem {
+  at: string; kind: 'untranslated' | 'dropped' | 'converted' | 'secret' | 'error' | 'candidateWrite'; what: string; reason: string; notNeeded?: true;
+}
 export interface ImportReport { source: ImportSource; steps: number; items: ImportItem[] }
 export interface ImportOptions {
   name: string;

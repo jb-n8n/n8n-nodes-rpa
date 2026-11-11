@@ -115,7 +115,7 @@ export function stripSecrets(input: ImportEvent[], opts: ImportOptions, report: 
   const shortSecrets = slValues.filter((s) => s.length < MIN_SECRET_LENGTH);
   const isShortSecret = (t: string) => shortSecrets.some((x) => same(t, x));
   const maskText = (t: string) => (isShortSecret(t) ? '[secret]' : masker.mask(t));
-  const add = (at: string, kind: ImportItem['kind'], what: string, reason: string) => items.push({ at, kind, what, reason });
+  const add = (at: string, kind: ImportItem['kind'], what: string, reason: string, notNeeded = false) => items.push({ at, kind, what, reason, ...(notNeeded ? { notNeeded: true as const } : {}) });
   const reportSecret = (e: Typed, reason: string) => add(e.at, 'secret', nameOf(e.label, e.target) || 'a field', reason);
 
   const roleOf = (e: ImportEvent): Role => {
@@ -314,9 +314,10 @@ export function stripSecrets(input: ImportEvent[], opts: ImportOptions, report: 
         return e.kind === 'expectUrl' ? `URL check ${e.path}` : e.kind === 'hover' ? `Hover over ${nameOf(e.label, e.target) || 'the element'}` : wait;
       };
       const isHover = (i: number) => events[i].kind === 'hover';
-      for (const i of twoPage ? [...twoPage.checks].reverse() : []) add(events[i].at, 'dropped', checkName(i, 'Wait between the username and the password'), isHover(i) ? HOVER_BETWEEN_PAGES : BETWEEN_PAGES);
+      // A check or wait between the parts is what signIn does itself; a hover there could open something, so it is listed.
+      for (const i of twoPage ? [...twoPage.checks].reverse() : []) add(events[i].at, 'dropped', checkName(i, 'Wait between the username and the password'), isHover(i) ? HOVER_BETWEEN_PAGES : BETWEEN_PAGES, !isHover(i));
       for (const i of ts >= 0 ? between : []) {
-        add(events[i].at, 'dropped', checkName(i, 'Wait between the sign-in and the code'), `it ${isHover(i) ? 'is on' : 'checks'} the page between the password and the code, which signIn passes in one step`);
+        add(events[i].at, 'dropped', checkName(i, 'Wait between the sign-in and the code'), `it ${isHover(i) ? 'is on' : 'checks'} the page between the password and the code, which signIn passes in one step`, !isHover(i));
       }
       const enterSubmit = (k: number, fallback: Candidate[]): Candidate[] => {
         const e = events[k];

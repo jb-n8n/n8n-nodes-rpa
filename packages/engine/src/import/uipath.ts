@@ -585,6 +585,8 @@ const DROPPED: Record<string, string> = {
   Assign: 'an assignment computes a value inside the bot: n8n expressions do that',
   MultipleAssign: 'an assignment computes a value inside the bot: n8n expressions do that',
 };
+/** DROPPED activities that are housekeeping (logging, comments): the bot does nothing on the site without them. An assignment may feed a later step, so it is not one. */
+const HOUSEKEEPING = new Set(['LogMessage', 'WriteLine', 'Comment', 'CommentOut']);
 const TAG_OF_TYPE: Record<string, string> = { button: 'BUTTON', inputbox: 'INPUT', input: 'INPUT', text: '', dropdown: 'SELECT', combobox: 'SELECT', listbox: 'SELECT', checkbox: 'INPUT', radiobutton: 'INPUT', link: 'A', hyperlink: 'A' };
 const READ_RANGE = new Set(['ReadRange', 'ExcelReadRange', 'ReadRangeX']);
 const WRITE_RANGE = new Set(['WriteRange', 'ExcelWriteRange', 'WriteRangeX']);
@@ -685,8 +687,8 @@ class Walker {
   private arg(el: XmlNode, key: string, ctx: Ctx): Val { return argOf(el, key, ctx.csharp); }
   private lit(el: XmlNode, key: string, ctx: Ctx): string | undefined { return literalOf(el, key, ctx.csharp); }
 
-  private add(at: string, kind: ImportItem['kind'], what: string, reason: string): void {
-    this.report.items.push({ at, kind, what, reason });
+  private add(at: string, kind: ImportItem['kind'], what: string, reason: string, notNeeded = false): void {
+    this.report.items.push({ at, kind, what, reason, ...(notNeeded ? { notNeeded: true as const } : {}) });
   }
 
   private count(): void {
@@ -766,7 +768,7 @@ class Walker {
     const at = this.at(el, ctx);
 
     if (name in DROPPED) {
-      this.add(at, 'dropped', displayName, DROPPED[name]);
+      this.add(at, 'dropped', displayName, DROPPED[name], HOUSEKEEPING.has(name));
       return [];
     }
     if (TOTP_ACTIVITY.test(name)) return this.totpActivity(el, ctx);
@@ -1179,7 +1181,7 @@ class Walker {
     const label = intentLabel(el.attrs.DisplayName ?? '');
     const scope = ctx.app?.name ?? displayName;
     const item = (event: DesktopEvent): Item => ({ t: 'desktop', event, scope });
-    const skip = (kind: ImportItem['kind'], reason: string): Item[] => { this.add(at, kind, displayName, `${name}: ${reason}`); return []; };
+    const skip = (kind: ImportItem['kind'], reason: string, notNeeded = false): Item[] => { this.add(at, kind, displayName, `${name}: ${reason}`, notNeeded); return []; };
 
     if (/^(CV|N?Image|Ocr|N?FindImage|ClickImage|ClickText|ClickOCRText|HoverImage)/.test(name) || /Image$|OCR/.test(name)) {
       return skip('untranslated', 'the target is found by image, OCR or computer vision, which UI Automation cannot read: rebuild this step on the app\'s elements');
@@ -1289,7 +1291,7 @@ class Walker {
       if (passwordField) return skip('untranslated', 'the text typed into this password field is an expression, which is not evaluated and never imported: type a run variable here by hand');
       return skip('untranslated', `the typed text is the expression ${val.expr.slice(0, 200)}, which is not evaluated: map it to a variable in the step by hand`);
     }
-    return skip('dropped', 'the activity types no text');
+    return skip('dropped', 'the activity types no text', true);
   }
 
   /**

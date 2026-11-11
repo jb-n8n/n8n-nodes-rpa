@@ -78,6 +78,11 @@ describe('Chrome Recorder JSON', () => {
     expect(items).toContainEqual(expect.objectContaining({ kind: 'dropped', what: 'Pierce selectors (11)' }));
     expect(items).toContainEqual(expect.objectContaining({ kind: 'dropped', what: 'Clicks into a field before typing (6)' }));
     expect(items).toContainEqual(expect.objectContaining({ kind: 'converted', what: 'Click Export' }));
+    // A drop whose absence changes nothing the bot does is marked notNeeded; the JavaScript wait is not a drop at all.
+    expect(items.filter((i) => i.notNeeded).map((i) => i.what)).toEqual([
+      'Viewport changes (1)', 'Scrolls (1)', 'Clicks into a field before typing (6)', 'XPath selectors (11)', 'Pierce selectors (11)',
+    ]);
+    expect(items.filter((i) => (i.kind === 'untranslated' || i.kind === 'dropped') && !i.notNeeded).map((i) => i.what)).toEqual(['Wait for a JavaScript condition']);
     expect(items.filter((i) => i.kind === 'secret').map((i) => i.what)).toEqual(['Dealer user ID', 'Password', 'Authentication code']);
     expect(r.report.steps).toBe(9);
   });
@@ -205,6 +210,8 @@ describe('Chrome Recorder JSON', () => {
     expect(find('step 2')).toMatchObject({ kind: 'untranslated', reason: expect.stringContaining('another tab') });
     expect(find('step 3')).toMatchObject({ kind: 'untranslated', reason: expect.stringContaining('frame') });
     expect(find('step 4')).toMatchObject({ kind: 'dropped', reason: expect.stringContaining('no selector') });
+    // A step dropped for want of a selector is a step the bot no longer does: not marked notNeeded.
+    expect(find('step 4')).not.toHaveProperty('notNeeded');
     expect(find('step 8')).toMatchObject({ kind: 'untranslated', what: 'Press Tab' });
     expect(find('step 12')).toMatchObject({ kind: 'untranslated', what: 'Wait for #spinner' });
     expect(find('step 13')).toMatchObject({ kind: 'untranslated', what: 'Close the page' });

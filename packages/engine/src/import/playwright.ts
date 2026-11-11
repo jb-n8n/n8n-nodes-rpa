@@ -860,10 +860,10 @@ export function playwrightEvents(code: string, report: ImportReport): ImportEven
   let reported = 0;
   let overflow = '';
   let overflowCount = 0;
-  const item = (at: string, kind: ImportItem['kind'], what: string, reason: string) => {
+  const item = (at: string, kind: ImportItem['kind'], what: string, reason: string, notNeeded = false) => {
     if (reported >= MAX_ITEMS) { if (!overflowCount) overflow = at; overflowCount++; return; }
     reported++;
-    report.items.push({ at, kind, what, reason });
+    report.items.push({ at, kind, what, reason, ...(notNeeded ? { notNeeded: true as const } : {}) });
   };
   if (split.tests > 1) item(`line ${split.testLine}`, 'converted', 'Tests', `the code has ${split.tests} tests: their steps were imported one after another`);
 
@@ -1016,9 +1016,10 @@ export function playwrightEvents(code: string, report: ImportReport): ImportEven
         return item(at, 'untranslated', second?.name === 'press' && key !== undefined && NAMED_KEYS.has(key) ? `Press ${key}` : 'Use the keyboard', R.key);
       }
       case 'close': return item(at, 'untranslated', 'Close the page', R.close);
-      case 'setViewportSize': return item(at, 'dropped', 'Viewport change', R.viewport);
+      case 'setViewportSize': return item(at, 'dropped', 'Viewport change', R.viewport, true);
     }
-    if (WAITS.has(first.name)) return item(at, 'dropped', shape, first.name === 'waitForFunction' ? R.javascript : R.wait);
+    // A JavaScript wait waits for something the steps cannot see: it is left out. A fixed or load wait is not needed.
+    if (WAITS.has(first.name)) return first.name === 'waitForFunction' ? item(at, 'dropped', shape, R.javascript) : item(at, 'dropped', shape, R.wait, true);
     if (PAGE_JAVASCRIPT.has(first.name)) return item(at, 'untranslated', shape, R.javascript);
     if (HANDLERS.has(first.name)) return item(at, 'untranslated', shape, R.handler);
     if (first.name === 'waitForEvent') {
@@ -1170,7 +1171,7 @@ export function playwrightEvents(code: string, report: ImportReport): ImportEven
     }
     if (binding?.kind === 'locator') return locatorStatement(at, segs, binding.built);
     if (binding?.kind === 'reassigned') return item(at, 'untranslated', shape, R.reassigned);
-    if (binding?.kind === 'download') return item(at, 'dropped', 'Save the download', R.saved);
+    if (binding?.kind === 'download') return item(at, 'dropped', 'Save the download', R.saved, true);
     if (binding?.kind === 'scaffold') {
       if (segs.length === 1 && segs[0].name === 'close') return;
       return item(at, 'untranslated', shape, R.unknown);
@@ -1195,6 +1196,6 @@ export function playwrightEvents(code: string, report: ImportReport): ImportEven
     }
     out.push(e);
   });
-  if (focus) report.items.push({ at: focusAt, kind: 'dropped', what: `Clicks into a field before typing (${focus})`, reason: 'typing into a field focuses it, so the click before it is not needed' });
+  if (focus) report.items.push({ at: focusAt, kind: 'dropped', notNeeded: true, what: `Clicks into a field before typing (${focus})`, reason: 'typing into a field focuses it, so the click before it is not needed' });
   return out;
 }

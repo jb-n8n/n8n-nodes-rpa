@@ -324,7 +324,7 @@ describe('Import Steps: execution', () => {
     expect(repaired).toHaveLength(1);
     const proposal = (await proved(input)) as Extract<AdoptResult, { ok: true }>;
     const leftOut = (data[0].json.report as { items: { kind: string; at: string; what: string; reason: string }[] }).items
-      .filter((i) => i.kind === 'untranslated' || i.kind === 'dropped').map((i) => `${i.at}, ${i.what}: ${i.reason}`);
+      .filter((i) => i.kind === 'untranslated' || (i.kind === 'dropped' && !(i as { notNeeded?: true }).notNeeded)).map((i) => `${i.at}, ${i.what}: ${i.reason}`);
     expect(repaired[0].json).toEqual(repairedStepsJson(engine, { ...proposal.proposal, leftOut }, 'after'));
     expect(repaired[0].json).toMatchObject({ name: 'sap-export', baseVersion: null, version: 1 });
     expect(repaired[0].binary?.after).toMatchObject({ mimeType: 'image/png', fileName: 'after-v1.png' });
@@ -1167,14 +1167,10 @@ describe('Import Steps: a step document', () => {
 });
 
 describe('Import Steps: what an import left out', () => {
-  // The Chrome fixture's report, as the import words it: one step not translated, four kinds of steps dropped.
+  // The Chrome fixture's report has one step not translated and five drops that change nothing the bot does (a viewport
+  // change, a scroll, focus clicks, XPath and pierce selectors): only the step that matters is left out.
   const LEFT_OUT = [
     'step 11, Wait for a JavaScript condition: steps do not run page JavaScript: add a waitFor on what the page shows when it is ready',
-    "step 1, Viewport changes (1): the node's Viewport option sets the window size",
-    'step 21, Scrolls (1): each step scrolls to its element itself',
-    'step 3, Clicks into a field before typing (6): typing into a field focuses it, so the click before it is not needed',
-    'step 4, XPath selectors (11): XPath selectors are not imported: each step keeps its other selectors',
-    'step 4, Pierce selectors (11): pierce selectors (through shadow DOM) are not imported: each step keeps its other selectors',
   ];
   const sign = async (engine: Engine, json: IDataObject, writeSteps?: string) => {
     const p = { ...signStepsParams(), ...(writeSteps !== undefined ? { writeSteps } : {}) };
@@ -1196,6 +1192,20 @@ describe('Import Steps: what an import left out', () => {
     expect(item.digest).toBe(real.proposalDigest({ ...(rest as unknown as real.Proposal), leftOut: LEFT_OUT }));
     expect((await sign(engine, item)).status).toBe('active');
     expect(String((await sign(engine, rest)).error)).toContain('the repaired steps changed after they were reviewed');
+  });
+
+  it('a drop marked notNeeded stays in the report and is not left out; a drop for want of a selector is', async () => {
+    const result = () => ({
+      drafts: [chromeDraft('sap-export')], report: { source: 'chrome' as const, steps: 9, items: [
+        { at: 'step 1', kind: 'dropped' as const, what: 'Viewport changes (1)', reason: "the node's Viewport option sets the window size", notNeeded: true as const },
+        { at: 'step 3', kind: 'dropped' as const, what: 'Clicks into a field before typing (2)', reason: 'typing into a field focuses it, so the click before it is not needed', notNeeded: true as const },
+        { at: 'step 4', kind: 'dropped' as const, what: 'Click Status', reason: 'no selector the import can use' },
+      ] },
+    });
+    const [data, repaired] = await run(importEngine((input) => proved(input), result));
+    const report = (data[0].json.report as { items: IDataObject[] }).items;
+    expect(report.filter((i) => i.notNeeded === true).map((i) => i.what)).toEqual(['Viewport changes (1)', 'Clicks into a field before typing (2)']);
+    expect(repaired[0].json.leftOut).toEqual(['step 4, Click Status: no selector the import can use']);
   });
 
   it('no typed value appears in leftOut', async () => {

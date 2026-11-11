@@ -69,7 +69,8 @@ describe('the sample UiPath desktop project (ERP Demo)', () => {
         { kind: 'desktop', sequence: 1, displayName: "Open Application 'ERP Demo - Sign in'" },
       ],
     });
-    expect(r.report.items).toContainEqual({ at: 'Main.xaml: LogMessage_1', kind: 'dropped', what: 'Log Message', reason: expect.stringContaining('logging is not a step') });
+    // Housekeeping: kept in the report, marked notNeeded, so the approval does not list it as left out.
+    expect(r.report.items).toContainEqual({ at: 'Main.xaml: LogMessage_1', kind: 'dropped', what: 'Log Message', reason: expect.stringContaining('logging is not a step'), notNeeded: true });
   });
 
   it('the password is a secret run variable: never imported, and the report says how to supply it', () => {

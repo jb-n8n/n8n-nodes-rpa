@@ -359,8 +359,8 @@ function staySignedInAnswers(events: ImportEvent[], dl: number): { answers: Map<
  */
 export function buildDraft(events: ImportEvent[], opts: ImportOptions, report: ImportReport, name: string): Draft | undefined {
   const masker = createMasker([opts.secrets?.username, opts.secrets?.password, opts.secrets?.totpSecret].filter((s) => (s?.length ?? 0) >= MIN_SECRET_LENGTH));
-  const add = (at: string, kind: ImportItem['kind'], what: string, reason: string) =>
-    report.items.push({ at: masker.mask(at), kind, what: masker.mask(what), reason: masker.mask(reason) });
+  const add = (at: string, kind: ImportItem['kind'], what: string, reason: string, notNeeded = false) =>
+    report.items.push({ at: masker.mask(at), kind, what: masker.mask(what), reason: masker.mask(reason), ...(notNeeded ? { notNeeded: true as const } : {}) });
 
   if (opts.idPattern) {
     add('', 'untranslated', 'ID Pattern', 'the recording reads no rows, and an import never invents an extract step: add one to read rows');
@@ -390,7 +390,7 @@ export function buildDraft(events: ImportEvent[], opts: ImportOptions, report: I
 
   events.forEach((e, i) => {
     if (between.has(i) && builtSignIns.has(between.get(i)!)) {
-      add(e.at, 'dropped', describeEvent(e), 'it checks the "Stay signed in?" page between the sign-in and its answer, which shows only sometimes: the answer runs only when it shows');
+      add(e.at, 'dropped', describeEvent(e), 'it checks the "Stay signed in?" page between the sign-in and its answer, which shows only sometimes: the answer runs only when it shows', true);
       return;
     }
     switch (e.kind) {

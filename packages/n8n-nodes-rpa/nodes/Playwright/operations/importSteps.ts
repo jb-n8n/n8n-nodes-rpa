@@ -168,12 +168,14 @@ function maskDeep<T>(value: T, mask: (s: string) => string): T {
 }
 
 /**
- * One line per step the import did not translate or dropped (report kinds `untranslated` and `dropped`), as the report
- * words it: where, what, and why. Notes of other kinds (converted steps, values removed as secrets) are not included.
+ * One line per step whose absence changes what the bot does: every `untranslated` item, and every `dropped` one the
+ * import did not mark `notNeeded` (a viewport change, a wait the steps do by themselves, a focus click, logging). As the
+ * report words it: where, what, and why. Notes of other kinds (converted steps, values removed as secrets) are not
+ * included; the report itself keeps every item.
  */
 function leftOutOf(report: ImportReport): string[] {
   return report.items
-    .filter((i) => i.kind === 'untranslated' || i.kind === 'dropped')
+    .filter((i) => i.kind === 'untranslated' || (i.kind === 'dropped' && i.notNeeded !== true))
     .map((i) => `${[i.at, i.what].filter((s) => s !== '').join(', ')}: ${i.reason}`);
 }
 

@@ -48,6 +48,8 @@ const COUNTED = {
 } as const;
 type Counted = keyof typeof COUNTED;
 /** A Map, so a step type such as `constructor` or `__proto__` is never mistaken for one of these. */
+/** The counted kinds whose absence changes nothing the bot does: each step scrolls and focuses itself, keeps its other selectors. A hover can open a menu, so it is not one. */
+const NOT_NEEDED = new Set<Counted>(['viewport', 'scroll', 'keyUp', 'focus', 'xpath', 'pierce', 'puppeteer', 'chain']);
 const SILENT = new Map<string, Counted>([['setViewport', 'viewport'], ['scroll', 'scroll'], ['hover', 'hover'], ['keyUp', 'keyUp']]);
 
 type Json = Record<string, unknown>;
@@ -375,7 +377,7 @@ export function chromeEvents(json: unknown, report: ImportReport): ImportEvent[]
 
   for (const k of Object.keys(COUNTED) as Counted[]) {
     const c = counted.get(k);
-    if (c) item(c.at, 'dropped', `${COUNTED[k][0]} (${c.n})`, COUNTED[k][1]);
+    if (c) report.items.push({ at: c.at, kind: 'dropped', what: `${COUNTED[k][0]} (${c.n})`, reason: COUNTED[k][1], ...(NOT_NEEDED.has(k) ? { notNeeded: true as const } : {}) });
   }
   return events;
 }

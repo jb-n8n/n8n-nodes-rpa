@@ -92,7 +92,7 @@ describe('Playwright code', () => {
     const items = r.report.items;
     expect(items).toContainEqual({ at: 'line 21', kind: 'untranslated', what: 'Click #x', reason: expect.stringContaining('.nth()') });
     expect(items).toContainEqual(expect.objectContaining({ at: 'line 23', kind: 'converted', what: 'Click Export' }));
-    expect(items).toContainEqual(expect.objectContaining({ kind: 'dropped', what: 'Clicks into a field before typing (3)' }));
+    expect(items).toContainEqual(expect.objectContaining({ kind: 'dropped', what: 'Clicks into a field before typing (3)', notNeeded: true }));
     expect(items.filter((i) => i.kind === 'secret').map((i) => i.what)).toEqual(['Dealer user ID', 'Password', 'Authentication code']);
     expect(r.report.source).toBe('playwright');
     expect(r.report.steps).toBe(10);
@@ -352,6 +352,20 @@ describe('Playwright code', () => {
     expect(legacy.items).toEqual([expect.objectContaining({ at: 'line 6', kind: 'untranslated', what: 'Click xpath=//button', reason: expect.stringContaining('XPath') })]);
   });
 
+  it('a drop whose absence changes nothing the bot does is marked notNeeded; a JavaScript wait is not', () => {
+    const { items } = parse(test([
+      "  await page.goto('https://portal.example.com/');", // 4
+      '  await page.setViewportSize({ width: 1280, height: 720 });', // 5
+      "  await page.waitForLoadState('networkidle');", // 6
+      "  await page.waitForFunction('window.ready');", // 7
+    ].join('\n')));
+    const at = (line: number) => items.find((i) => i.at === `line ${line}`);
+    expect(at(5)).toMatchObject({ kind: 'dropped', what: 'Viewport change', notNeeded: true });
+    expect(at(6)).toMatchObject({ kind: 'dropped', notNeeded: true });
+    expect(at(7)).toMatchObject({ kind: 'dropped', reason: expect.stringContaining('JavaScript') });
+    expect(at(7)).not.toHaveProperty('notNeeded');
+  });
+
   it('unsupported statements are reported with their line', () => {
     const { events, items } = parse(test([
       "  await page.goto('https://portal.example.com/');", // 4
@@ -391,7 +405,8 @@ describe('Playwright code', () => {
     expect(at(16)).toMatchObject({ kind: 'untranslated' });
     expect(at(17)).toMatchObject({ kind: 'untranslated', reason: expect.stringContaining('pattern') });
     expect(at(18)).toMatchObject({ kind: 'untranslated' });
-    expect(at(19)).toMatchObject({ kind: 'dropped' });
+    // A fixed wait is not needed (each step waits for its element).
+    expect(at(19)).toMatchObject({ kind: 'dropped', notNeeded: true });
     expect(at(20)).toMatchObject({ kind: 'untranslated' });
     expect(at(21)).toMatchObject({ kind: 'untranslated' });
     // A report item never quotes the statement's strings.
