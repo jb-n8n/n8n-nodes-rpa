@@ -27,7 +27,6 @@ export interface ToolCall {
   name: string;
   args: Record<string, unknown>;
 }
-export type AgentToolName = 'look' | 'click' | 'fill' | 'select' | 'sign_in' | 'enter_code' | 'dismiss' | 'expand_all' | 'next_page' | 'extract' | 'download' | 'back' | 'done';
 export type DoneOutcome = 'found' | 'not_found' | 'blocked';
 
 /** One tool call as it was executed. Compile uses only `ok` actions. */

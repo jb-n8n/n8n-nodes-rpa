@@ -67,7 +67,6 @@ const BUSY_WAIT_MARGIN_MS = 15_000;
  * apply), so waiting the lease plus a margin lets the next run start instead of failing busy just before the lock frees.
  */
 export const defaultBusyWaitMs = (leaseMs: number): number => leaseMs + BUSY_WAIT_MARGIN_MS;
-export const DEFAULT_BUSY_WAIT_MS = defaultBusyWaitMs(DEFAULT_LEASE_MS);
 const BUSY_RETRY_MS = 1_000;
 /**
  * Appended when the runner no longer knows the run (no_run, or a heartbeat told so): the run always sends its own

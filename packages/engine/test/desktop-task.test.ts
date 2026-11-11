@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { connectRunner } from '../src/desktop/client.js';
 import { createDesktopSurface } from '../src/desktop/surface.js';
-import { DEFAULT_BUSY_WAIT_MS, DEFAULT_LEASE_MS, defaultBusyWaitMs, runDesktopTask, type DesktopTaskInput, type DesktopTaskResult } from '../src/desktop/task.js';
+import { DEFAULT_LEASE_MS, defaultBusyWaitMs, runDesktopTask, type DesktopTaskInput, type DesktopTaskResult } from '../src/desktop/task.js';
 import { CANCELLED } from '../src/lane/script-lane.js';
 import { runTask } from '../src/lane/task.js';
 import { DESKTOP_STEPS_NEED_RUNNER, RUNNER_BUSY, UNSIGNED_REQUIRED, UNSIGNED_SECRET_VARIABLE, desktopNotInteractive } from '../src/messages.js';
@@ -263,7 +263,7 @@ describe('desktop task: refusals and runner errors', () => {
   });
 
   it('the default busy wait outlasts the lease, so a run left by a stopped n8n frees the runner in time (M12)', async () => {
-    expect(DEFAULT_BUSY_WAIT_MS).toBe(DEFAULT_LEASE_MS + 15_000);
+    expect(defaultBusyWaitMs(DEFAULT_LEASE_MS)).toBe(DEFAULT_LEASE_MS + 15_000);
     expect(defaultBusyWaitMs(60_000)).toBe(75_000);
     // The stopped n8n's run had this run's lease; without busyWaitMs this run waits it out.
     runner = await FakeRunner.start();

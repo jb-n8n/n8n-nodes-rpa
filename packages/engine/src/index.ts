@@ -45,7 +45,7 @@ export { importSource } from './import/index.js';
 export { detectImportSource } from './import/detect.js';
 export { adoptDraft, type AdoptInput, type AdoptResult } from './import/adopt.js';
 // Desktop step sets: the desktop lane, the runner client and the protocol's typed errors.
-export { checkDesktopTrust, DEFAULT_BUSY_WAIT_MS, DEFAULT_LEASE_MS, runDesktopTask, type DesktopTaskInput, type DesktopTaskResult } from './desktop/task.js';
+export { checkDesktopTrust, DEFAULT_LEASE_MS, runDesktopTask, type DesktopTaskInput, type DesktopTaskResult } from './desktop/task.js';
 export {
   connectRunner, fingerprintOf, normalizeFingerprint, probeRunner, RUNNER_CONNECT_TIMEOUT_MS, runnerAddress, RunnerClient,
   type Lease, type RunnerAddress, type RunnerEndpoint,
