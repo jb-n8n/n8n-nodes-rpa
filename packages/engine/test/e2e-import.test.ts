@@ -259,6 +259,8 @@ describe('adopting imported steps against the sandbox portal', () => {
     expect(posted).toMatchObject({ ok: false, code: 'policy_violation' });
     expect(posted).not.toHaveProperty('proposal');
     expect(posted.ok ? [] : posted.violations.map((v) => v.url)).toContainEqual(expect.stringContaining('/acme/reports/export'));
+    // The refusal names the request and where it can be let through.
+    expect(posted.ok ? '' : posted.message).toContain(`a blocked request was attempted during the run: POST ${portal.host}/acme/reports/export. If it only reads data, list it in the RPA Site Login under Requests That Only Read`);
     leakFree(posted);
   }, 120_000);
 });

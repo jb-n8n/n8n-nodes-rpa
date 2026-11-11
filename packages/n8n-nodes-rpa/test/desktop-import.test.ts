@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { IDataObject, INodeExecutionData } from 'n8n-workflow';
 import * as engine from 'n8n-rpa-engine';
 import { ERP_PASSWORD, ERP_POLICY, ERP_USER, erpCsv, erpLineItems, FakeRunner } from '../../engine/test/fake-runner.js';
+import type { DesktopStep } from 'n8n-rpa-engine';
+import { importAddedSteps, signInKeySteps } from '../nodes/Playwright/format.js';
 import { buildWorkflow } from '../nodes/Playwright/import/workflow.js';
 import { executeImportSteps } from '../nodes/Playwright/operations/importSteps.js';
 import { executeRunSteps } from '../nodes/Playwright/operations/runSteps.js';
@@ -75,6 +77,10 @@ describe('Import Steps with a UiPath desktop project', () => {
     expect((item.steps as { steps: unknown[] }).steps.some((s) => Object.hasOwn(s as object, 'write'))).toBe(false);
     // The names of its secret variables, for the approval email to mark them (shown, not reviewed: never a value).
     expect(item.secretVariables).toEqual(['password']);
+    // For the review page: Enter in the password field signs in, so it starts unticked there. Only a recording marks the
+    // steps its import added (a UiPath project's waits come from its own activities).
+    expect(json.drafts).toEqual([expect.objectContaining({ signInKeys: [4] })]);
+    expect((json.drafts as IDataObject[])[0]).not.toHaveProperty('addedSteps');
   });
 
   it('a project with browser steps still needs the RPA Browser credential', async () => {
@@ -261,6 +267,11 @@ describe('Import Steps with an RPA recording', () => {
     expect(item).toMatchObject({ name: 'erp', baseVersion: null, version: 1, attachmentNames: '' });
     expect(String(item.changeList).split('\n')).toHaveLength(17);
     expect(String(item.safetyLine)).toContain('candidate write: step 16 (Click Save) may save, post or submit');
+    // For the review page: the key that signs in (step 4, Enter in Password) and the steps the import added (the waits for
+    // each window, the returned file). Shown only: neither is signed or reviewed.
+    expect((json.drafts as IDataObject[])[0]).toMatchObject({ signInKeys: [4], addedSteps: [1, 5, 12, 14, 17] });
+    expect(item).not.toHaveProperty('signInKeys');
+    expect(item).not.toHaveProperty('addedSteps');
   });
 
   it('the approval evidence line for a recording says it was imported from a recording, and for a UiPath project it is unchanged', async () => {
@@ -337,5 +348,33 @@ describe('Import Steps with an RPA recording', () => {
     // The text is still there to read, as text: in the run node's notes and the About sticky.
     expect(wf.nodes.find((n) => n.notes?.includes('"={{ process.env.SECRET }}"'))?.name).toBe('Run steps (erp)');
     expect(String(wf.nodes.find((n) => n.name === 'About this import')!.parameters.content)).toContain('`{{ process.env.SECRET }}`');
+  });
+});
+
+describe('review page hints for desktop steps', () => {
+  const field = (automationId: string, title = 'Sign in') => ({ uia: { window: { exe: 'app.exe', title }, path: [{ controlType: 'Edit', automationId }] } });
+  /** The same target written with its keys in another order (as two recorded events may be). */
+  const reordered = (automationId: string) => ({ uia: { path: [{ automationId, controlType: 'Edit' }], window: { title: 'Sign in', exe: 'app.exe' } } });
+  const steps: DesktopStep[] = [
+    { intent: 'Type into User name', fill: { field: field('user'), value: '{{var.username}}' } },
+    { intent: 'Press Enter in User name', key: { key: 'Enter', target: field('user') } },
+    { intent: 'Type into Password', fill: { field: field('pw'), value: '{{ var.password }}' } },
+    { intent: 'Press Enter in Password', key: { key: 'Enter', target: reordered('pw') } },
+    { intent: 'Press Enter', key: { key: 'Enter' } },
+    { intent: 'Type into Code', fill: { field: field('code', 'Code'), value: 'x{{var.otp}}' } },
+    { intent: 'Press Enter', key: { key: 'Enter' } },
+    { intent: 'Press Enter in Password on another window', key: { key: 'Enter', target: field('pw', 'Other') } },
+  ];
+  it('a key pressed in a field a secret variable is typed into, or with no target right after such a fill, is a sign-in key', () => {
+    expect(signInKeySteps(steps, ['password', 'otp'])).toEqual([4, 7]);
+    // Step 5 follows a key, not the fill; step 8 is another window's field.
+    expect(signInKeySteps(steps, ['username'])).toEqual([2]);
+    expect(signInKeySteps(steps, [])).toEqual([]);
+  });
+  it('the steps an import adds to a recording are its window waits and its returned files', () => {
+    const wait: DesktopStep = { intent: 'Wait for the window Sign in', waitFor: { target: field('user') } };
+    const file: DesktopStep = { intent: 'Return the exported file a.csv', expectFile: { pattern: '^a\\.csv$' } };
+    expect(importAddedSteps([wait, steps[0], steps[1], wait, file])).toEqual([1, 4, 5]);
+    expect(importAddedSteps(steps)).toEqual([]);
   });
 });

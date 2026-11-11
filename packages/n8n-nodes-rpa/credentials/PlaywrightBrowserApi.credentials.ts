@@ -30,7 +30,7 @@ export class PlaywrightBrowserApi implements ICredentialType {
     },
     {
       displayName:
-        "Start the reference server with: docker compose up -d browser (README: Where the browser runs). On the compose network it listens on ws://browser:3000/: turn on Private Network Endpoint and set the Token from BROWSER_TOKEN in .env. For the browser on a Windows machine (Windows guide, section 6): paste the browser's Connection Line, which the installer prints when it finishes and Show-RpaConnection.ps1 -ShowTokens prints again; Private Network Endpoint stays off (the address is wss://).",
+        "Start the reference server with: docker compose up -d browser (README: Where the browser runs). On the compose network it listens on ws://browser:3000/: turn on Private Network Endpoint and set the Token from BROWSER_TOKEN in .env. For the browser on a Windows machine (Windows guide, section 6): paste the browser's Connection Line, which the installer prints when it finishes and, on that machine as an administrator, & \"C:\\Program Files\\RPA Runner\\rpa.cmd\" connection -ShowTokens prints again; Private Network Endpoint stays off (the address is wss://).",
       name: 'playwrightNotice',
       type: 'notice',
       default: '',

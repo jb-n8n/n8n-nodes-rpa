@@ -119,7 +119,7 @@ describe('v2 credential types', () => {
     expect(notice('playwright')).toContain('docker compose up -d browser');
     expect(notice('playwright')).toContain('README: Where the browser runs');
     expect(notice('playwright')).toContain('BROWSER_TOKEN');
-    expect(notice('playwright')).toContain('Show-RpaConnection.ps1 -ShowTokens');
+    expect(notice('playwright')).toContain('which the installer prints when it finishes and, on that machine as an administrator, & "C:\\Program Files\\RPA Runner\\rpa.cmd" connection -ShowTokens prints again');
     expect(notice('playwright')).toContain('paste the browser\'s Connection Line');
     expect(notice('playwright')).toContain('Private Network Endpoint stays off');
     expect(notice('local')).toContain('npx playwright install chromium');
@@ -142,10 +142,12 @@ describe('v2 credential types', () => {
   });
   it('RPA Desktop Runner: says where its Connection Line and its three values come from', () => {
     const props = new RpaDesktopRunnerApi().properties;
-    expect(props[0].displayName).toContain('Show-RpaConnection.ps1 -ShowTokens');
+    expect(props[0].displayName).toContain('on that machine, as an administrator, & "C:\\Program Files\\RPA Runner\\rpa.cmd" connection -ShowTokens prints it again');
     expect(props[0].displayName).toContain('Windows guide, section 6');
     expect(props[0].displayName).toContain('Paste the Connection Line');
-    expect(props.find((p) => p.name === 'fingerprint')?.description).toContain('Show-RpaConnection.ps1 prints');
+    expect(props.find((p) => p.name === 'fingerprint')?.description).toContain('as rpa connection prints it');
+    // The installer and its closing lines name the rpa command; the credentials name it too, not the script behind it.
+    expect(JSON.stringify(props)).not.toContain('Show-RpaConnection');
     const line = props.find((p) => p.name === 'connectionLine');
     expect(line).toMatchObject({ placeholder: 'rpa-runner://<address>:8765/rpa/v1#token=…&fingerprint=…' });
     expect(line?.description).toBe(

@@ -6,7 +6,7 @@ import {
   chromium, type Browser, type BrowserContext, type BrowserContextOptions, type CDPSession, type Page, type Request, type Response as PwResponse,
 } from 'playwright-core';
 import {
-  BLOCKED_REQUEST, BROWSER_CERT_NOT_TRUSTED, BROWSER_CERT_NOT_TRUSTED_CDP, BROWSER_FINGERPRINT_NEEDS_WSS, browserUnreachable, browserVersionMismatch,
+  BLOCKED_REQUEST, blockedActionAddress, blockedPost, blockedWrite, BROWSER_CERT_NOT_TRUSTED, BROWSER_CERT_NOT_TRUSTED_CDP, BROWSER_FINGERPRINT_NEEDS_WSS, browserUnreachable, browserVersionMismatch,
   CHROMIUM_MISSING, ENDPOINT_NOT_SECURE,
   noFreeBrowserSession, notHttp, offListSite, privateAddress, tokenRefused,
 } from '../messages.js';
@@ -178,7 +178,20 @@ export function violationMessage(v: Violation, policy: PortalPolicy): string {
     const host = v.host ?? u?.host;
     if (host) return offListSite(host, policy.navHosts);
   }
+  if (v.kind === 'write' && v.method && u && (u.protocol === 'http:' || u.protocol === 'https:')) return blockedWriteMessage(v.method.toUpperCase(), u);
   return BLOCKED_REQUEST;
+}
+
+/**
+ * A blocked write names its request as a Site Login line does (`METHOD host/path`): the path only, never the query or
+ * the fragment, with session segments masked. The caller masks secrets afterwards (script-lane override).
+ */
+function blockedWriteMessage(method: string, u: URL): string {
+  const path = maskSessionSegments(u.pathname).slice(0, 200);
+  const request = `${method} ${u.host}${path}`;
+  if (method === 'GET') return blockedActionAddress(request);
+  if (method === 'POST') return blockedPost(request, `POST ${u.host}${path.split('(…)').join('*')}`);
+  return blockedWrite(request);
 }
 
 /** Why a session was closed. Only the first reason is kept. */

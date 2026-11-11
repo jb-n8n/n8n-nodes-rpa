@@ -4,6 +4,7 @@ import {
   BROWSER_CERT_NOT_TRUSTED, BROWSER_CERT_NOT_TRUSTED_CDP, BROWSER_FINGERPRINT_INVALID, BROWSER_FINGERPRINT_MISMATCH, BROWSER_FINGERPRINT_NEEDS_WSS,
   IMPORT_EMPTY, IMPORT_NEEDS_SITE_LOGIN, IMPORT_NOT_ADOPTABLE, IMPORT_PROOF_FAILED, IMPORT_REFUSES_WRITES, IMPORT_UNSUPPORTED_TARGET,
 } from 'n8n-rpa-engine';
+import { SANDBOX } from 'n8n-rpa-sandbox/testing.js';
 import { GUIDANCE } from '../nodes/Playwright/errors.js';
 import { RUN_TABLE_COLUMNS, STEPS_TABLE_COLUMNS } from '../nodes/Playwright/rows.js';
 
@@ -418,6 +419,14 @@ describe('README', () => {
     const first = operation('Import Steps').slice(operation('Import Steps').indexOf('**First day: import a bot.**'));
     for (const text of ['after workflows 1 and 3, with workflow 3 published', 'ships with **AI Repair** off and no chat model',
       'turn on **AI Repair** in **Import steps**', 'repairs an imported browser step that no longer finds its element']) expect(first, text).toContain(text);
+  });
+
+  it("the sandbox set-up's Site Login lists the requests the sandbox's SAP pages post to read", () => {
+    const feed = section('## The self-healing data feed');
+    const line = feed.split('\n').find((l) => l.startsWith('   - **RPA Site Login**: Login Page URL `http://sandbox:8080/acme/login`'));
+    const reads = SANDBOX.erp.readPosts('sandbox:8080').map((r) => `\`POST ${r.host}${r.path}\``);
+    expect(reads).toEqual(['`POST sandbox:8080/sap*/bc/gui/sap/its/webgui`', '`POST sandbox:8080/sap/opu/odata/sap/ZLINEITEMS_SRV/$batch`']);
+    expect(line).toContain(`, Requests That Only Read ${reads.join(' and ')} (one per line).`);
   });
 
   it('Step documents say how to change desktop steps by hand: import the steps of the active row, not run them unsigned', () => {

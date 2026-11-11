@@ -88,6 +88,18 @@ export const offListSite = (host: string, navHosts: string[]) =>
   `Blocked: the page tried to open ${host}, which is not allowed. This run only visits ${navHosts.join(', ')}. Add it under Options → Also Allow These Sites if this is expected.`;
 /** A fatal violation with no more specific message (writes, sockets, sign-in refusals): the v1 text. */
 export const BLOCKED_REQUEST = 'a blocked request was attempted during the run';
+/**
+ * A blocked write, named: `request` is `METHOD host/path` (no query; session segments masked as `(…)`), `readLine` the
+ * same as a Requests That Only Read line (a masked segment written with *). A site that posts to read (SAP) is the common
+ * case; a real write needs a declared submission.
+ */
+export const blockedPost = (request: string, readLine: string) =>
+  `${BLOCKED_REQUEST}: ${request}. If it only reads data, list it in the RPA Site Login under Requests That Only Read, as ${readLine}; if it saves or sends, only a step that submits may send it, listed under Forms It May Submit.`;
+export const blockedWrite = (request: string) =>
+  `${BLOCKED_REQUEST}: ${request}. Only a step that submits may send it, listed in the RPA Site Login under Forms It May Submit.`;
+/** A main-frame navigation the destructive-action denylist refused (agent and replay sessions). */
+export const blockedActionAddress = (request: string) =>
+  `${BLOCKED_REQUEST}: ${request}. Its address looks like an action (such as delete, send or sign out), which this run does not open.`;
 /** A step stopped only because the session recorded a fatal violation (steps/run.ts). */
 export const BLOCKED_STOP = 'stopped: a blocked request was attempted';
 
@@ -226,7 +238,7 @@ export const DESKTOP_UNSIGNED_WRITES =
 export const RUNNER_URL_NOT_SECURE = 'The desktop runner URL must start with wss://: plain ws:// is refused.';
 export const RUNNER_URL_HAS_CREDENTIALS = 'The desktop runner URL must not carry a token or a user name: put the token in the Token field.';
 export const RUNNER_FINGERPRINT_INVALID =
-  'The certificate fingerprint must be the SHA-256 fingerprint Show-RpaConnection.ps1 prints: 64 hexadecimal digits, colons optional.';
+  'The certificate fingerprint must be the SHA-256 fingerprint rpa connection prints: 64 hexadecimal digits, colons optional.';
 export const runnerUnreachable = (where: string, why: string) => `Could not connect to the desktop runner at ${where} (${why}). Is it running, and is the port open?`;
 export const runnerFingerprintMismatch = (where: string, presented: string) =>
   `The desktop runner at ${where} presented a certificate with fingerprint ${presented}, which is not the fingerprint in the RPA Desktop Runner credential. Nothing was sent.`;

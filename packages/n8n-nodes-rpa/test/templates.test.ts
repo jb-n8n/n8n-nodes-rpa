@@ -1162,7 +1162,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(fromDoc[0].json.drafts).toEqual([expect.objectContaining({ name: 'line-item-export', adopted: false })]);
   });
 
-  it('an RPA recording: the review page shows its steps and ticks its candidate writes; Sign steps signs exactly the ticked and typed writes', async () => {
+  it('an RPA recording: the review page shows its steps, the ones the import added in grey, and ticks its candidate writes but the sign-in key; Sign steps signs exactly the ticked and typed writes', async () => {
     const { data, repaired, ran } = await importedRecording();
     expect(data[0].json.report).toMatchObject({ source: 'recording', steps: 17 });
     expect(data[0].binary?.workflow).toMatchObject({ fileName: 'line-item-export.workflow.json' });
@@ -1178,19 +1178,30 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // What it does besides reading, in short lines, then one short sentence per step: its verb, the value it types or
     // chooses and its field, as the recorder's bar words it; a secret variable never shows a value.
     const POINTER = '<p><em>How each step finds its control is in this run\'s execution in n8n (the Import steps node\'s output), and in the approval email when approval is by email.</em></p>';
-    expect(fields[0].html).toBe('<p>Opens ErpDemo.exe on the desktop runner.<br>Returns a file to n8n: step 17.<br>Not tried by the import: read every step before you approve.</p><p><b>The steps</b></p><ol>'
+    // The steps the import added (a wait for each window, the returned file) keep their numbers, in grey (<i>: the page's
+    // CSS colours a list item that holds one, and its number), with one grey line above the list that counts them.
+    const added = (l: string) => `<i>${l}</i>`;
+    expect(fields[0].html).toBe('<p>Opens ErpDemo.exe on the desktop runner.<br>Returns a file to n8n: step 17.<br>Not tried by the import: read every step before you approve.</p><p><b>The steps</b></p>'
+      + '<p><em>12 recorded steps, plus 5 the import added (waits for each window, the returned file)</em></p><ol>'
       + [
-        'Wait for the window ERP Demo - Sign in', 'Type &quot;clerk&quot; into User name', 'Type into Password <em>· secret variable password</em>', 'Press Enter in Password',
-        'Wait for the window ERP Demo - Line items', 'Choose &quot;2000&quot; in Company code', 'Type &quot;2026-01-20&quot; into Date from', 'Type &quot;2026-11-30&quot; into Date to',
-        'Click Search', 'Click Vendor Row 1', 'Click File', 'Wait for the window erpdemo.exe', 'Click Export...', 'Wait for the window Export line items',
-        'Save line-items.csv into the run&#39;s export folder', 'Click Save', 'Return the exported file line-items.csv <em>· returns a file</em>',
+        added('Wait for the window ERP Demo - Sign in'), 'Type &quot;clerk&quot; into User name', 'Type into Password <em>· secret variable password</em>', 'Press Enter in Password',
+        added('Wait for the window ERP Demo - Line items'), 'Choose &quot;2000&quot; in Company code', 'Type &quot;2026-01-20&quot; into Date from', 'Type &quot;2026-11-30&quot; into Date to',
+        'Click Search', 'Click Vendor Row 1', 'Click File', added('Wait for the window erpdemo.exe'), 'Click Export...', added('Wait for the window Export line items'),
+        'Save line-items.csv into the run&#39;s export folder', 'Click Save', added('Return the exported file line-items.csv <em>· returns a file</em>'),
       ].map((l) => `<li>${l}</li>`).join('') + `</ol>${POINTER}`);
+    expect(String((review.parameters.options as IDataObject).customCss)).toContain('div.html li:has(> i) { color: #7e8186; }\ndiv.html li > i { font-style: normal; color: #7e8186; }');
     expect((item.steps as { steps: unknown[] }).steps).toHaveLength(17);
-    // The candidate writes are asked, not explained twice: ticked to start with (the person here recorded or imported the bot).
+    // The candidate writes are asked, not explained twice: ticked to start with (the person here recorded or imported the
+    // bot), except a key pressed in the password field: that signs in, it does not save. It stays in the list, unticked.
     expect(fields[1]).toEqual({
       fieldLabel: 'Which of these steps save, send or submit?', fieldName: 'writes_0', fieldType: 'checkbox',
-      fieldOptions: { values: [{ option: 'Step 4: Press Enter in Password' }, { option: 'Step 16: Click Save' }] }, defaultValue: 'Step 4: Press Enter in Password,Step 16: Click Save',
+      fieldOptions: { values: [{ option: 'Step 4: Press Enter in Password' }, { option: 'Step 16: Click Save' }] }, defaultValue: 'Step 16: Click Save',
     });
+    // Without the hints (an Import steps output from before them), every candidate starts ticked and no step is grey.
+    const bare = (data[0].json.drafts as IDataObject[]).map(({ signInKeys: _k, addedSteps: _a, ...d }) => d);
+    const older = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan({ ...ran, 'Import steps': [[{ json: { ...data[0].json, drafts: bare } }], repaired] }) });
+    expect(older[1].defaultValue).toBe('Step 4: Press Enter in Password,Step 16: Click Save');
+    expect(older[0].html).not.toMatch(/<i>|recorded steps/);
     expect(fields[0].html).not.toContain('candidate');
     expect(fields[3]).toMatchObject({ fieldLabel: 'Any other step that saves, sends or submits (its number, optional)', placeholder: '7, 9' });
     expect(fields[3]).not.toHaveProperty('requiredField');
@@ -1412,6 +1423,14 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // Every import with steps comes with a workflow file now, a Chrome recording's too.
     expect(evaluate(ifParams.conditions.conditions[0].leftValue, { $: nodesRan({ 'Import steps': [data, []] }) })).toBe(true);
     expect(evaluate(ifParams.conditions.conditions[0].leftValue, { $: nodesRan({ 'Import steps': [[{ json: { report: {}, drafts: [] } }], []] }) })).toBe(false);
+    // After the review page, the file comes only when a step list was approved: a rejected bot gets no workflow to run.
+    const afterReview = (answer: IDataObject) => evaluate(ifParams.conditions.conditions[0].leftValue, { $: nodesRan({ 'Import steps': [data, []], [REVIEW]: [[{ json: answer }]] }) });
+    expect(afterReview({ decision_0: 'Approve and sign' })).toBe(true);
+    expect(afterReview({ decision_0: 'Reject', decision_1: 'Approve and sign' })).toBe(true);
+    expect(afterReview({ decision_0: 'Reject' })).toBe(false);
+    expect(afterReview({ decision_0: 'Reject', decision_1: 'Reject' })).toBe(false);
+    // Not answered in time: the page gives its input item on, with no decision.
+    expect(afterReview({ name: 'steps table' })).toBe(false);
 
     const withFile = completion('Imported, with the workflow file');
     expect(withFile).toMatchObject({ operation: 'completion', respondWith: 'returnBinary', inputDataFieldName: 'workflow', completionTitle: 'Imported' });
