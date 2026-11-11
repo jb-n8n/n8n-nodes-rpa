@@ -13,7 +13,10 @@ browser session at a time: a second browser run that starts while one is open wa
 | `runner/src/Rpa.Runner.Windows` | The Windows driver (net8.0-windows): UI Automation through [FlaUI](https://github.com/FlaUI/FlaUI) (MIT), session health, the foreground check, window capture. |
 | `runner/src/Rpa.Runner` | The executable, `RpaRunner.exe`. |
 | `runner/src/Rpa.Runner.PolicyTool` | The policy tool, `RpaPolicy.exe`: shows a change to the policy file, asks, and applies it as an administrator. |
+| `runner/src/Rpa.Supervisor.Core` | The platform-neutral part of the RPA Supervisor (net8.0): when to sign the bot user in and out, the port proxy, reading `install.json`, the supervisor's log. |
+| `runner/src/Rpa.Supervisor` | The RPA Supervisor, `RpaSupervisor.exe`: the Windows service for unattended mode and its Remote Desktop host (see "Unattended mode"). |
 | `runner/test/Rpa.Runner.Core.Tests` | Unit tests of the core with a fake desktop (run anywhere). |
+| `runner/test/Rpa.Supervisor.Core.Tests` | Unit tests of the supervisor's core with fake sessions (run anywhere). |
 | `runner/test/Rpa.Runner.Scenario` | The protocol test client CI runs against the real runner and the ERP Demo on Windows. |
 | `erp-demo` | ERP Demo: a small "legacy ERP" WinForms app with a v1 and a v2 UI. |
 | `installer` | The Windows package: `Install-Rpa.ps1`, `Uninstall-Rpa.ps1` and their module, the start scripts and `Show-RpaConnection.ps1` (`scripts/`), the script that stages the zip (`build/Stage.ps1`) and the Pester tests. |
@@ -119,6 +122,45 @@ acts with that person's access. Three limits to keep in mind:
   read a file of the bot user through a `file://` page, and, after a CDP session set the download folder of its
   browser context (`Browser.setDownloadBehavior`), saved a download with the name and content it chose into a folder
   of the bot user's profile; the file belonged to the bot user. A file only administrators could read was refused.
+
+## Unattended mode
+
+The runner needs a signed-in, unlocked desktop. In unattended mode nobody has to be signed in: the RPA Supervisor, a
+Windows service (`RPA Supervisor`, `RpaSupervisor.exe`, running as SYSTEM), listens on the runner's port (and the
+browser's) in place of the runner. When n8n connects, it signs the bot user in over a Remote Desktop connection from
+the machine to itself (to `127.0.0.2`, through the RDP client control that ships with Windows), waits until the session
+is Active and the runner listens inside it, and then passes the connection's bytes through unchanged: TLS, the token
+and the protocol stay between n8n and the runner. When no connection has held the session for `idleSeconds`, it signs
+the bot user out again. One bot user, one session at a time.
+
+The service reads `install.json` in the install directory (`%ProgramFiles%\RPA Runner`), which the installer writes:
+
+| Field | Meaning |
+|---|---|
+| `mode` | `"unattended"` makes the service run; with anything else it writes one line to its log and does nothing. |
+| `user` | The bot user: a local Windows user, its name only. |
+| `runnerPort`, `runnerInnerPort` | The service listens on `runnerPort` and passes each connection to `127.0.0.1:runnerInnerPort`, where the runner listens in the bot user's session. |
+| `browserPort`, `browserInnerPort` | The same for the RPA browser; without `browserPort` only the runner is passed on. |
+| `idleSeconds` | How long the session stays signed in without a connection (default 15, 0 to 86400). |
+| `listenAddresses` | The addresses the service listens on (default `["0.0.0.0"]`). |
+
+A field that is missing or wrong stops the service at start, and so does a port it cannot listen on; the reason is in
+the log. The bot user's password is read from the local security authority (the LSA secret `L$RpaRunnerBotPassword`,
+which standard users cannot read) for each sign-in. It reaches the Remote Desktop host process on its standard input,
+never on a command line, and is not written to the log or any file. The Remote Desktop connection does
+not check the server's identity: the server is the machine itself, over the loopback.
+
+The machine needs Remote Desktop turned on with Network Level Authentication, and the bot user in the Remote Desktop
+Users group. The service refuses a connection rather than act on a session it did not create: when someone is signed
+in as the bot user (at the console or over Remote Desktop), connections are closed until that session is signed out.
+When Windows refuses the password (or the client reports a sign-in failure that may concern it), the service tries no
+further sign-in until it is restarted, because retrying could lock the account out.
+
+The log is `%ProgramData%\RPA Runner\logs\supervisor.log` (the previous one in `supervisor.1.log`). It records
+sign-ins, sign-outs and failures with their reasons, never a password, a token or bytes of a connection, and writes
+the same line at most once in 30 s. `%ProgramData%\RPA Runner\supervisor-state.json` names the session the service
+created and its last failure, so that after a restart it signs its own stale session out and leaves anyone else's
+alone.
 
 ## Changing the policy
 

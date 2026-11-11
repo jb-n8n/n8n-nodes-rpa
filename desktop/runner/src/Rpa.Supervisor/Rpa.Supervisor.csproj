@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The RPA Supervisor, RpaSupervisor.exe: the Windows service "RPA Supervisor" (no arguments) that signs the bot
+       user in over a Remote Desktop connection from the machine to itself when n8n connects, and signs it out when the
+       work is done; and that connection's host process (rdp-host), which the service starts, one per connection. The
+       logic is in Rpa.Supervisor.Core. Publish: dotnet publish -c Release -r win-x64. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>RpaSupervisor</AssemblyName>
+    <RootNamespace>Rpa.Supervisor</RootNamespace>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- The service runs as SYSTEM: a DOTNET_STARTUP_HOOKS variable must not load code into it. -->
+    <StartupHookSupport>false</StartupHookSupport>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- ServiceBase, for running as a Windows service. -->
+    <PackageReference Include="System.ServiceProcess.ServiceController" Version="8.0.1" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Rpa.Supervisor.Core\Rpa.Supervisor.Core.csproj" />
+  </ItemGroup>
+</Project>
