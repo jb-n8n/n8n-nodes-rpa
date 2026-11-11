@@ -3,10 +3,11 @@
 // equivalent goes in the report. Typed values only ever reach fill/select events, which stripSecrets checks and drops
 // them: never a report item.
 import { cleanLabel } from './draft.js';
+import { isObject, MAX_IMPORT_JSON_BYTES, readJson, type Json } from './read.js';
 import type { Candidate, ImportEvent, ImportItem, ImportReport } from './types.js';
 
 /** A recording larger than this is refused before it is parsed. */
-export const MAX_CHROME_BYTES = 5 * 1024 * 1024;
+export const MAX_CHROME_BYTES = MAX_IMPORT_JSON_BYTES;
 /** A recording with more steps than this is refused. */
 export const MAX_CHROME_STEPS = 5_000;
 /** A target keeps at most this many of the recorded selectors, in the recorder's order (the draft builder keeps one plus three fallbacks). */
@@ -52,35 +53,14 @@ const NOT_NEEDED = new Set<Counted>(['viewport', 'scroll', 'keyUp', 'focus', 'xp
 /** A Map, so a step type such as `constructor` or `__proto__` is never mistaken for one of these. */
 const SILENT = new Map<string, Counted>([['setViewport', 'viewport'], ['scroll', 'scroll'], ['hover', 'hover'], ['keyUp', 'keyUp']]);
 
-type Json = Record<string, unknown>;
-const isObject = (v: unknown): v is Json => typeof v === 'object' && v !== null && !Array.isArray(v);
 const error = (reason: string): ImportItem => ({ at: '', kind: 'error', what: WHAT, reason });
 
-/**
- * Reads a recording's bytes or text as JSON, refusing more than MAX_CHROME_BYTES before anything is decoded or parsed.
- * undefined (and an `error` item) when it cannot be read. JSON.parse's own message quotes the input, which may hold a
- * typed password, so it is never copied into the report.
- */
+/** Reads a recording's bytes or text as JSON (readJson); undefined, and an `error` item, when it cannot be read. */
 export function readChromeJson(data: unknown, report: ImportReport): { value: unknown } | undefined {
-  let text: string;
-  if (typeof data === 'string') {
-    // A string has no more UTF-16 units than UTF-8 bytes, so a long one is refused without measuring it.
-    if (data.length > MAX_CHROME_BYTES || Buffer.byteLength(data, 'utf8') > MAX_CHROME_BYTES) { report.items.push(error(TOO_LARGE)); return undefined; }
-    text = data;
-  } else if (data instanceof Uint8Array) {
-    if (data.byteLength > MAX_CHROME_BYTES) { report.items.push(error(TOO_LARGE)); return undefined; }
-    text = new TextDecoder('utf-8').decode(data);
-  } else {
-    report.items.push(error(NOT_TEXT));
-    return undefined;
-  }
-  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
-  try {
-    return { value: JSON.parse(text) as unknown };
-  } catch {
-    report.items.push(error(NOT_JSON));
-    return undefined;
-  }
+  const read = readJson(data, MAX_CHROME_BYTES);
+  if ('value' in read) return read;
+  report.items.push(error({ tooLarge: TOO_LARGE, notText: NOT_TEXT, notJson: NOT_JSON }[read.problem]));
+  return undefined;
 }
 
 /** The tag of the element a CSS selector names: the type selector of its last compound, lower case ('' when it has none). One linear scan. */

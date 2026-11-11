@@ -6,13 +6,13 @@
 import { createMasker } from '../secrets/mask.js';
 import { isDesktopDocument, parseDesktopScript, parseScript, ScriptShapeError } from '../steps/parse.js';
 import type { DesktopScript, Script } from '../types.js';
-import { MAX_CHROME_BYTES } from './chrome.js';
+import { isObject, MAX_IMPORT_JSON_BYTES, readJson, type Json } from './read.js';
 import { MIN_SECRET_LENGTH } from './draft.js';
 import type { ImportOptions, ImportReport, ImportResult } from './types.js';
 import { desktopDraftOf } from './uipath-desktop.js';
 
 /** A step document larger than this is refused before it is parsed, as a Chrome recording is. */
-const MAX_STEPS_DOCUMENT_BYTES = MAX_CHROME_BYTES;
+const MAX_STEPS_DOCUMENT_BYTES = MAX_IMPORT_JSON_BYTES;
 
 const WHAT = 'Step document';
 const TOO_LARGE = 'the step document is larger than 5 MiB, so it was not read';
@@ -27,33 +27,7 @@ const SIGNATURE_DROPPED =
 const RENAMED = (name: string) => `the steps are named ${JSON.stringify(name)}, version 1: imported steps are a first version under the import's Name`;
 const EXPECTED_FILE_UNUSED = 'the download steps of a step document carry their own checks: Expected File is not used';
 
-type Json = Record<string, unknown>;
-const isObject = (v: unknown): v is Json => typeof v === 'object' && v !== null && !Array.isArray(v);
 const issuesOf = (err: unknown): string[] => (err instanceof ScriptShapeError ? err.issues : [err instanceof Error ? err.message : String(err)]);
-
-/**
- * The document's bytes or text as JSON, refusing more than MAX_STEPS_DOCUMENT_BYTES before anything is decoded or parsed.
- * JSON.parse's own message quotes the input, so it is never copied into the report.
- */
-function readJson(data: unknown): { value: unknown } | { error: string } {
-  let text: string;
-  if (typeof data === 'string') {
-    // A string has no more UTF-16 units than UTF-8 bytes, so a long one is refused without measuring it.
-    if (data.length > MAX_STEPS_DOCUMENT_BYTES || Buffer.byteLength(data, 'utf8') > MAX_STEPS_DOCUMENT_BYTES) return { error: TOO_LARGE };
-    text = data;
-  } else if (data instanceof Uint8Array) {
-    if (data.byteLength > MAX_STEPS_DOCUMENT_BYTES) return { error: TOO_LARGE };
-    text = new TextDecoder('utf-8').decode(data);
-  } else {
-    return { error: NOT_TEXT };
-  }
-  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
-  try {
-    return { value: JSON.parse(text) as unknown };
-  } catch {
-    return { error: NOT_JSON };
-  }
-}
 
 /**
  * Imports a step document (`data`: the file's bytes or its text) as one draft, or one desktop draft for a desktop step
@@ -68,8 +42,8 @@ export function importStepsDocument(data: unknown, opts: ImportOptions, report: 
     report.items.push({ at: '', kind: 'error', what: WHAT, reason: masker.mask(reason) });
     return { drafts: [], report };
   };
-  const read = readJson(data);
-  if ('error' in read) return fail(read.error);
+  const read = readJson(data, MAX_STEPS_DOCUMENT_BYTES);
+  if ('problem' in read) return fail({ tooLarge: TOO_LARGE, notText: NOT_TEXT, notJson: NOT_JSON }[read.problem]);
   const raw = Array.isArray(read.value) ? { steps: read.value } : read.value;
   if (!isObject(raw)) return fail(NOT_STEPS(['script must be an object']));
 
