@@ -5,7 +5,8 @@
 #   (v1 and v2) plus a release zip, and the protocol scenario: the published runner started with a policy and a
 #   random token, and a test client driving the demo app through it end to end (sign in, search, read, export to the
 #   run's export dir, retrieve the file, end the run) plus the refusals (401, busy, policy, not found, not unique,
-#   lease expiry);
+#   lease expiry); the recorder core's unit tests, and the recorder scenario: RpaRecorder.exe records the reference
+#   flow a stand-in for a person performs with synthetic input, checked against the engine's golden recording;
 # - the Windows package: the installer's tests, the browser host's and the gate's tests, the package staged by
 #   desktop/installer/build/Stage.ps1, then installed from its zip for a new standard user, the policy changed with
 #   the installed policy tool, the installed runner and browser started and driven (the same scenario; a browser
@@ -27,6 +28,10 @@ on:
       - "images/browser/gate/**"
       - "images/browser/host/**"
       - "images/browser/server/**"
+      # The engine files the recorder's tests read in place.
+      - "packages/engine/test/fixtures/import/recording-erp/**"
+      - "packages/engine/test/fixtures/desktop/stable-id-samples.json"
+      - "packages/engine/src/secrets/credential-field.ts"
       - ".github/workflows/desktop.yml"
   push:
     branches: [main]
@@ -35,6 +40,10 @@ on:
       - "images/browser/gate/**"
       - "images/browser/host/**"
       - "images/browser/server/**"
+      # The engine files the recorder's tests read in place.
+      - "packages/engine/test/fixtures/import/recording-erp/**"
+      - "packages/engine/test/fixtures/desktop/stable-id-samples.json"
+      - "packages/engine/src/secrets/credential-field.ts"
       - ".github/workflows/desktop.yml"
   workflow_dispatch:
   # For a workflow that needs the package. Any job of the calling run can upload an artifact of the same name, with a
@@ -89,6 +98,9 @@ jobs:
       - name: Supervisor core unit tests
         timeout-minutes: 10
         run: dotnet test desktop/runner/test/Rpa.Supervisor.Core.Tests -c Release --no-build --logger "console;verbosity=normal"
+      - name: Recorder core unit tests
+        timeout-minutes: 10
+        run: dotnet test desktop/recorder/test/Rpa.Recorder.Core.Tests -c Release --no-build --logger "console;verbosity=normal"
 
   windows:
     runs-on: windows-latest
@@ -149,8 +161,10 @@ jobs:
           dotnet test desktop/runner/test/Rpa.Runner.Core.Tests -c Release --no-build
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           dotnet test desktop/runner/test/Rpa.Supervisor.Core.Tests -c Release --no-build
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          dotnet test desktop/recorder/test/Rpa.Recorder.Core.Tests -c Release --no-build
 
-      - name: Publish the runner, the supervisor, the policy tool and the demo app (self-contained win-x64, single file)
+      - name: Publish the runner, the supervisor, the policy tool, the recorder and the demo app (self-contained win-x64, single file)
         timeout-minutes: 10
         run: |
           # The runner, the supervisor and the policy tool are published without IncludeNativeLibrariesForSelfExtract:
@@ -167,6 +181,8 @@ jobs:
           # The policy tool is published on Windows: its manifest, which asks for administrator rights, is embedded
           # only there.
           dotnet publish desktop/runner/src/Rpa.Runner.PolicyTool @single -o "$env:OUT\rpa-policy-tool"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          dotnet publish desktop/recorder/src/Rpa.Recorder @single '-p:EnableCompressionInSingleFile=true' -o "$env:OUT\rpa-recorder"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           foreach ($ui in 'v1', 'v2') {
             dotnet publish desktop/erp-demo @single '-p:IncludeNativeLibrariesForSelfExtract=true' '-p:EnableCompressionInSingleFile=true' "-p:ErpDemoUi=$ui" -o "$env:OUT\erp-demo\$ui"
@@ -217,6 +233,20 @@ jobs:
           } finally {
             Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
           }
+
+      # The recorder records the reference flow that a stand-in for a person performs with synthetic input (the same
+      # ERP Demo build, then with --ui v2), and the scenario checks the recording against the engine's golden file.
+      # continue-on-error: low-level hooks and synthetic input together have not been seen on a hosted runner yet, and a
+      # failure here must not keep the package from being uploaded. Its result shows on the step; the check is made on
+      # a real Windows Server in any case.
+      - name: Record the ERP Demo flow with RpaRecorder (the recorder scenario)
+        continue-on-error: true
+        timeout-minutes: 10
+        run: |
+          dotnet desktop/recorder/test/Rpa.Recorder.Scenario/bin/Release/net8.0-windows/Rpa.Recorder.Scenario.dll `
+            --recorder "$env:OUT\rpa-recorder\RpaRecorder.exe" --app "$env:OUT\erp-demo\v1\ErpDemo.exe" `
+            --golden packages/engine/test/fixtures/import/recording-erp/erp.rpa-recording.json --out "$env:OUT\recorder-scenario"
+          exit $LASTEXITCODE
 
       - name: Collect the runner's logs
         if: always()
