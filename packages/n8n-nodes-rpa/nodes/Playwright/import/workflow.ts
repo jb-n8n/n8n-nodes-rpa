@@ -10,6 +10,7 @@
 // notes and stickies as text. No credential is attached and no secret is written: credentials are named in stickies.
 import type { DesktopDraft, Draft, FlowNode, UiPathFlow } from 'n8n-rpa-engine';
 import { RPA_NODE_TYPE } from '../node-type.js';
+import { STEPS_TABLE } from '../rows.js';
 
 export interface WorkflowNode {
   id: string;
@@ -26,13 +27,12 @@ export interface WorkflowNode {
   /** A credential named by type and display name only: no id, no secret. n8n selects it when one credential has the name. */
   credentials?: Record<string, { id: null; name: string }>;
 }
-export type ConnectionType = 'main' | 'ai_languageModel';
-export interface WorkflowConnection { node: string; type: ConnectionType; index: number }
+export interface WorkflowConnection { node: string; type: 'main'; index: number }
 export interface WorkflowJson {
   name: string;
   description: string;
   nodes: WorkflowNode[];
-  connections: Record<string, Partial<Record<ConnectionType, WorkflowConnection[][]>>>;
+  connections: Record<string, { main?: WorkflowConnection[][] }>;
   settings: { executionOrder: 'v1' };
   pinData: Record<string, never>;
 }
@@ -83,7 +83,6 @@ const T = {
   if: ['n8n-nodes-base.if', 2.2],
 } as const satisfies Record<string, readonly [string, number]>;
 
-const STEPS_TABLE = 'playwright_steps';
 const COLOUR = { green: 4, gold: 2, grey: 7 } as const;
 /** Horizontal distance between columns, and the vertical distance of an If branch per level of nesting below it. */
 const STEP = 240;
@@ -298,11 +297,11 @@ class Builder {
     this.colours.add(color);
     this.add(T.sticky, reserved ? name : this.unique(name), position, { content, height, width, color });
   }
-  connect(tails: Tail[], to: string, type: ConnectionType = 'main'): void {
+  connect(tails: Tail[], to: string): void {
     for (const t of tails) {
-      const outputs = ((this.connections[t.node] ??= {})[type] ??= []);
+      const outputs = ((this.connections[t.node] ??= {}).main ??= []);
       while (outputs.length <= t.output) outputs.push([]);
-      outputs[t.output].push({ node: to, type, index: 0 });
+      outputs[t.output].push({ node: to, type: 'main', index: 0 });
     }
   }
   /** The nodes a flow node draws itself, its If or loop body aside. */
@@ -349,19 +348,8 @@ class Builder {
       `### ${more} (grey)\n${more}: see the report. This workflow draws only its first ${MAX_WORKFLOW_NODES} nodes: rebuild the rest by hand from the import report (\`report\` on Import steps' Data output) and the UiPath project.`, COLOUR.grey);
   }
 
-  /**
-   * A desktop sequence: Get active steps → Run steps on the RPA Desktop Runner credential (by type), signed steps
-   * required, AI Repair off, the draft's variables empty for the user (secret ones noted), and a gold sticky saying what
-   * to fill in and how the steps get approved. A sequence without a draft is a grey sticky.
-   */
-  private desktopPair(n: Extract<FlowNode, { kind: 'desktop' }>, tails: Tail[], x: number, y: number): Walked {
-    const draftName = draftOf(this.prefix, n);
-    const draft = this.desktopDrafts.get(draftName);
-    if (!draft) {
-      this.lastFile = undefined;
-      return this.untranslatedSticky(tails, x, y, n.displayName, 'Desktop steps', `no draft named ${draftName} was built, so there are no steps to run`);
-    }
-    this.desktopDraftNames.push(draftName);
+  /** Get active steps: the newest active version of the step list `draftName` from the steps table, connected after `tails`. */
+  private getActiveSteps(draftName: string, tails: Tail[], x: number, y: number): string {
     const get = this.unique(`Get active steps (${draftName})`);
     this.add(T.dataTable, get, [x, y], {
       resource: 'row',
@@ -380,6 +368,23 @@ class Builder {
       notes: `The newest active version of ${draftName}, or one empty item until a version is approved.`,
     });
     this.connect(tails, get);
+    return get;
+  }
+
+  /**
+   * A desktop sequence: Get active steps → Run steps on the RPA Desktop Runner credential (by type), signed steps
+   * required, AI Repair off, the draft's variables empty for the user (secret ones noted), and a gold sticky saying what
+   * to fill in and how the steps get approved. A sequence without a draft is a grey sticky.
+   */
+  private desktopPair(n: Extract<FlowNode, { kind: 'desktop' }>, tails: Tail[], x: number, y: number): Walked {
+    const draftName = draftOf(this.prefix, n);
+    const draft = this.desktopDrafts.get(draftName);
+    if (!draft) {
+      this.lastFile = undefined;
+      return this.untranslatedSticky(tails, x, y, n.displayName, 'Desktop steps', `no draft named ${draftName} was built, so there are no steps to run`);
+    }
+    this.desktopDraftNames.push(draftName);
+    const get = this.getActiveSteps(draftName, tails, x, y);
     const run = this.nodeName(n.displayName, `Run steps (${draftName})`);
     const runX = x + STEP;
     const secret = new Set(draft.secretVariables);
@@ -426,24 +431,7 @@ class Builder {
           return this.untranslatedSticky(tails, x, y, n.displayName, 'Browser steps', `no draft named ${draftName} was built, so there are no steps to run`);
         }
         this.draftNames.push(draftName);
-        const get = this.unique(`Get active steps (${draftName})`);
-        this.add(T.dataTable, get, [x, y], {
-          resource: 'row',
-          operation: 'get',
-          dataTableId: { __rl: true, mode: 'name', value: STEPS_TABLE },
-          matchType: 'allConditions',
-          filters: { conditions: [{ keyName: 'name', condition: 'eq', keyValue: draftName }, { keyName: 'status', condition: 'eq', keyValue: 'active' }] },
-          returnAll: false,
-          limit: 1,
-          orderBy: true,
-          orderByColumn: 'version',
-          orderByDirection: 'DESC',
-        }, {
-          alwaysOutputData: true,
-          executeOnce: true,
-          notes: `The newest active version of ${draftName}, or one empty item until a version is approved.`,
-        });
-        this.connect(tails, get);
+        const get = this.getActiveSteps(draftName, tails, x, y);
         const run = this.nodeName(n.displayName, `Run steps (${draftName})`);
         const runX = x + STEP;
         const vars = stepVariables(draft.script);
@@ -684,9 +672,9 @@ export function buildWorkflow(flow: UiPathFlow, drafts: Draft[], opts: BuildWork
   };
 }
 
-/** The workflow as the Data output's binary `workflow`: `<name>.workflow.json`, application/json. */
-export function workflowFile(flow: UiPathFlow, drafts: Draft[], opts: BuildWorkflowOptions): { data: Buffer; fileName: string; mimeType: 'application/json' } {
+/** The workflow as the Data output's binary `workflow`: `<name>.workflow.json`, application/json, and the workflow's name. */
+export function workflowFile(flow: UiPathFlow, drafts: Draft[], opts: BuildWorkflowOptions): { data: Buffer; fileName: string; mimeType: 'application/json'; name: string } {
   const json = buildWorkflow(flow, drafts, opts);
   const base = opts.name.replace(/[^\w.\- ]+/g, '_').replace(/^[.\s]+/, '').trim().slice(0, 120) || 'import';
-  return { data: Buffer.from(JSON.stringify(json, null, 2), 'utf8'), fileName: `${base}.workflow.json`, mimeType: 'application/json' };
+  return { data: Buffer.from(JSON.stringify(json, null, 2), 'utf8'), fileName: `${base}.workflow.json`, mimeType: 'application/json', name: json.name };
 }

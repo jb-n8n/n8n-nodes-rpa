@@ -90,9 +90,6 @@ const byName = (w: WorkflowJson, name: string): WorkflowNode => {
   return n;
 };
 const targets = (w: WorkflowJson, from: string) => (w.connections[from]?.main ?? []).map((out) => out.map((c) => c.node));
-/** The nodes whose ai_languageModel output goes to `to`. */
-const models = (w: WorkflowJson, to: string) =>
-  Object.entries(w.connections).filter(([, byType]) => (byType.ai_languageModel ?? []).some((out) => out.some((c) => c.node === to))).map(([from]) => from);
 const working = (w: WorkflowJson) => w.nodes.filter((n) => n.type !== STICKY);
 const stickies = (w: WorkflowJson) => w.nodes.filter((n) => n.type === STICKY);
 const content = (n: WorkflowNode) => (n.parameters as { content: string }).content;
@@ -147,11 +144,12 @@ function lint(w: WorkflowJson): void {
   for (const n of runs) {
     expect(n.parameters.aiRepair, n.name).toBe(false);
     expect(n.parameters, n.name).not.toHaveProperty('goal');
-    expect(models(w, n.name), n.name).toEqual([]);
     expect(targets(w, n.name).length, n.name).toBeLessThanOrEqual(1);
     if (!n.credentials) expect(n.notes, n.name).toContain('To let it repair itself when the site changes:\n1. Connect a chat model to its Model input (after step 2).\n2. Turn on AI Repair here and write the Goal in plain words.\n3. Connect its Repaired Steps output to an Execute Workflow node that calls RPA: 3 Approve steps.');
   }
   expect(w.nodes.filter((x) => x.type === CHAT || x.type === EXECUTE)).toEqual([]);
+  // Main connections only: no node feeds a Model input.
+  for (const byType of Object.values(w.connections)) expect(Object.keys(byType)).toEqual(['main']);
   // Data Tables: only known tables and columns.
   for (const n of w.nodes.filter((x) => x.type === 'n8n-nodes-base.dataTable')) {
     const p = n.parameters as { dataTableId: { value: string }; filters?: { conditions: { keyName: string }[] } };

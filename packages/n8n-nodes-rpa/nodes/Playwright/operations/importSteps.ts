@@ -299,8 +299,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
         ...(p.codeWorkflowId ? { codeWorkflow: { id: p.codeWorkflowId, timeoutSeconds: p.codeTimeoutMs / 1000 } } : {}),
         run: { maxSeconds: p.common.maxSeconds, allowedHosts: p.common.allowedHosts },
       });
-      const name = (JSON.parse(file.data.toString('utf8')) as { name: string }).name;
-      workflow = { binary: { workflow: await ctx.helpers.prepareBinaryData(file.data, file.fileName, file.mimeType) }, name };
+      workflow = { binary: { workflow: await ctx.helpers.prepareBinaryData(file.data, file.fileName, file.mimeType) }, name: file.name };
     } catch (error) {
       return configError(mask(errorMessage(error)), p.name, { report });
     }
