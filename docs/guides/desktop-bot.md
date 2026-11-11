@@ -35,8 +35,9 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 
 It downloads the package, checks it, and starts the installer, saying each step in one line. The installer lists what
 it will change and asks you to type `YES`. On Windows Server it sets up the **unattended** mode: a Windows service
-signs the bot user in when n8n connects and signs it out afterwards, so nobody needs to stay signed in. It ends with
-`RPA is installed.`
+signs the bot user in when n8n connects and signs it out afterwards, so nobody needs to stay signed in. It prints
+`RPA is installed.` and then a summary of what it set up: the programs, the data, the policy, the tasks, the service,
+the firewall rule and how to remove it all.
 
 ## 2. Connect n8n
 
@@ -65,7 +66,8 @@ by another name or address than the one in the line (a NAT, a tunnel), run the c
    **Company code**, click **Search**, then **File → Export...** and **Save**. Each step shows on the bar as a
    sentence, such as `Type "clerk" into User name`. The recorder does not read the password box: that step types a **secret**, which
    n8n supplies later.
-4. To return a value to n8n, point at it in the app (for example the result count) and press **F9**.
+4. To return a value to n8n, point at it in the app (for example the result count) and press **F9**. A small
+   **Read a value** window opens. Keep or change the name in its **Output name** box, then choose **Add read step**.
 5. Choose **Finish**. The bar asks `Which of these change from run to run?`. Tick the company code, keep the suggested
    name, and choose **Continue**.
 6. Choose **Save**. The bar saves the recording in `Documents\RPA recordings` and lists two things left to do.
@@ -98,13 +100,14 @@ by another name or address than the one in the line (a NAT, a tunnel), run the c
 ## 5. Run it
 
 1. In n8n, create a workflow, **⋯ → Import from File**, and pick the downloaded `erp-line-items.workflow.json`.
-2. On **Run steps**, pick the **RPA Desktop Runner** credential and the **RPA Step Signing** credential.
-3. The password is a secret variable. Create an **RPA Secret Variables** credential on **Run steps**, with one variable:
-   the name the note on **Run steps** gives (such as `password`) and the value `demo1234`. **Options → Variables**
+2. On the RPA node, named after your recording (here **ErpDemo recording**), pick the **RPA Desktop Runner**
+   credential and the **RPA Step Signing** credential.
+3. The password is a secret variable. Create an **RPA Secret Variables** credential on that node, with one variable:
+   the name its note gives (such as `password`) and the value `demo1234`. **Options → Variables**
    already holds the company code you ticked, starting with the value you recorded.
-4. Click **Execute workflow**. On the Windows machine nobody needs to be signed in: the service signs the bot user in,
-   ERP Demo opens, works and closes, and the bot user is signed out again. The output holds the values you read with
-   F9 under `values`, and the exported file in the **Binary** tab.
+4. Run the workflow (the **Execute** button at the bottom of the canvas). On the Windows machine nobody needs to be
+   signed in: the service signs the bot user in, ERP Demo opens, works and closes, and the bot user is signed out
+   again. The output holds the values you read with F9 under `values`, and the exported file in the **Binary** tab.
 
 The first run after a quiet time waits while Windows signs the bot user in, about 5 to 20 seconds. If it fails with
 `runner_unavailable`, run it again, then see the [Windows guide](../install/windows.md#11-when-something-fails).

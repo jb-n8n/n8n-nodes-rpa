@@ -104,7 +104,7 @@ A small mark after a step says it needs a look. Its tooltip says why.
 - A value typed into a box the recorder does not recognise is read like any field. Make that step a secret before you
   save: the value is removed from the list and the file. Close the recorder after saving, so the value does not stay
   in its memory. The import refuses a recording that still holds a value in a field named like a password.
-- n8n supplies secrets from an **RPA Secret Variables** credential on the bot's **Run steps** node, by the variable's
+- n8n supplies secrets from an **RPA Secret Variables** credential on the bot's RPA node (named after your recording), by the variable's
   name. Who may hold that credential is in [Security](../reference/security.md#secret-variables).
 
 ## Notices
