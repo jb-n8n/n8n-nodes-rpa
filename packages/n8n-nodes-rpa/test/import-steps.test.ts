@@ -239,13 +239,11 @@ describe('Import Steps: the description', () => {
     expect(Object.keys(DISPATCH)).toContain('importSteps');
   });
 
-  it('says that an import can take about twice Max Seconds, which must leave room for a TOTP wait, and only on Import Steps', () => {
+  it('one Max Seconds for every browser operation; Import Steps\' notice says that an import can take about twice it', () => {
     const maxSeconds = optionsFor('importSteps').filter((o) => o.name === 'maxSeconds');
     expect(maxSeconds).toHaveLength(1);
     expect(maxSeconds[0]).toMatchObject({ default: 180, typeOptions: { minValue: 10, maxValue: 600 } });
-    expect(maxSeconds[0].description).toContain('so it can take about twice this. On sites with an authenticator code, Max Seconds must leave room for up to a 30 s wait.');
-    // Every other operation shows the plain help, without the import sentence.
-    for (const op of ['runSteps', 'screenshot', 'download']) {
+    for (const op of ['importSteps', 'runSteps', 'screenshot', 'download']) {
       const other = optionsFor(op).filter((o) => o.name === 'maxSeconds');
       expect(other, op).toHaveLength(1);
       expect(other[0].description, op).toBe('One deadline for the whole run, AI repair and proof included');

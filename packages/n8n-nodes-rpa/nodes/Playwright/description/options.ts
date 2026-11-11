@@ -152,19 +152,9 @@ export const OPTION_ENTRIES: INodeProperties[] = [
     type: 'number',
     default: 180,
     typeOptions: { minValue: 10, maxValue: MAX_SECONDS },
+    // Import Steps' notice (IMPORT_NOTICE) says that an import takes about twice this per step list.
     description: 'One deadline for the whole run, AI repair and proof included',
-    displayOptions: only(BROWSER_OPERATIONS.filter((op) => op !== 'importSteps')),
-  },
-  // The same option for Import Steps, with its own help (n8n shows the entry whose displayOptions match).
-  {
-    displayName: 'Max Seconds',
-    name: 'maxSeconds',
-    type: 'number',
-    default: 180,
-    typeOptions: { minValue: 10, maxValue: MAX_SECONDS },
-    description:
-      'One deadline for each run, AI repair and proof included. Each imported step list runs once and is then replayed in a fresh browser, so it can take about twice this. On sites with an authenticator code, Max Seconds must leave room for up to a 30 s wait.',
-    displayOptions: only(['importSteps']),
+    displayOptions: only(BROWSER_OPERATIONS),
   },
   {
     displayName: 'Viewport',
