@@ -161,10 +161,25 @@ describe('a step document as an import source: reading it', () => {
       source: 'steps', steps: 5, items: [
         SIGNATURE_DROPPED,
         { at: '', kind: 'converted', what: 'Name and version', reason: 'the steps are named "orders", version 1: imported steps are a first version under the import\'s Name' },
-        { at: '', kind: 'untranslated', what: 'Expected File', reason: 'the download steps of a step document carry their own checks: Expected File is not used' },
-        candidate(3, 'Run the batch'), candidate(4, 'Click Save'),
+        // A note, not an untranslated step: the import form counts untranslated items as steps it could not take.
+        { at: '', kind: 'converted', what: 'Expected File', reason: 'the download steps of a step document carry their own checks: Expected File is not used' },
+        // The step the document marked as a write says so; a step that only reads like one gets the general reason.
+        { at: '', kind: 'candidateWrite', what: 'Step 3: Run the batch', reason: 'the document marked this step as a write: declare it under Write Steps when you approve' },
+        candidate(4, 'Click Save'),
       ],
     });
+  });
+
+  it('a copied row of the steps table (steps as text) is refused with a hint to paste its steps column first', () => {
+    const steps = [{ intent: 'Open the report', goto: 'https://erp.example.com/acme/reports' }];
+    const row = { name: 'line-item-export', version: 3, steps: json(steps), hash: 'c'.repeat(64), signature: 'd'.repeat(64), approvedBy: 'someone@example.com', status: 'active' };
+    const r = importSource('steps', json(row), opts);
+    expect(r.drafts).toEqual([]);
+    const error = r.report.items.find((i) => i.kind === 'error');
+    expect(error?.reason).toMatch(/^the step document is not valid steps: this looks like a row of the steps table: paste the value of its steps column; /);
+    // A document whose steps are a list is not given the hint.
+    const plain = importSource('steps', json({ startUrl: 'https://erp.example.com/', steps: [{ intent: 'Open', goto: '/a', colour: 'red' }] }), opts);
+    expect(plain.report.items.find((i) => i.kind === 'error')?.reason).not.toContain('row of the steps table');
   });
 
   it('a desktop step set that does not parse is refused with the desktop parser\'s message', () => {

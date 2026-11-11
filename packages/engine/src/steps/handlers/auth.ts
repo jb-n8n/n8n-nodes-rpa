@@ -15,7 +15,6 @@ import {
 } from '../../messages.js';
 import { SECRET_FILL_VALUE } from '../../secrets/render.js';
 import { renderSecretValue } from '../../secrets/secret-fills.js';
-import { formTarget } from '../form-target.js';
 import { isLoginPage, maskSessionSegments } from '../urls.js';
 
 type S<K extends string> = Extract<Step, Record<K, unknown>>;
@@ -61,15 +60,33 @@ function assertLoginPage(ctx: StepContext) {
   throw new SignInPolicyError(web ? `signIn refused: ${shown} ${NOT_LISTED}` : `signIn refused: the page is at ${shown}, which ${NOT_LISTED}`);
 }
 /**
- * Where the form of `locator`'s element posts (its form's action, absolute), or null outside a form. Read by formTarget,
- * so a form field named "action" cannot hide it. A form whose target formTarget cannot read (a form the page nests in a
- * button of type "button", or in a label of one) gives '', which is not a web address: the caller refuses it.
+ * Runs in the page: where `form` itself posts, its own action resolved against the document as the browser does (an
+ * empty or missing action is the document's address), never a control around it. The attribute is read through
+ * Element.prototype and the document's URLs through their prototype getters, as formTarget does, so a field named
+ * "action" or an element named "URL" or "baseURI" cannot hide them. '' when the action does not resolve.
+ */
+function ownFormAction(form: Element): string {
+  const action = Element.prototype.getAttribute.call(form, 'action');
+  const documentUrl = (name: 'URL' | 'baseURI') => {
+    const owner = name === 'URL' ? Document.prototype : Node.prototype;
+    return Object.getOwnPropertyDescriptor(owner, name)?.get?.call(document) as string;
+  };
+  try {
+    return new URL(action || documentUrl('URL'), documentUrl('baseURI')).href;
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Where the form of `locator`'s element posts (the form's own action, absolute), or null outside a form. A form whose
+ * action does not resolve gives '', which is not a web address: the caller refuses it.
  */
 async function formActionOf(locator: Locator): Promise<string | null> {
   const form = (await locator.evaluateHandle((el) => (el as HTMLInputElement).form ?? null)).asElement();
   if (!form) return null;
   try {
-    return (await form.evaluate(formTarget, false))?.action ?? '';
+    return await form.evaluate(ownFormAction);
   } finally {
     await form.dispose();
   }

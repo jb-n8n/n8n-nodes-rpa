@@ -19,6 +19,8 @@ const TOO_LARGE = 'the step document is larger than 5 MiB, so it was not read';
 const NOT_TEXT = 'the step document must be text or a file';
 const NOT_JSON = 'the step document is not valid JSON: give the steps as JSON, as Run Steps takes them';
 const NOT_STEPS = (issues: string[]) => `the step document is not valid steps: ${issues.slice(0, 5).join('; ')}`;
+/** Said first when `steps` is text: a row copied from the steps table holds its steps as JSON text. */
+const LOOKS_LIKE_ROW = 'this looks like a row of the steps table: paste the value of its steps column';
 const NAMES_SECRET = "the step document names a value of the RPA Site Login, so it was not imported: a signIn step types the Site Login's values";
 const SIGNATURE_DROPPED =
   'imported steps are a first version for approval, so the signature and Approved By the document carried were not imported: Sign Steps signs the steps when a person approves them';
@@ -76,7 +78,8 @@ export function importStepsDocument(data: unknown, opts: ImportOptions, report: 
   if ((doc.name !== undefined && doc.name !== opts.name) || (doc.version !== undefined && doc.version !== 1)) {
     report.items.push({ at: '', kind: 'converted', what: 'Name and version', reason: masker.mask(RENAMED(opts.name)) });
   }
-  if (opts.download) report.items.push({ at: '', kind: 'untranslated', what: 'Expected File', reason: EXPECTED_FILE_UNUSED });
+  // A note, not a step the import could not take.
+  if (opts.download) report.items.push({ at: '', kind: 'converted', what: 'Expected File', reason: EXPECTED_FILE_UNUSED });
   const named: Json = { ...doc, name: opts.name, version: 1 };
   // Defence in depth behind the run's own checks: a document that names a Site Login secret is never a draft.
   if (masker.containsSecret(JSON.stringify(named))) return fail(NAMES_SECRET);
@@ -98,14 +101,14 @@ export function importStepsDocument(data: unknown, opts: ImportOptions, report: 
     } catch (err) {
       return fail(NOT_STEPS(issuesOf(err)));
     }
-    return { drafts: [], desktopDrafts: [desktopDraftOf(opts.name, script, report, { alsoCandidates: declared })], report };
+    return { drafts: [], desktopDrafts: [desktopDraftOf(opts.name, script, report, { authorMarked: declared })], report };
   }
 
   let script: Script;
   try {
     script = parseScript(named, opts.startUrl ? { defaultStartUrl: opts.startUrl } : {});
   } catch (err) {
-    return fail(NOT_STEPS(issuesOf(err)));
+    return fail(NOT_STEPS(typeof doc.steps === 'string' ? [LOOKS_LIKE_ROW, ...issuesOf(err)] : issuesOf(err)));
   }
   report.steps += script.steps.length;
   return { drafts: [{ name: opts.name, script }], report };

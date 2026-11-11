@@ -903,7 +903,8 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       '**step document**', 'this is how hand-written steps get approved and signed']) expect(about, s).toContain(s);
     const set = sticky(t, 'Set once').content;
     for (const s of ['**Import a bot**: a Basic Auth credential', '**RPA Browser**: Import steps', '**RPA Site Login**', '**Chat model**', 'RPA: 3 Approve steps',
-      '**Options → Allow Private Network**', 'Keep **Authentication** on', 'login breaker', 'chat model']) {
+      '**Options → Allow Private Network**', 'Keep **Authentication** on', 'login breaker', 'chat model',
+      'A step document with `{{var.name}}` values needs each one under **Options → Variables** in **Import steps**']) {
       expect(set, s).toContain(s);
     }
     const why = sticky(t, 'Why approval').content;

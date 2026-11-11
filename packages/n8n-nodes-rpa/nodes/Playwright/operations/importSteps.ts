@@ -199,8 +199,9 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
     p = readImportParams(ctx, i);
     if (!MAY_BE_DESKTOP.includes(p.source) || credentialId(ctx, CREDENTIALS.browser) !== undefined) {
       endpoint = browserConfig(await browserCredentials(ctx, i));
-      // A CDP connection cannot read downloaded files: refused before anything is read.
-      refuseCdpDownload(engine, endpoint, expectedDownload(engine, p.expectedFile) !== undefined);
+      // A CDP connection cannot read downloaded files: refused before anything is read. A step document's downloads carry
+      // their own checks and Expected File is not used, so it does not refuse one.
+      refuseCdpDownload(engine, endpoint, p.source !== 'steps' && expectedDownload(engine, p.expectedFile) !== undefined);
     }
     if (siteLoginId !== undefined) siteLogin = siteLoginConfig(await ctx.getCredentials(CREDENTIALS.siteLogin, i));
     if (siteLogin && !node.credentials?.[CREDENTIALS.redis] && isQueueMode(deps)) throw new ConfigError(QUEUE_NEEDS_REDIS);
@@ -228,9 +229,11 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
     if (v && typeof v === 'object') return Object.values(v).some(containsSecret);
     return false;
   };
+  // A step document without a start address starts where Run Steps would start it: Start URL, else the Site Login's.
+  const startUrl = p.startUrl || (p.source === 'steps' ? siteLogin?.policy.startUrl ?? '' : '');
   const opts: ImportOptions = {
     name: p.name,
-    ...(p.startUrl ? { startUrl: p.startUrl } : {}),
+    ...(startUrl ? { startUrl } : {}),
     ...(Object.keys(p.vars).length ? { vars: p.vars } : {}),
     ...(download ? { download } : {}),
     ...(p.idPattern ? { idPattern: p.idPattern } : {}),

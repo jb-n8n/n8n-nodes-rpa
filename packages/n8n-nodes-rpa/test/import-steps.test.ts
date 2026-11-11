@@ -1012,6 +1012,33 @@ describe('Import Steps: a step document', () => {
     expect(String((await sign(engine, { ...item, evidenceLine: 'Not replayed.' })).error)).toContain('changed after it was reviewed');
   });
 
+  it("a document without a start address takes the Site Login's when Start URL is empty, as Run Steps does", async () => {
+    const engine = importEngine((input) => proved(input));
+    const doc = { steps: [
+      { intent: 'Sign in', signIn: { username: { label: 'Dealer user ID' }, password: { label: 'Password' }, submit: { role: 'button', name: 'Sign in' } } },
+      { intent: 'Open the report', goto: '/acme/reports' },
+      { intent: 'Export', download: { trigger: { role: 'button', name: 'Export' }, check: { name: '^LINEITEMS_' } } },
+    ] };
+    const [data, repaired] = await run(engine, { params: docParams(doc), items: textItem });
+    expect(data[0].json.error, JSON.stringify(data[0].json).slice(0, 800)).toBeUndefined();
+    expect(engine.adoptions).toHaveLength(1);
+    expect(engine.adoptions[0].draft.startUrl).toBe(`${SITE.url}/acme/login`);
+    expect(drafts(data[0])).toEqual([expect.objectContaining({ name: 'sap-export', adopted: true })]);
+    expect(repaired).toHaveLength(1);
+  });
+
+  it('an Expected File this source does not use neither refuses a CDP browser nor counts as a step not translated', async () => {
+    const cdp = { playwrightBrowserApi: { mode: 'cdp', wsUrl: 'ws://chrome.internal:9222/' }, playwrightSiteLoginApi: siteLoginData(SITE) };
+    const engine = importEngine((input) => proved(input));
+    const doc = { startUrl: `${SITE.url}/acme/login`, steps: [{ intent: 'Open the report', goto: '/acme/reports' }, { intent: 'Read the items', extract: { scope: { css: 'main' }, idPattern: 'SKU-\\d{4}' } }] };
+    const [data] = await run(engine, { params: docParams(doc, { expectedFile: EXPECTED_FILE, idPattern: 'SKU-\\d{4}' }), items: textItem, credentials: cdp });
+    expect(data[0].json.error, JSON.stringify(data[0].json).slice(0, 800)).toBeUndefined();
+    expect(engine.adoptions).toHaveLength(1);
+    const items = (data[0].json.report as { items: IDataObject[] }).items;
+    expect(items).toContainEqual({ at: '', kind: 'converted', what: 'Expected File', reason: 'the download steps of a step document carry their own checks: Expected File is not used' });
+    expect(items.filter((i) => i.kind === 'untranslated')).toEqual([]);
+  });
+
   it('a browser step document still needs the RPA Browser credential', async () => {
     const engine = importEngine((input) => proved(input));
     const doc = { startUrl: `${SITE.url}/acme/login`, steps: [{ intent: 'Open the report', goto: '/acme/reports' }] };

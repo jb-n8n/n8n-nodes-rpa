@@ -192,19 +192,26 @@ export function buildDesktopDraft(seq: DesktopSequence, report: ImportReport): D
   return desktopDraftOf(seq.name, script, report, { atOf, secretVariables: seq.secretVariables });
 }
 
+/** Why a step the source document marked `write: true` is a candidate write. */
+const AUTHOR_MARKED_WRITE = 'the document marked this step as a write: declare it under Write Steps when you approve';
+
 /**
  * A parsed desktop step set as a desktop draft named `name`, reported as every desktop import reports one: each
- * candidate write (desktopWriteCandidates, and `alsoCandidates`, 1-based) gets a report item and none is declared; the
- * variables are those its fills and selects type; its steps are counted. `atOf[n - 1]`: where step n came from.
+ * candidate write (desktopWriteCandidates, and `authorMarked`, 1-based: the steps the source document marked as writes,
+ * reported with their own reason) gets a report item and none is declared; the variables are those its fills and
+ * selects type; its steps are counted. `atOf[n - 1]`: where step n came from.
  */
 export function desktopDraftOf(
-  name: string, script: DesktopScript, report: ImportReport, o: { atOf?: string[]; secretVariables?: string[]; alsoCandidates?: number[] } = {},
+  name: string, script: DesktopScript, report: ImportReport, o: { atOf?: string[]; secretVariables?: string[]; authorMarked?: number[] } = {},
 ): DesktopDraft {
-  const writeCandidates = [...new Set([...desktopWriteCandidates(script), ...(o.alsoCandidates ?? [])])].sort((a, b) => a - b);
+  const marked = new Set(o.authorMarked ?? []);
+  const writeCandidates = [...new Set([...desktopWriteCandidates(script), ...marked])].sort((a, b) => a - b);
   for (const n of writeCandidates) {
     report.items.push({
       at: o.atOf?.[n - 1] ?? '', kind: 'candidateWrite', what: `Step ${n}: ${script.steps[n - 1].intent}`,
-      reason: `this step may save, post or submit. The import never declares a write: if it writes, list ${n} in Write Steps when you approve these steps (Sign Steps); the desktop runner refuses a declared write control without it`,
+      reason: marked.has(n)
+        ? AUTHOR_MARKED_WRITE
+        : `this step may save, post or submit. The import never declares a write: if it writes, list ${n} in Write Steps when you approve these steps (Sign Steps); the desktop runner refuses a declared write control without it`,
     });
   }
   const variables = [...new Set(script.steps.flatMap((s) => {

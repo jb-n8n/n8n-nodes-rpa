@@ -155,24 +155,47 @@ describe('signIn / detect / interrupts', () => {
       if (!r.ok) throw new Error(r.failure.message);
     } finally { await session.close(); }
   });
-  it('a login form nested in a <button type="button"> is refused (its target cannot be read); an ordinary form still signs in', async () => {
-    const nested = await signInAfter((page) => page.evaluate(() => {
+  it('a login form nested in a <button type="button"> is judged by its own action: it signs in when that is listed and is refused, naming it, when not', async () => {
+    const nest = (action: string | null) => (page: StepContext['page']) => page.evaluate((a) => {
       const form = document.querySelector('form')!;
+      if (a !== null) form.setAttribute('action', a);
       const button = document.createElement('button');
       button.type = 'button';
       // Named apart, so only the form check can stop the sign-in.
       button.setAttribute('aria-label', 'Panel');
       form.replaceWith(button);
       button.appendChild(form);
-    }));
+    }, action);
+    const listed = await signInAfter(nest(null));
+    try {
+      if (!listed.r.ok) throw new Error(listed.r.failure.message);
+    } finally { await session.close(); }
+    const nested = await signInAfter(nest('http://127.0.0.1:1/elsewhere'));
     try {
       if (nested.r.ok) throw new Error('expected failure');
-      expect(nested.r.failure.message).toBe("signIn refused: the username field's form posts to an address that is not a web address (http or https), which is not listed in the Site Login under Pages Where the Password May Be Typed.");
+      expect(nested.r.failure.message).toBe("signIn refused: the username field's form posts to 127.0.0.1:1/elsewhere, which is not listed in the Site Login under Pages Where the Password May Be Typed. Add 127.0.0.1:1/elsewhere there: the address bar never shows where a form posts.");
       expect(nested.ctx.violations).toContainEqual(expect.objectContaining({ kind: 'signin', fatal: true }));
     } finally { await session.close(); }
     const { r } = await signInAfter(async () => undefined);
     try {
       if (!r.ok) throw new Error(r.failure.message);
+    } finally { await session.close(); }
+  });
+  it('a login form nested in a submit button with its own formaction is judged by the form\'s own action, and refused when that is not listed', async () => {
+    const { ctx, r } = await signInAfter((page) => page.evaluate((listed) => {
+      const form = document.querySelector('form')!;
+      form.setAttribute('action', 'http://127.0.0.1:1/elsewhere');
+      const button = document.createElement('button');
+      button.type = 'submit';
+      button.setAttribute('formaction', listed);
+      button.setAttribute('aria-label', 'Panel');
+      form.replaceWith(button);
+      button.appendChild(form);
+    }, `${portal.url}/acme/login`));
+    try {
+      if (r.ok) throw new Error('expected failure');
+      expect(r.failure.message).toBe("signIn refused: the username field's form posts to 127.0.0.1:1/elsewhere, which is not listed in the Site Login under Pages Where the Password May Be Typed. Add 127.0.0.1:1/elsewhere there: the address bar never shows where a form posts.");
+      expect(ctx.violations).toContainEqual({ kind: 'signin', url: 'http://127.0.0.1:1/elsewhere', fatal: true });
     } finally { await session.close(); }
   });
   it('submits credentials only once per run', async () => {
