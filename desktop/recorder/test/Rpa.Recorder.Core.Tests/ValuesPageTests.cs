@@ -145,7 +145,11 @@ public class ValuesPageTests
         var t = Record(Typed(1, Notes), Left(2, Notes, longText));
         t.MarkVariable(0, "notes");
         var row = ValuesPage.Rows(t.Steps, null, t.StartValue)[0];
-        Assert.Equal($"Starts as \"{new string('a', 57)}...\".", ValuesPage.StartsAs(row));
+        // Cut after 40 characters, so a long value without spaces does not push the line apart.
+        Assert.Equal($"Starts as \"{new string('a', 37)}...\".", ValuesPage.StartsAs(row));
+        var forty = Record(Typed(1, Notes), Left(2, Notes, new string('c', 40)));
+        forty.MarkVariable(0, "notes");
+        Assert.Equal($"Starts as \"{new string('c', 40)}\".", ValuesPage.StartsAs(ValuesPage.Rows(forty.Steps, null, forty.StartValue)[0]));
         // A value the file does not take (more than 500 characters) is not shown as a start value either.
         var tooLong = Record(Typed(1, Notes), Left(2, Notes, new string('b', Session.MaxStartValueLength + 1)));
         tooLong.MarkVariable(0, "notes");
