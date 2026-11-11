@@ -91,7 +91,7 @@ by another name or address than the one in the line (a NAT, a tunnel), run the c
    - On **Sign steps**, type your email address in **Approver Allowlist**. It is recorded as the approver.
 3. Click **Publish**, then open the form: on **Import a bot**, copy the production URL and open it in your browser.
 4. Upload the recording, give the steps a name such as `erp-line-items`, and submit.
-5. The next page, **Review and approve**, lists the steps by number. Steps in italics are the ones the import added (a wait
+5. The next page, **Review and approve**, lists the steps by number. The lighter, grey steps are the ones the import added (a wait
    for each window, and one for the file the bot returns). Under **Which of these steps save, send or submit?**, keep
    **Click Save** ticked, and untick a step that does not save or send. Choose **Approve and sign**, then **Submit**.
 6. The last page says `Approved and signed: erp-line-items v1 is now the version that runs under that name.` Your
