@@ -36,7 +36,7 @@ public sealed class PortProxyTests : IAsyncLifetime
         var options = new SupervisorOptions(Bot, [new PortMap(listen, target)], ["127.0.0.1"], idleSeconds, readySeconds,
             stateFile);
         var host = new FakeRdpHost(_sessions, time, _events);
-        var manager = new SessionManager(_sessions, host, options, _log, time);
+        var manager = new SessionManager(_sessions, host, new FakeRemoteDesktop(), options, _log, time);
         _proxy = new PortProxy(manager, options, _log).RunAsync(_stop.Token);
         return new Setup(host, manager, listen, target);
     }
@@ -280,6 +280,26 @@ public sealed class PortProxyTests : IAsyncLifetime
         Assert.Equal(0, await read.WaitAsync(Patience));
         Assert.StartsWith("HostExited", setup.Manager.LastFailure);
         Assert.Contains("\"lastFailure\":\"HostExited", File.ReadAllText(stateFile));
+        // The connection ends with the sign-in's reason, not as a timeout of its own.
+        Assert.Contains(_log.Failures, f => f.Reason == SessionFailure.HostExited);
+        Assert.DoesNotContain(_log.Failures, f => f.Reason == SessionFailure.Timeout);
+    }
+
+    [Fact]
+    public async Task A_connection_whose_session_went_away_while_it_waited_for_its_target_ends_with_the_sign_ins_reason()
+    {
+        var setup = Start(TimeProvider.System);
+        var client = await Connect(setup.ListenPort);
+        for (var i = 0; i < 500 && setup.Host.Connections.Count == 0; i++) await Task.Delay(10);
+
+        // The session's Remote Desktop connection ends before anything listens; signing in again fails.
+        setup.Host.AlwaysFail = SessionFailure.NotAllowed;
+        setup.Host.Connections[0].Drop();
+
+        await AssertEnds(client);
+        Assert.Equal(2, setup.Host.Calls);
+        Assert.Contains(_log.Failures, f => f.Reason == SessionFailure.NotAllowed);
+        Assert.DoesNotContain(_log.Failures, f => f.Message.Contains("Nothing listened"));
     }
 
     [Fact]

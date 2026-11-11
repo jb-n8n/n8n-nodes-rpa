@@ -38,8 +38,11 @@ internal static class LsaSecret
                 var value = data == IntPtr.Zero ? default : Marshal.PtrToStructure<LSA_UNICODE_STRING>(data);
                 if (value.Length == 0 || value.Buffer == IntPtr.Zero)
                     throw new SessionException(SessionFailure.NoPassword, $"The stored password of the bot user is empty (the LSA secret {name}).");
-                var text = Marshal.PtrToStringUni(value.Buffer, value.Length / 2);
+                // A secret written with its terminating NUL holds it in its length.
+                var text = Marshal.PtrToStringUni(value.Buffer, value.Length / 2).TrimEnd('\0');
                 Marshal.Copy(new byte[value.Length], 0, value.Buffer, value.Length); // no copy left in freed memory
+                if (text.Length == 0)
+                    throw new SessionException(SessionFailure.NoPassword, $"The stored password of the bot user is empty (the LSA secret {name}).");
                 return text;
             }
             finally

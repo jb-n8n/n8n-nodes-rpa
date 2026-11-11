@@ -27,8 +27,9 @@ public static class InstallFile
     private static readonly char[] NotInUserName = ['"', '/', '\\', '[', ']', ':', ';', '|', '=', ',', '+', '*', '?', '<', '>', '@'];
 
     /// <summary>The supervisor's options from install.json's text, or null when mode is not unattended. Throws
-    /// InvalidDataException, naming the field, when a field is missing or wrong.</summary>
-    public static SupervisorOptions? ToOptions(string json, string stateFile)
+    /// InvalidDataException, naming the field, when a field is missing or wrong. user may be written name, .\name or
+    /// machineName\name; the options hold the name alone.</summary>
+    public static SupervisorOptions? ToOptions(string json, string stateFile, string machineName)
     {
         JsonElement root;
         try
@@ -45,8 +46,11 @@ public static class InstallFile
             return null;
 
         var user = root.TryGetProperty(User, out var u) && u.ValueKind == JsonValueKind.String ? u.GetString()! : "";
+        if (user.Split('\\') is [var prefix, var name]
+            && (prefix == "." || string.Equals(prefix, machineName, StringComparison.OrdinalIgnoreCase)))
+            user = name;
         if (user.Length is 0 or > 20 || user.Trim(' ', '.').Length == 0 || user.IndexOfAny(NotInUserName) >= 0 || user.Any(char.IsControl))
-            throw Wrong($"{User} must be the name of a local Windows user (at most 20 characters, without a domain).");
+            throw Wrong($"{User} must name a local Windows user of this machine: name, .\\name or {machineName}\\name, the name at most 20 characters.");
 
         var ports = new List<PortMap> { new(Port(root, RunnerPort), Port(root, RunnerInnerPort)) };
         if (root.TryGetProperty(BrowserPort, out var browser) && browser.ValueKind != JsonValueKind.Null)

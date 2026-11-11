@@ -62,6 +62,10 @@ public sealed class FakeRdpHost(FakeSessions sessions, TimeProvider time, List<s
     /// <summary>When set, each attempt waits for it before it does anything else.</summary>
     public TaskCompletionSource? Gate { get; set; }
 
+    /// <summary>This many of the next sign-ins return a connection that has already closed (its host ended as the
+    /// session became Active).</summary>
+    public int ClosedOnReturn { get; set; }
+
     /// <summary>When set, a failed attempt leaves a session in this state behind: Disconnected as a Remote Desktop
     /// client that times out after the session was made can, Active as a person who signs in during the attempt.</summary>
     public SessionState? LeaveSessionOnFailure { get; set; }
@@ -85,7 +89,32 @@ public sealed class FakeRdpHost(FakeSessions sessions, TimeProvider time, List<s
         sessions.Add(new SessionInfo(id, user, SessionState.Active, time.GetUtcNow()));
         var connection = new FakeConnection(id);
         lock (Connections) Connections.Add(connection);
+        if (ClosedOnReturn > 0)
+        {
+            ClosedOnReturn--;
+            connection.Drop();
+        }
         return connection;
+    }
+}
+
+/// <summary>The Remote Desktop service: running unless a test says otherwise.</summary>
+public sealed class FakeRemoteDesktop : IRemoteDesktopService
+{
+    /// <summary>This many of the next checks find the service stopped.</summary>
+    public int StoppedChecks { get; set; }
+
+    public int Checks { get; private set; }
+
+    public bool IsRunning
+    {
+        get
+        {
+            Checks++;
+            if (StoppedChecks <= 0) return true;
+            StoppedChecks--;
+            return false;
+        }
     }
 }
 

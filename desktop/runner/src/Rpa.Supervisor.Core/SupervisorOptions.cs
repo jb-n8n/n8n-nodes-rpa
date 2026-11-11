@@ -13,4 +13,4 @@ public sealed record PortMap(int ListenPort, int TargetPort);
 /// <param name="StateFile">The JSON file that names the session the supervisor created and its last failure; empty
 /// keeps them in memory only.</param>
 public sealed record SupervisorOptions(string User, IReadOnlyList<PortMap> Ports, IReadOnlyList<string> ListenAddresses,
-    int IdleSeconds = 15, int ReadySeconds = 45, string StateFile = "");
+    int IdleSeconds = 15, int ReadySeconds = 90, string StateFile = "");

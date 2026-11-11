@@ -16,7 +16,15 @@ internal static class Program
             case [RdpHostMode]:
                 return RdpHostWindow.Run();
             case [] when !Environment.UserInteractive:
-                ServiceBase.Run(new SupervisorService());
+                try
+                {
+                    ServiceBase.Run(new SupervisorService());
+                }
+                catch (StartRefused)
+                {
+                    // ServiceBase.Run throws again what OnStart threw; the service has logged it once already.
+                    return 1;
+                }
                 return 0;
             default:
                 Console.Error.WriteLine(

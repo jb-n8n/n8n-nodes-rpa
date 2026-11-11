@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
@@ -9,31 +10,59 @@ namespace Rpa.Supervisor;
 internal sealed class WindowsSessions : ISessions
 {
     private static readonly TimeSpan SignOutLimit = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan SignOutRepeat = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan RecentSignOut = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan Poll = TimeSpan.FromMilliseconds(250);
 
+    private readonly ConcurrentDictionary<uint, long> _signOuts = new();
+
     /// <summary>Every session of the user in any state, the console session included. A local and a domain user of
-    /// the same name both count: listing too much makes the supervisor refuse, never sign out a person.</summary>
+    /// the same name both count: listing too much makes the supervisor refuse, never sign out a person. Throws when a
+    /// session that is still listed cannot be read.</summary>
     public IReadOnlyList<SessionInfo> ForUser(string user) =>
         All().Where(s => string.Equals(s.User, user, StringComparison.OrdinalIgnoreCase)).ToArray();
 
-    /// <summary>Signs the session out without waiting in Windows, then waits up to 30 s until it is no longer listed.
-    /// Throws when Windows refuses or the session is still there.</summary>
+    /// <summary>Signs the session out without waiting in Windows, then waits up to 30 s until it is no longer listed,
+    /// asking again every 5 s (a session in the middle of its logon may not take the first request). Throws when
+    /// Windows refuses or the session is still there.</summary>
     public async Task SignOutAsync(uint sessionId, CancellationToken ct)
     {
         if (All().FirstOrDefault(s => s.Id == sessionId) is not { } session) return;
-        if (!WTSLogoffSession(IntPtr.Zero, sessionId, false))
-        {
-            var error = new Win32Exception();
-            if (!Listed(session)) return;
-            throw new Win32Exception(error.NativeErrorCode, $"Windows did not sign session {sessionId} out: {error.Message}");
-        }
+        _signOuts[sessionId] = Environment.TickCount64;
         var waited = Stopwatch.StartNew();
+        var asked = TimeSpan.Zero;
+        LogOff(session);
         while (Listed(session))
         {
             if (waited.Elapsed > SignOutLimit)
                 throw new TimeoutException($"Session {sessionId} was still there {SignOutLimit.TotalSeconds:0} s after it was signed out.");
+            if (waited.Elapsed - asked >= SignOutRepeat)
+            {
+                asked = waited.Elapsed;
+                try
+                {
+                    LogOff(session);
+                }
+                catch (Win32Exception)
+                {
+                    // The first request may still be under way; the wait decides.
+                }
+            }
             await Task.Delay(Poll, ct);
         }
+    }
+
+    /// <summary>Whether this process signed the session out in the last minute: its Remote Desktop connection then
+    /// ends as a matter of course.</summary>
+    public bool SignedOutRecently(uint sessionId) =>
+        _signOuts.TryGetValue(sessionId, out var at) && Environment.TickCount64 - at < RecentSignOut.TotalMilliseconds;
+
+    private static void LogOff(SessionInfo session)
+    {
+        if (WTSLogoffSession(IntPtr.Zero, session.Id, false)) return;
+        var error = new Win32Exception();
+        if (!Listed(session)) return;
+        throw new Win32Exception(error.NativeErrorCode, $"Windows did not sign session {session.Id} out: {error.Message}");
     }
 
     // A session is told apart by its id and its logon time together: Windows reuses ids.
@@ -43,31 +72,43 @@ internal sealed class WindowsSessions : ISessions
     /// <summary>Every session that has a user.</summary>
     private static List<SessionInfo> All()
     {
+        var sessions = new List<SessionInfo>();
+        foreach (var id in Ids())
+            if (Query(id) is { } session) sessions.Add(session);
+        return sessions;
+    }
+
+    private static List<uint> Ids()
+    {
         if (!WTSEnumerateSessions(IntPtr.Zero, 0, 1, out var buffer, out var count)) throw new Win32Exception();
-        var ids = new List<uint>(count);
         try
         {
             var size = Marshal.SizeOf<WTS_SESSION_INFO>();
+            var ids = new List<uint>(count);
             for (var i = 0; i < count; i++) ids.Add(Marshal.PtrToStructure<WTS_SESSION_INFO>(buffer + i * size).SessionId);
+            return ids;
         }
         finally
         {
             WTSFreeMemory(buffer);
         }
-        var sessions = new List<SessionInfo>(ids.Count);
-        foreach (var id in ids)
-            if (Query(id) is { } session) sessions.Add(session);
-        return sessions;
     }
 
     // One session's user, state and logon time, read together; null when it has no user or is gone since the listing.
+    // A session that is still listed but cannot be read throws: it might be the user's.
     private static SessionInfo? Query(uint id)
     {
-        if (!WTSQuerySessionInformation(IntPtr.Zero, id, WTSSessionInfoEx, out var buffer, out _)) return null;
+        if (!WTSQuerySessionInformation(IntPtr.Zero, id, WTSSessionInfoEx, out var buffer, out _))
+        {
+            var error = new Win32Exception();
+            if (!Ids().Contains(id)) return null;
+            throw new Win32Exception(error.NativeErrorCode, $"Session {id} could not be read: {error.Message}");
+        }
         try
         {
             var info = Marshal.PtrToStructure<WTSINFOEXW>(buffer);
-            if (info.Level != 1 || string.IsNullOrEmpty(info.Data.UserName)) return null;
+            if (info.Level != 1) throw new Win32Exception($"Session {id} could not be read: Windows answered with level {info.Level}.");
+            if (string.IsNullOrEmpty(info.Data.UserName)) return null;
             var state = info.Data.SessionState switch
             {
                 WTSActive => SessionState.Active,

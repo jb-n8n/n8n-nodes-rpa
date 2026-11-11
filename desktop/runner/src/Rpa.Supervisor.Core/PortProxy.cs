@@ -124,7 +124,8 @@ public sealed class PortProxy(SessionManager manager, SupervisorOptions options,
         }
     }
 
-    // The session, then a connection to the target, within ReadySeconds. Null when the connection is to be closed.
+    // The session, then a connection to the target, within ReadySeconds. Null when the connection is to be closed. A
+    // failed sign-in has been recorded with its reason by the manager; only a target that never listened is logged here.
     private async Task<Socket?> WaitForTargetAsync(Socket client, PortMap map, CancellationToken ct)
     {
         using var ready = new CancellationTokenSource(TimeSpan.FromSeconds(options.ReadySeconds), manager.Time);
@@ -138,6 +139,7 @@ public sealed class PortProxy(SessionManager manager, SupervisorOptions options,
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
+            sessionReady = sessionReady && manager.HasOpenConnection;
             log.Failure(sessionReady ? null : SessionFailure.Timeout, sessionReady
                 ? $"Nothing listened on 127.0.0.1:{map.TargetPort} within {options.ReadySeconds} s; the connection to port {map.ListenPort} is closed."
                 : $"No session within {options.ReadySeconds} s; the connection to port {map.ListenPort} is closed.");
@@ -153,6 +155,9 @@ public sealed class PortProxy(SessionManager manager, SupervisorOptions options,
     {
         while (true)
         {
+            // The session went away while this connection waited (its Remote Desktop connection ended): it needs one
+            // again, and fails with the sign-in's reason when there is none.
+            if (!manager.HasOpenConnection) await manager.EnsureAsync(ct);
             var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
             try
             {

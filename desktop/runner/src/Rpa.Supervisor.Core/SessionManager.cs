@@ -12,7 +12,8 @@ namespace Rpa.Supervisor.Core;
 /// person signed in as the bot user); EnsureAsync refuses with UserSignedIn instead. Its own session is signed out
 /// when no Hold has been taken for IdleSeconds, when its Remote Desktop connection closes, and on StopAsync. The state
 /// file names that session, so that after a restart the supervisor signs its own stale session out and still leaves a
-/// person's alone. The password never passes through here.
+/// person's alone. No attempt starts while the machine's Remote Desktop service is not running. The password never
+/// passes through here.
 /// </summary>
 public sealed class SessionManager
 {
@@ -25,6 +26,7 @@ public sealed class SessionManager
 
     private readonly ISessions _sessions;
     private readonly IRdpHost _host;
+    private readonly IRemoteDesktopService _remoteDesktop;
     private readonly SupervisorOptions _options;
     private readonly ISupervisorLog _log;
 
@@ -40,10 +42,12 @@ public sealed class SessionManager
     private bool _stopping;
     private long? _failureRecordedAt;
 
-    public SessionManager(ISessions sessions, IRdpHost host, SupervisorOptions options, ISupervisorLog log, TimeProvider time)
+    public SessionManager(ISessions sessions, IRdpHost host, IRemoteDesktopService remoteDesktop, SupervisorOptions options,
+        ISupervisorLog log, TimeProvider time)
     {
         _sessions = sessions;
         _host = host;
+        _remoteDesktop = remoteDesktop;
         _options = options;
         _log = log;
         Time = time;
@@ -56,6 +60,10 @@ public sealed class SessionManager
     /// <summary>The last sign-in or sign-out failure ("Reason: message"), cleared by a successful sign-in. Also in the
     /// state file as lastFailure.</summary>
     public string? LastFailure => _state.LastFailure;
+
+    /// <summary>Whether the session's Remote Desktop connection is open; read without the lock, so it can be stale.
+    /// A connection that waits for its target uses it to notice that the session went away.</summary>
+    internal bool HasOpenConnection => Volatile.Read(ref _connection) is { Closed.IsCompleted: false };
 
     /// <summary>Returns when a session the supervisor created exists and is Active, or throws SessionException.</summary>
     public async Task EnsureAsync(CancellationToken ct)
@@ -125,11 +133,24 @@ public sealed class SessionManager
             Exception failure;
             try
             {
+                // While the Remote Desktop service is stopped, anyone may be able to listen on its port: no password
+                // goes to whatever answers there.
+                if (!_remoteDesktop.IsRunning)
+                    throw new SessionException(SessionFailure.HostExited,
+                        $"The Remote Desktop service (TermService) is not running, so {_options.User} is not signed in; it is tried again.");
                 var connection = await _host.ConnectAsync(_options.User, attempt.Token);
+                if (connection.Closed.IsCompleted)
+                {
+                    // Its host ended as the session became Active: a failed attempt, not a session to hand out.
+                    await SignOutClosedAsync(connection);
+                    failure = new SessionException(SessionFailure.HostExited,
+                        $"The Remote Desktop connection of session {connection.SessionId} ended as soon as the session was ready.");
+                }
                 // On success the supervisor adopts the session its connection reports.
-                if (await AdoptAsync(connection)) return;
-                failure = new SessionException(SessionFailure.HostExited,
-                    $"Session {connection.SessionId} of the Remote Desktop connection is not a session of {_options.User}.");
+                else if (await AdoptAsync(connection)) return;
+                else
+                    failure = new SessionException(SessionFailure.HostExited,
+                        $"Session {connection.SessionId} of the Remote Desktop connection is not a session of {_options.User}.");
             }
             catch (Exception e)
             {
@@ -137,7 +158,7 @@ public sealed class SessionManager
             }
             last = await AttemptFailedAsync(failure, startedAt, last, ct);
 
-            _log.Info($"Sign-in attempt for {_options.User} failed ({last.Reason}): {last.Message}");
+            _log.Failure(last.Reason, $"Sign-in attempt for {_options.User} failed: {last.Message}");
             if (deadline.IsCancellationRequested) throw Fail(last);
             var wait = RetrySpacing - Time.GetElapsedTime(started);
             if (wait <= TimeSpan.Zero) continue;
@@ -147,10 +168,8 @@ public sealed class SessionManager
             }
             catch (OperationCanceledException)
             {
-                // Recorded also when the caller gave up first, so the reason the sign-in kept failing is not lost.
-                var reason = Fail(last);
-                if (!ct.IsCancellationRequested) throw reason;
-                throw;
+                // Also when the caller gave up first: the connection ends with the reason the sign-in kept failing.
+                throw Fail(last);
             }
         }
     }
@@ -160,7 +179,7 @@ public sealed class SessionManager
     private async Task<SessionException> AttemptFailedAsync(Exception failure, DateTimeOffset startedAt,
         SessionException? last, CancellationToken ct)
     {
-        // WrongPassword, PasswordExpired, NotAllowed and NoPassword fail before a session exists.
+        // WrongPassword, PasswordExpired, NotAllowed, NoPassword and Refused fail before a session exists.
         if (failure is not SessionException { Reason: not (SessionFailure.Timeout or SessionFailure.HostExited) })
             await SignOutLeftoverAsync(startedAt);
         switch (failure)
@@ -177,9 +196,10 @@ public sealed class SessionManager
             case OperationCanceledException when !ct.IsCancellationRequested:
                 throw Fail(last ?? new SessionException(SessionFailure.Timeout,
                     $"{_options.User} was not signed in within {_options.ReadySeconds} s."));
+            case OperationCanceledException when last is not null:
+                // The caller gave up: the connection ends with the reason the sign-in kept failing.
+                throw Fail(last);
             default:
-                // The caller gave up, or something unexpected failed: keep the reason the sign-in kept failing for.
-                if (last is not null) Fail(last);
                 ExceptionDispatchInfo.Throw(failure);
                 throw new UnreachableException();
         }
@@ -220,6 +240,8 @@ public sealed class SessionManager
     // next check refuses it with UserSignedIn.
     private async Task SignOutLeftoverAsync(DateTimeOffset startedAt)
     {
+        // A session of ours whose sign-out failed is signed out before the next attempt (ClearSessionsAsync).
+        if (_state.SessionId is not null) return;
         var listed = _sessions.ForUser(_options.User);
         if (listed.Count == 0) return;
         if (listed is not [{ State: not SessionState.Active } left] || left.LogonTime < startedAt)
@@ -264,6 +286,16 @@ public sealed class SessionManager
         {
             if (connection is not null) await DisposeQuietlyAsync(connection);
         }
+    }
+
+    // The session a connection reported is the supervisor's, as on a sign-in, so it is signed out even while Active.
+    private async Task SignOutClosedAsync(IRdpConnection connection)
+    {
+        await DisposeQuietlyAsync(connection);
+        if (_sessions.ForUser(_options.User).FirstOrDefault(s => s.Id == connection.SessionId) is not { } session) return;
+        Save(_state with { SessionId = session.Id, LogonTime = session.LogonTime });
+        _log.Info($"The Remote Desktop connection of session {session.Id} ended as soon as the session was ready; signing it out.");
+        await SignOutOursAsync();
     }
 
     private async Task WatchAsync(IRdpConnection connection)

@@ -127,40 +127,46 @@ acts with that person's access. Three limits to keep in mind:
 
 The runner needs a signed-in, unlocked desktop. In unattended mode nobody has to be signed in: the RPA Supervisor, a
 Windows service (`RPA Supervisor`, `RpaSupervisor.exe`, running as SYSTEM), listens on the runner's port (and the
-browser's) in place of the runner. When n8n connects, it signs the bot user in over a Remote Desktop connection from
-the machine to itself (to `127.0.0.2`, through the RDP client control that ships with Windows), waits until the session
-is Active and the runner listens inside it, and then passes the connection's bytes through unchanged: TLS, the token
-and the protocol stay between n8n and the runner. When no connection has held the session for `idleSeconds`, it signs
-the bot user out again. One bot user, one session at a time.
+browser's) in place of the runner. When n8n connects, it signs the bot user in over a Remote Desktop connection from the
+machine to itself (to `127.0.0.2`, through the RDP client control that ships with Windows), waits until the session is
+Active and the runner listens inside it, and then passes the connection's bytes through unchanged: TLS, the token and
+the protocol stay between n8n and the runner. When no connection has held the session for `idleSeconds`, it signs the
+bot user out again. One bot user, one session at a time.
 
 The service reads `install.json` in the install directory (`%ProgramFiles%\RPA Runner`), which the installer writes:
 
 | Field | Meaning |
 |---|---|
 | `mode` | `"unattended"` makes the service run; with anything else it writes one line to its log and does nothing. |
-| `user` | The bot user: a local Windows user, its name only. |
+| `user` | The bot user: a local Windows user, as `name`, `.\name` or `<this machine>\name`. |
 | `runnerPort`, `runnerInnerPort` | The service listens on `runnerPort` and passes each connection to `127.0.0.1:runnerInnerPort`, where the runner listens in the bot user's session. |
 | `browserPort`, `browserInnerPort` | The same for the RPA browser; without `browserPort` only the runner is passed on. |
 | `idleSeconds` | How long the session stays signed in without a connection (default 15, 0 to 86400). |
 | `listenAddresses` | The addresses the service listens on (default `["0.0.0.0"]`). |
 
 A field that is missing or wrong stops the service at start, and so does a port it cannot listen on; the reason is in
-the log. The bot user's password is read from the local security authority (the LSA secret `L$RpaRunnerBotPassword`,
-which standard users cannot read) for each sign-in. It reaches the Remote Desktop host process on its standard input,
-never on a command line, and is not written to the log or any file. The Remote Desktop connection does
-not check the server's identity: the server is the machine itself, over the loopback.
+its log, in one line. The bot user's password is read from the local security authority (the LSA secret
+`L$RpaRunnerBotPassword`, which standard users cannot read) for each sign-in. It reaches the Remote Desktop host process
+on its standard input, never on a command line, and is not written to the log or any file. The Remote Desktop connection
+does not check the server's identity: the server is the machine itself, over the loopback. Before each sign-in the
+service checks that the machine's Remote Desktop service (TermService) is running, because while it is stopped any user
+may listen on its port; when it is not running, no sign-in is tried and the connection waits for it. It does not check
+who answers on the port once that check is done.
 
 The machine needs Remote Desktop turned on with Network Level Authentication, and the bot user in the Remote Desktop
-Users group. The service refuses a connection rather than act on a session it did not create: when someone is signed
-in as the bot user (at the console or over Remote Desktop), connections are closed until that session is signed out.
-When Windows refuses the password (or the client reports a sign-in failure that may concern it), the service tries no
-further sign-in until it is restarted, because retrying could lock the account out.
+Users group. The service refuses a connection rather than act on a session it did not create: when someone is signed in
+as the bot user (at the console or over Remote Desktop), connections are closed until that session is signed out. When
+Windows refuses the password, or the account (unknown, disabled, locked, restricted or expired), or the password has
+expired or must change, the service tries no further sign-in until it is restarted, because retrying could lock the
+account out. Another refusal by the Remote Desktop client fails that connection only.
 
-The log is `%ProgramData%\RPA Runner\logs\supervisor.log` (the previous one in `supervisor.1.log`). It records
-sign-ins, sign-outs and failures with their reasons, never a password, a token or bytes of a connection, and writes
-the same line at most once in 30 s. `%ProgramData%\RPA Runner\supervisor-state.json` names the session the service
-created and its last failure, so that after a restart it signs its own stale session out and leaves anyone else's
-alone.
+The service's log and state are in `%ProgramData%\RPA Runner\supervisor\`, a folder the installer creates for SYSTEM and
+administrators only (the service does not create it); without it the service does not start, and says so in the Windows
+event log. The log is `supervisor.log` there (the previous one in `supervisor.1.log`). It records sign-ins, sign-outs
+and failures with their reasons, never a password, a token or bytes of a connection, and writes the same failure at most
+once in 30 s. `supervisor-state.json` names the session the service created and its last failure, so that after a
+restart it signs its own stale session out and leaves anyone else's alone. A connection waits up to 90 s for the session
+and the runner together; the first sign-in after a restart, or of a new user, can take most of that.
 
 ## Changing the policy
 

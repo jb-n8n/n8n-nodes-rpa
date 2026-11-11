@@ -3,11 +3,11 @@ using System.Globalization;
 namespace Rpa.Supervisor.Core;
 
 /// <summary>
-/// The supervisor's log file. The same line again within 30 s is counted instead of written; when it is written again,
-/// the count follows it. A log larger than maxBytes moves to &lt;name&gt;.1.log (replacing the one there) and a new one
-/// starts. A line that cannot be written is dropped: the log never stops the supervisor. So is a line whose file or
-/// folder is a link (a reparse point): the service runs as SYSTEM, and others may be able to change what is in its log
-/// folder. This is checked just before each write, so a link put there in between is not seen.
+/// The supervisor's log file, in a folder the installer creates and only SYSTEM and administrators can write (this
+/// class does not create it). The same failure line again within 30 s is counted instead of written; when it is
+/// written again, the count follows it. Info lines are always written: they are events (a sign-in, a sign-out). A log
+/// larger than maxBytes moves to &lt;name&gt;.1.log (replacing the one there) and a new one starts. A line that cannot
+/// be written is dropped: the log never stops the supervisor.
 /// </summary>
 public sealed class FileSupervisorLog : ISupervisorLog
 {
@@ -29,13 +29,14 @@ public sealed class FileSupervisorLog : ISupervisorLog
         _maxBytes = maxBytes;
     }
 
-    public void Info(string message) => Write($"INFO {message}");
-
-    public void Failure(SessionFailure? reason, string message) =>
-        Write(reason is { } r ? $"FAIL {r}: {message}" : $"FAIL {message}");
-
-    private void Write(string text)
+    public void Info(string message)
     {
+        lock (_gate) Append(_time.GetUtcNow(), $"INFO {message}");
+    }
+
+    public void Failure(SessionFailure? reason, string message)
+    {
+        var text = reason is { } r ? $"FAIL {r}: {message}" : $"FAIL {message}";
         lock (_gate)
         {
             var now = _time.GetUtcNow();
@@ -47,37 +48,26 @@ public sealed class FileSupervisorLog : ISupervisorLog
                     _recent[text] = seen with { Left = seen.Left + 1 };
                     return;
                 }
-                if (seen.Left > 0) suffix = $" ({seen.Left} more times since it was last written)";
+                if (seen.Left > 0) suffix = $" ({seen.Left} more {(seen.Left == 1 ? "time" : "times")} since it was last written)";
             }
             Forget(now);
             _recent[text] = (now, 0);
-
-            var line = $"{now.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture)} {text}{suffix}{Environment.NewLine}";
-            try
-            {
-                var folder = Path.GetDirectoryName(_path)!;
-                Directory.CreateDirectory(folder);
-                if (IsLink(folder) || IsLink(_path) || IsLink(_previousPath)) return;
-                var file = new FileInfo(_path);
-                if (file.Exists && file.Length + line.Length > _maxBytes) File.Move(_path, _previousPath, overwrite: true);
-                File.AppendAllText(_path, line);
-            }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-            {
-            }
+            Append(now, text + suffix);
         }
     }
 
-    // Looks at the entry itself, not at what a link points to (which may not exist).
-    private static bool IsLink(string path)
+    // Under _gate.
+    private void Append(DateTimeOffset now, string text)
     {
+        var line = $"{now.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture)} {text}{Environment.NewLine}";
         try
         {
-            return File.GetAttributes(path).HasFlag(FileAttributes.ReparsePoint);
+            var file = new FileInfo(_path);
+            if (file.Exists && file.Length + line.Length > _maxBytes) File.Move(_path, _previousPath, overwrite: true);
+            File.AppendAllText(_path, line);
         }
-        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException)
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            return false;
         }
     }
 

@@ -4,7 +4,8 @@ namespace Rpa.Supervisor.Core.Tests;
 
 public sealed class InstallFileTests
 {
-    private const string StateFile = @"C:\ProgramData\RPA Runner\supervisor-state.json";
+    private const string StateFile = @"C:\ProgramData\RPA Runner\supervisor\supervisor-state.json";
+    private const string Machine = "BOTPC";
 
     private static JsonObject Unattended() => new()
     {
@@ -19,7 +20,7 @@ public sealed class InstallFileTests
         ["listenAddresses"] = new JsonArray("10.0.0.5", "127.0.0.1"),
     };
 
-    private static SupervisorOptions? Read(JsonObject install) => InstallFile.ToOptions(install.ToJsonString(), StateFile);
+    private static SupervisorOptions? Read(JsonObject install) => InstallFile.ToOptions(install.ToJsonString(), StateFile, Machine);
 
     private static string Refused(JsonObject install) => Assert.Throws<InvalidDataException>(() => Read(install)).Message;
 
@@ -81,7 +82,7 @@ public sealed class InstallFileTests
     [Fact]
     public void A_file_that_is_not_JSON_is_refused()
     {
-        var message = Assert.Throws<InvalidDataException>(() => InstallFile.ToOptions("{ \"mode\": ", StateFile)).Message;
+        var message = Assert.Throws<InvalidDataException>(() => InstallFile.ToOptions("{ \"mode\": ", StateFile, Machine)).Message;
         Assert.StartsWith("install.json is not valid JSON", message);
     }
 
@@ -91,12 +92,27 @@ public sealed class InstallFileTests
         var install = Unattended();
         install.Remove("user");
 
-        Assert.Equal("install.json: user must be the name of a local Windows user (at most 20 characters, without a domain).",
+        Assert.Equal(@"install.json: user must name a local Windows user of this machine: name, .\name or BOTPC\name, the name at most 20 characters.",
             Refused(install));
     }
 
     [Theory]
+    [InlineData(@".\rpabot")]
+    [InlineData(@"BOTPC\rpabot")]
+    [InlineData(@"botpc\rpabot")]
+    public void A_user_written_with_this_machine_s_name_or_a_dot_is_the_plain_name(string user)
+    {
+        // As the installer writes a local user today.
+        var install = Unattended();
+        install["user"] = user;
+
+        Assert.Equal("rpabot", Read(install)!.User);
+    }
+
+    [Theory]
     [InlineData(@"CORP\rpabot")]
+    [InlineData(@"BOTPC\CORP\rpabot")]
+    [InlineData(@"BOTPC\")]
     [InlineData("rpabot@corp.example")]
     [InlineData("")]
     [InlineData("rpa\nbot")]
@@ -106,7 +122,7 @@ public sealed class InstallFileTests
         var install = Unattended();
         install["user"] = user;
 
-        Assert.StartsWith("install.json: user must be the name of a local Windows user", Refused(install));
+        Assert.StartsWith("install.json: user must name a local Windows user of this machine", Refused(install));
     }
 
     [Theory]

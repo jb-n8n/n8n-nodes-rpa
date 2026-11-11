@@ -10,8 +10,8 @@ namespace Rpa.Supervisor;
 /// user's name and password from standard input (one line each), connects to this machine at 127.0.0.2 through the
 /// RDP client control that ships with Windows (mstscax.dll), and writes RdpHostEvent lines on standard output. Its
 /// window is in the service's session (Session 0), where nobody sees it. Every second a watchdog answers any message
-/// box of the process with its default button and reports the box's text: in Session 0 nobody could answer it, and
-/// it blocks the control's events. The host disconnects and exits when its standard input closes, and exits when the
+/// box of the process with its default button (or closes it when it finds none) and reports the box's text: in
+/// Session 0 nobody could answer it, and it blocks the control's events. After three answers the attempt is given up. The host disconnects and exits when its standard input closes, and exits when the
 /// connection ends.
 /// </summary>
 internal sealed class RdpHostWindow : Form
@@ -26,6 +26,7 @@ internal sealed class RdpHostWindow : Form
     private const int DesktopHeight = 800;
     private const int TickMs = 250;
     private const int DialogTicks = 4; // 1 s
+    private const int MaxPresses = 3;
     private const int AliveTicks = 20; // 5 s, well within the service's 30 s
     private const int EndTicks = 40; // 10 s for the disconnect event once the end was asked or the connection dropped
 
@@ -49,6 +50,7 @@ internal sealed class RdpHostWindow : Form
     private int _ticks;
     private int _endTicks = -1;
     private int _exitCode;
+    private int _presses;
 
     private RdpHostWindow(StreamWriter output, string user, string password)
     {
@@ -66,6 +68,8 @@ internal sealed class RdpHostWindow : Form
         _events.Connected = () => _connected = true;
         _events.Disconnected = OnDisconnected;
         _events.FatalError = code => Fail($"The Remote Desktop client reported fatal error {code}.");
+        _events.LogonError = code => Emit(_output, new RdpHostEvent.LogonError(code));
+        _events.Warning = code => Emit(_output, new RdpHostEvent.Warning(code));
         _timer.Tick += (_, _) => OnTick();
     }
 
@@ -264,8 +268,15 @@ internal sealed class RdpHostWindow : Form
     {
         foreach (var dialog in DialogWindows.Of(Environment.ProcessId))
         {
-            if (_dialogs.Add(dialog)) Emit(_output, new RdpHostEvent.Dialog(DialogWindows.Text(dialog)));
-            DialogWindows.PressDefaultButton(dialog);
+            if (_presses == MaxPresses)
+            {
+                Fail($"The Remote Desktop client showed a message again after {MaxPresses} were answered; the attempt is given up.");
+                return;
+            }
+            _presses++;
+            var text = DialogWindows.Text(dialog);
+            var pressed = DialogWindows.PressDefaultButton(dialog);
+            if (_dialogs.Add(dialog)) Emit(_output, new RdpHostEvent.Dialog(pressed, text));
         }
     }
 
@@ -340,26 +351,29 @@ internal sealed class RdpHostWindow : Form
             return dialogs;
         }
 
-        /// <summary>The title and the message of a box.</summary>
+        /// <summary>The title of a box and the texts of its child windows other than its buttons.</summary>
         public static string Text(IntPtr dialog)
         {
             var parts = new List<string> { TextOf(dialog) };
             EnumChildWindows(dialog, (child, _) =>
             {
-                if (ClassOf(child) == "Static") parts.Add(TextOf(child));
+                if (ClassOf(child) != "Button") parts.Add(TextOf(child));
                 return true;
             }, IntPtr.Zero);
             return string.Join(": ", parts.Where(p => p.Length > 0));
         }
 
-        /// <summary>Presses the box's default button, or closes it when it has none.</summary>
-        public static void PressDefaultButton(IntPtr dialog)
+        /// <summary>Presses the box's default button (true), or closes it when no such button is found (false).</summary>
+        public static bool PressDefaultButton(IntPtr dialog)
         {
             var result = (long)SendMessage(dialog, DM_GETDEFID, IntPtr.Zero, IntPtr.Zero);
             if (((result >> 16) & 0xFFFF) == DC_HASDEFID && GetDlgItem(dialog, (int)(result & 0xFFFF)) is var button && button != IntPtr.Zero)
+            {
                 SendMessage(button, BM_CLICK, IntPtr.Zero, IntPtr.Zero);
-            else
-                PostMessage(dialog, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+                return true;
+            }
+            PostMessage(dialog, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+            return false;
         }
 
         private static string ClassOf(IntPtr window)
@@ -430,12 +444,19 @@ public sealed class RdpClientEvents : IMsTscAxEvents
     internal Action? Connected;
     internal Action<int>? Disconnected;
     internal Action<int>? FatalError;
+    internal Action<int>? LogonError;
+    internal Action<int>? Warning;
 
     public void OnConnecting() { }
     public void OnConnected() => Connected?.Invoke();
     public void OnLoginComplete() => Connected?.Invoke();
     public void OnDisconnected(int discReason) => Disconnected?.Invoke(discReason);
     public void OnFatalError(int errorCode) => FatalError?.Invoke(errorCode);
-    public void OnWarning(int warningCode) { }
-    public void OnLogonError(int lError) { }
+    public void OnWarning(int warningCode) => Warning?.Invoke(warningCode);
+
+    // -2 says that the logon goes on; it comes with every sign-in.
+    public void OnLogonError(int lError)
+    {
+        if (lError != -2) LogonError?.Invoke(lError);
+    }
 }

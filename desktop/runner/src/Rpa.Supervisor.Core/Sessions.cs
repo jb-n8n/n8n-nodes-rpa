@@ -16,6 +16,13 @@ public interface ISessions
     Task SignOutAsync(uint sessionId, CancellationToken ct);
 }
 
+/// <summary>The machine's Remote Desktop service (Windows: TermService). While it is not running, anyone may be able to
+/// listen on its port, so no sign-in is tried.</summary>
+public interface IRemoteDesktopService
+{
+    bool IsRunning { get; }
+}
+
 /// <summary>Signs the bot user in over a Remote Desktop connection from the machine to itself. The implementation
 /// reads the password itself; it never passes through the supervisor's logic.</summary>
 public interface IRdpHost
@@ -32,7 +39,10 @@ public interface IRdpConnection : IAsyncDisposable
     Task Closed { get; }
 }
 
-public enum SessionFailure { UserSignedIn, WrongPassword, PasswordExpired, NotAllowed, Timeout, HostExited, NoPassword }
+/// <summary>Why a sign-in failed. Timeout and HostExited are tried again; WrongPassword and PasswordExpired stop every
+/// sign-in until the service restarts; the others fail the connection and the next connection tries again. Refused: the
+/// Remote Desktop client refused the sign-in for a reason that is not known to concern the password.</summary>
+public enum SessionFailure { UserSignedIn, WrongPassword, PasswordExpired, NotAllowed, Timeout, HostExited, NoPassword, Refused }
 
 public sealed class SessionException(SessionFailure reason, string message) : Exception(message)
 {

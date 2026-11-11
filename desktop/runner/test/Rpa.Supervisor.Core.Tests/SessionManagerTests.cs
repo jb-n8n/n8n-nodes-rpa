@@ -12,6 +12,7 @@ public sealed class SessionManagerTests : IDisposable
     private readonly FakeSessions _sessions;
     private readonly FakeRdpHost _host;
     private readonly RecordingLog _log = new();
+    private readonly FakeRemoteDesktop _remoteDesktop = new();
 
     public SessionManagerTests()
     {
@@ -24,7 +25,7 @@ public sealed class SessionManagerTests : IDisposable
     private string StateFile => Path.Combine(_dir, "supervisor-state.json");
 
     private SessionManager Manager(int idleSeconds = 15, int readySeconds = 45) =>
-        new(_sessions, _host, new SupervisorOptions(Bot, [new PortMap(8765, 18765)], ["127.0.0.1"], idleSeconds,
+        new(_sessions, _host, _remoteDesktop, new SupervisorOptions(Bot, [new PortMap(8765, 18765)], ["127.0.0.1"], idleSeconds,
             readySeconds, StateFile), _log, _time);
 
     private void WriteState(uint sessionId, DateTimeOffset logonTime) =>
@@ -232,7 +233,7 @@ public sealed class SessionManagerTests : IDisposable
         var again = new FakeRdpHost(_sessions, _time, []) { AttemptDuration = TimeSpan.FromSeconds(10) };
         again.Outcomes.Enqueue(SessionFailure.Timeout);
         again.AlwaysFail = SessionFailure.HostExited;
-        var slow = new SessionManager(_sessions, again, new SupervisorOptions(Bot, [], [], ReadySeconds: 45), _log, _time);
+        var slow = new SessionManager(_sessions, again, _remoteDesktop, new SupervisorOptions(Bot, [], [], ReadySeconds: 45), _log, _time);
         var started = _time.GetTimestamp();
         Assert.Equal(SessionFailure.HostExited, (await Fails(() => slow.EnsureAsync(CancellationToken.None))).Reason);
         Assert.Equal(5, again.Calls);
@@ -240,7 +241,7 @@ public sealed class SessionManagerTests : IDisposable
 
         // Attempts that fail at once are spaced out, not repeated in a tight loop.
         var fast = new FakeRdpHost(_sessions, _time, []) { AlwaysFail = SessionFailure.HostExited };
-        var quick = new SessionManager(_sessions, fast, new SupervisorOptions(Bot, [], [], ReadySeconds: 45), _log, _time);
+        var quick = new SessionManager(_sessions, fast, _remoteDesktop, new SupervisorOptions(Bot, [], [], ReadySeconds: 45), _log, _time);
         var e = await Drive(Fails(() => quick.EnsureAsync(CancellationToken.None)));
         Assert.Equal(SessionFailure.HostExited, e.Reason);
         Assert.InRange(fast.Calls, 2, 24);
@@ -412,6 +413,76 @@ public sealed class SessionManagerTests : IDisposable
         Assert.Equal([id, id, id], _sessions.SignOuts);
         Assert.Equal(2, _host.Calls);
         Assert.NotEqual(id, Assert.Single(_sessions.ForUser(Bot)).Id);
+    }
+
+    [Fact]
+    public async Task Refused_fails_the_connection_without_a_retry_and_the_next_call_tries_again()
+    {
+        var manager = Manager(readySeconds: 45);
+        _host.Outcomes.Enqueue(SessionFailure.Refused);
+
+        Assert.Equal(SessionFailure.Refused, (await Fails(() => manager.EnsureAsync(CancellationToken.None))).Reason);
+        Assert.Equal(1, _host.Calls);
+
+        await manager.EnsureAsync(CancellationToken.None);
+        Assert.Equal(2, _host.Calls);
+        Assert.Single(_sessions.ForUser(Bot));
+    }
+
+    [Fact]
+    public async Task While_the_Remote_Desktop_service_is_not_running_no_attempt_starts_and_it_is_tried_again()
+    {
+        var manager = Manager(readySeconds: 45);
+        _remoteDesktop.StoppedChecks = 2;
+
+        await Drive(manager.EnsureAsync(CancellationToken.None).ContinueWith(_ => 0));
+
+        Assert.Equal(3, _remoteDesktop.Checks);
+        Assert.Equal(1, _host.Calls);
+        Assert.Single(_sessions.ForUser(Bot));
+        Assert.Contains(_log.Failures, f => f.Reason == SessionFailure.HostExited && f.Message.Contains("Remote Desktop service (TermService) is not running"));
+    }
+
+    [Fact]
+    public async Task While_the_Remote_Desktop_service_stays_stopped_the_connection_fails_with_that_reason()
+    {
+        var manager = Manager(readySeconds: 10);
+        _remoteDesktop.StoppedChecks = int.MaxValue;
+
+        var e = await Drive(Fails(() => manager.EnsureAsync(CancellationToken.None)));
+
+        Assert.Equal(SessionFailure.HostExited, e.Reason);
+        Assert.Contains("TermService", e.Message);
+        Assert.Equal(0, _host.Calls);
+    }
+
+    [Fact]
+    public async Task A_connection_that_has_closed_when_it_is_returned_is_a_failed_attempt_and_its_session_is_signed_out()
+    {
+        // Its host ended as the session became Active: the session is not handed out, it is signed out, and another
+        // attempt follows.
+        var manager = Manager();
+        _host.ClosedOnReturn = 1;
+
+        await Drive(manager.EnsureAsync(CancellationToken.None).ContinueWith(t => t.Exception));
+
+        Assert.Equal(["connect", "signout 10", "connect"], _events);
+        Assert.Equal(11u, Assert.Single(_sessions.ForUser(Bot)).Id);
+        Assert.Equal(11u, ReadState()["sessionId"]!.GetValue<uint>());
+        Assert.Contains(_log.Failures, f => f.Reason == SessionFailure.HostExited && f.Message.Contains("ended as soon as the session was ready"));
+    }
+
+    [Fact]
+    public async Task A_caller_that_gives_up_after_failed_attempts_gets_the_reason_they_failed_for()
+    {
+        var manager = Manager(readySeconds: 45);
+        _host.AlwaysFail = SessionFailure.HostExited;
+        using var caller = new CancellationTokenSource(TimeSpan.FromSeconds(5), _time);
+
+        var e = await Drive(Fails(() => manager.EnsureAsync(caller.Token)));
+
+        Assert.Equal(SessionFailure.HostExited, e.Reason);
+        Assert.StartsWith("HostExited", manager.LastFailure);
     }
 
     [Fact]

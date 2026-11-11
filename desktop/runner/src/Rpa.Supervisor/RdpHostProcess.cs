@@ -11,14 +11,14 @@ namespace Rpa.Supervisor;
 /// Signs the bot user in by starting a Remote Desktop host process (RpaSupervisor.exe rdp-host, RdpHostWindow), one
 /// per connection, in a job object that ends it when the service ends. The host gets the user name and the password on
 /// its standard input, never on its command line, and answers with RdpHostEvent lines. A host that writes nothing for
-/// 30 s is ended. ConnectAsync waits at most 25 s for the session (ReadySeconds is 45). When an attempt fails or is
-/// cancelled, the host is ended, and ConnectAsync throws only after it has ended and no session of the user that
-/// began during the attempt is Active (at most about 10 s more), so that the session manager can tell a half-made
-/// session from a person's.
+/// 30 s is ended. ConnectAsync waits at most 60 s for the session (a first sign-in after boot or of a new user takes
+/// long; ReadySeconds is 90). When an attempt fails or is cancelled, the host is ended, and ConnectAsync throws only
+/// after it has ended and no session of the user that began during the attempt is Active (at most about 10 s more), so
+/// that the session manager can tell a half-made session from a person's.
 /// </summary>
-internal sealed class RdpHostProcess(ISessions sessions, ISupervisorLog log) : IRdpHost
+internal sealed class RdpHostProcess(WindowsSessions sessions, ISupervisorLog log) : IRdpHost
 {
-    private static readonly TimeSpan ConnectLimit = TimeSpan.FromSeconds(25);
+    private static readonly TimeSpan ConnectLimit = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan SilenceLimit = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan EndLimit = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan Poll = TimeSpan.FromMilliseconds(250);
@@ -28,7 +28,7 @@ internal sealed class RdpHostProcess(ISessions sessions, ISupervisorLog log) : I
     {
         ct.ThrowIfCancellationRequested();
         var startedAt = DateTimeOffset.UtcNow;
-        var host = Host.Start(user, LsaSecret.Read(LsaSecret.BotPasswordName), log);
+        var host = Host.Start(user, LsaSecret.Read(LsaSecret.BotPasswordName), sessions, log);
         try
         {
             using var limit = new CancellationTokenSource(ConnectLimit);
@@ -42,7 +42,7 @@ internal sealed class RdpHostProcess(ISessions sessions, ISupervisorLog log) : I
             await WaitUntilNotActiveAsync(user, startedAt);
             if (e is OperationCanceledException && !ct.IsCancellationRequested)
                 throw RdpFailures.WithoutDisconnect(SessionFailure.Timeout,
-                    $"{user} was not signed in within {ConnectLimit.TotalSeconds:0} s.", host.Dialog);
+                    $"{user} was not signed in within {ConnectLimit.TotalSeconds:0} s.", host.Reports);
             throw;
         }
     }
@@ -88,16 +88,21 @@ internal sealed class RdpHostProcess(ISessions sessions, ISupervisorLog log) : I
 
         private readonly Process _process;
         private readonly string _user;
+        private readonly WindowsSessions _sessions;
         private readonly ISupervisorLog _log;
         private readonly TaskCompletionSource<uint> _active = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _closed = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private long _lastOutput = Environment.TickCount64;
         private string? _failed;
+        private string? _dialog;
+        private int? _logonError;
+        private int? _warning;
 
-        private Host(Process process, string user, ISupervisorLog log)
+        private Host(Process process, string user, WindowsSessions sessions, ISupervisorLog log)
         {
             _process = process;
             _user = user;
+            _sessions = sessions;
             _log = log;
             // A failure nobody waits for any more (the attempt timed out first) is not an unobserved exception.
             _active.Task.ContinueWith(t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted);
@@ -114,10 +119,10 @@ internal sealed class RdpHostProcess(ISessions sessions, ISupervisorLog log) : I
         /// <summary>Completes when the process has ended, all it wrote is read and it is disposed.</summary>
         public Task Exited { get; }
 
-        /// <summary>The first message box the client showed, if any.</summary>
-        public string? Dialog { get; private set; }
+        /// <summary>The first message box the client showed, and its last logon error and warning.</summary>
+        public ClientReports Reports => new(_dialog, _logonError, _warning);
 
-        public static Host Start(string user, string password, ISupervisorLog log)
+        public static Host Start(string user, string password, WindowsSessions sessions, ISupervisorLog log)
         {
             if (password.AsSpan().IndexOfAny('\r', '\n') >= 0)
                 throw new SessionException(SessionFailure.NoPassword,
@@ -154,16 +159,16 @@ internal sealed class RdpHostProcess(ISessions sessions, ISupervisorLog log) : I
                 process.Dispose();
                 throw new SessionException(SessionFailure.HostExited, $"The Remote Desktop host could not be put in the service's job object: {e.Message}");
             }
-            var host = new Host(process, user, log);
+            var host = new Host(process, user, sessions, log);
             try
             {
                 process.StandardInput.WriteLine(user);
                 process.StandardInput.WriteLine(password);
                 process.StandardInput.Flush();
             }
-            catch (IOException)
+            catch (Exception e) when (e is IOException or InvalidOperationException)
             {
-                // The host has ended already; its end says why.
+                // The host has ended already (and its process may be disposed); its end says why.
             }
             return host;
         }
@@ -234,7 +239,7 @@ internal sealed class RdpHostProcess(ISessions sessions, ISupervisorLog log) : I
                 _process.Dispose();
                 _active.TrySetException(RdpFailures.WithoutDisconnect(SessionFailure.HostExited,
                     $"The Remote Desktop host for {_user} ended (exit code {exitCode}{(_failed is null ? "" : ": " + _failed)}) before the session was ready.",
-                    Dialog));
+                    Reports));
                 _closed.TrySetResult();
             }
         }
@@ -247,14 +252,21 @@ internal sealed class RdpHostProcess(ISessions sessions, ISupervisorLog log) : I
                     _active.TrySetResult(active.SessionId);
                     break;
                 case RdpHostEvent.Disconnected d:
-                    if (_active.Task.IsCompletedSuccessfully)
-                        _log.Info($"The Remote Desktop connection of {_user} ended (disconnect reason {d.Reason}, extended reason {d.Extended}{(d.Description.Length > 0 ? ": " + d.Description : "")}).");
-                    _active.TrySetException(RdpFailures.FromDisconnect(_user, d.Reason, d.Extended, d.Description, Dialog));
+                    if (_active.Task.IsCompletedSuccessfully) LogEnd(_active.Task.Result, d);
+                    _active.TrySetException(RdpFailures.FromDisconnect(_user, d.Reason, d.Extended, d.Description, Reports));
                     _closed.TrySetResult();
                     break;
                 case RdpHostEvent.Dialog d:
-                    Dialog ??= d.Text;
-                    _log.Failure(null, $"The Remote Desktop client showed a message, answered with its default button: \"{d.Text}\"");
+                    _dialog ??= d.Text;
+                    _log.Failure(null, $"The Remote Desktop client showed a message, which was {(d.Pressed ? "answered with its default button" : "closed")}: \"{d.Text}\"");
+                    break;
+                case RdpHostEvent.LogonError e:
+                    _logonError = e.Code;
+                    _log.Info($"The Remote Desktop client of {_user} reported logon error {e.Code}.");
+                    break;
+                case RdpHostEvent.Warning w:
+                    _warning = w.Code;
+                    _log.Info($"The Remote Desktop client of {_user} reported warning {w.Code}.");
                     break;
                 case RdpHostEvent.Failed f:
                     _failed ??= f.Text;
@@ -266,6 +278,17 @@ internal sealed class RdpHostProcess(ISessions sessions, ISupervisorLog log) : I
                     _log.Info($"The Remote Desktop host wrote a line that is not an event: {Cut(line)}");
                     break;
             }
+        }
+
+        // After the supervisor's own sign-out the connection ends as a matter of course, with texts that read like an
+        // error ("an internal error has occurred"); only an end without that sign-out is told in full.
+        private void LogEnd(uint sessionId, RdpHostEvent.Disconnected d)
+        {
+            if (_sessions.SignedOutRecently(sessionId))
+                _log.Info($"The Remote Desktop connection of session {sessionId} ended after its sign-out.");
+            else
+                _log.Info($"The Remote Desktop connection of session {sessionId} ended without a sign-out by the RPA Supervisor " +
+                    $"(disconnect reason {d.Reason}, extended reason {d.Extended}{(d.Description.Length > 0 ? ": " + d.Description : "")}).");
         }
 
         // The host writes nothing on its standard error unless the runtime fails; the first lines go to the log.
