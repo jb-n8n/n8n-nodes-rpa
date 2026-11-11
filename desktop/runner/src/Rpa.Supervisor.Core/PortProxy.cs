@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 
@@ -8,7 +9,8 @@ namespace Rpa.Supervisor.Core;
 /// EnsureAsync and then for something to listen on 127.0.0.1 at the map's target port (together at most ReadySeconds),
 /// and passes bytes both ways without reading them. Bytes the client sends while it waits stay in the socket and are
 /// passed on in order. When the client ends its side, the end is passed on and the target's answer still flows back;
-/// when the target ends, the connection ends.
+/// when the target ends, the connection ends. A connection that ends before the client answered the target (the runner
+/// and the browser host speak TLS, so a working connection always goes back and forth) is logged with who ended it.
 /// TLS, tokens and the protocol stay between n8n and the runner or browser host.
 /// </summary>
 public sealed class PortProxy(SessionManager manager, SupervisorOptions options, ISupervisorLog log)
@@ -22,6 +24,7 @@ public sealed class PortProxy(SessionManager manager, SupervisorOptions options,
     private static readonly TimeSpan PeerLogInterval = TimeSpan.FromSeconds(30);
     private const int MaxPeersRemembered = 256;
     private readonly Dictionary<(string Address, int Port), long> _peersLogged = [];
+    private readonly Dictionary<int, (long At, int Left)> _endsLogged = [];
     private int _waiting;
     private int _fullLogged;
 
@@ -81,9 +84,11 @@ public sealed class PortProxy(SessionManager manager, SupervisorOptions options,
             {
                 // The client reset the connection before it was accepted (a scanner or a TCP health check).
                 client.Dispose();
+                LogEnd(map, $"A connection to port {map.ListenPort} was reset by the client before it was accepted.");
                 continue;
             }
-            LogPeer(client, map);
+            var address = PeerAddress(client);
+            LogPeer(address, map);
 
             if (Interlocked.Increment(ref _waiting) > MaxWaiting)
             {
@@ -93,24 +98,27 @@ public sealed class PortProxy(SessionManager manager, SupervisorOptions options,
                 client.Dispose();
                 continue;
             }
-            _ = ServeAsync(client, map, ct);
+            _ = ServeAsync(client, address, map, ct);
         }
     }
 
     // Who connected: behind the proxy the runner and the browser host see every peer as 127.0.0.1. One line per address
     // and port per PeerLogInterval; the memory of what was logged is cleared before it holds more than
     // MaxPeersRemembered entries, so that many addresses cannot make it grow without limit.
-    private void LogPeer(Socket client, PortMap map)
+    private static string PeerAddress(Socket client)
     {
-        string address;
         try
         {
-            address = (client.RemoteEndPoint as IPEndPoint)?.Address.ToString() ?? "an unknown address";
+            return (client.RemoteEndPoint as IPEndPoint)?.Address.ToString() ?? "an unknown address";
         }
         catch (Exception e) when (e is SocketException or ObjectDisposedException)
         {
-            address = "an unknown address";
+            return "an unknown address";
         }
+    }
+
+    private void LogPeer(string address, PortMap map)
+    {
         lock (_peersLogged)
         {
             var key = (address, map.ListenPort);
@@ -121,9 +129,10 @@ public sealed class PortProxy(SessionManager manager, SupervisorOptions options,
         log.Info($"Connection from {address} to port {map.ListenPort}.");
     }
 
-    private async Task ServeAsync(Socket client, PortMap map, CancellationToken ct)
+    private async Task ServeAsync(Socket client, string address, PortMap map, CancellationToken ct)
     {
         Socket? target = null;
+        var arrived = manager.Time.GetTimestamp();
         try
         {
             using var hold = manager.Hold();
@@ -136,7 +145,17 @@ public sealed class PortProxy(SessionManager manager, SupervisorOptions options,
                 Interlocked.Decrement(ref _waiting);
                 Volatile.Write(ref _fullLogged, 0);
             }
-            if (target is not null) await PipeAsync(client, target, ct);
+            if (target is null) return;
+            var passed = manager.Time.GetTimestamp();
+            var exchange = new Exchange(manager.Time, TargetName(map));
+            await PipeAsync(client, target, exchange, ct);
+            var ended = exchange.EndedBy is null ? manager.Time.GetTimestamp() : exchange.EndedAt;
+            if (!exchange.ClientAnswered && !ct.IsCancellationRequested)
+                LogEnd(map, $"A connection from {address} to port {map.ListenPort} ended before " +
+                    (exchange.FromTarget == 0 ? $"the {exchange.Target} answered" : $"the client answered the {exchange.Target}") +
+                    $": {exchange.EndedBy ?? "it was stopped"} {Seconds(passed, ended)} s after it was passed to the {exchange.Target}, " +
+                    $"{Seconds(arrived, ended)} s after it arrived; {Bytes(exchange.FromClient)} came from the client and " +
+                    $"{(exchange.FromTarget == 0 ? "none" : exchange.FromTarget.ToString(CultureInfo.InvariantCulture))} from the {exchange.Target}.");
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -170,8 +189,9 @@ public sealed class PortProxy(SessionManager manager, SupervisorOptions options,
             if (sessionReady && manager.HasOpenConnection)
             {
                 // The bot user is signed in, but the program did not start in its session: the last failure says
-                // which program, and the log that says why. The runner's port comes first in install.json.
-                var (program, file) = map == options.Ports[0] ? ("runner", "runner.out.log") : ("browser host", "browser.err.log");
+                // which program, and the log that says why.
+                var program = TargetName(map);
+                var file = program == "runner" ? "runner.out.log" : "browser.err.log";
                 await manager.RecordTargetFailureAsync(
                     $"Nothing listened on 127.0.0.1:{map.TargetPort} within {options.ReadySeconds} s: the {program} did not start in " +
                     $"{options.User}'s session; read %ProgramData%\\RPA Runner\\logs\\{file}. The connection to port {map.ListenPort} is closed.");
@@ -212,33 +232,108 @@ public sealed class PortProxy(SessionManager manager, SupervisorOptions options,
         }
     }
 
-    private static async Task PipeAsync(Socket client, Socket target, CancellationToken ct)
+    // The runner's port comes first in install.json.
+    private string TargetName(PortMap map) => map == options.Ports[0] ? "runner" : "browser host";
+
+    private string Seconds(long from, long to) =>
+        manager.Time.GetElapsedTime(from, to).TotalSeconds.ToString("0.0", CultureInfo.InvariantCulture);
+
+    private static string Bytes(long count) => count switch
+    {
+        0 => "no byte",
+        1 => "1 byte",
+        _ => $"{count.ToString(CultureInfo.InvariantCulture)} bytes",
+    };
+
+    // One line per port per PeerLogInterval; the next line written counts the ones left out. A port's lines share one
+    // limit, so that a flood of short connections cannot fill the log.
+    private void LogEnd(PortMap map, string message)
+    {
+        int left;
+        lock (_endsLogged)
+        {
+            if (_endsLogged.TryGetValue(map.ListenPort, out var last) && manager.Time.GetElapsedTime(last.At) < PeerLogInterval)
+            {
+                _endsLogged[map.ListenPort] = last with { Left = last.Left + 1 };
+                return;
+            }
+            left = last.Left;
+            _endsLogged[map.ListenPort] = (manager.Time.GetTimestamp(), 0);
+        }
+        log.Failure(null, left == 0 ? message
+            : $"{message} ({left} more such {(left == 1 ? "connection" : "connections")} since the last such line)");
+    }
+
+    private static async Task PipeAsync(Socket client, Socket target, Exchange exchange, CancellationToken ct)
     {
         using var broken = CancellationTokenSource.CreateLinkedTokenSource(ct);
         // The client may half-close and still read the answer; a connection lives no longer than its target, so a
         // client that stays open and silent cannot keep the session signed in.
-        await Task.WhenAll(CopyAsync(client, target, broken, endsBoth: false), CopyAsync(target, client, broken, endsBoth: true));
+        await Task.WhenAll(CopyAsync(client, target, broken, exchange, fromClient: true),
+            CopyAsync(target, client, broken, exchange, fromClient: false));
     }
 
-    // Copies until the source ends, then passes the end on (and with endsBoth, ends the other direction too). A reset
-    // or a stop ends both directions.
-    private static async Task CopyAsync(Socket from, Socket to, CancellationTokenSource broken, bool endsBoth)
+    // Copies until the source ends, then passes the end on (from the target, it ends the other direction too). A reset
+    // or a stop ends both directions. The first end is noted in exchange.
+    private static async Task CopyAsync(Socket from, Socket to, CancellationTokenSource broken, Exchange exchange, bool fromClient)
     {
+        var (source, other) = fromClient ? ("client", exchange.Target) : (exchange.Target, "client");
         var buffer = new byte[16 * 1024];
+        var sending = false;
         try
         {
             int read;
             while ((read = await from.ReceiveAsync(buffer, SocketFlags.None, broken.Token)) > 0)
             {
+                exchange.Received(fromClient, read);
                 var pending = buffer.AsMemory(0, read);
+                sending = true;
                 while (!pending.IsEmpty) pending = pending[await to.SendAsync(pending, SocketFlags.None, broken.Token)..];
+                sending = false;
             }
+            exchange.Ended($"the {source} closed it");
             to.Shutdown(SocketShutdown.Send);
-            if (endsBoth) broken.Cancel();
+            if (!fromClient) broken.Cancel();
         }
         catch (Exception e) when (e is SocketException or OperationCanceledException or ObjectDisposedException)
         {
+            if (e is SocketException) exchange.Ended(sending ? $"the {other} reset it" : $"the {source} reset it");
             broken.Cancel();
+        }
+    }
+
+    // What passed through one connection: the bytes each way, whether the client sent anything after the target's
+    // first bytes, and who ended it first.
+    private sealed class Exchange(TimeProvider time, string target)
+    {
+        private long _fromClient;
+        private long _fromTarget;
+        private int _clientAnswered;
+        private string? _endedBy;
+
+        public string Target => target;
+        public long FromClient => Interlocked.Read(ref _fromClient);
+        public long FromTarget => Interlocked.Read(ref _fromTarget);
+        public bool ClientAnswered => Volatile.Read(ref _clientAnswered) == 1;
+        public string? EndedBy => Volatile.Read(ref _endedBy);
+        public long EndedAt { get; private set; }
+
+        // The target's bytes are counted before they are passed on, so a client's reply always finds them counted.
+        public void Received(bool fromClient, int count)
+        {
+            if (!fromClient)
+            {
+                Interlocked.Add(ref _fromTarget, count);
+                return;
+            }
+            if (FromTarget > 0) Volatile.Write(ref _clientAnswered, 1);
+            Interlocked.Add(ref _fromClient, count);
+        }
+
+        public void Ended(string by)
+        {
+            var at = time.GetTimestamp();
+            if (Interlocked.CompareExchange(ref _endedBy, by, null) is null) EndedAt = at;
         }
     }
 }
