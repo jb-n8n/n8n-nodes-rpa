@@ -323,6 +323,8 @@ catch {
   $userKept = $_.Exception.Data['UserKept']
   if ($notPutBack.Count -eq 0) {
     Write-Host 'The install did not finish. Fix the cause and run Install-Rpa.ps1 again with the same parameters.'
+    # A move from automatic sign-in that had signed the bot user out: automatic sign-in is back, for the next start.
+    if ($_.Exception.Data['SignedOut']) { Write-Host ('  {0} stays signed out until this machine starts again, when Windows signs it in, or until someone signs in as {0}.' -f $User) }
   } else {
     # The undo could not put everything back, so it removed nothing more. What is left, and what to do about it.
     Write-Host 'The install did not finish, and the settings listed above could not be put back.'

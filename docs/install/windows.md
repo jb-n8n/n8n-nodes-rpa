@@ -529,7 +529,13 @@ warning with the supervisor's last failure, and the install is complete all the 
 Desktop Users when the installer put it there, and turns Remote Desktop off again when the installer turned it on
 (it says so at its end: an administrator who has started to use Remote Desktop since loses it).
 An install with `-Unattended:$false` over one with `-Unattended` does the same: that is the way back to the
-signed-in mode. An upgrade without the parameter keeps unattended mode (section 9).
+signed-in mode. Back to automatic sign-in, `-Unattended:$false -AutoSignIn` keeps the password as the move does: it
+needs no `-UserPassword` and no new password. The installer reads the password the supervisor has, tries it against
+the account, sets automatic sign-in up with it, and only then removes the supervisor and puts back the rest; Windows
+signs the bot user in at the machine's next start. When that password is missing, or Windows no longer accepts it,
+the installer refuses and changes nothing (give `-UserPassword`, or install for a new bot user with `-User`). When
+the way back fails before the supervisor is put back, the install stays unattended and working. An upgrade without
+the parameter keeps unattended mode (section 9).
 
 **What the machine needs.**
 
@@ -897,8 +903,9 @@ powershell.exe -ExecutionPolicy Bypass -File "$package\rpa-windows-x64\Install-R
 An upgrade replaces the programs and keeps the user, the policy, both tokens and both certificates, so the n8n
 credentials stay as they are. It also keeps the firewall addresses and automatic sign-in of the earlier install when
 you give none. An install made with `-Unattended` stays unattended, with its idle time and its stored password; to go
-back to the signed-in mode, run the installer with `-Unattended:$false`. An install made with `-AutoSignIn` moves to
-`-Unattended` with the password it has: add `-Unattended` (section 4,
+back to the signed-in mode, run the installer with `-Unattended:$false`. Both directions between `-AutoSignIn` and
+`-Unattended` keep the bot user's password: add `-Unattended` to move an install with automatic sign-in, or
+`-Unattended:$false -AutoSignIn` to go back (section 4,
 [Running with nobody signed in](#running-with-nobody-signed-in)). While the bot user is signed in the runner is
 running, and the installer refuses without `-Force` (`The runner is running; a run in progress will fail. Use -Force
 to continue.`): run the upgrade when no run is in progress. The installer prints `Upgrading RPA:`, stops both

@@ -263,6 +263,22 @@ function Read-RpaAutoSignInPassword {
   [RpaLsaRead]::Read($script:AutoSignInSecret)
 }
 
+# The password stored for the RPA Supervisor (the LSA secret L$RpaRunnerBotPassword), as a SecureString, or nothing
+# when it is missing or empty.
+function Read-RpaSupervisorPassword {
+  Add-RpaMoveTypes
+  [RpaLsaRead]::Read($script:SupervisorSecret)
+}
+
+# The step 'keep the supervisor password for automatic sign-in', on the way back from -Unattended to -AutoSignIn: the
+# password the supervisor has is kept in the run's memory, and the steps of automatic sign-in that follow store it, so
+# that the bot user keeps its password. The step that removes the supervisor's secret comes after them.
+function Copy-RpaSupervisorPassword([hashtable]$Run) {
+  $stored = Read-RpaSupervisorPassword
+  if (-not $stored) { throw 'The password stored for the RPA Supervisor is missing or empty; nothing of it was kept.' }
+  $Run.Password = $stored
+}
+
 # The step 'keep the automatic sign-in password for the supervisor', when an install with automatic sign-in moves to
 # -Unattended: the bot user's password stays the one it has (a new password set by an administrator would make what
 # the bot user's programs protect with it unreadable). It is read from the secret for automatic sign-in while that is

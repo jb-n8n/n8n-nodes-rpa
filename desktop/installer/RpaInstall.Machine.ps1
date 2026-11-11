@@ -23,7 +23,8 @@ $script:KnownSteps = @(
   'write policy', 'write token', 'write browser-token', 'add the runner firewall rule', 'add the browser firewall rule',
   'remove the browser firewall rule', 'register the runner task', 'register the browser task',
   'remove the browser task', 'write install.json', 'put back what -Unattended changed', 'store sign-in password',
-  'turn on automatic sign-in', 'keep the desktop unlocked', 'keep the automatic sign-in password for the supervisor',
+  'keep the supervisor password for automatic sign-in', 'turn on automatic sign-in', 'keep the desktop unlocked',
+  'keep the automatic sign-in password for the supervisor',
   'turn off automatic sign-in', 'allow the bot user to sign in through Remote Desktop', 'turn on Remote Desktop',
   "store the bot user's password for the supervisor", 'sign the bot user out', 'register the supervisor service',
   'point the firewall rules at the supervisor', 'start tasks')
@@ -187,6 +188,22 @@ function Get-RpaDataEntries([string]$DataDir) {
   $result
 }
 
+# Tries a password read from an LSA secret (a SecureString, or nothing) against the account, and disposes of it: State
+# is missing, wrong (Windows' "the user name or password is incorrect", 1326) or ok, and Problem says why it could not
+# be checked otherwise. 1385 means the password is right and only this kind of logon is not allowed.
+function Test-RpaStoredPassword($Stored, [hashtable]$Account) {
+  if (-not $Stored) { return @{ State = 'missing'; Problem = $null } }
+  try {
+    $domain = '.'
+    if ($Account.IsDomain) { $domain = $Account.Domain }
+    $code = [RpaAccounts]::CheckPassword($domain, $Account.Name, $Stored)
+  } finally { $Stored.Dispose() }
+  if ($code -eq 1326) { return @{ State = 'wrong'; Problem = $null } }
+  $problem = $null
+  if ($code -ne 0 -and $code -ne 1385) { $problem = (New-Object ComponentModel.Win32Exception $code).Message }
+  @{ State = 'ok'; Problem = $problem }
+}
+
 # The facts Get-RpaInstallPlan judges. Changes nothing.
 function Get-RpaMachineFacts {
   param([Parameter(Mandatory = $true)][hashtable]$Parameters)
@@ -237,6 +254,8 @@ function Get-RpaMachineFacts {
     InstalledIdleSeconds       = $null
     AutoSignInPassword         = $null
     AutoSignInPasswordProblem  = $null
+    SupervisorPassword         = $null
+    SupervisorPasswordProblem  = $null
     RemoteDesktopPort          = $null
     InstalledUnattendedChanges = $false
     SupervisorDir              = $layout.SupervisorDir
@@ -323,20 +342,16 @@ function Get-RpaMachineFacts {
     # for automatic sign-in is read into memory and tried the same way; only the outcome is kept here.
     $moving = ($Parameters.Unattended -or $keepsUnattended) -and $install -and $install.autoSignIn -eq $true -and $facts.InstalledForUser
     if ($moving -and -not $Parameters.UserPassword) {
-      $stored = Read-RpaAutoSignInPassword
-      if (-not $stored) { $facts.AutoSignInPassword = 'missing' }
-      else {
-        try {
-          $domain = '.'
-          if ($account.IsDomain) { $domain = $account.Domain }
-          $code = [RpaAccounts]::CheckPassword($domain, $account.Name, $stored)
-        } finally { $stored.Dispose() }
-        if ($code -eq 1326) { $facts.AutoSignInPassword = 'wrong' }
-        else {
-          $facts.AutoSignInPassword = 'ok'
-          if ($code -ne 0 -and $code -ne 1385) { $facts.AutoSignInPasswordProblem = (New-Object ComponentModel.Win32Exception $code).Message }
-        }
-      }
+      $checked = Test-RpaStoredPassword (Read-RpaAutoSignInPassword) $account
+      $facts.AutoSignInPassword = $checked.State
+      $facts.AutoSignInPasswordProblem = $checked.Problem
+    }
+    # The way back, -Unattended:$false -AutoSignIn without -UserPassword: the same for the password the supervisor has.
+    $back = $Parameters.AutoSignIn -and -not $Parameters.Unattended -and $facts.InstalledSupervisorSecret -and $facts.InstalledForUser
+    if ($back -and -not $Parameters.UserPassword) {
+      $checked = Test-RpaStoredPassword (Read-RpaSupervisorPassword) $account
+      $facts.SupervisorPassword = $checked.State
+      $facts.SupervisorPasswordProblem = $checked.Problem
     }
   }
 
@@ -1522,11 +1537,14 @@ function Undo-RpaUnattended([hashtable]$Run) {
 # On a failed upgrade: install.json's mode, the RPA Supervisor's fields and the browser port go back to what the
 # record before this run said (an older record without a mode was signed in), so that the start scripts do not move
 # the runner and the browser behind a supervisor that the undo removed.
-# Only when this run wrote unattended over a record that was not: a failed run with -Unattended:$false over an unattended
-# install keeps the signed-in mode it wrote, because what the supervisor needs may be gone by then.
+# Not when the mode is the same, and not when a run with -Unattended:$false over an unattended install failed after it
+# began to put back what -Unattended changed: what the supervisor needs may be gone by then.
 function Restore-RpaModeBefore([hashtable]$Run) {
   $before = $Run.Before
-  if (-not $before -or $Run.Install.mode -ne 'unattended' -or [string]$before.mode -eq 'unattended') { return }
+  if (-not $before) { return }
+  $had = [string]$before.mode
+  if (-not $had) { $had = 'signedIn' }
+  if ([string]$Run.Install.mode -eq $had -or ($had -eq 'unattended' -and $Run.UnattendedPutBack)) { return }
   foreach ($field in 'browserPort', 'mode', 'idleSeconds', 'runnerInnerPort', 'browserInnerPort', 'listenAddresses') {
     $property = $before.PSObject.Properties[$field]
     if ($property) { $Run.Install[$field] = $property.Value }
@@ -1544,11 +1562,17 @@ function Restore-RpaModeBefore([hashtable]$Run) {
 # Returns the lines that name what could not be put back (NotPutBack) and the user that was kept (UserKept).
 function Undo-RpaFailedRun([hashtable]$Run) {
   $failed = @()
-  if (@($Run.NewChanges).Count -gt 0) {
+  # A failure while what -Unattended changed was being put back keeps what this run set up before (automatic sign-in
+  # with its password): the supervisor may be gone already, and the records of what is left stay for the next run.
+  $keepNew = [bool]$Run.UnattendedPutBack
+  if ($keepNew -and @($Run.NewChanges).Count -gt 0) {
+    Write-Host '  undo: the settings this run changed stay, because what -Unattended changed was being put back'
+  } elseif (@($Run.NewChanges).Count -gt 0) {
     Write-Host '  undo: put back the settings this run changed'
     $failed = @(Restore-RpaSignInChanges $Run.NewChanges $false)
   }
-  $newIds = @($Run.NewChanges | ForEach-Object { Get-RpaChangeId $_ })
+  $newIds = @()
+  if (-not $keepNew) { $newIds = @($Run.NewChanges | ForEach-Object { Get-RpaChangeId $_ }) }
   # A run that moved from automatic sign-in turns it on again, with the password it kept in memory.
   if ($Run.AutoSignInTurnedOff) { $failed += @(Enable-RpaAutoSignInAgain $Run) }
   $result = @{ NotPutBack = @($failed | ForEach-Object { $_.Text }); UserKept = $null }
@@ -1567,7 +1591,7 @@ function Undo-RpaFailedRun([hashtable]$Run) {
   if ($Run.WroteInstallFile) {
     if ($Run.Upgrade) {
       $Run.Install.signInChanges = @($Run.Install.signInChanges | Where-Object { $newIds -notcontains (Get-RpaChangeId $_) })
-      $Run.Install.autoSignIn = $Run.AutoSignInBefore
+      if (-not $keepNew) { $Run.Install.autoSignIn = $Run.AutoSignInBefore }
       Restore-RpaModeBefore $Run
       Save-RpaInstallFile $Run
     } else {
@@ -1673,7 +1697,12 @@ function Invoke-RpaInstallPlan {
           Save-RpaInstallFile $run
           $run.WroteInstallFile = $true
         }
-        'put back what -Unattended changed' { Undo-RpaUnattended $run }
+        'put back what -Unattended changed' {
+          # From here on a failure leaves what this run set up (automatic sign-in) in place: the supervisor may be gone.
+          $run.UnattendedPutBack = $true
+          Undo-RpaUnattended $run
+        }
+        'keep the supervisor password for automatic sign-in' { Copy-RpaSupervisorPassword $run }
         'store sign-in password' { Set-RpaSignInPassword $run }
         'turn on automatic sign-in' { Enable-RpaAutoSignIn $run }
         'keep the desktop unlocked' { Set-RpaDesktopUnlocked $run }
@@ -1685,7 +1714,10 @@ function Invoke-RpaInstallPlan {
         "store the bot user's password for the supervisor" { Set-RpaSupervisorPassword $run }
         'keep the automatic sign-in password for the supervisor' { Copy-RpaAutoSignInPassword $run }
         'turn off automatic sign-in' { Disable-RpaAutoSignIn $run }
-        'sign the bot user out' { Close-RpaBotSessions $run }
+        'sign the bot user out' {
+          $run.SignedOut = $true
+          Close-RpaBotSessions $run
+        }
         'register the supervisor service' {
           Register-RpaSupervisor $run
           Wait-RpaFirstSignIn $run $runnerPort
@@ -1698,6 +1730,7 @@ function Invoke-RpaInstallPlan {
       $undone = Undo-RpaFailedRun $run
       $failure.Data['NotPutBack'] = [string[]]@($undone.NotPutBack)
       $failure.Data['UserKept'] = $undone.UserKept
+      $failure.Data['SignedOut'] = [bool]$run.SignedOut
       throw $failure
     }
   }
