@@ -12,6 +12,7 @@ import type { WorkflowJson } from '../nodes/Playwright/import/workflow.js';
 import { executeImportSteps, SOURCE_NOT_DETECTED } from '../nodes/Playwright/operations/importSteps.js';
 import { fakeEngine } from './fake-engine.js';
 import { nodeContext, siteLoginData } from './feed-fixtures.js';
+import { WORKFLOW_NODE_TYPES } from './fixtures.js';
 import { SECRETS } from './fixtures.js';
 
 // Every source, through Import Steps with Source → Work It Out From the File: the source is read from the file, and the
@@ -21,13 +22,6 @@ import { SECRETS } from './fixtures.js';
 const SITE = { url: 'https://erp.example.com', host: 'erp.example.com' };
 const FIXTURES = new URL('../../engine/test/fixtures/import/', import.meta.url);
 const fixture = (name: string) => readFileSync(new URL(name, FIXTURES));
-/** Node types and versions the generator emits (import-workflow.test.ts has the same table, checked against n8n). */
-const KNOWN = new Map<string, number>([
-  ['n8n-nodes-base.manualTrigger', 1], ['n8n-nodes-base.scheduleTrigger', 1.2], ['n8n-nodes-base.stickyNote', 1], ['n8n-nodes-base.dataTable', 1.1],
-  ['n8n-nodes-rpa.playwright', 1], ['n8n-nodes-base.awsS3', 2], ['n8n-nodes-base.extractFromFile', 1.1], ['n8n-nodes-base.convertToFile', 1.1],
-  ['n8n-nodes-base.httpRequest', 4.2], ['n8n-nodes-base.emailSend', 2.1], ['n8n-nodes-base.wait', 1.1], ['n8n-nodes-base.if', 2.2],
-  ['@n8n/n8n-nodes-langchain.lmChatAnthropic', 1.5], ['n8n-nodes-base.executeWorkflow', 1.2],
-]);
 /** A value of a secret run variable, given to the import as Options → Variables: it must never reach the workflow file. */
 const EXPORT_PASSWORD = 'Export-Secret-7731';
 
@@ -64,7 +58,7 @@ async function importFile(data: Buffer | string, fileName: string, options: IDat
 function workflowOf(item: INodeExecutionData): WorkflowJson {
   const text = Buffer.from(String(item.binary?.workflow?.data ?? ''), 'base64').toString('utf8');
   const wf = JSON.parse(text) as WorkflowJson;
-  for (const n of wf.nodes) expect(KNOWN.get(n.type), `${n.name}: ${n.type}`).toBe(n.typeVersion);
+  for (const n of wf.nodes) expect(WORKFLOW_NODE_TYPES[n.type], `${n.name}: ${n.type}`).toBe(n.typeVersion);
   for (const s of [SECRETS.username, SECRETS.password, SECRETS.totpSecret, EXPORT_PASSWORD]) expect(text).not.toContain(s);
   expect(text).not.toContain('allowPrivateNetwork');
   expect(wf.nodes.find((n) => n.type === 'n8n-nodes-base.scheduleTrigger')).toMatchObject({ disabled: true });
