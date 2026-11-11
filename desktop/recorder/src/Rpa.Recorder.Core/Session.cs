@@ -68,12 +68,29 @@ public sealed class Session
         }
     }
 
+    /// <summary>The most arguments, and the longest, a desktop step set takes (the engine's step parser).</summary>
+    public const int MaxArgs = 50, MaxArgLength = 1000;
+
+    /// <summary>
+    /// The recording is of a program whose window was already open (Record an open window): the recording's app is that
+    /// program (<paramref name="exePath"/>, its file), with no arguments, and no launch step (the importer adds one).
+    /// </summary>
+    public void Attach(string exePath)
+    {
+        if (_app is not null) throw new InvalidOperationException("a recording records one application");
+        var exe = WindowRules.FileName(exePath);
+        if (!WindowRules.IsExeName(exe)) throw new ArgumentException("the application must be a program (.exe)", nameof(exePath));
+        _app = (exe, []);
+    }
+
     private void Started(AppStarted o)
     {
         if (_app is not null) throw new InvalidOperationException("a recording records one application");
         var exe = WindowRules.FileName(o.ExePath);
         if (!WindowRules.IsExeName(exe)) throw new ArgumentException("the application must be a program (.exe)", nameof(o));
         if (o.Args.Any(a => a.Contains("{{"))) throw new ArgumentException("the application's arguments may not hold {{", nameof(o));
+        if (o.Args.Count > MaxArgs || o.Args.Any(a => a.Length > MaxArgLength))
+            throw new ArgumentException($"A recording takes at most {MaxArgs} arguments of at most {MaxArgLength} characters each, as Import Steps does.", nameof(o));
         var args = o.Args.ToArray();
         _app = (exe, args);
         _steps.Add(new RecordedStep(StepKind.Launch, o.At, exe) { Exe = exe, Args = args, Window = WindowRules.Window(o.Window) });
@@ -90,11 +107,13 @@ public sealed class Session
         var combo = element.Ancestors.Select((a, i) => (a, i)).FirstOrDefault(x => x.a.ControlType == "ComboBox");
         if (element.ControlType == "ListItem" && combo.a is not null)
         {
+            // An empty item (a blank first entry) cannot be chosen by a step: no select is recorded.
+            if (element.Name.Length == 0) return;
             var select = Step(StepKind.Select, o.At, o.Window, combo.a, 1) with { Option = Literal(element.Name, combo.a) };
             AddFolding(select, takeClickTime: false);
             return;
         }
-        if (element.IsChecked is { } wasChecked && element.ControlType != "RadioButton")
+        if (element.IsChecked is { } wasChecked && element.ControlType == "CheckBox")
         {
             _steps.Add(Step(StepKind.Check, o.At, o.Window, element, o.Matches) with { Checked = !wasChecked });
             return;
@@ -118,7 +137,7 @@ public sealed class Session
     {
         _typing = null;
         var element = o.Element;
-        _steps.Add(element.IsChecked is { } wasChecked && element.ControlType != "RadioButton"
+        _steps.Add(element.IsChecked is { } wasChecked && element.ControlType == "CheckBox"
             ? Step(StepKind.Check, o.At, o.Window, element, 1) with { Checked = !wasChecked }
             : Step(StepKind.Click, o.At, o.Window, element, 1));
     }
@@ -143,7 +162,7 @@ public sealed class Session
         var step = Step(typing.Kind == FieldKind.DropDown ? StepKind.Select : StepKind.Fill, typing.At, typing.Window, typing.Field, 1);
         if (typing.Kind == FieldKind.DropDown)
         {
-            if (o.Selection is null) return;
+            if (string.IsNullOrEmpty(o.Selection)) return;
             step = step with { Option = Literal(o.Selection, typing.Field) };
         }
         else if (SecretRules.IsSecret(typing.Field) || SecretRules.IsSecret(o.Field))
@@ -156,7 +175,7 @@ public sealed class Session
             step = step with { Value = Literal(o.Value, typing.Field) };
             // A file name typed into a Save dialog: the run saves into its own export folder.
             var file = WindowRules.FileName(step.Value);
-            if (typing.Window.ClassName == "#32770" && typing.Field.AutomationId == "1001" && step.Value == o.Value && IsFileName(file))
+            if (IsFileNameBox(typing.Window, typing.Field) && step.Value == o.Value && IsFileName(file))
                 step = step with { Value = $"{{{{$exportDir}}}}\\{file}", ExportFile = file };
         }
         AddFolding(step, takeClickTime: true);
@@ -205,6 +224,7 @@ public sealed class Session
     public void AddRead(ElementFacts element, WindowFacts window, string name)
     {
         CheckName(name);
+        if (SecretRules.IsSecret(element)) throw new ArgumentException(Notices.PasswordNotRead, nameof(element));
         if (_steps.Any(s => s.Kind == StepKind.Read && s.As == name)) throw new ArgumentException($"another read already gives {name}", nameof(name));
         var target = LocatorRules.ReadTarget(window, element, out var byText);
         _steps.Add(new RecordedStep(StepKind.Read, DateTimeOffset.Now, LocatorRules.ReadLabel(element))
@@ -267,8 +287,14 @@ public sealed class Session
 
     private static void CheckName(string name)
     {
-        if (!SecretRules.IsVariableName(name)) throw new ArgumentException("a variable's name starts with a letter or _ and holds only letters, digits and _", nameof(name));
+        if (!SecretRules.IsVariableName(name))
+            throw new ArgumentException("A variable's name starts with a letter or _, holds only letters, digits and _, and has at most 64 characters.", nameof(name));
     }
+
+    /// <summary>The file-name box of a common file dialog: control 1001 inside the dialog's FileNameControlHost combo box,
+    /// in a <c>#32770</c> window. Any other dialog's control 1001 is an ordinary field.</summary>
+    private static bool IsFileNameBox(WindowFacts window, ElementFacts field) =>
+        window.ClassName == "#32770" && field.AutomationId == "1001" && field.Ancestors.Any(a => a.AutomationId == "FileNameControlHost");
 
     /// <summary>A file name without a folder, as the importer takes it (FILE_NAME in recording.ts).</summary>
     private static bool IsFileName(string name) =>

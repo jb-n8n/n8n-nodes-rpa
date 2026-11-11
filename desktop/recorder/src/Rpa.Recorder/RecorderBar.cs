@@ -77,9 +77,9 @@ internal sealed class RecorderBar : Form
     {
         using var pick = new OpenFileDialog { Title = "The program to record", Filter = "Programs (*.exe)|*.exe" };
         if (pick.ShowDialog(this) != DialogResult.OK) return;
-        var line = Ask("Arguments", $"Arguments for {Path.GetFileName(pick.FileName)} (optional, separated by spaces).\r\n{Notices.Arguments}", "");
+        var line = Ask("Arguments", $"Arguments for {Path.GetFileName(pick.FileName)} (optional; put one with spaces in quotes).\r\n{Notices.Arguments}", "");
         if (line is null) return;
-        var args = line.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var args = CommandLine.Split(line);
         _startProgram.Enabled = _startWindow.Enabled = false;
         try
         {

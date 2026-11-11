@@ -41,6 +41,9 @@
 // "<file>"; no other "{{$...}}" template may appear anywhere. "positional": true marks a target found by a name that
 // carries a position (a grid cell, "Vendor Row 1").
 //
+// A key event whose chord the step format refuses (a Windows shell chord such as Alt+Tab, or a chord not in the
+// canonical spelling) and a select of an empty item are left out, each with a `dropped` report item; the rest imports.
+//
 // On import, an automation id that stableDesktopId finds generated is dropped from its condition (an outer condition
 // left with only a control type goes from the path), and an event whose own condition is left with nothing but a
 // control type is left out. The draft is `<name>-1` for the import's Name, with the flow's one desktop node.
@@ -48,6 +51,7 @@ import { stableDesktopId } from '../desktop/stable-ids.js';
 import { IMPORT_EMPTY } from '../messages.js';
 import { CREDENTIAL_FIELD } from '../secrets/credential-field.js';
 import { createMasker } from '../secrets/mask.js';
+import { stepChordProblem } from '../steps/desktop-vocabulary.js';
 import type { DesktopApp, UiaCond, UiaTarget } from '../types.js';
 import { MAX_CHROME_BYTES } from './chrome.js';
 import { cleanLabel, MIN_SECRET_LENGTH } from './draft.js';
@@ -84,6 +88,8 @@ const NOT_EXE_NAME = (path: string) => `${path} must be a program's file name, s
 const OTHER_APP = (path: string) => `${path} must open the recording's app, with the same exe and args`;
 const UNSTABLE_ID = 'the automation id looks generated (it may change from run to run), so the step finds the element without it';
 const NOTHING_LEFT = 'the automation id looks generated (it may change from run to run) and nothing else names the element, so this step was left out: add it by hand';
+const KEY_LEFT_OUT = (problem: string) => `the step was left out: its key ${problem}`;
+const EMPTY_OPTION = 'the step was left out: it chooses an empty item, which desktop steps cannot choose';
 const POSITIONAL = 'the step finds its element by a row position, not by what the row holds: on a later run it acts on whatever is in that row';
 
 /** Keys beside at, kind and label, by kind. A Map, so a kind such as `constructor` or `__proto__` is never mistaken for one. */
@@ -290,6 +296,10 @@ export function importRecording(data: Buffer | Uint8Array | string, opts: Import
     const { secret, positional, ...event } = recorded;
     const what = cleanLabel(event.label) || 'the element';
     if (secret && event.kind === 'fill') secretVariables.add(ONE_VARIABLE.exec(event.value)![1]);
+    // What the step parser would refuse in one event leaves that event out, not the whole recording.
+    const chordProblem = event.kind === 'key' ? stepChordProblem(event.chord) : undefined;
+    if (chordProblem) { add(event.at, 'dropped', what, KEY_LEFT_OUT(chordProblem)); continue; }
+    if (event.kind === 'select' && event.option === '') { add(event.at, 'dropped', what, EMPTY_OPTION); continue; }
     if ('target' in event && event.target) {
       const stable = stableTarget(event.target);
       if (!stable) { add(event.at, 'dropped', what, NOTHING_LEFT); continue; }

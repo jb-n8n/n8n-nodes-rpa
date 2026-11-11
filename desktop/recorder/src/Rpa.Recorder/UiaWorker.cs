@@ -74,11 +74,11 @@ internal sealed class UiaWorker : IDisposable
         return element is null ? null : Describe(element, withAncestors: true);
     }
 
-    /// <summary>The element that has the keyboard focus, without its ancestors (a key's step needs none).</summary>
+    /// <summary>The element that has the keyboard focus, with its ancestors (they tell a common file dialog's file-name box).</summary>
     public Described? Focused()
     {
         var element = Safe(() => _automation.FocusedElement());
-        return element is null ? null : Describe(element, withAncestors: false);
+        return element is null ? null : Describe(element, withAncestors: true);
     }
 
     private Described Describe(AutomationElement element, bool withAncestors)

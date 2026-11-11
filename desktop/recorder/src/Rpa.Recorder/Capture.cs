@@ -8,7 +8,7 @@ using Rpa.Recorder.Core;
 
 namespace Rpa.Recorder;
 
-internal enum NoticeKind { Late, HookLost, Elevated, NotStarted, OtherProgram }
+internal enum NoticeKind { Late, HookLost, Elevated, NotStarted, OtherProgram, NotRead, TooManySteps }
 
 /// <summary>Something the recorder tells the person. <c>Text</c> may name a step's element; it never holds typed text.</summary>
 internal sealed record Notice(NoticeKind Kind, DateTimeOffset At, string Text);
@@ -141,23 +141,30 @@ internal sealed class Capture : IDisposable
             Notify(NoticeKind.Elevated, Notices.Elevated);
             return false;
         }
-        ProgramPath = Native.ImagePath(process);
+        var path = Native.ImagePath(process);
+        try
+        {
+            // The recording's app is the attached program, as the policy change's is.
+            lock (_gate) _session.Attach(path ?? throw new ArgumentException(Notices.ProgramUnknown));
+        }
+        catch (ArgumentException)
+        {
+            Notify(NoticeKind.NotStarted, Notices.ProgramUnknown);
+            return false;
+        }
+        ProgramPath = path;
         AppProcessId = (int)process;
         _lastAppWindow = window;
-        _scope = ScopeOf((int)process, ProgramPath);
+        _scope = new AppScope((int)process, path);
         var handle = Native.OpenToWatch(process);
-        if (handle is null) _scope.AppExited(DateTimeOffset.Now);
+        if (handle is null) _scope.AppExited();
         else Watch(new ProcessWait(handle));
         Begin();
         return true;
     }
 
     /// <summary>The recorded application: its process, and its program file as Windows names it.</summary>
-    private static AppScope ScopeOf(int processId, string? path)
-    {
-        var app = Native.Describe(processId) ?? new ProcessFacts(processId, 0, path, null);
-        return new AppScope(app, app.ImagePath ?? path);
-    }
+    private static AppScope ScopeOf(int processId, string path) => new(processId, Native.ImagePath((uint)processId) ?? path);
 
     /// <summary>
     /// Holds the recorded process open (its handle) and tells the scope when it exits. A process that cannot be held
@@ -168,11 +175,11 @@ internal sealed class Capture : IDisposable
     {
         _appHandle = process;
         var scope = _scope;
-        _appWait = ThreadPool.RegisterWaitForSingleObject(_appHandle, (_, _) => scope?.AppExited(DateTimeOffset.Now), null, Timeout.Infinite, executeOnlyOnce: true);
+        _appWait = ThreadPool.RegisterWaitForSingleObject(_appHandle, (_, _) => scope?.AppExited(), null, Timeout.Infinite, executeOnlyOnce: true);
     }
 
     /// <summary>Whether a process's input belongs to the recording (<see cref="AppScope"/>).</summary>
-    private bool InScope(uint processId) => _scope?.Includes((int)processId, Native.Describe) == true;
+    private bool InScope(uint processId) => _scope?.Includes((int)processId, id => Native.ImagePath((uint)id)) == true;
 
     /// <summary>Input in another program: nothing of it is recorded, and the field being typed into in the recorded
     /// application is left (it was).</summary>
@@ -242,15 +249,18 @@ internal sealed class Capture : IDisposable
     public (string Recording, string PolicyChange) Save(string folder, string name, bool overwrite)
     {
         var program = ProgramPath ?? throw new InvalidOperationException("the program's file is not known, so no policy change can be made for it");
-        string recording, change;
+        RecordingFile file;
+        string change;
         lock (_gate)
         {
-            recording = _session.ToFile(name).ToJson();
+            file = _session.ToFile(name);
             change = _session.ToPolicyChange(program, Sha256(program)).ToJson();
         }
         var paths = (Path.Combine(folder, SaveNames.Recording(name)), Path.Combine(folder, SaveNames.PolicyChange(name)));
-        Write(paths.Item1, recording, overwrite);
+        Write(paths.Item1, file.ToJson(), overwrite);
         Write(paths.Item2, change, overwrite);
+        // Saved all the same: the person can delete steps and save again.
+        if (file.EstimatedSteps > RecordingFile.MaxSteps) Notify(NoticeKind.TooManySteps, Notices.TooManySteps(file.EstimatedSteps), always: true);
         return paths;
     }
 
@@ -305,11 +315,12 @@ internal sealed class Capture : IDisposable
         described.Wait(BudgetMs);
     }
 
-    private bool OnKeyDown(int vk, bool ctrl, bool alt, bool shift)
+    private bool OnKeyDown(int vk, bool ctrl, bool alt, bool shift, bool win)
     {
         if (!_recording) return false;
-        var kind = KeyRules.Kind(vk, ctrl, alt);
-        if (kind == KeyKind.Modifier) return false;
+        // Modifiers alone, and the keys that belong to Windows (Win chords, Alt+Tab, Ctrl+Esc...), are never recorded.
+        var kind = KeyRules.Kind(vk, ctrl, alt, win);
+        if (kind is KeyKind.Modifier or KeyKind.Shell) return false;
         var foreground = Native.ProcessOf(Native.GetForegroundWindow());
         if (foreground == _ownProcess) return false;
         // Another program has the keyboard: the key goes on untouched (F9 too), and nothing of it is passed on.
@@ -413,6 +424,8 @@ internal sealed class Capture : IDisposable
         if (Native.ProcessOf(top) == _ownProcess) return;
         var d = _worker.At(point.X, point.Y);
         if (d is null || d.ProcessId == _ownProcess || !InScope(d.ProcessId)) return;
+        // A password field: the runner never reads one, so a read of it would fail on every run.
+        if (SecretRules.IsSecret(d.Facts, UiaWorker.ReadPasswordFlag(d.Element))) { Notify(NoticeKind.NotRead, Notices.PasswordNotRead, always: true); return; }
         ReadRequested?.Invoke(d.Facts, UiaWorker.WindowOf(d, top));
     }
 
@@ -446,6 +459,9 @@ internal sealed class Capture : IDisposable
         var window = _fieldWindow ?? new WindowFacts("", "", "");
         (_fieldElement, _fieldId, _fieldWindow) = (null, "", null);
         lock (_gate) _session.Add(new FieldLeft(at, window, field, value, selection));
+        // Typed into, but nothing could be read: say so, rather than leave the recording silently short of a step.
+        if (!field.IsPassword && !SecretRules.IsSecret(field) && (KeyRules.Field(field) == FieldKind.DropDown ? selection is null : value is null))
+            Notify(NoticeKind.NotRead, Notices.NotRead(LocatorRules.Label(field)), always: true);
         Changed?.Invoke();
     }
 

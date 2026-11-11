@@ -8,6 +8,16 @@ public static class Notices
     public const string CtrlAltShortcuts =
         "A shortcut with Ctrl+Alt and a letter or digit is not recorded: AltGr is Ctrl+Alt on many keyboards and types characters, which may be part of a password.";
 
+    public const string ProgramUnknown = "The program of this window could not be read, so it cannot be recorded.";
+
+    public const string PasswordNotRead = "A password field cannot be read into the run's output.";
+
+    public static string NotRead(string field) =>
+        $"The value typed into \"{field}\" could not be read, so that step is not in the recording: add it by hand.";
+
+    public static string TooManySteps(int steps) =>
+        $"The recording makes about {steps} steps, and Import Steps takes at most {RecordingFile.MaxSteps}: delete steps, or record the work in shorter parts.";
+
     public const string OtherPrograms = "Input in other programs is not recorded.";
 
     public const string Elevated =

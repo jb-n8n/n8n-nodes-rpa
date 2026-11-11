@@ -15,6 +15,12 @@ public sealed record RecordingFile(string Name, string Exe, IReadOnlyList<string
     public const string Format = "rpa-recording/1";
     /// <summary>The most events the importer reads from one recording.</summary>
     public const int MaxEvents = 400;
+    /// <summary>The most steps a desktop step set has (the engine's step parser).</summary>
+    public const int MaxSteps = 200;
+
+    /// <summary>About how many steps Import Steps makes of this recording: one per event (a launch and a scope become a
+    /// wait), plus a check of the exported file after each export. It leaves out steps it cannot use, so it may be fewer.</summary>
+    public int EstimatedSteps => Events.Count + Events.Count(e => e.ExportFile is not null);
 
     private static readonly JsonSerializerOptions Indented = new() { WriteIndented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 

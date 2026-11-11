@@ -63,10 +63,6 @@ internal static class Native
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool CreateProcess(string applicationName, StringBuilder commandLine, IntPtr processAttributes, IntPtr threadAttributes,
         bool inheritHandles, uint creationFlags, IntPtr environment, string? currentDirectory, ref STARTUPINFO startupInfo, out PROCESS_INFORMATION processInformation);
-    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool GetProcessTimes(IntPtr process, out long creation, out long exit, out long kernel, out long user);
-    [DllImport("ntdll.dll")] private static extern int NtQueryInformationProcess(IntPtr process, int infoClass, ref PROCESS_BASIC_INFORMATION info, int length, out int returned);
-    [StructLayout(LayoutKind.Sequential)]
-    private struct PROCESS_BASIC_INFORMATION { public IntPtr ExitStatus, PebBaseAddress, AffinityMask, BasePriority, UniqueProcessId, InheritedFromUniqueProcessId; }
     [DllImport("advapi32.dll", SetLastError = true)] private static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
     [DllImport("advapi32.dll", SetLastError = true)] private static extern bool GetTokenInformation(IntPtr token, int infoClass, out uint info, uint length, out uint returned);
 
@@ -92,29 +88,6 @@ internal static class Native
             var sb = new StringBuilder(1024);
             var size = (uint)sb.Capacity;
             return QueryFullProcessImageName(process, 0, sb, ref size) ? sb.ToString(0, (int)size) : null;
-        }
-        finally { CloseHandle(process); }
-    }
-
-    /// <summary>
-    /// A process's id, its parent's id (ProcessBasicInformation), its program file (QueryFullProcessImageName) and its
-    /// start time (GetProcessTimes), all with the least access Windows has (PROCESS_QUERY_LIMITED_INFORMATION). Null
-    /// when the process cannot be opened; a part that cannot be read is null (the parent id 0).
-    /// </summary>
-    public static Rpa.Recorder.Core.ProcessFacts? Describe(int processId)
-    {
-        var process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, (uint)processId);
-        if (process == IntPtr.Zero) return null;
-        try
-        {
-            var info = new PROCESS_BASIC_INFORMATION();
-            var parent = NtQueryInformationProcess(process, 0, ref info, Marshal.SizeOf<PROCESS_BASIC_INFORMATION>(), out _) == 0
-                ? (int)info.InheritedFromUniqueProcessId : 0;
-            var sb = new StringBuilder(1024);
-            var size = (uint)sb.Capacity;
-            var image = QueryFullProcessImageName(process, 0, sb, ref size) ? sb.ToString(0, (int)size) : null;
-            DateTimeOffset? started = GetProcessTimes(process, out var creation, out _, out _, out _) ? DateTimeOffset.FromFileTime(creation) : null;
-            return new Rpa.Recorder.Core.ProcessFacts(processId, parent, image, started);
         }
         finally { CloseHandle(process); }
     }

@@ -1113,17 +1113,22 @@ If something below differs on your machine, report it as a problem (section 11, 
 ### What it records, and what it does not
 
 - **Recorded:** a left click, a double click (one step), the text of a field, read when the person leaves the field, a
-  choice in a drop-down list, a check box as the state it is set to (by a click or by Space), Space on a button,
-  Enter, Tab, Escape, the function keys, and Ctrl or Alt shortcuts.
+  choice in a drop-down list, a check box as the state it is set to (by a click or by Space; a list row or tree item
+  with a box of its own is recorded as a click), Space on a button, Enter, Tab, Escape, the function keys, and Ctrl
+  or Alt shortcuts.
 - **Not recorded:** a right click and its menu (unless an item of the menu is then clicked with the left button), the
   mouse wheel, dragging, and a shortcut of Ctrl+Alt with a letter or digit. Windows treats Ctrl+Alt as AltGr on many
   keyboards, where those keys type characters that may be part of a password, so the recorder never records them as
-  keys. Add such a step by hand in a step document.
-- **Only the app you record.** Input in other programs is not recorded, and their fields are never read. The bar says
-  so once, as `Input in other programs is not recorded.`
-- **A password is never saved.** The recorder never reads the value of a password field: its step types a run
-  variable marked secret, which you supply when you run the steps. A field the recorder cannot tell is a password box
-  (an app that draws its own) must be marked secret by you before you save (step 5 below). Keys typed into a field
+  keys. Add such a step by hand in a step document. Also not recorded: keys that belong to Windows rather than to the
+  app (any shortcut with the Windows key, Alt+Tab, Alt+Esc, Ctrl+Esc), and choosing an empty item of a list.
+- **Only the app you record.** Input in other programs, a program the app starts included, is not recorded, and their
+  fields are not read: a run drives only the app it starts. The bar says so once, as `Input in other programs is not
+  recorded.`
+- **Passwords.** The recorder does not read a field it recognises as a password box (by its password flag, or by a
+  name or id that reads like one): its step types a run variable marked secret, which you supply when you run the
+  steps. A value typed into a box it does not recognise (an app that draws its own) is read like any field: mark that
+  step secret before you save (step 5 below), and the value is removed from the list and the file. Import Steps
+  refuses a recording that still carries a value in a field that looks like a password field. Keys typed into a field
   are not logged or counted. Do not put a password into the program's arguments either: the arguments are saved in
   the recording and in the policy change file. The bar says so when you start a program.
 - **A grid cell is found by its row position.** The step's locator says, for example, `Vendor Row 1`, so a later run
@@ -1143,7 +1148,8 @@ If something below differs on your machine, report it as a problem (section 11, 
 2. **Start the recorder.** Run `C:\Program Files\RPA Runner\recorder\RpaRecorder.exe`. A narrow window, **RPA
    Recorder**, opens at the top right of the screen and stays on top. Drag it aside or resize it if it covers the app;
    clicks on it are never recorded. Choose **Start a program...** and pick the app's `.exe`, then type its arguments if
-   it needs any (leave the box empty otherwise), or choose **Record an open window...** to record an app that is
+   it needs any, separated by spaces, with an argument that holds spaces in quotes (leave the box empty otherwise;
+   at most 50 arguments of at most 1000 characters each), or choose **Record an open window...** to record an app that is
    already running. That list shows the titled windows of other programs; it leaves out Windows' own desktop and
    taskbar, windows Windows keeps hidden, and the recorder's own. A program that shows no window within 30 seconds is
    reported as `The program did not show a window within 30 seconds.`
@@ -1154,6 +1160,7 @@ If something below differs on your machine, report it as a problem (section 11, 
    that element on each run. F9 does not reach the app. The step names the element by its automation id (`Read
    lblResultCount as out_ResultCount`), not by the text it shows now, because that text is the value it reads. An
    element with no stable id is found by its text; the bar then adds `(found by the text it shows now: check it)`.
+   F9 over a password field adds nothing: the bar says `A password field cannot be read into the run's output.`
    After you use the bar (Delete, Mark as..., the F9 question, Pause, Resume), the recorder gives the app its focus
    back. If a click in the app still did nothing (it only brought the app's window to the front), click again, and
    delete the extra step on the bar.
@@ -1163,7 +1170,9 @@ If something below differs on your machine, report it as a problem (section 11, 
    `The application took longer than 200 ms to describe "<step>", so the step was recorded as it was then. Check it,
    and delete it if it is wrong.`): look at it, and delete it and record it again if it is wrong. If the bar says
    `The recorder missed input: Windows stopped passing it on ...`, check the last steps and record again what is
-   missing; the recorder listens again by then.
+   missing; the recorder listens again by then. If it says `The value typed into "<field>" could not be read, so that
+   step is not in the recording: add it by hand.`, the app does not show that field's text to the recorder: add the
+   step in a step document.
 5. **Mark values.** Select a typed value or a chosen list item that should differ on each run, such as a date or a company code, choose
    **Mark as variable...** and name the run variable; the step then uses `{{var.<name>}}` and the recorded value is
    removed. Select the typing of a password or any other secret and choose **Mark as secret...**: the step types a
@@ -1176,7 +1185,8 @@ If something below differs on your machine, report it as a problem (section 11, 
 6. **Stop and save.** Choose **Stop**, type a name in **Name of the recording**, choose **Save...** and pick a folder. It
    writes two files there: `<name>.rpa-recording.json` and `<name>.policy-change.json` (characters Windows does not
    allow in a file name become `_`). It asks before it replaces files of the same names. The recorder applies no policy
-   itself. Then close the recorder.
+   itself. If the bar then says `The recording makes about <n> steps, and Import Steps takes at most 200 ...`, the
+   import will refuse it: delete steps and save again, or record the work in shorter parts. Then close the recorder.
 7. **Sign the bot user out** if this machine runs with `-Unattended`, and give the desktop back to whoever uses it.
 
 ### Allow the app, then import the recording

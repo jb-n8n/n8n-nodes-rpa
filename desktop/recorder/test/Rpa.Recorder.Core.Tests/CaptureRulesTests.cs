@@ -62,8 +62,9 @@ public class CaptureRulesTests
 
         s.MarkVariable(1, "username");
         Assert.Equal("Type the variable username into Name", StepText.Sentence(s.Steps[1]));
-        var export = Record(Typed(1, El("Edit", "1001", "File name:"), new("app.exe", "Save As", "#32770")),
-            Left(2, El("Edit", "1001", "File name:"), @"C:\out\report.csv", window: new("app.exe", "Save As", "#32770"))).Steps[0];
+        var fileName = El("Edit", "1001", "File name:", "Edit", false, false, El("ComboBox", "FileNameControlHost", "File name:"));
+        var export = Record(Typed(1, fileName, new("app.exe", "Save As", "#32770")),
+            Left(2, fileName, @"C:\out\report.csv", window: new("app.exe", "Save As", "#32770"))).Steps[0];
         Assert.Equal("Save report.csv into the run's export folder (File name:)", StepText.Sentence(export));
         var unchecking = Record(Click(1, box with { IsChecked = true })).Steps[0];
         Assert.Equal("Uncheck All companies", StepText.Sentence(unchecking));

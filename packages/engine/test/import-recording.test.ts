@@ -334,6 +334,37 @@ describe('secrets, ids and positions', () => {
     expectRefused(importRec(rec), notValid('events[9].positional must be true when it is there'));
   });
 
+  it('a key the steps never send (a Windows shell chord) is left out with a report item, and the rest imports', () => {
+    for (const chord of ['Alt+Tab', 'Alt+Shift+Tab', 'Ctrl+Escape', 'Ctrl+Shift+Escape', 'Alt+Escape']) {
+      const rec = recording();
+      rec.events[3].chord = chord;
+      const r = importRec(rec);
+      expect(items(r, 'error')).toEqual([]);
+      expect(items(r, 'dropped')).toContainEqual({
+        at: '2026-11-10T22:59:20.5266375+00:00', kind: 'dropped', what: 'Password',
+        reason: `the step was left out: its key is ${chord}, which drives the Windows shell, not the app: desktop steps never send it`,
+      });
+      expect(r.report.steps).toBe(16);
+      expect(r.desktopDrafts![0].script.steps.some((s) => 'key' in s)).toBe(false);
+    }
+    const rec = recording();
+    rec.events[3].chord = 'ctrl+s';
+    expect(items(importRec(rec), 'dropped').map((i) => i.reason)).toContain(
+      'the step was left out: its key must be a key chord such as Enter, Tab, Ctrl+S or F5 (modifiers in the order Ctrl, Alt, Shift; letters uppercase)');
+  });
+
+  it('a choice of an empty item is left out with a report item, and the rest imports', () => {
+    const rec = recording();
+    rec.events[5].option = '';
+    const r = importRec(rec);
+    expect(items(r, 'error')).toEqual([]);
+    expect(items(r, 'dropped')).toContainEqual({
+      at: '2026-11-10T22:59:22.9162750+00:00', kind: 'dropped', what: 'Company code',
+      reason: 'the step was left out: it chooses an empty item, which desktop steps cannot choose',
+    });
+    expect(r.report.steps).toBe(16);
+  });
+
   it('stableDesktopId agrees with every sample in stable-id-samples.json', () => {
     const samples = JSON.parse(readFileSync(SAMPLES, 'utf8')) as { id: string; stable: boolean }[];
     expect(samples.length).toBeGreaterThanOrEqual(20);

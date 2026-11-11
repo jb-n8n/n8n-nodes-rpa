@@ -36,9 +36,8 @@ public static partial class SecretRules
 
     /// <summary>The importer's CREDENTIAL_FIELD: the password words, PIN and secret. JavaScript's <c>\b</c> is spelled out
     /// as a boundary of ASCII word characters.</summary>
-    private static readonly Regex CredentialField = new(
-        string.Join('|', PasswordWords) + "|(?<![A-Za-z0-9_])pin(?![A-Za-z0-9_])|secret",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    internal static readonly string CredentialFieldPattern = string.Join('|', PasswordWords) + "|(?<![A-Za-z0-9_])pin(?![A-Za-z0-9_])|secret";
+    private static readonly Regex CredentialField = new(CredentialFieldPattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     public static bool IsSecret(ElementFacts field) =>
         field.IsPassword || CredentialLike(field.Name) || CredentialLike(field.AutomationId);
@@ -54,9 +53,10 @@ public static partial class SecretRules
     private static bool CredentialLike(string text) => Redaction.IsCredentialLike(text) || CredentialField.IsMatch(text);
 
     [GeneratedRegex("[^a-z0-9]+")] private static partial Regex NotNameChars();
-    [GeneratedRegex("^[A-Za-z_][A-Za-z0-9_]*$")] private static partial Regex VariableNameShape();
+    [GeneratedRegex("^[A-Za-z_][A-Za-z0-9_]{0,63}$")] private static partial Regex VariableNameShape();
 
-    /// <summary>A run variable's name as the steps accept it: a letter or _ first, then letters, digits and _.</summary>
+    /// <summary>A run variable's or a read's name as the steps accept it: a letter or _ first, then letters, digits and _,
+    /// at most 64 characters (READ_NAME in the engine).</summary>
     public static bool IsVariableName(string name) => VariableNameShape().IsMatch(name);
 
     /// <summary>The run variable a field's value goes into: its name (or automation id) in lower case, with <c>_</c> between

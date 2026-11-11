@@ -13,8 +13,8 @@ internal sealed class Hooks : IDisposable
     /// <summary>A left mouse button went down at this screen point; returns when the input may go on.</summary>
     public required Action<int, int> MouseDown { get; init; }
     public required Action MouseUp { get; init; }
-    /// <summary>A key went down (virtual-key code, Ctrl, Alt, Shift); true keeps it from the application.</summary>
-    public required Func<int, bool, bool, bool, bool> KeyDown { get; init; }
+    /// <summary>A key went down (virtual-key code, Ctrl, Alt, Shift, a Windows key); true keeps it from the application.</summary>
+    public required Func<int, bool, bool, bool, bool, bool> KeyDown { get; init; }
     /// <summary>Any mouse or key event: for the hook watch.</summary>
     public required Action Seen { get; init; }
 
@@ -107,7 +107,7 @@ internal sealed class Hooks : IDisposable
                 if ((int)wParam is Native.WM_KEYDOWN or Native.WM_SYSKEYDOWN)
                 {
                     var vk = (int)Marshal.PtrToStructure<Native.KBDLLHOOKSTRUCT>(lParam).vkCode;
-                    if (KeyDown(vk, Down(0x11), Down(0x12), Down(0x10))) return (IntPtr)1;
+                    if (KeyDown(vk, Down(0x11), Down(0x12), Down(0x10), Down(0x5B) || Down(0x5C))) return (IntPtr)1;
                 }
             }
             catch (Exception) { /* a hook must always pass the input on */ }

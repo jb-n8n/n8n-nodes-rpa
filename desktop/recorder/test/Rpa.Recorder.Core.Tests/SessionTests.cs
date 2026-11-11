@@ -80,8 +80,14 @@ public class SessionTests
         var withoutComments = Regex.Replace(list, @"//[^\n]*", "");
         var words = Regex.Matches(withoutComments, @"'([^']*)'|""([^""]*)""").Select(m => m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value);
         Assert.Equal(words, SecretRules.PasswordWords);
-        Assert.Contains("export const PASSWORD_FIELD = new RegExp(`${PASSWORD_WORDS.join('|')}|\\\\bpin\\\\b`, 'i');", ts);
-        Assert.Contains("export const CREDENTIAL_FIELD = new RegExp(`${PASSWORD_FIELD.source}|secret`, 'i');", ts);
+        // The whole pattern: the words, PASSWORD_FIELD's tail (\b spelled out as a boundary of ASCII word characters, as
+        // JavaScript reads it) and CREDENTIAL_FIELD's tail.
+        var passwordTail = Regex.Match(ts, @"export const PASSWORD_FIELD = new RegExp\(`\$\{PASSWORD_WORDS\.join\('\|'\)\}(.*?)`, 'i'\);").Groups[1].Value;
+        var credentialTail = Regex.Match(ts, @"export const CREDENTIAL_FIELD = new RegExp\(`\$\{PASSWORD_FIELD\.source\}(.*?)`, 'i'\);").Groups[1].Value;
+        Assert.NotEqual("", passwordTail);
+        Assert.NotEqual("", credentialTail);
+        var asDotNet = Regex.Replace(passwordTail.Replace(@"\\", @"\"), @"\\b(\w+)\\b", "(?<![A-Za-z0-9_])$1(?![A-Za-z0-9_])");
+        Assert.Equal(string.Join('|', words) + asDotNet + credentialTail, SecretRules.CredentialFieldPattern);
     }
 
     [Fact]

@@ -28,10 +28,13 @@ on:
       - "images/browser/gate/**"
       - "images/browser/host/**"
       - "images/browser/server/**"
-      # The engine files the recorder's tests read in place.
+      # The engine files the recorder's tests read in place, and the engine rules the recorder's C# twins.
       - "packages/engine/test/fixtures/import/recording-erp/**"
       - "packages/engine/test/fixtures/desktop/stable-id-samples.json"
       - "packages/engine/src/secrets/credential-field.ts"
+      - "packages/engine/src/desktop/stable-ids.ts"
+      - "packages/engine/src/import/recording.ts"
+      - "packages/engine/src/steps/desktop-vocabulary.ts"
       - ".github/workflows/desktop.yml"
   push:
     branches: [main]
@@ -40,10 +43,13 @@ on:
       - "images/browser/gate/**"
       - "images/browser/host/**"
       - "images/browser/server/**"
-      # The engine files the recorder's tests read in place.
+      # The engine files the recorder's tests read in place, and the engine rules the recorder's C# twins.
       - "packages/engine/test/fixtures/import/recording-erp/**"
       - "packages/engine/test/fixtures/desktop/stable-id-samples.json"
       - "packages/engine/src/secrets/credential-field.ts"
+      - "packages/engine/src/desktop/stable-ids.ts"
+      - "packages/engine/src/import/recording.ts"
+      - "packages/engine/src/steps/desktop-vocabulary.ts"
       - ".github/workflows/desktop.yml"
   workflow_dispatch:
   # For a workflow that needs the package. Any job of the calling run can upload an artifact of the same name, with a

@@ -5,6 +5,10 @@ public enum KeyKind
 {
     /// <summary>Ctrl, Alt, Shift, Win and the lock keys alone: ignored.</summary>
     Modifier,
+    /// <summary>A key that belongs to Windows, not to the application: any chord with the Windows key, Alt with Tab or
+    /// Escape, Ctrl with Escape (the shell chords the step parser refuses, isShellChord in the engine). Never
+    /// recorded, and not typing either.</summary>
+    Shell,
     /// <summary>A key that types a character (letters, digits, Space, punctuation, Alt with numpad digits), alone or with
     /// Ctrl+Alt (AltGr types @, \ or { on many keyboards, also into a password box the recorder does not take for a text
     /// field), or a chord the runner has no name for: typing in a field, dropped elsewhere. Never a key event, so an
@@ -42,9 +46,11 @@ public static class KeyRules
         _ => null,
     };
 
-    public static KeyKind Kind(int vk, bool ctrl, bool alt)
+    /// <param name="win">Whether a Windows key is held.</param>
+    public static KeyKind Kind(int vk, bool ctrl, bool alt, bool win = false)
     {
         if (vk is 0x10 or 0x11 or 0x12 or >= 0xA0 and <= 0xA5 or 0x5B or 0x5C or 0x14 or 0x90 or 0x91) return KeyKind.Modifier;
+        if (win || (alt && vk is 0x09 or 0x1B) || (ctrl && vk == 0x1B)) return KeyKind.Shell;
         if (vk is 0x0D or 0x09 or 0x1B or >= 0x70 and <= 0x87) return KeyKind.Command;
         var named = KeyName(vk) is not null;
         if (ctrl && alt) return vk is 0x08 or 0x2E or 0x2D or >= 0x21 and <= 0x28 ? KeyKind.EditChord : KeyKind.Printable;

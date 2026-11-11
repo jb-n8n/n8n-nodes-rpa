@@ -38,7 +38,8 @@ public class RecordingFileTests
     public void A_fill_into_a_Save_dialogs_file_name_types_the_file_into_the_export_folder()
     {
         WindowFacts dialog = new("app.exe", "Save As", "#32770"), main = new("app.exe", "Orders", "AppMain");
-        var fileName = El("Edit", "1001", "File name:");
+        // The file-name box of a common file dialog: control 1001 inside the FileNameControlHost combo box.
+        var fileName = El("Edit", "1001", "File name:", "Edit", false, false, El("ComboBox", "FileNameControlHost", "File name:"));
         var s = Record(Click(1, fileName, window: dialog), Typed(2, fileName, dialog), Left(3, fileName, "C:/Users/clerk/report.csv", window: dialog));
         Assert.Equal(("{{$exportDir}}\\report.csv", "report.csv"), (s.Steps[0].Value, s.Steps[0].ExportFile));
 
@@ -47,6 +48,16 @@ public class RecordingFileTests
         Assert.Equal(("report.csv", null), (s.Steps[0].Value, s.Steps[0].ExportFile));
         s = Record(Typed(1, fileName, dialog), Left(2, fileName, @"C:\out\", window: dialog));
         Assert.Equal((@"C:\out\", null), (s.Steps[0].Value, s.Steps[0].ExportFile));
+    }
+
+    [Fact]
+    public void Control_1001_of_a_dialog_that_is_not_a_file_dialog_stays_a_plain_fill()
+    {
+        // A Win32 app's own dialog is also #32770, and 1001 is an ordinary control id there.
+        WindowFacts dialog = new("app.exe", "Customer", "#32770");
+        var company = El("Edit", "1001", "Company", "Edit", false, false, El("Pane", "", ""), El("Window", "", "Customer", "#32770"));
+        var s = Record(Typed(1, company, dialog), Left(2, company, "ACME Corp", window: dialog));
+        Assert.Equal(("ACME Corp", null), (s.Steps[0].Value, s.Steps[0].ExportFile));
     }
 
     [Fact]
