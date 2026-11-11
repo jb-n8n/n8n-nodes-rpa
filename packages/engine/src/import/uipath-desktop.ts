@@ -12,6 +12,8 @@ import { cleanLabel, MIN_SECRET_LENGTH } from './draft.js';
 import type { DesktopDraft, ImportItem, ImportOptions, ImportReport } from './types.js';
 import { READ_NAME } from '../steps/desktop-vocabulary.js';
 
+/** A desktop step a condition may gate: `when`, the element that must show for it to run (Check App State). */
+interface Gated { when?: UiaTarget }
 /** One desktop activity, as the walker resolved it. `at` says where in the project it came from, for the report. */
 export type DesktopEvent =
   /** Open Application (or a Use Application that opens its app): the app the step set launches. */
@@ -19,13 +21,13 @@ export type DesktopEvent =
   /** A window scope begins (Attach Window, Use Application): the next step first waits for its window. */
   | { at: string; kind: 'scope'; window?: WindowSel; label: string }
   /** `double`: a double click (a doubleClick step). */
-  | { at: string; kind: 'click'; target: UiaTarget; label: string; double?: true }
+  | ({ at: string; kind: 'click'; target: UiaTarget; label: string; double?: true } & Gated)
   /** `exportFile`: the value is a save path rewritten to the run's export folder; an expectFile step follows the next click. */
-  | { at: string; kind: 'fill'; target: UiaTarget; label: string; value: string; exportFile?: string }
-  | { at: string; kind: 'select'; target: UiaTarget; label: string; option: string }
-  | { at: string; kind: 'check'; target: UiaTarget; label: string; checked: boolean }
-  | { at: string; kind: 'key'; target?: UiaTarget; label: string; chord: string }
-  | { at: string; kind: 'read'; target: UiaTarget; label: string; as: string };
+  | ({ at: string; kind: 'fill'; target: UiaTarget; label: string; value: string; exportFile?: string } & Gated)
+  | ({ at: string; kind: 'select'; target: UiaTarget; label: string; option: string } & Gated)
+  | ({ at: string; kind: 'check'; target: UiaTarget; label: string; checked: boolean } & Gated)
+  | ({ at: string; kind: 'key'; target?: UiaTarget; label: string; chord: string } & Gated)
+  | ({ at: string; kind: 'read'; target: UiaTarget; label: string; as: string } & Gated);
 
 /** A run of desktop events: one desktop draft, named `<name>-<number>` like a browser sequence. */
 export interface DesktopSequence {
@@ -103,12 +105,15 @@ export function buildDesktopDraft(seq: DesktopSequence, report: ImportReport, o:
 
   const steps: DesktopStep[] = [];
   const atOf: string[] = [];
-  const push = (step: DesktopStep, at: string) => { steps.push(step); atOf.push(at); };
+  /** The current event's condition, given to the steps it builds (never to the window wait or an expectFile). */
+  let gate: DesktopStep['when'];
+  const push = (step: DesktopStep, at: string) => { steps.push(gate ? { ...step, when: gate } : step); atOf.push(at); };
   let pendingWindow: { window?: WindowSel; label: string; at: string } | undefined;
   let pendingFile: { file: string; at: string } | undefined;
   const reads = new Set<string>();
   const flushFile = () => {
     if (!pendingFile) return;
+    gate = undefined;
     push({ intent: `Return the exported file ${shown(cleanLabel(pendingFile.file))}`, expectFile: { pattern: filePattern(pendingFile.file) } }, pendingFile.at);
     add(pendingFile.at, 'converted', `Return ${cleanLabel(pendingFile.file)}`, 'the file the app saves into the run\'s export folder comes back to n8n as the step\'s file (expectFile), matched by its name');
     pendingFile = undefined;
@@ -129,7 +134,9 @@ export function buildDesktopDraft(seq: DesktopSequence, report: ImportReport, o:
       add(e.at, 'untranslated', e.label || targetName(target), `the element is in a window of ${target.window.exe}, another application than the one the steps open (${exe}): a run drives only the app it launches`);
       continue;
     }
-    if (pendingWindow && target) {
+    gate = undefined;
+    // A step that runs only when its element shows cannot be the one the window wait waits for: the next one is.
+    if (pendingWindow && target && !e.when) {
       const window = pendingWindow.window ?? target.window;
       const shownWindow = windowName(window);
       if (window) {
@@ -137,6 +144,8 @@ export function buildDesktopDraft(seq: DesktopSequence, report: ImportReport, o:
       }
       pendingWindow = undefined;
     }
+    // Only the primary target: the step looks at the element once, before it runs.
+    if (e.when) gate = { visible: { uia: { ...(e.when.window ? { window: { ...e.when.window } } : {}), path: e.when.path.map((c) => ({ ...c })) } } };
     const name = shown(cleanLabel(e.label) || targetName(target) || 'the element');
     switch (e.kind) {
       case 'click':

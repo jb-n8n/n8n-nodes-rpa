@@ -6,7 +6,7 @@ import { CREDENTIAL_FIELD, PASSWORD_FIELD, STRICT_TOTP_FIELD } from '../secrets/
 import { createMasker, type Masker } from '../secrets/mask.js';
 import { canonicalize } from '../sign.js';
 import type { Locator } from '../types.js';
-import { capEvent, MAX_CANDIDATE_CHARS, MIN_SECRET_LENGTH, nameOf } from './draft.js';
+import { capEvent, describeEvent, MAX_CANDIDATE_CHARS, MIN_SECRET_LENGTH, nameOf } from './draft.js';
 import type { Candidate, ImportEvent, ImportItem, ImportOptions, ImportReport } from './types.js';
 
 const PASSWORD_TYPE = /type\s*=\s*["']?password\b/i;
@@ -364,12 +364,23 @@ export function stripSecrets(input: ImportEvent[], opts: ImportOptions, report: 
     ...(e.totp ? { totp: { field: clean(e.totp.field), submit: clean(e.totp.submit) } } : {}),
   });
   const out: ImportEvent[] = [];
-  events.forEach((e, i) => {
+  events.forEach((source, i) => {
     if (signIn?.at === i) {
       const s = signIn.event;
       out.push(cleanSignIn(s));
     }
     if (removed.has(i)) return;
+    // A condition's element is cleaned as a target is; a step whose condition names only sign-in values goes, condition and all.
+    let e = source;
+    if ('when' in source && source.when) {
+      const cands = 'visible' in source.when ? source.when.visible : source.when.hidden;
+      const kept = clean(cands);
+      if (kept.length === 0 && cands.length > 0) {
+        add(source.at, 'secret', maskText(describeEvent(source)), 'the element its condition looks at is named only by a sign-in value: the step was removed');
+        return;
+      }
+      e = { ...source, when: 'visible' in source.when ? { visible: kept } : { hidden: kept } } as ImportEvent;
+    }
     switch (e.kind) {
       case 'goto': {
         const url = cleanUrl(e.url, masker);

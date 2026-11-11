@@ -585,9 +585,76 @@ const DROPPED: Record<string, string> = {
 /** DROPPED activities that are housekeeping (logging, comments): the bot does nothing on the site without them. An assignment may feed a later step, so it is not one. */
 const HOUSEKEEPING = new Set(['LogMessage', 'WriteLine', 'Comment', 'CommentOut']);
 const TAG_OF_TYPE: Record<string, string> = { button: 'BUTTON', inputbox: 'INPUT', input: 'INPUT', text: '', dropdown: 'SELECT', combobox: 'SELECT', listbox: 'SELECT', checkbox: 'INPUT', radiobutton: 'INPUT', link: 'A', hyperlink: 'A' };
+/** Properties that hold activities a block runs, for countIn. */
+const NESTED_PROPS = new Set([...BODY_PROPS, 'Then', 'Else', 'Try', 'Finally', 'Catches', 'Default', 'IfExists', 'IfNotExists', 'Entry', 'Exit', 'Transitions', 'Trigger', 'To', 'StartNode', 'Next', 'True', 'False', 'InitialState', 'Condition']);
+/** Elements that only hold activities: countIn counts what is inside them, not them. */
+const STRUCTURE = new Set(['Sequence', 'ActivityAction', 'ActivityFunc', 'Catch', 'FlowStep', 'Transition']);
+/** Browser events a condition may gate (an Enter is a sign-in's submit or no step at all). */
+const GATED_EVENTS: ReadonlySet<ImportEvent['kind']> = new Set(['goto', 'click', 'hover', 'fill', 'select', 'check', 'waitFor']);
+/** Check App State attributes that may say it waits for something else than its element to appear (names unverified). */
+const CHECK_MODES = ['Mode', 'CheckType', 'WaitFor'];
+const EACH_STEP_CHECKS = 'Each step checks again just before it runs, so a step that makes the element show or go away changes which of the later steps run';
+const CHECK_THE_ORDER = 'Check the order, and remove the steps the run should not do or make the choice in n8n';
 const READ_RANGE = new Set(['ReadRange', 'ExcelReadRange', 'ReadRangeX']);
 const WRITE_RANGE = new Set(['WriteRange', 'ExcelWriteRange', 'WriteRangeX']);
 const EXCEL_SCOPE = new Set(['ExcelApplicationScope', 'ExcelProcessScopeX', 'ExcelApplicationCard']);
+
+/** The element a block's condition looks at, as the steps' `when` can name it; `name` is what it shows as, for the report. */
+type ElementCond = { surface: 'browser'; candidates: Candidate[]; name: string } | { surface: 'desktop'; target: UiaTarget; name: string };
+
+const activities = (n: number): string => (n === 1 ? '1 activity' : `${n} activities`);
+const were = (n: number): string => (n === 1 ? 'was' : 'were');
+
+/** The element an Element Exists or Check App State display name names (`Check App State 'Popup'` → `Popup`). */
+function elementLabel(displayName: string): string {
+  let s = displayName.slice(0, 400).trim().replace(/^(element exists|check app state)\s*/i, '');
+  const close = QUOTES[s[0] ?? ''];
+  if (close && s.length >= 2 && s.endsWith(close)) s = s.slice(1, -1);
+  return cleanLabel(s);
+}
+
+/** What a desktop target shows as: its last condition's name, else its automation id. */
+const targetName = (t: UiaTarget): string => cleanLabel(t.path[t.path.length - 1]?.name ?? t.path[t.path.length - 1]?.automationId ?? '');
+
+/**
+ * Which steps run when, in words: `the steps from its 1 activity under Then run only when X shows, and those from its 2
+ * activities under Else only when it does not`. Branches without activities are left out.
+ */
+function conditionText(label: string, branches: { name: string; n: number; shows: boolean }[]): string {
+  const said = branches.filter((b) => b.n > 0).map((b, i) => (i === 0
+    ? `the steps from its ${activities(b.n)} under ${b.name} run only when ${label} ${b.shows ? 'shows' : 'does not show'}`
+    : `those from its ${activities(b.n)} under ${b.name} only when it ${b.shows ? 'does' : 'does not'}`));
+  return said.length ? said.join(', and ') : 'it holds no activities';
+}
+
+/**
+ * A sentence for a block whose browser activities type a password: the import makes them one sign-in step, which has no
+ * condition. '' otherwise.
+ */
+function signsIn(items: Item[]): string {
+  const typed = items.some((i) => i.t === 'event' && i.event.kind === 'fill' && (i.event.secure || CREDENTIAL_FIELD.test(i.event.hints.join(' '))));
+  return typed ? '. A sign-in among them becomes the sign-in step, which runs every time: every run starts in a new browser, signed out' : '';
+}
+
+/** The UI steps walked items give, in words (no typed value), for a state's report item. */
+function uiNames(items: Item[]): string[] {
+  const out: string[] = [];
+  for (const i of items) {
+    if (i.t === 'event') out.push(describeEvent(i.event.kind === 'select' ? { ...i.event, value: '' } : i.event));
+    else if (i.t === 'desktop') {
+      const e = i.event;
+      const name = cleanLabel(e.label) || ('target' in e && e.target ? targetName(e.target) : '') || 'the element';
+      if (e.kind === 'click') out.push(`${e.double ? 'Double-click' : 'Click'} ${name}`);
+      else if (e.kind === 'fill') out.push(`Type into ${name}`);
+      else if (e.kind === 'select') out.push(`Choose an option in ${name}`);
+      else if (e.kind === 'check') out.push(`${e.checked ? 'Check' : 'Uncheck'} ${name}`);
+      else if (e.kind === 'key') out.push(`Press ${e.chord}`);
+      else if (e.kind === 'read') out.push(`Read ${name}`);
+    } else if (i.t === 'if') append(out, [...uiNames(i.then), ...uiNames(i.else)]);
+    else if (i.t === 'forEach') append(out, uiNames(i.body));
+  }
+  return out;
+}
 
 /**
  * A browser sequence: its events, and the card it belongs to; `continued` when an earlier sequence used the same card.
@@ -620,6 +687,10 @@ class Walker {
   private readonly xmlns: Map<string, string>[] = [];
   /** The variables TOTP activities write their code to, lower case. */
   private readonly totpOutputs = new Set<string>();
+  /** Activities walked so far in each workflow file (Sequences aside), for the counts a block's report item gives. */
+  private readonly walkedIn = new Map<string, number>();
+  /** Each Element Exists the walk could read, by `<file>\0<its output variable, lower case>`, for an If that tests it. */
+  private readonly exists = new Map<string, { cond: ElementCond; item: ImportItem; displayName: string; label: string }>();
 
   constructor(private readonly project: Project, private readonly opts: ImportOptions, private readonly report: ImportReport) {}
 
@@ -664,7 +735,12 @@ class Walker {
 
   /** Charges one walk of a workflow file (its elements, and its text in 32-byte units) against MAX_WALK. */
   private charge(key: string, parsed: Parsed): void {
-    this.work += parsed.elements + Math.ceil(this.project.files.get(key)!.text.length / 32);
+    this.spend(parsed.elements + Math.ceil(this.project.files.get(key)!.text.length / 32));
+  }
+
+  /** Charges `units` element visits against MAX_WALK. */
+  private spend(units: number): void {
+    this.work += units;
     if (this.work > MAX_WALK) {
       this.add('', 'error', WHAT, `the project needs more work than an import does (over ${MAX_WALK.toLocaleString('en-US')} element visits once invoked workflows are followed), so it was not imported`);
       throw new Aborted();
@@ -763,6 +839,7 @@ class Walker {
     const name = local(el.name);
     const displayName = displayOf(el);
     const at = this.at(el, ctx);
+    if (name !== 'Sequence') this.walkedIn.set(ctx.file, (this.walkedIn.get(ctx.file) ?? 0) + 1);
 
     if (name in DROPPED) {
       this.add(at, 'dropped', displayName, DROPPED[name], HOUSEKEEPING.has(name));
@@ -772,25 +849,45 @@ class Walker {
     switch (name) {
       case 'Sequence':
         return this.list(content(el), ctx);
-      case 'If': {
-        const cond = this.arg(el, 'Condition', ctx);
-        const branch = (prop: string) => this.list(this.body(el, new Set([prop])), ctx);
-        return [{ t: 'if', expression: textOf(cond), displayName, then: branch('Then'), else: branch('Else') }];
-      }
+      case 'If':
+        return this.ifActivity(el, ctx);
       case 'ForEach':
-      case 'ForEachRow': {
-        const values = this.arg(el, name === 'ForEach' ? 'Values' : 'DataTable', ctx);
-        return [{ t: 'forEach', expression: textOf(values), displayName, body: this.list(this.body(el), ctx) }];
+      case 'ForEachRow':
+      case 'ParallelForEach': {
+        const values = this.arg(el, name === 'ForEachRow' ? 'DataTable' : 'Values', ctx);
+        const mark = this.report.items.length;
+        const body = this.list(this.body(el), ctx);
+        if (name === 'ParallelForEach') this.insert(mark, at, 'converted', displayName, `${name}: it became an n8n loop over ${textOf(values).slice(0, 200)}: n8n runs the items one after another, not at the same time`);
+        return [{ t: 'forEach', expression: textOf(values), displayName, body }];
       }
-      case 'TryCatch': {
-        const out = this.list(this.body(el, new Set(['Try'])), ctx);
-        const catches = el.children.find((c) => isProperty(c) && propertyName(c) === 'Catches');
-        for (const c of catches ? content(catches) : []) {
-          const type = c.attrs['x:TypeArguments'] ?? 'Exception';
-          this.add(at, 'untranslated', `Catch ${local(type)}`, 'the catch branch was not imported: give the n8n node an error output or the workflow an error workflow');
-        }
-        append(out, this.list(this.body(el, new Set(['Finally'])), ctx));
-        return out;
+      case 'TryCatch':
+        return this.tryCatch(el, ctx);
+      case 'RetryScope': {
+        const mark = this.report.items.length;
+        const { items, n } = this.walkCount(this.body(el), ctx);
+        const check = this.countIn(this.body(el, new Set(['Condition'])));
+        this.insert(mark, at, 'converted', displayName, `${name}: its ${activities(n)} ${were(n)} imported once, in order. The steps do not retry them: a step that fails ends the run, and n8n's Retry On Fail setting on the Run steps node runs all the steps again${check ? `. Its check that they worked (${activities(check)}) was not imported` : ''}`);
+        return items;
+      }
+      case 'While':
+      case 'DoWhile':
+      case 'InterruptibleWhile':
+      case 'InterruptibleDoWhile': {
+        const mark = this.report.items.length;
+        const { items, n } = this.walkCount([...this.body(el), ...content(el).filter((c) => local(c.name) !== 'ActivityAction')], ctx);
+        this.insert(mark, at, 'untranslated', displayName, `${name}: the loop was not imported: its ${activities(n)} ${were(n)} imported to run once, in order. To repeat the steps, give the Run steps node one item per repetition: n8n runs the steps once for each item`);
+        return items;
+      }
+      case 'Switch':
+        return this.switchCases(el, ctx);
+      case 'NCheckState':
+        return this.checkState(el, ctx);
+      case 'StateMachine':
+        return this.stateMachine(el, ctx);
+      case 'ElementExists': {
+        const read = this.elementExists(el, ctx);
+        if (read) return read;
+        break;
       }
       case 'Flowchart':
         return this.flowchart(el, ctx);
@@ -1330,33 +1427,325 @@ class Walker {
     return this.workflow(key, parsed, { ...ctx, file: target.path, stack: [...ctx.stack, key], chain: [...ctx.chain, target.path] });
   }
 
-  /** A Flowchart, followed from its start node while it is linear; a decision or switch ends it with a report. */
+  // -------------------------------------------------------------------------------------------------------------------
+  // Blocks that wrap other activities: their UI activities are imported as if the block were not there, and the block is
+  // reported once, saying what that changes.
+
+  /** The activities in `els`, walked, and how many of them are in this workflow file (Sequences aside). */
+  private walkCount(els: XmlNode[], ctx: Ctx): { items: Item[]; n: number } {
+    const before = this.walkedIn.get(ctx.file) ?? 0;
+    const items = this.list(els, ctx);
+    return { items, n: (this.walkedIn.get(ctx.file) ?? 0) - before };
+  }
+
+  /** How many activities `els` hold, without walking them (for a body that is not imported). Charged against MAX_WALK. */
+  private countIn(els: XmlNode[]): number {
+    let n = 0;
+    let visits = 0;
+    const stack = [...els];
+    while (stack.length) {
+      const el = stack.pop()!;
+      visits++;
+      const prefix = prefixOf(el.name);
+      if (prefix === 'x' || prefix === 'mc') continue;
+      if (isProperty(el)) {
+        if (NESTED_PROPS.has(propertyName(el)) && local(el.name).split('.').length === 2) append(stack, el.children);
+        continue;
+      }
+      const name = local(el.name);
+      if (!STRUCTURE.has(name)) n++;
+      if (name !== 'CommentOut') append(stack, el.children);
+    }
+    this.spend(visits);
+    return n;
+  }
+
+  /** Adds a report item at `mark`, so that a block's item comes before the items of what it holds. */
+  private insert(mark: number, at: string, kind: ImportItem['kind'], what: string, reason: string): ImportItem {
+    const item: ImportItem = { at, kind, what, reason };
+    this.report.items.splice(mark, 0, item);
+    return item;
+  }
+
+  /** The element an Element Exists or a Check App State looks at, as a browser or a desktop target; or why there is none. */
+  private elementCondition(el: XmlNode, ctx: Ctx): ElementCond | { problem: string } {
+    const at = this.at(el, ctx);
+    if (ctx.desktop) return { problem: 'the element is in SAP GUI for Windows' };
+    if (ctx.app || this.desktopKind(el, ctx) === 'desktop') {
+      const t = this.desktopTarget(el, ctx);
+      if (t.sap) return { problem: 'the element is in SAP GUI for Windows' };
+      if (!t.target) return { problem: t.problem ?? 'the activity has no target the import can read' };
+      for (const issue of t.issues) this.add(at, 'converted', displayOf(el), issue);
+      return { surface: 'desktop', target: t.target, name: targetName(t.target) };
+    }
+    const t = this.target(el, ctx);
+    if (t.desktop) return { problem: 'the element is in a desktop application' };
+    if (!t.candidates.length) return { problem: t.problem ?? 'the selector names no web element' };
+    for (const issue of t.issues) this.add(at, 'converted', displayOf(el), issue);
+    return { surface: 'browser', candidates: t.candidates, name: nameOfCandidate(t.candidates[0]) };
+  }
+
+  /**
+   * The branches' items with the condition on each step, in the order given, or undefined when a branch holds anything
+   * but UI activities of the condition's own kind (browser or desktop) that may carry one, or a step already has one.
+   * Desktop steps can only run when an element shows: a desktop branch for "does not show" must be empty.
+   */
+  private gate(cond: ElementCond, branches: { items: Item[]; shows: boolean }[]): Item[] | undefined {
+    const all = branches.flatMap((b) => b.items);
+    if (cond.surface === 'browser') {
+      if (!all.every((i) => i.t === 'event' && GATED_EVENTS.has(i.event.kind) && !('when' in i.event && i.event.when))) return undefined;
+      // The candidates are shared, as one selector's are between the events that use it.
+      return branches.flatMap((b) => b.items.map((i): Item => {
+        const it = i as Extract<Item, { t: 'event' }>;
+        return { ...it, event: { ...it.event, when: b.shows ? { visible: cond.candidates } : { hidden: cond.candidates } } as ImportEvent };
+      }));
+    }
+    if (!all.every((i) => i.t === 'desktop' && i.event.kind !== 'launch' && i.event.kind !== 'scope' && !('when' in i.event && i.event.when))) return undefined;
+    if (branches.some((b) => !b.shows && b.items.length)) return undefined;
+    return all.map((i): Item => {
+      const it = i as Extract<Item, { t: 'desktop' }>;
+      return { ...it, event: { ...it.event, when: cond.target } as DesktopEvent };
+    });
+  }
+
+  /** An If: an n8n If, or its branches' steps with conditions when it tests an Element Exists' answer. */
+  private ifActivity(el: XmlNode, ctx: Ctx): Item[] {
+    const displayName = displayOf(el);
+    const cond = this.arg(el, 'Condition', ctx);
+    const mark = this.report.items.length;
+    const then = this.walkCount(this.body(el, new Set(['Then'])), ctx);
+    const other = this.walkCount(this.body(el, new Set(['Else'])), ctx);
+    const test = cond && 'expr' in cond ? /^(not\s+|!\s*)?\(?\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)?$/i.exec(cond.expr.trim()) : null;
+    const found = test ? this.exists.get(`${ctx.file}\u0000${test[2].toLowerCase()}`) : undefined;
+    if (test && found) {
+      const shows = !test[1];
+      const flat = this.gate(found.cond, [{ items: then.items, shows }, { items: other.items, shows: !shows }]);
+      if (flat) {
+        found.item.kind = 'converted';
+        found.item.reason = `ElementExists: it became the condition of the steps in ${displayName}`;
+        const said = conditionText(found.label, [{ name: 'Then', n: then.n, shows }, { name: 'Else', n: other.n, shows: !shows }]);
+        this.insert(mark, this.at(el, ctx), 'converted', displayName, `If: it tests ${test[2]}, the answer of ${found.displayName}: ${said}. ${EACH_STEP_CHECKS}${signsIn(flat)}`);
+        return flat;
+      }
+    }
+    return [{ t: 'if', expression: textOf(cond), displayName, then: then.items, else: other.items }];
+  }
+
+  /**
+   * An Element Exists whose answer goes to a plain variable, on an element the import can read: no step and no flow node
+   * by itself. An If on that variable makes it its steps' condition; until one does, it is reported as not translated.
+   * Undefined (the activity is handled as before) when the import cannot read it.
+   */
+  private elementExists(el: XmlNode, ctx: Ctx): Item[] | undefined {
+    const out = this.arg(el, 'Exists', ctx);
+    if (!out || !('expr' in out) || !IDENT.test(out.expr)) return undefined;
+    const cond = this.elementCondition(el, ctx);
+    if ('problem' in cond) return undefined;
+    const displayName = displayOf(el);
+    const label = elementLabel(el.attrs.DisplayName ?? '') || cond.name || 'the element';
+    const item: ImportItem = {
+      at: this.at(el, ctx), kind: 'untranslated', what: displayName,
+      reason: `${local(el.name)}: it checks whether ${label} shows and keeps the answer in ${out.expr}, which no If here turns into a condition on its steps (an If on ${out.expr} alone, whose branches hold only UI activities, would): add the check to the steps by hand`,
+    };
+    this.report.items.push(item);
+    this.exists.set(`${ctx.file}\u0000${out.expr.toLowerCase()}`, { cond, item, displayName, label });
+    return [];
+  }
+
+  /**
+   * A Check App State: "Target appears" runs only when its element shows and "Target does not appear" only when it does
+   * not, as conditions on their steps. When the import cannot read the element, or the steps cannot carry the condition,
+   * it is an n8n If whose condition the person fills in: never steps that run unconditionally without saying so.
+   */
+  private checkState(el: XmlNode, ctx: Ctx): Item[] {
+    const name = local(el.name);
+    const displayName = displayOf(el);
+    const at = this.at(el, ctx);
+    const mark = this.report.items.length;
+    const cond = this.elementCondition(el, ctx);
+    const yes = this.walkCount(this.body(el, new Set(['IfExists'])), ctx);
+    const no = this.walkCount(this.body(el, new Set(['IfNotExists'])), ctx);
+    const mode = CHECK_MODES.map((k) => el.attrs[k]).find((v) => v !== undefined && !/^(element|target)?appears?$/i.test(v.trim()));
+    let why: string;
+    if ('problem' in cond) why = `the import cannot read which element it checks (${cond.problem})`;
+    else if (mode !== undefined) why = 'it waits for something other than its element to appear';
+    else {
+      const flat = this.gate(cond, [{ items: yes.items, shows: true }, { items: no.items, shows: false }]);
+      if (flat) {
+        const label = elementLabel(el.attrs.DisplayName ?? '') || cond.name || 'the element';
+        const said = conditionText(label, [{ name: '"Target appears"', n: yes.n, shows: true }, { name: '"Target does not appear"', n: no.n, shows: false }]);
+        this.insert(mark, at, 'converted', displayName, `${name}: ${said}. ${EACH_STEP_CHECKS}${signsIn(flat)}`);
+        return flat;
+      }
+      why = cond.surface === 'desktop' && no.items.length
+        ? 'desktop steps can run only when an element shows, not when it does not'
+        : 'what it holds is more than UI activities in one browser or app';
+    }
+    this.insert(mark, at, 'converted', displayName, `${name}: ${why}, so it became an n8n If: fill in its condition in the workflow; until then the steps under "Target appears" run every time and those under "Target does not appear" never do`);
+    return [{ t: 'if', expression: `${displayName}: the element shows`, displayName, then: yes.items, else: no.items }];
+  }
+
+  /** A Try Catch: its Try (and Finally) imported in order; each Catch reported as not imported, with what it holds. */
+  private tryCatch(el: XmlNode, ctx: Ctx): Item[] {
+    const at = this.at(el, ctx);
+    const mark = this.report.items.length;
+    const tried = this.walkCount(this.body(el, new Set(['Try'])), ctx);
+    const out = tried.items;
+    const catches = el.children.find((c) => isProperty(c) && propertyName(c) === 'Catches');
+    for (const c of catches ? content(catches) : []) {
+      const type = c.attrs['x:TypeArguments'] ?? 'Exception';
+      const k = this.countIn([c]);
+      this.add(at, 'untranslated', `Catch ${local(type)}`, `the catch branch${k ? ` (${activities(k)})` : ''} was not imported: give the n8n node an error output or the workflow an error workflow`);
+    }
+    const fin = this.walkCount(this.body(el, new Set(['Finally'])), ctx);
+    append(out, fin.items);
+    const finally_ = fin.n ? `, then the ${activities(fin.n)} in Finally` : '';
+    this.insert(mark, at, 'converted', displayOf(el), `${local(el.name)}: its ${activities(tried.n)} in Try ${were(tried.n)} imported, in order${finally_}. When a step from Try fails, the run stops there: nothing in Catch${fin.n ? ' or Finally' : ''} runs`);
+    return out;
+  }
+
+  /** A Switch: one n8n If per case, each testing the expression against the case, with Default after the last. */
+  private switchCases(el: XmlNode, ctx: Ctx): Item[] {
+    const displayName = displayOf(el);
+    const expr = textOf(this.arg(el, 'Expression', ctx));
+    const quoted = /String$/.test(el.attrs['x:TypeArguments'] ?? '');
+    const mark = this.report.items.length;
+    const isCase = (c: XmlNode) => !isProperty(c) && prefixOf(c.name) !== 'x' && prefixOf(c.name) !== 'mc';
+    // Each case is one more If inside the last: the chain counts against the nesting limit, so the flow stays shallow.
+    const inner = { ...ctx, nesting: ctx.nesting + el.children.filter(isCase).length };
+    if (inner.nesting > MAX_NESTING) {
+      this.add(this.at(el, ctx), 'error', WHAT, `the workflows are nested deeper than ${MAX_NESTING} elements once invoked workflows are followed and a Switch's cases are counted: the rest of this branch was not imported`);
+      return [];
+    }
+    const cases: { key: string; items: Item[] }[] = [];
+    let fallback: Item[] | undefined;
+    for (const c of el.children) {
+      if (isProperty(c)) {
+        if (propertyName(c) === 'Default' && local(c.name).split('.').length === 2) fallback = this.list(this.body(el, new Set(['Default'])), inner);
+        continue;
+      }
+      if (!isCase(c)) continue;
+      cases.push({ key: c.attrs['x:Key'] ?? displayOf(c), items: this.list([c], inner) });
+    }
+    let tail: Item[] = fallback ?? [];
+    for (let i = cases.length - 1; i >= 0; i--) {
+      const { key, items } = cases[i];
+      const value = quoted ? `"${key.replaceAll('"', '""')}"` : key;
+      tail = [{ t: 'if', expression: `${expr} = ${value}`, displayName: cleanLabel(`${displayName}: ${key}`), then: items, else: tail }];
+    }
+    const keys = cases.map((c) => cleanLabel(c.key));
+    const shownKeys = keys.length > 20 ? `${keys.slice(0, 20).join(', ')} and ${keys.length - 20} more` : keys.join(', ');
+    this.insert(mark, this.at(el, ctx), 'converted', displayName, cases.length
+      ? `Switch: each of its cases (${shownKeys}) became an n8n If on ${expr.slice(0, 200)}${fallback ? ', and Default comes after the last one' : ''}: fill in their conditions in the workflow; until then every run takes the first case`
+      : 'Switch: it has no cases: its Default was imported, and runs every time');
+    return tail;
+  }
+
+  /**
+   * A Flowchart, followed from its start node, depth first: each node's activities once, a decision's True path before
+   * its False path and a switch's Default before its cases. A decision or switch is reported (every run now takes all
+   * of its paths); a step that leads back to one on the current path is reported as a loop.
+   */
   private flowchart(el: XmlNode, ctx: Ctx): Item[] {
     // x:Name is unique in a workflow file, so the file's index (built once at parse) serves every Flowchart in it.
     const named = ctx.names;
-    const resolve = (holder: XmlNode | undefined): XmlNode | undefined => {
-      const node = holder ? content(holder)[0] : undefined;
-      if (!node) return undefined;
-      if (local(node.name) === 'Reference' && prefixOf(node.name) === 'x') return named.get(node.text.trim()) ?? named.get(node.attrs.Name ?? '');
-      return node;
-    };
+    const deref = (node: XmlNode | undefined): XmlNode | undefined =>
+      node && local(node.name) === 'Reference' && prefixOf(node.name) === 'x' ? named.get(node.text.trim()) ?? named.get(node.attrs.Name ?? '') : node;
+    const prop = (node: XmlNode, p: string) => node.children.find((c) => isProperty(c) && propertyName(c) === p);
+    const resolve = (holder: XmlNode | undefined): XmlNode | undefined => deref(holder ? content(holder)[0] : undefined);
     const out: Item[] = [];
     const seen = new Set<XmlNode>();
-    let node = resolve(el.children.find((c) => isProperty(c) && propertyName(c) === 'StartNode'));
-    while (node) {
-      if (seen.has(node)) {
+    const onPath = new Set<XmlNode>();
+    const stack: { node: XmlNode; leave?: true }[] = [];
+    const start = resolve(prop(el, 'StartNode'));
+    if (start) stack.push({ node: start });
+    while (stack.length) {
+      const { node, leave } = stack.pop()!;
+      if (leave) { onPath.delete(node); continue; }
+      if (onPath.has(node)) {
         append(out, this.untranslated(node, ctx, 'the Flowchart loops back to an earlier step: rebuild the loop in n8n', 'Flowchart'));
-        break;
+        continue;
       }
+      // Two paths that join: the node's activities are imported once, on the first path that reaches it.
+      if (seen.has(node)) continue;
       seen.add(node);
+      onPath.add(node);
+      stack.push({ node, leave: true });
       const kind = local(node.name);
-      if (kind !== 'FlowStep') {
-        append(out, this.untranslated(node, ctx, 'a Flowchart branch is not imported (only a linear Flowchart is): rebuild it with an If', kind));
-        break;
+      let next: (XmlNode | undefined)[] = [];
+      if (kind === 'FlowStep') {
+        append(out, this.list(content(node), ctx));
+        next = [resolve(prop(node, 'Next'))];
+      } else if (kind === 'FlowDecision') {
+        this.add(this.at(node, ctx), 'untranslated', displayOf(node), `${kind}: the decision was not imported: the activities on its True path, then those on its False path, were imported one after another, so every run does both. ${CHECK_THE_ORDER}`);
+        next = [resolve(prop(node, 'True')), resolve(prop(node, 'False'))];
+      } else if (kind === 'FlowSwitch') {
+        this.add(this.at(node, ctx), 'untranslated', displayOf(node), `${kind}: the choice was not imported: the activities of each of its cases, Default first, were imported one after another, so every run does all of them. ${CHECK_THE_ORDER}`);
+        next = [resolve(prop(node, 'Default')), ...content(node).map(deref)];
+      } else {
+        append(out, this.untranslated(node, ctx, 'a Flowchart node of this kind is not imported: rebuild it with an If', kind));
       }
-      append(out, this.list(content(node), ctx));
-      node = resolve(node.children.find((c) => isProperty(c) && propertyName(c) === 'Next'));
+      for (let i = next.length - 1; i >= 0; i--) if (next[i]) stack.push({ node: next[i]! });
     }
+    return out;
+  }
+
+  /**
+   * A State Machine (the standard project template is one): each state's entry, once, in the order of the states (from
+   * the initial state along the transitions, depth first, then any state no transition reaches), each state its own
+   * report item that names the steps it gave. Transitions, exits and triggers are not imported, and that is reported.
+   */
+  private stateMachine(el: XmlNode, ctx: Ctx): Item[] {
+    const named = ctx.names;
+    const deref = (node: XmlNode | undefined): XmlNode | undefined =>
+      node && local(node.name) === 'Reference' && prefixOf(node.name) === 'x' ? named.get(node.text.trim()) : node;
+    /** A state a property names: `P="{x:Reference name}"`, or an inline State or x:Reference in `<X.P>`. */
+    const stateAt = (node: XmlNode, p: string): XmlNode | undefined => {
+      const m = /^\{x:Reference\s+([^}\s]+)\s*\}$/.exec((node.attrs[p] ?? '').trim());
+      if (m) return named.get(m[1]);
+      const holder = node.children.find((c) => isProperty(c) && propertyName(c) === p);
+      return deref(holder ? content(holder)[0] : undefined);
+    };
+    const transitions = (state: XmlNode): XmlNode[] => {
+      const holder = state.children.find((c) => isProperty(c) && propertyName(c) === 'Transitions');
+      return holder ? content(holder).filter((t) => local(t.name) === 'Transition') : [];
+    };
+    const states: XmlNode[] = [];
+    const seen = new Set<XmlNode>();
+    const visit = (from: XmlNode | undefined) => {
+      const stack = [from];
+      while (stack.length) {
+        const s = stack.pop();
+        if (!s || local(s.name) !== 'State' || seen.has(s)) continue;
+        seen.add(s);
+        states.push(s);
+        const to = transitions(s).map((t) => stateAt(t, 'To'));
+        for (let i = to.length - 1; i >= 0; i--) stack.push(to[i]);
+      }
+    };
+    visit(stateAt(el, 'InitialState'));
+    for (const c of content(el)) visit(deref(c));
+
+    const total = states.length;
+    const names = states.map((s) => displayOf(s));
+    const order = names.length > 20 ? `${names.slice(0, 20).join(', ')} and ${names.length - 20} more` : names.join(', ');
+    this.add(this.at(el, ctx), 'untranslated', displayOf(el), `${local(el.name)}: its transitions were not imported: the entry activities of its ${total === 1 ? 'one state were' : `${total} states were`} imported once each, one after another, in this order: ${order}. The steps never go back to an earlier state, as a state machine does to take the next transaction: check the order, and give the Run steps node one item per transaction in n8n`);
+    const out: Item[] = [];
+    states.forEach((state, i) => {
+      const what = cleanLabel(`State "${displayOf(state)}"`);
+      const item = this.insert(this.report.items.length, this.at(state, ctx), 'converted', what, '');
+      const { items, n } = this.walkCount(this.body(state, new Set(['Entry'])), ctx);
+      const ui = uiNames(items);
+      const listed = ui.length > 10 ? `${ui.slice(0, 10).join(', ')} and ${ui.length - 10} more` : ui.join(', ');
+      item.reason = ui.length ? `state ${i + 1} of ${total}: the steps from its entry (${activities(n)}): ${listed}` : `state ${i + 1} of ${total}: its entry (${activities(n)}) gave no UI steps`;
+      append(out, items);
+      const exit = this.countIn(this.body(state, new Set(['Exit'])));
+      if (exit) this.add(this.at(state, ctx), 'untranslated', `${what}: Exit`, `its ${activities(exit)} ${were(exit)} not imported: the steps run each state's entry only`);
+      for (const t of transitions(state)) {
+        const k = this.countIn(this.body(t, new Set(['Trigger', 'Action'])));
+        if (k) this.add(this.at(t, ctx), 'untranslated', cleanLabel(`Transition "${displayOf(t)}"`), `its trigger and action (${activities(k)}) were not imported: the steps do not move between states`);
+      }
+    });
     return out;
   }
 

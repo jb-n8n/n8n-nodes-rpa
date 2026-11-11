@@ -10,19 +10,26 @@ import type { ClickModifier, DesktopScript, Locator, PortalSecrets, Script } fro
 export type ImportSource = 'chrome' | 'playwright' | 'uipath' | 'steps' | 'recording';
 /** One way to find an element, as the source recorded it. A target lists them best first: the first is the primary locator. */
 export type Candidate = Locator;
+/**
+ * The condition a source put around an event (a UiPath Check App State, or an If on an Element Exists): the step runs
+ * only when the element shows (`visible`) or does not (`hidden`). The step's `when` is the first usable candidate.
+ */
+export type ImportWhen = { visible: Candidate[] } | { hidden: Candidate[] };
+/** An event a condition may gate. */
+interface Gated { when?: ImportWhen }
 /** `at` says where in the source the event came from (a step number, a line, an activity), for the report. */
 export type ImportEvent =
-  | { at: string; kind: 'goto'; url: string }
+  | ({ at: string; kind: 'goto'; url: string } & Gated)
   /** `modifiers`: keys the source held down during the click (UiPath KeyModifiers). */
-  | { at: string; kind: 'click'; target: Candidate[]; label: string; download?: true; popup?: true; modifiers?: ClickModifier[] }
-  | { at: string; kind: 'hover'; target: Candidate[]; label: string }
+  | ({ at: string; kind: 'click'; target: Candidate[]; label: string; download?: true; popup?: true; modifiers?: ClickModifier[] } & Gated)
+  | ({ at: string; kind: 'hover'; target: Candidate[]; label: string } & Gated)
   /** `secure`: the source marked the typed text secret (UiPath SecureText). `hints`: selector, name, id, aria and type text the source saw, for credential detection only; never copied into steps. */
-  | { at: string; kind: 'fill'; target: Candidate[]; label: string; value: string; secure?: true; hints: string[] }
+  | ({ at: string; kind: 'fill'; target: Candidate[]; label: string; value: string; secure?: true; hints: string[] } & Gated)
   /** `value` as an array: a multi-select, exactly these options (the step's select with an array value). */
-  | { at: string; kind: 'select'; target: Candidate[]; label: string; value: string | string[]; secure?: true; hints: string[] }
-  | { at: string; kind: 'check'; target: Candidate[]; label: string; checked: boolean }
+  | ({ at: string; kind: 'select'; target: Candidate[]; label: string; value: string | string[]; secure?: true; hints: string[] } & Gated)
+  | ({ at: string; kind: 'check'; target: Candidate[]; label: string; checked: boolean } & Gated)
   | { at: string; kind: 'enter'; label: string }
-  | { at: string; kind: 'waitFor'; target: Candidate[]; label: string }
+  | ({ at: string; kind: 'waitFor'; target: Candidate[]; label: string } & Gated)
   | { at: string; kind: 'expectUrl'; path: string }
   | { at: string; kind: 'report'; item: ImportItem }
   /**
