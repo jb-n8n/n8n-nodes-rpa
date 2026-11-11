@@ -86,7 +86,7 @@ public class BranchReviewTests
         foreach (var field in new[] { El("Edit", "txtPassword", "Password", password: true), El("Edit", "txtPin", "PIN") })
             Assert.Throws<ArgumentException>(() => s.AddRead(field, Window, "out_secret"));
         Assert.Empty(s.Steps);
-        Assert.Equal("A password field cannot be read into the run's output.", Notices.PasswordNotRead);
+        Assert.Equal("F9 added nothing: a password box is never read.", Notices.PasswordNotRead);
     }
 
     [Fact]
