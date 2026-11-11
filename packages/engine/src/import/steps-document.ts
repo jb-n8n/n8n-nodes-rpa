@@ -9,7 +9,7 @@ import type { DesktopScript, Script } from '../types.js';
 import { isObject, MAX_IMPORT_JSON_BYTES, readJson, type Json } from './read.js';
 import { MIN_SECRET_LENGTH } from './draft.js';
 import type { ImportOptions, ImportReport, ImportResult } from './types.js';
-import { desktopDraftOf } from './uipath-desktop.js';
+import { desktopDraftOf } from './desktop-draft.js';
 
 /** A step document larger than this is refused before it is parsed, as a Chrome recording is. */
 const MAX_STEPS_DOCUMENT_BYTES = MAX_IMPORT_JSON_BYTES;

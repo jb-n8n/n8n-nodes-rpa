@@ -1,9 +1,11 @@
-// UiPath desktop sequences become desktop step sets. The walker (uipath.ts) turns each desktop activity inside an Open
-// Application, Attach Window or Use Application scope (or with a full `<wnd>` selector) into a DesktopEvent with a UI
-// Automation target and a value it already resolved; buildDesktopDraft turns one sequence of them into a desktop step
-// document (version 1, unsigned, accepted by parseDesktopScript) and report items. No value is evaluated; no password is
-// ever imported (a secure or credential-like value is always a run variable), and no step is marked a write: the owner
-// declares writes when approving, and the report lists the candidates.
+// Desktop drafts, for every desktop source: a UiPath desktop sequence, an RPA recording and a desktop step document.
+// The UiPath walker (uipath.ts) turns each desktop activity inside an Open Application, Attach Window or Use Application
+// scope (or with a full `<wnd>` selector) into a DesktopEvent with a UI Automation target and a value it already
+// resolved, and the recording importer reads them from the file; buildDesktopDraft turns one sequence of them into a
+// desktop step document (version 1, unsigned, accepted by parseDesktopScript) and report items, and desktopDraftOf
+// checks a step document's own desktop steps. No value is evaluated; no password is ever imported (a secure or
+// credential-like value is always a run variable), and no step is marked a write: the owner declares writes when
+// approving, and the report lists the candidates.
 import { desktopWriteCandidates } from '../proposal/desktop.js';
 import { createMasker } from '../secrets/mask.js';
 import { parseDesktopScript, ScriptShapeError } from '../steps/parse.js';

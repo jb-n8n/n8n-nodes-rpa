@@ -10,7 +10,7 @@ import { readZipEntries, type ZipCaps } from '../steps/zip.js';
 import { buildDraft, cleanLabel, clickModifiers, describeEvent, MIN_SECRET_LENGTH } from './draft.js';
 import { stripSecrets, TOTP_OUTPUT_HINT } from './secrets.js';
 import type { Candidate, DesktopDraft, Draft, FlowNode, ImportEvent, ImportItem, ImportOptions, ImportReport, ImportResult, UiPathFlow } from './types.js';
-import { buildDesktopDraft, DRAFT_NAMES_SIGN_IN_VALUE, signInValueCheck, type DesktopEvent, type DesktopSequence } from './uipath-desktop.js';
+import { buildDesktopDraft, DRAFT_NAMES_SIGN_IN_VALUE, signInValueCheck, type DesktopEvent, type DesktopSequence } from './desktop-draft.js';
 import { readDesktopSelector, type DesktopSelectorRead } from './uipath-desktop-selector.js';
 import { readSelector } from './uipath-selector.js';
 import type { UiaTarget, WindowSel } from '../types.js';

@@ -64,7 +64,7 @@ import type { DesktopApp, UiaCond, UiaTarget } from '../types.js';
 import { cleanLabel, MIN_SECRET_LENGTH } from './draft.js';
 import { isObject, MAX_IMPORT_JSON_BYTES, readJson, type Json } from './read.js';
 import type { ImportItem, ImportOptions, ImportReport, ImportResult, UiPathFlow } from './types.js';
-import { buildDesktopDraft, DRAFT_NAMES_SIGN_IN_VALUE, signInValueCheck, type DesktopEvent } from './uipath-desktop.js';
+import { buildDesktopDraft, DRAFT_NAMES_SIGN_IN_VALUE, signInValueCheck, type DesktopEvent } from './desktop-draft.js';
 
 export const RECORDING_FORMAT = 'rpa-recording/1';
 /** One recorded event: a desktop event, `secret` on a fill typed into a secret field, `positional` on a target found by its position. */
