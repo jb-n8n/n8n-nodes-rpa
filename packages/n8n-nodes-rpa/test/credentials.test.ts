@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { createServer as createHttpServer } from 'node:http';
 import { createServer, type AddressInfo } from 'node:net';
 import { describe, expect, it, vi } from 'vitest';
-import type { ICredentialType } from 'n8n-workflow';
+import type { ICredentialType, INodeProperties } from 'n8n-workflow';
 import * as engine from 'n8n-rpa-engine';
 import { bound } from '../../engine/test/timing.js';
 import { PlaywrightBrowserApi } from '../credentials/PlaywrightBrowserApi.credentials.js';
@@ -10,8 +10,9 @@ import { PlaywrightRedisApi } from '../credentials/PlaywrightRedisApi.credential
 import { PlaywrightScriptSigningApi } from '../credentials/PlaywrightScriptSigningApi.credentials.js';
 import { PlaywrightSiteLoginApi } from '../credentials/PlaywrightSiteLoginApi.credentials.js';
 import { RpaDesktopRunnerApi } from '../credentials/RpaDesktopRunnerApi.credentials.js';
+import { RpaSecretVariablesApi } from '../credentials/RpaSecretVariablesApi.credentials.js';
 import { CREDENTIALS } from '../nodes/Playwright/config.js';
-import { browserTestResult, CREDENTIAL_TEST_WAIT_MS, scriptSigningResult, siteLoginTestResult } from '../nodes/Playwright/credential-tests.js';
+import { browserTestResult, CREDENTIAL_TEST_WAIT_MS, scriptSigningResult, secretVariablesTestResult, siteLoginTestResult } from '../nodes/Playwright/credential-tests.js';
 
 // The Local Browser test needs playwright-core to find no Chromium. vi.hoisted runs before the imports above, so
 // playwright-core reads this path when it loads. Vitest runs each test file in its own process (pool: 'forks'), so
@@ -22,16 +23,20 @@ vi.hoisted(() => {
 
 const SECRET_FIELDS = ['password', 'totpSecret', 'token', 'secretKey', 'connectionLine'];
 
-const V2 = [new PlaywrightBrowserApi(), new PlaywrightSiteLoginApi(), new PlaywrightScriptSigningApi(), new PlaywrightRedisApi(), new RpaDesktopRunnerApi()];
+const V2 = [new PlaywrightBrowserApi(), new PlaywrightSiteLoginApi(), new PlaywrightScriptSigningApi(), new PlaywrightRedisApi(), new RpaDesktopRunnerApi(), new RpaSecretVariablesApi()];
 const USE_CASE_WORDS = /\b(portal|recall|notice|dealer)s?\b/i;
 type OptionLike = { name?: string; value?: unknown; description?: string };
 /** Every text a user reads in the credential dialog (never `name` or `type`, which are identifiers). */
 function texts(c: ICredentialType): string[] {
   const out = [c.displayName];
-  for (const p of c.properties) {
+  const add = (p: INodeProperties) => {
     out.push(p.displayName, p.description ?? '', p.placeholder ?? '', p.hint ?? '');
-    for (const o of (p.options ?? []) as OptionLike[]) out.push(o.name ?? '', o.description ?? '');
-  }
+    for (const o of (p.options ?? []) as (OptionLike & { displayName?: string; values?: INodeProperties[] })[]) {
+      out.push(o.name ?? '', o.description ?? '', o.displayName ?? '');
+      for (const v of o.values ?? []) add(v);
+    }
+  };
+  for (const p of c.properties) add(p);
   return out.filter(Boolean);
 }
 async function closedPort(): Promise<number> {
@@ -55,12 +60,12 @@ describe('RPA Redis credential', () => {
 
 describe('v2 credential types', () => {
   it('have the CREDENTIALS names, and package.json registers each compiled file', () => {
-    expect(V2.map((c) => c.name)).toEqual([CREDENTIALS.browser, CREDENTIALS.siteLogin, CREDENTIALS.signing, CREDENTIALS.redis, CREDENTIALS.desktopRunner]);
+    expect(V2.map((c) => c.name)).toEqual([CREDENTIALS.browser, CREDENTIALS.siteLogin, CREDENTIALS.signing, CREDENTIALS.redis, CREDENTIALS.desktopRunner, CREDENTIALS.secretVariables]);
     const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { n8n: { credentials: string[] } };
     for (const c of V2) expect(pkg.n8n.credentials).toContain(`dist/credentials/${c.constructor.name}.credentials.js`);
   });
   it('every credential display name starts with "RPA " (n8n lists credential types globally)', () => {
-    expect(V2.map((c) => c.displayName)).toEqual(['RPA Browser', 'RPA Site Login', 'RPA Step Signing', 'RPA Redis', 'RPA Desktop Runner']);
+    expect(V2.map((c) => c.displayName)).toEqual(['RPA Browser', 'RPA Site Login', 'RPA Step Signing', 'RPA Redis', 'RPA Desktop Runner', 'RPA Secret Variables']);
     for (const c of V2) expect(c.displayName.startsWith('RPA ')).toBe(true);
   });
   it('names Playwright only where an operator needs it: the Browser Server protocol and the local install command', () => {
@@ -147,6 +152,18 @@ describe('v2 credential types', () => {
       'The one line the Windows installer prints for the runner. It holds the address, the token and the certificate fingerprint: keep it as secret as the token. When it is filled, the three fields below are not used.',
     );
   });
+  it('RPA Secret Variables: name and value pairs, the value a password-type field, and what the node does with them', () => {
+    const c = new RpaSecretVariablesApi();
+    expect({ name: c.name, displayName: c.displayName }).toEqual({ name: 'rpaSecretVariablesApi', displayName: 'RPA Secret Variables' });
+    const [about, variables, ...rest] = c.properties;
+    expect(rest).toEqual([]);
+    expect(about.type).toBe('notice');
+    for (const text of ['{{var.name}}', 'Run Steps', 'masks', 'Only signed steps type one', 'at least 4 characters', 'Options → Variables']) expect(about.displayName, text).toContain(text);
+    expect(variables).toMatchObject({ displayName: 'Variables', name: 'variables', type: 'fixedCollection', typeOptions: { multipleValues: true }, default: {} });
+    const [pair] = (variables.options ?? []) as { name: string; values: INodeProperties[] }[];
+    expect(pair.name).toBe('values');
+    expect(pair.values.map((v) => [v.name, v.type, v.typeOptions?.password === true])).toEqual([['name', 'string', false], ['value', 'string', true]]);
+  });
   it('RPA Site Login: the login page, the secrets and the six allowlist fields, in order', () => {
     const props = new PlaywrightSiteLoginApi().properties.filter((p) => p.type !== 'notice');
     expect(props.map((p) => [p.name, p.displayName])).toEqual([
@@ -183,6 +200,7 @@ describe('v2 credential types', () => {
       'dist/credentials/PlaywrightScriptSigningApi.credentials.js',
       'dist/credentials/PlaywrightRedisApi.credentials.js',
       'dist/credentials/RpaDesktopRunnerApi.credentials.js',
+      'dist/credentials/RpaSecretVariablesApi.credentials.js',
     ]);
     expect(() => new URL(String(pkg.homepage))).not.toThrow();
   });
@@ -263,6 +281,29 @@ describe('v2 credential tests', () => {
     expect(siteLoginTestResult({ ...base, navHosts: 'files.example.com', allowedSubmits: 'POST example.com/a\nexample.com/b' }))
       .toEqual({ status: 'OK', message: 'Valid: 2 site(s) the browser may open, 1 password page(s), 2 form(s) it may submit' });
     expect(siteLoginTestResult({ ...base, navHosts: '*.example.com' })).toEqual({ status: 'Error', message: '"*.example.com": wildcards are not allowed, list each exact host' });
+  });
+  it('Secret Variables: counts and names the variables, or says what is wrong without a value', () => {
+    const pairs = (...values: { name: string; value: string }[]) => ({ variables: { values } });
+    expect(secretVariablesTestResult(pairs({ name: 'password', value: 'Pw-5513-xyz' }, { name: 'pin', value: '4711' })))
+      .toEqual({ status: 'OK', message: 'Valid: 2 secret variable(s): password, pin' });
+    expect(secretVariablesTestResult({})).toEqual({ status: 'OK', message: 'Valid: 0 secret variable(s)' });
+    const short = secretVariablesTestResult(pairs({ name: 'pin', value: '471' }));
+    expect(short).toEqual({
+      status: 'Error',
+      message: 'The secret variable "pin" in the RPA Secret Variables credential is shorter than 4 characters: a value that short cannot be masked without also hiding ordinary text. Put a value that is not secret in Options → Variables.',
+    });
+    const badName = secretVariablesTestResult(pairs({ name: 'Pw-5513-xyz', value: 'Pw-5513-xyz' }));
+    expect(badName).toEqual({
+      status: 'Error', message: 'The name of secret variable 1 in the RPA Secret Variables credential may only use letters, digits and _, and may not start with a digit.',
+    });
+    expect(secretVariablesTestResult(pairs({ name: '', value: 'Pw-5513-xyz' }))).toEqual({
+      status: 'Error', message: 'Secret variable 1 in the RPA Secret Variables credential has a value but no name.',
+    });
+    expect(secretVariablesTestResult(pairs({ name: 'pw', value: 'Pw-5513-xyz' }, { name: 'pw', value: 'Other-5513' }))).toEqual({
+      status: 'Error', message: 'The secret variable "pw" is listed twice in the RPA Secret Variables credential.',
+    });
+    // A row left empty is not a variable.
+    expect(secretVariablesTestResult(pairs({ name: '', value: '' }, { name: ' pw ', value: 'Pw-5513-xyz' }))).toEqual({ status: 'OK', message: 'Valid: 1 secret variable(s): pw' });
   });
   it('Step Signing: a key of 31 characters is refused, 32 accepted', () => {
     expect(scriptSigningResult({ secretKey: 'k'.repeat(31) })).toEqual({

@@ -1,8 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { readPathMatches, readPathTooBroad, readPostLabel } from 'n8n-rpa-engine';
+import { MIN_MASKED_TYPED } from '../../engine/src/desktop/surface.js';
 import {
-  browserConfig, ConfigError, CREDENTIALS, DEFAULT_ENDPOINT_URL, desktopRunnerConfig, normalizeHost, parseAllowedSubmits, parseHosts, parseLoginPages, parseReadPosts, signingKey,
+  browserConfig, ConfigError, CREDENTIALS, DEFAULT_ENDPOINT_URL, desktopRunnerConfig, MIN_SECRET_VARIABLE_LENGTH, normalizeHost, parseAllowedSubmits, parseHosts, parseLoginPages, parseReadPosts, signingKey,
   siteLoginConfig, readPathMatchesLocal as nodeMatches, readPathTooBroadLocal as nodeTooBroad, readPostLabelLocal as nodeLabel,
 } from '../nodes/Playwright/config.js';
 
@@ -117,6 +118,7 @@ describe('v2 credential names', () => {
   it('names the v2 credential types and the Redis credential', () => {
     expect(CREDENTIALS).toEqual({
       browser: 'playwrightBrowserApi', siteLogin: 'playwrightSiteLoginApi', signing: 'playwrightScriptSigningApi', redis: 'playwrightRedisApi', desktopRunner: 'rpaDesktopRunnerApi',
+      secretVariables: 'rpaSecretVariablesApi',
     });
     expect(DEFAULT_ENDPOINT_URL).toBe('ws://browser:3000/');
   });
@@ -405,5 +407,11 @@ describe('Connection Line (RPA Desktop Runner and RPA Browser credentials)', () 
     expect(refusal(browserLine('ws://browser:3000/'), BROWSER.token)).toBe(
       'The Connection Line in the RPA Browser credential must be the whole line that starts with rpa-browser://, as the installer prints it.',
     );
+  });
+});
+
+describe('RPA Secret Variables', () => {
+  it('takes values from the length the desktop lane masks a typed value from', () => {
+    expect(MIN_SECRET_VARIABLE_LENGTH).toBe(MIN_MASKED_TYPED);
   });
 });

@@ -1,10 +1,11 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { startPortal } from 'n8n-rpa-sandbox/testing.js';
 import { openSession } from '../src/browser/session.js';
-import { runScriptLane } from '../src/lane/script-lane.js';
+import { laneMasker, runScriptLane, screenshotMasks } from '../src/lane/script-lane.js';
 import { checkTrust } from '../src/lane/trust.js';
 import { INPUT_CONTAINS_SECRET, PASSWORD_FILL_REFUSED_STEPS, UNSIGNED_SECRET_FILL } from '../src/messages.js';
 import { createMasker } from '../src/secrets/mask.js';
+import { registerSecretVars, secretFillValues } from '../src/secrets/secret-fills.js';
 import { parseScript, ScriptShapeError } from '../src/steps/parse.js';
 import { runSteps, type StepContext } from '../src/steps/run.js';
 import type { PortalPolicy, Step } from '../src/types.js';
@@ -178,5 +179,77 @@ describe('fill.secret: trust and the lane', () => {
       script: doc(), trust: { required: false, allowUnsignedWrites: true }, policy: pub(), endpoint: LOCAL, vars: { pw: EXPORT_PW },
     });
     expect(r).toMatchObject({ ok: false, code: 'script_untrusted' });
+  });
+});
+
+describe('secret variables (TaskInput.secretVars, the RPA Secret Variables credential in n8n)', () => {
+  const VARS = { pw: EXPORT_PW, plain: 'Widget-77' };
+  const masker = (secrets?: typeof SECRETS) => laneMasker({ endpoint: LOCAL, ...(secrets ? { secrets } : {}), vars: VARS, secretVars: ['pw'] });
+  it('the run masker holds a secret variable from the start, whether or not a step uses it, and nothing else', () => {
+    const m = masker();
+    expect(m.mask(`a ${EXPORT_PW} b Widget-77`)).toBe('a [secret] b Widget-77');
+    expect(secretFillValues(m).has(EXPORT_PW)).toBe(true);
+    // Names that are not given, empty values and repeated calls change nothing.
+    registerSecretVars(['pw', 'missing'], { ...VARS, missing: '' }, m);
+    expect(m.secrets.filter((s) => s === EXPORT_PW)).toHaveLength(1);
+    expect(laneMasker({ endpoint: LOCAL, vars: VARS }).mask(EXPORT_PW)).toBe(EXPORT_PW);
+  });
+  it('a secret variable that holds a Site Login secret is masked but never made typable', () => {
+    const m = laneMasker({ endpoint: LOCAL, secrets: SECRETS, vars: { pw: SECRETS.password }, secretVars: ['pw'] });
+    expect(m.mask(SECRETS.password)).toBe('[secret]');
+    expect(secretFillValues(m).has(SECRETS.password)).toBe(false);
+  });
+  it('a secret fill types it; a plain fill, a locator and a condition that render it are refused, and nothing shows it', async () => {
+    const typed = await direct([secretFill('{{var.pw}}')], VARS, { masker: masker() });
+    try {
+      expect(typed.r.ok).toBe(true);
+      expect(await typed.s.page.inputValue('input[name=password]')).toBe(EXPORT_PW);
+    } finally { await typed.s.close(); }
+    const uses: Step[][] = [
+      [{ intent: 'Type the name', fill: { field: { label: 'Name' }, value: '{{var.pw}}' } }],
+      [{ intent: 'Find the link', timeoutMs: 300, click: { text: 'Open {{var.pw}}' } }],
+      [{ intent: 'Only when', when: { var: 'pw', equals: 'guess' }, click: { label: 'Name' } }],
+    ];
+    for (const steps of uses) {
+      const { s, r } = await direct(steps, VARS, { masker: masker() });
+      try {
+        expect(r.ok, JSON.stringify(steps)).toBe(false);
+        if (!r.ok) expect(r.failure.message).toBe(INPUT_CONTAINS_SECRET);
+        expect(JSON.stringify(r)).not.toContain(EXPORT_PW);
+        expect(await s.page.inputValue('input[name=name]')).toBe('');
+      } finally { await s.close(); }
+    }
+  });
+  it('an error that quotes the value shows [secret], from the first step on', async () => {
+    const steps: Step[] = [{ intent: 'Find the link', timeoutMs: 300, click: { css: `a[title="${EXPORT_PW}"]` } }];
+    const { s, r } = await direct(steps, VARS, { masker: masker() });
+    try {
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.failure.message).toContain('[secret]');
+      expect(JSON.stringify(r)).not.toContain(EXPORT_PW);
+    } finally { await s.close(); }
+  });
+  it('screenshots mask the text of a secret variable as they mask the Site Login password', async () => {
+    const s = await openSession({ endpoint: LOCAL, policy: pub(), masker: createMasker([]) });
+    try {
+      expect(screenshotMasks(s.page, undefined, secretFillValues(masker()))).toHaveLength(2);
+      expect(screenshotMasks(s.page, undefined, secretFillValues(createMasker([])))).toHaveLength(1);
+    } finally { await s.close(); }
+  });
+  it('a signed lane run with secretVars types the value and its result never shows it; unsigned steps cannot render it', async () => {
+    const steps: Step[] = [secretFill('{{var.pw}}'), { intent: 'Done', waitFor: { target: { css: 'form#contact' } } }];
+    const doc = { name: 'export', version: 1, startUrl: `${portal.url}/public/form`, steps };
+    const ok = await runScriptLane(signedLaneInput(doc, {
+      policy: pub(), endpoint: LOCAL, defaultStepTimeoutMs: 3000, vars: VARS, secretVars: ['pw'], saveTrace: 'never' as const,
+    }));
+    expect(ok.ok).toBe(true);
+    expect(JSON.stringify(ok)).not.toContain(EXPORT_PW);
+    const plain = { ...doc, steps: [{ intent: 'Type the name', fill: { field: { label: 'Name' }, value: '{{var.pw}}' } }] };
+    const refused = await runScriptLane({
+      script: plain, trust: { required: false }, policy: pub(), endpoint: LOCAL, defaultStepTimeoutMs: 3000, vars: VARS, secretVars: ['pw'], saveTrace: 'never',
+    });
+    expect(refused).toMatchObject({ ok: false });
+    if (!refused.ok) expect(refused.message).toContain(INPUT_CONTAINS_SECRET);
+    expect(JSON.stringify(refused)).not.toContain(EXPORT_PW);
   });
 });

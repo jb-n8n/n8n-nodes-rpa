@@ -166,6 +166,35 @@ describe('Run Steps routes by the steps\' surface', () => {
   });
 });
 
+describe('desktop steps with the RPA Secret Variables credential', () => {
+  const secretCreds = (runnerEndpoint: object) => ({
+    rpaDesktopRunnerApi: { ...runnerEndpoint }, playwrightScriptSigningApi: { secretKey: KEY },
+    rpaSecretVariablesApi: { variables: { values: [{ name: 'password', value: DEMO_PASSWORD }] } },
+  });
+  const onlyUser = { saveTrace: 'never', variables: { values: [{ name: 'user', value: DEMO_USER }] }, timeout: 2000 };
+  it('signed steps type the password from the credential; nothing in the output shows it', async () => {
+    runner = await FakeRunner.start();
+    const [data] = await executeRunSteps(ctx(secretCreds(runner.endpoint), { ...params(DESKTOP_STEPS), options: onlyUser }), fakeEngine(() => scriptOk()));
+    expect(data[0].json.error).toBeUndefined();
+    const typed = runner.requests.filter((q) => q.method === 'act').flatMap((q) => ((q.params.segments ?? []) as { text?: string }[]).map((x) => x.text ?? ''));
+    expect(typed).toContain(DEMO_PASSWORD);
+    expect(JSON.stringify(data)).not.toContain(DEMO_PASSWORD);
+  });
+  it('unsigned steps cannot type it: policy_violation, nothing typed', async () => {
+    runner = await FakeRunner.start();
+    const unsignedParams = { ...params(DESKTOP_STEPS), requireSignedSteps: false, signature: '', approvedBy: '', options: onlyUser };
+    const [data] = await executeRunSteps(ctx(secretCreds(runner.endpoint), unsignedParams), fakeEngine(() => scriptOk()));
+    expect(data[0].json.error).toBe('policy_violation: Type the password: Unsigned steps cannot type a secret variable. Sign them with Sign Steps; Allow Unsigned Writes does not cover it.');
+    expect(JSON.stringify(runner.requests)).not.toContain(DEMO_PASSWORD);
+  });
+  it('a password nobody supplied fails as a missing variable, and the message says where a secret goes', async () => {
+    runner = await FakeRunner.start();
+    const creds = { rpaDesktopRunnerApi: { ...runner.endpoint }, playwrightScriptSigningApi: { secretKey: KEY } };
+    const [data] = await executeRunSteps(ctx(creds, { ...params(DESKTOP_STEPS), options: onlyUser }), fakeEngine(() => scriptOk()));
+    expect(data[0].json.error).toContain('missing input "password" (a secret goes in an RPA Secret Variables credential, any other value in Options → Variables)');
+  });
+});
+
 describe('desktop steps elsewhere in the node', () => {
   it('Sign Steps refuses desktop steps that were not reviewed as they are (a crafted digest, a base version)', async () => {
     const { executeSignSteps } = await import('../nodes/Playwright/operations/signSteps.js');

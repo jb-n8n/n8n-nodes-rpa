@@ -5,7 +5,7 @@ import { createDesktopSurface } from '../src/desktop/surface.js';
 import { DEFAULT_BUSY_WAIT_MS, DEFAULT_LEASE_MS, defaultBusyWaitMs, runDesktopTask, type DesktopTaskInput, type DesktopTaskResult } from '../src/desktop/task.js';
 import { CANCELLED } from '../src/lane/script-lane.js';
 import { runTask } from '../src/lane/task.js';
-import { DESKTOP_STEPS_NEED_RUNNER, RUNNER_BUSY, UNSIGNED_REQUIRED, desktopNotInteractive } from '../src/messages.js';
+import { DESKTOP_STEPS_NEED_RUNNER, RUNNER_BUSY, UNSIGNED_REQUIRED, UNSIGNED_SECRET_VARIABLE, desktopNotInteractive } from '../src/messages.js';
 import { createMasker } from '../src/secrets/mask.js';
 import { signScript } from '../src/sign.js';
 import type { DesktopLocator } from '../src/types.js';
@@ -373,6 +373,41 @@ describe('desktop task: refusals and runner errors', () => {
     const f = failed(await run(doc([...d.steps as unknown[], { intent: 'Missing', click: uia('nothing', 'Button'), timeoutMs: 300 }])));
     expect(f.log[2].output).toEqual({ text: 'id:[secret]' });
     expect(JSON.stringify(f)).not.toContain(DEMO_USER);
+  });
+
+  it('secret variables: signed steps type one; it is masked everywhere, from the first step on, and refused anywhere else', async () => {
+    const typedTexts = () => runner!.requests.filter((q) => q.method === 'act').flatMap((q) => ((q.params.segments ?? []) as { text?: string }[]).map((x) => x.text ?? ''));
+    // Typed by a fill whose value is exactly the one template, and read back: the read shows [secret].
+    const d = doc([...SIGN_IN, { intent: 'Read the title', read: { target: uia('lblCount', 'Text'), as: 'count' } }]);
+    const r = succeeded(await run(d, { secretVars: ['password', 'user'] }));
+    expect(typedTexts()).toEqual([DEMO_USER, DEMO_PASSWORD]);
+    expect(JSON.stringify(r)).not.toContain(DEMO_PASSWORD);
+    expect(JSON.stringify(r)).not.toContain(DEMO_USER);
+    // A secret variable no step types is still masked: a runner message that quotes it shows [secret].
+    const echo = failed(await run(doc([{ intent: 'Open it', click: uia('Pin-4711', 'Button'), timeoutMs: 300 }]), { vars: { ...VARS, pin: 'Pin-4711' }, secretVars: ['pin'] }));
+    expect(echo.message).toContain('Button #[secret]');
+    expect(JSON.stringify(echo)).not.toContain('Pin-4711');
+    // With text around it or in a select option it is refused before anything is sent (desktop steps have no variable conditions).
+    const uses = [
+      { intent: 'Type the user name', fill: { field: uia('txtUser'), value: 'id:{{var.user}}' } },
+      { intent: 'Status', select: { field: uia('cmbStatus', 'ComboBox'), option: '{{var.user}}' } },
+    ];
+    for (const step of uses) {
+      runner!.requests.length = 0;
+      const f = failed(await run(doc([step]), { secretVars: ['user'] }));
+      expect(f.message, step.intent).toContain('an input value contains a credential secret');
+      expect(JSON.stringify(f)).not.toContain(DEMO_USER);
+      expect(runner!.requests.filter((q) => q.method === 'act')).toEqual([]);
+    }
+  });
+
+  it('secret variables: unsigned steps cannot type one (policy_violation), and nothing is typed', async () => {
+    const d = doc(SIGN_IN);
+    const f = failed(await run(d, { trust: { required: false }, secretVars: ['password'] }));
+    expect({ code: f.code, message: f.message }).toEqual({ code: 'policy_violation', message: `Type the password: ${UNSIGNED_SECRET_VARIABLE}` });
+    const typed = runner!.requests.filter((q) => q.method === 'act').map((q) => JSON.stringify(q.params));
+    expect(typed.join()).not.toContain(DEMO_PASSWORD);
+    expect(JSON.stringify(f)).not.toContain(DEMO_PASSWORD);
   });
 
   it('an app outside the runner policy is refused at launch', async () => {

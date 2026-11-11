@@ -1,6 +1,8 @@
 import { NodeConnectionTypes, NodeOperationError, type IDataObject, type INodeExecutionData, type IPairedItemData } from 'n8n-workflow';
 import type { BrowserEndpoint, CodeProvider, DownloadTemplate, ErrorCode, FileCheck, OutputSpec, PortalPolicy, TaskInput, TaskResult } from 'n8n-rpa-engine';
-import { browserConfig, ConfigError, CREDENTIALS, policyFor, signingKey, siteLoginConfig, UrlPolicyError, type SiteLogin } from '../config.js';
+import {
+  browserConfig, ConfigError, CREDENTIALS, policyFor, secretVariablesConfig, signingKey, siteLoginConfig, UrlPolicyError, VARIABLE_NAME, type SiteLogin,
+} from '../config.js';
 import type { NodeContext } from '../context.js';
 import { nodeOutputs } from '../description/io.js';
 import type { Engine } from '../engine.js';
@@ -66,6 +68,8 @@ export interface RunStepsParams {
   expectedFile: unknown;
   output?: OutputSpec;
   vars: Record<string, string>;
+  /** The names in `vars` that came from the RPA Secret Variables credential (withSecretVariables); [] without it. */
+  secretVars: string[];
   name: string;
   expectedVersion?: number;
   allowUnsignedWrites: boolean;
@@ -79,8 +83,6 @@ export interface RunStepsParams {
   codeTimeoutMs: number;
   common: CommonOptions;
 }
-
-const VAR_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /**
  * Expected Version: absent when empty; otherwise digits only after trimming (Data Table numbers may arrive as text), or
@@ -100,11 +102,30 @@ export function variablesOption(v: unknown): Record<string, string> {
   for (const entry of Array.isArray(entries) ? entries : []) {
     const name = asString(field(entry, 'name')).trim();
     if (!name) continue;
-    if (!VAR_NAME.test(name)) throw new ConfigError(`Variable name "${name}" may only use letters, digits and underscores`);
+    if (!VARIABLE_NAME.test(name)) throw new ConfigError(`Variable name "${name}" may only use letters, digits and underscores`);
     vars[name] = asString(field(entry, 'value'));
   }
   return vars;
 }
+
+export const SECRET_VARIABLE_TWICE = (name: string) =>
+  `Variable "${name}" is set both in Options → Variables and in the RPA Secret Variables credential: keep it in one of them.`;
+
+/**
+ * The run variables with the RPA Secret Variables credential's pairs merged in, as secret variables (the engine masks
+ * their values from the run start, and only signed steps type them). A name in both places is a configuration
+ * error that names the variable, never a value. Without the credential, `p` as it is.
+ */
+export async function withSecretVariables(ctx: NodeContext, i: number, p: RunStepsParams): Promise<RunStepsParams> {
+  if (credentialId(ctx, CREDENTIALS.secretVariables) === undefined) return p;
+  const secret = secretVariablesConfig(await ctx.getCredentials(CREDENTIALS.secretVariables, i));
+  for (const name of Object.keys(secret)) if (Object.hasOwn(p.vars, name)) throw new ConfigError(SECRET_VARIABLE_TWICE(name));
+  return { ...p, vars: { ...p.vars, ...secret }, secretVars: Object.keys(secret) };
+}
+
+export const MISSING_VARIABLE_HINT = 'a secret goes in an RPA Secret Variables credential, any other value in Options → Variables';
+/** A run that stopped on a variable nobody supplied (the engine's `missing input "<name>"`) says where its value goes. */
+export const withVariableHint = (message: string): string => (/missing input "[A-Za-z0-9_]+"/.test(message) ? `${message} (${MISSING_VARIABLE_HINT})` : message);
 
 /** The configured row checks, or undefined when none is set (only the configured checks run). */
 function outputOption(opt: (name: string) => unknown): OutputSpec | undefined {
@@ -165,6 +186,7 @@ export function readRunStepsParams(ctx: NodeContext, i: number): RunStepsParams 
     expectedFile: get('expectedFile', {}),
     ...(output ? { output } : {}),
     vars: variablesOption(opt('variables')),
+    secretVars: [],
     name: asString(opt('name')).trim(),
     ...(expectedVersion !== undefined ? { expectedVersion } : {}),
     allowUnsignedWrites,
@@ -317,7 +339,7 @@ async function runStepsItem(ctx: NodeContext, engine: Engine, i: number, deps: R
   try {
     // An empty id would key every id-less Site Login together ("site-login:") and bind signatures to nothing.
     if (siteLoginId === '') throw new ConfigError(SITE_LOGIN_NO_ID);
-    p = readRunStepsParams(ctx, i);
+    p = await withSecretVariables(ctx, i, readRunStepsParams(ctx, i));
   } catch (error) {
     return configError(errorMessage(error), safeOptionName(ctx, i));
   }
@@ -411,6 +433,7 @@ async function runStepsItem(ctx: NodeContext, engine: Engine, i: number, deps: R
     endpoint,
     ...(p.output ? { output: p.output } : {}),
     vars: p.vars,
+    ...(p.secretVars.length ? { secretVars: p.secretVars } : {}),
     budgetMs,
     defaultStepTimeoutMs: p.common.timeoutMs,
     viewport: p.common.viewport,
@@ -435,7 +458,7 @@ async function runStepsItem(ctx: NodeContext, engine: Engine, i: number, deps: R
   if (!r.ok) {
     if (r.configError) return configError(r.message, id.name, r.submitted === true);
     const hint = r.code === 'drift_detected' && p.aiRepair && !modelConnected ? ` (${NO_MODEL})` : '';
-    return failure({ ...r, message: `${r.message}${hint}` });
+    return failure({ ...r, message: `${withVariableHint(r.message)}${hint}` });
   }
   try {
     const repaired = r.lane === 'agent' && r.proposal ? { ...(await repairedStepsItem(ctx, engine, r.proposal)), pairedItem: paired } : undefined;

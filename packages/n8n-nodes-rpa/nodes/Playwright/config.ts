@@ -6,6 +6,7 @@ export const CREDENTIALS = {
   signing: 'playwrightScriptSigningApi',
   redis: 'playwrightRedisApi',
   desktopRunner: 'rpaDesktopRunnerApi',
+  secretVariables: 'rpaSecretVariablesApi',
 } as const;
 
 /** The most Max Seconds may be, in seconds. A test pins it to the engine's MAX_BUDGET_MS; the node must not import the engine at load time. */
@@ -288,6 +289,42 @@ export function desktopRunnerConfig(data: CredentialData): { url: string; token:
   if (!token) throw new ConfigError('The RPA Desktop Runner credential needs the Token.');
   if (!fingerprint) throw new ConfigError('The RPA Desktop Runner credential needs the Certificate Fingerprint the runner prints at start.');
   return { url, token, fingerprint };
+}
+
+/** A run variable's name, in Options → Variables and in the RPA Secret Variables credential. */
+export const VARIABLE_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/**
+ * The shortest value the RPA Secret Variables credential takes: the length from which the desktop lane masks a typed value
+ * (the engine's MIN_MASKED_TYPED; a test pins the two). A shorter value masked everywhere would also hide ordinary text.
+ */
+export const MIN_SECRET_VARIABLE_LENGTH = 4;
+
+/**
+ * The RPA Secret Variables credential (rpaSecretVariablesApi) → name → value. Its messages name a variable by its name only
+ * once the name is a valid one (a value typed into the name box is never shown), and never show a value. A row with neither
+ * name nor value is skipped.
+ */
+export function secretVariablesConfig(data: CredentialData): Record<string, string> {
+  const vars: Record<string, string> = {};
+  const values = (data.variables as { values?: unknown } | undefined)?.values;
+  (Array.isArray(values) ? values : []).forEach((entry: unknown, i) => {
+    const row = entry && typeof entry === 'object' ? (entry as Record<string, unknown>) : {};
+    const name = typeof row.name === 'string' ? row.name.trim() : '';
+    const value = typeof row.value === 'string' ? row.value : '';
+    if (!name && !value) return;
+    if (!name) throw new ConfigError(`Secret variable ${i + 1} in the RPA Secret Variables credential has a value but no name.`);
+    if (!VARIABLE_NAME.test(name)) {
+      throw new ConfigError(`The name of secret variable ${i + 1} in the RPA Secret Variables credential may only use letters, digits and _, and may not start with a digit.`);
+    }
+    if (Object.hasOwn(vars, name)) throw new ConfigError(`The secret variable "${name}" is listed twice in the RPA Secret Variables credential.`);
+    if (value.length < MIN_SECRET_VARIABLE_LENGTH) {
+      throw new ConfigError(
+        `The secret variable "${name}" in the RPA Secret Variables credential is shorter than ${MIN_SECRET_VARIABLE_LENGTH} characters: a value that short cannot be masked without also hiding ordinary text. Put a value that is not secret in Options → Variables.`,
+      );
+    }
+    vars[name] = value;
+  });
+  return vars;
 }
 
 export function signingKey(data: CredentialData): string {

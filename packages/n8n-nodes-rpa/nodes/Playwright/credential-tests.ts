@@ -1,6 +1,6 @@
 import type { INodeCredentialTestResult } from 'n8n-workflow';
 import type { PortalPolicy } from 'n8n-rpa-engine';
-import { browserConfig, desktopRunnerConfig, signingKey, siteLoginConfig, type CredentialData } from './config.js';
+import { browserConfig, desktopRunnerConfig, secretVariablesConfig, signingKey, siteLoginConfig, type CredentialData } from './config.js';
 import type { Engine } from './engine.js';
 import { pingRedis } from './redis-store.js';
 
@@ -78,6 +78,16 @@ export function siteLoginTestResult(data: CredentialData): INodeCredentialTestRe
       status: 'OK',
       message: `Valid: ${policy.navHosts.length} site(s) the browser may open, ${policy.login.length} password page(s), ${policy.allowedSubmits.length} form(s) it may submit`,
     };
+  } catch (error) {
+    return { status: 'Error', message: reason(error) };
+  }
+}
+
+/** Checks the RPA Secret Variables credential's names and values; the message names the variables, never a value. */
+export function secretVariablesTestResult(data: CredentialData): INodeCredentialTestResult {
+  try {
+    const names = Object.keys(secretVariablesConfig(data));
+    return { status: 'OK', message: `Valid: ${names.length} secret variable(s)${names.length ? `: ${names.join(', ')}` : ''}` };
   } catch (error) {
     return { status: 'Error', message: reason(error) };
   }

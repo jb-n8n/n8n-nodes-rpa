@@ -238,7 +238,8 @@ export const OPTION_ENTRIES: INodeProperties[] = [
     typeOptions: { multipleValues: true },
     default: {},
     placeholder: 'Add Variable',
-    description: 'Values the steps may type into fields, used as {{var.name}} inside the steps; masked only where a fill with secret: true or a desktop step types them',
+    description:
+      'Values the steps may type into fields, used as {{var.name}} inside the steps; masked only where a fill with secret: true or a desktop step types them. In Run Steps, put a password or another secret in an RPA Secret Variables credential instead.',
     hint: 'Not n8n expressions; {{var.name}} is replaced inside steps.',
     options: [
       {

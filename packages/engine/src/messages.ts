@@ -36,6 +36,8 @@ export const UNSIGNED_WRITES =
   'Unsigned steps cannot sign in, submit a form or download through a form. Sign them with Sign Steps, or turn on Options → Allow Unsigned Writes.';
 export const UNSIGNED_SECRET_FILL =
   'Unsigned steps cannot type a secret into a password field (fill with secret: true). Sign them with Sign Steps; Allow Unsigned Writes does not cover it.';
+/** A desktop fill of a secret variable in unsigned steps: as a secret fill in the browser, only signed steps type one. */
+export const UNSIGNED_SECRET_VARIABLE = 'Unsigned steps cannot type a secret variable. Sign them with Sign Steps; Allow Unsigned Writes does not cover it.';
 /**
  * A signIn with changePassword in unsigned steps: refused at the trust gate before the browser opens, whatever Allow
  * Unsigned Writes says, and by the step itself before anything is typed.

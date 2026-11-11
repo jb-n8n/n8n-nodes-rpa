@@ -65,6 +65,11 @@ export interface TaskInput {
   endpoint: BrowserEndpoint;
   output?: OutputSpec;
   vars?: Record<string, string>;
+  /**
+   * The names in `vars` whose values are secrets (in n8n, the RPA Secret Variables credential): masked from the run start in
+   * everything the run returns and shows, refused by every template except a secret fill's (registerSecretVars).
+   */
+  secretVars?: string[];
   budgetMs?: number;
   defaultStepTimeoutMs?: number;
   viewport?: { width: number; height: number };
@@ -207,7 +212,7 @@ export function repairPrecondition(raw: unknown, output: OutputSpec | undefined,
 }
 
 const withoutName = ({ name: _name, ...rest }: RepairInput): RepairInput => rest;
-const maskerOf = (input: TaskInput) => laneMasker({ secrets: input.secrets, endpoint: input.endpoint, signingKey: input.trust.key });
+const maskerOf = (input: TaskInput) => laneMasker({ secrets: input.secrets, endpoint: input.endpoint, signingKey: input.trust.key, vars: input.vars, secretVars: input.secretVars });
 
 /**
  * One run: the script lane, then (on drift, with AI repair) the agent lane on the same session, compile, prove and

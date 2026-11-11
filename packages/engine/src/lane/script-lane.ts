@@ -8,6 +8,7 @@ import { loginDetectIndex } from '../policy/login-block.js';
 import { loginBlockEnd, validateScript } from '../policy/validate.js';
 import { createMasker, maskRequests, maskViolations, type Masker } from '../secrets/mask.js';
 import { MAX_RENDERED } from '../secrets/render.js';
+import { registerSecretVars, secretFillValues } from '../secrets/secret-fills.js';
 import { scriptHash } from '../sign.js';
 import { MAX_SCREENSHOT_HEIGHT } from '../steps/handlers/capture.js';
 import { runBinaryProblem } from '../steps/limits.js';
@@ -45,6 +46,8 @@ export interface ScriptLaneInput {
   /** Browser viewport; Playwright's default when absent. */
   viewport?: { width: number; height: number };
   vars?: Record<string, string>;
+  /** The names in `vars` whose values are secrets (registerSecretVars): masked from the run start, typed only by a secret fill. */
+  secretVars?: string[];
   /** Row checks, run only after an extract step. Absent: rows are returned unchecked (none are required). */
   output?: OutputSpec;
   /** How the start page's status is read: 'classify' (default, v1) or 'report' (quick operations). */
@@ -121,9 +124,13 @@ export function codeSettings(input: { codeProvider?: CodeProvider; codeTimeoutMs
   };
 }
 
-/** The run masker: every Site Login secret (when attached), the endpoint token and the signing key. */
-export function laneMasker(input: { secrets?: PortalSecrets; endpoint: BrowserEndpoint; signingKey?: string }): Masker {
-  return createMasker([input.secrets?.username, input.secrets?.password, input.secrets?.totpSecret, input.endpoint.token, input.signingKey]);
+/** The run masker: every Site Login secret (when attached), the endpoint token, the signing key and the secret variables' values. */
+export function laneMasker(input: {
+  secrets?: PortalSecrets; endpoint: BrowserEndpoint; signingKey?: string; vars?: Record<string, string>; secretVars?: readonly string[];
+}): Masker {
+  const masker = createMasker([input.secrets?.username, input.secrets?.password, input.secrets?.totpSecret, input.endpoint.token, input.signingKey]);
+  registerSecretVars(input.secretVars, input.vars ?? {}, masker);
+  return masker;
 }
 
 export function clampBudget(budgetMs?: number): number {
@@ -224,9 +231,9 @@ export interface ScriptRun {
 }
 
 /** A masked failure screenshot: full page unless the page is taller than a screenshot may be (then the viewport). */
-async function failureScreenshot(page: Page, secrets?: PortalSecrets): Promise<Buffer | undefined> {
+async function failureScreenshot(page: Page, secrets: PortalSecrets | undefined, masker: Masker): Promise<Buffer | undefined> {
   const height = await page.evaluate(() => document.documentElement?.scrollHeight ?? 0).catch(() => 0);
-  return page.screenshot({ fullPage: height <= MAX_SCREENSHOT_HEIGHT, mask: screenshotMasks(page, secrets) }).catch(() => undefined);
+  return page.screenshot({ fullPage: height <= MAX_SCREENSHOT_HEIGHT, mask: screenshotMasks(page, secrets, secretFillValues(masker)) }).catch(() => undefined);
 }
 
 async function executeScript(
@@ -292,7 +299,7 @@ async function executeScript(
   await session.idle();
   const keep = { ctx, state: res.state, script, ...seen };
   if (!res.ok) {
-    const screenshot = await failureScreenshot(ctx.page, input.secrets);
+    const screenshot = await failureScreenshot(ctx.page, input.secrets, masker);
     const failure = { ...res.failure, intent: masker.mask(res.failure.intent), message: masker.mask(res.failure.message) };
     const base = {
       failure, violations: session.violations, log: maskLog(res.state.log, masker), screenshot,
@@ -360,7 +367,7 @@ export async function startScriptLane(
 ): Promise<{ run: ScriptRun; runtime?: LaneRuntime }> {
   const t0 = opts.t0 ?? Date.now();
   // Built first: the gate's messages carry names and hosts, and every result string is masked.
-  const masker = laneMasker({ secrets: input.secrets, endpoint: input.endpoint, signingKey: input.trust.key });
+  const masker = laneMasker({ secrets: input.secrets, endpoint: input.endpoint, signingKey: input.trust.key, vars: input.vars, secretVars: input.secretVars });
   // The trust gate runs before the steps are parsed for the run and before any browser opens.
   const gate = checkTrust(input.script, input.trust, { policy: input.policy, firstRun: false });
   if (!gate.ok) return { run: { result: laneFailure(t0, masker, gate.code, masker.mask(gate.message)) } };
