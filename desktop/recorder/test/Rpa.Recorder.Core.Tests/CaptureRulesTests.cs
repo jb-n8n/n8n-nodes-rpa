@@ -3,7 +3,7 @@ using static Rpa.Recorder.Core.Tests.Fakes;
 namespace Rpa.Recorder.Core.Tests;
 
 /// <summary>The rules the Windows program follows around the session: when a field is left, the bar's sentences, the
-/// hook watch, the headless options and the saved files' names.</summary>
+/// hook watch, the headless options, the saved files' names and the windows "Use an app that is already open…" offers.</summary>
 public class CaptureRulesTests
 {
     private static readonly ElementFacts Name = El("Edit", "txtName", "Name");
@@ -120,5 +120,19 @@ public class CaptureRulesTests
         Assert.Equal("_CON.rpa-recording.json", SaveNames.Recording("CON"));
         Assert.Equal("recording.rpa-recording.json", SaveNames.Recording(" .. "));
         Assert.Equal(new string('x', 100) + ".rpa-recording.json", SaveNames.Recording(new string('x', 200)));
+    }
+
+    [Fact]
+    public void Use_an_app_that_is_already_open_offers_only_windows_a_person_can_mean()
+    {
+        Assert.True(OpenWindows.IsOffered("ERP Demo - Sign in", "WindowsForms10.Window.8.app.0.19fd5c7_r3_ad1", cloaked: false, own: false));
+        Assert.True(OpenWindows.IsOffered("Untitled - Notepad", "Notepad", cloaked: false, own: false));
+        Assert.False(OpenWindows.IsOffered("Program Manager", "Progman", cloaked: false, own: false));
+        Assert.False(OpenWindows.IsOffered("", "WorkerW", cloaked: false, own: false));
+        Assert.False(OpenWindows.IsOffered("Taskbar", "Shell_TrayWnd", cloaked: false, own: false));
+        Assert.False(OpenWindows.IsOffered("Taskbar", "Shell_SecondaryTrayWnd", cloaked: false, own: false));
+        Assert.False(OpenWindows.IsOffered("Windows Input Experience", "Windows.UI.Core.CoreWindow", cloaked: true, own: false));
+        Assert.False(OpenWindows.IsOffered("   ", "Notepad", cloaked: false, own: false));
+        Assert.False(OpenWindows.IsOffered("RPA Recorder", "WindowsForms10.Window.8.app.0.1", cloaked: false, own: true));
     }
 }

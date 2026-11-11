@@ -360,4 +360,10 @@ public class BarTests
         // The bar low on the screen: the dialog stays inside it.
         Assert.Equal(new Point(168, 468), BarLayout.Beside(new Rectangle(596, 600, 420, 120), new Size(420, 260), area, 8));
     }
+
+    [Fact]
+    public void A_field_whose_value_could_not_be_read_is_named_in_a_notice()
+    {
+        Assert.Equal("The value typed into \"Notes\" could not be read, so that step is not in the recording: add it by hand.", Notices.NotRead("Notes"));
+    }
 }

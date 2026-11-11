@@ -7,7 +7,7 @@ namespace Rpa.Recorder.Core.Tests;
 public class KeyRulesTests
 {
     private const int Enter = 0x0D, Tab = 0x09, Escape = 0x1B, F1 = 0x70, F5 = 0x74, F24 = 0x87, Backspace = 0x08, Delete = 0x2E;
-    private const int Left = 0x25, Down = 0x28, Home = 0x24, Space = 0x20, A = 0x41, C = 0x43, F = 0x46, Q = 0x51, S = 0x53, V = 0x56;
+    private const int Left = 0x25, Down = 0x28, Home = 0x24, Space = 0x20, A = 0x41, C = 0x43, E = 0x45, F = 0x46, Q = 0x51, S = 0x53, V = 0x56;
     private const int Digit1 = 0x31, Numpad1 = 0x61, OemPlus = 0xBB;
 
     private static readonly ElementFacts TextBox = El("Edit", "txtName", "Name");
@@ -159,5 +159,28 @@ public class KeyRulesTests
     {
         foreach (var vk in new[] { 0x10, 0x11, 0x12, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0x5B, 0x5C, 0x14, 0x90, 0x91 })
             Assert.Equal(KeyKind.Modifier, KeyRules.Kind(vk, true, false));
+    }
+
+    [Fact]
+    public void Keys_that_belong_to_Windows_are_never_recorded()
+    {
+        // Alt+Tab, Alt+Shift+Tab, Ctrl+Alt+Tab, Alt+Escape, Ctrl+Escape, Ctrl+Shift+Escape, and any chord with the Windows
+        // key (Win+Tab, Win+E, Win+Left).
+        foreach (var (vk, ctrl, alt, win) in new[] { (Tab, false, true, false), (Tab, true, true, false), (Escape, false, true, false),
+            (Escape, true, false, false), (Escape, true, true, false), (Tab, false, false, true), (E, false, false, true), (Left, false, false, true), (S, true, false, true) })
+        {
+            Assert.Equal(KeyKind.Shell, KeyRules.Kind(vk, ctrl, alt, win));
+            Assert.False(KeyRules.IsTyping(KeyKind.Shell, FieldKind.Text));
+        }
+        foreach (var (vk, ctrl) in new[] { (Tab, false), (Tab, true), (Escape, false) }) Assert.Equal(KeyKind.Command, KeyRules.Kind(vk, ctrl, false, false));
+    }
+
+    [Fact]
+    public void The_shell_chords_are_the_step_parsers()
+    {
+        // The engine refuses them in a step (isShellChord); the recorder's rule above is that rule, word for word.
+        var ts = RepoFile("packages", "engine", "src", "steps", "desktop-vocabulary.ts");
+        Assert.Contains("return (mods.has('Ctrl') && key === 'Escape') || (mods.has('Alt') && (key === 'Tab' || key === 'Escape'));", ts);
+        Assert.Contains("if (mods.some((m) => /^(win|windows|meta)$/i.test(m))) return 'is a Windows-key shortcut", ts);
     }
 }

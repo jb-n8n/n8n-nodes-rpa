@@ -275,4 +275,41 @@ public class RecordingFileTests
         Assert.Empty(s.ToFile("Test").Variables);
         Assert.DoesNotContain("Same-Value-1", s.ToFile("Test").ToJson());
     }
+
+    [Fact]
+    public void The_recording_says_about_how_many_steps_it_makes()
+    {
+        Assert.Equal(17, Record(ErpDemoObservations.List()).ToFile("ERP Demo line items").EstimatedSteps);
+        var many = new Session();
+        for (var i = 0; i < 205; i++) many.Add(Click(i, El("Button", "btnNext", "Next")));
+        var file = many.ToFile("Long");
+        Assert.True(file.EstimatedSteps > RecordingFile.MaxSteps);
+        Assert.Equal("The recording makes about 206 steps, and Import Steps takes at most 200: delete steps, or record the work in shorter parts.",
+            Notices.TooManySteps(file.EstimatedSteps));
+    }
+
+    [Fact]
+    public void A_recording_of_an_open_window_names_the_attached_program()
+    {
+        var s = new Session();
+        s.Attach(@"C:\Apps\Orders.exe");
+        s.Add(Click(1, El("Button", "btnOk", "OK"), window: new("helper.exe", "Helper", "HelperWindow")));
+        var file = s.ToFile("Test");
+        Assert.Equal(("Orders.exe", 0), (file.Exe, file.Args.Count));
+        Assert.DoesNotContain(file.Events, e => e.Kind == StepKind.Launch);
+        Assert.Throws<ArgumentException>(() => s.ToPolicyChange(@"C:\Apps\Other.exe", new string('a', 64)));
+        Assert.Equal("Orders.exe", s.ToPolicyChange(@"C:\Apps\Orders.exe", new string('a', 64)).Exe);
+        Assert.Throws<InvalidOperationException>(() => s.Attach(@"C:\Apps\Orders.exe"));
+        Assert.Throws<ArgumentException>(() => new Session().Attach(@"C:\Apps\run.bat"));
+    }
+
+    [Fact]
+    public void Arguments_the_importer_would_refuse_are_refused_at_start()
+    {
+        var tooMany = Enumerable.Range(0, 51).Select(i => $"a{i}").ToArray();
+        var e = Assert.Throws<ArgumentException>(() => Record(new AppStarted(At(0), @"C:\Apps\app.exe", tooMany, Window)));
+        Assert.StartsWith("A recording takes at most 50 arguments of at most 1000 characters each", e.Message);
+        Assert.Throws<ArgumentException>(() => Record(new AppStarted(At(0), @"C:\Apps\app.exe", [new string('x', 1001)], Window)));
+        Assert.Single(Record(new AppStarted(At(0), @"C:\Apps\app.exe", Enumerable.Range(0, 50).Select(i => new string('x', 1000)).ToArray(), Window)).Steps);
+    }
 }

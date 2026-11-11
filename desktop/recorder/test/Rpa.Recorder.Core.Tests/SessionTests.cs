@@ -267,6 +267,8 @@ public class SessionTests
         Assert.Equal([new RecordedCondition("Text", "lblResultCount", null)], read.Target!.Path);
         Assert.Throws<ArgumentException>(() => s.AddRead(count, Window, "out_ResultCount"));
         Assert.Throws<ArgumentException>(() => s.AddRead(count, Window, "out result"));
+        Assert.Equal("out_result_count", StepText.SuggestedReadName(count));
+        Assert.DoesNotContain("6 line items", Json(s));
     }
 
     [Fact]
@@ -291,5 +293,58 @@ public class SessionTests
             "Select Company code", "Fill Date from", "Fill Date to", "Click Search", "Click Vendor Row 1", "Click File",
             "Scope erpdemo.exe", "Click Export...", "Scope Export line items", "Fill File name:", "Click Save",
         ], s.ToFile("ERP Demo line items").Events.Select(e => $"{e.Kind} {e.Label}"));
+    }
+
+    [Fact]
+    public void A_choice_of_an_empty_item_is_not_recorded()
+    {
+        var blank = El("ListItem", "", "", "", false, false, El("List", "1000", "Company code"), Company);
+        Assert.Equal(["Click Company code"], Record(Click(1, Company), Click(2, blank)).Steps.Select(step => StepText.Action(step)));
+        Assert.Empty(Record(Typed(1, Company), Left(2, Company, null, "")).Steps);
+    }
+
+    [Fact]
+    public void Only_a_check_box_records_a_check()
+    {
+        foreach (var type in new[] { "ListItem", "TreeItem", "DataItem", "Button" })
+        {
+            var row = El(type, "row1", "Acme Paper Co") with { IsChecked = true };
+            Assert.Equal(StepKind.Click, Record(Click(1, row)).Steps.Single().Kind);
+        }
+        Assert.Equal(StepKind.Click, Record(new Activated(At(1), Window, El("Button", "btnBold", "Bold") with { IsChecked = true })).Steps.Single().Kind);
+        Assert.Equal(StepKind.Check, Record(Click(1, El("CheckBox", "chkAll", "All") with { IsChecked = true })).Steps.Single().Kind);
+    }
+
+    [Fact]
+    public void A_password_field_cannot_be_read_into_the_runs_output()
+    {
+        var s = new Session();
+        foreach (var field in new[] { El("Edit", "txtPassword", "Password", password: true), El("Edit", "txtPin", "PIN") })
+            Assert.Throws<ArgumentException>(() => s.AddRead(field, Window, "out_secret"));
+        Assert.Empty(s.Steps);
+    }
+
+    [Fact]
+    public void A_variables_or_a_reads_name_has_at_most_64_characters()
+    {
+        Assert.True(SecretRules.IsVariableName("a" + new string('b', 63)));
+        Assert.False(SecretRules.IsVariableName("a" + new string('b', 64)));
+        var s = Record(Typed(1, El("Edit", "txtName", "Name")), Left(2, El("Edit", "txtName", "Name"), "Ada"));
+        var e = Assert.Throws<ArgumentException>(() => s.MarkVariable(0, new string('n', 65)));
+        Assert.StartsWith("A variable's name starts with a letter or _, holds only letters, digits and _, and has at most 64 characters", e.Message);
+        Assert.Throws<ArgumentException>(() => s.AddRead(El("Text", "lblCount", "6"), Window, new string('n', 65)));
+    }
+
+    [Fact]
+    public void A_read_step_with_no_stable_id_keeps_the_text_and_is_marked_for_the_person_to_check()
+    {
+        var cell = El("DataItem", "4237251161", "Acme Paper Co");
+        var s = Record(Click(1, El("Button", "btnOk", "OK")));
+        s.AddRead(cell, Window, "out_Vendor");
+        var read = s.Steps[^1];
+        Assert.Equal([new RecordedCondition("DataItem", null, "Acme Paper Co")], read.Target!.Path);
+        Assert.True(read.FoundByText);
+        Assert.Equal("Read DataItem as out_Vendor", StepText.Action(read));
+        Assert.Equal("out_data_item", StepText.SuggestedReadName(cell));
     }
 }
