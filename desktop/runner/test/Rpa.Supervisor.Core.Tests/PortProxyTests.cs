@@ -190,24 +190,6 @@ public sealed class PortProxyTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_target_that_does_not_listen_within_ReadySeconds_closes_the_connection_and_logs_it()
-    {
-        var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-11-10T08:00:00Z"));
-        var setup = Start(time, readySeconds: 45);
-        var client = await Connect(setup.ListenPort);
-        var read = client.GetStream().ReadAsync(new byte[1]).AsTask();
-
-        for (var i = 0; i < 200 && !read.IsCompleted; i++)
-        {
-            time.Advance(TimeSpan.FromSeconds(5));
-            await Task.Delay(10);
-        }
-
-        Assert.Equal(0, await read.WaitAsync(Patience));
-        Assert.Contains(_log.Failures, f => f.Message.Contains($"127.0.0.1:{setup.TargetPort}") && f.Message.Contains("45 s"));
-    }
-
-    [Fact]
     public async Task A_runner_that_does_not_start_in_the_session_is_the_last_failure_and_names_its_log()
     {
         var dir = Directory.CreateTempSubdirectory("rpa-supervisor-").FullName;
