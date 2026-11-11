@@ -4581,7 +4581,7 @@ Describe 'The Start menu shortcut' {
 }
 
 # Names the installer shares with the supervisor's C# code and a place in the guide its refusals point to. The service's
-# own "blocked" sentence (Show-RpaConnection.ps1 against SessionManager.cs) is not pinned here.
+# own "blocked" sentence (Show-RpaConnection.ps1 against SessionManager.cs) is pinned here too.
 Describe 'Names shared with the supervisor and the guide' {
   BeforeAll {
     $script:RepoRoot = Join-Path $PSScriptRoot '../../..'
@@ -4598,6 +4598,13 @@ Describe 'Names shared with the supervisor and the guide' {
     $name = InModuleScope RpaInstall { $script:SupervisorService }
     Get-RepoText 'desktop/runner/src/Rpa.Supervisor/SupervisorService.cs' | Should -Match ([regex]::Escape(('public const string Name = "{0}";' -f $name)))
     Get-RepoText 'desktop/installer/scripts/Show-RpaConnection.ps1' | Should -Match ([regex]::Escape(("-Filter `"Name='{0}'`"" -f $name)))
+  }
+
+  It 'the sentence Show-RpaConnection.ps1 matches to detect a blocked sign-in is the one the supervisor writes' {
+    $script = Get-RepoText 'desktop/installer/scripts/Show-RpaConnection.ps1'
+    $match = [regex]::Match($script, '\$failure\.Contains\(''([^'']+)''\)')
+    $match.Success | Should -BeTrue
+    Get-RepoText 'desktop/runner/src/Rpa.Supervisor.Core/SessionManager.cs' | Should -Match ([regex]::Escape($match.Groups[1].Value))
   }
 
   It 'section 10 of the Windows guide, which the refusals about a new password name, is about the certificates' {
