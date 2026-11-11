@@ -42,8 +42,8 @@ without detours. Each step appears in the numbered list as a sentence, such as `
 - To return a value to n8n, point at it in the app and press **F9**: `Point at a value in the app and press F9 to read it on every run.`
   The bar asks for an output name (for example `out_result_count`) and adds `Read "6 line items" as out_result_count`.
 - To fix a mistake, select the step and choose **Delete step**.
-- **Make variable…** and **Make secret…** turn a selected step's value into a variable or a secret now. You can also
-  do it all at once after **Finish**.
+- **Make secret…** turns a selected step's typed value into a secret. Values that change from run to run become
+  variables after **Finish**.
 
 <!-- screenshot: recorder-bar-recording.png -->
 

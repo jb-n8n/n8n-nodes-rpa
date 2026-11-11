@@ -8,7 +8,7 @@ public enum StepMark { None, Variable, Secret, Check }
 public sealed record StepRow(int Number, string Text, StepMark Mark, string? Tip);
 
 /// <summary>Which step actions fit the selected step, and the line that says what they act on.</summary>
-public sealed record StepActions(bool Delete, bool Variable, bool Secret, string Hint);
+public sealed record StepActions(bool Delete, bool Secret, string Hint);
 
 /// <summary>The bar's step list: its rows, the actions that fit a step, and where it scrolls.</summary>
 public static class StepRows
@@ -61,16 +61,16 @@ public static class StepRows
 
     /// <summary>
     /// The actions that fit the selected step (null: none selected), numbered <paramref name="number"/>. Any step can
-    /// be deleted. A typed value or a chosen item can be a variable; only a typed value can be a secret; a secret stays
-    /// a secret; a file name typed into a Save dialog stays as recorded (the run saves into its own export folder).
+    /// be deleted. Only a typed value can be a secret; a secret stays a secret; a file name typed into a Save dialog
+    /// stays as recorded (the run saves into its own export folder). Variables are made on the values page.
     /// </summary>
     public static StepActions ActionsFor(RecordedStep? step, int number)
     {
-        if (step is null) return new(false, false, false, "Select a step to change it.");
-        if (step.Kind is not (StepKind.Fill or StepKind.Select)) return new(true, false, false, $"Step {number} has no value to make a variable or a secret.");
-        if (step.Secret) return new(true, false, false, $"Step {number} is already a secret.");
-        if (step.ExportFile is not null) return new(true, false, false, $"Step {number} saves a file into the run's export folder: its name stays as recorded.");
-        return new(true, true, step.Kind == StepKind.Fill, $"Step {number} is selected.");
+        if (step is null) return new(false, false, "Select a step to change it.");
+        if (step.Kind != StepKind.Fill) return new(true, false, $"Step {number} has no typed value to make a secret.");
+        if (step.Secret) return new(true, false, $"Step {number} is already a secret.");
+        if (step.ExportFile is not null) return new(true, false, $"Step {number} saves a file into the run's export folder: its name stays as recorded.");
+        return new(true, true, $"Step {number} is selected.");
     }
 
     /// <summary>Whether closing or starting over loses work: there are steps, and they are not the ones last saved

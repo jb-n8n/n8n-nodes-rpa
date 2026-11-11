@@ -25,7 +25,7 @@ public enum BarPart
     List = 8,
     /// <summary>The line about F9 under the list.</summary>
     ReadHint = 16,
-    /// <summary>Delete step, Make variable…, Make secret… with the line that says what they act on.</summary>
+    /// <summary>Delete step and Make secret… with the line that says what they act on.</summary>
     StepActions = 32,
     /// <summary>Name, the folder with Change folder…, and Save.</summary>
     SaveBlock = 64,
@@ -44,8 +44,7 @@ public static class BarText
     public const string UseOpenApp = "Use an open app…";
     public const string Finish = "Finish";
     public const string DeleteStep = "Delete step";
-    // Short enough that the three step actions fit one row on a bar 360 wide.
-    public const string MakeVariable = "Make variable…";
+    // A variable is made on the values page (ValuesPage); a secret can be made on the bar, before saving.
     public const string MakeSecret = "Make secret…";
     public const string Name = "Name";
     public const string Save = "Save";

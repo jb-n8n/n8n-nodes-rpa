@@ -34,13 +34,6 @@ public static class DialogText
 
     public static string WindowEntry(string title, string exe) => $"{title} ({exe})";
 
-    public static NameQuestion Variable(int number, RecordedStep step) => new(
-        $"Make step {number} a variable",
-        $"Step {number} {StepText.Describe(step)}. On each run this value comes from the variable below (n8n supplies it).",
-        "Variable name",
-        StepText.VariableOf(step) ?? StepText.SuggestedName(step),
-        Action(BarText.MakeVariable));
-
     public static NameQuestion Secret(int number, RecordedStep step) => new(
         $"Make step {number} a secret",
         $"Step {number} {StepText.Describe(step)}. The typed value is removed from the recording now. " +

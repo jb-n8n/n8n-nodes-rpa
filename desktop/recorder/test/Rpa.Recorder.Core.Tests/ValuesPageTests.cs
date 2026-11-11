@@ -88,7 +88,7 @@ public class ValuesPageTests
     }
 
     [Fact]
-    public void A_value_made_a_variable_while_recording_is_ticked_and_can_be_renamed()
+    public void A_value_that_is_a_variable_already_is_ticked_and_can_be_renamed()
     {
         var s = Flow();
         s.MarkVariable(4, "in_CompanyCode");
@@ -222,10 +222,11 @@ public class ValuesPageTests
     [Fact]
     public void A_tick_that_cannot_be_taken_off_says_why()
     {
-        var s = Flow();
-        s.MarkVariable(1, "user");
+        // A typed value that holds {{ is the field's variable from the start: a step cannot type {{ as text.
+        var s = Record(Typed(1, User), Left(2, User, "{{x}}"), Typed(3, Password), Left(4, Password, null), Typed(5, Notes), Left(6, Notes, "monthly"));
         var rows = ValuesPage.Rows(s.Steps);
-        Assert.Equal("Made a variable while recording, so it stays one. Its name can change below.", ValuesPage.Tip(rows[0]));
+        Assert.Equal((ValueKind.Variable, "user_name"), (rows[0].Kind, rows[0].Name));
+        Assert.Equal("Its recorded value held {{, which a step cannot type as text, so it is a variable. Its name can change below.", ValuesPage.Tip(rows[0]));
         Assert.Equal("A secret stays a secret: its typed value is not in the recording.", ValuesPage.Tip(rows[1]));
         Assert.Null(ValuesPage.Tip(rows[2]));
     }

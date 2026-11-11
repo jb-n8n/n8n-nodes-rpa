@@ -101,7 +101,8 @@ public class BarTests
         // Short, so that it fits beside Start an app… on a bar 360 wide; its window keeps the longer title.
         Assert.Equal("Use an open app…", BarText.UseOpenApp);
         Assert.Equal("Use an app that is already open", DialogText.OpenTitle);
-        Assert.Equal(("Delete step", "Make variable…", "Make secret…"), (BarText.DeleteStep, BarText.MakeVariable, BarText.MakeSecret));
+        // A variable is made on the values page only; a secret can be made on the bar too (before saving, while recording).
+        Assert.Equal(("Delete step", "Make secret…"), (BarText.DeleteStep, BarText.MakeSecret));
         Assert.Equal("Earlier notices", DialogText.NoticesTitle);
         // A screen reader names the list and the values page by these, not after a label near them.
         Assert.Equal(("Recorded steps", "Values that can change"), (BarText.ListName, ValuesPage.AreaName));

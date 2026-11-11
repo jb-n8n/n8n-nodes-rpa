@@ -8,8 +8,9 @@ namespace Rpa.Recorder;
 /// The recorder's bar: a window that stays on top at the top right of the screen. At the top, the state in words with
 /// a coloured dot (red while recording, amber while paused), one sentence that says what to do now, and the notice
 /// line. Below, what the stage needs: Ready offers two ways to choose the app; Recording and Paused show Pause or
-/// Resume, Finish, the numbered steps and the step actions; after Finish, one page asks which recorded values change
-/// from run to run (Back returns to the list, paused); Finished adds the name and Save; after saving, what to do next
+/// Resume, Finish, the numbered steps and the step actions (Delete step, Make secret…); after Finish, one page asks
+/// which recorded values change from run to run, the one place where a value becomes a variable (Back returns to the
+/// list, paused); Finished adds the name and Save; after saving, what to do next
 /// (allow the app with the policy tool, import the recording in n8n) and Record another. Everything the bar decides or
 /// says is in Rpa.Recorder.Core (BarText, StepRows, ValuesPage, DialogText, NoticeLine, SaveNames, NextSteps,
 /// BarLayout); this class shows it. The bar's own windows are never recorded, and after a bar action while recording
@@ -61,7 +62,6 @@ internal sealed class RecorderBar : Form
     private readonly Label _actionHint;
     private readonly FlowLayoutPanel _actionRow = Row();
     private readonly Button _delete = SmallDialog.NewButton(BarText.DeleteStep);
-    private readonly Button _variable = SmallDialog.NewButton(BarText.MakeVariable);
     private readonly Button _secret = SmallDialog.NewButton(BarText.MakeSecret);
     // The values page (Values): its sentence, a scrolling table in the list's place, a problem line and Back / Continue.
     private readonly Label _valuesIntro;
@@ -131,8 +131,7 @@ internal sealed class RecorderBar : Form
         // Once saved, selecting a step shows the step actions again.
         _list.SelectedIndexChanged += (_, _) => { if (_stage == BarStage.Saved) ShowStage(_stage); else ShowActions(); };
         _delete.Click += (_, _) => Delete();
-        _variable.Click += (_, _) => Mark(secret: false);
-        _secret.Click += (_, _) => Mark(secret: true);
+        _secret.Click += (_, _) => MakeSecret();
         _changeFolder.Click += (_, _) => ChangeFolder();
         _save.Click += (_, _) => Save();
         _allowButton.Click += async (_, _) => await Allow();
@@ -200,7 +199,7 @@ internal sealed class RecorderBar : Form
         // The step actions are two rows of the bar's own table, not a table of their own: a table inside a table is
         // measured at the width of its widest label, where the buttons wrapped into three rows, and the bar kept those
         // rows' height as an empty band under them. They never wrap: 4 apart, they fit a bar 360 wide.
-        Buttons(_actionRow, BarLayout.Tight, _delete, _variable, _secret);
+        Buttons(_actionRow, BarLayout.Tight, _delete, _secret);
         _actionRow.WrapContents = false;
         _actionHint.Margin = new Padding(0, BarLayout.Space, 0, 0);
 
@@ -415,7 +414,6 @@ internal sealed class RecorderBar : Form
         var i = _list.SelectedIndex;
         var actions = StepRows.ActionsFor(i >= 0 && i < _shown.Count ? _shown[i] : null, i + 1);
         _delete.Enabled = actions.Delete;
-        _variable.Enabled = actions.Variable;
         _secret.Enabled = actions.Secret;
         _actionHint.Text = actions.Hint;
     }
@@ -643,16 +641,15 @@ internal sealed class RecorderBar : Form
         BackToApp();
     }
 
-    private void Mark(bool secret)
+    private void MakeSecret()
     {
         var i = _list.SelectedIndex;
         if (i < 0 || i >= _shown.Count) return;
-        var question = secret ? DialogText.Secret(i + 1, _shown[i]) : DialogText.Variable(i + 1, _shown[i]);
-        using var dialog = new NameDialog(this, question, []);
+        using var dialog = new NameDialog(this, DialogText.Secret(i + 1, _shown[i]), []);
         if (Ask(dialog))
         {
             var name = dialog.Answer;
-            try { _capture.Use(s => { if (secret) s.MarkSecret(i, name); else s.MarkVariable(i, name); return 0; }); }
+            try { _capture.Use(s => { s.MarkSecret(i, name); return 0; }); }
             catch (Exception e) when (e is ArgumentException or InvalidOperationException) { Say(e.Message); }
         }
         BackToApp();

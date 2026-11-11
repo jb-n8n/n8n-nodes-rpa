@@ -1,8 +1,8 @@
 namespace Rpa.Recorder.Core;
 
-/// <summary>What a step on the values page is: a value as it was recorded, which the person may tick; a value made a
-/// variable on the bar while recording (ticked, and its name can change); or a secret (ticked for good, shown by its
-/// variable's name only).</summary>
+/// <summary>What a step on the values page is: a value as it was recorded, which the person may tick; a value that is a
+/// variable already, because it held <c>{{</c> (ticked, and its name can change); or a secret (ticked for good, shown
+/// by its variable's name only).</summary>
 public enum ValueKind { Recorded, Variable, Secret }
 
 /// <summary>
@@ -29,9 +29,9 @@ public sealed record ValueRow(int Index, RecordedStep Step, ValueKind Kind, stri
 
 /// <summary>
 /// The page the bar shows after Finish, before the name and Save: "Which of these change from run to run?", with every
-/// step that typed a value or chose an item. Each ticked value becomes a run variable, as Make variable… makes it: its
-/// recorded value is kept beside it as its start value (<see cref="Session.MarkVariable"/>), never for a secret. A
-/// secret shows its variable's name, never a value.
+/// step that typed a value or chose an item. It is the one place where a value becomes a run variable: its recorded
+/// value is kept beside it as its start value (<see cref="Session.MarkVariable"/>), never for a secret. A secret shows
+/// its variable's name, never a value.
 /// </summary>
 public static class ValuesPage
 {
@@ -50,7 +50,7 @@ public static class ValuesPage
     /// <summary>Why a tick cannot be taken off (null when it can).</summary>
     public static string? Tip(ValueRow row) => row.Kind switch
     {
-        ValueKind.Variable => "Made a variable while recording, so it stays one. Its name can change below.",
+        ValueKind.Variable => "Its recorded value held {{, which a step cannot type as text, so it is a variable. Its name can change below.",
         ValueKind.Secret => "A secret stays a secret: its typed value is not in the recording.",
         _ => null,
     };
@@ -92,7 +92,8 @@ public static class ValuesPage
     }
 
     /// <summary>What is wrong with the name of a ticked value, with its step's number, or null when Continue can apply
-    /// the page. Names are checked as the variable question checks them; two values may share a name (one variable).</summary>
+    /// the page. Names are checked as the bar's other name questions check them; two values may share a name (one
+    /// variable).</summary>
     public static string? Problem(IEnumerable<ValueRow> rows) =>
         rows.Where(r => r.NameEditable).Select(r => DialogText.NameProblem(r.Name, []) is { } problem ? $"Step {r.Number}: {problem}" : null)
             .FirstOrDefault(p => p is not null);
