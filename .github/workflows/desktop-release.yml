@@ -351,7 +351,7 @@ jobs:
             echo
             echo "The attestation shows which workflow of this repository attested the zip, from which tag and commit. It does not show that the commit was reviewed, or that the zip is what the source code would build elsewhere."
             echo
-            echo "${tick}Get-Rpa.ps1${tick} does the download, these two checks (the attestation with the GitHub CLI where it is installed), the unpack and the install in one command, in an administrator Windows PowerShell: ${tick}.\\Get-Rpa.ps1 -AllowFrom <n8n address>${tick}. It names the zip's SHA-256 and is attested too: where the GitHub CLI is not installed, check the attestation of ${tick}Get-Rpa.ps1${tick} on another machine with the command above and add ${tick}-AttestationChecked${tick}."
+            echo "${tick}Get-Rpa.ps1${tick} does the download, the hash check, the unpack and the install in one command, in an administrator Windows PowerShell: ${tick}.\\Get-Rpa.ps1 -AllowFrom <n8n address>${tick}. It checks the attestation too where the GitHub CLI is installed and signed in, and otherwise says that it did not; ${tick}-RequireAttestation${tick} makes that check mandatory. It names the zip's SHA-256 and is attested too, so the command above run on ${tick}Get-Rpa.ps1${tick} covers the zip."
             echo
             echo "Details: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${tag}/desktop/README.md#releasing-the-windows-package"
           } > "$RUNNER_TEMP/notes/notes.md"

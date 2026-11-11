@@ -4009,7 +4009,7 @@ Describe 'Get-Rpa.ps1' {
     $installer = [Management.Automation.Language.Parser]::ParseFile((Join-Path $script:InstallerDir 'Install-Rpa.ps1'), [ref]$null, [ref]$null).ParamBlock.Parameters
     $texts = @($own | ForEach-Object { $_.Extent.Text })
     foreach ($parameter in $installer) { $texts | Should -Contain $parameter.Extent.Text }
-    @($own | ForEach-Object { $_.Name.VariablePath.UserPath } | Where-Object { @($installer | ForEach-Object { $_.Name.VariablePath.UserPath }) -notcontains $_ }) | Should -BeExactly @('Zip', 'AttestationChecked')
+    @($own | ForEach-Object { $_.Name.VariablePath.UserPath } | Where-Object { @($installer | ForEach-Object { $_.Name.VariablePath.UserPath }) -notcontains $_ }) | Should -BeExactly @('Zip', 'RequireAttestation')
   }
 
   It 'passes on to Install-Rpa.ps1 exactly what it was given, a password as the same SecureString, and -Unattended:$false as given' {
@@ -4018,7 +4018,7 @@ Describe 'Get-Rpa.ps1' {
     $installerBlock = [Management.Automation.Language.Parser]::ParseFile((Join-Path $script:InstallerDir 'Install-Rpa.ps1'), [ref]$null, [ref]$null).ParamBlock.Extent.Text
     $fake = [scriptblock]::Create("[CmdletBinding()]`n$installerBlock`n" + '$PSBoundParameters.Keys | Sort-Object | ForEach-Object { "{0}={1}" -f $_, (@($PSBoundParameters[$_]) -join ",") }; if ($UserPassword) { [object]::ReferenceEquals($UserPassword, $script:Secure) }')
     $script:Secure = New-Object Security.SecureString
-    $bound = & $capture -AllowFrom 10.0.0.5, 10.0.0.6 -Unattended:$false -UserPassword $script:Secure -IdleSeconds 30 -Zip 'C:\x.zip' -AttestationChecked -Force
+    $bound = & $capture -AllowFrom 10.0.0.5, 10.0.0.6 -Unattended:$false -UserPassword $script:Secure -IdleSeconds 30 -Zip 'C:\x.zip' -RequireAttestation -Force
     $arguments = Get-RpaInstallArguments $bound
     @($arguments.Keys | Sort-Object) | Should -BeExactly @('AllowFrom', 'Force', 'IdleSeconds', 'Unattended', 'UserPassword')
     & $fake @arguments | Should -BeExactly @('AllowFrom=10.0.0.5,10.0.0.6', 'Force=True', 'IdleSeconds=30', 'Unattended=False', 'UserPassword=System.Security.SecureString', 'True')
@@ -4098,6 +4098,86 @@ Describe 'Get-Rpa.ps1' {
       if ($env:OS -eq 'Windows_NT') { (Expand-RpaPackage $zip.Zip $zip.Sha '' '' $root $swap).Version | Should -BeExactly '0.3.0' }
       $source = Get-Content -Raw -LiteralPath $script:GetRpa
       $source | Should -Match ([regex]::Escape("[IO.File]::Open(`$ZipPath, 'Open', 'Read', 'Read')"))
+    }
+  }
+
+  # A stand-in for gh.exe: exit codes for "auth status" and "attestation verify" from RPA_FAKE_AUTH and RPA_FAKE_VERIFY,
+  # and each call written to RPA_FAKE_LOG.
+  Context 'the build attestation' {
+    BeforeAll {
+      $script:FakeGh = Join-Path $script:GetRoot 'gh.exe'
+      $script:GhLog = Join-Path $script:GetRoot 'gh.log'
+      if ($env:OS -eq 'Windows_NT') {
+        Add-Type -OutputType ConsoleApplication -OutputAssembly $script:FakeGh -TypeDefinition @'
+using System;
+public static class Program {
+  public static int Main(string[] args) {
+    System.IO.File.AppendAllText(Environment.GetEnvironmentVariable("RPA_FAKE_LOG"), string.Join(" ", args) + "\n");
+    if (args.Length > 0 && args[0] == "auth") return int.Parse(Environment.GetEnvironmentVariable("RPA_FAKE_AUTH"));
+    Console.WriteLine("made-up verify output");
+    return int.Parse(Environment.GetEnvironmentVariable("RPA_FAKE_VERIFY"));
+  }
+}
+'@
+      } else {
+        [IO.File]::WriteAllText($script:FakeGh, "#!/bin/sh`nprintf '%s\n' `"`$*`" >> `"`$RPA_FAKE_LOG`"`nif [ `"`$1`" = auth ]; then exit `$RPA_FAKE_AUTH; fi`necho made-up verify output`nexit `$RPA_FAKE_VERIFY`n")
+        & chmod +x $script:FakeGh
+      }
+      $env:RPA_FAKE_LOG = $script:GhLog
+      $script:Command = 'gh attestation verify rpa-windows-x64.zip --repo jb-n8n/n8n-nodes-rpa --signer-workflow jb-n8n/n8n-nodes-rpa/.github/workflows/desktop-release.yml --source-ref refs/tags/desktop-v0.3.0'
+      $script:Why = "It shows that this project's release workflow built the zip; the hash only shows that the zip is the file published beside this script."
+      function Set-FakeGh([int]$Auth, [int]$Verify) { $env:RPA_FAKE_AUTH = "$Auth"; $env:RPA_FAKE_VERIFY = "$Verify"; Remove-Item -LiteralPath $script:GhLog -ErrorAction SilentlyContinue }
+      function Get-GhCalls { if (Test-Path -LiteralPath $script:GhLog) { @(Get-Content -LiteralPath $script:GhLog) } else { @() } }
+    }
+    AfterAll { Remove-Item -LiteralPath env:RPA_FAKE_LOG, env:RPA_FAKE_AUTH, env:RPA_FAKE_VERIFY -ErrorAction SilentlyContinue }
+
+    It 'without the GitHub CLI goes on, and says in one line that the attestation was NOT checked, why it matters and how to check it' {
+      $missing = Join-Path $script:GetRoot 'no-gh.exe'
+      Get-RpaGhState $missing | Should -BeExactly 'missing'
+      $result = Test-RpaAttestation $missing 'missing' 'C:\x\rpa-windows-x64.zip' '0.3.0' $false
+      $result.Refusal | Should -BeNullOrEmpty
+      $result.Line | Should -BeExactly ("The build attestation was NOT checked: the GitHub CLI is not installed here ($missing). $($script:Why) To check it on a machine with gh: $($script:Command)")
+    }
+
+    It 'with a GitHub CLI that is not signed in goes on the same way, and does not ask it to verify' {
+      Set-FakeGh 1 0
+      Get-RpaGhState $script:FakeGh | Should -BeExactly 'signed out'
+      $result = Test-RpaAttestation $script:FakeGh 'signed out' 'C:\x\rpa-windows-x64.zip' '0.3.0' $false
+      $result.Refusal | Should -BeNullOrEmpty
+      $result.Line | Should -BeExactly ("The build attestation was NOT checked: the GitHub CLI here is not signed in (gh auth status). $($script:Why) To check it on a machine with gh: $($script:Command)")
+      Get-GhCalls | Should -BeExactly @('auth status')
+    }
+
+    It 'with a signed-in GitHub CLI checks it: accepted goes on, refused stops, with and without -RequireAttestation' {
+      Set-FakeGh 0 0
+      Get-RpaGhState $script:FakeGh | Should -BeExactly 'ready'
+      foreach ($require in $false, $true) {
+        $result = Test-RpaAttestation $script:FakeGh 'ready' 'C:\x\rpa-windows-x64.zip' '0.3.0' $require
+        $result.Refusal | Should -BeNullOrEmpty
+        $result.Line | Should -BeExactly 'The attestation: gh accepted it (desktop-release.yml of jb-n8n/n8n-nodes-rpa, tag desktop-v0.3.0).'
+      }
+      (Get-GhCalls)[-1] | Should -BeExactly 'attestation verify C:\x\rpa-windows-x64.zip --repo jb-n8n/n8n-nodes-rpa --signer-workflow jb-n8n/n8n-nodes-rpa/.github/workflows/desktop-release.yml --source-ref refs/tags/desktop-v0.3.0'
+      Set-FakeGh 0 1
+      foreach ($require in $false, $true) {
+        (Test-RpaAttestation $script:FakeGh 'ready' 'C:\x\rpa-windows-x64.zip' '0.3.0' $require).Refusal | Should -BeExactly 'gh attestation verify did not accept C:\x\rpa-windows-x64.zip (exit code 1): made-up verify output'
+      }
+    }
+
+    It 'with -RequireAttestation stops when the GitHub CLI is <State>, without asking it to verify' -ForEach @(
+      @{ State = 'missing'; Reason = 'the GitHub CLI is not installed here ({0})' }
+      @{ State = 'signed out'; Reason = 'the GitHub CLI here is not signed in (gh auth status)' }
+    ) {
+      Set-FakeGh 1 0
+      $result = Test-RpaAttestation $script:FakeGh $State 'C:\x\rpa-windows-x64.zip' '0.3.0' $true
+      $result.Refusal | Should -BeExactly ('-RequireAttestation: the build attestation cannot be checked: {0}. Install the GitHub CLI here and sign it in (gh auth login), then run this again.' -f ($Reason -f $script:FakeGh))
+      @(Get-GhCalls | Where-Object { $_ -like 'attestation*' }).Count | Should -Be 0
+    }
+
+    It 'stops before the download when -RequireAttestation cannot be met, and otherwise checks before the unpack' {
+      $source = Get-Content -Raw -LiteralPath $script:GetRpa
+      $source | Should -Match ([regex]::Escape("`$ghState = Get-RpaGhState `$gh"))
+      $source.IndexOf('$early = Test-RpaAttestation') | Should -BeLessThan $source.IndexOf('Invoke-WebRequest')
+      $source | Should -Not -Match 'AttestationChecked'
     }
   }
 
