@@ -14,7 +14,7 @@ const TEMPLATES = fileURLToPath(new URL('../../../packages/n8n-nodes-rpa/templat
 const API_KEY = 'n8n-api-key-0123456789-abcdefghij';
 const TOKEN = 'rpa-browser-token-ZYXWVUTSRQPONMLKJIHGFEDCBA-0123456789';
 const ENDPOINT = 'ws://rpa-browser.n8n.svc.cluster.local:3000/';
-const EXPECTED = ['RPA: 0 Connection check', 'RPA: 1 Create tables (run once)', 'RPA: 2 Data feed', 'RPA: 3 Approve steps', 'RPA: Hello world'];
+const EXPECTED = ['RPA: 0 Connection check', 'RPA: 2 Data feed', 'RPA: 3 Approve steps', 'RPA: Hello world'];
 // The fields of the RPA Browser credential (credentials/PlaywrightBrowserApi.credentials.ts), as n8n 2.41's
 // GET /api/v1/credentials/schema/playwrightBrowserApi derives them (toJsonSchema: notices included, nothing required).
 const SCHEMA = {
@@ -118,7 +118,7 @@ test('creates the credential and imports the templates without echoing the token
       assert.ok(!JSON.stringify(w).includes('"credentials"'), `${w.name} carries no credential`);
     }
     const file = readFileSync(join(TEMPLATES, '2-data-feed.json'), 'utf8');
-    assert.deepEqual(imported[2].nodes, JSON.parse(file).nodes);
+    assert.deepEqual(imported[1].nodes, JSON.parse(file).nodes);
 
     // Every request carried the key in the header, and no request put a secret in its URL.
     for (const r of n8n.state.requests) {
@@ -127,7 +127,7 @@ test('creates the credential and imports the templates without echoing the token
     }
     for (const name of ['RPA Browser', ...EXPECTED]) assert.match(out, new RegExp(`created.*${name.replace(/[()]/g, '\\$&')}`, 'i'));
     // The remaining steps.
-    assert.match(out, /RPA: 1 Create tables \(run once\)/);
+    assert.match(out, /creates the two Data Tables on its first run/);
     assert.match(out, /pick/i);
   } finally {
     await n8n.close();

@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { USE_CASE_WORDS } from 'n8n-rpa-engine';
 import {
   BROWSER_CERT_NOT_TRUSTED, BROWSER_CERT_NOT_TRUSTED_CDP, BROWSER_FINGERPRINT_INVALID, BROWSER_FINGERPRINT_MISMATCH, BROWSER_FINGERPRINT_NEEDS_WSS,
   IMPORT_EMPTY, IMPORT_NEEDS_SITE_LOGIN, IMPORT_NOT_ADOPTABLE, IMPORT_PROOF_FAILED, IMPORT_REFUSES_WRITES, IMPORT_UNSUPPORTED_TARGET,
@@ -10,7 +11,6 @@ import { RUN_TABLE_COLUMNS, STEPS_TABLE_COLUMNS } from '../nodes/Playwright/rows
 
 const root = new URL('../../../', import.meta.url);
 const readme = readFileSync(new URL('README.md', root), 'utf8');
-const USE_CASE_WORDS = /\b(portal|recall|notice|dealer)s?\b/i;
 
 const HEADINGS = [
   'What it is', 'Hello world in 10 minutes', 'Operations', 'Where the browser runs', 'Safety model', 'Locators',
@@ -67,9 +67,9 @@ describe('README', () => {
     ]) expect(s, text).toContain(text);
   });
 
-  it('documents the six templates by file name and workflow name', () => {
+  it('documents the five templates by file name and workflow name', () => {
     const s = section('## The self-healing data feed');
-    for (const [f, name] of [['0-connection-check.json', 'RPA: 0 Connection check'], ['1-create-tables.json', 'RPA: 1 Create tables (run once)'],
+    for (const [f, name] of [['0-connection-check.json', 'RPA: 0 Connection check'],
       ['2-data-feed.json', 'RPA: 2 Data feed'], ['3-approve-steps.json', 'RPA: 3 Approve steps'], ['5-import-a-bot.json', 'RPA: 5 Import a bot'],
       ['hello-world.json', 'RPA: Hello world']]) {
       expect(s, f).toContain(`| \`${f}\` | \`${name}\` |`);

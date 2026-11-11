@@ -11,38 +11,12 @@ import { buildWorkflow, MAX_WORKFLOW_NODES, workflowFile, type WorkflowJson, typ
 import { RPA_NODE_TYPE } from '../nodes/Playwright/node-type.js';
 import { Playwright } from '../nodes/Playwright/Playwright.node.js';
 import { RUN_TABLE, RUN_TABLE_COLUMNS, STEPS_TABLE, STEPS_TABLE_COLUMNS } from '../nodes/Playwright/rows.js';
+import { WORKFLOW_NODE_TYPES } from './fixtures.js';
 
 const PACKAGE = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { name: string };
 const NODE_TYPE = `${PACKAGE.name}.playwright`;
 const STICKY = 'n8n-nodes-base.stickyNote';
 const COLOUR = { green: 4, gold: 2, grey: 7 } as const;
-/** Every node type and version the generator may emit, as they exist in n8n 2.41 (nodes-base at tag n8n@2.41.0). */
-const TYPES: Record<string, number> = {
-  'n8n-nodes-base.manualTrigger': 1,
-  'n8n-nodes-base.stickyNote': 1,
-  'n8n-nodes-base.dataTable': 1.1,
-  [NODE_TYPE]: 1,
-  'n8n-nodes-base.awsS3': 2,
-  'n8n-nodes-base.extractFromFile': 1.1,
-  'n8n-nodes-base.convertToFile': 1.1,
-  'n8n-nodes-base.httpRequest': 4.2,
-  'n8n-nodes-base.emailSend': 2.1,
-  'n8n-nodes-base.wait': 1.1,
-  'n8n-nodes-base.if': 2.2,
-  // Each Run steps' Chat model (nodes-langchain at tag n8n@2.41.0) and its Approve steps.
-  '@n8n/n8n-nodes-langchain.lmChatAnthropic': 1.5,
-  'n8n-nodes-base.executeWorkflow': 1.2,
-  // Off until a person sets the time (ScheduleTrigger.node.ts at tag n8n@2.41.0 has versions 1 to 1.2 and later).
-  'n8n-nodes-base.scheduleTrigger': 1.2,
-};
-const CHAT = '@n8n/n8n-nodes-langchain.lmChatAnthropic';
-const EXECUTE = 'n8n-nodes-base.executeWorkflow';
-/** Template 2's Chat model and Approve steps parameters: no credential, the approval workflow left for the user to pick. */
-const CHAT_PARAMETERS = { model: { __rl: true, mode: 'id', value: 'claude-sonnet-5-5' }, options: {} };
-const APPROVE_PARAMETERS = {
-  source: 'database', workflowId: { __rl: true, mode: 'list', value: '', cachedResultName: 'RPA: 3 Approve steps' }, mode: 'once', options: { waitForSubWorkflow: false },
-};
-const TEMPLATE_2 = JSON.parse(readFileSync(new URL('../templates/2-data-feed.json', import.meta.url), 'utf8')) as WorkflowJson;
 /** The only n8n expressions a generated workflow holds: the signed row read by Run steps. UiPath text never becomes one. */
 const OWN_EXPRESSIONS = ["={{ $json.steps ?? '' }}", '={{ $json.signature }}', '={{ $json.approvedBy }}', '={{ $json.version }}'];
 /** S3's Input Binary Field: the name Run steps gave its last file, with the imported draft's name as the fallback. */
@@ -90,9 +64,6 @@ const byName = (w: WorkflowJson, name: string): WorkflowNode => {
   return n;
 };
 const targets = (w: WorkflowJson, from: string) => (w.connections[from]?.main ?? []).map((out) => out.map((c) => c.node));
-/** The nodes whose ai_languageModel output goes to `to`. */
-const models = (w: WorkflowJson, to: string) =>
-  Object.entries(w.connections).filter(([, byType]) => (byType.ai_languageModel ?? []).some((out) => out.some((c) => c.node === to))).map(([from]) => from);
 const working = (w: WorkflowJson) => w.nodes.filter((n) => n.type !== STICKY);
 const stickies = (w: WorkflowJson) => w.nodes.filter((n) => n.type === STICKY);
 const content = (n: WorkflowNode) => (n.parameters as { content: string }).content;
@@ -109,7 +80,7 @@ function lint(w: WorkflowJson): void {
   expect(new Set(w.nodes.map((n) => n.name)).size).toBe(w.nodes.length);
   expect(new Set(w.nodes.map((n) => n.id)).size).toBe(w.nodes.length);
   for (const n of w.nodes) {
-    expect(TYPES[n.type], `${n.name}: ${n.type}`).toBe(n.typeVersion);
+    expect(WORKFLOW_NODE_TYPES[n.type], `${n.name}: ${n.type}`).toBe(n.typeVersion);
     expect(n.position).toHaveLength(2);
     expect(n.position.every((p) => Number.isFinite(p))).toBe(true);
     expect(typeof n.parameters).toBe('object');
@@ -147,11 +118,11 @@ function lint(w: WorkflowJson): void {
   for (const n of runs) {
     expect(n.parameters.aiRepair, n.name).toBe(false);
     expect(n.parameters, n.name).not.toHaveProperty('goal');
-    expect(models(w, n.name), n.name).toEqual([]);
     expect(targets(w, n.name).length, n.name).toBeLessThanOrEqual(1);
     if (!n.credentials) expect(n.notes, n.name).toContain('To let it repair itself when the site changes:\n1. Connect a chat model to its Model input (after step 2).\n2. Turn on AI Repair here and write the Goal in plain words.\n3. Connect its Repaired Steps output to an Execute Workflow node that calls RPA: 3 Approve steps.');
   }
-  expect(w.nodes.filter((x) => x.type === CHAT || x.type === EXECUTE)).toEqual([]);
+  // Main connections only: no node feeds a Model input.
+  for (const byType of Object.values(w.connections)) expect(Object.keys(byType)).toEqual(['main']);
   // Data Tables: only known tables and columns.
   for (const n of w.nodes.filter((x) => x.type === 'n8n-nodes-base.dataTable')) {
     const p = n.parameters as { dataTableId: { value: string }; filters?: { conditions: { keyName: string }[] } };
@@ -365,11 +336,10 @@ describe('buildWorkflow', () => {
     }
     // No Model input and no repair branch: the workflow runs as generated.
     expect(workflow.getParentNodes('Use Browser Chrome: SAP Logon', 'ai_languageModel')).toEqual([]);
-    // Every working node is reachable from the trigger, the Chat model through the Run steps it serves; no sticky is connected.
+    // Every working node is reachable from the trigger; no sticky is connected.
     const reached = new Set(workflow.getChildNodes('Run the bot'));
-    for (const n of working(w).filter((x) => !['Run the bot', 'On a schedule'].includes(x.name) && x.type !== CHAT)) expect(reached, n.name).toContain(n.name);
+    for (const n of working(w).filter((x) => !['Run the bot', 'On a schedule'].includes(x.name))) expect(reached, n.name).toContain(n.name);
     expect(workflow.getChildNodes('On a schedule')).toEqual(workflow.getChildNodes('Run the bot'));
-    for (const n of working(w).filter((x) => x.type === CHAT)) expect(reached).toContain(workflow.getChildNodes(n.name, 'ai_languageModel')[0]);
     for (const s of stickies(w)) expect(reached.has(s.name)).toBe(false);
     expect(workflow.getParentNodes('Run the bot')).toEqual([]);
   });
@@ -448,7 +418,7 @@ describe('buildWorkflow', () => {
     ]), [draft('n-1')], { name: 'n' });
     lint(h);
     expect(byName(h, 'Not translated: Browser').parameters).toMatchObject({ color: COLOUR.grey });
-    expect(content(byName(h, 'Not translated: Browser'))).toContain('no draft named n-2');
+    expect(content(byName(h, 'Not translated: Browser'))).toContain('no step list named n-2');
     expect(working(h).map((n) => n.name).slice(2, 4)).toEqual(['Wait', 'Wait 2']);
     for (const n of h.nodes) expect(n.name.length).toBeLessThanOrEqual(100);
     expect(targets(h, 'Run the bot')).toEqual([['Wait']]);

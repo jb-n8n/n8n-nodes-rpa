@@ -3,6 +3,7 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { strToU8, zipSync } from 'fflate';
 import { afterEach, describe, expect, it } from 'vitest';
+import { APPROVER } from './fixtures.js';
 import type { IDataObject, INodeExecutionData } from 'n8n-workflow';
 import * as engine from 'n8n-rpa-engine';
 import { ERP_PASSWORD, ERP_POLICY, ERP_USER, erpCsv, erpLineItems, FakeRunner } from '../../engine/test/fake-runner.js';
@@ -17,7 +18,6 @@ import { harness, type HarnessOptions } from './harness.js';
 
 // Golden strings are written out here on purpose (tests assert them verbatim, not through the constants).
 const KEY = 'desktop-import-signing-key-0123456789';
-const APPROVER = 'approver@example.com';
 const DIR = fileURLToPath(new URL('../../engine/test/fixtures/import/uipath-erp-desktop/', import.meta.url));
 
 function sampleZip(): Buffer {
@@ -79,8 +79,8 @@ describe('Import Steps with a UiPath desktop project', () => {
     expect(item.secretVariables).toEqual(['password']);
     // For the review page: Enter in the password field signs in, so it starts unticked there. Only a recording marks the
     // steps its import added (a UiPath project's waits come from its own activities).
-    expect(json.drafts).toEqual([expect.objectContaining({ signInKeys: [4] })]);
-    expect((json.drafts as IDataObject[])[0]).not.toHaveProperty('addedSteps');
+    expect(item.writeCandidates).toEqual([{ step: 4, intent: 'Press Enter in Password', signsIn: true }, { step: 16, intent: 'Click Save' }]);
+    expect((item.reviewSteps as IDataObject[]).filter((r) => r.added)).toEqual([]);
   });
 
   it('a project with browser steps still needs the RPA Browser credential', async () => {
@@ -168,7 +168,7 @@ describe('approving imported desktop steps: Sign Steps with Write Steps', () => 
     expect(await sign(item, { approved: false, writeSteps: '16' })).toMatchObject({ status: 'rejected', hash: item.hash, steps: '' });
   });
 
-  it('numbers the change list for desktop steps, and Sign Steps names the steps it signed as writes with their intents (I2)', async () => {
+  it('numbers the change list for desktop steps, and Sign Steps names the steps it signed as writes with their intents', async () => {
     const { repaired } = await importSample();
     const item = repaired[0].json;
     const lines = String(item.changeList).split('\n');
@@ -184,7 +184,7 @@ describe('approving imported desktop steps: Sign Steps with Write Steps', () => 
     expect(none).toMatchObject({ status: 'active', writeSteps: [], writeLine: 'Signed as writes: none' });
   });
 
-  it('says plainly that an unlisted step can still save unless the runner policy lists its control (I3)', async () => {
+  it('says plainly that an unlisted step can still save unless the runner policy lists its control', async () => {
     const { repaired } = await importSample();
     expect(String(repaired[0].json.safetyLine)).toContain(
       'candidate write: step 16 (Click Save) may save, post or submit',
@@ -269,9 +269,8 @@ describe('Import Steps with an RPA recording', () => {
     expect(String(item.safetyLine)).toContain('candidate write: step 16 (Click Save) may save, post or submit');
     // For the review page: the key that signs in (step 4, Enter in Password) and the steps the import added (the waits for
     // each window, the returned file). Shown only: neither is signed or reviewed.
-    expect((json.drafts as IDataObject[])[0]).toMatchObject({ signInKeys: [4], addedSteps: [1, 5, 12, 14, 17] });
-    expect(item).not.toHaveProperty('signInKeys');
-    expect(item).not.toHaveProperty('addedSteps');
+    expect(item.writeCandidates).toEqual([{ step: 4, intent: 'Press Enter in Password', signsIn: true }, { step: 16, intent: 'Click Save' }]);
+    expect((item.reviewSteps as IDataObject[]).flatMap((r, i) => (r.added ? [i + 1] : []))).toEqual([1, 5, 12, 14, 17]);
   });
 
   it('the approval evidence line for a recording says it was imported from a recording, and for a UiPath project it is unchanged', async () => {

@@ -48,7 +48,7 @@ export const QUICK_PROPERTIES: INodeProperties[] = [
 /**
  * Operations in menu order: the quick operations first (QUICK_OPERATION_OPTIONS), then the expert operations, Import
  * Steps last.
- * The order is logical on purpose. @n8n/eslint-plugin-community-nodes 0.35.0 has no option-sorting rule, so there is
+ * The order is logical on purpose. @n8n/eslint-plugin-community-nodes 0.37.0 has no option-sorting rule, so there is
  * nothing to disable here.
  */
 export const OPERATION_OPTIONS: INodePropertyOptions[] = [
@@ -63,13 +63,13 @@ export const OPERATION_OPTIONS: INodePropertyOptions[] = [
     name: 'Sign Steps',
     value: 'signSteps',
     action: 'Sign a repaired step list',
-    description: 'Advanced: sign a Repaired steps item from Run Steps after a person approved it, or record a rejection',
+    description: 'Advanced: sign a Repaired steps item from Run Steps or Import Steps after a person approved it, or record a rejection',
   },
   {
     name: 'Import Steps',
     value: 'importSteps',
     action: 'Import steps from a recording, code or a UiPath bot',
-    description: 'Advanced: turn a Chrome Recorder export, Playwright code or a UiPath project into steps for approval',
+    description: 'Advanced: turn a Chrome Recorder export, Playwright code, a UiPath project, an RPA recording or a step document into steps for approval',
   },
 ];
 

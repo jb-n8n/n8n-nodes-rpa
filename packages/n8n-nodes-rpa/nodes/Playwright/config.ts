@@ -143,15 +143,18 @@ export function parseReadPosts(value: string, label = 'Read-only request'): { ho
   });
 }
 
-/** Field labels a credential's error messages use. */
-interface SiteLabels { startKey: string; start: string; nav: string; sub: string; login: string; submit: string; read: string }
-const SITE_LOGIN_LABELS: SiteLabels = {
-  startKey: 'loginUrl', start: 'Login Page URL', nav: 'Sites the Browser May Open', sub: 'Sites It May Load Files From', login: 'Password page', submit: 'Form', read: 'Read-only request',
-};
+/** Field labels the Site Login's error messages use. */
+const SITE_LOGIN_LABELS = {
+  start: 'Login Page URL', nav: 'Sites the Browser May Open', sub: 'Sites It May Load Files From', login: 'Password page', submit: 'Form', read: 'Read-only request',
+} as const;
 
-/** A login credential → the engine's policy and secrets. Security settings only ever come from the credential. */
-function siteFromCredential(data: CredentialData, l: SiteLabels): SiteLogin {
-  const start = parseUrl(text(data, l.startKey));
+/**
+ * RPA Site Login credential (playwrightSiteLoginApi) → the engine's policy and secrets (SiteLogin). Security settings only
+ * ever come from the credential; policyFor adds writeMode and allowPrivateNetwork.
+ */
+export function siteLoginConfig(data: CredentialData): SiteLogin {
+  const l = SITE_LOGIN_LABELS;
+  const start = parseUrl(text(data, 'loginUrl'));
   if (!start) throw new ConfigError(`${l.start} must be a full URL such as https://example.com/login`);
   if (start.protocol !== 'https:' && start.protocol !== 'http:') throw new ConfigError(`${l.start} must use http or https`);
   if (start.username || start.password) throw new ConfigError(`${l.start} must not contain a username or password: use the Username and Password fields`);
@@ -182,11 +185,6 @@ function siteFromCredential(data: CredentialData, l: SiteLabels): SiteLogin {
     policy: { startUrl: start.href, navHosts, subresourceHosts, ...(frameHosts.length ? { frameHosts } : {}), login, allowedSubmits, ...(readPosts.length ? { readPosts } : {}) },
     secrets: { username, password, ...(totp ? { totpSecret: totp } : {}) },
   };
-}
-
-/** RPA Site Login credential (playwrightSiteLoginApi) → SiteLogin. policyFor adds writeMode and allowPrivateNetwork. */
-export function siteLoginConfig(data: CredentialData): SiteLogin {
-  return siteFromCredential(data, SITE_LOGIN_LABELS);
 }
 
 /** Upper bound for the RPA Browser credential's Slow Motion (ms). */

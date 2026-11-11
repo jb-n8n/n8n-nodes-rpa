@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { CODE_WORKFLOW_GUIDANCE, NO_TOTP_SECRET_GUIDANCE } from '../nodes/Playwright/errors.js';
+import { APPROVER } from './fixtures.js';
 import { NodeHelpers, NodeOperationError, type IDataObject, type INodeExecutionData } from 'n8n-workflow';
 import { isEmptySteps, MAX_BUDGET_MS, proposalDigest, scriptHash, type Proposal, type Script } from 'n8n-rpa-engine';
 import { ConfigError, MAX_SECONDS } from '../nodes/Playwright/config.js';
 import { memoryGuardStore, type GuardStore } from '../nodes/Playwright/guard-store.js';
 import { BREAKER_KEY, resetGuardsForTests, siteLoginKey } from '../nodes/Playwright/guard.js';
-import { executeRunSteps, parseStepsParam, readRunStepsParams } from '../nodes/Playwright/operations/runSteps.js';
+import { executeRunSteps } from '../nodes/Playwright/operations/runSteps.js';
+import { parseStepsParam, readRunStepsParams } from '../nodes/Playwright/operations/runStepsParams.js';
 import { Playwright } from '../nodes/Playwright/Playwright.node.js';
 import { agentOk, fakeEngine, scriptOk, taskFail } from './fake-engine.js';
 import { harness, type HarnessOptions } from './harness.js';
@@ -16,7 +19,6 @@ const KEY = 'run-steps-signing-key-0123456789abcdef';
 const TOKEN = 'tok-5d8e3a71';
 const USER = 'site-user-7c1';
 const PASS = 'site-pass-9f2';
-const APPROVER = 'approver@example.com';
 const SIGNATURE = 'ab'.repeat(32);
 const GOAL = 'Read every item; IDs look like SKU-1001.';
 const BROWSER = { mode: 'playwright', wsUrl: 'wss://browser.example.net/pw', token: TOKEN };
@@ -165,6 +167,13 @@ describe('Run Steps: trust and engine input', () => {
     expect(viewport({ width: 4000, height: 4000 })).toEqual({ width: 3840, height: 2160 });
     expect(viewport({ width: 320, height: 2160 })).toEqual({ width: 320, height: 2160 });
     expect(viewport({ width: 'wide', height: null })).toEqual({ width: 1280, height: 800 });
+  });
+  it('refuses a variable name the steps could not name, as the RPA Secret Variables credential does', () => {
+    const read = (name: string) => () => readRunStepsParams(ctx({ params: params({}, { variables: { values: [{ name, value: 'x' }] } }) }), 0);
+    for (const name of ['2026', 'from-date', 'a b']) {
+      expect(read(name)).toThrow(`Variable name "${name}" may only use letters, digits and underscores, and may not start with a digit`);
+    }
+    expect(read('from_2026')()).toMatchObject({ vars: { from_2026: 'x' } });
   });
   it('reads the documented defaults', () => {
     const p = readRunStepsParams(ctx(), 0);
@@ -590,7 +599,7 @@ describe('AI repair', () => {
   });
   it('agent-lane results that spent no model effort do not use up the repair', async () => {
     const before = [
-      taskFail('drift_detected', 'repair cannot record field extraction yet: update the script by hand', { lane: 'agent' }),
+      taskFail('drift_detected', 'repair cannot record field extraction yet: update the steps by hand', { lane: 'agent' }),
       taskFail('browser_unavailable', 'Could not connect to the browser server', { lane: 'agent', llmCalls: 0 }),
       taskFail('site_down', 'HTTP 503 at https://example.com/list', { lane: 'agent' }),
       taskFail('incomplete', 'run cancelled', { lane: 'agent', llmCalls: 0, tokens: 0 }),
@@ -795,9 +804,9 @@ describe('outputs', () => {
   it('an auth_blocked failure gets the description of its cause: the code workflow, no TOTP Secret, or neither', async () => {
     const cases: [string, string][] = [
       ['Sign in: detected:mfa_code: the one-time code workflow failed: it is not published: open the workflow set in Options → One-Time Code Workflow and click Publish (Workflow is not active and cannot be executed.)',
-        'auth_blocked: The One-Time Code Workflow gave no code; the first line says why. Run that workflow by itself until it returns one item with a code field, publish it, then run again.'],
-      ['Sign in: detected:mfa_code: the one-time code workflow did not return a code within 120 s', 'auth_blocked: The One-Time Code Workflow gave no code; the first line says why. Run that workflow by itself until it returns one item with a code field, publish it, then run again.'],
-      ['Sign in: detected:mfa_totp: the site asked for a one-time code and the Site Login has no TOTP Secret', 'auth_blocked: The site asked for a one-time code and the RPA Site Login has no TOTP Secret. Put the authenticator\'s seed in its TOTP Secret. To take the code from a workflow instead, set Options → One-Time Code Workflow (steps you wrote also need "source": "workflow" in the sign-in step).'],
+        `auth_blocked: ${CODE_WORKFLOW_GUIDANCE}`],
+      ['Sign in: detected:mfa_code: the one-time code workflow did not return a code within 120 s', `auth_blocked: ${CODE_WORKFLOW_GUIDANCE}`],
+      ['Sign in: detected:mfa_totp: the site asked for a one-time code and the Site Login has no TOTP Secret', `auth_blocked: ${NO_TOTP_SECRET_GUIDANCE}`],
       ['Sign in: detected:mfa_sms', 'auth_blocked: The site asked for a second factor that this run could not answer; the first line says which. A push message or a hardware key needs a person to sign in.'],
       // A detect step that found the code page is not the missing seed: the steps have no code step.
       ['Check sign-in: detected:mfa_totp', 'auth_blocked: The site asked for a second factor that this run could not answer; the first line says which. A push message or a hardware key needs a person to sign in.'],

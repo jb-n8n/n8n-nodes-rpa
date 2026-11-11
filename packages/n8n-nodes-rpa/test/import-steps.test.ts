@@ -3,6 +3,9 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { deflateRawSync, inflateRawSync } from 'node:zlib';
 import { afterEach, describe, expect, it } from 'vitest';
+import { CODE_WORKFLOW_GUIDANCE, NO_TOTP_SECRET_GUIDANCE } from '../nodes/Playwright/errors.js';
+import { NO_MODEL } from '../nodes/Playwright/operations/common.js';
+import { USE_CASE_WORDS } from 'n8n-rpa-engine';
 import { NodeHelpers, NodeOperationError, type IDataObject, type INodeExecutionData, type INodeProperties, type INodePropertyOptions } from 'n8n-workflow';
 import * as real from 'n8n-rpa-engine';
 import type { AdoptInput, AdoptResult, Draft, ImportResult, Script } from 'n8n-rpa-engine';
@@ -13,9 +16,11 @@ import { nodeInputs, nodeOutputs } from '../nodes/Playwright/description/io.js';
 import type { Engine } from '../nodes/Playwright/engine.js';
 import { resetGuardsForTests } from '../nodes/Playwright/guard.js';
 import { memoryGuardStore } from '../nodes/Playwright/guard-store.js';
-import { executeImportSteps, MAX_IMPORT_BYTES, STEPS_WITHHELD } from '../nodes/Playwright/operations/importSteps.js';
+import {
+  executeImportSteps, IMPORT_NEEDS_START, MAX_IMPORT_BYTES, NOT_TRIED_CANCELLED, SOURCE_UNKNOWN, STEPS_WITHHELD,
+} from '../nodes/Playwright/operations/importSteps.js';
 import { executeSignSteps } from '../nodes/Playwright/operations/signSteps.js';
-import { fullSafetyFlags } from '../nodes/Playwright/format.js';
+import { fullSafetyFlags, reviewSteps } from '../nodes/Playwright/format.js';
 import { repairedStepsJson } from '../nodes/Playwright/output.js';
 import type { WorkflowJson } from '../nodes/Playwright/import/workflow.js';
 import { DISPATCH, Playwright } from '../nodes/Playwright/Playwright.node.js';
@@ -33,8 +38,6 @@ const NAME_REQUIRED = 'Name is required: it names the imported steps.';
 const NAME_EQUALS = 'Name must not start with "=".';
 const CDP_DOWNLOAD =
   'Downloads need the Browser Server or Local Browser mode: a Chrome DevTools Protocol (CDP) connection cannot read downloaded files. Pick an RPA Browser credential in Browser Server mode for this node.';
-const NO_MODEL = 'AI repair is on but no chat model is connected. Connect one to the Model input.';
-const USE_CASE_WORDS = /\b(portal|recall|notice|dealer)s?\b/i;
 
 const SITE = { url: 'https://erp.example.com', host: 'erp.example.com' };
 const ENGINE_FIXTURES = new URL('../../engine/test/fixtures/import/', import.meta.url);
@@ -234,18 +237,16 @@ describe('Import Steps: the description', () => {
     ]);
     expect((OPERATIONS.options as INodePropertyOptions[]).at(-1)).toEqual({
       name: 'Import Steps', value: 'importSteps', action: 'Import steps from a recording, code or a UiPath bot',
-      description: 'Advanced: turn a Chrome Recorder export, Playwright code or a UiPath project into steps for approval',
+      description: 'Advanced: turn a Chrome Recorder export, Playwright code, a UiPath project, an RPA recording or a step document into steps for approval',
     });
     expect(Object.keys(DISPATCH)).toContain('importSteps');
   });
 
-  it('says that an import can take about twice Max Seconds, which must leave room for a TOTP wait, and only on Import Steps', () => {
+  it('one Max Seconds for every browser operation; Import Steps\' notice says that an import can take about twice it', () => {
     const maxSeconds = optionsFor('importSteps').filter((o) => o.name === 'maxSeconds');
     expect(maxSeconds).toHaveLength(1);
     expect(maxSeconds[0]).toMatchObject({ default: 180, typeOptions: { minValue: 10, maxValue: 600 } });
-    expect(maxSeconds[0].description).toContain('so it can take about twice this. On sites with an authenticator code, Max Seconds must leave room for up to a 30 s wait.');
-    // Every other operation shows the plain help, without the import sentence.
-    for (const op of ['runSteps', 'screenshot', 'download']) {
+    for (const op of ['importSteps', 'runSteps', 'screenshot', 'download']) {
       const other = optionsFor(op).filter((o) => o.name === 'maxSeconds');
       expect(other, op).toHaveLength(1);
       expect(other[0].description, op).toBe('One deadline for the whole run, AI repair and proof included');
@@ -288,7 +289,7 @@ describe('Import Steps: the description', () => {
     for (const t of texts) expect(t, t).not.toMatch(USE_CASE_WORDS);
     expect(texts.filter((t) => /playwright/i.test(t))).toEqual([
       'Playwright Code (JavaScript or TypeScript)',
-      'Advanced: turn a Chrome Recorder export, Playwright code or a UiPath project into steps for approval',
+      'Advanced: turn a Chrome Recorder export, Playwright code, a UiPath project, an RPA recording or a step document into steps for approval',
     ]);
   });
 });
@@ -321,12 +322,15 @@ describe('Import Steps: execution', () => {
     expect(input).not.toHaveProperty('trust');
     expect(JSON.stringify(input.draft)).not.toContain(SECRETS.password);
 
-    // Repaired Steps: exactly the item Run Steps emits for the same proposal, with what the import left out.
+    // Repaired Steps: exactly the item Run Steps emits for the same proposal, with what the import left out, plus its steps
+    // as the review page lists them (shown only).
     expect(repaired).toHaveLength(1);
     const proposal = (await proved(input)) as Extract<AdoptResult, { ok: true }>;
     const leftOut = (data[0].json.report as { items: { kind: string; at: string; what: string; reason: string }[] }).items
       .filter((i) => i.kind === 'untranslated' || (i.kind === 'dropped' && !(i as { notNeeded?: true }).notNeeded)).map((i) => `${i.at}, ${i.what}: ${i.reason}`);
-    expect(repaired[0].json).toEqual(repairedStepsJson(engine, { ...proposal.proposal, leftOut }, 'after'));
+    expect(repaired[0].json).toEqual({
+      ...repairedStepsJson(engine, { ...proposal.proposal, leftOut }, 'after'), reviewSteps: reviewSteps(proposal.proposal.steps.steps, { desktop: false }),
+    });
     expect(repaired[0].json).toMatchObject({ name: 'sap-export', baseVersion: null, version: 1 });
     expect(repaired[0].binary?.after).toMatchObject({ mimeType: 'image/png', fileName: 'after-v1.png' });
     expect(repaired[0].pairedItem).toEqual([{ item: 0 }]);
@@ -564,7 +568,7 @@ describe('Import Steps: execution', () => {
     const [data] = await run(engine, { params: params({ source: 'uipath', stepsName: 'sap-report' }) });
     expect(engine.adoptions).toHaveLength(1);
     expect((details(data[0]).drafts as IDataObject[]).map((x) => x.code)).toEqual(['login_failed', 'locked_out']);
-    expect(String(data[0].json.error)).toMatch(/^None of the 2 imported step lists could be adopted\. sap-report-1: login_failed: /);
+    expect(String(data[0].json.error)).toMatch(/^None of the 2 imported step lists could be replayed\. sap-report-1: login_failed: /);
     // The same execution's next import with that Site Login is locked out too, before any import.
     const next = importEngine((input) => proved(input));
     const [locked] = await run(next);
@@ -572,14 +576,50 @@ describe('Import Steps: execution', () => {
     expect((details(locked[0]).drafts as IDataObject[])[0]).toMatchObject({ code: 'locked_out' });
   });
 
-  it('adopts at most 10 drafts per import; the rest are reported, not tried', async () => {
+  it('refuses a Source it does not know, before reading the file', async () => {
+    const engine = importEngine((input) => proved(input));
+    const [data] = await run(engine, { params: params({ source: 'cobol' }) });
+    expect(data[0].json.error).toBe(SOURCE_UNKNOWN);
+    expect(engine.imports).toHaveLength(0);
+  });
+
+  it('a draft that opens no page, with no Start URL and no Site Login, is not replayed', async () => {
+    const { startUrl: _start, ...noStart } = chromeDraft('sap-export').script;
+    const engine = importEngine((input) => proved(input), () => ({ drafts: [{ name: 'sap-export', script: noStart as Script }], report: { source: 'chrome', steps: 9, items: [] } }));
+    const [data] = await run(engine, { credentials: { playwrightBrowserApi: BROWSER } });
+    expect(engine.adoptions).toHaveLength(0);
+    expect(details(data[0]).drafts).toEqual([expect.objectContaining({ adopted: false, code: 'policy_violation', reason: IMPORT_NEEDS_START })]);
+  });
+
+  it('a cancelled execution tries no draft, and the error says where the reasons are', async () => {
+    const engine = importEngine((input) => proved(input), uipathResult(2));
+    const ctx = nodeContext({ params: params({ source: 'uipath', stepsName: 'sap-report' }), items: [fileItem(CHROME)], credentials: CREDS as never, signal: AbortSignal.abort() }) as Harness;
+    const error = await run(engine, {}, ctx).then(() => undefined, (e: unknown) => e);
+    expect(engine.adoptions).toHaveLength(0);
+    expect(error).toBeInstanceOf(NodeOperationError);
+    expect((error as NodeOperationError).message).toBe(`None of the 2 imported step lists could be replayed. sap-report-1: ${NOT_TRIED_CANCELLED}`);
+    expect((error as NodeOperationError).description).toBe('No step list was replayed. The reasons are in details.drafts.');
+  });
+
+  it('a replay that throws is reported for its draft, and the next draft is still tried', async () => {
+    const engine = importEngine((input, call) => {
+      if (call === 0) throw new Error('the browser went away');
+      return proved(input);
+    }, uipathResult(2));
+    const [data, repaired] = await run(engine, { params: params({ source: 'uipath', stepsName: 'sap-report' }) });
+    expect(engine.adoptions).toHaveLength(2);
+    expect(repaired).toHaveLength(1);
+    expect(drafts(data[0])[0]).toMatchObject({ adopted: false, code: 'incomplete', reason: 'the replay stopped unexpectedly: the browser went away' });
+  });
+
+  it('replays at most 10 drafts per import; the rest are reported, not tried', async () => {
     const engine = importEngine((input) => proved(input), uipathResult(12));
     const [data, repaired] = await run(engine, { params: params({ source: 'uipath', stepsName: 'sap-report' }) });
     expect(engine.adoptions).toHaveLength(10);
     expect(repaired).toHaveLength(10);
     const rest = drafts(data[0]).slice(10);
     expect(rest.map((x) => x.name)).toEqual(['sap-report-11', 'sap-report-12']);
-    for (const x of rest) expect(x).toMatchObject({ adopted: false, reason: 'not tried: an import adopts at most 10 step lists' });
+    for (const x of rest) expect(x).toMatchObject({ adopted: false, reason: 'not tried: an import replays at most 10 step lists' });
   });
 
   it('AI Repair with a model heals a drift; one repair per execution, so a later draft gets none', async () => {
@@ -660,7 +700,7 @@ describe('Import Steps: execution', () => {
       expect(error).toBeInstanceOf(NodeOperationError);
       expect((error as NodeOperationError).message).toBe(`auth_blocked: ${message}`);
       expect((error as NodeOperationError).description).toBe(
-        'auth_blocked: The site asked for a one-time code and the RPA Site Login has no TOTP Secret. Put the authenticator\'s seed in its TOTP Secret. To take the code from a workflow instead, set Options → One-Time Code Workflow (steps you wrote also need "source": "workflow" in the sign-in step).',
+        `auth_blocked: ${NO_TOTP_SECRET_GUIDANCE}`,
       );
       expect(engine.adoptions[0]).not.toHaveProperty('codeProvider');
     });
@@ -682,7 +722,7 @@ describe('Import Steps: execution', () => {
         'auth_blocked: Sign in with an authentication code: detected:mfa_code: the one-time code workflow failed: it is not published: open the workflow set in Options → One-Time Code Workflow and click Publish (Workflow is not active and cannot be executed.)',
       );
       expect((error as NodeOperationError).description).toBe(
-        'auth_blocked: The One-Time Code Workflow gave no code; the first line says why. Run that workflow by itself until it returns one item with a code field, publish it, then run again.',
+        `auth_blocked: ${CODE_WORKFLOW_GUIDANCE}`,
       );
     });
 
@@ -819,7 +859,7 @@ describe('Import Steps: execution', () => {
     // Several drafts, all failed: the first failure's are `screenshot` and `trace`, the others' `trace-<n>`.
     const allFailed = importEngine(drift, uipathResult(2));
     const [error] = await run(allFailed, { params: params({ source: 'uipath', stepsName: 'sap-report', options: { variables: VARIABLES, saveTrace: 'onFailure' } }) });
-    expect(String(error[0].json.error)).toMatch(/^None of the 2 imported step lists could be adopted\./);
+    expect(String(error[0].json.error)).toMatch(/^None of the 2 imported step lists could be replayed\./);
     expect(Object.keys(error[0].binary ?? {}).sort()).toEqual(['screenshot', 'trace', 'trace-1', 'workflow']);
     expect((details(error[0]).drafts as IDataObject[]).map((x) => x.traceRef)).toEqual(['trace', 'trace-1']);
   });

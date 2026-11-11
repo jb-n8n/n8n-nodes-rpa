@@ -3,6 +3,9 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { deflateRawSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
+import { NOT_REPLAYED_EVIDENCE_LINE, reviewSteps } from '../nodes/Playwright/format.js';
+import { USE_CASE_WORDS } from 'n8n-rpa-engine';
+import { APPROVER } from './fixtures.js';
 import {
   NodeHelpers, Workflow, type IDataObject, type INodeExecutionData, type INodeParameters, type INodeProperties, type INodeTypes,
 } from 'n8n-workflow';
@@ -39,7 +42,6 @@ type TableParams = {
 
 const FILES = {
   '0-connection-check.json': 'RPA: 0 Connection check',
-  '1-create-tables.json': 'RPA: 1 Create tables (run once)',
   '2-data-feed.json': 'RPA: 2 Data feed',
   '3-approve-steps.json': 'RPA: 3 Approve steps',
   '5-import-a-bot.json': 'RPA: 5 Import a bot',
@@ -49,7 +51,6 @@ const load = (file: string): Template => JSON.parse(readFileSync(new URL(`../tem
 const NODE_TYPE = 'n8n-nodes-rpa.playwright';
 const STICKY = 'n8n-nodes-base.stickyNote';
 const DATA_TABLE = 'n8n-nodes-base.dataTable';
-const USE_CASE_WORDS = /\b(portal|recall|notice|dealer)s?\b/i;
 /** n8n sticky colours (design-system tokens --sticky--color--background--variant-N): 4 green, 2 gold (n8n's nearest to orange), 7 grey. */
 const COLOUR = { green: 4, gold: 2, grey: 7 } as const;
 const SETTINGS_NAME = "$('Settings').item.json.name";
@@ -57,7 +58,6 @@ const SETTINGS_NAME = "$('Settings').item.json.name";
 const SUPERSEDE_UP_TO = "={{ $('Repaired steps received').item.json.baseVersion === null ? 2147483647 : $('Repaired steps received').item.json.version }}";
 const AI_REPAIR = "={{ $('Get pending').all().filter(i => i.json.hash && DateTime.fromISO(i.json.expiresAt) > $now).length === 0 }}";
 const EXPIRES_AT = "={{ $now.plus({ hours: $('Settings').item.json.approvalTimeoutHours }).toISO() }}";
-const APPROVER = 'approver@example.com';
 /** Template 3 takes the approver from its Settings everywhere except the Approver Allowlist, which must be typed. */
 const SETTINGS_APPROVER = "={{ $('Settings').item.json.approver }}";
 
@@ -208,25 +208,6 @@ describe('every Data Table read and write uses the Settings name', () => {
   });
 });
 
-describe('1-create-tables.json', () => {
-  const t = load('1-create-tables.json');
-  it('creates both Data Tables with the documented columns, if they do not exist', () => {
-    const create = (name: string) => byName(t, name).parameters as { resource: string; operation: string; tableName: string; columns: { column: unknown[] }; options: IDataObject };
-    expect(create('Create steps table')).toMatchObject({ resource: 'table', operation: 'create', tableName: STEPS_TABLE, options: { createIfNotExists: true } });
-    expect(create('Create steps table').columns.column).toEqual(STEPS_TABLE_COLUMNS);
-    expect(create('Create run log table')).toMatchObject({ resource: 'table', operation: 'create', tableName: RUN_TABLE, options: { createIfNotExists: true } });
-    expect(create('Create run log table').columns.column).toEqual(RUN_TABLE_COLUMNS);
-    expect(targets(t, 'Run once')).toEqual([['Create steps table']]);
-    expect(targets(t, 'Create steps table')).toEqual([['Create run log table']]);
-    expect(t.nodes.map((n) => n.name).sort()).toEqual(['About this workflow', 'Create run log table', 'Create steps table', 'Run once']);
-  });
-  it('says that it is optional: templates 5 and 3 create the tables when they are missing', () => {
-    const about = sticky(t, 'About this workflow').content;
-    expect(about.split('\n')[0]).toBe('### Create the RPA Data Tables (optional; grey: leave as is)');
-    expect(about).toContain('**RPA: 5 Import a bot** and **RPA: 3 Approve steps** create these tables when they are missing');
-  });
-});
-
 describe('2-data-feed.json', () => {
   const t = load('2-data-feed.json');
   const run = byName(t, 'Run steps');
@@ -238,7 +219,7 @@ describe('2-data-feed.json', () => {
     expect(sticky(t, 'First run').color).toBe(COLOUR.grey);
     expect(sticky(t, 'Why signed steps').color).toBe(COLOUR.grey);
     const map = sticky(t, 'Set once').content;
-    for (const s of ['**RPA Browser**: Run steps', '**RPA Site Login**: Run steps', '**RPA Step Signing**: Run steps', '**Chat model**', '**Alert on failure**', 'RPA: 3 Approve steps', 'RPA: 1 Create tables (run once)']) {
+    for (const s of ['**RPA Browser**: Run steps', '**RPA Site Login**: Run steps', '**RPA Step Signing**: Run steps', '**Chat model**', '**Alert on failure**', 'RPA: 3 Approve steps', 'the two Data Tables are created on the first run']) {
       expect(map).toContain(s);
     }
     const checklist = sticky(t, 'Change per site').content;
@@ -255,7 +236,11 @@ describe('2-data-feed.json', () => {
   });
   it('Every 6 hours → Settings → Get pending → Get active steps → Run steps, with the chat model on the Model input', () => {
     expect(targets(t, 'Every 6 hours')).toEqual([['Settings']]);
-    expect(targets(t, 'Settings')).toEqual([['Get pending']]);
+    // The top branch first (v1 order): both Data Tables, created when they are missing, then the feed.
+    expect(targets(t, 'Settings')).toEqual([['Create steps table', 'Get pending']]);
+    expect(targets(t, 'Create steps table')).toEqual([['Create run log table']]);
+    expect(targets(t, 'Create run log table')).toEqual([]);
+    expect(byName(t, 'Create steps table').position[1]).toBeLessThan(byName(t, 'Get pending').position[1]);
     expect(targets(t, 'Get pending')).toEqual([['Get active steps']]);
     expect(targets(t, 'Get active steps')).toEqual([['Run steps']]);
     expect(targets(t, 'Chat model', 'ai_languageModel')).toEqual([['Run steps']]);
@@ -389,11 +374,13 @@ describe('2-data-feed.json', () => {
     expect(render(p.subject, scope(config))).toBe('RPA config_error on example-feed');
     expect(p.options.fileAttachments).toContain('$binary.trace');
   });
-  it('needs at most 9 working nodes: stickies, the chat model and the destination placeholder not counted', () => {
-    const working = t.nodes.filter((n) => ![STICKY, '@n8n/n8n-nodes-langchain.lmChatAnthropic', 'n8n-nodes-base.noOp'].includes(n.type)).map((n) => n.name);
+  it('needs at most 9 working nodes: stickies, the chat model, the two table creations and the destination placeholder not counted', () => {
+    const working = t.nodes
+      .filter((n) => ![STICKY, '@n8n/n8n-nodes-langchain.lmChatAnthropic', 'n8n-nodes-base.noOp'].includes(n.type) && (n.parameters as { operation?: string }).operation !== 'create')
+      .map((n) => n.name);
     expect(working.sort()).toEqual(['Alert on failure', 'Approve steps', 'Every 6 hours', 'Get active steps', 'Get pending', 'Log failed run', 'Log run', 'Run steps', 'Settings']);
-    // 16 nodes in total: 5 stickies, the chat model, the 9 working nodes and the destination placeholder.
-    expect(t.nodes).toHaveLength(16);
+    // 18 nodes in total: 5 stickies, the chat model, the 9 working nodes, the two table creations and the destination placeholder.
+    expect(t.nodes).toHaveLength(18);
     expect(t.nodes.filter((n) => n.type === STICKY)).toHaveLength(5);
     expect(t.nodes.filter((n) => n.type === 'n8n-nodes-base.noOp').map((n) => n.name)).toEqual(['Send data to destination']);
   });
@@ -402,7 +389,7 @@ describe('2-data-feed.json', () => {
 /** The heading both approval emails put over the steps an import left out. */
 const LEFT_OUT_HEADING = 'Left out by the import (the source does these, the steps do not):';
 /** The evidence line of browser steps that go to approval without a replay (format.ts), written out. */
-const NOT_REPLAYED_LINE = 'Not replayed: these browser steps were never run by the import, because they submit a form, download through a form, type a secret or change a password. Check every step, each form\'s target and each download before you approve.';
+const NOT_REPLAYED_LINE = NOT_REPLAYED_EVIDENCE_LINE;
 
 describe('3-approve-steps.json', () => {
   const t = load('3-approve-steps.json');
@@ -440,9 +427,16 @@ describe('3-approve-steps.json', () => {
     });
     expect(byName(t, 'Settings')).not.toHaveProperty('parameters.options.stripBinary');
   });
-  it('creates both Data Tables when they are missing, with the columns of template 1', () => {
-    const t1 = load('1-create-tables.json');
-    for (const name of ['Create steps table', 'Create run log table']) expect(byName(t, name).parameters).toEqual(byName(t1, name).parameters);
+  it('creates both Data Tables with the documented columns when they are missing', () => {
+    const create = (name: string) => byName(t, name).parameters as { resource: string; operation: string; tableName: string; columns: { column: unknown[] }; options: IDataObject };
+    expect(create('Create steps table')).toMatchObject({ resource: 'table', operation: 'create', tableName: STEPS_TABLE, options: { createIfNotExists: true } });
+    expect(create('Create steps table').columns.column).toEqual(STEPS_TABLE_COLUMNS);
+    expect(create('Create run log table')).toMatchObject({ resource: 'table', operation: 'create', tableName: RUN_TABLE, options: { createIfNotExists: true } });
+    expect(create('Create run log table').columns.column).toEqual(RUN_TABLE_COLUMNS);
+    // Templates 2 and 5 create them with the same parameters.
+    for (const file of ['2-data-feed.json', '5-import-a-bot.json']) {
+      for (const name of ['Create steps table', 'Create run log table']) expect(byName(load(file), name).parameters, `${file}: ${name}`).toEqual(byName(t, name).parameters);
+    }
   });
   it('Mark pending upserts by hash: status pending, expiresAt now + approvalTimeoutHours', () => {
     const p = table(byName(t, 'Mark pending'));
@@ -467,7 +461,7 @@ describe('3-approve-steps.json', () => {
     });
     expect(table(byName(t, 'Record rejection')).columns?.value).toEqual({ status: 'rejected', approvedBy: SETTINGS_APPROVER, approvedAt: '={{ $now.toISO() }}' });
   });
-  it('Supersede older versions runs after Save signed steps: every other active row of the same name up to the new version becomes superseded (I1)', () => {
+  it('Supersede older versions runs after Save signed steps: every other active row of the same name up to the new version becomes superseded', () => {
     expect(targets(t, 'Save signed steps')).toEqual([['Supersede older versions', 'Email signed steps']]);
     expect(targets(t, 'Supersede older versions')).toEqual([]);
     const n = table(byName(t, 'Supersede older versions'));
@@ -489,7 +483,7 @@ describe('3-approve-steps.json', () => {
     expect(byName(t, 'Supersede older versions').notes).toContain('An approved first version (an import) replaces every other active row of its name');
     expect(sticky(t, 'About this workflow').content).toContain('An approved import becomes the version that runs under its name, also when a higher version was active.');
   });
-  it('Email signed steps confirms what was signed, naming the steps signed as writes for desktop steps (I2); the hash and the review digest are one reference line at the end', () => {
+  it('Email signed steps confirms what was signed, naming the steps signed as writes for desktop steps; the hash and the review digest are one reference line at the end', () => {
     const p = byName(t, 'Email signed steps').parameters as { operation: string; toEmail: string; subject: string; text: string; emailFormat: string };
     expect(p).toMatchObject({ operation: 'send', toEmail: SETTINGS_APPROVER, emailFormat: 'text' });
     const reviewed = { hash: 'h0', digest: 'd0' };
@@ -1055,9 +1049,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     }
   });
 
-  it('creates both Data Tables when they are missing, with the columns of template 1, before the review page', () => {
-    const t1 = load('1-create-tables.json');
-    for (const name of ['Create steps table', 'Create run log table']) expect(byName(t, name).parameters).toEqual(byName(t1, name).parameters);
+  it('creates both Data Tables when they are missing, as template 3 does, before the review page', () => {
+    const t3 = load('3-approve-steps.json');
+    for (const name of ['Create steps table', 'Create run log table']) expect(byName(t, name).parameters).toEqual(byName(t3, name).parameters);
   });
 
   it('nothing reaches Save signed steps except an active record on the success output of Sign steps; Sign steps\' allowlist is typed', () => {
@@ -1197,11 +1191,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       fieldLabel: 'Which of these steps save, send or submit?', fieldName: 'writes_0', fieldType: 'checkbox',
       fieldOptions: { values: [{ option: 'Step 4: Press Enter in Password' }, { option: 'Step 16: Click Save' }] }, defaultValue: 'Step 16: Click Save',
     });
-    // Without the hints (an Import steps output from before them), every candidate starts ticked and no step is grey.
-    const bare = (data[0].json.drafts as IDataObject[]).map(({ signInKeys: _k, addedSteps: _a, ...d }) => d);
-    const older = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan({ ...ran, 'Import steps': [[{ json: { ...data[0].json, drafts: bare } }], repaired] }) });
-    expect(older[1].defaultValue).toBe('Step 4: Press Enter in Password,Step 16: Click Save');
-    expect(older[0].html).not.toMatch(/<i>|recorded steps/);
+    // The page places what Import steps built (reviewSteps, writeCandidates); it reads nothing from Data's drafts.
+    const noDrafts = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan({ ...ran, 'Import steps': [[{ json: { ...data[0].json, drafts: [] } }], repaired] }) });
+    expect(noDrafts).toEqual(fields);
     expect(fields[0].html).not.toContain('candidate');
     expect(fields[3]).toMatchObject({ fieldLabel: 'Any other step that saves, sends or submits (its number, optional)', placeholder: '7, 9' });
     expect(fields[3]).not.toHaveProperty('requiredField');
@@ -1260,8 +1252,8 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const { data, repaired } = await importedRecording();
     // A candidate whose intent holds a comma and angle brackets: n8n compares the ticked-to-start labels with the options
     // after its JSON-form escaping of < and > (not applied to options) and splits the start value at commas.
-    const flag = 'candidate write: step 3 (Save, then <b>close</b>) may save, post or submit';
-    const two = [repaired[0], { json: { ...repaired[0].json, name: 'second<b>', safetyFlags: [...(repaired[0].json.safetyFlags as string[]), flag] } }];
+    const candidate = { step: 3, intent: 'Save, then <b>close</b>' };
+    const two = [repaired[0], { json: { ...repaired[0].json, name: 'second<b>', writeCandidates: [...(repaired[0].json.writeCandidates as IDataObject[]), candidate] } }];
     const ran = { Settings: [[{ json: settingsJson() }]], 'Import steps': [data, two] } as Record<string, INodeExecutionData[][]>;
     const fields = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan(ran) });
     const html = fields.filter((f) => f.fieldType === 'html').map((f) => String(f.html));
@@ -1274,7 +1266,8 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(fields.filter((f) => f.fieldType === 'radio').map((f) => [f.fieldName, f.fieldLabel])).toEqual([['decision_0', `${String(two[0].json.name)}: Decision`], ['decision_1', 'second<b>: Decision']]);
     const ticks = fields.find((f) => f.fieldName === 'writes_1');
     expect(ticks?.fieldOptions?.values.map((v) => v.option)).toEqual(['Step 4: Press Enter in Password', 'Step 16: Click Save', 'Step 3: Save; then \u2039b\u203aclose\u2039/b\u203a']);
-    expect(ticks?.defaultValue?.split(',')).toEqual(ticks?.fieldOptions?.values.map((v) => v.option));
+    // Ticked to start with, but the key that signs in: the second list carries its own hints.
+    expect(ticks?.defaultValue?.split(',')).toEqual(['Step 16: Click Save', 'Step 3: Save; then \u2039b\u203aclose\u2039/b\u203a']);
     expect(ticks?.fieldLabel).toBe('second<b>: Which of these steps save, send or submit?');
     const sign = byName(t, 'Sign steps').parameters;
     const answer = { decision_0: 'Reject', decision_1: 'Approve and sign', writes_1: ['Step 3: x'], moreWrites_1: '5' };
@@ -1298,7 +1291,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       safetyLine: 'host: a.example\' <script>; …', evidenceLine: '7 rows <img src=x onerror=alert(1)>; compared with the repair run: 0 missing, 0 extra',
       changeList: 'Added: Open the list\nAdded: Read "rows" $& $$', leftOutList: 'step 4, Pick <b>Status</b>\nstep 9, Wait',
     };
-    const ran = { Settings: [[{ json: settingsJson() }]], 'Import steps': [[{ json: { report: { steps: 2, items: [] }, drafts: [] } }], [{ json: item }]] } as Record<string, INodeExecutionData[][]>;
+    // As Import steps builds it from the steps.
+    const withLines = { ...item, reviewSteps: reviewSteps(item.steps.steps, { desktop: false }) };
+    const ran = { Settings: [[{ json: settingsJson() }]], 'Import steps': [[{ json: { report: { steps: 2, items: [] }, drafts: [] } }], [{ json: withLines }]] } as Record<string, INodeExecutionData[][]>;
     const fields = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan(ran) });
     expect(fields.map((f) => f.fieldType)).toEqual(['html', 'radio']);
     const POINTER = '<p><em>How each step finds its control is in this run\'s execution in n8n (the Import steps node\'s output), and in the approval email when approval is by email.</em></p>';
@@ -1313,21 +1308,24 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       + '<p><em><b>Evidence (as reported by the run):</b> 7 rows &lt;img src=x onerror=alert(1)&gt;; compared with the repair run: 0 missing, 0 extra</em></p>'
       + '<p><em><b>What changed (as reported by the run):</b><br>Added: Open the list<br>Added: Read &quot;rows&quot; $&amp; $$</em></p>'
       + '<p><em>Screenshots of the replay are in this execution in n8n, on the Repaired Steps output of Import steps.</em></p>');
-    const notRun = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan({ Settings: [[{ json: { ...settingsJson(), showDetails: true } }]], 'Import steps': [ran['Import steps'][0], [{ json: { ...item, evidenceLine: NOT_REPLAYED_LINE, attachmentNames: '', leftOutList: undefined } }]] }) });
+    const notRun = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan({ Settings: [[{ json: { ...settingsJson(), showDetails: true } }]], 'Import steps': [ran['Import steps'][0], [{ json: { ...withLines, evidenceLine: NOT_REPLAYED_LINE, attachmentNames: '', leftOutList: undefined } }]] }) });
     expect(notRun[0].html).toContain('<br>Not run by the import: check every step, each form&#39;s target and each download before you approve.</p><p><b>The steps</b></p><ol>');
     expect(notRun[0].html).toContain(`<b>Evidence:</b> ${escapeHtml(NOT_REPLAYED_LINE)}</em></p><p><em><b>What changed (as written; these steps were never run):</b>`);
     expect(notRun[0].html).not.toContain('Screenshots');
+    // A variable written with spaces gets its mark too (the page's own regex used to miss it).
+    expect(reviewSteps([{ intent: 'Type the note', fill: { field: { label: 'Note' }, value: '{{ var.note }}' } }], { desktop: false }))
+      .toEqual([{ text: 'Type the note', marks: ['variable note'] }]);
+    expect(reviewSteps([{ intent: 'Pick', select: { field: { uia: { path: [{ controlType: 'ComboBox', name: 'Plant' }] } }, option: '{{ var.plant }}' } }], { desktop: true }))
+      .toEqual([{ text: 'Choose an item in Plant', marks: ['variable plant'] }]);
   });
 
-  it('a recording\'s marks name its secret variables from the import (Data drafts), never a value', async () => {
-    const { ran } = await importedRecording();
+  it('a recording\'s marks name its secret variables from the import, never a value', async () => {
+    const { repaired, ran } = await importedRecording();
     const data = ran['Import steps'][0][0].json as { drafts: IDataObject[] };
     expect(data.drafts[0]).toMatchObject({ surface: 'desktop', secretVariables: ['password'] });
+    expect((repaired[0].json.reviewSteps as IDataObject[])[2]).toEqual({ text: 'Type into Password', marks: ['secret variable password'] });
     const fields = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan(ran) });
     expect(fields[0].html).toContain('<li>Type into Password <em>· secret variable password</em></li>');
-    // Without the draft's list, the same variable is a plain variable: the mark follows the import's own data.
-    const without = { ...ran, 'Import steps': [[{ json: { ...data, drafts: [] } }], ran['Import steps'][1]] };
-    expect(jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan(without) })[0].html).toContain('<li>Type into Password <em>· variable password</em></li>');
   });
 
   it('an import with an untranslated step puts it into leftOut and both emails show it', async () => {

@@ -55,7 +55,8 @@
     "build": "pnpm --filter n8n-rpa-engine build && node scripts/clean.mjs && tsc -p tsconfig.json && node scripts/copy-assets.mjs",
     "typecheck": "tsc -p tsconfig.test.json",
     "lint": "eslint .",
-    "test": "tsc -p tsconfig.json && node scripts/copy-assets.mjs && vitest run"
+    "test": "pnpm --filter n8n-rpa-engine build && tsc -p tsconfig.json && node scripts/copy-assets.mjs && vitest run",
+    "test:unit": "vitest run --exclude \"test/**/*.integration.test.ts\" --exclude test/package.test.ts --exclude test/lazy-engine.test.ts"
   },
   "dependencies": {
     "fflate": "0.8.3",

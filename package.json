@@ -7,6 +7,7 @@
   },
   "scripts": {
     "test": "pnpm -r --workspace-concurrency=1 test && node --test \"deploy/scripts/test/*.test.mjs\"",
+    "test:unit": "pnpm --filter n8n-rpa-engine test:unit && pnpm --filter n8n-nodes-rpa test:unit",
     "typecheck": "pnpm -r typecheck",
     "acceptance": "pnpm --filter n8n-rpa-eval acceptance"
   },

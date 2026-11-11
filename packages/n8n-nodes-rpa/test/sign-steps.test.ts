@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { APPROVER } from './fixtures.js';
 import { NodeOperationError, type IDataObject, type INodeExecutionData } from 'n8n-workflow';
 import { describeInterrupt, describeStep, proposalDigest, scriptHash, verifyScript, type Proposal, type Script } from 'n8n-rpa-engine';
 import { changeList, evidenceLine, fullSafetyFlags, safetyLine } from '../nodes/Playwright/format.js';
@@ -10,7 +11,6 @@ import { harness, type HarnessOptions } from './harness.js';
 
 // Golden strings are written out here on purpose.
 const KEY = 'sign-steps-signing-key-0123456789abcdef';
-const APPROVER = 'approver@example.com';
 const NOW = new Date('2026-10-07T09:30:00.000Z');
 const USER = 'site-user-7c1';
 const PASS = 'site-pass-9f2';
@@ -23,7 +23,7 @@ const STEPS: Script = {
     { intent: 'Read the items', extract: { scope: { css: 'main' }, idPattern: 'SKU-\\d{4}' } },
   ],
 };
-const NOT_REPAIRED = 'The input item is not a Repaired steps item from Run Steps (it has no digest). Only Repaired steps items can be signed.';
+const NOT_REPAIRED = 'The input item is not a Repaired steps item from Run Steps or Import Steps (it has no digest). Only Repaired steps items can be signed.';
 
 const engine = fakeEngine(() => {
   throw new Error('Sign Steps never opens a browser');

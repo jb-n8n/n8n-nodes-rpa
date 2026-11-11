@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { createServer, type AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
+import { NOT_REPAIRED_STEPS } from '../nodes/Playwright/operations/signSteps.js';
+import { STEPS_EMPTY_NEEDS_REPAIR } from '../nodes/Playwright/operations/runSteps.js';
 import type { ICredentialTestFunctions, IExecuteFunctions } from 'n8n-workflow';
 import { CREDENTIALS } from '../nodes/Playwright/config.js';
 import type { NodeContext } from '../nodes/Playwright/context.js';
@@ -73,7 +75,7 @@ describe('RPA node', () => {
     const out = await exec(harness({ params, rawParameters: params, credentials: { playwrightBrowserApi: { mode: 'local', headless: true } }, continueOnFail: true }));
     expect(out).toHaveLength(1);
     expect(out[0]).toHaveLength(1);
-    expect(JSON.stringify(out[0][0].json)).toContain('Steps is empty. Add steps, or turn on AI Repair to build them from the Goal.');
+    expect(JSON.stringify(out[0][0].json)).toContain(STEPS_EMPTY_NEEDS_REPAIR);
     expect(out[0][0].json.details).toMatchObject({ configError: true });
   });
   it('execute dispatches Sign Steps: an item that is not a Repaired steps item is refused', async () => {
@@ -85,7 +87,7 @@ describe('RPA node', () => {
     const out = await exec(ctx);
     expect(out).toHaveLength(1);
     expect(out[0][0].json.error).toBe(
-      'Sign Steps refused: The input item is not a Repaired steps item from Run Steps (it has no digest). Only Repaired steps items can be signed.',
+      `Sign Steps refused: ${NOT_REPAIRED_STEPS}`,
     );
   });
   it('execute dispatches Import Steps: an empty Name is a configuration error, before anything is read', async () => {
@@ -110,5 +112,13 @@ describe('RPA node', () => {
   });
   it('loads the engine only when asked', async () => {
     expect(typeof (await loadEngine()).runTask).toBe('function');
+  });
+});
+
+// n8n's NodeCredentials.vue (getCredentialsFieldLabel) uses the description's displayName when set; otherwise a node
+// with several credential types shows the bare "Credential" label for some of them, so users cannot tell the slots apart.
+describe('RPA node credential labels', () => {
+  it('names every credential slot with its credential type name (the "RPA" prefix)', () => {
+    expect(new Playwright().description.credentials?.map((c) => c.displayName)).toEqual(['RPA Browser', 'RPA Site Login', 'RPA Step Signing', 'RPA Redis', 'RPA Desktop Runner', 'RPA Secret Variables']);
   });
 });

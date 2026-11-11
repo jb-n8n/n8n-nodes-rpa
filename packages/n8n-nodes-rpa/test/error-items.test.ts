@@ -1,10 +1,10 @@
-// Regression: n8n's normalizeNodeErrors wipes structured fields from error items
+// Error items keep their structured fields through n8n's error output and normalizeNodeErrors.
 import { afterEach, describe, expect, it } from 'vitest';
 import type { GenericValue, IDataObject, INodeExecutionData, IPairedItemData } from 'n8n-workflow';
 import type { TaskFailure } from 'n8n-rpa-engine';
 import { resetGuardsForTests } from '../nodes/Playwright/guard.js';
 import { executeRunSteps } from '../nodes/Playwright/operations/runSteps.js';
-import { executeSignSteps } from '../nodes/Playwright/operations/signSteps.js';
+import { executeSignSteps, NOT_REPAIRED_STEPS } from '../nodes/Playwright/operations/signSteps.js';
 import { fakeEngine } from './fake-engine.js';
 import { credentialsV2, FEED_NAME, nodeContext, runStepsParams, signStepsParams } from './feed-fixtures.js';
 import { APPROVER, baselineScript } from './fixtures.js';
@@ -136,7 +136,7 @@ describe('v2 error items keep their structured fields through n8n', () => {
     const [records, errors] = throughN8n(out, input);
     expect(records).toEqual([]);
     expect(errors).toHaveLength(1);
-    const reason = 'The input item is not a Repaired steps item from Run Steps (it has no digest). Only Repaired steps items can be signed.';
+    const reason = NOT_REPAIRED_STEPS;
     expect(errors[0].json.error).toBe(`Sign Steps refused: ${reason}`);
     expect(errors[0].json.details).toEqual({ code: null, reasons: [reason], name: FEED_NAME, version: 2 });
   });

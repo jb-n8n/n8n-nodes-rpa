@@ -9,6 +9,7 @@ import { MAX_SELECT_VALUES } from '../policy/validate.js';
 import { browserKeyProblem } from '../steps/browser-keys.js';
 import { cleanLabel, clickModifiers } from './draft.js';
 import type { ClickModifier } from '../types.js';
+import { readText } from './read.js';
 import type { Candidate, ImportEvent, ImportItem, ImportReport } from './types.js';
 
 /** Code larger than this is refused before it is read. */
@@ -837,19 +838,12 @@ function otherTarget(code: string): boolean {
   return false;
 }
 
-/** Reads code's bytes or text, refusing more than MAX_PLAYWRIGHT_BYTES before anything is decoded. */
+/** Reads code's bytes or text (readText), refusing more than MAX_PLAYWRIGHT_BYTES before anything is decoded. */
 export function readPlaywrightCode(data: unknown, report: ImportReport): string | undefined {
-  const error = (reason: string) => { report.items.push({ at: '', kind: 'error', what: WHAT, reason }); return undefined; };
-  let text: string;
-  if (typeof data === 'string') {
-    // A string has no more UTF-16 units than UTF-8 bytes, so a long one is refused without measuring it.
-    if (data.length > MAX_PLAYWRIGHT_BYTES || Buffer.byteLength(data, 'utf8') > MAX_PLAYWRIGHT_BYTES) return error(TOO_LARGE);
-    text = data;
-  } else if (data instanceof Uint8Array) {
-    if (data.byteLength > MAX_PLAYWRIGHT_BYTES) return error(TOO_LARGE);
-    text = new TextDecoder('utf-8').decode(data);
-  } else return error(NOT_TEXT);
-  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+  const read = readText(data, MAX_PLAYWRIGHT_BYTES);
+  if ('text' in read) return read.text;
+  report.items.push({ at: '', kind: 'error', what: WHAT, reason: read.problem === 'tooLarge' ? TOO_LARGE : NOT_TEXT });
+  return undefined;
 }
 
 /**

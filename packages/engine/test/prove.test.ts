@@ -88,7 +88,7 @@ describe('proveScript', () => {
     const state = await healingState();
     const r = await prove(baselineScript(portal.url, 2), { ...state, agentRows: [], output: { idPattern: 'N26-\\d{4}', emptyPattern: 'No active notices' } });
     expect(r.ok).toBe(false);
-    expect(r.reasons).toEqual(['a zero-row proof cannot confirm a recorded script']);
+    expect(r.reasons).toEqual(['a zero-row proof cannot confirm recorded steps']);
     expect(r.policyViolation).toBe(false);
   });
   it('fails when the count does not match the stated total', async () => {
@@ -142,7 +142,7 @@ describe('proveScript', () => {
     expect(JSON.stringify(boom.reasons)).not.toContain(SECRETS.password);
     const cant = await prove(baselineScript(portal.url, 2), { endpoint: { mode: 'playwright', wsUrl: 'ws://127.0.0.1:1/never' } });
     expect(cant.ok).toBe(false);
-    expect(cant.reasons[0]).toMatch(/^could not open a browser to prove the script/);
+    expect(cant.reasons[0]).toMatch(/^could not open a browser to prove the steps/);
   });
   it('proves a full replay that starts on a login page served with 401', async () => {
     const script = { ...baselineScript(portal.url, 2), startUrl: `${portal.url}/acme/login?status=401` };

@@ -31,7 +31,7 @@ import { isEmptySteps, type TrustInput } from './trust.js';
 export { MAX_AGENT_ACTIONS, MAX_AGENT_TOKENS, PROVE_RESERVE_MS } from './agent-lane.js';
 export { MIN_PROVE_MS } from './prove-run.js';
 /** v1 repair never records field extraction: such runs report drift instead of healing. */
-export const FIELDS_UNSUPPORTED = 'repair cannot record field extraction yet: update the script by hand';
+export const FIELDS_UNSUPPORTED = 'repair cannot record field extraction yet: update the steps by hand';
 
 /** AI repair settings. Present only when repair is on and a chat model is connected. */
 export interface RepairInput {

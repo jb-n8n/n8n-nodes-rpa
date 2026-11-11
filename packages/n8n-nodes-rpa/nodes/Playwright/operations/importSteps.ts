@@ -6,25 +6,24 @@ import { browserConfig, ConfigError, CREDENTIALS, policyFor, siteLoginConfig, ty
 import type { NodeContext } from '../context.js';
 import type { Engine } from '../engine.js';
 import { configNodeError, errorJson, failedOnCode, guidanceFor } from '../errors.js';
-import { isBreakerCode, runGuarded, type GuardedResult } from '../execute.js';
-import { DESKTOP_DOCUMENT_EVIDENCE_LINE, DESKTOP_EVIDENCE_LINE, DESKTOP_RECORDING_EVIDENCE_LINE, importAddedSteps, signInKeySteps } from '../format.js';
+import { isBreakerCode, noteRepairRan, repairAlreadyRan, runGuarded, siteLoginGuard, type GuardedResult } from '../execute.js';
+import {
+  DESKTOP_DOCUMENT_EVIDENCE_LINE, DESKTOP_EVIDENCE_LINE, DESKTOP_RECORDING_EVIDENCE_LINE, importAddedSteps, reviewSteps, reviewWrites,
+} from '../format.js';
 import { isQueueMode, openGuardStore, QUEUE_NEEDS_REDIS, type GuardStoreDeps } from '../guard-store.js';
 import { workflowFile } from '../import/workflow.js';
 import { lazyChatModel } from '../model.js';
-import { configErrorItem, desktopRepairedStepsJson, repairedStepsItem, repairedStepsJson, slug } from '../output.js';
+import { configErrorItem, desktopRepairedStepsJson, plain, repairedStepsItem, repairedStepsJson, slug } from '../output.js';
+import { codeSettingsFor, codeWorkflowOptions } from './codeWorkflow.js';
 import {
-  asBoolean, asString, BROWSER_CREDENTIAL_NEEDED, browserCredentials, checkMaxItems, credentialId, errorMessage, field, hasDownloadStep, literalString, readCommonOptions,
-  refuseCdpDownload, regexOption, SITE_LOGIN_NO_ID, type CommonOptions,
+  asBoolean, asString, BROWSER_CREDENTIAL_NEEDED, browserCredentials, checkMaxItems, credentialId, errorMessage, field, hasDownloadStep, literalString, NO_MODEL,
+  readCommonOptions, refuseCdpDownload, regexOption, safeParam, SITE_LOGIN_NO_ID, type CommonOptions,
 } from './common.js';
-import {
-  codeSettingsFor, codeWorkflowOptions, expectedDownload, NO_MODEL, noteRepairRan, repairAlreadyRan, siteLoginGuard, variablesOption,
-} from './runSteps.js';
+import { expectedDownload, variablesOption } from './runStepsParams.js';
 import { signingPolicy } from './signSteps.js';
 
 /** The largest file or text Import Steps reads. The importers apply their own, smaller limits. */
 export const MAX_IMPORT_BYTES = 20 * 1024 * 1024;
-/** `{ [key]: numbers }`, or nothing when there are none. */
-const nonEmpty = (key: string, numbers: number[]): IDataObject => (numbers.length ? { [key]: numbers } : {});
 /** The most drafts one input item adopts, one after another: each can take about twice Max Seconds. */
 export const MAX_ADOPTIONS = 10;
 /** How long the proof may wait for a fresh authenticator code window (engine adopt.ts, freshTotpAfter). */
@@ -48,12 +47,12 @@ export const SOURCE_NOT_DETECTED =
 export const IMPORT_NEEDS_START = 'Import Steps needs a Start URL or a Site Login: the imported steps do not open a page first.';
 /** The repair goal when Goal is empty: the agent sees the imported steps as its base. */
 export const DEFAULT_GOAL = 'Do what the imported steps do, on the page as it is now.';
-export const NOT_TRIED_LIMIT = `not tried: an import adopts at most ${MAX_ADOPTIONS} step lists`;
+export const NOT_TRIED_LIMIT = `not tried: an import replays at most ${MAX_ADOPTIONS} step lists`;
 export const NOT_TRIED_CANCELLED = 'not tried: the execution was cancelled';
 /** A step list after one that failed on its one-time code: another sign-in would ask for (or type) another code. */
 export const NOT_TRIED_CODE = (name: string, reason: string) => `not tried: ${name} failed on its one-time code (${reason})`;
 export const NOTHING_IMPORTED = (reason: string) => `Nothing was imported: ${reason}`;
-export const NONE_ADOPTED = (n: number, first: string) => `None of the ${n} imported step lists could be adopted. ${first}`;
+export const NONE_ADOPTED = (n: number, first: string) => `None of the ${n} imported step lists could be replayed. ${first}`;
 /** Why a draft's steps are null on Data: they carry a Site Login value (defence in depth behind the importer's own stripping). */
 export const STEPS_WITHHELD = 'The steps are not shown: they contain a value of the RPA Site Login.';
 /** A desktop draft on Data: it goes to approval as imported, without a replay. */
@@ -166,8 +165,6 @@ type ItemOutcome =
   | { kind: 'ok'; data: INodeExecutionData; repaired: INodeExecutionData[] }
   | { kind: 'error'; item: INodeExecutionData; error: NodeOperationError };
 
-/** A JSON copy: n8n items must not share objects with the engine result. */
-const plain = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
 
 /** Every string in a JSON value through the masker (the report and the reasons: defence in depth behind the engine's own masking). */
 function maskDeep<T>(value: T, mask: (s: string) => string): T {
@@ -190,17 +187,6 @@ function leftOutOf(report: ImportReport): string[] {
   return report.items
     .filter((i) => i.kind === 'untranslated' || (i.kind === 'dropped' && i.notNeeded !== true))
     .map((i) => `${[i.at, i.what].filter((s) => s !== '').join(', ')}: ${i.reason}`);
-}
-
-/** Options → Name for an error item when the parameters could not be read (never throws). */
-function safeName(ctx: NodeContext, i: number): string | null {
-  let name: unknown;
-  try {
-    name = ctx.getNodeParameter('stepsName', i, '');
-  } catch {
-    name = '';
-  }
-  return typeof name === 'string' && name.trim() ? name.trim() : null;
 }
 
 /** Test seam for the guard store: the Redis factory and how the n8n execution mode is read (as Run Steps). */
@@ -247,7 +233,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
     // With a Site Login or a Start URL the policy is known now; otherwise each draft's first page decides it.
     if (siteLogin || p.startUrl) fixedPolicy = policyOf(p, siteLogin, p.startUrl);
   } catch (error) {
-    return configError(errorMessage(error), safeName(ctx, i));
+    return configError(errorMessage(error), safeParam(ctx, i, 'stepsName'));
   }
 
   const download = expectedDownload(engine, p.expectedFile);
@@ -299,8 +285,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
         ...(p.codeWorkflowId ? { codeWorkflow: { id: p.codeWorkflowId, timeoutSeconds: p.codeTimeoutMs / 1000 } } : {}),
         run: { maxSeconds: p.common.maxSeconds, allowedHosts: p.common.allowedHosts },
       });
-      const name = (JSON.parse(file.data.toString('utf8')) as { name: string }).name;
-      workflow = { binary: { workflow: await ctx.helpers.prepareBinaryData(file.data, file.fileName, file.mimeType) }, name };
+      workflow = { binary: { workflow: await ctx.helpers.prepareBinaryData(file.data, file.fileName, file.mimeType) }, name: file.name };
     } catch (error) {
       return configError(mask(errorMessage(error)), p.name, { report });
     }
@@ -334,7 +319,15 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
     if (!withheld) {
       try {
         const line = source === 'steps' ? DESKTOP_DOCUMENT_EVIDENCE_LINE : source === 'recording' ? DESKTOP_RECORDING_EVIDENCE_LINE : DESKTOP_EVIDENCE_LINE;
-        review = desktopRepairedStepsJson(engine, withLeftOut(engine.desktopProposal(d.script)), line, d.secretVariables);
+        review = {
+          ...desktopRepairedStepsJson(engine, withLeftOut(engine.desktopProposal(d.script)), line, d.secretVariables),
+          // Shown on the review page only; neither the digest nor the signature covers them.
+          reviewSteps: reviewSteps(d.script.steps, {
+            desktop: true, secretVariables: d.secretVariables, ...(d.startValues ? { startValues: d.startValues } : {}),
+            ...(source === 'recording' ? { added: importAddedSteps(d.script.steps) } : {}),
+          }) as unknown as IDataObject[],
+          writeCandidates: reviewWrites(d.script.steps, engine.desktopWriteCandidates(d.script), d.secretVariables) as unknown as IDataObject[],
+        };
       } catch (error) {
         problem = mask(errorMessage(error));
       }
@@ -350,10 +343,6 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
       secretVariables: [...d.secretVariables],
       // A recording's start values (never a secret's), for the review page and the generated workflow.
       ...(d.startValues && Object.keys(d.startValues).length ? { startValues: { ...d.startValues } } : {}),
-      // For the review page only (step numbers; never signed): the keys that sign in start unticked, and a recording's
-      // steps that the import added are shown apart.
-      ...nonEmpty('signInKeys', signInKeySteps(d.script.steps, d.secretVariables)),
-      ...(source === 'recording' ? nonEmpty('addedSteps', importAddedSteps(d.script.steps)) : {}),
       reason: withheld ? STEPS_WITHHELD : problem ?? DESKTOP_FOR_APPROVAL,
     };
     return { entry, review };
@@ -404,7 +393,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
     const what = `${first.code ? `${first.code}: ` : ''}${mask(first.reason)}`;
     const message = outcomes.length === 1 ? what : NONE_ADOPTED(outcomes.length, `${first.draft.name}: ${what}`);
     const error = new NodeOperationError(node, message, {
-      itemIndex: i, description: first.code ? `${first.code}: ${first.guidance ?? guidanceFor(first.code, first.reason)}` : 'Nothing was adopted. The reasons are in details.drafts.',
+      itemIndex: i, description: first.code ? `${first.code}: ${first.guidance ?? guidanceFor(first.code, first.reason)}` : 'No step list was replayed. The reasons are in details.drafts.',
     });
     error.message = message;
     Object.assign(error.context, { code: first.code ?? null, name: p.name });
@@ -418,11 +407,20 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
 
   const repaired: INodeExecutionData[] = [];
   for (const o of outcomes) {
-    if (o.kind === 'adopted') repaired.push({ ...(await repairedStepsItem(ctx, engine, withLeftOut(o.proposal))), pairedItem: paired });
-    if (o.kind === 'forApproval') repaired.push({ json: o.review, pairedItem: paired });
+    if (o.kind === 'adopted') {
+      const item = await repairedStepsItem(ctx, engine, withLeftOut(o.proposal));
+      repaired.push({ ...item, json: withReviewSteps(item.json), pairedItem: paired });
+    }
+    if (o.kind === 'forApproval') repaired.push({ json: withReviewSteps(o.review), pairedItem: paired });
   }
   for (const o of desktopOut) if (o.review) repaired.push({ json: o.review, pairedItem: paired });
   return { kind: 'ok', data: { json: fields, pairedItem: paired, ...binaryField }, repaired };
+}
+
+/** A browser Repaired steps item with its steps as the review page lists them (shown only, never signed or reviewed). */
+function withReviewSteps(json: IDataObject): IDataObject {
+  const steps = (json.steps as { steps?: unknown } | null)?.steps;
+  return { ...json, reviewSteps: reviewSteps(Array.isArray(steps) ? steps : [], { desktop: false }) as unknown as IDataObject[] };
 }
 
 /**
@@ -469,7 +467,6 @@ function checkedCaptures(engine: Engine, r: { screenshot?: Buffer; trace?: Buffe
   return trace || screenshot ? { ...(trace ? { trace } : {}), ...(screenshot ? { screenshot } : {}) } : undefined;
 }
 
-/** The policy for a run: the Site Login's (Start URL may move the start page within it), or Start URL's site plus Also Allow These Sites. */
 /** The flow of a source without one (a Chrome recording, Playwright code, a step document): one pair per step list, by its name. */
 function pairsFlow(name: string, drafts: Draft[], desktopDrafts: DesktopDraft[]): UiPathFlow | undefined {
   const nodes: FlowNode[] = [
@@ -479,6 +476,7 @@ function pairsFlow(name: string, drafts: Draft[], desktopDrafts: DesktopDraft[])
   return nodes.length ? { name, nodes } : undefined;
 }
 
+/** The policy for a run: the Site Login's (Start URL may move the start page within it), or Start URL's site plus Also Allow These Sites. */
 function policyOf(p: ImportParams, siteLogin: SiteLogin | undefined, url: string): PortalPolicy {
   return policyFor({ siteLogin, url: url || undefined, allowedHosts: p.common.allowedHosts, allowPrivateNetwork: p.common.allowPrivateNetwork, operation: 'runSteps' });
 }
@@ -566,7 +564,7 @@ async function adoptAll(
         loginFailure: (r) => (!r.ok && isBreakerCode(r.code) ? { code: r.code, message: r.message } : undefined),
       });
     } catch (error) {
-      outcomes.push({ draft, kind: 'failed', code: 'incomplete', reason: `the adoption stopped unexpectedly: ${errorMessage(error)}` });
+      outcomes.push({ draft, kind: 'failed', code: 'incomplete', reason: `the replay stopped unexpectedly: ${errorMessage(error)}` });
       continue;
     }
     if (ran.kind === 'blocked') {
@@ -594,8 +592,8 @@ async function adoptAll(
 /**
  * Import Steps: per input item, the recording, code, project or step document → engine.importSource → each draft
  * adopted (engine.adoptDraft) → [Data, Repaired Steps]. Repaired Steps holds one item per adopted draft, built exactly
- * as Run Steps builds it, so Sign Steps accepts it unchanged. Data holds `{ report, drafts, workflowName? }` and, for
- * UiPath, the workflow file as binary `workflow`. A configuration error, nothing imported, or every draft failed is an
+ * as Run Steps builds it, so Sign Steps accepts it unchanged. Data holds `{ report, drafts, workflowName? }` and the
+ * workflow file as binary `workflow`. A configuration error, nothing imported, or every draft failed is an
  * error item in Data (n8n's error output), as in Run Steps.
  */
 export async function executeImportSteps(ctx: NodeContext, engine: Engine, deps: ImportStepsDeps = {}): Promise<INodeExecutionData[][]> {
@@ -613,7 +611,7 @@ export async function executeImportSteps(ctx: NodeContext, engine: Engine, deps:
       // under continue-on-fail, where n8n would copy the input items to Data as if they had succeeded.
       const message = errorMessage(error);
       const thrown = error instanceof NodeOperationError ? error : configNodeError(ctx.getNode(), message, i);
-      outcome = { kind: 'error', item: configErrorItem(message, safeName(ctx, i), [{ item: i }]), error: thrown };
+      outcome = { kind: 'error', item: configErrorItem(message, safeParam(ctx, i, 'stepsName'), [{ item: i }]), error: thrown };
     }
     if (outcome.kind === 'error') {
       if (!ctx.continueOnFail()) throw outcome.error;

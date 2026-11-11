@@ -13,7 +13,7 @@ import { rejectedRecord, signedRecord, type StepsRecord } from '../rows.js';
 import { asBoolean, asString, checkMaxItems, credentialId, errorMessage, isObject, literalRaw, SITE_LOGIN_NO_ID, splitList } from './common.js';
 
 export const WRITE_STEPS_BROWSER = 'Write Steps applies to desktop steps only: clear it for browser steps.';
-export const NOT_REPAIRED_STEPS = 'The input item is not a Repaired steps item from Run Steps (it has no digest). Only Repaired steps items can be signed.';
+export const NOT_REPAIRED_STEPS = 'The input item is not a Repaired steps item from Run Steps or Import Steps (it has no digest). Only Repaired steps items can be signed.';
 export const MISSING_NAME_OR_VERSION = 'The Repaired steps item has no name or version.';
 export const APPROVER_NOT_ALLOWED = 'Approved By is not on the Approver Allowlist';
 export const APPROVER_NEEDED = 'Approved By is empty, and the Approver Allowlist holds more than one address: set Approved By to the one who decided';
@@ -33,8 +33,6 @@ export const NOT_REPLAYED_CHANGES_MISMATCH = 'the change list does not show ever
 export const PROVEN_FIRST_VERSION_WRITES =
   'the evidence line says the steps were proven in a fresh browser, but a first version that submits a form, downloads through a form, types a secret or changes a password is never replayed: it must carry the not-replayed evidence line';
 export const LEFT_OUT_MALFORMED = 'the left-out steps are not a list of text';
-/** The engine's STEPS_HASH_MISMATCH wording (the engine is loaded lazily, so its constants are not imported here). */
-export const HASH_MISMATCH = 'the steps do not match the hash that was reviewed';
 /** Site Login secrets shorter than this are not looked for in records (the engine's MIN_SECRET_LEN_FOR_LITERAL_CHECK). */
 const MIN_SECRET_LEN = 4;
 
@@ -345,7 +343,7 @@ async function signOne(ctx: NodeContext, engine: Engine, i: number, json: IDataO
   if (!approverId || !allowlist.includes(approverId.toLowerCase())) return refuse([APPROVER_NOT_ALLOWED]);
   if (!approved) {
     // Template 3 marks the row with this hash rejected, so the hash must be the hash of these steps.
-    if (!hashMatches(engine, p.steps, p.hash)) return refuse([HASH_MISMATCH]);
+    if (!hashMatches(engine, p.steps, p.hash)) return refuse([engine.STEPS_HASH_MISMATCH]);
     return record(rejectedRecord({ name: p.name, version: p.version, hash: p.hash }, approverId, at));
   }
   const leftOut = leftOutProblem(p);

@@ -1,5 +1,7 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { hrefHasSession, looksGenerated } from '../src/agent/stable-ids.js';
+import { stableDesktopId } from '../src/desktop/stable-ids.js';
 
 describe('looksGenerated table', () => {
   it.each([
@@ -15,5 +17,14 @@ describe('hrefHasSession', () => {
   it('spots a session segment only', () => {
     expect(hrefHasSession('/sap(cz1TSUQ6QU5PTjo=)/bc/gui/x')).toBe(true);
     expect(hrefHasSession('/acme/service')).toBe(false);
+  });
+});
+
+describe('desktop-stable-ids', () => {
+  // The recorder's StableIds (desktop/recorder) reads the same file: keep its path.
+  it('stableDesktopId agrees with every sample in stable-id-samples.json', () => {
+    const samples = JSON.parse(readFileSync(new URL('./fixtures/desktop/stable-id-samples.json', import.meta.url), 'utf8')) as { id: string; stable: boolean }[];
+    expect(samples.length).toBeGreaterThanOrEqual(20);
+    for (const s of samples) expect(stableDesktopId(s.id), JSON.stringify(s.id)).toBe(s.stable);
   });
 });

@@ -635,7 +635,6 @@ It is built from three templates on top of Run Steps and Sign Steps, with standa
 | File | Workflow | What it does |
 |---|---|---|
 | `0-connection-check.json` | `RPA: 0 Connection check` | One screenshot of the URL in **Site to check**: proves the browser service reaches your site before anyone writes steps (see **Deploy at scale** in [Where the browser runs](#where-the-browser-runs)) |
-| `1-create-tables.json` | `RPA: 1 Create tables (run once)` | Creates the two Data Tables |
 | `2-data-feed.json` | `RPA: 2 Data feed` | Runs every 6 hours: newest active steps, Run Steps, log, destination, alert |
 | `3-approve-steps.json` | `RPA: 3 Approve steps` | Emails the evidence, waits for approval, signs the steps |
 | `5-import-a-bot.json` | `RPA: 5 Import a bot` | A form: upload a bot (a Chrome Recorder export, Playwright code or a UiPath project), a step document you wrote or an RPA recording; Import Steps sends what passes to approval (see **First day: import a bot** under [Import Steps](#import-steps)) |

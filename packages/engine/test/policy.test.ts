@@ -177,10 +177,10 @@ describe('validateScript', () => {
     expect(validateScript(withSecret, ctx).violations[0]).toMatch(/contains a credential secret/);
     // startUrl with secret in query
     const s = { ...baselineScript(portal.url), startUrl: `${portal.url}?p=demo-password` };
-    expect(validateScript(s, ctx).violations.some((v) => v.match(/script field startUrl.*contains a credential secret/))).toBe(true);
+    expect(validateScript(s, ctx).violations.some((v) => v.match(/field startUrl of the steps.*contains a credential secret/))).toBe(true);
     // Interrupt css containing secret
     const withInterrupt = { ...baselineScript(portal.url), interrupts: [{ target: { css: 'a[href*="demo-password"]' }, click: { css: '#close' } }] };
-    expect(validateScript(withInterrupt, ctx).violations.some((v) => v.match(/script field interrupts.*contains a credential secret/))).toBe(true);
+    expect(validateScript(withInterrupt, ctx).violations.some((v) => v.match(/field interrupts\[0\]\S* of the steps contains a credential secret/))).toBe(true);
     // Goto with encoded username in query
     const encoded = add(baselineScript(portal.url), { intent: 'Encoded', goto: '/acme/reports?user=' + encodeURIComponent('summit-ops') });
     expect(validateScript(encoded, ctx).violations.some((v) => v.match(/contains a credential secret/))).toBe(true);

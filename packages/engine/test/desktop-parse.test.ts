@@ -58,7 +58,7 @@ describe('desktop step sets: parsing', () => {
     expect(desktopIssues(desktop([{ intent: 'x', click: uia('a') }], { app: { exe: '{{var.app}}' } }))[0]).toMatch(/^app\.exe must be/);
     expect(desktopIssues(desktop([{ intent: 'x', click: uia('a') }], { app: { exe: 'a.exe', args: ['{{var.x}}'] } }))[0]).toMatch(/^app\.args/);
     expect(desktopIssues(desktop([{ intent: 'x', click: uia('a') }], { startUrl: 'https://example.com/' }))).toEqual([
-      'script has unknown key "startUrl"', 'startUrl is a browser setting, not allowed in a desktop step set: set app instead',
+      'the steps have the unknown key "startUrl"', 'startUrl is a browser setting, not allowed in a desktop step set: set app instead',
     ]);
     expect(desktopIssues(desktop([{ intent: 'x', click: uia('a') }], { interrupts: [{ target: uia('a'), click: uia('b') }] }))).toEqual(['interrupts are not supported in a desktop step set yet']);
     expect(desktopIssues(desktop([{ intent: 'x', click: uia('a') }], { interrupts: [] }))).toEqual([]);
@@ -221,7 +221,7 @@ describe('desktop step sets: signing', () => {
 
   it('signing refuses a desktop step set that does not parse', () => {
     expect(() => signScript(desktop([{ intent: 'x', goto: 'https://example.com/' }]), KEY, { approvedBy: WHO })).toThrow(
-      'invalid script: steps[0]: "goto" is a browser step, not allowed in a desktop step set',
+      'invalid steps: steps[0]: "goto" is a browser step, not allowed in a desktop step set',
     );
   });
 

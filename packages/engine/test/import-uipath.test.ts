@@ -7,7 +7,7 @@ import { IMPORT_NEEDS_SITE_LOGIN } from '../src/messages.js';
 import { importSource } from '../src/import/index.js';
 import type { FlowNode, ImportItem, ImportOptions, ImportReport, ImportResult } from '../src/import/types.js';
 import { MAX_REPORT_ITEMS, MAX_UIPATH_ACTIVITIES, uipathImport } from '../src/import/uipath.js';
-import { readSelector, selectorToCandidates } from '../src/import/uipath-selector.js';
+import { readSelector } from '../src/import/uipath-selector.js';
 import { loginBlockEnd } from '../src/policy/validate.js';
 import { parseScript } from '../src/steps/parse.js';
 import type { Step } from '../src/types.js';
@@ -217,7 +217,7 @@ describe('UiPath projects', () => {
   });
 
   it('selector attributes map to locators', () => {
-    const c = selectorToCandidates;
+    const c = (selector: string, tagHint?: string) => readSelector(selector, tagHint).candidates;
     // aaname on a button, a link or a submit/button input: a role with an exact name.
     expect(c("<webctrl tag='BUTTON' aaname='Save' />")).toEqual([{ role: 'button', name: 'Save', exact: true }]);
     expect(c("<webctrl tag='A' aaname='Reports' />")).toEqual([{ role: 'link', name: 'Reports', exact: true }]);

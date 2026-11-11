@@ -1,5 +1,10 @@
 export * from './types.js';
-export * from './messages.js';
+// The texts the node and its tests name; the rest of messages.ts is internal.
+export {
+  BROWSER_CERT_NOT_TRUSTED, BROWSER_CERT_NOT_TRUSTED_CDP, BROWSER_FINGERPRINT_INVALID, BROWSER_FINGERPRINT_MISMATCH, BROWSER_FINGERPRINT_NEEDS_WSS,
+  codeWorkflowFailed, DOWNLOAD_NEEDS_BROWSER_SERVER, IMPORT_EMPTY, IMPORT_NEEDS_SITE_LOGIN, IMPORT_NOT_ADOPTABLE, IMPORT_PROOF_FAILED,
+  IMPORT_REFUSES_WRITES, IMPORT_UNSUPPORTED_TARGET, notHttp, runnerConnected, STEPS_HASH_MISMATCH, USE_CASE_WORDS,
+} from './messages.js';
 export * from './sign.js';
 export * from './secrets/totp.js';
 export { createMasker, type Masker } from './secrets/mask.js';
@@ -45,7 +50,7 @@ export { importSource } from './import/index.js';
 export { detectImportSource } from './import/detect.js';
 export { adoptDraft, type AdoptInput, type AdoptResult } from './import/adopt.js';
 // Desktop step sets: the desktop lane, the runner client and the protocol's typed errors.
-export { checkDesktopTrust, DEFAULT_BUSY_WAIT_MS, DEFAULT_LEASE_MS, runDesktopTask, type DesktopTaskInput, type DesktopTaskResult } from './desktop/task.js';
+export { checkDesktopTrust, DEFAULT_LEASE_MS, runDesktopTask, type DesktopTaskInput, type DesktopTaskResult } from './desktop/task.js';
 export {
   connectRunner, fingerprintOf, normalizeFingerprint, probeRunner, RUNNER_CONNECT_TIMEOUT_MS, runnerAddress, RunnerClient,
   type Lease, type RunnerAddress, type RunnerEndpoint,

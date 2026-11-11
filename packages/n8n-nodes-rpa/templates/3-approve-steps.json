@@ -97,7 +97,7 @@
       "type": "n8n-nodes-base.dataTable",
       "typeVersion": 1.1,
       "position": [660, -280],
-      "notes": "Creates playwright_steps and playwright_runs when they are missing (RPA: 1 Create tables does the same by hand). This branch runs first: it is the top one."
+      "notes": "Creates playwright_steps and playwright_runs when they are missing, as templates 2 and 5 do. This branch runs first: it is the top one."
     },
     {
       "parameters": {

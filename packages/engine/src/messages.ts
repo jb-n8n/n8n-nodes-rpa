@@ -1,7 +1,7 @@
 import type { Locator } from './types.js';
 
-// Every user-facing golden string of the engine. Tests assert them verbatim, and
-// test/wording.test.ts checks that none of them contains a use-case word.
+// User-facing texts that several modules share, or that the node and its tests name. A text used in one place stays
+// next to its code. Tests assert them verbatim, and test/wording.test.ts checks that none of these contains a use-case word.
 
 /** Words no user-facing text may contain. */
 export const USE_CASE_WORDS = /\b(portal|recall|notice|dealer)s?\b/i;
@@ -252,17 +252,8 @@ export const runnerAppMissing = (exe: string) =>
   `the desktop runner could not start ${exe}: it is not installed at the path the runner's policy names (allowedApps[].path). Install it there or correct the policy`;
 export const desktopNotInteractive = (locked: boolean) =>
   locked ? 'the desktop runner\'s Windows session is locked: unlock it or sign the runner user in again' : 'the desktop runner is not in an interactive Windows session';
-// A failed desktop step, led by the step and what it found (desktop/failure-text.ts); the runner's target comes last.
-type ShownStep = { number: number; intent: string };
-const stepLead = (s: ShownStep): string => `Step ${s.number} (${s.intent})`;
-/** `found`: `2 buttons named "Save"`; `conditions`: the ones the target does not use yet, `name, automationId or className`. */
-export const desktopNotUnique = (s: ShownStep, found: string, conditions: string, target: string): string =>
-  `${stepLead(s)} found ${found}. Add what tells them apart to the step's target: the window, a parent with an automationId, or a condition such as ${conditions}. Target: ${target}`;
-/** `element`: `the button named "Post"`; `hint`: the runner's own advice. */
-export const desktopDisabled = (s: ShownStep, element: string, hint: string, target: string): string =>
-  `${stepLead(s)} found ${element} disabled. ${hint} Target: ${target}`;
-export const desktopOtherCopy = (s: ShownStep, exe: string, window: string): string =>
-  `${stepLead(s)} found its window in a copy of ${exe} that this run did not start (most often one left open before the run). Close that copy on the runner machine, then run again. Window: ${window}`;
+/** A desktop step the runner refused: the step (numbered from 1, as the review page numbers it), then the runner's own words. */
+export const desktopStepFailure = (number: number, intent: string, runnerSays: string): string => `Step ${number} (${intent}): ${runnerSays}`;
 
 /** The credential test's success message, with the Windows session's state as the runner reports it. */
 export const runnerConnected = (session: { interactive?: boolean; locked?: boolean }) =>

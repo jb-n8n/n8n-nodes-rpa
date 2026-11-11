@@ -327,9 +327,9 @@ describe('the adoption flow', () => {
 
   it('a repair whose proof failed names the proof, not Deliver Unconfirmed Rows', async () => {
     // The scripted run stands in for the agent lane's failure: adoptDraft reads only its message.
-    lane.next = { result: { ok: false, code: 'incomplete', message: `${ROWS_WITHHELD}. Reason: a zero-row proof cannot confirm a recorded script`, violations: [], log: [], blockedRequests: [], durationMs: 1 } };
+    lane.next = { result: { ok: false, code: 'incomplete', message: `${ROWS_WITHHELD}. Reason: a zero-row proof cannot confirm recorded steps`, violations: [], log: [], blockedRequests: [], durationMs: 1 } };
     const r = await adoptDraft(adoptInput(draftOf([EXTRACT]), { output: { idPattern: 'N26-\\d{4}' }, repair: { model: fakeModel([]), goal: 'rows' } }));
-    expect(r).toMatchObject({ ok: false, code: 'incomplete', message: `${IMPORT_PROOF_FAILED}. Reason: a zero-row proof cannot confirm a recorded script` });
+    expect(r).toMatchObject({ ok: false, code: 'incomplete', message: `${IMPORT_PROOF_FAILED}. Reason: a zero-row proof cannot confirm recorded steps` });
   });
 
   it('a cancelled adoption does not start the proof', async () => {

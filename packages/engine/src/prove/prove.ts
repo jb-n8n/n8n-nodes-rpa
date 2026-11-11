@@ -178,7 +178,7 @@ async function proveInner(input: ProveInput): Promise<ProveResult> {
     });
   } catch (err) {
     if (input.signal?.aborted) { reasons.push('prove cancelled'); return finish([], null); }
-    reasons.push(`could not open a browser to prove the script: ${(err as Error).message}`);
+    reasons.push(`could not open a browser to prove the steps: ${(err as Error).message}`);
     return finish([], null);
   }
   proofSession = session;
@@ -253,7 +253,7 @@ async function proveInner(input: ProveInput): Promise<ProveResult> {
       // Prove only judges agent-recorded scripts: an empty result is never evidence that a recorded script works.
       if (run.state.rows.length === 0) {
         reasons.length = 0;
-        reasons.push('a zero-row proof cannot confirm a recorded script');
+        reasons.push('a zero-row proof cannot confirm recorded steps');
         return await traced(finish([], v.total, await shot()));
       }
     }

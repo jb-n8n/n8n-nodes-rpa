@@ -1,17 +1,17 @@
 import { describe, expect, it } from 'vitest';
+import { USE_CASE_WORDS } from 'n8n-rpa-engine';
 import type { IDataObject, INodeProperties, INodePropertyCollection } from 'n8n-workflow';
 import { parseScript, validateScript } from 'n8n-rpa-engine';
 import { policyFor } from '../nodes/Playwright/config.js';
 import { fillFormProperties, PASSWORD_WARNING, SUBMIT_SCOPE } from '../nodes/Playwright/description/fillForm.js';
 import { OPERATIONS, properties } from '../nodes/Playwright/description/index.js';
 import { locatorGroupValues } from '../nodes/Playwright/description/locator.js';
-import { COMPILERS, compileQuickOp, executeQuickOp, OUTPUTS, quickFieldNames, type QuickParams } from '../nodes/Playwright/operations/quick.js';
+import { COMPILERS, compileQuickOp, executeQuickOp, OUTPUTS, quickFieldNames, URL_TEMPLATE, type QuickParams } from '../nodes/Playwright/operations/quick.js';
 import { compileFillForm, fillFormOutput } from '../nodes/Playwright/operations/quick/fillForm.js';
 import { fakeEngine } from './fake-engine.js';
 import { harness } from './harness.js';
 import { assertRunnable, BROWSER, failResult, okResult, optionsFor, PAGE_URL, QUICK_COMMON_OPTIONS, quickParams } from './quick-fixtures.js';
 
-const USE_CASE_WORDS = /\b(portal|recall|notice|dealer)s?\b/i;
 const FIELDS = { field: [{ findBy: 'label', label: 'Name', value: 'Ada Lovelace' }, { findBy: 'label', label: 'Message', value: 'Hello there' }] };
 const SEND = { locator: { findBy: 'role', role: 'button', roleName: 'Send' } };
 const q = (over: IDataObject = {}, options: IDataObject = {}): QuickParams =>
@@ -142,7 +142,7 @@ describe('executeQuickOp: fillForm (fake engine)', () => {
     const engine = fakeEngine(() => okResult());
     const p = quickParams('fillForm', { url: 'https://example.com/log?v={{var.f0}}', formFields: FIELDS, submitButton: SEND });
     const [data] = await executeQuickOp(harness({ params: p, credentials: BROWSER, continueOnFail: true }), engine, 'fillForm');
-    expect(data[0].json).toMatchObject({ message: 'URL must not contain {{ }} templates', details: { configError: true } });
+    expect(data[0].json).toMatchObject({ message: URL_TEMPLATE, details: { configError: true } });
     expect(engine.calls).toHaveLength(0);
   });
   it('a failure after the POST carries details.submitted: true', async () => {

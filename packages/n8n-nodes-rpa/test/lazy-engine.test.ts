@@ -1,5 +1,6 @@
 // n8n requires every installed node file to list it. Loading the compiled node must not load the engine or playwright-core
-// (spec: the engine loads on first use). Runs against dist, which the package "test" script compiles first (the engine dist comes from `pnpm -r build`).
+// (spec: the engine loads on first use). Runs against dist, which the package "test" script builds first, engine
+// included (`pnpm test:unit` leaves this file out).
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';

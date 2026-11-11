@@ -59,14 +59,14 @@ import { stableDesktopId } from '../desktop/stable-ids.js';
 import { IMPORT_EMPTY } from '../messages.js';
 import { CREDENTIAL_FIELD } from '../secrets/credential-field.js';
 import { createMasker } from '../secrets/mask.js';
-import { stepChordProblem } from '../steps/desktop-vocabulary.js';
+import { COND_TEXT_KEYS, isText, MAX_UIA_TEXT, RESERVED, stepChordProblem, WINDOW_KEYS } from '../steps/desktop-vocabulary.js';
 import type { DesktopApp, UiaCond, UiaTarget } from '../types.js';
-import { MAX_CHROME_BYTES } from './chrome.js';
 import { cleanLabel, MIN_SECRET_LENGTH } from './draft.js';
+import { isObject, MAX_IMPORT_JSON_BYTES, readJson, type Json } from './read.js';
 import type { ImportItem, ImportOptions, ImportReport, ImportResult, UiPathFlow } from './types.js';
-import { buildDesktopDraft, DRAFT_NAMES_SIGN_IN_VALUE, signInValueCheck, type DesktopEvent } from './uipath-desktop.js';
+import { buildDesktopDraft, DRAFT_NAMES_SIGN_IN_VALUE, signInValueCheck, type DesktopEvent } from './desktop-draft.js';
 
-const RECORDING_FORMAT = 'rpa-recording/1';
+export const RECORDING_FORMAT = 'rpa-recording/1';
 /** One recorded event: a desktop event, `secret` on a fill typed into a secret field, `positional` on a target found by its position. */
 export type RecordedEvent = DesktopEvent & { secret?: true; positional?: true };
 /** A recording file, as the RPA recorder saves it (the format above). */
@@ -75,11 +75,9 @@ export interface RecordingFile {
 }
 
 /** A recording larger than this is refused before it is parsed, as a Chrome recording is. */
-const MAX_RECORDING_BYTES = MAX_CHROME_BYTES;
+const MAX_RECORDING_BYTES = MAX_IMPORT_JSON_BYTES;
 /** A recording with more events than this is refused (the draft keeps the step parser's own limit on steps). */
 const MAX_RECORDING_EVENTS = 400;
-/** The longest text of a window or a condition, as the step parser allows. */
-const MAX_UIA_TEXT = 500;
 
 const WHAT = 'RPA recording';
 const TOO_LARGE = 'the recording is larger than 5 MiB, so it was not read';
@@ -121,8 +119,6 @@ const EVENT_KEYS = new Map<string, readonly string[]>([
   ['key', ['target', 'chord', 'positional']],
   ['read', ['target', 'as', 'positional']],
 ]);
-const WINDOW_KEYS = ['exe', 'title', 'titlePattern', 'automationId', 'className'];
-const COND_KEYS = ['controlType', 'automationId', 'name', 'className'];
 /** A program's file name: no folder, drive, wildcard or control character, ending in .exe. */
 const EXE_NAME = /^(?![ .])[^\\/:*?"<>|\p{Cc}]{0,251}\.exe$/iu;
 /** A file name without a folder (a Save dialog's file). */
@@ -130,12 +126,7 @@ const FILE_NAME = /^(?!\.{1,2}$)[^\\/:*?"<>|\p{Cc}]{1,255}$/u;
 /** A secret fill's whole value: one run variable. */
 const ONE_VARIABLE = /^\{\{\s*var\.([A-Za-z0-9_]+)\s*\}\}$/;
 const VARIABLE_NAME = /^[A-Za-z0-9_]+$/;
-/** A `{{$name}}` template, also behind extra braces or spaces, as the step parser finds it. */
-const RESERVED = /\{\{[\s{]*(\$[^}]*?)\s*\}\}/g;
 
-type Json = Record<string, unknown>;
-const isObject = (v: unknown): v is Json => typeof v === 'object' && v !== null && !Array.isArray(v);
-const isText = (v: unknown, max: number): v is string => typeof v === 'string' && v.length > 0 && v.length <= max && !/[\r\n]/.test(v);
 const isStringList = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string');
 
 /** What names a fill's field: its label, and the name and automation id of the field's own (last) condition. */
@@ -143,30 +134,6 @@ function fieldTexts(e: Json): string[] {
   const path = isObject(e.target) && Array.isArray(e.target.path) ? e.target.path : [];
   const own: unknown = path[path.length - 1];
   return [e.label, ...(isObject(own) ? [own.name, own.automationId] : [])].filter((t): t is string => typeof t === 'string');
-}
-
-/**
- * The recording's bytes or text as JSON, refusing more than MAX_RECORDING_BYTES before anything is decoded or parsed.
- * JSON.parse's own message quotes the input, so it is never copied into the report.
- */
-function readJson(data: unknown): { value: unknown } | { error: string } {
-  let text: string;
-  if (typeof data === 'string') {
-    // A string has no more UTF-16 units than UTF-8 bytes, so a long one is refused without measuring it.
-    if (data.length > MAX_RECORDING_BYTES || Buffer.byteLength(data, 'utf8') > MAX_RECORDING_BYTES) return { error: TOO_LARGE };
-    text = data;
-  } else if (data instanceof Uint8Array) {
-    if (data.byteLength > MAX_RECORDING_BYTES) return { error: TOO_LARGE };
-    text = new TextDecoder('utf-8').decode(data);
-  } else {
-    return { error: NOT_TEXT };
-  }
-  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
-  try {
-    return { value: JSON.parse(text) as unknown };
-  } catch {
-    return { error: NOT_JSON };
-  }
 }
 
 /** Every problem of a parsed recording (format and event count already checked), in file order; none when it is valid. */
@@ -199,8 +166,8 @@ function recordingIssues(rec: Json): string[] {
       const at = `${path}.path[${i}]`;
       if (!isObject(c)) { issues.push(`${at} must be an object`); return; }
       if (Object.hasOwn(c, 'index')) issues.push(HAS_INDEX(at));
-      onlyKeys(c, [...COND_KEYS, 'index'], at);
-      for (const k of COND_KEYS) if (c[k] !== undefined) text(c, k, at, MAX_UIA_TEXT);
+      onlyKeys(c, [...COND_TEXT_KEYS, 'index'], at);
+      for (const k of COND_TEXT_KEYS) if (c[k] !== undefined) text(c, k, at, MAX_UIA_TEXT);
     });
   };
 
@@ -325,8 +292,8 @@ export function importRecording(data: Buffer | Uint8Array | string, opts: Import
     add('', 'error', WHAT, reason);
     return { drafts: [], report };
   };
-  const read = readJson(data);
-  if ('error' in read) return fail(read.error);
+  const read = readJson(data, MAX_RECORDING_BYTES);
+  if ('problem' in read) return fail({ tooLarge: TOO_LARGE, notText: NOT_TEXT, notJson: NOT_JSON }[read.problem]);
   const raw = read.value;
   if (!isObject(raw) || raw.format !== RECORDING_FORMAT) return fail(NOT_A_RECORDING);
   if (!Array.isArray(raw.events)) return fail(NOT_VALID(['events must be a list of events']));

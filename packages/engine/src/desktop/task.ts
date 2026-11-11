@@ -9,7 +9,7 @@ import { CANCELLED, clampBudget, laneFailure, type LaneSuccess } from '../lane/s
 import type { TaskFailure } from '../lane/task.js';
 import { hasSignature, type TrustInput, type TrustResult } from '../lane/trust.js';
 import {
-  DESKTOP_UNSIGNED_WRITES, desktopNotInteractive, inputTooLong, nameMismatch, RUNNER_BUSY, runnerAppMissing, SIGNATURE_INVALID, SIGNATURE_WITHOUT_KEY,
+  DESKTOP_UNSIGNED_WRITES, desktopNotInteractive, desktopStepFailure, inputTooLong, nameMismatch, RUNNER_BUSY, runnerAppMissing, SIGNATURE_INVALID, SIGNATURE_WITHOUT_KEY,
   UNSIGNED_REQUIRED, UNSIGNED_SECRET_VARIABLE, versionMismatch,
 } from '../messages.js';
 import { createMasker, type Masker } from '../secrets/mask.js';
@@ -23,10 +23,9 @@ import { sleep } from '../steps/poll.js';
 import { newRunState, runSteps, type StepContext } from '../steps/run.js';
 import type { DesktopScript, ErrorCode, PortalPolicy, RunState, Script, Step, StepLogEntry, StepOutput } from '../types.js';
 import { connectRunner, RUNNER_CONNECT_TIMEOUT_MS, type Lease, type RunnerClient, type RunnerEndpoint } from './client.js';
-import { desktopFailureText } from './failure-text.js';
 import {
   DesktopUnavailableError, ElementCannotActError, ElementNotFoundError, ElementNotUniqueError, ExpectedFileMissingError, NoRunError, PolicyRefusedError, PROTOCOL_VERSION,
-  RunnerBusyError, RunnerConnectError, RunnerDisconnectedError, RunnerTimeoutError,
+  RunnerBusyError, RunnerConnectError, RunnerDisconnectedError, RunnerError, RunnerTimeoutError, RUNNER_ERROR_CODES,
 } from './protocol.js';
 import { createDesktopSurface, DesktopDriftError, MIN_MASKED_TYPED, RunnerTooOldError, type DesktopSurface } from './surface.js';
 import './handlers.js';
@@ -67,7 +66,6 @@ const BUSY_WAIT_MARGIN_MS = 15_000;
  * apply), so waiting the lease plus a margin lets the next run start instead of failing busy just before the lock frees.
  */
 export const defaultBusyWaitMs = (leaseMs: number): number => leaseMs + BUSY_WAIT_MARGIN_MS;
-export const DEFAULT_BUSY_WAIT_MS = defaultBusyWaitMs(DEFAULT_LEASE_MS);
 const BUSY_RETRY_MS = 1_000;
 /**
  * Appended when the runner no longer knows the run (no_run, or a heartbeat told so): the run always sends its own
@@ -118,6 +116,15 @@ export function checkDesktopTrust(raw: unknown, trust: TrustInput): TrustResult 
   if (trust.required) return refuse(UNSIGNED_REQUIRED);
   if (script && !trust.allowUnsignedWrites && script.steps.some((s) => s.write === true)) return refuse(DESKTOP_UNSIGNED_WRITES);
   return { ok: true, signed: false };
+}
+
+/**
+ * A runner message without its leading error code (`not_unique: `, `invalid params: `): the code names the kind of
+ * failure for the engine, and the rest is the runner's sentence for a person. Any other text comes back as it is.
+ */
+function withoutRunnerCode(message: string): string {
+  const code = [...Object.keys(RUNNER_ERROR_CODES), 'invalid params'].find((c) => message.startsWith(`${c}: `));
+  return code === undefined ? message : message.slice(code.length + 2);
 }
 
 /** The error code of a desktop failure, from the error the failing step met. */
@@ -298,8 +305,11 @@ export async function runDesktopTask(input: DesktopTaskInput): Promise<DesktopTa
       const cause = desktop.errors.get(res.failure.index);
       const code = codeOf(cause, res.failure.message);
       const lost = lease?.error || cause instanceof NoRunError ? ` (${LEASE_LOST})` : '';
-      const found = desktopFailureText(res.failure.index, res.failure.intent, cause);
-      return fail(code, `${found !== undefined ? m.mask(found) : shownFailure(res.failure.intent, failure.message)}${lost}`, base);
+      // The runner words its own failures (what it found, what to do, its target): shown after the step, as they came.
+      const shown = cause instanceof RunnerError
+        ? desktopStepFailure(res.failure.index + 1, res.failure.intent.replace(/\s+/g, ' ').trim(), withoutRunnerCode(failure.message))
+        : shownFailure(res.failure.intent, failure.message);
+      return fail(code, `${shown}${lost}`, base);
     }
     const tail = { ...ids, log: maskedLog(res.state.log, outputMasker(secrets, surface)), ...(res.state.submitted ? { submitted: true } : {}) };
     const o = override();

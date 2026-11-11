@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { APPROVER } from './fixtures.js';
 import type { ICredentialTestFunctions, IDataObject } from 'n8n-workflow';
 import * as engine from 'n8n-rpa-engine';
 import { DEMO_PASSWORD, DEMO_USER, FakeRunner } from '../../engine/test/fake-runner.js';
@@ -12,7 +13,6 @@ import { harness, type HarnessOptions } from './harness.js';
 
 // Golden strings are written out here on purpose (tests assert them verbatim, not through the constants).
 const KEY = 'desktop-signing-key-0123456789abcdef';
-const APPROVER = 'approver@example.com';
 const uia = (automationId: string, controlType = 'Edit') => ({ uia: { path: [{ controlType, automationId }] } });
 const DESKTOP_STEPS = {
   surface: 'desktop', name: 'erp-orders', version: 2, app: { exe: 'ErpDemo.exe' },
@@ -161,7 +161,7 @@ describe('Run Steps routes by the steps\' surface', () => {
     expect(runner.tcpConnections).toBe(0);
     const missing = { ...DESKTOP_STEPS, steps: [{ intent: 'Click Help', click: uia('btnHelp', 'Button'), timeoutMs: 300 }] };
     const [drift] = await executeRunSteps(ctx(creds, params(missing)), eng);
-    expect(drift[0].json.error).toBe('drift_detected: Click Help: no element matched Button #btnHelp in window "ERP Demo - Sign in"');
+    expect(drift[0].json.error).toBe('drift_detected: Step 1 (Click Help): no element matched Button #btnHelp in window "ERP Demo - Sign in"');
     expect(details(drift[0].json)).toMatchObject({ code: 'drift_detected', lane: 'script', stepIntent: 'Click Help', submitted: false });
   });
 });
