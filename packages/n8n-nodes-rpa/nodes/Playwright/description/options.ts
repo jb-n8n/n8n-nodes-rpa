@@ -310,11 +310,13 @@ export const OPTION_ENTRIES: INodeProperties[] = [
   {
     displayName: 'One-Time Code Workflow',
     name: 'codeWorkflowId',
-    type: 'string',
+    // n8n's workflow selector (as its Execute Workflow node), by list or by ID. A plain ID saved before arrives as text.
+    type: 'workflowSelector',
     default: '',
-    placeholder: "e.g. 4nQkZp2r8XyT1bLm (from the workflow's address, after /workflow/)",
+    // A literal: the steps run whichever workflow it names (operations/runSteps.ts codeWorkflowOptions).
+    noDataExpression: true,
     description:
-      'ID of the published workflow that supplies the sign-in code when the steps\' sign-in takes its code from a workflow ("source": "workflow"). It starts with an Execute Workflow Trigger, receives requestedAt and must return exactly one item with a code field of 6 to 10 digits. Publish it before the first run. In Import Steps, setting it makes a recorded sign-in take its code from this workflow, even when the Site Login has a TOTP Secret; a step document keeps its own sign-in, so in a step document also set "source": "workflow" in its totp. The approved steps then need the same workflow here in Run Steps.',
+      'The published workflow that supplies the sign-in code when the steps\' sign-in takes its code from a workflow ("source": "workflow"): pick it from the list, or give its ID (the part of its address after /workflow/). It starts with an Execute Workflow Trigger, receives requestedAt and must return exactly one item with a code field of 6 to 10 digits. Publish it before the first run. In Import Steps, setting it makes a recorded sign-in take its code from this workflow, even when the Site Login has a TOTP Secret; a step document keeps its own sign-in, so in a step document also set "source": "workflow" in its totp. The approved steps then need the same workflow here in Run Steps. Must be set directly, not with an expression.',
     displayOptions: only(['runSteps', 'importSteps']),
   },
   {

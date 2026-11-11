@@ -14,7 +14,8 @@ import { lazyChatModel } from '../model.js';
 import { configErrorItem, dataItem, failureItem, repairedStepsItem } from '../output.js';
 import { BROWSER_STEPS_NEED_BROWSER_CREDENTIAL, runDesktopStepsItem } from './runDesktopSteps.js';
 import {
-  asBoolean, asNumber, asString, browserCredentials, checkMaxItems, clamp, credentialId, errorMessage, field, isObject, literalBoolean, literalString, rawParameter, readCommonOptions, rowCheckPatterns,
+  asBoolean, asNumber, asString, browserCredentials, checkMaxItems, clamp, credentialId, errorMessage, field, isExpressionText, isObject, literalBoolean, literalRaw, literalString,
+  rawParameter, readCommonOptions, rowCheckPatterns,
   refuseCdpDownload, rowChecks, hasDownloadStep, SITE_LOGIN_NO_ID, splitList, type CommonOptions,
 } from './common.js';
 
@@ -194,15 +195,34 @@ export function readRunStepsParams(ctx: NodeContext, i: number): RunStepsParams 
     maxActions: clamp(Math.floor(asNumber(opt('maxActions'), 40)), 1, 200),
     maxTokens: clamp(Math.floor(asNumber(opt('maxTokens'), 200_000)), 1000, 1_000_000),
     breakerResetKey,
-    ...codeWorkflowOptions(opt),
+    ...codeWorkflowOptions(ctx, opt),
     common,
   };
 }
 
-/** Options → One-Time Code Workflow and Code Timeout (Seconds), read the same way by Run Steps and Import Steps. */
-export function codeWorkflowOptions(opt: (name: string) => unknown): { codeWorkflowId: string; codeTimeoutMs: number } {
+/**
+ * Options → One-Time Code Workflow as saved: the workflow picker's value ({ __rl: true, mode, value }), or the plain ID a
+ * workflow saved before the picker holds. undefined for anything else.
+ */
+function workflowIdOf(raw: unknown): string | undefined {
+  if (raw === undefined || raw === null) return '';
+  if (typeof raw === 'string') return raw;
+  if (isObject(raw) && raw.__rl === true && (raw.value === undefined || raw.value === null || typeof raw.value === 'string')) return asString(raw.value);
+  return undefined;
+}
+
+/**
+ * Options → One-Time Code Workflow and Code Timeout (Seconds), read the same way by Run Steps and Import Steps. The
+ * workflow is a literal, read from the saved parameter: an expression (in the picker's value or as text) is refused, so
+ * item data never chooses which workflow the node runs.
+ */
+export function codeWorkflowOptions(ctx: NodeContext, opt: (name: string) => unknown): { codeWorkflowId: string; codeTimeoutMs: number } {
+  const raw = literalRaw(ctx, 'options.codeWorkflowId', 'One-Time Code Workflow', (r) => {
+    const id = workflowIdOf(r);
+    return id === undefined || isExpressionText(id);
+  });
   return {
-    codeWorkflowId: asString(opt('codeWorkflowId')).trim(),
+    codeWorkflowId: (workflowIdOf(raw) ?? '').trim(),
     codeTimeoutMs: clamp(Math.floor(asNumber(opt('codeTimeout'), 120)), 1, 300) * 1000,
   };
 }
