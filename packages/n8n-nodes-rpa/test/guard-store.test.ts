@@ -48,6 +48,32 @@ describe('queue mode detection (no Redis credential)', () => {
 
 guardStoreContract('memory', async () => memoryGuardStore(), async () => resetMemoryGuardStoreForTests());
 
+/** The commands the Redis store sends, on a map: its serialisation and compare-and-delete run without a Redis server. */
+function mapRedis(): { client: () => GuardClient; reset: () => void } {
+  const data = new Map<string, { value: string; expiresAt: number }>();
+  const live = (key: string) => {
+    const entry = data.get(key);
+    if (entry && entry.expiresAt <= Date.now()) data.delete(key);
+    return data.get(key);
+  };
+  return {
+    reset: () => data.clear(),
+    client: () => ({
+      get: async (key) => live(key)?.value ?? null,
+      set: async (key, value, options) => {
+        if (options && live(key)) return null;
+        data.set(key, { value, expiresAt: options ? Date.now() + options.expiration.value : Infinity });
+        return 'OK';
+      },
+      eval: async (_script, { keys: [key], arguments: [value] }) => (live(key)?.value === value ? Number(data.delete(key)) : 0),
+      quit: async () => undefined,
+      destroy: () => {},
+    }),
+  };
+}
+const onMap = mapRedis();
+guardStoreContract('redis commands on a map', async () => guardStoreOnClient(onMap.client()), async () => onMap.reset());
+
 describe('Redis connect failures', () => {
   const reply = (message: string) => Object.assign(new Error(message), { name: 'ErrorReply' });
   it.each([

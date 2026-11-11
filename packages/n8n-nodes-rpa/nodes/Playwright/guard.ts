@@ -1,11 +1,12 @@
+import { createHmac, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
 import type { IDataObject } from 'n8n-workflow';
-import { isRecord } from './breaker-record.js';
-import { resetMemoryGuardStoreForTests, sameRecord, type BreakerRecord, type GuardStore } from './guard-store.js';
+import { readRecord } from './breaker-record.js';
+import { resetMemoryGuardStoreForTests, sameRecord, type BreakerRecord, type GuardStore, type LoginFingerprint } from './guard-store.js';
 
 /** The one key this node writes in global workflow static data. */
 export const BREAKER_KEY = 'playwrightLoginBreakers';
 
-export type { BreakerCode, BreakerRecord, Lock } from './guard-store.js';
+export type { BreakerCode, BreakerRecord, Lock, LoginFingerprint } from './guard-store.js';
 
 /** Breaker and lock key of an RPA Site Login credential: the credential id only. */
 export function siteLoginKey(credentialId: string): string {
@@ -16,7 +17,10 @@ function persisted(staticData: IDataObject): Record<string, BreakerRecord> {
   const all = staticData[BREAKER_KEY];
   const out: Record<string, BreakerRecord> = {};
   if (typeof all !== 'object' || all === null || Array.isArray(all)) return out;
-  for (const [k, v] of Object.entries(all)) if (isRecord(v)) out[k] = { code: v.code, at: v.at, resetKey: v.resetKey, message: v.message };
+  for (const [k, v] of Object.entries(all)) {
+    const record = readRecord(v);
+    if (record) out[k] = record;
+  }
   return out;
 }
 
@@ -51,7 +55,8 @@ export async function tripBreaker(store: GuardStore, staticData: IDataObject, ke
   // Redis outage must not turn a rejected login into a breaker that is open nowhere.
   const existing = persisted(staticData)[key] ?? await store.getBreaker(key).catch(() => undefined);
   // Re-tripping an open breaker (writing a process record back to static data) keeps the original time and message.
-  const record: BreakerRecord = existing && existing.resetKey.trim() === resetKey
+  // Not a record with a login fingerprint: a run gets past one only with a corrected login, whose failure replaces it.
+  const record: BreakerRecord = existing && existing.resetKey.trim() === resetKey && !existing.login
     ? { ...existing, resetKey }
     : { ...input, resetKey, at: now.toISOString() };
   // Always a new top-level object: n8n's ObservableObject only notices writes to the top level.
@@ -75,6 +80,62 @@ export async function resetBreaker(store: GuardStore, staticData: IDataObject, k
   if (!(key in all)) return;
   delete all[key];
   staticData[BREAKER_KEY] = all;
+}
+
+/** The Site Login values a login fingerprint is made of. */
+export type SiteLoginSecrets = { username: string; password: string; totpSecret?: string };
+
+/** Fixed scrypt cost of a login fingerprint: about 32 MiB and some tens of milliseconds for each hash. */
+const SCRYPT = { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
+const SALT_BYTES = 16;
+const HASH_BYTES = 32;
+
+/** Login fingerprints of one Site Login. The values stay in this closure; a fingerprint is never logged or output. */
+export interface LoginFingerprints {
+  /** A fingerprint with a new random salt, for the record of a login the site rejected. */
+  create(): Promise<LoginFingerprint>;
+  /** Whether `stored` is a fingerprint of this login (a constant-time comparison). */
+  matches(stored: LoginFingerprint): Promise<boolean>;
+}
+
+/**
+ * scrypt (salted, slow) of `username NUL password`, so that correcting either one gives a new fingerprint. With a TOTP
+ * Secret the input is first HMAC-SHA256 keyed with it, so testing a guess against the stored value also needs that
+ * secret. Each salt's hash is computed once per instance.
+ */
+export function loginFingerprints(secrets: SiteLoginSecrets): LoginFingerprints {
+  const material = Buffer.from(`${secrets.username}\0${secrets.password}`, 'utf8');
+  const input = secrets.totpSecret ? createHmac('sha256', secrets.totpSecret).update(material).digest() : material;
+  const derive = (salt: Buffer) => new Promise<Buffer>((resolve, reject) => {
+    scrypt(input, salt, HASH_BYTES, SCRYPT, (error, key) => (error ? reject(error) : resolve(key)));
+  });
+  const bySalt = new Map<string, Promise<Buffer>>();
+  return {
+    async create() {
+      const salt = randomBytes(SALT_BYTES);
+      return { salt: salt.toString('base64'), hash: (await derive(salt)).toString('base64') };
+    },
+    async matches(stored) {
+      let hash = bySalt.get(stored.salt);
+      if (!hash) {
+        hash = derive(Buffer.from(stored.salt, 'base64'));
+        bySalt.set(stored.salt, hash);
+      }
+      const expected = Buffer.from(stored.hash, 'base64');
+      const actual = await hash;
+      return expected.length === actual.length && timingSafeEqual(expected, actual);
+    },
+  };
+}
+
+/**
+ * True when `record` stops a login_failed with a fingerprint that is not of the current login: the run is then let
+ * through for one try. Never for an account_locked record, a record without a fingerprint or a guard without a login.
+ * A fingerprint that cannot be computed counts as the same login (the breaker stays open).
+ */
+export async function loginCorrected(record: BreakerRecord, login: LoginFingerprints | undefined): Promise<boolean> {
+  if (record.code !== 'login_failed' || !record.login || !login) return false;
+  return !(await login.matches(record.login).catch(() => true));
 }
 
 export function resetGuardsForTests(): void {

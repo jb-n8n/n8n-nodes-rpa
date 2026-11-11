@@ -2,7 +2,7 @@ import { NodeOperationError } from 'n8n-workflow';
 import type { ErrorCode, TaskInput, TaskResult } from 'n8n-rpa-engine';
 import type { NodeContext } from './context.js';
 import type { Engine } from './engine.js';
-import { openBreaker, tripBreaker, type BreakerCode, type BreakerRecord } from './guard.js';
+import { loginCorrected, openBreaker, resetBreaker, tripBreaker, type BreakerCode, type BreakerRecord, type LoginFingerprints } from './guard.js';
 import type { GuardStore } from './guard-store.js';
 import { isObject } from './operations/common.js';
 
@@ -22,6 +22,11 @@ export interface GuardSpec {
   ttlMs: number;
   lockedOutMessage: (b: BreakerRecord) => string;
   busyMessage: string;
+  /**
+   * The Site Login's fingerprints. With them, a login_failed record whose fingerprint is not of the current login lets
+   * one run try (a corrected username or password), and a login_failed record gets the fingerprint of the login.
+   */
+  fingerprints?: LoginFingerprints;
 }
 
 /** Golden `locked_out` message for a Site Login. */
@@ -79,12 +84,13 @@ function changedInExecution(ctx: NodeContext): Record<string, true> {
  * One engine run behind the login breaker and the run lock. Order: a password changed earlier in this execution
  * (locked_out with SITE_LOGIN_PASSWORD_CHANGED, no login, the breaker untouched; a run that changed the password never
  * trips the breaker) → breaker (locked_out; a breaker tripped earlier in
- * this execution stays open whatever the reset key) → lock (busy) → breaker again (another worker may have tripped it
- * between the first check and the lock) → engine.runTask(input()) → trip the breaker on login_failed / account_locked
- * (the result's code, or an agent run's proof replay failureCode) → release the lock. The trip comes before the
- * release, so no other worker can take the lock and log in before the breaker is open. Without `guard` there is no
- * breaker and no lock. `input` is called only once the lock is held. Throws NodeOperationError when runTask (or
- * `input`) throws; the lock is released on every path.
+ * this execution stays open whatever the reset key or the login) → lock (busy) → breaker again (another worker may
+ * have tripped it between the first check and the lock) → engine.runTask(input()) → trip the breaker on login_failed /
+ * account_locked (the result's code, or an agent run's proof replay failureCode) → release the lock. The trip comes
+ * before the release, so no other worker can take the lock and log in before the breaker is open. A login_failed
+ * breaker with the fingerprint of another login lets the run through (both checks); when the run then trips nothing,
+ * the breaker is cleared. Without `guard` there is no breaker and no lock. `input` is called only once the lock is
+ * held. Throws NodeOperationError when runTask (or `input`) throws; the lock is released on every path.
  */
 export async function runOne(
   ctx: NodeContext,
@@ -132,26 +138,43 @@ async function guardedCall<T>(ctx: NodeContext, opts: GuardedOptions<T>): Promis
   if (!guard) return { kind: 'ran', result: await opts.call(), tripped: false };
   if (changedInExecution(ctx)[guard.key]) return { kind: 'blocked', code: 'locked_out', message: SITE_LOGIN_PASSWORD_CHANGED, passwordChanged: true };
   const staticData = ctx.getWorkflowStaticData('global');
-  const lockedOut = async (): Promise<GuardedResult<T> | undefined> => {
-    const breaker = trippedInExecution(ctx)[guard.key] ?? await openBreaker(guard.store, staticData, guard.key, guard.resetKey);
-    return breaker ? { kind: 'blocked', code: 'locked_out', message: guard.lockedOutMessage(breaker) } : undefined;
+  /** The breaker that turns this call away, or the one a corrected login gets past (`passed`), or neither. */
+  const breaker = async (): Promise<{ open: BreakerRecord } | { passed?: BreakerRecord }> => {
+    const tripped = trippedInExecution(ctx)[guard.key];
+    if (tripped) return { open: tripped };
+    const record = await openBreaker(guard.store, staticData, guard.key, guard.resetKey);
+    if (!record) return {};
+    return await loginCorrected(record, guard.fingerprints) ? { passed: record } : { open: record };
   };
+  const lockedOut = (b: BreakerRecord): GuardedResult<T> => ({ kind: 'blocked', code: 'locked_out', message: guard.lockedOutMessage(b) });
 
-  const before = await lockedOut();
-  if (before) return before;
+  const before = await breaker();
+  if ('open' in before) return lockedOut(before.open);
   const lock = await guard.store.acquireLock(guard.key, guard.ttlMs);
   if (!lock) return { kind: 'blocked', code: 'busy', message: guard.busyMessage };
   try {
-    const after = await lockedOut();
-    if (after) return after;
+    // Under the lock, so two workers with the same corrected login cannot both take its one try.
+    const after = await breaker();
+    if ('open' in after) return lockedOut(after.open);
     const result = await opts.call();
     // A run that changed the password signed in with the stored one: a later login failure in it says nothing about the
     // credential, so it does not open the breaker (the in-execution block stops later items).
     const changedNow = opts.passwordChanged?.(result) === true;
     if (changedNow) changedInExecution(ctx)[guard.key] = true;
     const login = changedNow ? undefined : opts.loginFailure(result);
-    if (!login) return { kind: 'ran', result, tripped: false };
-    trippedInExecution(ctx)[guard.key] = await tripBreaker(guard.store, staticData, guard.key, { code: login.code, resetKey: guard.resetKey, message: login.message });
+    if (!login) {
+      // The corrected login was not rejected: clear the breaker it got past. A failed clear only means the next run
+      // compares the login again.
+      if (after.passed) await resetBreaker(guard.store, staticData, guard.key, after.passed).catch(() => undefined);
+      return { kind: 'ran', result, tripped: false };
+    }
+    // Without a fingerprint (none could be computed) the record opens only with a new reset key.
+    const fingerprint = login.code === 'login_failed' ? await guard.fingerprints?.create().catch(() => undefined) : undefined;
+    const record = await tripBreaker(guard.store, staticData, guard.key, {
+      code: login.code, resetKey: guard.resetKey, message: login.message, ...(fingerprint ? { login: fingerprint } : {}),
+    });
+    // The execution's copy only blocks, and n8n saves it with the execution: it does not need the fingerprint.
+    trippedInExecution(ctx)[guard.key] = { code: record.code, at: record.at, resetKey: record.resetKey, message: record.message };
     return { kind: 'ran', result, tripped: true };
   } finally {
     // A release error never replaces the run's result or error: the lock's TTL frees it.

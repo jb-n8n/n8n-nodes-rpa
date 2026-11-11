@@ -109,6 +109,15 @@ describe('login breaker', () => {
     await openBreaker(store, persistedAlready, KEY, 'r1');
     expect(persistedAlready.__dataChanged).toBe(false);
   });
+  it('a record whose login field is malformed keeps blocking without the field: only a new reset key opens it', async () => {
+    const base = { code: 'login_failed', at: AT.toISOString(), resetKey: '', message: 'm' };
+    for (const login of ['text', { salt: 'AAAA', hash: 'AAAA' }, { salt: Buffer.alloc(16).toString('base64') }]) {
+      resetGuardsForTests();
+      const s: IDataObject = { [BREAKER_KEY]: { [KEY]: { ...base, login } } };
+      expect(await openBreaker(store, s, KEY, '')).toEqual(base);
+      expect(await openBreaker(store, s, KEY, 'new')).toBeNull();
+    }
+  });
   it('ignores malformed static data', async () => {
     expect(await openBreaker(store, { [BREAKER_KEY]: { [KEY]: 'garbage' } }, KEY, '')).toBeNull();
     expect(await openBreaker(store, { [BREAKER_KEY]: ['x'] }, KEY, '')).toBeNull();

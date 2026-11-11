@@ -3,7 +3,7 @@ import type { ErrorCode } from 'n8n-rpa-engine';
 
 /** What a person should do about each code. Shown as the error description in n8n. */
 export const GUIDANCE: Record<ErrorCode, string> = {
-  login_failed: 'The site rejected the username or password, and no further login is tried until you do two things: 1. correct the RPA Site Login credential; 2. type a new value (any text, such as today\'s date) in Options → Login Breaker Reset Key.',
+  login_failed: 'The site rejected the username or password, so no further login is tried with them. Correct the username or password in the RPA Site Login credential: the next run then tries once. If they were right and something else was wrong, type a new value (any text, such as today\'s date) in Options → Login Breaker Reset Key.',
   account_locked: 'The site says the account is locked. Unlock it with the site owner, then change Options → Login Breaker Reset Key.',
   auth_blocked: 'The site asked for a second factor this run could not answer: the first line says which. If nothing automatic can answer it (a push message, a hardware key), a person has to sign in.',
   site_down: 'The site did not answer, returned a server error, or the first page did not finish loading in time. Try again later.',
@@ -13,7 +13,7 @@ export const GUIDANCE: Record<ErrorCode, string> = {
   incomplete: 'Not every row the page states was read, a capture failed, a limit was hit, the run timed out, or it was cancelled.',
   script_untrusted: 'The steps are not signed by the Step Signing key, or the signature does not match their name, version, start site, Site Login, approver or the expected version. Nothing ran.',
   policy_violation: 'The run tried something its rules do not allow, and stopped; the first line says what. In a browser: an unlisted or private site, a write, a password field, or a secret outside sign-in. On a desktop: an app or a window the runner\'s policy does not allow, or a write that was not declared.',
-  locked_out: 'No login was tried, because an earlier one failed. If the account is now correct, type a new value (any text) in Options → Login Breaker Reset Key and run again. Or a run changed the Site Login\'s password earlier in this execution: store the new password where the Site Login reads it, then run again.',
+  locked_out: 'No login was tried, because an earlier one failed. If the site rejected the username or password, correct it in the RPA Site Login credential and run again: a changed login gets one try. If the login was right, or the account has been unlocked, type a new value (any text) in Options → Login Breaker Reset Key and run again. Or a run changed the Site Login\'s password earlier in this execution: store the new password where the Site Login reads it, then run again.',
   busy: 'Another run using this Site Login or desktop runner is in progress. This run was skipped.',
   password_change_failed: 'The site did not confirm the new password: its change-password page came back, or still showed when the wait for its answer ran out (then the new password may or may not be in force). The login breaker stays closed. Keep the pending password, and check the site\'s password rules and the run variable that holds it.',
   runner_unavailable: 'The desktop runner could not be reached, refused the token or the certificate, its Windows session is locked or signed out, or the app is not installed where the runner\'s policy says. Check the RPA Desktop Runner credential and the runner machine.',

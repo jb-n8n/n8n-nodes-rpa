@@ -6,7 +6,7 @@ import { nodeOutputs } from '../description/io.js';
 import type { Engine } from '../engine.js';
 import { configNodeError, stepsRunError, type FailureDetails } from '../errors.js';
 import { LOCK_GRACE_MS, runOne, SITE_LOGIN_BUSY, siteLoginLockedOut, type GuardSpec, type RunOneResult } from '../execute.js';
-import { siteLoginKey } from '../guard.js';
+import { loginFingerprints, siteLoginKey } from '../guard.js';
 import { openGuardStore, type GuardStore, type GuardStoreDeps } from '../guard-store.js';
 import { lazyChatModel } from '../model.js';
 import { configErrorItem, dataItem, failureItem, repairedStepsItem } from '../output.js';
@@ -279,12 +279,16 @@ function safeOptionName(ctx: NodeContext, i: number): string | null {
   return typeof name === 'string' && name.trim() ? name.trim() : null;
 }
 
-/** Breaker and lock for a Site Login: keyed by its credential id, golden messages naming only the login host. The lock lasts `budgetMs` (the longest the guarded run can take) plus LOCK_GRACE_MS. */
+/**
+ * Breaker and lock for a Site Login: keyed by its credential id, golden messages naming only the login host, and the
+ * login's fingerprints (a corrected username or password gets one try). The lock lasts `budgetMs` (the longest the
+ * guarded run can take) plus LOCK_GRACE_MS.
+ */
 export function siteLoginGuard(siteLogin: SiteLogin, id: string, resetKey: string, budgetMs: number): (store: GuardStore) => GuardSpec {
   const loginHost = new URL(siteLogin.policy.startUrl).host;
   return (store) => ({
     key: siteLoginKey(id), resetKey, store, ttlMs: budgetMs + LOCK_GRACE_MS,
-    lockedOutMessage: () => siteLoginLockedOut(loginHost), busyMessage: SITE_LOGIN_BUSY,
+    lockedOutMessage: () => siteLoginLockedOut(loginHost), busyMessage: SITE_LOGIN_BUSY, fingerprints: loginFingerprints(siteLogin.secrets),
   });
 }
 

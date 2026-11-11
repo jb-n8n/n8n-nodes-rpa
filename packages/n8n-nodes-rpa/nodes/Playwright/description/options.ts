@@ -332,7 +332,7 @@ export const OPTION_ENTRIES: INodeProperties[] = [
     default: '',
     noDataExpression: true,
     description:
-      "Only used with a Site Login. A failed login stops all further logins with that credential. After fixing the account, change this value (for example to today's date) to allow the next login. Type the value, not an expression: it is the same for every item, and a login that fails stays blocked for the rest of the execution.",
+      "Only used with a Site Login. A failed login stops all further logins with that credential until its username or password is corrected, which gets one try. When the login was right and something else was wrong, or after the account is unlocked, change this value (for example to today's date) to allow the next login. Type the value, not an expression: it is the same for every item, and a login that fails stays blocked for the rest of the execution.",
     displayOptions: only(['runSteps', 'importSteps']),
   },
   {
