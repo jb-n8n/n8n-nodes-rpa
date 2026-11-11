@@ -12,8 +12,8 @@ namespace Rpa.Supervisor.Core;
 /// person signed in as the bot user); EnsureAsync refuses with UserSignedIn instead. Its own session is signed out
 /// when no Hold has been taken for IdleSeconds, when its Remote Desktop connection closes, and on StopAsync. The state
 /// file names that session, so that after a restart the supervisor signs its own stale session out and still leaves a
-/// person's alone. No attempt starts while the machine's Remote Desktop service is not running. The password never
-/// passes through here.
+/// person's alone. No attempt starts unless the machine's Remote Desktop service runs and alone listens on its port.
+/// The password never passes through here.
 /// </summary>
 public sealed class SessionManager
 {
@@ -133,11 +133,10 @@ public sealed class SessionManager
             Exception failure;
             try
             {
-                // While the Remote Desktop service is stopped, anyone may be able to listen on its port: no password
-                // goes to whatever answers there.
-                if (!_remoteDesktop.IsRunning)
+                // Only the Remote Desktop service may answer on its port: no sign-in goes to another listener there.
+                if (_remoteDesktop.Problem() is { } problem)
                     throw new SessionException(SessionFailure.HostExited,
-                        $"The Remote Desktop service (TermService) is not running, so {_options.User} is not signed in; it is tried again.");
+                        $"{problem}, so {_options.User} is not signed in; it is tried again.");
                 var connection = await _host.ConnectAsync(_options.User, attempt.Token);
                 if (connection.Closed.IsCompleted)
                 {
@@ -179,8 +178,9 @@ public sealed class SessionManager
     private async Task<SessionException> AttemptFailedAsync(Exception failure, DateTimeOffset startedAt,
         SessionException? last, CancellationToken ct)
     {
-        // WrongPassword, PasswordExpired, NotAllowed, NoPassword and Refused fail before a session exists.
-        if (failure is not SessionException { Reason: not (SessionFailure.Timeout or SessionFailure.HostExited) })
+        // WrongPassword, PasswordExpired, NotAllowed and NoPassword fail before a session exists. Refused may follow a
+        // timeout or an ended host (after a dialog of the client): the leftover rule's own conditions decide.
+        if (failure is not SessionException { Reason: not (SessionFailure.Timeout or SessionFailure.HostExited or SessionFailure.Refused) })
             await SignOutLeftoverAsync(startedAt);
         switch (failure)
         {

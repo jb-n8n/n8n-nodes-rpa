@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.ServiceProcess;
 using Rpa.Supervisor.Core;
 
@@ -9,8 +11,9 @@ namespace Rpa.Supervisor;
 /// in front of the runner and the browser host, which signs the bot user in when n8n connects and out when the work is
 /// done (SessionManager). With any other mode it writes one line to its log and does nothing. Its log and state file
 /// are in %ProgramData%\RPA Runner\supervisor\, which the installer creates and only SYSTEM and administrators can
-/// write; without that folder, a wrong install.json or a port it cannot listen on, it does not start, and says why in
-/// one line (in the Windows event log when the folder is missing, in its log otherwise). On stop it ends the proxy's
+/// write; when that folder is missing, a link or owned by anyone else, or install.json is wrong, or a port cannot be
+/// listened on, it does not start, and says why in one line (in the Windows event log for the folder, in its log
+/// otherwise). Its exit code is then 1, which the System log shows as "Incorrect function". On stop it ends the proxy's
 /// run first, which also cancels a sign-in in progress, and then signs its session out, within 60 s in all.
 /// </summary>
 internal sealed class SupervisorService : ServiceBase
@@ -51,10 +54,10 @@ internal sealed class SupervisorService : ServiceBase
 
     protected override void OnStart(string[] args)
     {
-        // A folder the service made itself would take the rights of the folder above it, which the bot user can write to.
-        if (!Directory.Exists(SupervisorDirectory))
-            throw Refuse($"The RPA Supervisor did not start: its folder {SupervisorDirectory} is missing. Run the installer again to create it.",
-                inEventLog: true);
+        // Before anything is written there. A folder the service made itself would take the rights of the folder above
+        // it, which the bot user can write to.
+        if (FolderProblem() is { } problem)
+            throw Refuse($"The RPA Supervisor did not start: its folder {SupervisorDirectory} {problem}", inEventLog: true);
 
         SupervisorOptions? options;
         try
@@ -87,6 +90,54 @@ internal sealed class SupervisorService : ServiceBase
         var ports = string.Join(", ", options.Ports.Select(p => $"{p.ListenPort} to 127.0.0.1:{p.TargetPort}"));
         _log.Info($"The RPA Supervisor started for {options.User}: it listens on {string.Join(", ", options.ListenAddresses)} " +
             $"and passes port {ports}; the session is signed out after {options.IdleSeconds} s without a connection.");
+    }
+
+    // The folder must be there, be a folder and not a link (a reparse point), and be owned by SYSTEM or Administrators,
+    // as the installer creates it. Its access rules are not read.
+    private static string? FolderProblem()
+    {
+        FileAttributes attributes;
+        try
+        {
+            attributes = File.GetAttributes(SupervisorDirectory);
+        }
+        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return "is missing. Run the installer again to create it.";
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return $"could not be checked: {e.Message}";
+        }
+        const string Again = "Remove it and run the installer again to create it.";
+        if (!attributes.HasFlag(FileAttributes.Directory)) return $"is not a folder. {Again}";
+        if (attributes.HasFlag(FileAttributes.ReparsePoint)) return $"is a link (a reparse point), not a folder. {Again}";
+        IdentityReference? owner;
+        try
+        {
+            owner = new DirectoryInfo(SupervisorDirectory).GetAccessControl(AccessControlSections.Owner).GetOwner(typeof(SecurityIdentifier));
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            return $"could not be checked: {e.Message}";
+        }
+        if (owner is SecurityIdentifier sid
+            && (sid.IsWellKnown(WellKnownSidType.LocalSystemSid) || sid.IsWellKnown(WellKnownSidType.BuiltinAdministratorsSid)))
+            return null;
+        return $"is owned by {AccountName(owner)}, not by SYSTEM or Administrators. {Again}";
+    }
+
+    private static string AccountName(IdentityReference? owner)
+    {
+        if (owner is null) return "nobody";
+        try
+        {
+            return owner.Translate(typeof(NTAccount)).Value;
+        }
+        catch (IdentityNotMappedException)
+        {
+            return owner.Value;
+        }
     }
 
     protected override void OnStop() => Shutdown();

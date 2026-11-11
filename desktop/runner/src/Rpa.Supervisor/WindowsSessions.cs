@@ -9,10 +9,13 @@ namespace Rpa.Supervisor;
 /// <summary>The machine's sessions, through the Remote Desktop Services API (wtsapi32).</summary>
 internal sealed class WindowsSessions : ISessions
 {
-    private static readonly TimeSpan SignOutLimit = TimeSpan.FromSeconds(30);
+    // A session ended in the middle of its logon goes only after about 30 s, when Windows gives up on it.
+    private static readonly TimeSpan SignOutLimit = TimeSpan.FromSeconds(45);
     private static readonly TimeSpan SignOutRepeat = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan RecentSignOut = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan Poll = TimeSpan.FromMilliseconds(250);
+    private static readonly TimeSpan ReadRetry = TimeSpan.FromMilliseconds(100);
+    private const int ReadTries = 3;
 
     private readonly ConcurrentDictionary<uint, long> _signOuts = new();
 
@@ -22,9 +25,9 @@ internal sealed class WindowsSessions : ISessions
     public IReadOnlyList<SessionInfo> ForUser(string user) =>
         All().Where(s => string.Equals(s.User, user, StringComparison.OrdinalIgnoreCase)).ToArray();
 
-    /// <summary>Signs the session out without waiting in Windows, then waits up to 30 s until it is no longer listed,
-    /// asking again every 5 s (a session in the middle of its logon may not take the first request). Throws when
-    /// Windows refuses or the session is still there.</summary>
+    /// <summary>Signs the session out without waiting in Windows, then waits up to 45 s until it is no longer listed,
+    /// asking again every 5 s. While it goes away a session can be listed and not readable for a moment; during this
+    /// wait that counts as still there. Throws when Windows refuses or the session is still there at the end.</summary>
     public async Task SignOutAsync(uint sessionId, CancellationToken ct)
     {
         if (All().FirstOrDefault(s => s.Id == sessionId) is not { } session) return;
@@ -32,7 +35,7 @@ internal sealed class WindowsSessions : ISessions
         var waited = Stopwatch.StartNew();
         var asked = TimeSpan.Zero;
         LogOff(session);
-        while (Listed(session))
+        while (StillListed(session))
         {
             if (waited.Elapsed > SignOutLimit)
                 throw new TimeoutException($"Session {sessionId} was still there {SignOutLimit.TotalSeconds:0} s after it was signed out.");
@@ -65,6 +68,20 @@ internal sealed class WindowsSessions : ISessions
         throw new Win32Exception(error.NativeErrorCode, $"Windows did not sign session {session.Id} out: {error.Message}");
     }
 
+    // During a sign-out wait: a session that cannot be read is still going ("The tag is invalid" was seen 0.2 s into a
+    // sign-out); the time limit decides.
+    private static bool StillListed(SessionInfo session)
+    {
+        try
+        {
+            return Listed(session);
+        }
+        catch (Win32Exception)
+        {
+            return true;
+        }
+    }
+
     // A session is told apart by its id and its logon time together: Windows reuses ids.
     private static bool Listed(SessionInfo session) =>
         All().Any(s => s.Id == session.Id && s.LogonTime == session.LogonTime);
@@ -95,14 +112,17 @@ internal sealed class WindowsSessions : ISessions
     }
 
     // One session's user, state and logon time, read together; null when it has no user or is gone since the listing.
-    // A session that is still listed but cannot be read throws: it might be the user's.
+    // A session that is going away can fail a read for a moment before it leaves the list, so a failed read is tried
+    // again; one that is still listed and still cannot be read throws: it might be the user's.
     private static SessionInfo? Query(uint id)
     {
-        if (!WTSQuerySessionInformation(IntPtr.Zero, id, WTSSessionInfoEx, out var buffer, out _))
+        IntPtr buffer;
+        for (var tries = 1; !WTSQuerySessionInformation(IntPtr.Zero, id, WTSSessionInfoEx, out buffer, out _); tries++)
         {
             var error = new Win32Exception();
             if (!Ids().Contains(id)) return null;
-            throw new Win32Exception(error.NativeErrorCode, $"Session {id} could not be read: {error.Message}");
+            if (tries == ReadTries) throw new Win32Exception(error.NativeErrorCode, $"Session {id} could not be read: {error.Message}");
+            Thread.Sleep(ReadRetry);
         }
         try
         {

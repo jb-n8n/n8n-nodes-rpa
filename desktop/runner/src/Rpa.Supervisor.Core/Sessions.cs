@@ -16,11 +16,13 @@ public interface ISessions
     Task SignOutAsync(uint sessionId, CancellationToken ct);
 }
 
-/// <summary>The machine's Remote Desktop service (Windows: TermService). While it is not running, anyone may be able to
-/// listen on its port, so no sign-in is tried.</summary>
+/// <summary>The machine's Remote Desktop service (Windows: TermService) and its port. While the service is stopped any
+/// user may listen on the port, and such a listener stays after the service starts again; a sign-in would go to it. So
+/// no sign-in is tried until the service runs and every listener on the port is the service's.</summary>
 public interface IRemoteDesktopService
 {
-    bool IsRunning { get; }
+    /// <summary>Null when the service runs and owns every listener on its port; otherwise why not (RemoteDesktopPort).</summary>
+    string? Problem();
 }
 
 /// <summary>Signs the bot user in over a Remote Desktop connection from the machine to itself. The implementation

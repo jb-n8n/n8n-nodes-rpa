@@ -149,9 +149,10 @@ its log, in one line. The bot user's password is read from the local security au
 `L$RpaRunnerBotPassword`, which standard users cannot read) for each sign-in. It reaches the Remote Desktop host process
 on its standard input, never on a command line, and is not written to the log or any file. The Remote Desktop connection
 does not check the server's identity: the server is the machine itself, over the loopback. Before each sign-in the
-service checks that the machine's Remote Desktop service (TermService) is running, because while it is stopped any user
-may listen on its port; when it is not running, no sign-in is tried and the connection waits for it. It does not check
-who answers on the port once that check is done.
+service checks that the machine's Remote Desktop service (TermService) is running and that every listener on port 3389
+is that service: while the service is stopped any user may listen on the port, and such a listener stays after the
+service starts again. Until both hold, no sign-in is tried and the connection waits. It does not check who answers on
+the port after that check.
 
 The machine needs Remote Desktop turned on with Network Level Authentication, and the bot user in the Remote Desktop
 Users group. The service refuses a connection rather than act on a session it did not create: when someone is signed in
@@ -161,12 +162,13 @@ expired or must change, the service tries no further sign-in until it is restart
 account out. Another refusal by the Remote Desktop client fails that connection only.
 
 The service's log and state are in `%ProgramData%\RPA Runner\supervisor\`, a folder the installer creates for SYSTEM and
-administrators only (the service does not create it); without it the service does not start, and says so in the Windows
-event log. The log is `supervisor.log` there (the previous one in `supervisor.1.log`). It records sign-ins, sign-outs
-and failures with their reasons, never a password, a token or bytes of a connection, and writes the same failure at most
-once in 30 s. `supervisor-state.json` names the session the service created and its last failure, so that after a
-restart it signs its own stale session out and leaves anyone else's alone. A connection waits up to 90 s for the session
-and the runner together; the first sign-in after a restart, or of a new user, can take most of that.
+administrators only (the service does not create it); when it is missing, is a link, or is owned by anyone but SYSTEM or
+Administrators, the service does not start, and says so in the Windows event log. The log is `supervisor.log` there (the
+previous one in `supervisor.1.log`). It records sign-ins, sign-outs and failures with their reasons, never a password, a
+token or bytes of a connection, and writes the same failure at most once in 30 s. `supervisor-state.json` names the
+session the service created and its last failure, so that after a restart it signs its own stale session out and leaves
+anyone else's alone. A connection waits up to 90 s for the session and the runner together; the first sign-in after a
+restart, or of a new user, can take most of that.
 
 ## Changing the policy
 

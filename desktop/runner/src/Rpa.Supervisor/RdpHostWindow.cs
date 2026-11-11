@@ -11,7 +11,8 @@ namespace Rpa.Supervisor;
 /// RDP client control that ships with Windows (mstscax.dll), and writes RdpHostEvent lines on standard output. Its
 /// window is in the service's session (Session 0), where nobody sees it. Every second a watchdog answers any message
 /// box of the process with its default button (or closes it when it finds none) and reports the box's text: in
-/// Session 0 nobody could answer it, and it blocks the control's events. After three answers the attempt is given up. The host disconnects and exits when its standard input closes, and exits when the
+/// Session 0 nobody could answer it, and it blocks the control's events. A fourth box before the session is Active
+/// gives the attempt up. The host disconnects and exits when its standard input closes, and exits when the
 /// connection ends.
 /// </summary>
 internal sealed class RdpHostWindow : Form
@@ -268,12 +269,16 @@ internal sealed class RdpHostWindow : Form
     {
         foreach (var dialog in DialogWindows.Of(Environment.ProcessId))
         {
-            if (_presses == MaxPresses)
+            // Before the session is Active a box that keeps coming back would hold the attempt until its time limit.
+            if (!_activeSent)
             {
-                Fail($"The Remote Desktop client showed a message again after {MaxPresses} were answered; the attempt is given up.");
-                return;
+                if (_presses == MaxPresses)
+                {
+                    Fail($"The Remote Desktop client showed a message again after {MaxPresses} were answered; the attempt is given up.");
+                    return;
+                }
+                _presses++;
             }
-            _presses++;
             var text = DialogWindows.Text(dialog);
             var pressed = DialogWindows.PressDefaultButton(dialog);
             if (_dialogs.Add(dialog)) Emit(_output, new RdpHostEvent.Dialog(pressed, text));
@@ -351,13 +356,15 @@ internal sealed class RdpHostWindow : Form
             return dialogs;
         }
 
-        /// <summary>The title of a box and the texts of its child windows other than its buttons.</summary>
+        /// <summary>The title of a box and the texts of its child windows other than its buttons and edit fields (Edit,
+        /// RichEdit and the like: what is typed into a field, a password among others, is not put in the log).</summary>
         public static string Text(IntPtr dialog)
         {
             var parts = new List<string> { TextOf(dialog) };
             EnumChildWindows(dialog, (child, _) =>
             {
-                if (ClassOf(child) != "Button") parts.Add(TextOf(child));
+                var name = ClassOf(child);
+                if (name != "Button" && !name.Contains("Edit", StringComparison.OrdinalIgnoreCase)) parts.Add(TextOf(child));
                 return true;
             }, IntPtr.Zero);
             return string.Join(": ", parts.Where(p => p.Length > 0));

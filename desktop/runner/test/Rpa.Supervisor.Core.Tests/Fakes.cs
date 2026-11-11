@@ -98,23 +98,21 @@ public sealed class FakeRdpHost(FakeSessions sessions, TimeProvider time, List<s
     }
 }
 
-/// <summary>The Remote Desktop service: running unless a test says otherwise.</summary>
+/// <summary>The Remote Desktop service and its port: ready unless a test says otherwise.</summary>
 public sealed class FakeRemoteDesktop : IRemoteDesktopService
 {
-    /// <summary>This many of the next checks find the service stopped.</summary>
-    public int StoppedChecks { get; set; }
+    /// <summary>The answers of the next checks; when it is empty, the port is ready.</summary>
+    public Queue<string?> Problems { get; } = new();
+
+    /// <summary>When set, every check after Problems is empty answers this.</summary>
+    public string? AlwaysProblem { get; set; }
 
     public int Checks { get; private set; }
 
-    public bool IsRunning
+    public string? Problem()
     {
-        get
-        {
-            Checks++;
-            if (StoppedChecks <= 0) return true;
-            StoppedChecks--;
-            return false;
-        }
+        Checks++;
+        return Problems.Count > 0 ? Problems.Dequeue() : AlwaysProblem;
     }
 }
 

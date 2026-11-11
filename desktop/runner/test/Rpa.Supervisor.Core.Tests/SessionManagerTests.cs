@@ -429,31 +429,55 @@ public sealed class SessionManagerTests : IDisposable
         Assert.Single(_sessions.ForUser(Bot));
     }
 
-    [Fact]
-    public async Task While_the_Remote_Desktop_service_is_not_running_no_attempt_starts_and_it_is_tried_again()
+    private const string NotRunning = "The Remote Desktop service (TermService) is not running";
+    private const string OtherListener = "Another program (process 4242) listens on the Remote Desktop port 3389";
+
+    [Theory]
+    [InlineData(NotRunning)]
+    [InlineData(OtherListener)]
+    public async Task While_the_Remote_Desktop_port_is_not_the_services_alone_no_attempt_starts_and_it_is_tried_again(string problem)
     {
         var manager = Manager(readySeconds: 45);
-        _remoteDesktop.StoppedChecks = 2;
+        _remoteDesktop.Problems.Enqueue(problem);
+        _remoteDesktop.Problems.Enqueue(problem);
 
         await Drive(manager.EnsureAsync(CancellationToken.None).ContinueWith(_ => 0));
 
         Assert.Equal(3, _remoteDesktop.Checks);
         Assert.Equal(1, _host.Calls);
         Assert.Single(_sessions.ForUser(Bot));
-        Assert.Contains(_log.Failures, f => f.Reason == SessionFailure.HostExited && f.Message.Contains("Remote Desktop service (TermService) is not running"));
+        Assert.Contains(_log.Failures, f => f.Reason == SessionFailure.HostExited
+            && f.Message.Contains($"{problem}, so {Bot} is not signed in; it is tried again."));
     }
 
-    [Fact]
-    public async Task While_the_Remote_Desktop_service_stays_stopped_the_connection_fails_with_that_reason()
+    [Theory]
+    [InlineData(NotRunning)]
+    [InlineData(OtherListener)]
+    public async Task While_the_Remote_Desktop_port_stays_wrong_the_connection_fails_with_that_reason(string problem)
     {
         var manager = Manager(readySeconds: 10);
-        _remoteDesktop.StoppedChecks = int.MaxValue;
+        _remoteDesktop.AlwaysProblem = problem;
 
         var e = await Drive(Fails(() => manager.EnsureAsync(CancellationToken.None)));
 
         Assert.Equal(SessionFailure.HostExited, e.Reason);
-        Assert.Contains("TermService", e.Message);
+        Assert.StartsWith(problem, e.Message);
         Assert.Equal(0, _host.Calls);
+    }
+
+    [Fact]
+    public async Task A_session_left_by_a_Refused_attempt_is_signed_out_by_the_leftover_rule()
+    {
+        // A timeout or an ended host after a dialog of the client is Refused, and may have left a half-made session.
+        var manager = Manager();
+        _host.AttemptDuration = TimeSpan.FromSeconds(10);
+        _host.LeaveSessionOnFailure = SessionState.Disconnected;
+        _host.Outcomes.Enqueue(SessionFailure.Refused);
+
+        Assert.Equal(SessionFailure.Refused, (await Fails(() => manager.EnsureAsync(CancellationToken.None))).Reason);
+
+        Assert.Equal(["connect", "signout 10"], _events);
+        Assert.Empty(_sessions.ForUser(Bot));
     }
 
     [Fact]
