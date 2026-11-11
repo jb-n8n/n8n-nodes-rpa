@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { createServer, type AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
+import { NOT_REPAIRED_STEPS } from '../nodes/Playwright/operations/signSteps.js';
+import { STEPS_EMPTY_NEEDS_REPAIR } from '../nodes/Playwright/operations/runSteps.js';
 import type { ICredentialTestFunctions, IExecuteFunctions } from 'n8n-workflow';
 import { CREDENTIALS } from '../nodes/Playwright/config.js';
 import type { NodeContext } from '../nodes/Playwright/context.js';
@@ -73,7 +75,7 @@ describe('RPA node', () => {
     const out = await exec(harness({ params, rawParameters: params, credentials: { playwrightBrowserApi: { mode: 'local', headless: true } }, continueOnFail: true }));
     expect(out).toHaveLength(1);
     expect(out[0]).toHaveLength(1);
-    expect(JSON.stringify(out[0][0].json)).toContain('Steps is empty. Add steps, or turn on AI Repair to build them from the Goal.');
+    expect(JSON.stringify(out[0][0].json)).toContain(STEPS_EMPTY_NEEDS_REPAIR);
     expect(out[0][0].json.details).toMatchObject({ configError: true });
   });
   it('execute dispatches Sign Steps: an item that is not a Repaired steps item is refused', async () => {
@@ -85,7 +87,7 @@ describe('RPA node', () => {
     const out = await exec(ctx);
     expect(out).toHaveLength(1);
     expect(out[0][0].json.error).toBe(
-      'Sign Steps refused: The input item is not a Repaired steps item from Run Steps or Import Steps (it has no digest). Only Repaired steps items can be signed.',
+      `Sign Steps refused: ${NOT_REPAIRED_STEPS}`,
     );
   });
   it('execute dispatches Import Steps: an empty Name is a configuration error, before anything is read', async () => {

@@ -3,6 +3,7 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { deflateRawSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
+import { NOT_REPLAYED_EVIDENCE_LINE } from '../nodes/Playwright/format.js';
 import { USE_CASE_WORDS } from 'n8n-rpa-engine';
 import { APPROVER } from './fixtures.js';
 import {
@@ -402,7 +403,7 @@ describe('2-data-feed.json', () => {
 /** The heading both approval emails put over the steps an import left out. */
 const LEFT_OUT_HEADING = 'Left out by the import (the source does these, the steps do not):';
 /** The evidence line of browser steps that go to approval without a replay (format.ts), written out. */
-const NOT_REPLAYED_LINE = 'Not replayed: these browser steps were never run by the import, because they submit a form, download through a form, type a secret or change a password. Check every step, each form\'s target and each download before you approve.';
+const NOT_REPLAYED_LINE = NOT_REPLAYED_EVIDENCE_LINE;
 
 describe('3-approve-steps.json', () => {
   const t = load('3-approve-steps.json');

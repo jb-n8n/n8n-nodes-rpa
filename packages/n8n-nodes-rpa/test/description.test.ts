@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
+import { NO_MODEL } from '../nodes/Playwright/operations/common.js';
 import { USE_CASE_WORDS } from 'n8n-rpa-engine';
 import {
   NodeHelpers, Workflow, type INodeCredentialDescription, type INodeParameters, type INodeProperties, type INodePropertyOptions, type INodeType, type INodeTypes,
@@ -13,7 +14,7 @@ import { STEPS_PLACEHOLDER, UNSIGNED_NOTICE } from '../nodes/Playwright/descript
 import { CODE_WORKFLOW_GUIDANCE, GUIDANCE, guidanceFor, LOGIN_PAGE_GUIDANCE, NO_TOTP_SECRET_GUIDANCE, PASSWORD_CHANGED_GUIDANCE } from '../nodes/Playwright/errors.js';
 import { SITE_LOGIN_PASSWORD_CHANGED, siteLoginLockedOut } from '../nodes/Playwright/execute.js';
 import { COMPILERS, quickFieldNames, type QuickOp } from '../nodes/Playwright/operations/quick.js';
-import { executeRunSteps } from '../nodes/Playwright/operations/runSteps.js';
+import { executeRunSteps, STEPS_EMPTY_NEEDS_REPAIR } from '../nodes/Playwright/operations/runSteps.js';
 import { readRunStepsParams } from '../nodes/Playwright/operations/runStepsParams.js';
 import { DISPATCH, Playwright } from '../nodes/Playwright/Playwright.node.js';
 import { fakeEngine } from './fake-engine.js';
@@ -309,11 +310,11 @@ describe('dynamic inputs and outputs', () => {
     const resolvedFalse = await run(false, AI_REPAIR_EXPRESSION);
     expect(resolvedFalse).toHaveLength(2);
     expect(resolvedFalse[1]).toEqual([]);
-    expect(JSON.stringify(resolvedFalse[0])).toContain('Steps is empty. Add steps, or turn on AI Repair to build them from the Goal.');
+    expect(JSON.stringify(resolvedFalse[0])).toContain(STEPS_EMPTY_NEEDS_REPAIR);
 
     const resolvedTrue = await run(true, AI_REPAIR_EXPRESSION); // no chat model connected
     expect(resolvedTrue).toHaveLength(2);
-    expect(JSON.stringify(resolvedTrue[0])).toContain('AI repair is on but no chat model is connected. Connect one to the Model input.');
+    expect(JSON.stringify(resolvedTrue[0])).toContain(NO_MODEL);
 
     expect(await run(false, false)).toHaveLength(1);
     expect(engine.calls).toEqual([]);

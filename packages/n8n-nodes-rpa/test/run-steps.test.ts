@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { CODE_WORKFLOW_GUIDANCE, NO_TOTP_SECRET_GUIDANCE } from '../nodes/Playwright/errors.js';
 import { APPROVER } from './fixtures.js';
 import { NodeHelpers, NodeOperationError, type IDataObject, type INodeExecutionData } from 'n8n-workflow';
 import { isEmptySteps, MAX_BUDGET_MS, proposalDigest, scriptHash, type Proposal, type Script } from 'n8n-rpa-engine';
@@ -803,9 +804,9 @@ describe('outputs', () => {
   it('an auth_blocked failure gets the description of its cause: the code workflow, no TOTP Secret, or neither', async () => {
     const cases: [string, string][] = [
       ['Sign in: detected:mfa_code: the one-time code workflow failed: it is not published: open the workflow set in Options → One-Time Code Workflow and click Publish (Workflow is not active and cannot be executed.)',
-        'auth_blocked: The One-Time Code Workflow gave no code; the first line says why. Run that workflow by itself until it returns one item with a code field, publish it, then run again.'],
-      ['Sign in: detected:mfa_code: the one-time code workflow did not return a code within 120 s', 'auth_blocked: The One-Time Code Workflow gave no code; the first line says why. Run that workflow by itself until it returns one item with a code field, publish it, then run again.'],
-      ['Sign in: detected:mfa_totp: the site asked for a one-time code and the Site Login has no TOTP Secret', 'auth_blocked: The site asked for a one-time code and the RPA Site Login has no TOTP Secret. Put the authenticator\'s seed in its TOTP Secret. To take the code from a workflow instead, set Options → One-Time Code Workflow (steps you wrote also need "source": "workflow" in the sign-in step).'],
+        `auth_blocked: ${CODE_WORKFLOW_GUIDANCE}`],
+      ['Sign in: detected:mfa_code: the one-time code workflow did not return a code within 120 s', `auth_blocked: ${CODE_WORKFLOW_GUIDANCE}`],
+      ['Sign in: detected:mfa_totp: the site asked for a one-time code and the Site Login has no TOTP Secret', `auth_blocked: ${NO_TOTP_SECRET_GUIDANCE}`],
       ['Sign in: detected:mfa_sms', 'auth_blocked: The site asked for a second factor that this run could not answer; the first line says which. A push message or a hardware key needs a person to sign in.'],
       // A detect step that found the code page is not the missing seed: the steps have no code step.
       ['Check sign-in: detected:mfa_totp', 'auth_blocked: The site asked for a second factor that this run could not answer; the first line says which. A push message or a hardware key needs a person to sign in.'],

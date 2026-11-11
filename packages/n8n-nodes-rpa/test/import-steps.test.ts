@@ -3,6 +3,8 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { deflateRawSync, inflateRawSync } from 'node:zlib';
 import { afterEach, describe, expect, it } from 'vitest';
+import { CODE_WORKFLOW_GUIDANCE, NO_TOTP_SECRET_GUIDANCE } from '../nodes/Playwright/errors.js';
+import { NO_MODEL } from '../nodes/Playwright/operations/common.js';
 import { USE_CASE_WORDS } from 'n8n-rpa-engine';
 import { NodeHelpers, NodeOperationError, type IDataObject, type INodeExecutionData, type INodeProperties, type INodePropertyOptions } from 'n8n-workflow';
 import * as real from 'n8n-rpa-engine';
@@ -36,7 +38,6 @@ const NAME_REQUIRED = 'Name is required: it names the imported steps.';
 const NAME_EQUALS = 'Name must not start with "=".';
 const CDP_DOWNLOAD =
   'Downloads need the Browser Server or Local Browser mode: a Chrome DevTools Protocol (CDP) connection cannot read downloaded files. Pick an RPA Browser credential in Browser Server mode for this node.';
-const NO_MODEL = 'AI repair is on but no chat model is connected. Connect one to the Model input.';
 
 const SITE = { url: 'https://erp.example.com', host: 'erp.example.com' };
 const ENGINE_FIXTURES = new URL('../../engine/test/fixtures/import/', import.meta.url);
@@ -696,7 +697,7 @@ describe('Import Steps: execution', () => {
       expect(error).toBeInstanceOf(NodeOperationError);
       expect((error as NodeOperationError).message).toBe(`auth_blocked: ${message}`);
       expect((error as NodeOperationError).description).toBe(
-        'auth_blocked: The site asked for a one-time code and the RPA Site Login has no TOTP Secret. Put the authenticator\'s seed in its TOTP Secret. To take the code from a workflow instead, set Options → One-Time Code Workflow (steps you wrote also need "source": "workflow" in the sign-in step).',
+        `auth_blocked: ${NO_TOTP_SECRET_GUIDANCE}`,
       );
       expect(engine.adoptions[0]).not.toHaveProperty('codeProvider');
     });
@@ -718,7 +719,7 @@ describe('Import Steps: execution', () => {
         'auth_blocked: Sign in with an authentication code: detected:mfa_code: the one-time code workflow failed: it is not published: open the workflow set in Options → One-Time Code Workflow and click Publish (Workflow is not active and cannot be executed.)',
       );
       expect((error as NodeOperationError).description).toBe(
-        'auth_blocked: The One-Time Code Workflow gave no code; the first line says why. Run that workflow by itself until it returns one item with a code field, publish it, then run again.',
+        `auth_blocked: ${CODE_WORKFLOW_GUIDANCE}`,
       );
     });
 

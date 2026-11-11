@@ -6,7 +6,7 @@ import { policyFor } from '../nodes/Playwright/config.js';
 import { fillFormProperties, PASSWORD_WARNING, SUBMIT_SCOPE } from '../nodes/Playwright/description/fillForm.js';
 import { OPERATIONS, properties } from '../nodes/Playwright/description/index.js';
 import { locatorGroupValues } from '../nodes/Playwright/description/locator.js';
-import { COMPILERS, compileQuickOp, executeQuickOp, OUTPUTS, quickFieldNames, type QuickParams } from '../nodes/Playwright/operations/quick.js';
+import { COMPILERS, compileQuickOp, executeQuickOp, OUTPUTS, quickFieldNames, URL_TEMPLATE, type QuickParams } from '../nodes/Playwright/operations/quick.js';
 import { compileFillForm, fillFormOutput } from '../nodes/Playwright/operations/quick/fillForm.js';
 import { fakeEngine } from './fake-engine.js';
 import { harness } from './harness.js';
@@ -142,7 +142,7 @@ describe('executeQuickOp: fillForm (fake engine)', () => {
     const engine = fakeEngine(() => okResult());
     const p = quickParams('fillForm', { url: 'https://example.com/log?v={{var.f0}}', formFields: FIELDS, submitButton: SEND });
     const [data] = await executeQuickOp(harness({ params: p, credentials: BROWSER, continueOnFail: true }), engine, 'fillForm');
-    expect(data[0].json).toMatchObject({ message: 'URL must not contain {{ }} templates', details: { configError: true } });
+    expect(data[0].json).toMatchObject({ message: URL_TEMPLATE, details: { configError: true } });
     expect(engine.calls).toHaveLength(0);
   });
   it('a failure after the POST carries details.submitted: true', async () => {
