@@ -138,4 +138,116 @@ public class RecordingFileTests
         Assert.Throws<ArgumentException>(() => s.ToPolicyChange(path, "abc"));
         Assert.Throws<ArgumentException>(() => s.ToPolicyChange(path.Replace("ErpDemo", "Other"), Sha));
     }
+
+    [Fact]
+    public void A_variable_keeps_the_value_that_was_recorded_as_its_start_value_except_a_secret()
+    {
+        var s = Record(ErpDemoObservations.List());
+        int Index(string intentStart) => s.Steps.Select((step, i) => (step, i)).First(x => StepText.Sentence(x.step).StartsWith(intentStart, StringComparison.Ordinal)).i;
+        var company = Index("Choose");
+        var dateFrom = Index("Type \"2026-01-20\"");
+        s.MarkVariable(company, "in_CompanyCode");
+        s.MarkVariable(dateFrom, "in_DateFrom");
+        var file = s.ToFile("ERP Demo line items");
+        Assert.Equal(new Dictionary<string, string> { ["in_CompanyCode"] = "2000", ["in_DateFrom"] = "2026-01-20" }, file.Variables);
+        var json = JsonDocument.Parse(file.ToJson()).RootElement;
+        Assert.Equal("""{"in_CompanyCode":"2000","in_DateFrom":"2026-01-20"}""", json.GetProperty("variables").GetRawText().Replace(" ", "").Replace("\n", "").Replace("\r", ""));
+        // The secret variable the password field gave never has a start value.
+        Assert.Equal(["password"], file.SecretVariables);
+        Assert.False(json.GetProperty("variables").TryGetProperty("password", out _));
+
+        // Made secret after it was a variable: no start value, and the typed value is gone.
+        s.MarkSecret(dateFrom, "in_DateFrom");
+        Assert.Equal(new Dictionary<string, string> { ["in_CompanyCode"] = "2000" }, s.ToFile("Test").Variables);
+        Assert.DoesNotContain("2026-01-20", s.ToFile("Test").ToJson());
+        // A deleted step takes its start value with it.
+        s.Delete(company);
+        Assert.Empty(s.ToFile("Test").Variables);
+        Assert.DoesNotContain("variables", s.ToFile("Test").ToJson());
+    }
+
+    [Fact]
+    public void A_value_the_importer_would_refuse_as_a_start_value_is_not_kept()
+    {
+        // More than one line, or longer than 500 characters: the variable starts empty (the person fills it in).
+        var note = El("Edit", "txtNote", "Note");
+        var s = Record(Typed(1, Name), Left(2, Name, "line one\nline two"), Typed(3, note), Left(4, note, new string('x', 501)));
+        s.MarkVariable(0, "note");
+        s.MarkVariable(1, "longText");
+        Assert.Empty(s.ToFile("Test").Variables);
+    }
+
+    private static (Session Session, int Company, int DateFrom) ErpWithVariables()
+    {
+        var s = Record(ErpDemoObservations.List());
+        int Index(string start) => s.Steps.Select((step, i) => (step, i)).First(x => StepText.Sentence(x.step).StartsWith(start, StringComparison.Ordinal)).i;
+        return (s, Index("Choose"), Index("Type \"2026-01-20\""));
+    }
+
+    [Fact]
+    public void A_step_marked_as_a_variable_and_then_as_a_secret_under_another_name_leaves_no_start_value()
+    {
+        var (s, company, dateFrom) = ErpWithVariables();
+        s.MarkVariable(dateFrom, "a");
+        // Another step still types the variable a, so the name stays in use after the first step is made secret.
+        s.MarkVariable(company, "a");
+        s.MarkSecret(dateFrom, "b");
+        var file = s.ToFile("Test");
+        Assert.DoesNotContain("2026-01-20", file.ToJson());
+        Assert.Equal(new Dictionary<string, string> { ["a"] = "2000" }, file.Variables);
+        Assert.Contains("b", file.SecretVariables);
+    }
+
+    [Fact]
+    public void Deleting_a_step_removes_its_start_value()
+    {
+        var (s, company, dateFrom) = ErpWithVariables();
+        s.MarkVariable(company, "in_CompanyCode");
+        s.MarkVariable(dateFrom, "in_DateFrom");
+        s.Delete(dateFrom);
+        Assert.Equal(new Dictionary<string, string> { ["in_CompanyCode"] = "2000" }, s.ToFile("Test").Variables);
+    }
+
+    [Fact]
+    public void Renaming_a_variable_moves_its_start_value()
+    {
+        var (s, company, _) = ErpWithVariables();
+        s.MarkVariable(company, "first");
+        s.MarkVariable(company, "in_CompanyCode");
+        Assert.Equal(new Dictionary<string, string> { ["in_CompanyCode"] = "2000" }, s.ToFile("Test").Variables);
+    }
+
+    [Fact]
+    public void Two_steps_that_share_a_name_start_with_the_first_steps_value_which_goes_with_that_step()
+    {
+        var (s, company, dateFrom) = ErpWithVariables();
+        s.MarkVariable(dateFrom, "shared");
+        s.MarkVariable(company, "shared");
+        Assert.Equal(new Dictionary<string, string> { ["shared"] = "2026-01-20" }, s.ToFile("Test").Variables);
+        s.Delete(dateFrom);
+        Assert.Equal(new Dictionary<string, string> { ["shared"] = "2000" }, s.ToFile("Test").Variables);
+    }
+
+    [Fact]
+    public void No_start_value_is_written_for_a_secret_variables_name()
+    {
+        // The password field's variable is secret; a variable of the same name on another step gets no start value.
+        var (s, company, _) = ErpWithVariables();
+        s.MarkVariable(company, "password");
+        var file = s.ToFile("Test");
+        Assert.Contains("password", file.SecretVariables);
+        Assert.Empty(file.Variables);
+    }
+
+    [Fact]
+    public void A_start_value_equal_to_a_value_that_was_made_secret_is_not_written()
+    {
+        var name = El("Edit", "txtName", "Name");
+        var note = El("Edit", "txtNote", "Note");
+        var s = Record(Typed(1, name), Left(2, name, "Same-Value-1"), Typed(3, note), Left(4, note, "Same-Value-1"));
+        s.MarkSecret(0, "secretOne");
+        s.MarkVariable(1, "plain");
+        Assert.Empty(s.ToFile("Test").Variables);
+        Assert.DoesNotContain("Same-Value-1", s.ToFile("Test").ToJson());
+    }
 }

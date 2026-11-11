@@ -92,7 +92,8 @@ describe('Import Steps with a UiPath desktop project', () => {
       operation: 'runSteps', steps: "={{ $json.steps ?? '' }}", requireSignedSteps: true, signature: '={{ $json.signature }}', approvedBy: '={{ $json.approvedBy }}', aiRepair: false,
       options: {
         name: 'erp-1', expectedVersion: '={{ $json.version }}',
-        variables: { values: ['username', 'password', 'in_CompanyCode', 'in_DateFrom', 'in_DateTo'].map((name) => ({ name, value: '' })) },
+        // The secret one (password) is not here: it comes from the RPA Secret Variables credential the note names.
+        variables: { values: ['username', 'in_CompanyCode', 'in_DateFrom', 'in_DateTo'].map((name) => ({ name, value: '' })) },
       },
     });
     expect(run.credentials).toEqual({ rpaDesktopRunnerApi: { id: null, name: 'RPA Desktop Runner' } });
@@ -102,10 +103,11 @@ describe('Import Steps with a UiPath desktop project', () => {
     const get = wf.nodes.find((n) => n.name === 'Get active steps (erp-1)')!;
     expect(get.parameters).toMatchObject({ dataTableId: { value: 'playwright_steps' }, filters: { conditions: [{ keyName: 'name', keyValue: 'erp-1' }, { keyName: 'status', keyValue: 'active' }] } });
     const gold = wf.nodes.find((n) => n.name === 'Fill in the variables (erp-1)')!;
-    expect(String(gold.parameters.content)).toContain('**`password`** (a secret: map it from a secret source');
-    expect(String(gold.parameters.content)).toContain('list in **Write Steps** the ones that save, post or submit');
+    expect(String(gold.parameters.content)).toBe('### Fill in the variables (gold)\nOn **Open Application \'ERP Demo - Sign in\'**, Options → Variables: `username`, `in_CompanyCode`, `in_DateFrom`, `in_DateTo`. Secret: `password`: in an **RPA Secret Variables** credential selected on **Open Application \'ERP Demo - Sign in\'**, never typed here. Desktop steps run only once approved: import the project with **RPA: 5 Import a bot** and approve `erp-1` on its review page.');
+    expect(run.notes).toContain('password: put it in an RPA Secret Variables credential (type rpaSecretVariablesApi, field Variables) and select it here.');
     const credentialSticky = wf.nodes.find((n) => n.name.startsWith('Credential:'))!;
     expect(String(credentialSticky.parameters.content)).toContain("Desktop steps type the user name and password from their Run steps' **Variables**");
+    expect(String(wf.nodes[1].parameters.content)).toContain('- **RPA Secret Variables**, holding `password`: on the Run steps that name them (their notes say which)');
     expect(wf.description).toBe('Imported from the UiPath project ERP Demo Line Items: 0 browser sequences and 1 desktop sequence as signed RPA steps, 0 other activities as n8n nodes, 0 not translated.');
     expect(JSON.stringify(wf)).not.toContain(ERP_PASSWORD);
   });
@@ -194,12 +196,18 @@ describe('approving imported desktop steps: Sign Steps with Write Steps', () => 
 });
 
 describe('RPA: 5 Import a bot with a desktop project', () => {
-  it('the completion page counts the desktop step lists waiting for approval without a replay', async () => {
+  it('with approval by email, the completion page counts the desktop step lists waiting for approval without a replay', async () => {
     const t = JSON.parse(readFileSync(new URL('../templates/5-import-a-bot.json', import.meta.url), 'utf8')) as { nodes: { name: string; parameters: Record<string, unknown> }[] };
     const message = String(t.nodes.find((n) => n.name === 'Imported')!.parameters.completionMessage);
-    const render = (text: string, $json: unknown) => text.replace(/^=/, '').replace(/\{\{(.+?)\}\}/gs, (_, code: string) => String(new Function('$json', `return (${code});`)($json)));
     const { data } = await importSample();
-    const shown = render(message, data[0].json);
+    // $('<node>') as n8n gives it: Import steps ran, the review page did not, Settings say by email and Approve steps names its workflow.
+    const ran: Record<string, { json: unknown }[][]> = { 'Import steps': [data], Settings: [[{ json: { approval: 'by email' } }]] };
+    const $ = (name: string) => ({
+      isExecuted: name in ran, params: name === 'Approve steps' ? { workflowId: { value: 'wf-3' } } : {},
+      first: (branch = 0) => ran[name][branch][0], all: (branch = 0) => ran[name][branch] ?? [],
+    });
+    const render = (text: string) => text.replace(/^=/, '').replace(/\{\{(.+?)\}\}/gs, (_, code: string) => String(new Function('$', `return (${code});`)($)));
+    const shown = render(message);
     expect(shown).toContain('\n1 desktop step list is waiting for approval in RPA: 3 Approve steps, not replayed: review every step');
     expect(shown).not.toContain('passed the replay');
   });
@@ -242,13 +250,13 @@ describe('Import Steps with an RPA recording', () => {
     const { data, repaired } = await importRecording();
     const json = data[0].json;
     expect(json.drafts).toEqual([expect.objectContaining({
-      name: 'erp-1', surface: 'desktop', adopted: false, forApproval: true, writeCandidates: [4, 16], variables: ['password'], secretVariables: ['password'],
+      name: 'erp', surface: 'desktop', adopted: false, forApproval: true, writeCandidates: [4, 16], variables: ['password'], secretVariables: ['password'],
       reason: 'Desktop steps are not replayed at import (there is no desktop proof yet): they go to approval as imported. Review every step, supply the variables in Run steps, and list the steps that save, post or submit in Write Steps when you approve.',
     })]);
     expect(json.workflowName).toBe('ERP Demo line items (imported from a recording)');
     expect(data[0].binary?.workflow).toMatchObject({ mimeType: 'application/json', fileName: 'erp.workflow.json' });
     const item = repaired[0].json;
-    expect(item).toMatchObject({ name: 'erp-1', baseVersion: null, version: 1, attachmentNames: '' });
+    expect(item).toMatchObject({ name: 'erp', baseVersion: null, version: 1, attachmentNames: '' });
     expect(String(item.changeList).split('\n')).toHaveLength(17);
     expect(String(item.safetyLine)).toContain('candidate write: step 16 (Click Save) may save, post or submit');
   });
@@ -260,7 +268,7 @@ describe('Import Steps with an RPA recording', () => {
     expect(uipath.repaired[0].json.evidenceLine).toBe('Not replayed: desktop steps imported from UiPath are reviewed as written (there is no desktop proof yet). Check every step, and list in Write Steps the steps that save, post or submit.');
     // Sign Steps takes the recording's item, with its line, and signs exactly the declared writes.
     const record = await sign(repaired[0].json, { writeSteps: '4, 16' });
-    expect(record).toMatchObject({ name: 'erp-1', version: 1, status: 'active', writeLine: 'Signed as writes: step 4 (Press Enter in Password), step 16 (Click Save)' });
+    expect(record).toMatchObject({ name: 'erp', version: 1, status: 'active', writeLine: 'Signed as writes: step 4 (Press Enter in Password), step 16 (Click Save)' });
     // The line is one Sign Steps knows: another text is refused.
     expect(String((await sign({ ...repaired[0].json, evidenceLine: RECORDING_LINE.replace('a recording', 'somewhere') })).error)).toContain('changed after it was reviewed');
   });
@@ -272,10 +280,12 @@ describe('Import Steps with an RPA recording', () => {
     expect(wf.description).toBe('Imported from the recording ERP Demo line items: 1 desktop step list as signed RPA steps.');
     const run = wf.nodes.find((n) => n.type === 'n8n-nodes-rpa.playwright')!;
     expect(run.name).toBe('ERP Demo line items');
-    expect(run.parameters).toMatchObject({ operation: 'runSteps', aiRepair: false, options: { name: 'erp-1', variables: { values: [{ name: 'password', value: '' }] } } });
+    // The recording's only variable, password, is secret: no Variables here, the RPA Secret Variables credential holds it.
+    expect(run.parameters).toMatchObject({ operation: 'runSteps', aiRepair: false, options: { name: 'erp' } });
+    expect(run.parameters.options).not.toHaveProperty('variables');
     expect(run.credentials).toEqual({ rpaDesktopRunnerApi: { id: null, name: 'RPA Desktop Runner' } });
-    expect(run.notes).toBe('Runs the signed desktop steps erp-1 (17 steps imported from the recording "ERP Demo line items") on the desktop runner. Pick the RPA Desktop Runner and RPA Step Signing credentials. Fill in the Variables; password must come from a secret source.');
-    const gold = String(wf.nodes.find((n) => n.name === 'Fill in the variables (erp-1)')!.parameters.content);
+    expect(run.notes).toBe('Runs the signed desktop steps erp (17 steps imported from the recording "ERP Demo line items") on the desktop runner. Pick the RPA Desktop Runner and RPA Step Signing credentials. Fill in the Variables. password: put it in an RPA Secret Variables credential (type rpaSecretVariablesApi, field Variables) and select it here.');
+    const gold = String(wf.nodes.find((n) => n.name === 'Fill in the variables (erp)')!.parameters.content);
     expect(gold).toContain('import the recording with **RPA: 5 Import a bot**');
     const text = JSON.stringify(wf);
     expect(text).not.toMatch(/UiPath|project/);
@@ -323,7 +333,7 @@ describe('Import Steps with an RPA recording', () => {
     for (const n of wf.nodes) expect(n.name.startsWith('='), n.name).toBe(false);
     expect(wf.name).toBe('{{ process.env.SECRET }} (imported from a recording)');
     // The text is still there to read, as text: in the run node's notes and the About sticky.
-    expect(wf.nodes.find((n) => n.notes?.includes('"={{ process.env.SECRET }}"'))?.name).toBe('Run steps (erp-1)');
+    expect(wf.nodes.find((n) => n.notes?.includes('"={{ process.env.SECRET }}"'))?.name).toBe('Run steps (erp)');
     expect(String(wf.nodes.find((n) => n.name === 'About this import')!.parameters.content)).toContain('`{{ process.env.SECRET }}`');
   });
 });

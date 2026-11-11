@@ -21,6 +21,17 @@ namespace Rpa.Recorder.Core;
 public sealed class Session
 {
     private readonly List<RecordedStep> _steps = [];
+    /// <summary>
+    /// The start values, each kept with the step it came from (that step's record, by reference): the name it was made a
+    /// variable under and the value it held then. A step made secret, deleted, or changed in any other way is no longer
+    /// in <see cref="_steps"/> as that record, so what it contributed counts no more (<see cref="ToFile"/>).
+    /// </summary>
+    private readonly List<(RecordedStep Step, string Name, string Value)> _startValues = [];
+    /// <summary>SHA-256 of every value a step held when it was made secret in this session (never the value itself): no
+    /// start value equal to one is written.</summary>
+    private readonly HashSet<string> _madeSecret = [];
+    /// <summary>The longest start value the importer takes (MAX_START_VALUE in recording.ts).</summary>
+    public const int MaxStartValueLength = 500;
     private (string Exe, IReadOnlyList<string> Args)? _app;
     /// <summary>The field the person is typing into, until they leave it. Its value is never kept here.</summary>
     private Typing? _typing;
@@ -196,19 +207,35 @@ public sealed class Session
         _steps.Add(step);
     }
 
-    public void Delete(int index) => _steps.RemoveAt(index);
+    /// <summary>Deletes a step, and the start value it gave a variable.</summary>
+    public void Delete(int index)
+    {
+        var step = _steps[index];
+        _steps.RemoveAt(index);
+        _startValues.RemoveAll(c => ReferenceEquals(c.Step, step));
+    }
 
-    /// <summary>Makes a fill's value or a select's item the run variable <paramref name="name"/>. A secret fill stays secret.</summary>
+    /// <summary>Makes a fill's value or a select's item the run variable <paramref name="name"/>. A secret fill stays secret.
+    /// The value it held becomes the variable's start value (see <see cref="ToFile"/>), unless the fill is secret.</summary>
     public void MarkVariable(int index, string name)
     {
         CheckName(name);
         var step = _steps[index];
-        _steps[index] = step.Kind switch
+        var marked = step.Kind switch
         {
             StepKind.Fill => step with { Value = Variable(name), ExportFile = null },
             StepKind.Select => step with { Option = Variable(name) },
             _ => throw new InvalidOperationException("only a typed value or a selected item can be a variable"),
         };
+        // The value this step gives its variable: the one it holds now, or, when it is already a variable (a rename), the
+        // value it contributed then. Whatever it contributed before goes with the old record.
+        var recorded = step.Kind == StepKind.Fill ? step.Value : step.Option;
+        var before = _startValues.FindIndex(c => ReferenceEquals(c.Step, step));
+        var value = before >= 0 ? _startValues[before].Value
+            : recorded is not null && !step.Secret && step.ExportFile is null && !recorded.Contains("{{") ? recorded : null;
+        if (before >= 0) _startValues.RemoveAt(before);
+        _steps[index] = marked;
+        if (value is not null && !step.Secret) _startValues.Add((marked, name, value));
     }
 
     /// <summary>Makes a fill secret: its value becomes the run variable <paramref name="name"/>, and the typed value is gone.</summary>
@@ -217,8 +244,14 @@ public sealed class Session
         CheckName(name);
         var step = _steps[index];
         if (step.Kind != StepKind.Fill) throw new InvalidOperationException("only a typed value can be secret");
+        // Neither the value the step holds nor the start value it gave a variable may reach the file from now on.
+        if (step.Value is { } typed && !typed.Contains("{{")) _madeSecret.Add(Hash(typed));
+        foreach (var c in _startValues.Where(c => ReferenceEquals(c.Step, step))) _madeSecret.Add(Hash(c.Value));
+        _startValues.RemoveAll(c => ReferenceEquals(c.Step, step));
         _steps[index] = step with { Value = Variable(name), ExportFile = null, Secret = true };
     }
+
+    private static string Hash(string value) => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(value)));
 
     /// <summary>Adds a step that reads the element's text into the run output <paramref name="name"/>.</summary>
     public void AddRead(ElementFacts element, WindowFacts window, string name)
@@ -256,7 +289,19 @@ public sealed class Session
         if (events.Count > RecordingFile.MaxEvents)
             throw new InvalidOperationException($"a recording holds at most {RecordingFile.MaxEvents} events; this one has {events.Count}: delete steps or record the work in shorter parts");
         var secrets = _steps.Where(s => s.Secret).Select(s => s.Value![6..^2]).Distinct().ToArray();
-        return new RecordingFile(name, exe, args, events, secrets);
+        // A start value for a name only while the step it came from is still in the steps as a non-secret variable of that
+        // name; the first such step's value when two share a name. Never for a secret variable's name, never a value that
+        // was made secret in this session, and only a value the importer takes (one line of at most 500 characters).
+        var variables = new Dictionary<string, string>();
+        foreach (var (step, varName, value) in _startValues)
+        {
+            var kept = _steps.FirstOrDefault(s => ReferenceEquals(s, step));
+            var typed = kept?.Kind == StepKind.Fill ? kept.Value : kept?.Option;
+            if (kept is null || kept.Secret || typed != Variable(varName) || secrets.Contains(varName) || _madeSecret.Contains(Hash(value))) continue;
+            if (value.Length is 0 or > MaxStartValueLength || value.Contains('\r') || value.Contains('\n')) continue;
+            variables.TryAdd(varName, value);
+        }
+        return new RecordingFile(name, exe, args, events, secrets) { Variables = variables };
     }
 
     /// <summary>The change that allows the recorded application, by its path and SHA-256, for <c>RpaPolicy.exe apply</c>.

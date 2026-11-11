@@ -3,7 +3,7 @@
   "nodes": [
     {
       "parameters": {
-        "content": "### Create the RPA Data Tables (grey: leave as is)\nRun this once per n8n project. It creates `playwright_steps` (one row per step-list version, with its status: pending, active, superseded, rejected or expired) and `playwright_runs` (one row per run). Running it again changes nothing.\n\nThen import **RPA: 3 Approve steps** and **RPA: 2 Data feed**.",
+        "content": "### Create the RPA Data Tables (optional; grey: leave as is)\n**RPA: 5 Import a bot** and **RPA: 3 Approve steps** create these tables when they are missing, so you need this only to create them by hand, for example before **RPA: 2 Data feed** runs for the first time. It creates `playwright_steps` (one row per step-list version, with its status: pending, active, superseded, rejected or expired) and `playwright_runs` (one row per run). Running it again changes nothing.",
         "height": 260,
         "width": 480,
         "color": 7

@@ -8,10 +8,15 @@ namespace Rpa.Recorder.Core;
 /// <summary>
 /// A recording file, format <c>rpa-recording/1</c>, as the engine's importer reads it (the format is defined at the top
 /// of packages/engine/src/import/recording.ts): the name the person gave, the application, the events, and the run
-/// variables whose fills were typed into secret fields. <see cref="ToJson"/> writes only the keys that format lists.
+/// variables whose fills were typed into secret fields, and the start values of the variables that are not secret (the
+/// value recorded where the person made a variable). <see cref="ToJson"/> writes only the keys that format lists, and
+/// <c>variables</c> only when there is one.
 /// </summary>
 public sealed record RecordingFile(string Name, string Exe, IReadOnlyList<string> Args, IReadOnlyList<RecordedStep> Events, IReadOnlyList<string> SecretVariables)
 {
+    /// <summary>Each variable that is not secret, with the value that was recorded for it.</summary>
+    public IReadOnlyDictionary<string, string> Variables { get; init; } = new Dictionary<string, string>();
+
     public const string Format = "rpa-recording/1";
     /// <summary>The most events the importer reads from one recording.</summary>
     public const int MaxEvents = 400;
@@ -36,6 +41,7 @@ public sealed record RecordingFile(string Name, string Exe, IReadOnlyList<string
             ["events"] = new JsonArray(Events.Select(e => (JsonNode)Event(e)).ToArray()),
             ["secretVariables"] = Strings(SecretVariables),
         };
+        if (Variables.Count > 0) file["variables"] = new JsonObject(Variables.Select(v => KeyValuePair.Create(v.Key, (JsonNode?)JsonValue.Create(v.Value))));
         return file.ToJsonString(Indented);
     }
 

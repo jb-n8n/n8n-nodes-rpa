@@ -1,8 +1,9 @@
-// A UiPath import's flow, or an RPA recording's one desktop node, as an n8n workflow, delivered as JSON for n8n's
-// "Import from file".
+// The workflow around an import's steps, delivered as JSON for n8n's "Import from file": a UiPath project's flow, an RPA
+// recording's one desktop node, or, for the other sources, one browser or desktop pair per step list. It starts with a
+// manual trigger and a Schedule Trigger that is switched off (set the time, then publish).
 // Each browser sequence n becomes Get active steps (playwright_steps, name <name>-n) feeding Run steps with signed steps
-// required and AI Repair on, as in template 2: its own Chat model and its Repaired Steps output into its own
-// Approve steps, whose workflow the user picks. Each desktop sequence n becomes Get active steps feeding a Run steps on
+// required and AI Repair off, so the workflow runs as generated: no Chat model credential and no approval workflow to
+// pick first; the Run steps note says how to add self-repair. Each desktop sequence n becomes Get active steps feeding a Run steps on
 // the RPA Desktop Runner credential (named by type, no secret), with signed steps required, AI Repair off (desktop steps
 // have none yet) and the variables its steps type, empty for the user to fill in (secrets from a secret source). Everything else follows a fixed table of n8n 2.41 node types. Text from the project is
 // never evaluated: it goes into literal parameters only when n8n cannot read it as an expression, and otherwise into
@@ -20,6 +21,8 @@ export interface WorkflowNode {
   notes?: string;
   alwaysOutputData?: boolean;
   executeOnce?: boolean;
+  /** Switched off: n8n skips it (the Schedule Trigger, until a person sets the time). */
+  disabled?: boolean;
   /** A credential named by type and display name only: no id, no secret. n8n selects it when one credential has the name. */
   credentials?: Record<string, { id: null; name: string }>;
 }
@@ -40,15 +43,26 @@ export interface BuildWorkflowOptions {
   desktopDrafts?: DesktopDraft[];
   /** The import's One-Time Code Workflow: each browser Run steps takes its code from it too. */
   codeWorkflow?: { id: string; timeoutSeconds: number };
-  /** Where the flow came from: a UiPath project (the default) or an RPA recording. Only the texts that name it differ. */
+  /** The import's run options that the steps were proven with: Max Seconds (when not the default) and Also Allow These Sites. */
+  run?: { maxSeconds?: number; allowedHosts?: string[] };
+  /** Where the flow came from. Only the texts that name it differ. */
   source?: ImportedFrom;
 }
-export type ImportedFrom = 'uipath' | 'recording';
+export type ImportedFrom = 'uipath' | 'recording' | 'chrome' | 'playwright' | 'steps';
 /** How the generated texts name where the steps came from. */
 const FROM = {
   uipath: { steps: 'imported from UiPath', importIt: 'import the project', workflow: 'imported from UiPath', origin: 'the UiPath project' },
   recording: { steps: 'imported from the recording', importIt: 'import the recording', workflow: 'imported from a recording', origin: 'the recording' },
+  chrome: { steps: 'imported from the Chrome recording', importIt: 'import the recording', workflow: 'imported from a Chrome recording', origin: 'the Chrome recording' },
+  playwright: { steps: 'imported from the Playwright code', importIt: 'import the code', workflow: 'imported from Playwright code', origin: 'the Playwright code' },
+  steps: { steps: 'from the step document', importIt: 'import the step document', workflow: 'imported from a step document', origin: 'the step document' },
 } as const;
+/** The default Max Seconds of Run Steps: a run option equal to it is not written. */
+const DEFAULT_MAX_SECONDS = 180;
+/** The credential type a run's secret variables come from (Task N3: RPA Secret Variables). */
+const SECRET_VARIABLES = '**RPA Secret Variables**';
+/** Where the steps get approved by default. */
+const IMPORT_FORM = 'RPA: 5 Import a bot';
 
 /** The credential a desktop Run steps names, by type (CREDENTIALS.desktopRunner) and display name. */
 const DESKTOP_RUNNER_CREDENTIAL = { rpaDesktopRunnerApi: { id: null, name: 'RPA Desktop Runner' } };
@@ -56,6 +70,7 @@ const DESKTOP_RUNNER_CREDENTIAL = { rpaDesktopRunnerApi: { id: null, name: 'RPA 
 /** Node types and the versions used, each checked against n8n's nodes-base (and nodes-langchain) at tag n8n@2.41.0. */
 const T = {
   manualTrigger: ['n8n-nodes-base.manualTrigger', 1],
+  scheduleTrigger: ['n8n-nodes-base.scheduleTrigger', 1.2],
   sticky: ['n8n-nodes-base.stickyNote', 1],
   dataTable: ['n8n-nodes-base.dataTable', 1.1],
   rpa: [RPA_NODE_TYPE, 1],
@@ -66,8 +81,6 @@ const T = {
   emailSend: ['n8n-nodes-base.emailSend', 2.1],
   wait: ['n8n-nodes-base.wait', 1.1],
   if: ['n8n-nodes-base.if', 2.2],
-  chatModel: ['@n8n/n8n-nodes-langchain.lmChatAnthropic', 1.5],
-  executeWorkflow: ['n8n-nodes-base.executeWorkflow', 1.2],
 } as const satisfies Record<string, readonly [string, number]>;
 
 const STEPS_TABLE = 'playwright_steps';
@@ -78,8 +91,8 @@ const BRANCH = 200;
 const HTTP_METHODS = new Set(['DELETE', 'GET', 'HEAD', 'OPTIONS', 'PATCH', 'POST', 'PUT']);
 const MAX_NAME = 95;
 const APPROVE_WORKFLOW = 'RPA: 3 Approve steps';
-/** The nodes one browser pair draws: Get active steps, Run steps, its Chat model, its Approve steps and their sticky. */
-const PAIR_NODES = 5;
+/** The nodes one browser pair draws: Get active steps and Run steps. */
+const PAIR_NODES = 2;
 /** The nodes one desktop pair draws: Get active steps, Run steps and the variables sticky. */
 const DESKTOP_PAIR_NODES = 3;
 /**
@@ -125,6 +138,26 @@ function size(node: FlowNode): number {
   }
   return count;
 }
+/** The draft a browser or desktop flow node runs: its own `draft`, else `<name>-<sequence>`. */
+const draftOf = (prefix: string, n: { sequence: number; draft?: string }): string => n.draft ?? `${prefix}-${n.sequence}`;
+/** The run variables steps name ({{var.name}}), in order, and those a secret fill or a password change types. */
+function stepVariables(steps: unknown): { all: string[]; secret: string[] } {
+  const all = [...new Set([...JSON.stringify(steps ?? null).matchAll(/\{\{\s*var\.([A-Za-z0-9_]+)\s*\}\}/g)].map((m) => m[1]))];
+  const secret = new Set<string>();
+  const walk = (v: unknown): void => {
+    if (Array.isArray(v)) { v.forEach(walk); return; }
+    if (typeof v !== 'object' || v === null) return;
+    const o = v as Record<string, unknown>;
+    const fill = o.fill as { secret?: unknown; value?: unknown } | undefined;
+    const change = (o.signIn as { changePassword?: { value?: unknown } } | undefined)?.changePassword;
+    for (const text of [fill?.secret === true ? fill.value : undefined, change?.value]) {
+      if (typeof text === 'string') for (const m of text.matchAll(/\{\{\s*var\.([A-Za-z0-9_]+)\s*\}\}/g)) secret.add(m[1]);
+    }
+    Object.values(o).forEach(walk);
+  };
+  walk(steps);
+  return { all, secret: all.filter((v) => secret.has(v)) };
+}
 const RUNS_ONCE = 'Run steps runs once for all items here, not once per item, because Get active steps has Execute Once on.';
 /** The binary property Run steps gives the draft's last top-level download or expected file (file_<index>, see the engine's binaryName). */
 function downloadProperty(draft: Draft | DesktopDraft): string | undefined {
@@ -148,8 +181,6 @@ class Builder {
   readonly s3Nodes: string[] = [];
   readonly emailNodes: string[] = [];
   readonly httpNodes: string[] = [];
-  readonly chatNodes: string[] = [];
-  readonly approveNodes: string[] = [];
   readonly draftNames: string[] = [];
   readonly desktopRunNodes: string[] = [];
   readonly desktopDraftNames: string[] = [];
@@ -173,16 +204,36 @@ class Builder {
   constructor(
     private readonly prefix: string, private readonly drafts: Map<string, Draft>, private readonly desktopDrafts: Map<string, DesktopDraft> = new Map(),
     private readonly codeWorkflow?: BuildWorkflowOptions['codeWorkflow'], readonly source: ImportedFrom = 'uipath',
+    private readonly run: NonNullable<BuildWorkflowOptions['run']> = {},
   ) {}
+  /** Run variables that come from the RPA Secret Variables credential, over every Run steps. */
+  readonly secretVariables = new Set<string>();
+
+  /** The run options the import was proven with: Max Seconds when it is not the default, and Also Allow These Sites. */
+  private runOptions(browser: boolean): Record<string, string | number> {
+    const max = this.run.maxSeconds;
+    const hosts = (this.run.allowedHosts ?? []).map((h) => literal(h)).filter((h): h is string => h !== undefined);
+    return {
+      ...(max !== undefined && max !== DEFAULT_MAX_SECONDS ? { maxSeconds: max } : {}),
+      ...(browser && hosts.length ? { allowedHosts: hosts.join(', ') } : {}),
+    };
+  }
+  /** Options → Variables for the steps' run variables: not secret ones, each with its start value or empty; secret ones are left out. */
+  private variablesOption(all: string[], secret: Set<string>, start: Record<string, string> = {}): Record<string, unknown> {
+    const values = all.filter((v) => !secret.has(v)).map((name) => ({ name, value: literal(start[name]) ?? '' }));
+    for (const v of secret) this.secretVariables.add(v);
+    return values.length ? { variables: { values } } : {};
+  }
 
   /**
    * A browser Run steps' code options: the import's One-Time Code Workflow (only as a literal, never text that n8n would
    * read as an expression), and Code Timeout when it is not the default 120 s.
    */
-  private codeOptions(): Record<string, string | number> {
+  private codeOptions(): Record<string, unknown> {
     const id = literal(this.codeWorkflow?.id);
     if (!this.codeWorkflow || id === undefined) return {};
-    return { codeWorkflowId: id, ...(this.codeWorkflow.timeoutSeconds !== 120 ? { codeTimeout: this.codeWorkflow.timeoutSeconds } : {}) };
+    // The option is n8n's workflow picker: the workflow by its ID, in the picker's own form.
+    return { codeWorkflowId: { __rl: true, mode: 'id', value: id }, ...(this.codeWorkflow.timeoutSeconds !== 120 ? { codeTimeout: this.codeWorkflow.timeoutSeconds } : {}) };
   }
 
   /** How deep If and For Each nest inside these lists (0 without any). */
@@ -204,8 +255,8 @@ class Builder {
   /** Whether a browser pair (a browser node with its draft) is in these lists, at any depth. */
   private hasBrowser(lists: FlowNode[][]): boolean {
     return lists.some((list) => list.some((n) => {
-      if (n.kind === 'browser') return this.drafts.has(`${this.prefix}-${n.sequence}`);
-      if (n.kind === 'desktop') return this.desktopDrafts.has(`${this.prefix}-${n.sequence}`);
+      if (n.kind === 'browser') return this.drafts.has(draftOf(this.prefix, n));
+      if (n.kind === 'desktop') return this.desktopDrafts.has(draftOf(this.prefix, n));
       if (n.kind !== 'if' && n.kind !== 'forEach') return false;
       let has = this.browsers.get(n);
       if (has === undefined) {
@@ -253,8 +304,8 @@ class Builder {
   }
   /** The nodes a flow node draws itself, its If or loop body aside. */
   private cost(n: FlowNode): number {
-    if (n.kind === 'browser') return this.drafts.has(`${this.prefix}-${n.sequence}`) ? PAIR_NODES : 1;
-    if (n.kind === 'desktop') return this.desktopDrafts.has(`${this.prefix}-${n.sequence}`) ? DESKTOP_PAIR_NODES : 1;
+    if (n.kind === 'browser') return this.drafts.has(draftOf(this.prefix, n)) ? PAIR_NODES : 1;
+    if (n.kind === 'desktop') return this.desktopDrafts.has(draftOf(this.prefix, n)) ? DESKTOP_PAIR_NODES : 1;
     return n.kind === 'if' ? 2 : 1;
   }
   /** A working node in the next column: every open end connects to it, and it is the only open end after it. */
@@ -301,7 +352,7 @@ class Builder {
    * to fill in and how the steps get approved. A sequence without a draft is a grey sticky.
    */
   private desktopPair(n: Extract<FlowNode, { kind: 'desktop' }>, tails: Tail[], x: number, y: number): Walked {
-    const draftName = `${this.prefix}-${n.sequence}`;
+    const draftName = draftOf(this.prefix, n);
     const draft = this.desktopDrafts.get(draftName);
     if (!draft) {
       this.lastFile = undefined;
@@ -329,7 +380,9 @@ class Builder {
     const run = this.nodeName(n.displayName, `Run steps (${draftName})`);
     const runX = x + STEP;
     const secret = new Set(draft.secretVariables);
-    const variables = draft.variables.map((name) => ({ name, value: '' }));
+    const start = draft.startValues ?? {};
+    /** The start values the workflow writes: those n8n would not read as an expression. */
+    const plain = (values: Record<string, string>) => Object.values(values).filter((v) => literal(v) !== undefined);
     this.add(T.rpa, run, [runX, y], {
       operation: 'runSteps',
       steps: "={{ $json.steps ?? '' }}",
@@ -337,19 +390,18 @@ class Builder {
       signature: '={{ $json.signature }}',
       approvedBy: '={{ $json.approvedBy }}',
       aiRepair: false,
-      options: { name: draftName, expectedVersion: '={{ $json.version }}', ...(variables.length ? { variables: { values: variables } } : {}) },
+      options: { name: draftName, expectedVersion: '={{ $json.version }}', ...this.runOptions(false), ...this.variablesOption(draft.variables, secret, start) },
     }, {
       credentials: { ...DESKTOP_RUNNER_CREDENTIAL },
-      notes: `Runs the signed desktop steps ${draftName} (${plural(draft.script.steps.length, 'step')} ${FROM[this.source].steps} "${line(n.displayName, 120)}") on the desktop runner. Pick the RPA Desktop Runner and RPA Step Signing credentials. Fill in the Variables${secret.size ? `; ${[...secret].join(', ')} must come from a secret source` : ''}.`,
+      notes: `Runs the signed desktop steps ${draftName} (${plural(draft.script.steps.length, 'step')} ${FROM[this.source].steps} "${line(n.displayName, 120)}") on the desktop runner. Pick the RPA Desktop Runner and RPA Step Signing credentials.${plain(start).length ? ' The Variables start with the values that were recorded: change them here.' : ' Fill in the Variables.'}${secret.size ? ` ${[...secret].join(', ')}: put ${secret.size === 1 ? 'it' : 'them'} in an RPA Secret Variables credential (type rpaSecretVariablesApi, field Variables) and select it here.` : ''}`,
     });
     this.connect([{ node: get, output: 0 }], run);
     this.desktopRunNodes.push(run);
-    const listedVars = draft.variables.length
-      ? draft.variables.map((v) => (secret.has(v) ? `**${code(v, 60)}** (a secret: map it from a secret source, such as an n8n external secret or a node that reads your vault; never type it here)` : code(v, 60))).join(', ')
-      : 'none';
-    const writes = draft.writeCandidates.length ? ` The import lists steps ${draft.writeCandidates.join(', ')} as candidate writes: when you approve, list in **Write Steps** the ones that save, post or submit.` : '';
+    const plainVars = draft.variables.filter((v) => !secret.has(v));
+    const listedVars = plainVars.length ? plainVars.map((v) => (literal(start[v]) !== undefined ? `${code(v, 60)} (starts as ${code(start[v], 120)})` : code(v, 60))).join(', ') : 'none';
+    const secretVars = secret.size ? ` Secret: ${[...secret].map((v) => code(v, 60)).join(', ')}: in an ${SECRET_VARIABLES} credential selected on **${md(run)}**, never typed here.` : '';
     this.sticky(`Fill in the variables (${draftName})`,
-      `### Fill in the variables (gold)\nOn **${md(run)}**, Options → Variables: ${listedVars}. Desktop steps are approved before they run: ${FROM[this.source].importIt} with **RPA: 5 Import a bot** and approve ${code(draftName)} in **${APPROVE_WORKFLOW}**.${writes}`,
+      `### Fill in the variables (gold)\nOn **${md(run)}**, Options → Variables: ${listedVars}.${secretVars} Desktop steps run only once approved: ${FROM[this.source].importIt} with **${IMPORT_FORM}** and approve ${code(draftName)} on its review page.`,
       COLOUR.gold, [runX - 80, y + 160], 320, 260);
     this.lastFile = downloadProperty(draft);
     return { tails: [{ node: run, output: 0 }], x: x + 2 * STEP };
@@ -358,7 +410,7 @@ class Builder {
   private one(n: FlowNode, tails: Tail[], x: number, y: number): Walked {
     switch (n.kind) {
       case 'browser': {
-        const draftName = `${this.prefix}-${n.sequence}`;
+        const draftName = draftOf(this.prefix, n);
         const draft = this.drafts.get(draftName);
         if (!draft) {
           this.lastFile = undefined;
@@ -384,41 +436,29 @@ class Builder {
         });
         this.connect(tails, get);
         const run = this.nodeName(n.displayName, `Run steps (${draftName})`);
-        const chat = this.unique(`Chat model (${draftName})`);
-        const approve = this.unique(`Approve steps (${draftName})`);
         const runX = x + STEP;
-        // The draft name comes from the import's Name, which may hold "{{": then the Goal names no draft.
-        const goal = literal(`Do what the imported steps do: ${draftName}`) ?? 'Do what the imported steps do.';
+        const vars = stepVariables(draft.script);
+        // Runs as generated: no repair branch (a Chat model and an Approve steps would need a credential and a workflow
+        // picked first). The note says how to add it.
         this.add(T.rpa, run, [runX, y], {
           operation: 'runSteps',
           steps: "={{ $json.steps ?? '' }}",
           requireSignedSteps: true,
           signature: '={{ $json.signature }}',
           approvedBy: '={{ $json.approvedBy }}',
-          aiRepair: true,
-          goal,
-          options: { name: draftName, expectedVersion: '={{ $json.version }}', ...this.codeOptions() },
+          aiRepair: false,
+          options: { name: draftName, expectedVersion: '={{ $json.version }}', ...this.codeOptions(), ...this.runOptions(true), ...this.variablesOption(vars.all, new Set(vars.secret)) },
         }, {
-          notes: `Runs the signed steps ${draftName} (${plural(draft.script.steps.length, 'step')} imported from UiPath "${line(n.displayName, 120)}"). Pick RPA Browser, RPA Site Login and RPA Step Signing here. AI Repair is on: rewrite the Goal in plain words (what the data is), pick a credential on ${chat}, and repaired steps go to ${approve}.`,
+          notes: [
+            `Runs the signed steps ${draftName} (${plural(draft.script.steps.length, 'step')} ${FROM[this.source].steps} "${line(n.displayName, 120)}"). Pick RPA Browser, RPA Site Login and RPA Step Signing here. For a site on your own network, turn on Options → Allow Private Network here.${vars.secret.length ? ` ${vars.secret.join(', ')}: put ${vars.secret.length === 1 ? 'it' : 'them'} in an RPA Secret Variables credential (type rpaSecretVariablesApi, field Variables) and select it here.` : ''}`,
+            'To let it repair itself when the site changes:',
+            '1. Connect a chat model to its Model input (after step 2).',
+            `2. Turn on AI Repair here and write the Goal in plain words.`,
+            `3. Connect its Repaired Steps output to an Execute Workflow node that calls ${APPROVE_WORKFLOW}.`,
+          ].join('\n'),
         });
         this.connect([{ node: get, output: 0 }], run);
         this.runNodes.push(run);
-        // Below Run steps and left of the next column, where an If's or an inline sticky starts (x - 60, x - 40). The two labels sit
-        // side by side (centres 210 apart) and the sticky starts below them (a node is 100 high, its label about 40 more).
-        this.add(T.chatModel, chat, [runX - 80, y + 160], { model: { __rl: true, mode: 'id', value: 'claude-sonnet-5-5' }, options: {} });
-        this.connect([{ node: chat, output: 0 }], run, 'ai_languageModel');
-        this.chatNodes.push(chat);
-        this.add(T.executeWorkflow, approve, [runX + 130, y + 160], {
-          source: 'database',
-          workflowId: { __rl: true, mode: 'list', value: '', cachedResultName: APPROVE_WORKFLOW },
-          mode: 'once',
-          options: { waitForSubWorkflow: false },
-        }, { notes: `Pick the workflow ${APPROVE_WORKFLOW}. Fire and forget: the approval waits for a person; this run finishes now.` });
-        this.connect([{ node: run, output: 1 }], approve);
-        this.approveNodes.push(approve);
-        this.sticky(`Pick ${APPROVE_WORKFLOW} (${draftName})`,
-          `### Pick the approval workflow (gold)\nIn **${md(approve)}**, pick **${APPROVE_WORKFLOW}**: repaired steps wait there for a person.`,
-          COLOUR.gold, [runX - 80, y + 320], 300, 100);
         this.lastFile = downloadProperty(draft);
         return { tails: [{ node: run, output: 0 }], x: x + 2 * STEP };
       }
@@ -541,7 +581,7 @@ class Builder {
         const end = Math.max(body.x, x + STEP);
         this.sticky(`Loop: ${line(n.displayName, 80) || 'For Each'}`,
           `### Loop: ${md(n.displayName, 120)} (grey)\nUiPath looped over ${code(n.expression)}. n8n runs each node once per item, so the loop's body is inline here. Make sure the items that reach it are the ones to loop over.${this.hasBrowser([n.body]) ? ` ${RUNS_ONCE}` : ''}`,
-          // A browser pair's Chat model, Approve steps and sticky reach 420 below its row.
+          // Room below the row for a pair's labels.
           COLOUR.grey, [x - 60, y - 160 - BRANCH * d], end - x, 330 + 2 * BRANCH * d + (this.hasBrowser([n.body]) ? 270 : 0));
         return { tails: body.tails, x: end };
       }
@@ -551,7 +591,7 @@ class Builder {
         if (this.desktopDrafts.size > 0) {
           const browser = this.drafts.size > 0 ? ' Browser steps: pick an RPA Site Login on their Run steps; the Site Login holds the login.' : '';
           return this.inline(tails, x, y, `Credential: ${line(n.asset, 80) || 'UiPath'}`,
-            `### UiPath credential (green)\nUiPath credential ${code(n.asset, 120)}: n8n never copies a UiPath credential. Desktop steps type the user name and password from their Run steps' **Variables** (see the gold notes): supply the password from a secret source, never as text in this workflow.${browser}`, COLOUR.green);
+            `### UiPath credential (green)\nUiPath credential ${code(n.asset, 120)}: n8n never copies a UiPath credential. Desktop steps type the user name and password from their Run steps' **Variables** (see the gold notes); a secret one, such as the password, comes from an ${SECRET_VARIABLES} credential selected on that Run steps, never as text in this workflow.${browser}`, COLOUR.green);
         }
         return this.inline(tails, x, y, `Credential: ${line(n.asset, 80) || 'UiPath'}`,
           `### UiPath credential (green)\nUiPath credential ${code(n.asset, 120)}: pick an RPA Site Login on the Run steps node(s). n8n never copies a UiPath credential; the Site Login holds the login.`, COLOUR.green);
@@ -573,16 +613,21 @@ function listed(names: string[]): string {
  */
 export function buildWorkflow(flow: UiPathFlow, drafts: Draft[], opts: BuildWorkflowOptions): WorkflowJson {
   if (opts.name.trim() === '' || opts.name.startsWith('=')) throw new Error('The Name must not be empty or start with "="');
-  const b = new Builder(opts.name, new Map(drafts.map((d) => [d.name, d])), new Map((opts.desktopDrafts ?? []).map((d) => [d.name, d])), opts.codeWorkflow, opts.source);
+  const b = new Builder(opts.name, new Map(drafts.map((d) => [d.name, d])), new Map((opts.desktopDrafts ?? []).map((d) => [d.name, d])), opts.codeWorkflow, opts.source, opts.run);
   const from = FROM[b.source];
-  const recording = b.source === 'recording';
+  const uipath = b.source === 'uipath';
   b.add(T.manualTrigger, b.unique('Run the bot'), [0, 0], {});
+  // Off until a person sets the time: n8n then runs the bot on that schedule once the workflow is published.
+  b.add(T.scheduleTrigger, b.unique('On a schedule'), [0, 200], { rule: { interval: [{ field: 'days', triggerAtHour: 6 }] } }, {
+    disabled: true, notes: 'Set the time, then turn this node on and publish the workflow. Until then the bot runs only when you click Execute.',
+  });
   b.reserve('About this import', 'Set once');
-  b.overflow(b.walk(flow.nodes, [{ node: 'Run the bot', output: 0 }], STEP, 0));
+  b.overflow(b.walk(flow.nodes, [{ node: 'Run the bot', output: 0 }, { node: 'On a schedule', output: 0 }], STEP, 0));
 
   const project = line(flow.name, 120).replace(/^=+/, '').trim() || opts.name;
   const desktopPart = b.desktopDraftNames.length ? ` and ${plural(b.desktopDraftNames.length, 'desktop sequence')}` : '';
-  const summary = recording ? `${plural(b.desktopDraftNames.length, 'desktop step list')} as signed RPA steps` : `${plural(b.draftNames.length, 'browser sequence')}${desktopPart} as signed RPA steps, ${plural(b.others, 'other activity', 'other activities')} as n8n nodes, ${b.untranslated} not translated${b.skipped ? `, ${b.skipped.toLocaleString('en-US')} more not drawn (see the report)` : ''}`;
+  const lists = [b.draftNames.length ? plural(b.draftNames.length, 'step list') : '', b.desktopDraftNames.length ? plural(b.desktopDraftNames.length, 'desktop step list') : ''].filter(Boolean).join(' and ') || '0 step lists';
+  const summary = !uipath ? `${lists} as signed RPA steps` : `${plural(b.draftNames.length, 'browser sequence')}${desktopPart} as signed RPA steps, ${plural(b.others, 'other activity', 'other activities')} as n8n nodes, ${b.untranslated} not translated${b.skipped ? `, ${b.skipped.toLocaleString('en-US')} more not drawn (see the report)` : ''}`;
   // A loop, not Math.min(...positions): spreading a long array into arguments overflows the stack.
   let highest = 0;
   for (const n of b.nodes) highest = Math.min(highest, n.position[1]);
@@ -591,27 +636,27 @@ export function buildWorkflow(flow: UiPathFlow, drafts: Draft[], opts: BuildWork
     '### About this import (grey: leave as is)',
     `Imported from ${from.origin} ${code(project, 120)}: ${summary}.`,
     b.draftNames.length
-      ? `Each browser sequence is **Get active steps** → **Run steps**. AI Repair is on: when a page no longer matches, the Run steps' **Chat model** repairs the run and its Repaired Steps output goes to **Approve steps**. Run steps runs only the newest signed, active version of its steps (${b.draftNames.slice(0, 3).map((d) => code(d)).join(', ')}${b.draftNames.length > 3 ? ', …' : ''}) from ${STEPS_TABLE}. Run **Import steps** on the project (template **RPA: 5 Import a bot**) and approve each Repaired steps item in **RPA: 3 Approve steps**; until a version is approved, Run steps stops with "Steps is empty".`
+      ? `${uipath ? 'Each browser sequence is' : 'The browser steps are'} **Get active steps** → **Run steps**, which runs only the newest signed, active version of its steps (${b.draftNames.slice(0, 3).map((d) => code(d)).join(', ')}${b.draftNames.length > 3 ? ', …' : ''}) from ${STEPS_TABLE}: approve them on the review page of **${IMPORT_FORM}**; until a version is approved, Run steps stops with "Steps is empty". AI Repair is off: each Run steps' note says how to let it repair itself when the site changes (a chat model, AI Repair, **${APPROVE_WORKFLOW}**).`
       : '',
     b.desktopDraftNames.length
-      ? `${recording ? 'The desktop steps are' : 'Each desktop sequence is'} **Get active steps** → **Run steps** on the **RPA Desktop Runner**: it runs only the newest signed, active version of its steps (${b.desktopDraftNames.slice(0, 3).map((d) => code(d)).join(', ')}${b.desktopDraftNames.length > 3 ? ', …' : ''}) from ${STEPS_TABLE}. Desktop steps are not replayed at import and have no AI repair yet: approve them in **${APPROVE_WORKFLOW}**, listing the steps that save, post or submit in Write Steps.`
+      ? `${uipath ? 'Each desktop sequence is' : 'The desktop steps are'} **Get active steps** → **Run steps** on the **RPA Desktop Runner**: it runs only the newest signed, active version of its steps (${b.desktopDraftNames.slice(0, 3).map((d) => code(d)).join(', ')}${b.desktopDraftNames.length > 3 ? ', …' : ''}) from ${STEPS_TABLE}. Desktop steps are not replayed at import and have no AI repair yet: approve them on the review page of **${IMPORT_FORM}**, ticking the steps that save, send or submit.`
       : '',
-    recording
-      ? 'Gold: fill in. Green: set once. Text from the recording is kept as text; nothing from it runs as an n8n expression.'
-      : 'Grey notes: not translated, rebuild by hand. Gold: fill in. Green: set once. UiPath expressions are kept as text in notes; nothing from the project runs as an n8n expression.',
+    '**On a schedule** is off: set the time, turn it on and publish the workflow. **Run the bot** runs it now.',
+    uipath
+      ? 'Grey notes: not translated, rebuild by hand. Gold: fill in. Green: set once. UiPath expressions are kept as text in notes; nothing from the project runs as an n8n expression.'
+      : `Gold: fill in. Green: set once. Text from ${from.origin} is kept as text; nothing from it runs as an n8n expression.`,
   ].filter(Boolean).join('\n\n');
   const setOnce = [
     '### Set once (green)',
     'No credential is stored in this file. Pick them on the nodes:',
     b.runNodes.length ? `- **RPA Browser**, **RPA Site Login** and **RPA Step Signing**: ${listed(b.runNodes)}` : '',
     b.desktopRunNodes.length ? `- **RPA Desktop Runner** and **RPA Step Signing**: ${listed(b.desktopRunNodes)}` : '',
-    b.chatNodes.length ? `- **Chat model** (your model provider): ${listed(b.chatNodes)}` : '',
+    b.secretVariables.size ? `- ${SECRET_VARIABLES}, holding ${[...b.secretVariables].slice(0, 10).map((v) => code(v, 60)).join(', ')}: on the Run steps that name them (their notes say which)` : '',
     b.credentials && !b.desktopRunNodes.length ? '- UiPath credential lookups (green notes in the flow): the RPA Site Login on Run steps holds that login' : '',
-    b.credentials && b.desktopRunNodes.length ? '- UiPath credential lookups (green notes in the flow): desktop steps type the sign-in from their Run steps\' Variables (a password from a secret source); browser steps use the RPA Site Login on their Run steps' : '',
+    b.credentials && b.desktopRunNodes.length ? `- UiPath credential lookups (green notes in the flow): desktop steps type the sign-in from their Run steps' Variables (a password from ${SECRET_VARIABLES}); browser steps use the RPA Site Login on their Run steps` : '',
     b.s3Nodes.length ? `- **AWS**: ${listed(b.s3Nodes)}` : '',
     b.emailNodes.length ? `- **SMTP**: ${listed(b.emailNodes)}` : '',
     b.httpNodes.length ? `- HTTP authentication, if the endpoint needs it: ${listed(b.httpNodes)}` : '',
-    b.approveNodes.length ? `\n${listed(b.approveNodes)}: choose **${APPROVE_WORKFLOW}**.` : '',
   ].filter(Boolean).join('\n');
   const before = b.nodes.length;
   b.sticky('About this import', about, COLOUR.grey, [-80, top], 460, 360, true);

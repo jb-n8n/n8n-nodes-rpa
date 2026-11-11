@@ -3,8 +3,8 @@
   "nodes": [
     {
       "parameters": {
-        "content": "### Approve repaired steps (grey: leave as is)\nCalled by **RPA: 2 Data feed** or **RPA: 5 Import a bot** with a Repaired steps item. The approver gets the evidence, the change list, red safety flags and before/after screenshots, then an Approve / Reject email. **Mark pending** writes a `pending` row that expires after `approvalTimeoutHours`; while it is unexpired the feed reports a changed site instead of repairing again. Approve: **Sign steps** signs exactly the steps that were reviewed and **Save signed steps** sets the row `active`, **Supersede older versions** sets every other `active` row of the same name with this version or a lower one to `superseded` (An approved import becomes the version that runs under its name, also when a higher version was active. An import is always version 1.), and **Email signed steps** confirms what was signed, for desktop steps with the steps signed as writes. Reject or a refused signature: `rejected`. No answer in time: `expired`, and the next run repairs again. Browser steps from a step document that submit a form, download through a form, type a secret or change a password were never run either: their evidence line says so, and the emails do not say that they ran. Desktop steps (imported from UiPath or a recording, or from a step document; not replayed) get a form instead of the buttons: **Decision** and **Write steps**, the numbers (from the numbered change list) of the steps that save, post or submit; **Sign steps** marks exactly those as writes before it signs. The runner refuses a write only on the controls and keys its policy lists, so an unlisted step can still save through any other control.",
-        "height": 400,
+        "content": "### Approve repaired steps (grey: leave as is)\nCalled by **RPA: 2 Data feed**, or by **RPA: 5 Import a bot** when its Settings say `approval` `by email`, with a Repaired steps item. It creates the Data Tables when they are missing. **Mark pending** writes a `pending` row that expires after `approvalTimeoutHours`; while it is unexpired the feed reports a changed site instead of repairing again. Browser steps: a review email with the evidence, the change list, red safety flags and the screenshots, then an Approve / Reject email. Desktop steps (imported from UiPath or a recording, or from a step document; not replayed): one email with the numbered steps and a **Review and decide** button, to a form with **Decision** and the steps that save, send or submit as tick boxes, none ticked to start with; **Sign steps** signs exactly the ticked steps as writes. The runner refuses a write only on the controls and keys its policy lists, so an unticked step can still save through any other control. Approve: **Sign steps** signs exactly the steps that were reviewed, **Save signed steps** sets the row `active`, **Supersede older versions** sets every other `active` row of the same name with this version or a lower one to `superseded` (An approved import becomes the version that runs under its name, also when a higher version was active. An import is always version 1.), and **Email signed steps** confirms what was signed. Reject or a refused signature: `rejected`; a configuration fault (a missing credential, a short signing key) also ends there, so check the error on **Sign steps** before the feed runs again. No answer in time: `expired`, and the next run repairs again. Approve one Repaired steps item per version.",
+        "height": 560,
         "width": 520,
         "color": 7
       },
@@ -12,12 +12,12 @@
       "name": "About this workflow",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
-      "position": [-80, -500]
+      "position": [-80, -800]
     },
     {
       "parameters": {
-        "content": "### Set once (green)\nPick the SMTP credential on **Email repaired steps**, **Ask for approval**, **Ask for approval (desktop steps)** and **Email signed steps**, and the **RPA Site Login** and **RPA Step Signing** credentials on **Sign steps** (the same ones as Run steps in workflow 2; desktop signatures bind the app, never a Site Login). Use one approver address in **Email repaired steps**, **Ask for approval**, **Ask for approval (desktop steps)** and **Email signed steps** (To), **Sign steps** (Approved By and Approver Allowlist) and **Record rejection**.\n\nConfiguration faults (a missing credential, a short signing key) also end in **Record rejection**: check the error on **Sign steps** before the feed runs again. Approve one Repaired steps item per version.",
-        "height": 400,
+        "content": "### Set once (green)\n1. Pick the SMTP credential on **Email repaired steps**, **Ask for approval**, **Ask for approval (desktop steps)** and **Email signed steps**.\n2. Pick **RPA Step Signing** and **RPA Site Login** on **Sign steps** (the ones Run steps uses).\n3. Type the approver's address in **Settings → approver**.\n4. Type the same address in **Sign steps → Approver Allowlist**.\n5. Publish this workflow.",
+        "height": 260,
         "width": 460,
         "color": 4
       },
@@ -25,7 +25,7 @@
       "name": "Set once",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
-      "position": [480, -500]
+      "position": [480, -560]
     },
     {
       "parameters": { "inputSource": "passthrough" },
@@ -41,7 +41,7 @@
         "resource": "email",
         "operation": "send",
         "fromEmail": "n8n-rpa@localhost",
-        "toEmail": "approver@example.com",
+        "toEmail": "={{ $('Settings').item.json.approver }}",
         "subject": "=1 of 2, review: steps v{{ $json.version }} for {{ $json.name }}",
         "emailFormat": "html",
         "html": "=<!-- Every value below comes from the run (page text, model output): each is HTML-escaped so it cannot restyle or hide parts of this email. -->\n<h2>Steps v{{ String($json.version ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }} for {{ String($json.name ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }} are ready for review</h2>\n<p style=\"color:#b00020\"><b>Safety flags (what these steps do besides reading pages):</b> {{ String($json.safetyLine ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}</p>\n{{ String($json.leftOutList ?? '') ? '<p style=\"color:#b00020\"><b>Left out by the import (the source does these, the steps do not):</b><br>' + String($json.leftOutList).replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]).split('\\n').join('<br>') + '</p>' : '' }}\n<p><b>Evidence{{ String($json.evidenceLine ?? '').startsWith('Not replayed:') ? '' : ' (as reported by the run)' }}:</b> {{ String($json.evidenceLine ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}</p>\n<p><b>What changed{{ String($json.evidenceLine ?? '').startsWith('Not replayed:') ? ' (as written; these steps were never run)' : ' (as reported by the run)' }}:</b><br>{{ String($json.changeList ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]).split('\\n').join('<br>') }}</p>\n<p>Steps hash: <code>{{ String($json.hash ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}</code>. {{ ({ 'before,after': 'Screenshots before and after the change are attached.', 'after': 'A screenshot after the change is attached (a first run has no before).', 'before': 'A screenshot before the change is attached.' })[String($json.attachmentNames ?? '')] ?? 'No screenshots are attached.' }} The next email has the Approve and Reject buttons.</p>",
@@ -51,24 +51,80 @@
       "name": "Email repaired steps",
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2.1,
-      "position": [220, 0]
+      "position": [880, 120]
     },
     {
       "parameters": {
         "assignments": {
           "assignments": [
             { "id": "3d6f1a20-7b4c-4e8a-9c11-0000000003a1", "name": "name", "value": "={{ $('Repaired steps received').item.json.name }}", "type": "string" },
-            { "id": "3d6f1a20-7b4c-4e8a-9c11-0000000003a2", "name": "approvalTimeoutHours", "value": 72, "type": "number" }
+            { "id": "3d6f1a20-7b4c-4e8a-9c11-0000000003a2", "name": "approvalTimeoutHours", "value": 72, "type": "number" },
+            { "id": "3d6f1a20-7b4c-4e8a-9c11-0000000003a3", "name": "approver", "value": "approver@example.com", "type": "string" }
           ]
         },
+        "includeOtherFields": true,
         "options": {}
       },
       "id": "3d6f1a20-7b4c-4e8a-9c11-000000000305",
       "name": "Settings",
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
-      "position": [440, 0],
-      "notes": "name comes from the Repaired steps item, so one approval workflow serves every feed on the same Site Login. Change approvalTimeoutHours here."
+      "position": [220, 0],
+      "notes": "name comes from the Repaired steps item, so one approval workflow serves every feed on the same Site Login. Change approvalTimeoutHours and approver here (approver also goes into Sign steps → Approver Allowlist, typed). The item and its screenshots pass through for the review email."
+    },
+    {
+      "parameters": {
+        "resource": "table",
+        "operation": "create",
+        "tableName": "playwright_steps",
+        "columns": {
+          "column": [
+            { "name": "name", "type": "string" },
+            { "name": "version", "type": "number" },
+            { "name": "steps", "type": "string" },
+            { "name": "hash", "type": "string" },
+            { "name": "signature", "type": "string" },
+            { "name": "approvedBy", "type": "string" },
+            { "name": "approvedAt", "type": "string" },
+            { "name": "status", "type": "string" },
+            { "name": "expiresAt", "type": "string" }
+          ]
+        },
+        "options": { "createIfNotExists": true }
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000320",
+      "name": "Create steps table",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [660, -280],
+      "notes": "Creates playwright_steps and playwright_runs when they are missing (RPA: 1 Create tables does the same by hand). This branch runs first: it is the top one."
+    },
+    {
+      "parameters": {
+        "resource": "table",
+        "operation": "create",
+        "tableName": "playwright_runs",
+        "columns": {
+          "column": [
+            { "name": "name", "type": "string" },
+            { "name": "lane", "type": "string" },
+            { "name": "version", "type": "number" },
+            { "name": "hash", "type": "string" },
+            { "name": "confirmed", "type": "boolean" },
+            { "name": "rowCount", "type": "number" },
+            { "name": "durationMs", "type": "number" },
+            { "name": "llmTokens", "type": "number" },
+            { "name": "code", "type": "string" },
+            { "name": "executionId", "type": "string" }
+          ]
+        },
+        "options": { "createIfNotExists": true }
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000321",
+      "name": "Create run log table",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [880, -280]
     },
     {
       "parameters": {
@@ -106,7 +162,7 @@
       "name": "Mark pending",
       "type": "n8n-nodes-base.dataTable",
       "typeVersion": 1.1,
-      "position": [660, 0],
+      "position": [1100, -280],
       "notes": "Update-in-place by hash: the same repaired steps proposed again reuse their row."
     },
     {
@@ -129,15 +185,15 @@
       "name": "Desktop steps?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
-      "position": [880, 0],
-      "notes": "Desktop steps are approved with a form that also asks which steps are writes (Write Steps on Sign steps)."
+      "position": [660, 40],
+      "notes": "Desktop steps: one email with a form that also asks which steps are writes (Write Steps on Sign steps). Browser steps: the review email with the screenshots, then the Approve / Reject email."
     },
     {
       "parameters": {
         "resource": "email",
         "operation": "sendAndWait",
         "fromEmail": "n8n-rpa@localhost",
-        "toEmail": "approver@example.com",
+        "toEmail": "={{ $('Settings').item.json.approver }}",
         "subject": "=2 of 2, approve steps v{{ $('Repaired steps received').item.json.version }} for {{ $('Repaired steps received').item.json.name }}?",
         "message": "=Steps v{{ String($('Repaired steps received').item.json.version ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }} for {{ String($('Repaired steps received').item.json.name ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}{{ String($('Repaired steps received').item.json.leftOutList ?? '') ? '\\nLeft out by the import (the source does these, the steps do not):\\n' + String($('Repaired steps received').item.json.leftOutList).replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) : '' }}\nEvidence{{ String($('Repaired steps received').item.json.evidenceLine ?? '').startsWith('Not replayed:') ? '' : ' (as reported by the run)' }}: {{ String($('Repaired steps received').item.json.evidenceLine ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\nSafety flags: {{ String($('Repaired steps received').item.json.safetyLine ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\nWhat changed{{ String($('Repaired steps received').item.json.evidenceLine ?? '').startsWith('Not replayed:') ? ' (as written; these steps were never run)' : ' (as reported by the run)' }}:\n{{ String($('Repaired steps received').item.json.changeList ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\n\nApprove: these exact steps are signed and n8n runs them with the stored login, without asking again, until the site changes. Reject: nothing is signed; the version in use, if any, stays in use. The two values below identify what you are approving; you do not need to compare them by hand. This request expires after {{ $('Settings').item.json.approvalTimeoutHours }} hours.\nHash: {{ String($('Repaired steps received').item.json.hash ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\nReview digest: {{ String($('Repaired steps received').item.json.digest ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}",
         "approvalOptions": { "values": { "approvalType": "double", "approveLabel": "Approve", "disapproveLabel": "Reject" } },
@@ -159,36 +215,32 @@
         "resource": "email",
         "operation": "sendAndWait",
         "fromEmail": "n8n-rpa@localhost",
-        "toEmail": "approver@example.com",
-        "subject": "=2 of 2, approve desktop steps v{{ $('Repaired steps received').item.json.version }} for {{ $('Repaired steps received').item.json.name }}?",
-        "message": "=Steps v{{ String($('Repaired steps received').item.json.version ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }} for {{ String($('Repaired steps received').item.json.name ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}{{ String($('Repaired steps received').item.json.leftOutList ?? '') ? '\\nLeft out by the import (the source does these, the steps do not):\\n' + String($('Repaired steps received').item.json.leftOutList).replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) : '' }}\nEvidence: {{ String($('Repaired steps received').item.json.evidenceLine ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\nSafety flags: {{ String($('Repaired steps received').item.json.safetyLine ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\n\nThe steps, numbered as Write steps counts them:\n{{ String($('Repaired steps received').item.json.changeList ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\n\nThese desktop steps were not replayed. The import never marks a step as a write: in Write steps, list the numbers of the steps that save, post or submit (the safety flags name the candidates), for example 16. Leave it empty if no step writes. Listed steps are signed as writes, so the desktop runner lets them use the write controls and gated keys of its policy. The runner refuses a write only on those: leaving a step unlisted does not stop it from saving unless its control is in the runner policy.\nApprove: these exact steps are signed, the steps listed in Write steps as writes, and n8n runs them on the desktop runner without asking again, until you approve another version. Reject: nothing is signed; the version in use, if any, stays in use. The two values below identify what you are approving; you do not need to compare them by hand. This request expires after {{ $('Settings').item.json.approvalTimeoutHours }} hours.\nHash: {{ String($('Repaired steps received').item.json.hash ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\nReview digest: {{ String($('Repaired steps received').item.json.digest ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}",
+        "toEmail": "={{ $('Settings').item.json.approver }}",
+        "subject": "=Approve desktop steps v{{ $('Repaired steps received').item.json.version }} for {{ $('Repaired steps received').item.json.name }}?",
+        "message": "=Desktop steps v{{ String($('Repaired steps received').item.json.version ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }} for {{ String($('Repaired steps received').item.json.name ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}, for your approval.\n{{ ((steps, e) => ['Opens ' + e($('Repaired steps received').item.json.steps?.app?.exe) + ' on the desktop runner.'].concat(steps.map((s, i) => (s.expectFile ? i + 1 : 0)).filter((i) => i).map((i) => 'Returns a file to n8n: step ' + i + '.'), ['Not tried by the import: read every step before you approve.']).join('\\n') + (String($('Repaired steps received').item.json.leftOutList ?? '') ? '\\n\\n⚠ Left out by the import:\\n' + e($('Repaired steps received').item.json.leftOutList) : '') + '\\n\\nThe steps:\\n' + steps.map((s, i) => (i + 1) + '. ' + e(((field, isVar, file) => (s.fill ? (file ? 'Save ' + file[1] + ' into the run\\'s export folder' : isVar(s.fill.value) ? 'Type into ' + field : 'Type \"' + String(s.fill.value) + '\" into ' + field) : s.select ? (isVar(s.select.option) ? 'Choose an item in ' + field : 'Choose \"' + String(s.select.option) + '\" in ' + field) : s.key ? 'Press ' + String(s.key.key) + (field ? ' in ' + field : '') : s.check ? (s.check.checked === false ? 'Uncheck ' : 'Check ') + field : String(s.intent ?? '')))(((t) => (t && t.uia && Array.isArray(t.uia.path) && t.uia.path.length ? String(t.uia.path[t.uia.path.length - 1].name ?? t.uia.path[t.uia.path.length - 1].automationId ?? '') : ''))(s.fill?.field ?? s.select?.field ?? s.key?.target ?? s.check?.field) || String(s.intent ?? ''), (v) => /\\x7b\\x7b\\s*var\\./.test(String(v ?? '')), s.fill ? /^\\x7b\\x7b\\$exportDir\\x7d\\x7d[\\\\/](.+)$/.exec(String(s.fill.value ?? '')) : null)) + ((m) => (m.length ? ' (' + e(m.join('; ')) + ')' : ''))(Array.from(new Set((JSON.stringify(s ?? null).match(/\\x7b\\x7bvar\\.([A-Za-z_][A-Za-z0-9_]*)\\x7d\\x7d/g) ?? []).map((v) => v.slice(6, -2)))).map((v) => 'variable ' + v).concat(s.expectFile ? ['returns a file'] : [], s.read && s.read.as ? ['gives its text to n8n as ' + s.read.as] : []))).join('\\n'))(Array.isArray($('Repaired steps received').item.json.steps?.steps) ? $('Repaired steps received').item.json.steps.steps : [], (v) => String(v ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c])) }}\n\nClick Review and decide, tick the steps that save, send or submit (none is ticked for you), then approve or reject. Ticked steps are allowed to save or send. An unticked step is stopped only when it tries to use a control or key that your administrator has protected on the bot machine.\nApprove and sign: these exact steps are signed, the ticked steps as writes, and n8n runs them on the desktop runner without asking again, until you approve another version. Reject: nothing is signed; the version in use, if any, stays in use. This request expires after {{ $('Settings').item.json.approvalTimeoutHours }} hours.\n\nDetails of every step (how each one finds its control):{{ String($('Repaired steps received').item.json.leftOutList ?? '') ? '\\nLeft out by the import (the source does these, the steps do not):\\n' + String($('Repaired steps received').item.json.leftOutList ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) : '' }}\nEvidence: {{ String($('Repaired steps received').item.json.evidenceLine ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\nSafety flags: {{ String($('Repaired steps received').item.json.safetyLine ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\n{{ String($('Repaired steps received').item.json.changeList ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\nThe two values below identify what you are approving; you do not need to compare them by hand.\nHash: {{ String($('Repaired steps received').item.json.hash ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}\nReview digest: {{ String($('Repaired steps received').item.json.digest ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}",
         "options": {
           "messageButtonLabel": "Review and decide",
           "responseFormTitle": "Approve desktop steps",
-          "responseFormDescription": "=Steps v{{ String($('Repaired steps received').item.json.version ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }} for {{ String($('Repaired steps received').item.json.name ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}. Write steps: the numbers of the steps that save, post or submit, from the numbered list in the email (candidates: {{ ($('Repaired steps received').item.json.safetyFlags ?? []).filter((f) => String(f).startsWith('candidate write: step ')).map((f) => 'step ' + /^candidate write: step (\\d+)/.exec(String(f))[1]).join(', ') || 'none' }}). The runner refuses a write only on the controls and keys its policy lists: an unlisted step can still save through any other control.",
+          "responseFormDescription": "=Steps v{{ String($('Repaired steps received').item.json.version ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }} for {{ String($('Repaired steps received').item.json.name ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]) }}. Tick the steps that save, send or submit, from the numbered list in the email; none is ticked for you. Ticked steps are allowed to save or send. An unticked step is stopped only when it tries to use a control or key that your administrator has protected on the bot machine.",
           "limitWaitTime": {
             "values": { "limitType": "afterTimeInterval", "resumeAmount": "={{ $('Settings').item.json.approvalTimeoutHours }}", "resumeUnit": "hours" }
           }
         },
         "responseType": "customForm",
-        "formFields": {
-          "values": [
-            { "fieldLabel": "Decision", "fieldType": "dropdown", "fieldOptions": { "values": [{ "option": "Approve" }, { "option": "Reject" }] }, "requiredField": true },
-            { "fieldLabel": "Write steps", "placeholder": "16" }
-          ]
-        }
+        "defineForm": "json",
+        "jsonOutput": "={{ JSON.stringify([{ fieldLabel: 'Decision', fieldType: 'dropdown', fieldOptions: { values: [{ option: 'Approve and sign' }, { option: 'Reject' }] }, requiredField: true }].concat(((c) => c.length ? [{ fieldLabel: 'Steps that save, send or submit', fieldType: 'checkbox', fieldOptions: { values: c.map((o) => ({ option: o })) } }] : [])(($('Repaired steps received').item.json.safetyFlags ?? []).map((f) => /^candidate write: step (\\d+) \\((.*)\\) may save, post or submit: list \\d+ in Write Steps/.exec(String(f))).filter((m) => m).map((m) => 'Step ' + m[1] + ': ' + m[2].split(',').join(';'))), [{ fieldLabel: 'Any other step that saves, sends or submits (its number)', fieldType: 'text', placeholder: '7, 9' }])).split('$').join('\\\\u0024') }}"
       },
       "id": "3d6f1a20-7b4c-4e8a-9c11-000000000317",
       "name": "Ask for approval (desktop steps)",
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2.1,
       "position": [1100, 120],
-      "notes": "The button is a signed link sent only to the approver's mailbox, to a form: Decision and Write steps. Without an answer it resumes after approvalTimeoutHours with no data."
+      "notes": "One email: the numbered steps and a button, a signed link sent only to the approver's mailbox, to a form: Decision, and the candidate writes as tick boxes (none ticked) with a field for other step numbers. Without an answer it resumes after approvalTimeoutHours with no data."
     },
     {
       "parameters": {
         "mode": "raw",
-        "jsonOutput": "={{ $json.data === undefined ? {} : { data: { approved: $json.data['Decision'] === 'Approve', writeSteps: String($json.data['Write steps'] ?? '') } } }}",
+        "jsonOutput": "={{ $json.data === undefined ? {} : { data: { approved: $json.data['Decision'] === 'Approve and sign', writeSteps: [].concat($json.data['Steps that save, send or submit'] ?? []).map((l) => (/^Step (\\d+):/.exec(String(l)) ?? [])[1]).filter((n) => n).concat(String($json.data['Any other step that saves, sends or submits (its number)'] ?? '')).join(' ').trim() } } }}",
         "options": {}
       },
       "id": "3d6f1a20-7b4c-4e8a-9c11-000000000318",
@@ -196,7 +248,7 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [1320, 120],
-      "notes": "The form answer in the shape Ask for approval gives: data.approved, plus data.writeSteps. No answer: no data, so Timed out? is true."
+      "notes": "The form answer in the shape Ask for approval gives: data.approved, plus data.writeSteps (the numbers of the ticked steps and of the typed ones). No answer: no data, so Timed out? is true."
     },
     {
       "parameters": {
@@ -261,7 +313,7 @@
       "parameters": {
         "operation": "signSteps",
         "approved": "={{ $('Timed out?').item.json.data.approved }}",
-        "approverId": "approver@example.com",
+        "approverId": "={{ $('Settings').item.json.approver }}",
         "approverAllowlist": "approver@example.com",
         "writeSteps": "={{ $('Timed out?').item.json.data.writeSteps ?? '' }}"
       },
@@ -372,7 +424,7 @@
         "resource": "email",
         "operation": "send",
         "fromEmail": "n8n-rpa@localhost",
-        "toEmail": "approver@example.com",
+        "toEmail": "={{ $('Settings').item.json.approver }}",
         "subject": "=Signed: steps v{{ $('Sign steps').item.json.version }} for {{ $('Sign steps').item.json.name }} are active",
         "emailFormat": "text",
         "text": "=Steps v{{ $('Sign steps').item.json.version }} for {{ $('Sign steps').item.json.name }} are signed and active (hash {{ $('Sign steps').item.json.hash }}), approved by {{ $('Sign steps').item.json.approvedBy }} at {{ $('Sign steps').item.json.approvedAt }}.\n{{ $('Sign steps').item.json.writeLine ?? '' }}",
@@ -399,7 +451,7 @@
         },
         "columns": {
           "mappingMode": "defineBelow",
-          "value": { "status": "rejected", "approvedBy": "approver@example.com", "approvedAt": "={{ $now.toISO() }}" },
+          "value": { "status": "rejected", "approvedBy": "={{ $('Settings').item.json.approver }}", "approvedAt": "={{ $now.toISO() }}" },
           "matchingColumns": [],
           "schema": [
             { "id": "status", "displayName": "status", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
@@ -418,10 +470,11 @@
     }
   ],
   "connections": {
-    "Repaired steps received": { "main": [[{ "node": "Email repaired steps", "type": "main", "index": 0 }]] },
-    "Email repaired steps": { "main": [[{ "node": "Settings", "type": "main", "index": 0 }]] },
-    "Settings": { "main": [[{ "node": "Mark pending", "type": "main", "index": 0 }]] },
-    "Mark pending": { "main": [[{ "node": "Desktop steps?", "type": "main", "index": 0 }]] },
+    "Repaired steps received": { "main": [[{ "node": "Settings", "type": "main", "index": 0 }]] },
+    "Settings": { "main": [[{ "node": "Create steps table", "type": "main", "index": 0 }, { "node": "Desktop steps?", "type": "main", "index": 0 }]] },
+    "Create steps table": { "main": [[{ "node": "Create run log table", "type": "main", "index": 0 }]] },
+    "Create run log table": { "main": [[{ "node": "Mark pending", "type": "main", "index": 0 }]] },
+    "Email repaired steps": { "main": [[{ "node": "Ask for approval", "type": "main", "index": 0 }]] },
     "Ask for approval": { "main": [[{ "node": "Timed out?", "type": "main", "index": 0 }]] },
     "Timed out?": { "main": [[{ "node": "Record expiry", "type": "main", "index": 0 }], [{ "node": "Repaired steps to sign", "type": "main", "index": 0 }]] },
     "Repaired steps to sign": { "main": [[{ "node": "Sign steps", "type": "main", "index": 0 }]] },
@@ -429,7 +482,7 @@
     "Save signed steps": { "main": [[{ "node": "Supersede older versions", "type": "main", "index": 0 }, { "node": "Email signed steps", "type": "main", "index": 0 }]] },
     "Signed?": { "main": [[{ "node": "Save signed steps", "type": "main", "index": 0 }], [{ "node": "Record rejection", "type": "main", "index": 0 }]] },
     "Desktop steps?": {
-      "main": [[{ "node": "Ask for approval (desktop steps)", "type": "main", "index": 0 }], [{ "node": "Ask for approval", "type": "main", "index": 0 }]]
+      "main": [[{ "node": "Ask for approval (desktop steps)", "type": "main", "index": 0 }], [{ "node": "Email repaired steps", "type": "main", "index": 0 }]]
     },
     "Ask for approval (desktop steps)": { "main": [[{ "node": "Desktop answer", "type": "main", "index": 0 }]] },
     "Desktop answer": { "main": [[{ "node": "Timed out?", "type": "main", "index": 0 }]] }

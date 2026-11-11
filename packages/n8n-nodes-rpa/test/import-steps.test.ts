@@ -203,7 +203,7 @@ describe('Import Steps: the description', () => {
     ]);
     for (const p of own) expect(p.displayOptions?.show?.operation, p.name).toEqual(['importSteps']);
     expect((field('source').options as INodePropertyOptions[]).map((o) => [o.name, o.value])).toEqual([
-      ['Chrome Recorder (JSON)', 'chrome'], ['Playwright Code (JavaScript or TypeScript)', 'playwright'], ['UiPath Project (ZIP or XAML)', 'uipath'],
+      ['Work It Out From the File', 'auto'], ['Chrome Recorder (JSON)', 'chrome'], ['Playwright Code (JavaScript or TypeScript)', 'playwright'], ['UiPath Project (ZIP or XAML)', 'uipath'],
       ['Step Document (JSON)', 'steps'], ['RPA Recording', 'recording'],
     ]);
     expect(field('source').default).toBe('chrome');
@@ -337,8 +337,10 @@ describe('Import Steps: execution', () => {
     expect(data[0].json.report).toMatchObject({ source: 'chrome', steps: 9 });
     expect((data[0].json.report as { items: { kind: string }[] }).items.some((i) => i.kind === 'secret')).toBe(true);
     expect(drafts(data[0])).toEqual([{ name: 'sap-export', steps: JSON.parse(JSON.stringify(input.draft)), adopted: true }]);
-    expect(data[0].json).not.toHaveProperty('workflowName');
-    expect(data[0].binary).toBeUndefined();
+    // Every import with steps comes with the workflow around them: here one browser pair, by the draft's name.
+    expect(data[0].json.workflowName).toBe('sap-export (imported from a Chrome recording)');
+    expect(Object.keys(data[0].binary ?? {})).toEqual(['workflow']);
+    expect(data[0].binary?.workflow).toMatchObject({ mimeType: 'application/json', fileName: 'sap-export.workflow.json' });
     expect(data[0].pairedItem).toEqual([{ item: 0 }]);
   });
 
@@ -701,7 +703,7 @@ describe('Import Steps: execution', () => {
       const workflow = JSON.parse(binaryText(data[0], 'workflow').toString('utf8')) as WorkflowJson;
       const runs = workflow.nodes.filter((n) => (n.parameters as { operation?: string }).operation === 'runSteps');
       expect(runs).toHaveLength(3);
-      for (const n of runs) expect((n.parameters as { options: IDataObject }).options).toMatchObject({ codeWorkflowId: 'wf-code-1', codeTimeout: 45 });
+      for (const n of runs) expect((n.parameters as { options: IDataObject }).options).toMatchObject({ codeWorkflowId: { __rl: true, mode: 'id', value: 'wf-code-1' }, codeTimeout: 45 });
     });
   });
 
@@ -787,7 +789,8 @@ describe('Import Steps: execution', () => {
     // One draft, every draft failed: the error item has `screenshot` and `trace`, as a Run Steps failure item does.
     const [failed] = await run(importEngine(drift), { params: params({}, { variables: VARIABLES, saveTrace: 'onFailure' }) });
     expect(failed[0].json.error).toMatch(/^drift_detected: /);
-    expect(Object.keys(failed[0].binary ?? {}).sort()).toEqual(['screenshot', 'trace']);
+    // The workflow file was built from what could be read, as for a UiPath project: the error item keeps it.
+    expect(Object.keys(failed[0].binary ?? {}).sort()).toEqual(['screenshot', 'trace', 'workflow']);
     expect(failed[0].binary?.trace).toMatchObject({ mimeType: 'application/zip', fileName: 'sap-export-trace.zip' });
     expect(failed[0].binary?.screenshot).toMatchObject({ mimeType: 'image/png', fileName: 'sap-export-failure.png' });
     expect(binaryText(failed[0], 'screenshot')).toEqual(png);
@@ -797,9 +800,9 @@ describe('Import Steps: execution', () => {
     expect(details(failed[0])).toMatchObject({ traceRef: 'trace' });
     expect((details(failed[0]).drafts as IDataObject[])[0]).toMatchObject({ traceRef: 'trace' });
 
-    // Debug Trace Never: no page capture leaves the node.
+    // Debug Trace Never: no page capture leaves the node (the workflow file does).
     const [never] = await run(importEngine(drift), { params: params({}, { variables: VARIABLES, saveTrace: 'never' }) });
-    expect(never[0].binary).toBeUndefined();
+    expect(Object.keys(never[0].binary ?? {})).toEqual(['workflow']);
     expect(details(never[0])).toMatchObject({ traceRef: null });
     expect((details(never[0]).drafts as IDataObject[])[0]).not.toHaveProperty('traceRef');
 
