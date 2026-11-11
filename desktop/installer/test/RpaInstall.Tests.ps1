@@ -4548,3 +4548,29 @@ Describe 'The Start menu shortcut' {
     $lines | Should -Contain '    the Start menu shortcut C:\x.lnk (it was not there): Access is denied.'
   }
 }
+
+# Names the installer shares with the supervisor's C# code and a place in the guide its refusals point to. The service's
+# own "blocked" sentence (Show-RpaConnection.ps1 against SessionManager.cs) is not pinned here.
+Describe 'Names shared with the supervisor and the guide' {
+  BeforeAll {
+    $script:RepoRoot = Join-Path $PSScriptRoot '../../..'
+    function Get-RepoText([string]$Path) { Get-Content -Raw -LiteralPath (Join-Path $script:RepoRoot $Path) }
+  }
+
+  It 'the LSA secret that holds the password of the bot user is the one the supervisor reads' {
+    $name = InModuleScope RpaInstall { $script:SupervisorSecret }
+    $name | Should -BeExactly 'L$RpaRunnerBotPassword'
+    Get-RepoText 'desktop/runner/src/Rpa.Supervisor/LsaSecret.cs' | Should -Match ([regex]::Escape(('public const string BotPasswordName = "{0}";' -f $name)))
+  }
+
+  It 'the service is the one the supervisor registers as, also where Show-RpaConnection.ps1 looks for it' {
+    $name = InModuleScope RpaInstall { $script:SupervisorService }
+    Get-RepoText 'desktop/runner/src/Rpa.Supervisor/SupervisorService.cs' | Should -Match ([regex]::Escape(('public const string Name = "{0}";' -f $name)))
+    Get-RepoText 'desktop/installer/scripts/Show-RpaConnection.ps1' | Should -Match ([regex]::Escape(("-Filter `"Name='{0}'`"" -f $name)))
+  }
+
+  It 'section 10 of the Windows guide, which the refusals about a new password name, is about the certificates' {
+    $script:ModuleSource | Should -Match ([regex]::Escape('(docs/install/windows.md, section 10)'))
+    (Get-RepoText 'docs/install/windows.md') -split "`r?`n" | Should -Contain '## 10. Changing the tokens and the certificates'
+  }
+}
