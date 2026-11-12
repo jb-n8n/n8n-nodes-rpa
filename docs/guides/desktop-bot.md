@@ -107,6 +107,8 @@ by another name or address than the one in the line (a NAT, a tunnel), run the c
    `--show-signing-key` to the first run to see it once. The command never changes a key that exists: only
    `--replace-signing-key` does, after you type `REPLACE`, and every bot signed with the old key must then be approved
    again. Run it again at any time: it reuses what it made, and `--new-form-password` gives the form a new password.
+   It reuses only what your own project holds (your personal project, or the one `--project-id` names). A credential
+   or workflow of the same name that belongs to someone else is left alone, and the command says so.
 
    Until version 0.2.0 is on npm, run it from this repository instead: `pnpm install`, then
    `pnpm --filter n8n-nodes-rpa build`, then `node packages/n8n-nodes-rpa/dist/setup.mjs setup` with the same options.

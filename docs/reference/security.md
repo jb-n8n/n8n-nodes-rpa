@@ -82,6 +82,9 @@ runs a step list only when its signature verifies and its version equals **Expec
 `playwright_steps` Data Table fails `script_untrusted` and nothing runs. Desktop signatures bind the app, not a Site
 Login.
 
+**Who holds the key.** Anyone who knows the signing key can sign steps. `npx n8n-nodes-rpa setup` therefore uses only
+an **RPA Step Signing** credential that its own project owns, and never one of the same name made by another user.
+
 **Approval.** Nothing an import or an AI repair makes runs until a person approves it and Sign Steps signs it.
 - **On the form (the default).** In **RPA: 5 Import a bot**, the person who imports reviews every step list on the next
   page of the form and chooses **Approve and sign** or **Reject**. Anyone who can open the form (its Basic Auth
