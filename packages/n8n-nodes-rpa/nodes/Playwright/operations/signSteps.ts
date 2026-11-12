@@ -5,8 +5,8 @@ import type { NodeContext } from '../context.js';
 import type { Engine } from '../engine.js';
 import { configNodeError, errorJson } from '../errors.js';
 import {
-  changeList, DESKTOP_EVIDENCE_LINES, evidenceLine, fullSafetyFlags, hasDownloadStep, isDesktopProposal, isFileDocument, leftOutList, NOT_REPLAYED_EVIDENCE_LINE,
-  safetyLine,
+  changeList, DESKTOP_EVIDENCE_LINES, evidenceLine, fullSafetyFlags, hasDownloadStep, importAddedSteps, isDesktopProposal, isFileDocument, leftOutList,
+  NOT_REPLAYED_EVIDENCE_LINE, reviewSteps, safetyLine, type ReviewStep,
 } from '../format.js';
 import { configErrorItem } from '../output.js';
 import { rejectedRecord, signedRecord, type StepsRecord } from '../rows.js';
@@ -33,6 +33,7 @@ export const NOT_REPLAYED_CHANGES_MISMATCH = 'the change list does not show ever
 export const PROVEN_FIRST_VERSION_WRITES =
   'the evidence line says the steps were proven in a fresh browser, but a first version that submits a form, downloads through a form, types a secret or changes a password is never replayed: it must carry the not-replayed evidence line';
 export const LEFT_OUT_MALFORMED = 'the left-out steps are not a list of text';
+export const REVIEW_STEPS_CHANGED = 'the steps shown for approval are not the steps to sign: import the steps again';
 /** Site Login secrets shorter than this are not looked for in records (the engine's MIN_SECRET_LEN_FOR_LITERAL_CHECK). */
 const MIN_SECRET_LEN = 4;
 
@@ -122,6 +123,45 @@ function shownTextChanged(engine: Engine, p: Proposal | DesktopProposal, shown: 
     if (expected !== undefined && value !== expected) return true;
   }
   return false;
+}
+
+/** A variable's start value, which the import knows and the item does not record: shown only, never compared. */
+const STARTS_AS = /^(variable [A-Za-z_][A-Za-z0-9_]*), starts as [\s\S]*$/;
+
+/** True when an entry of the item's `reviewSteps` says what the rebuilt entry says (see reviewStepsProblem). */
+function sameReviewStep(shown: unknown, built: ReviewStep): boolean {
+  if (!isObject(shown) || shown.text !== built.text || !Array.isArray(shown.marks)) return false;
+  const marks = shown.marks.map((m) => (typeof m === 'string' ? m.replace(STARTS_AS, '$1') : m));
+  if (marks.length !== built.marks.length || marks.some((m, i) => m !== built.marks[i])) return false;
+  // Only a step the import may add (a wait for a window, a returned file) may be shown as added.
+  if (shown.added !== undefined && !(shown.added === true && built.added === true)) return false;
+  if (shown.each === undefined && built.each === undefined) return true;
+  return Array.isArray(shown.each) && built.each !== undefined && shown.each.length === built.each.length && shown.each.every((e, i) => sameReviewStep(e, built.each![i]));
+}
+
+/**
+ * Why the steps the review page and the approval email showed (`reviewSteps`, shown only and outside the digest) cannot
+ * stand for the steps to sign, or undefined. Each sentence is rebuilt from the item's own steps with the function the
+ * import used, entry by entry (a paginate's inner lines too), with the marks: the variables (secret ones as the item's
+ * `secretVariables` name them on desktop steps, from the step on browser steps), a returned file, a read's output, a
+ * sign-in, and "added" only on a step the import may add. A start value is not recorded on the item and is not compared.
+ * An item without `reviewSteps` (an older one, or one from Run Steps) is signed as before.
+ */
+function reviewStepsProblem(engine: Engine, p: ParsedProposal, json: IDataObject): string | undefined {
+  const shown = json.reviewSteps;
+  if (shown === undefined) return undefined;
+  const steps = isObject(p.steps) ? p.steps.steps : undefined;
+  if (!Array.isArray(shown) || !Array.isArray(steps)) return REVIEW_STEPS_CHANGED;
+  let built: ReviewStep[];
+  try {
+    const secretVariables = Array.isArray(json.secretVariables) ? json.secretVariables.filter((v): v is string => typeof v === 'string') : [];
+    built = engine.isDesktopDocument(p.steps)
+      ? reviewSteps(steps, { desktop: true, secretVariables, added: importAddedSteps(steps as never) })
+      : reviewSteps(steps, { desktop: false, shownUrl: engine.shownUrl });
+  } catch {
+    return REVIEW_STEPS_CHANGED;
+  }
+  return shown.length === built.length && shown.every((e, i) => sameReviewStep(e, built[i])) ? undefined : REVIEW_STEPS_CHANGED;
 }
 
 /** Hosts of the absolute http(s) gotos, paginate bodies included. */
@@ -348,7 +388,9 @@ async function signOne(ctx: NodeContext, engine: Engine, i: number, json: IDataO
   }
   const leftOut = leftOutProblem(p);
   if (leftOut) return refuse([leftOut]);
-  if (engine.isDesktopDocument(p.steps)) return signDesktop(engine, p, { key, approverId, writeStepsText, secrets: siteSecrets, at, refuse, record });
+  // Reported after the engine's own reasons (a step edited after review fails the digest check first), never instead.
+  const shownSteps = reviewStepsProblem(engine, p, json);
+  if (engine.isDesktopDocument(p.steps)) return signDesktop(engine, p, { key, approverId, writeStepsText, secrets: siteSecrets, at, refuse, record, shownSteps });
   if (writeStepsText) return refuse([WRITE_STEPS_BROWSER]);
 
   const proposal: Proposal = {
@@ -406,8 +448,8 @@ async function signOne(ctx: NodeContext, engine: Engine, i: number, json: IDataO
   } catch (error) {
     return refuse([errorMessage(error)]);
   }
-  const reasons = [...(result.ok ? [] : result.reasons), ...(changes ? [changes] : [])];
-  if (!result.ok || changes) return refuse(reasons);
+  const reasons = [...(result.ok ? [] : result.reasons), ...(changes ? [changes] : []), ...(shownSteps ? [shownSteps] : [])];
+  if (!result.ok || changes || shownSteps) return refuse(reasons);
   return record(signedRecord(result.row));
 }
 
@@ -419,7 +461,11 @@ async function signOne(ctx: NodeContext, engine: Engine, i: number, json: IDataO
  */
 function signDesktop(
   engine: Engine, p: ParsedProposal,
-  c: { key: string; approverId: string; writeStepsText: string; secrets: (string | undefined)[]; at: Date; refuse: (r: string[]) => SignOutcome; record: (r: StepsRecord) => SignOutcome },
+  c: {
+    key: string; approverId: string; writeStepsText: string; secrets: (string | undefined)[]; at: Date; refuse: (r: string[]) => SignOutcome; record: (r: StepsRecord) => SignOutcome;
+    /** Why the shown steps (reviewSteps) do not match, reported after the engine's reasons. */
+    shownSteps?: string;
+  },
 ): SignOutcome {
   const writeSteps = engine.parseWriteSteps(c.writeStepsText);
   if ('error' in writeSteps) return c.refuse([writeSteps.error]);
@@ -446,7 +492,8 @@ function signDesktop(
   } catch (error) {
     return c.refuse([errorMessage(error)]);
   }
-  if (!result.ok) return c.refuse(result.reasons);
+  if (!result.ok) return c.refuse([...result.reasons, ...(c.shownSteps ? [c.shownSteps] : [])]);
+  if (c.shownSteps) return c.refuse([c.shownSteps]);
   // What was signed as writes, by number and intent, so the approver's choice is confirmed in words.
   const writes = result.row.writeSteps.map((n) => ({ step: n, intent: result.row.steps.steps[n - 1].intent }));
   return c.record({ ...signedRecord(result.row), writeSteps: writes, writeLine: desktopWriteLine(writes) });

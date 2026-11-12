@@ -618,6 +618,10 @@ describe('3-approve-steps.json', () => {
     const { reviewSteps: _r, ...older } = fromNode;
     expect(shownSteps(older)).toBe('1. Read the total\n2. Type &quot;&lt;b&gt;9999&lt;/b&gt;&quot; into Read the total\n3. Type into User name (secret variable username)');
     expect(shownSteps({ ...fromNode, reviewSteps: fromNode.reviewSteps.slice(1) })).toBe(shownSteps(older));
+    // A start value is not on the item, so Sign Steps cannot check it: the email leaves it out of the marks.
+    const started = fromNode.reviewSteps.map((r, i) => (i === 2 ? { ...r, marks: ['variable username, starts as jdoe'] } : r));
+    expect(shownSteps({ ...fromNode, reviewSteps: started })).toContain('\n3. Type into User name (variable username)');
+    expect(shownSteps({ ...fromNode, reviewSteps: started })).not.toContain('jdoe');
     expect(message).toContain('tick the steps that save, send or submit (none is ticked for you), then approve or reject.');
     expect(message).toContain('Ticked steps are allowed to save or send. An unticked step is stopped only when it tries to use a control or key that your administrator has protected on the bot machine.');
     // The full detail below: the item's own change list, evidence and flags.

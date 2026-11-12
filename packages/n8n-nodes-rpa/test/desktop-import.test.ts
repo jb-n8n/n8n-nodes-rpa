@@ -285,6 +285,39 @@ describe('Import Steps with an RPA recording', () => {
     expect(String((await sign({ ...repaired[0].json, evidenceLine: RECORDING_LINE.replace('a recording', 'somewhere') })).error)).toContain('changed after it was reviewed');
   });
 
+  it('Sign Steps refuses an item whose shown steps (reviewSteps) are not those its steps give; an honest item and one without them sign', async () => {
+    const REFUSED = 'Sign Steps refused: the steps shown for approval are not the steps to sign: import the steps again';
+    for (const { repaired } of [await importSample(), await importRecording()]) {
+      const item = repaired[0].json;
+      const shown = item.reviewSteps as { text: string; marks: string[]; added?: true }[];
+      const click = shown.findIndex((r) => r.text.startsWith('Click '));
+      const forge = async (list: unknown) => {
+        const out = await sign({ ...item, reviewSteps: list as IDataObject[] }, { writeSteps: '16' });
+        expect(out.error).toBe(REFUSED);
+        expect(out).not.toHaveProperty('signature');
+      };
+      // A text that says something else, an entry missing or added, a click shown as one the import added, a secret
+      // variable shown as a plain one.
+      await forge(shown.map((r, i) => (i === click ? { ...r, text: 'Click Cancel' } : r)));
+      await forge(shown.slice(1));
+      await forge([...shown, { text: 'Click Save', marks: [] }]);
+      await forge(shown.map((r, i) => (i === click ? { ...r, added: true } : r)));
+      const secret = shown.findIndex((r) => r.marks.some((m) => m.startsWith('secret variable')));
+      await forge(shown.map((r, i) => (i === secret ? { ...r, marks: r.marks.map((m) => m.replace('secret variable', 'variable')) } : r)));
+      // Honest, and without the shown list (an older item): both sign.
+      expect(await sign(item, { writeSteps: '16' })).toMatchObject({ status: 'active' });
+      const { reviewSteps: _r, ...older } = item;
+      expect(await sign(older, { writeSteps: '16' })).toMatchObject({ status: 'active' });
+    }
+    // A recording's start value for a plain variable is not on the item: shown, not compared (the email leaves it out).
+    // It only adds to a mark, never to the sentence.
+    const { repaired } = await importSample();
+    const started = (repaired[0].json.reviewSteps as { text: string; marks: string[] }[])
+      .map((r) => ({ ...r, marks: r.marks.map((m) => (m === 'variable in_CompanyCode' ? `${m}, starts as 2000` : m)) }));
+    expect(JSON.stringify(started)).toContain('starts as 2000');
+    expect(await sign({ ...repaired[0].json, reviewSteps: started as unknown as IDataObject[] }, { writeSteps: '16' })).toMatchObject({ status: 'active' });
+  });
+
   it('the generated workflow\'s desktop pair and name say "recording"', async () => {
     const r = engine.importSource('recording', readFileSync(RECORDING), { name: 'erp', hasSiteLogin: false });
     const wf = buildWorkflow(r.flow!, r.drafts, { name: 'erp', desktopDrafts: r.desktopDrafts, source: 'recording' });

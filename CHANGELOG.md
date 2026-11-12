@@ -63,7 +63,7 @@ All notable changes to `n8n-nodes-rpa`, the `rpa-browser` image and the Windows 
 - `policy-changes\` is created for administrators only and refused when it is a link or someone else owns it.
 - The secret variables credential is not bound to the signed steps: share it only with people who may approve imports ([Security](docs/reference/security.md#secret-variables)).
 - The review page words each browser step from the step itself (its action, target and value) and shows the author's description beside it when it says something else.
-- The approval email for desktop steps words each step as the review page does, from the step itself.
+- The approval email for desktop steps words each step as the review page does, from the step itself. Sign Steps refuses when the step sentences shown for approval differ from the steps it signs.
 
 ## 0.2.0 (2026-11-10)
 

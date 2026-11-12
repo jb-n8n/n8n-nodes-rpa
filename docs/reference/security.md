@@ -95,6 +95,7 @@ an **RPA Step Signing** credential that its own project owns, and never one of t
 - **What each step says.** The review page builds each step's sentence from the step itself: what it does, where, and
   the value it types or chooses. A secret's or a variable's value is never shown. A step's description comes from
   whoever wrote the steps, so it is shown beside the sentence, as `(described as: …)`, when it says something else.
+  Sign Steps refuses to sign when the step sentences shown for approval differ from the steps it is asked to sign.
 - **Desktop writes.** The review page asks "Which of these steps save, send or submit?". The ticked steps are signed as
   writes. A write mark only matters where the runner's policy lists the control or key (see [Desktop runs](#desktop-runs)).
 
