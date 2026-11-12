@@ -266,8 +266,9 @@ describe('npx n8n-nodes-rpa setup', () => {
       expect(fake.state.credentials.find((c) => c.id === 'c7')!.data.secretKey).toBe(KEY);
       expect(fake.state.requests.some((q) => q.method === 'PATCH')).toBe(false);
       expect(r.stdout).toMatch(/reused .*RPA Step Signing.*its key stays as it is/);
-      if (extra.length) expect(r.stdout).toMatch(/does not give a stored key back, so it cannot be shown, and the key was not changed/);
-      expect(r.stdout).toMatch(/--replace-signing-key/);
+      // Bots may be approved with it by now: no advice to replace it, only what a new key does.
+      expect(r.stdout).toContain('  Signing key: made earlier and kept in n8n, which does not show it again. A new key (--replace-signing-key) stops every bot signed with this one until it is approved again.');
+      expect(r.stdout).not.toMatch(/To keep a copy|before you approve a bot/);
     }
     expect(fake.state.workflows).toHaveLength(1);
   });
