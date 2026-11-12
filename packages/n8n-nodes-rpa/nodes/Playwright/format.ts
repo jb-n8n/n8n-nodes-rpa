@@ -290,14 +290,18 @@ const READ_OR_WAIT = ['waitFor', 'extract', 'extractTable', 'read', 'detect', 's
 
 /**
  * What a browser step does, from the step itself: `core` is the action and its target in the importer's words, `more` the
- * value or detail after it (a typed value, the keys held, the form it sends). undefined for a step that only reads or waits.
+ * value or detail after it (a typed value, the keys held, the form it sends), `alike` another wording of the same that a
+ * description may use (a plain http address without its scheme). undefined for a step that only reads or waits.
  */
-function browserAction(s: Json, shownUrl: (url: string) => string): { core: string; more: string } | undefined {
+function browserAction(s: Json, shownUrl: (url: string) => string): { core: string; more: string; alike?: string } | undefined {
   const value = (v: unknown, secret: boolean) => (secret ? 'a secret' : holdsVariable(v) ? 'a variable' : shownValue(v));
   if (typeof s.goto === 'string') {
-    // As the importer words it: host and path, never the query or fragment, without "https://" (the sites line shows hosts so).
-    const place = shownUrl(s.goto).replace(/^https?:\/\//i, '').replace(/^([^/]+)\/$/, '$1');
-    return { core: `Open ${shownName(clean(place, MAX_SHOWN))}`, more: '' };
+    // Host and path, never the query or fragment, without "https://" as the importer words it. A plain http address
+    // keeps its "http://": the page then says the site is not encrypted. The importer's wording, without it, still matches.
+    const place = shownUrl(s.goto).replace(/^https:\/\//i, '').replace(/^((?:http:\/\/)?[^/]+)\/$/i, '$1');
+    const open = (p: string) => `Open ${shownName(clean(p, MAX_SHOWN))}`;
+    const plain = place.replace(/^http:\/\//i, '');
+    return { core: open(place), more: '', ...(plain !== place ? { alike: open(plain) } : {}) };
   }
   if (s.signIn !== undefined) {
     const sign = asJson(s.signIn);
@@ -355,7 +359,7 @@ function browserSentence(s: Json, shownUrl: (url: string) => string): string {
   const action = browserAction(s, shownUrl);
   if (!action) return String(s.intent ?? '');
   const text = `${action.core}${action.more}`;
-  const same = [action.core, text].some((t) => comparable(t) === comparable(described));
+  const same = [action.core, text, action.alike ?? text].some((t) => comparable(t) === comparable(described));
   return described && !same ? `${text} (described as: ${described})` : text;
 }
 

@@ -1564,6 +1564,19 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       `Click the element matching ${JSON.stringify(long.slice(0, 80))}… (described as: Click the first cell ${'x'.repeat(99)}…)`,
       'Type into Name: "say \\"hi\\"\\nbye"',
     ]);
+    // A plain http address keeps its "http://"; an https one is shown without its scheme. The importer's wording, which
+    // leaves out either scheme, still matches; a description that says something else does not.
+    expect(texts([
+      { intent: 'Open localhost:8080/acme/login', goto: 'http://localhost:8080/acme/login?x=1' },
+      { intent: 'Open a.example', goto: 'http://a.example/' },
+      { intent: 'Open the bank', goto: 'http://pay.example/transfer' },
+      { intent: 'Open pay.example/transfer', goto: 'https://pay.example/transfer' },
+    ])).toEqual([
+      'Open http://localhost:8080/acme/login',
+      'Open http://a.example',
+      'Open http://pay.example/transfer (described as: Open the bank)',
+      'Open pay.example/transfer',
+    ]);
     // Steps that only read or wait keep their description as their sentence.
     expect(texts([
       { intent: 'Wait for the table', waitFor: { target: { css: 'table' } } },
