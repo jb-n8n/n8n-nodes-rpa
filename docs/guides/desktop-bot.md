@@ -102,9 +102,10 @@ by another name or address than the one in the line (a NAT, a tunnel), run the c
      Password:   <32 characters>   (shown once: keep it in your password manager)
    ```
 
-   The signing key stays in n8n, and n8n does not show it again. A lost key means approving every bot again. To keep a
-   copy, run the command again with `--show-signing-key` before you approve a bot. Run it again at any time: it reuses
-   what it made, and `--new-form-password` gives the form a new password.
+   The signing key stays in n8n, and n8n does not show it again. A lost key means approving every bot again. Add
+   `--show-signing-key` to the first run to see it once. The command never changes a key that exists: only
+   `--replace-signing-key` does, after you type `REPLACE`, and every bot signed with the old key must then be approved
+   again. Run it again at any time: it reuses what it made, and `--new-form-password` gives the form a new password.
 
    Until version 0.2.0 is on npm, run it from this repository instead: `pnpm install`, then
    `pnpm --filter n8n-nodes-rpa build`, then `node packages/n8n-nodes-rpa/dist/setup.mjs setup` with the same options.

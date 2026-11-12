@@ -115,8 +115,10 @@ example with n8n's encryption key), every signed row stops: Run Steps fails `scr
 same happens when workflows move to another n8n, because the Site Login's credential ID changes.
 
 To sign the step lists again with the new key:
-1. Create the **RPA Step Signing** credential with a new key of 32 or more random characters, and select it on
-   **Sign steps** in template 5 (and template 3) and on every **Run steps** node.
+1. Make a new key: run `npx n8n-nodes-rpa setup --replace-signing-key` at a terminal and type `REPLACE` when it
+   asks. It replaces the key in the **RPA Step Signing** credential and shows the new one once. By hand instead,
+   create the credential with a new key of 32 or more random characters, and select it on **Sign steps** in template
+   5 (and template 3) and on every **Run steps** node.
 2. For each bot, open the `playwright_steps` Data Table, copy the `steps` value of its `active` row, and save it as a
    `.json` file.
 3. Upload that file on the **Import a bot** form with the source **Step document** and the bot's own name. Browser

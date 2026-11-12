@@ -1,13 +1,14 @@
 // `npx n8n-nodes-rpa setup` (dist/setup.mjs, built by `pnpm test`) against a fake n8n public API: a first run, a second
 // run, a missing node, a wrong key, an http address that is not this machine, a Connection Line that does not parse, and
 // that no secret reaches the output on any path, also when n8n echoes a request.
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 
 const CLI = fileURLToPath(new URL('../dist/setup.mjs', import.meta.url));
+const FAKE_TTY = fileURLToPath(new URL('./fixtures/fake-tty.mjs', import.meta.url));
 const API_KEY = 'n8n-api-key-0123456789-abcdefghij-KLMNOP';
 const FINGERPRINT = 'AB'.repeat(32);
 const RUNNER_TOKEN = 'runner-token-ZYXWVUTSRQPONMLKJIHGFEDCBA-98765';
@@ -22,7 +23,7 @@ const FIELDS: Record<string, string[]> = {
 
 interface Cred { id: string; name: string; type: string; data: Record<string, any> }
 interface Wf { id: string; name: string; active: boolean; versionId: string; nodes: any[]; connections: unknown; settings: unknown }
-interface Options { knowsNode?: boolean; echo?: 'credentials' | 'activate'; credentials?: Cred[]; executions?: number; patch?: boolean }
+interface Options { knowsNode?: boolean; echo?: 'credentials' | 'activate'; credentials?: Cred[]; patch?: boolean }
 
 /**
  * A fake n8n: the public API routes the command uses (two items a page, so lists page), the API key check, the form
@@ -89,7 +90,6 @@ async function fakeN8n(o: Options = {}) {
         w.active = true;
         return send(200, w);
       }
-      if (route === 'GET /api/v1/executions') return send(200, { data: Array.from({ length: o.executions ?? 0 }, (_, i) => ({ id: String(i) })), nextCursor: null });
       return send(404, { message: `no route ${route}` });
     });
   });
@@ -117,6 +117,26 @@ function run(args: string[], env: Record<string, string> = {}): Promise<{ code: 
       resolve({ code: err ? (typeof err.code === 'number' ? err.code : 1) : 0, out: `${stdout}${stderr}`, stdout });
     });
     child.stdin?.end();
+  });
+}
+
+/** Runs the command as if at a terminal (test/fixtures/fake-tty.mjs), answering each prompt as it shows. */
+function runAtTerminal(args: string[], env: Record<string, string>, answers: [RegExp, string][]): Promise<{ code: number; out: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, ['--import', FAKE_TTY, CLI, ...args], { env: { PATH: process.env.PATH, ...env } });
+    let out = '';
+    const pending = [...answers];
+    const onOutput = (chunk: Buffer) => {
+      out += chunk.toString();
+      if (pending.length && pending[0][0].test(out)) child.stdin.write(`${pending.shift()![1]}\n`);
+    };
+    child.stdout.on('data', onOutput);
+    child.stderr.on('data', onOutput);
+    const timer = setTimeout(() => child.kill(), 30_000);
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      resolve({ code: code ?? 1, out });
+    });
   });
 }
 
@@ -160,7 +180,7 @@ describe('npx n8n-nodes-rpa setup', () => {
     expect(count(out, form.data.password)).toBe(1);
     expect(stdout).toMatch(new RegExp(`Password: +${form.data.password} +\\(shown once: keep it in your password manager\\)`));
     expect(out).not.toContain(signing.data.secretKey);
-    expect(stdout).toMatch(/kept in n8n only.*a lost key means approving every bot again.*--show-signing-key/);
+    expect(stdout).toMatch(/kept in n8n only.*never shows it again. A lost key means approving every bot again.*--replace-signing-key before you approve a bot/);
     expect(stdout).toMatch(/1\. Record a bot.*\n.*2\. Open the form.*\n.*3\. Upload the file/);
     for (const name of ['RPA import form', 'RPA Step Signing', 'RPA: 5 Import a bot']) expect(stdout).toMatch(new RegExp(`created .*${name}`));
     expect(out).not.toMatch(/Note:|WARNING/);
@@ -195,28 +215,56 @@ describe('npx n8n-nodes-rpa setup', () => {
     expect(fake.state.workflows).toHaveLength(1);
   });
 
-  it('prints the signing key only with --show-signing-key; on a key made earlier, makes a new one only while the form is unused', async () => {
+  it('prints the signing key only with --show-signing-key, on the run that makes it', async () => {
     const fake = await n8n();
     const first = await run(setup(fake.url, '--show-signing-key'), ENV);
     expect(first.code, first.out).toBe(0);
     const key = fake.state.credentials[1].data.secretKey;
     expect(count(first.stdout, key)).toBe(1);
+    expect(first.stdout).toMatch(/Signing key: +[0-9a-f]{64} +\(shown once/);
+  });
 
-    const again = await run(['setup', '--url', fake.url, '--show-signing-key'], ENV);
-    expect(again.code, again.out).toBe(0);
+  it('never rewrites an existing signing key on its own: not with --show-signing-key, not without the import workflow', async () => {
+    const KEY = 'k'.repeat(40);
+    const fake = await n8n({ credentials: [{ id: 'c7', name: 'RPA Step Signing', type: 'playwrightScriptSigningApi', data: { secretKey: KEY } }] });
+    for (const extra of [[], ['--show-signing-key']]) {
+      const r = await run(setup(fake.url, ...extra), ENV);
+      expect(r.code, r.out).toBe(0);
+      expect(fake.state.credentials.find((c) => c.id === 'c7')!.data.secretKey).toBe(KEY);
+      expect(fake.state.requests.some((q) => q.method === 'PATCH')).toBe(false);
+      expect(r.stdout).toMatch(/reused .*RPA Step Signing.*its key stays as it is/);
+      if (extra.length) expect(r.stdout).toMatch(/does not give a stored key back, so it cannot be shown, and the key was not changed/);
+      expect(r.stdout).toMatch(/--replace-signing-key/);
+    }
+    expect(fake.state.workflows).toHaveLength(1);
+  });
+
+  it('--replace-signing-key: refused without a terminal, stops without the typed word, replaces and shows the key once with it', async () => {
+    const fake = await n8n();
+    expect((await run(setup(fake.url), ENV)).code).toBe(0);
+    const key = fake.state.credentials[1].data.secretKey;
+    const patches = () => fake.state.requests.filter((r) => r.method === 'PATCH').length;
+
+    const piped = await run(['setup', '--url', fake.url, '--replace-signing-key'], ENV);
+    expect(piped.code).toBe(2);
+    expect(piped.out).toMatch(/needs you at a terminal.*script_untrusted.*security\.md#if-the-signing-key-is-lost-or-changed.*Run it by hand/s);
+
+    const no = await runAtTerminal(['setup', '--url', fake.url, '--replace-signing-key'], ENV, [[/Connect a Windows machine now/, 'n'], [/Type REPLACE/, 'yes']]);
+    expect(no.code, no.out).toBe(1);
+    expect(no.out).toMatch(/script_untrusted/);
+    expect(no.out).toMatch(/Nothing was changed/);
+    expect(patches()).toBe(0);
+    expect(fake.state.credentials[1].data.secretKey).toBe(key);
+
+    const yes = await runAtTerminal(['setup', '--url', fake.url, '--replace-signing-key'], ENV, [[/Connect a Windows machine now/, 'n'], [/Type REPLACE/, 'REPLACE']]);
+    expect(yes.code, yes.out).toBe(0);
     const replaced = fake.state.credentials[1].data.secretKey;
+    expect(replaced).toMatch(/^[0-9a-f]{64}$/);
     expect(replaced).not.toBe(key);
-    expect(count(again.stdout, replaced)).toBe(1);
-
-    const used = await n8n({ executions: 1 });
-    expect((await run(setup(used.url), ENV)).code).toBe(0);
-    const kept = used.state.credentials[1].data.secretKey;
-    const refused = await run(['setup', '--url', used.url, '--show-signing-key'], ENV);
-    expect(refused.code).toBe(1);
-    expect(refused.out).toMatch(/used already.*Nothing was changed.*security\.md#if-the-signing-key-is-lost-or-changed/);
-    expect(used.state.credentials[1].data.secretKey).toBe(kept);
-    expect(refused.out).not.toMatch(/reused/);
-    expectNoSecrets(refused.out, [kept]);
+    expect(count(yes.out, replaced)).toBe(1);
+    expect(patches()).toBe(1);
+    expect(yes.out).not.toContain(key);
+    expectNoSecrets(yes.out);
   });
 
   it('a missing node: says how to install it and stops before creating anything', async () => {
@@ -350,7 +398,7 @@ describe('npx n8n-nodes-rpa setup', () => {
   it('prints its usage, and names the command', async () => {
     const help = await run(['--help']);
     expect(help.code).toBe(0);
-    for (const flag of ['--url', '--approver', '--allow-http', '--show-signing-key', '--new-form-password', '--browser-url', 'N8N_API_KEY', 'RPA_CONNECTION_LINE']) expect(help.out).toContain(flag);
+    for (const flag of ['--url', '--approver', '--allow-http', '--show-signing-key', '--replace-signing-key', '--new-form-password', '--browser-url', 'N8N_API_KEY', 'RPA_CONNECTION_LINE']) expect(help.out).toContain(flag);
     expect((await run([])).code).toBe(2);
   });
 });

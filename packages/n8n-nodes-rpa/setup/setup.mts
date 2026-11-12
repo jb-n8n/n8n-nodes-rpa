@@ -7,7 +7,11 @@
 // Secrets: the API key and the Connection Line come from the environment or a prompt that does not echo, never from a
 // flag. Every line printed passes through the redactor, which knows every secret (also a server error that echoes a
 // request). The form's password is printed once, on the line that shows it; the signing key only with
-// --show-signing-key. Nothing is written to a file.
+// --show-signing-key on the run that makes it. Nothing is written to a file.
+//
+// It never rewrites what is there on its own: a credential or workflow of the same name is reused as it is. Only a flag
+// made for it changes one: --new-form-password (the form's login) and --replace-signing-key, which also asks for the
+// word REPLACE at a terminal, because every bot signed with the old key stops until it is approved again.
 //
 // Run it again at any time: it lists credentials and workflows first and reuses those with the same name, saying so. n8n's
 // API never returns a secret, so a second run cannot show a password made earlier: --new-form-password replaces it.
@@ -42,7 +46,9 @@ const USAGE = [
   `  --url <address>        n8n's address (default ${DEFAULT_URL}). http:// only on this machine.`,
   '  --approver <email>     your email address: it goes into the Approver Allowlist of Sign steps.',
   '  --allow-http           allow http:// to another machine (the API key then crosses the network unencrypted).',
-  '  --show-signing-key     print the signing key. With a key made earlier, makes a new one: do this before you approve a bot.',
+  '  --show-signing-key     print the signing key when this run makes it (n8n never gives a stored key back).',
+  '  --replace-signing-key  make a new signing key and print it. Every bot signed with the old key must be approved again:',
+  '                         it asks you to type REPLACE, at a terminal only.',
   '  --new-form-password    give the form a new password and print it (n8n never shows the old one again).',
   '  --browser-url <ws-url> the browser service for browser bots: creates the RPA Browser credential, with the token from',
   '                         RPA_BROWSER_TOKEN, and sets it on Import steps.',
@@ -72,6 +78,7 @@ interface Options {
   approver?: string;
   allowHttp: boolean;
   showSigningKey: boolean;
+  replaceSigningKey: boolean;
   newFormPassword: boolean;
   browserUrl?: string;
 }
@@ -83,6 +90,7 @@ function readOptions(argv: string[]): Options | 'help' {
       args: argv,
       options: {
         url: { type: 'string' }, approver: { type: 'string' }, 'allow-http': { type: 'boolean' }, 'show-signing-key': { type: 'boolean' },
+        'replace-signing-key': { type: 'boolean' },
         'new-form-password': { type: 'boolean' }, 'browser-url': { type: 'string' }, help: { type: 'boolean', short: 'h' },
       },
       strict: true,
@@ -103,6 +111,7 @@ function readOptions(argv: string[]): Options | 'help' {
     approver: values.approver,
     allowHttp: values['allow-http'] === true,
     showSigningKey: values['show-signing-key'] === true,
+    replaceSigningKey: values['replace-signing-key'] === true,
     newFormPassword: values['new-form-password'] === true,
     browserUrl: values['browser-url'],
   };
@@ -294,6 +303,14 @@ async function publish(client: Client, id: string, versionId: unknown) {
   }
 }
 
+/** Says what a new signing key means and goes on only when the person types REPLACE at a terminal. */
+async function confirmReplace() {
+  const what = `A new signing key stops every bot signed with the old one (script_untrusted) until it is approved again: ${LOST_KEY_DOC}`;
+  if (!interactive()) throw new Stop(`--replace-signing-key needs you at a terminal, to type REPLACE. ${what} Run it by hand. Nothing was changed.`, 2);
+  say(what);
+  if ((await ask('Type REPLACE to make a new key, anything else to stop: ')) !== 'REPLACE') throw new Stop('Nothing was changed.');
+}
+
 async function run(inputs: Inputs): Promise<number> {
   const { client, options, origin } = inputs;
   if (inputs.plaintext) {
@@ -324,14 +341,10 @@ async function run(inputs: Inputs): Promise<number> {
     approver = checkApprover(await ask('Your email address (recorded as the approver of each bot): '));
   }
 
-  // A new signing key makes every step list signed with the old one fail to run: it replaces a key made earlier only
-  // while the form has never run. Checked before anything is changed.
-  if (options.showSigningKey && existingWorkflow && findCredential(list.items, SIGNING.name, SIGNING.type).existing) {
-    const ran = await client.api('GET', `/executions?workflowId=${encodeURIComponent(existingWorkflow.id)}&limit=1`);
-    if (ran.status !== 200 || (Array.isArray(ran.json?.data) && ran.json.data.length > 0)) {
-      throw new Stop(`The form has been used already, so a new signing key would stop every bot approved with the old one. Nothing was changed. To change the key anyway, follow ${LOST_KEY_DOC}`);
-    }
-  }
+  // An existing signing key is replaced only with --replace-signing-key and the typed word, asked before anything is
+  // changed. Nothing else decides it: a key may sign bots this command cannot see.
+  const replaceKey = options.replaceSigningKey && findCredential(list.items, SIGNING.name, SIGNING.type).existing !== undefined;
+  if (replaceKey) await confirmReplace();
 
   // The secrets made here are registered at once: from now on no output can print them by mistake.
   let formPassword: string | undefined = newPassword();
@@ -347,12 +360,13 @@ async function run(inputs: Inputs): Promise<number> {
   }
 
   const signing = await credential(client, list.items, SIGNING, () => ({ secretKey: signingKey }),
-    options.showSigningKey ? 'a new key is set below' : 'its key stays as it is');
+    replaceKey ? 'a new key is set below' : 'its key stays as it is');
   if (!signing.created) {
-    if (options.showSigningKey) {
-      await replaceData(client, signing.ref, SIGNING.type, { secretKey: signingKey });
-    } else signingKey = undefined;
+    if (replaceKey) await replaceData(client, signing.ref, SIGNING.type, { secretKey: signingKey });
+    else signingKey = undefined;
   }
+  // Shown when asked for on the run that made it, and always when it was replaced on purpose.
+  const showKey = signingKey !== undefined && (options.showSigningKey || options.replaceSigningKey);
 
   if (inputs.line) {
     const line = inputs.line;
@@ -407,8 +421,11 @@ async function run(inputs: Inputs): Promise<number> {
   say(`  User name:  ${FORM.user}`);
   if (formPassword) reveal('  Password:   ', formPassword, '   (shown once: keep it in your password manager)');
   else say('  Password:   made earlier, n8n does not show it again. To set a new one, run this again with --new-form-password.');
-  if (signingKey && options.showSigningKey) reveal(`  Signing key: `, signingKey, '   (keep a copy where you keep recovery secrets)');
-  else say(`Your signing key is kept in n8n only ("${SIGNING.name}"), n8n never shows it again, and a lost key means approving every bot again: to keep a copy, run this again with --show-signing-key before you approve a bot, or later make a new key as ${LOST_KEY_DOC} says.`);
+  if (showKey && signingKey) reveal(`  Signing key: `, signingKey, '   (shown once: keep a copy where you keep recovery secrets)');
+  else {
+    if (options.showSigningKey) say('  Signing key: made earlier. n8n does not give a stored key back, so it cannot be shown, and the key was not changed.');
+    say(`Your signing key is kept in n8n only ("${SIGNING.name}"), and n8n never shows it again. A lost key means approving every bot again. To keep a copy, run this again with --replace-signing-key before you approve a bot: it makes a new key and shows it. Later, see ${LOST_KEY_DOC}`);
+  }
   say();
   say('Next:');
   say('  1. Record a bot, or pick a bot file you have: an RPA recording, a UiPath project, a Chrome Recorder export, Playwright code or a step document.');
