@@ -4,6 +4,7 @@ export interface Redactor {
   redact(text: unknown): string;
 }
 export declare function createRedactor(): Redactor;
+export declare function clean(value: unknown, fallback?: unknown): string;
 export declare function isLoopback(hostname: string): boolean;
 export declare function parseN8nUrl(value: string | undefined, flag: string): { problem: string } | { problem?: undefined; origin: string; base: string; plaintext: boolean };
 export declare const MIN_BROWSER_TOKEN_LENGTH: number;

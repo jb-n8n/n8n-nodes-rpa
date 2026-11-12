@@ -29,7 +29,7 @@ const FIELDS: Record<string, string[]> = {
 
 interface Cred { id: string; name: string; type: string; data: Record<string, any>; projectId?: string }
 interface Wf { id: string; name: string; active: boolean; versionId: string; nodes: any[]; connections: unknown; settings: unknown; projectId?: string; updatedAt?: string }
-interface Options { knowsNode?: boolean; echo?: 'credentials' | 'activate'; credentials?: Cred[]; workflows?: Wf[]; patch?: boolean; ownership?: boolean }
+interface Options { teamName?: string; knowsNode?: boolean; echo?: 'credentials' | 'activate'; credentials?: Cred[]; workflows?: Wf[]; patch?: boolean; ownership?: boolean }
 
 // The fake's projects, as n8n 2.45 describes them: two personal projects and a team project.
 const PROJECTS: Record<string, { id: string; name: string; type: string; creatorId: string | null }> = {
@@ -75,9 +75,10 @@ async function fakeN8n(o: Options = {}) {
       const credItem = ({ data: _d, projectId, ...c }: Cred) => ({
         ...c, ...(own ? { shared: [{ id: projectId, name: PROJECTS[projectId!]?.name, role: 'credential:owner' }] } : {}),
       });
+      const project = (id: string) => (id === 'P-team' && o.teamName !== undefined ? { ...PROJECTS[id], name: o.teamName } : PROJECTS[id]);
       const wfItem = ({ projectId, ...w }: Wf, full = false) => ({
         ...w,
-        ...(own ? { shared: [{ role: 'workflow:owner', workflowId: w.id, projectId, ...(full ? { project: PROJECTS[projectId!] } : {}) }] } : {}),
+        ...(own ? { shared: [{ role: 'workflow:owner', workflowId: w.id, projectId, ...(full ? { project: project(projectId!) } : {}) }] } : {}),
       });
       const route = `${req.method} ${url.pathname}`;
       let m: RegExpExecArray | null;
@@ -526,7 +527,9 @@ describe('npx n8n-nodes-rpa setup', () => {
         const made = fake.state.credentials.find((c) => c.name === 'RPA Step Signing' && c.id !== 'c-team')!;
         expect(made.projectId).toBe('P-team');
         expect(signingOf(fake)).toBe(made.id);
-        expect(out).toMatch(new RegExp(`already in the shared project \\(id c-team\\) was left alone: this run's is id ${made.id}`));
+        expect(out).toMatch(/Found in the shared project "Ops" \(id P-team\):\n {2}credential "RPA Step Signing" \(id c-team\)\n/);
+        expect(out).toMatch(/Not used: without a terminal they are used only with --reuse-project-credentials\./);
+        expect(out).toMatch(/left alone in the shared project: credential id c-team\. This run makes its own set\./);
         expect(fake.state.credentials.find((c) => c.id === 'c-team')!.data.secretKey).toBe('t'.repeat(64));
       });
 
@@ -541,11 +544,11 @@ describe('npx n8n-nodes-rpa setup', () => {
       it('"y" typed at a terminal: reused; anything else: not', async () => {
         const yes = await n8n({ credentials: [TEAM_KEY], workflows: [OTHER_WORK] });
         const r = await runAtTerminal(setup(yes.url, '--project-id', 'P-team'), ENV,
-          [[/Connect a Windows machine now/, 'n'], [/"RPA Step Signing" \(credential\) already exists in the shared project "Ops" \(id P-team\)\. Anyone in that project could have made it\. Use it\? \[y\/N\]/, 'y']]);
+          [[/Connect a Windows machine now/, 'n'], [/Use these\? Anyone in that project could have made them\. \[y\/N\] /, 'y']]);
         expect(r.code, r.out).toBe(0);
         expect(signingOf(yes)).toBe('c-team');
         const no = await n8n({ credentials: [TEAM_KEY], workflows: [OTHER_WORK] });
-        const n = await runAtTerminal(setup(no.url, '--project-id', 'P-team'), ENV, [[/Connect a Windows machine now/, 'n'], [/Use it\?/, '']]);
+        const n = await runAtTerminal(setup(no.url, '--project-id', 'P-team'), ENV, [[/Connect a Windows machine now/, 'n'], [/Use these\?/, '']]);
         expect(n.code, n.out).toBe(0);
         expect(signingOf(no)).not.toBe('c-team');
       });
@@ -555,7 +558,71 @@ describe('npx n8n-nodes-rpa setup', () => {
         const r = await runAtTerminal(setup(fake.url), ENV, [[/Connect a Windows machine now/, 'n']]);
         expect(r.code, r.out).toBe(0);
         expect(signingOf(fake)).toBe('c-mine');
-        expect(r.out).not.toMatch(/shared|Use it\?/);
+        expect(r.out).not.toMatch(/shared|Use these\?/);
+      });
+
+      it('one answer for the set: "no" leaves the credential and the workflow alone, and makes a fresh set wired together', async () => {
+        const t = JSON.parse(readFileSync(TEMPLATE, 'utf8'));
+        const FORM_TEAM: Cred = { id: 'c-tform', name: 'RPA import form', type: 'httpBasicAuth', data: { user: 'rpa', password: 'q'.repeat(32) }, projectId: 'P-team' };
+        const nodes = t.nodes.map((x: any) => ({ ...x, ...(x.name === 'Sign steps' ? { credentials: { playwrightScriptSigningApi: { id: 'c-team', name: 'RPA Step Signing' } } } : {}),
+          ...(x.name === 'Import a bot' ? { credentials: { httpBasicAuth: { id: 'c-tform', name: 'RPA import form' } }, webhookId: 'team-form' } : {}) }));
+        const teamWf: Wf = { id: 'w-team', name: 'RPA: 5 Import a bot', active: true, versionId: 'v', nodes, connections: t.connections, settings: {}, projectId: 'P-team' };
+        const fake = await n8n({ credentials: [TEAM_KEY, FORM_TEAM], workflows: [teamWf] });
+        const r = await runAtTerminal(setup(fake.url, '--project-id', 'P-team', '--show-signing-key'), ENV, [[/Connect a Windows machine now/, 'n'], [/Use these\?/, 'n']]);
+        expect(r.code, r.out).toBe(0);
+        expect(r.out).toMatch(/credential "RPA import form" \(id c-tform\)\n {2}credential "RPA Step Signing" \(id c-team\)\n {2}workflow "RPA: 5 Import a bot" \(id w-team\)\n/);
+        expect(r.out.match(/Use these\?/g)).toHaveLength(1);
+        expect(r.out).toMatch(/left alone in the shared project: credential id c-tform, credential id c-team, workflow id w-team\./);
+        const mine = fake.state.workflows.find((w) => w.id !== 'w-team')!;
+        const key = fake.state.credentials.find((c) => c.name === 'RPA Step Signing' && c.id !== 'c-team')!;
+        expect(mine.nodes.find((x) => x.name === 'Sign steps').credentials.playwrightScriptSigningApi.id).toBe(key.id);
+        expect(mine.nodes.find((x) => x.name === 'Import a bot').credentials.httpBasicAuth.id).not.toBe('c-tform');
+        expect(r.out).not.toContain('team-form');
+        expect(count(r.out, key.data.secretKey)).toBe(1);
+      });
+
+      it('"yes" to the set, but the workflow points at another signing credential: the workflow is not used, a fresh one is', async () => {
+        const t = JSON.parse(readFileSync(TEMPLATE, 'utf8'));
+        const OTHER_KEY: Cred = { id: 'c-team2', name: 'Some other key', type: 'playwrightScriptSigningApi', data: { secretKey: 'u'.repeat(64) }, projectId: 'P-team' };
+        const nodes = t.nodes.map((x: any) => (x.name === 'Sign steps' ? { ...x, credentials: { playwrightScriptSigningApi: { id: 'c-team2', name: 'Some other key' } } } : x));
+        const teamWf: Wf = { id: 'w-team', name: 'RPA: 5 Import a bot', active: false, versionId: 'v', nodes, connections: t.connections, settings: {}, projectId: 'P-team' };
+        const fake = await n8n({ credentials: [TEAM_KEY, OTHER_KEY], workflows: [teamWf] });
+        const { code, out } = await run(setup(fake.url, '--project-id', 'P-team', '--reuse-project-credentials', '--show-signing-key'), ENV);
+        expect(code, out).toBe(0);
+        expect(out).toMatch(/not used workflow "RPA: 5 Import a bot" \(id w-team\): its node "(Import a bot|Sign steps)" does not use the (httpBasicAuth|playwrightScriptSigningApi) credential this run uses\. This run makes a fresh one\./);
+        expect(fake.state.workflows.find((w) => w.id === 'w-team')!.active).toBe(false);
+        expect(signingOf({ state: { workflows: fake.state.workflows.filter((w) => w.id !== 'w-team') } })).toBe('c-team');
+        // The key was not made by this run: it is never shown.
+        expect(out).not.toContain('t'.repeat(64));
+        expect(out).not.toContain('u'.repeat(64));
+      });
+
+      it('the same in the personal project: a workflow that points at another signing credential is not relied on', async () => {
+        const t = JSON.parse(readFileSync(TEMPLATE, 'utf8'));
+        const OTHER_KEY: Cred = { id: 'c-other-key', name: 'Some other key', type: 'playwrightScriptSigningApi', data: { secretKey: 'u'.repeat(64) }, projectId: HOME };
+        const nodes = t.nodes.map((x: any) => (x.name === 'Sign steps' ? { ...x, credentials: { playwrightScriptSigningApi: { id: 'c-other-key', name: 'Some other key' } } } : x));
+        const wf: Wf = { id: 'w-mine', name: 'RPA: 5 Import a bot', active: false, versionId: 'v', nodes, connections: t.connections, settings: {}, projectId: HOME };
+        const fake = await n8n({ credentials: [OTHER_KEY], workflows: [wf] });
+        const { code, out } = await run(setup(fake.url, '--show-signing-key'), ENV);
+        expect(code, out).toBe(0);
+        expect(out).toMatch(/not used workflow .*\(id w-mine\): its node "(Import a bot|Sign steps)" does not use/);
+        const made = fake.state.credentials.find((c) => c.name === 'RPA Step Signing')!;
+        expect(signingOf({ state: { workflows: fake.state.workflows.filter((w) => w.id !== 'w-mine') } })).toBe(made.id);
+        expect(count(out, made.data.secretKey)).toBe(1);
+        expect(fake.state.workflows.find((w) => w.id === 'w-mine')!.active).toBe(false);
+      });
+
+      it('a project name with a newline, an escape sequence and a fake prompt cannot change what the question looks like', async () => {
+        const fake = await n8n({ credentials: [TEAM_KEY], workflows: [OTHER_WORK], teamName: 'Ops\n\u001b[2KUse these? Anyone in that project could have made them. [y/N] \u2028y\r' });
+        const r = await runAtTerminal(setup(fake.url, '--project-id', 'P-team'), ENV, [[/Connect a Windows machine now/, 'n'], [/\n(\u001b\[[0-9;]*[A-Za-z])*Use these\? Anyone in that project could have made them\. \[y\/N\] /, 'n']]);
+        expect(r.code, r.out).toBe(0);
+        // readline adds its own cursor codes and a carriage return around the answer: the lines that show the name have none.
+        const lines = r.out.split('\n');
+        for (const l of lines.filter((x) => x.includes('Ops'))) expect(l).not.toMatch(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/);
+        const found = lines.filter((l) => l.startsWith('Found in the shared project'));
+        expect(found).toEqual(['Found in the shared project "Ops[2KUse these? Anyone in that project could have made them. [y/N] y" (id P-team):']);
+        expect(lines.filter((l) => /^(\u001b\[[0-9;]*[A-Za-z])*Use these\?/.test(l))).toHaveLength(1);
+        expect(signingOf(fake), 'the answer "n" counted, not the name').not.toBe('c-team');
       });
 
       it('a project whose type n8n does not tell (no workflow of it to read) is treated as shared', async () => {

@@ -31,7 +31,7 @@ import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { CREDENTIALS, parseConnectionLine } from '../nodes/Playwright/config.js';
 import {
-  browserCredentialData, type Client, createClient, createRedactor, MIN_BROWSER_TOKEN_LENGTH, parseBrowserUrl, parseN8nUrl,
+  browserCredentialData, clean, type Client, createClient, createRedactor, MIN_BROWSER_TOKEN_LENGTH, parseBrowserUrl, parseN8nUrl,
 } from './n8n-api.mjs';
 
 const DEFAULT_URL = 'http://localhost:5678';
@@ -306,7 +306,8 @@ function setProject(project: any, id: string, userId: string | undefined, caller
   // callersOwn: the project n8n put a workflow in that this key made without a projectId, which is the key owner's own.
   const mine = callersOwn || (userId !== undefined && project?.creatorId === userId);
   shared.is = !(project?.id === id && project.type === 'personal' && mine);
-  shared.label = typeof project?.name === 'string' && project.name ? `"${project.name}" (id ${id})` : `id ${id}`;
+  const name = clean(project?.name, '');
+  shared.label = name ? `"${name}" (id ${clean(id)})` : `id ${clean(id)}`;
   if (shared.is && !shared.announced) {
     shared.announced = true;
     say(`The project ${shared.label} is shared: everyone in it can use the form's login and the signing key this command sets up there. A personal project keeps them to one person.`);
@@ -321,11 +322,20 @@ async function projectOf(client: Client, workflows: any[], id: string) {
   return r.status === 200 ? ownerEntryProject(r.json) : undefined;
 }
 
-/** In a shared project, something of this name found there is used only when the person says so (or the flag does). */
-async function trustShared(kind: string, name: string): Promise<boolean> {
-  if (!shared.is || shared.reuse) return true;
-  if (!interactive()) return false;
-  return /^y(es)?$/i.test(await ask(`"${name}" (${kind}) already exists in the shared project ${shared.label}. Anyone in that project could have made it. Use it? [y/N] `));
+/**
+ * In a shared project, what was found there is used only as one set, and only when the person says so at a terminal or
+ * the flag does: listed by name and id, one question. Anywhere else (the key owner's personal project) it is used.
+ */
+async function useFound(found: { kind: string; name: string; id: string }[]): Promise<boolean> {
+  if (!shared.is || !found.length) return true;
+  say(`Found in the shared project ${shared.label}:`);
+  for (const f of found) say(`  ${f.kind} "${clean(f.name, f.id)}" (id ${clean(f.id)})`);
+  if (shared.reuse) return true;
+  if (!interactive()) {
+    say('Not used: without a terminal they are used only with --reuse-project-credentials.');
+    return false;
+  }
+  return /^y(es)?$/i.test(await ask('Use these? Anyone in that project could have made them. [y/N] '));
 }
 
 /** n8n answers, the key works, the node is installed (n8n knows its credential types), with the fields used here. */
@@ -355,16 +365,18 @@ interface Ref { id: string; name: string }
 
 /**
  * The credentials of this name: the one this run's project owns (mine), and those it leaves alone (others: another
- * project or user, or an owner n8n does not tell). Stops on a same-name credential of another type in the project, or
- * on two of the same name and type there (it could not tell which one is meant).
+ * project or user, or an owner n8n does not tell), each said in one line. Stops on a same-name credential of another
+ * type in the project, or on two of the same name and type there (it could not tell which one is meant).
  */
 function sameName(items: any[], spec: { name: string; type: string }, home: string | undefined) {
   const same = items.filter((c) => c?.name === spec.name);
   const ours = home ? same.filter((c) => ownerProject(c, 'credential') === home) : [];
   const conflict = ours.find((c) => c.type !== spec.type);
-  if (conflict) throw new Stop(`A credential named "${spec.name}" (id ${conflict.id}) has the type ${conflict.type}, not ${spec.type}. Rename it in n8n, then run this again.`);
-  if (ours.length > 1) throw new Stop(`Your project has ${ours.length} credentials named "${spec.name}" (ids ${ours.map((c) => c.id).join(', ')}), and this command cannot tell which one is meant. Rename or delete all but one in n8n, then run this again.`);
-  return { mine: ours[0], others: same.filter((c) => !ours.includes(c)) };
+  if (conflict) throw new Stop(`A credential named "${spec.name}" (id ${clean(conflict.id)}) has the type ${clean(conflict.type)}, not ${spec.type}. Rename it in n8n, then run this again.`);
+  if (ours.length > 1) throw new Stop(`Your project has ${ours.length} credentials named "${spec.name}" (ids ${ours.map((c) => clean(c.id)).join(', ')}), and this command cannot tell which one is meant. Rename or delete all but one in n8n, then run this again.`);
+  const others = same.filter((c) => !ours.includes(c));
+  for (const o of others) leftAlone('credential', o, clean(o.type), home);
+  return { mine: ours[0] as any, others };
 }
 
 /** One line for something of the same name that this run leaves alone. */
@@ -373,22 +385,22 @@ function leftAlone(kind: string, item: any, typeOrNothing: string, home: string 
   const why = !home ? 'this run could not tell which project is yours'
     : owner === home ? 'the API key does not say whose it is, so this run could not tell it was yours before it made a new one'
       : owner ? 'it belongs to another project or user' : 'n8n does not say whose it is';
-  say(`left alone ${kind} "${item.name}"${typeOrNothing ? ` (${typeOrNothing}, id ${item.id})` : ` (id ${item.id})`}: ${why}, so it is not used`);
+  const id = clean(item.id);
+  say(`left alone ${kind} "${clean(item.name, id)}"${typeOrNothing ? ` (${typeOrNothing}, id ${id})` : ` (id ${id})`}: ${why}, so it is not used`);
 }
 
-/** The credential with this name in this run's project: reused when it is there (said so), created there when not. */
-async function credential(client: Client, items: any[], home: string | undefined, projectId: string | undefined, spec: { name: string; type: string }, data: () => Record<string, unknown>, keptNote: string) {
-  const { mine, others } = sameName(items, spec, home);
-  for (const o of others) leftAlone('credential', o, String(o.type), home);
-  if (mine && (await trustShared('credential', spec.name))) {
-    say(`reused   credential "${spec.name}" (id ${mine.id}): ${keptNote}`);
+/** The credential this run uses: the one found (mine, when the run uses what it found), else one made in the project. */
+async function credential(client: Client, found: { mine?: any; others: any[] }, projectId: string | undefined, spec: { name: string; type: string }, data: () => Record<string, unknown>, keptNote: string) {
+  const { mine, others } = found;
+  if (mine) {
+    say(`reused   credential "${spec.name}" (id ${clean(mine.id)}): ${keptNote}`);
     return { ref: { id: String(mine.id), name: spec.name }, created: false };
   }
   const r = await client.api('POST', '/credentials', { name: spec.name, type: spec.type, data: data(), ...(projectId ? { projectId } : {}) });
   if ((r.status !== 200 && r.status !== 201) || !r.json?.id) throw new Stop(`Could not create the credential "${spec.name}" (${client.reason(r)}).`);
-  say(`created  credential "${spec.name}" (id ${r.json.id})`);
-  if (mine) say(`         the "${spec.name}" already in the shared project (id ${mine.id}) was left alone: this run's is id ${r.json.id}.`);
-  if (others.length) say(`         n8n now has more than one credential named "${spec.name}": this run's is id ${r.json.id}. Do not pick ids ${others.map((o) => o.id).join(', ')}.`);
+  const id = clean(r.json.id);
+  say(`created  credential "${spec.name}" (id ${id})`);
+  if (others.length) say(`         n8n now has more than one credential named "${spec.name}": this run's is id ${id}. Do not pick ids ${others.map((o) => clean(o.id)).join(', ')}.`);
   return { ref: { id: String(r.json.id), name: spec.name }, created: true };
 }
 
@@ -444,13 +456,13 @@ function templateDifference(workflow: any, credentials: any[], home: string): st
     if (!have.has(name)) return `it has no node "${name}"`;
     if (have.get(name) !== type) return `its node "${name}" is not a ${type} node`;
   }
-  for (const name of have.keys()) if (!want.has(name)) return `it has a node "${name}" that the template does not have`;
+  for (const name of have.keys()) if (!want.has(name)) return `it has a node "${clean(name)}" that the template does not have`;
   for (const n of workflow.nodes) {
     for (const [type, ref] of Object.entries((n?.credentials ?? {}) as Record<string, any>)) {
       const c = credentials.find((x) => x?.id !== undefined && String(x.id) === String(ref?.id));
       if (!c) return `a credential on "${n.name}" is not one this API key can see`;
-      if (c.type !== type) return `a credential on "${n.name}" (id ${c.id}) is not of the type ${type}`;
-      if (ownerProject(c, 'credential') !== home) return `a credential on "${n.name}" (id ${c.id}) belongs to another project or user`;
+      if (c.type !== type) return `a credential on "${n.name}" (id ${clean(c.id)}) is not of the type ${clean(type)}`;
+      if (ownerProject(c, 'credential') !== home) return `a credential on "${n.name}" (id ${clean(c.id)}) belongs to another project or user`;
     }
   }
   return undefined;
@@ -516,22 +528,54 @@ async function run(inputs: Inputs): Promise<number> {
   let differs: { id: string; name: string; why: string } | undefined;
   for (const w of [...ours].sort((a, b) => String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? '')))) {
     const r = await client.api('GET', `/workflows/${encodeURIComponent(String(w.id))}`);
-    if (r.status !== 200 || !Array.isArray(r.json?.nodes)) throw new Stop(`Could not read the workflow "${w.name}" (${client.reason(r)}).`);
+    if (r.status !== 200 || !Array.isArray(r.json?.nodes)) throw new Stop(`Could not read the workflow "${clean(w.name, w.id)}" (${client.reason(r)}).`);
     // Read again, from the workflow itself: it is used only when it still belongs to this project.
     const why = ownerProject(r.json, 'workflow') !== home ? 'n8n does not say it belongs to your project' : templateDifference(r.json, list.items, home as string);
     if (!why) {
-      if (await trustShared('workflow', String(w.name))) {
-        workflow = r.json;
-        break;
-      }
-      say(`left alone workflow "${w.name}" (id ${w.id}) in the shared project: this run makes its own.`);
-      continue;
+      workflow = r.json;
+      break;
     }
     differs ??= { id: String(w.id), name: String(w.name), why };
   }
   if (!workflow && differs && !options.newWorkflow) {
     reportOthers();
-    throw new Stop(`The workflow "${differs.name}" (id ${differs.id}) in your project differs from the template: ${differs.why}. It was not published, and the form is not ready. Rename or delete that workflow in n8n and run this again, or run this again with --new-workflow to leave it alone and make a fresh one.`);
+    throw new Stop(`The workflow "${clean(differs.name, differs.id)}" (id ${clean(differs.id)}) in your project differs from the template: ${differs.why}. It was not published, and the form is not ready. Rename or delete that workflow in n8n and run this again, or run this again with --new-workflow to leave it alone and make a fresh one.`);
+  }
+
+  // The credentials found in the project, by name (the browser's too without --browser-url: a reused workflow may use it).
+  const specs = [FORM, SIGNING, ...(inputs.line ? [RUNNER] : []), BROWSER];
+  let found = new Map<string, { mine?: any; others: any[] }>();
+  const findAll = () => { found = new Map(specs.map((spec) => [spec.name, sameName(list.items, spec, home)])); };
+  if (home) findAll();
+
+  // In a shared project, one answer for what was found there, as a set: all of it is used, or none of it.
+  if (home) {
+    const set = [...[...found].filter(([, f]) => f.mine).map(([name, f]) => ({ kind: 'credential', name, id: String(f.mine.id) })),
+      ...(workflow ? [{ kind: 'workflow', name: String(workflow.name), id: String(workflow.id) }] : [])];
+    if (!(await useFound(set))) {
+      say(`left alone in the shared project: ${set.map((f) => `${f.kind} id ${clean(f.id)}`).join(', ')}. This run makes its own set.`);
+      for (const f of found.values()) { if (f.mine) f.others.push(f.mine); f.mine = undefined; }
+      workflow = undefined;
+    }
+  }
+
+  // A reused workflow must use exactly this run's credentials (the form's login, the signing key, the browser): one that
+  // points at any other credential of those types is not relied on, and a fresh one is made.
+  if (workflow) {
+    const runs: Record<string, string | undefined> = { httpBasicAuth: found.get(FORM.name)?.mine?.id, [SIGNING.type]: found.get(SIGNING.name)?.mine?.id, [BROWSER.type]: found.get(BROWSER.name)?.mine?.id };
+    for (const n of workflow.nodes) {
+      const required = n.name === NODE.form ? 'httpBasicAuth' : n.name === NODE.signSteps ? SIGNING.type : undefined;
+      for (const type of Object.keys(runs)) {
+        const ref = n.credentials?.[type]?.id;
+        const odd = ref !== undefined ? runs[type] === undefined || String(ref) !== String(runs[type]) : type === required;
+        if (odd) {
+          say(`not used workflow "${clean(workflow.name, workflow.id)}" (id ${clean(workflow.id)}): its node "${n.name}" does not use the ${type} credential this run uses. This run makes a fresh one.`);
+          workflow = undefined;
+          break;
+        }
+      }
+      if (!workflow) break;
+    }
   }
 
   // The approver is needed only for a workflow still to create; asked before anything is created.
@@ -551,7 +595,7 @@ async function run(inputs: Inputs): Promise<number> {
   let workflowName = WORKFLOW_NAME;
   if (!workflow) {
     if (differs || named.some((w) => w.name === WORKFLOW_NAME)) {
-      // --new-workflow, or another project's of that name: a dated name, so that nobody confuses the two.
+      // --new-workflow, a set left alone, or another project's of that name: a dated name, so nobody confuses the two.
       const date = new Date().toISOString().slice(0, 10);
       const taken = new Set(workflows.items.map((w) => w?.name));
       workflowName = taken.has(`${WORKFLOW_NAME} (${date})`) ? `${WORKFLOW_NAME} (${date} ${new Date().toISOString().slice(11, 16).replace(':', '-')})` : `${WORKFLOW_NAME} (${date})`;
@@ -562,8 +606,13 @@ async function run(inputs: Inputs): Promise<number> {
       halfMade = { client, id: String(made.id) };
       const r = await client.api('GET', `/workflows/${encodeURIComponent(String(made.id))}`);
       home = r.status === 200 ? ownerProject(r.json, 'workflow') : undefined;
+      // Made without a projectId, so n8n put it in the key owner's personal project: nothing to ask about there.
       if (home) setProject(ownerEntryProject(r.json), home, inputs.userId, !projectId);
       if (!home) say('Note: n8n does not say which project owns the new workflow, so no credential of the same name is reused: fresh ones are made.');
+      findAll();
+      if (shared.is && !(await useFound([...found].filter(([, f]) => f.mine).map(([name, f]) => ({ kind: 'credential', name, id: String(f.mine.id) }))))) {
+        for (const f of found.values()) { if (f.mine) f.others.push(f.mine); f.mine = undefined; }
+      }
     }
   }
   reportOthers();
@@ -573,8 +622,9 @@ async function run(inputs: Inputs): Promise<number> {
   let signingKey: string | undefined = newSigningKey();
   redactor.add(formPassword);
   redactor.add(signingKey);
+  const of = (spec: { name: string }) => found.get(spec.name) ?? { others: [] };
 
-  const form = await credential(client, list.items, home, projectId, FORM, () => ({ user: FORM.user, password: formPassword }),
+  const form = await credential(client, of(FORM), projectId, FORM, () => ({ user: FORM.user, password: formPassword }),
     options.newFormPassword ? 'a new password is set below' : 'its password was made earlier and stays as it is');
   if (!form.created) {
     if (options.newFormPassword) await replaceData(client, form.ref, FORM.type, { user: FORM.user, password: formPassword });
@@ -582,55 +632,56 @@ async function run(inputs: Inputs): Promise<number> {
   }
 
   const replaceKey = options.replaceSigningKey;
-  const signing = await credential(client, list.items, home, projectId, SIGNING, () => ({ secretKey: signingKey }),
+  const signing = await credential(client, of(SIGNING), projectId, SIGNING, () => ({ secretKey: signingKey }),
     replaceKey ? 'a new key is set below' : 'its key stays as it is');
   if (!signing.created) {
     if (replaceKey) await replaceData(client, signing.ref, SIGNING.type, { secretKey: signingKey });
     else signingKey = undefined;
   }
-  // Shown when asked for on the run that made it, and always when it was replaced on purpose.
-  const showKey = signingKey !== undefined && (options.showSigningKey || options.replaceSigningKey);
 
   if (inputs.line) {
     const line = inputs.line;
-    await credential(client, list.items, home, projectId, RUNNER, () => ({ connectionLine: line }), 'its Connection Line stays as it is (to change it, paste the new line in n8n)');
+    await credential(client, of(RUNNER), projectId, RUNNER, () => ({ connectionLine: line }), 'its Connection Line stays as it is (to change it, paste the new line in n8n)');
   }
   let browserRef: Ref | undefined;
   if (inputs.browser) {
     const { href, token } = inputs.browser;
-    browserRef = (await credential(client, list.items, home, projectId, BROWSER, () => browserCredentialData(href, token), 'its endpoint and token stay as they are')).ref;
+    browserRef = (await credential(client, of(BROWSER), projectId, BROWSER, () => browserCredentialData(href, token), 'its endpoint and token stay as they are')).ref;
+  } else if (of(BROWSER).mine) {
+    browserRef = { id: String(of(BROWSER).mine.id), name: BROWSER.name };
   }
 
   if (workflow) {
-    say(`reused   workflow "${workflow.name}" (id ${workflow.id}): it matches the template${workflow.active ? '' : ', publishing it'}`);
+    say(`reused   workflow "${clean(workflow.name, workflow.id)}" (id ${clean(workflow.id)}): it matches the template${workflow.active ? '' : ', publishing it'}`);
     if (options.approver !== undefined) say(`         its Approver Allowlist was left as it is: change it on "${NODE.signSteps}" in n8n.`);
-    if (browserRef) say(`         its credentials were left as they are: pick "${BROWSER.name}" on "${NODE.importSteps}" in n8n.`);
-    const usesForm = workflow.nodes.find((n: { name: string }) => n.name === NODE.form)?.credentials?.httpBasicAuth?.id;
-    if (formPassword && String(usesForm) !== form.ref.id) {
-      warn(`Note: the form in "${workflow.name}" does not use the credential "${FORM.name}" (id ${form.ref.id}): pick it on the node "${NODE.form}" for the new password to apply.`);
-    }
+    if (inputs.browser && !workflow.nodes.find((n: any) => n.name === NODE.importSteps)?.credentials?.[BROWSER.type]) say(`         its credentials were left as they are: pick "${BROWSER.name}" on "${NODE.importSteps}" in n8n.`);
   } else {
     const wired = wire(nodes as Record<string, any>[], { form: form.ref, signing: signing.ref, browser: browserRef });
     if (made) {
       const r = await client.api('PUT', `/workflows/${encodeURIComponent(String(made.id))}`, { name: workflowName, nodes: wired, connections: made.connections, settings: made.settings ?? { executionOrder: 'v1' } });
-      if (r.status !== 200 || !r.json?.id) throw new Stop(`Could not set the credentials on the workflow "${workflowName}" (id ${made.id}) (${client.reason(r)}). It is not published.`);
+      if (r.status !== 200 || !r.json?.id) throw new Stop(`Could not set the credentials on the workflow "${workflowName}" (id ${clean(made.id)}) (${client.reason(r)}). It is not published.`);
       workflow = r.json;
       halfMade = undefined;
     } else {
       workflow = await createWorkflow(client, workflowName, wired, projectId);
     }
     workflow = workflow as Record<string, any>;
-    say(`created  workflow "${workflowName}" (id ${workflow.id}), approver ${approver}`);
+    say(`created  workflow "${workflowName}" (id ${clean(workflow.id)}), approver ${approver}`);
     const same = named.filter((w) => w.name === workflowName);
-    if (same.length) say(`         n8n now has more than one workflow named "${workflowName}": this run's is id ${workflow.id}.`);
+    if (same.length) say(`         n8n now has more than one workflow named "${workflowName}": this run's is id ${clean(workflow.id)}.`);
   }
+  // The signing key is shown only when this run made it and the workflow it ends with uses it.
+  const usesKey = String(workflow.nodes?.find((n: any) => n.name === NODE.signSteps)?.credentials?.[SIGNING.type]?.id) === signing.ref.id;
+  const showKey = signingKey !== undefined && usesKey && (options.showSigningKey || options.replaceSigningKey);
   if (!workflow.active) {
-    await publish(client, String(workflow.id), workflow.versionId, String(workflow.name));
-    say(`published workflow "${workflow.name}"`);
+    await publish(client, String(workflow.id), workflow.versionId, clean(workflow.name, workflow.id));
+    say(`published workflow "${clean(workflow.name, workflow.id)}"`);
   }
 
+  // The form's webhook id comes from n8n: used only when it is an id, never printed otherwise.
   const webhookId = workflow.nodes.find((n: { name: string }) => n.name === NODE.form)?.webhookId;
-  const formUrl = webhookId ? `${origin}/form/${webhookId}` : undefined;
+  const formUrl = typeof webhookId === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(webhookId) ? `${origin}/form/${webhookId}` : undefined;
+  const shownName = clean(workflow.name, workflow.id);
   if (formUrl) {
     // Without the login the published form answers 401: anything else means the address is not the form's. n8n
     // registers the form a moment after it publishes the workflow, so it is asked for up to 10 seconds.
@@ -640,12 +691,12 @@ async function run(inputs: Inputs): Promise<number> {
       probe = await fetch(formUrl, { redirect: 'manual', signal: AbortSignal.timeout(10_000) }).catch(() => undefined);
       if (probe?.status === 401) break;
     }
-    if (probe?.status !== 401) warn(`Note: the form did not answer as expected at ${formUrl} (${probe ? `HTTP ${probe.status}` : 'no answer'}). In n8n, open "${workflow.name}", then the node "${NODE.form}", for its production URL.`);
+    if (probe?.status !== 401) warn(`Note: the form did not answer as expected at ${formUrl} (${probe ? `HTTP ${probe.status}` : 'no answer'}). In n8n, open "${shownName}", then the node "${NODE.form}", for its production URL.`);
   }
 
   say();
   say('The import form is ready.');
-  say(`  Address:    ${formUrl ?? `open "${workflow.name}" in n8n, then the node "${NODE.form}", for its production URL`}`);
+  say(`  Address:    ${formUrl ?? `open "${shownName}" in n8n, then the node "${NODE.form}", for its production URL`}`);
   say(`  User name:  ${FORM.user}`);
   if (formPassword) reveal('  Password:   ', formPassword, '   (shown once: keep it in your password manager)');
   else say('  Password:   made earlier, n8n does not show it again. To set a new one, run this again with --new-form-password.');
