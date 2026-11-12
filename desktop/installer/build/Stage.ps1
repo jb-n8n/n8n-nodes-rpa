@@ -20,10 +20,13 @@
 #   IncludeNativeLibrariesForSelfExtract: such a program would unpack native libraries to the temp folder of whoever
 #   starts it, at every start, and load them from there. Without it the publish leaves those libraries beside the
 #   program, and this script copies every .dll it finds there into the program's folder with the program.
+#   The NuGet packages in those programs are read from the obj\project.assets.json that each publish leaves in its
+#   project folder, and their licence files from the NuGet packages folder named there, so publish from this checkout.
 #
 #   rpa-windows-x64\
 #     Install-Rpa.ps1  Uninstall-Rpa.ps1  RpaInstall.psd1  RpaInstall.Plan.ps1  RpaInstall.SignIn.ps1
-#     RpaInstall.Machine.ps1  rpa.cmd  LICENSE  VERSION
+#     RpaInstall.Machine.ps1  rpa.cmd  LICENSE  THIRD-PARTY-NOTICES.md  VERSION
+#     licenses\  <component>-<version>\ (the licence and notice files of each third-party component of this package)
 #     runner\    RpaRunner.exe  RpaSupervisor.exe  RpaPolicy.exe  *.dll (their native libraries)  policy.example.json
 #     recorder\  RpaRecorder.exe  *.dll (its native libraries)
 #     scripts\   start-loop.ps1  start-runner.ps1  Show-RpaConnection.ps1  rpa.ps1
@@ -31,10 +34,19 @@
 #
 #   rpa-browser-windows-x64\ (its zip holds what is in this folder, without the folder itself, so that unpacking it into
 #   rpa-windows-x64\ adds these to the package)
-#     browser\   VERSION  node.exe  LICENSE-node.txt  host\{host.mjs,run-server.mjs}
+#     browser\   VERSION  THIRD-PARTY-NOTICES.md  node.exe  host\{host.mjs,run-server.mjs}
 #                gate\{gate.mjs,ecs.mjs,selfsigned.mjs}  node_modules\ (playwright)  ms-playwright\ (Chromium)
 #                ms-playwright.sha256
+#                licenses\  <component>-<version>\ (the licence and notice files of each third-party component of the
+#                browser package)
 #     scripts\   start-browser.ps1
+#
+# Each THIRD-PARTY-NOTICES.md is that zip's section of the THIRD-PARTY-NOTICES.md at the top of this repository,
+# followed by a table of what the licenses\ beside it holds. The browser package's are in browser\, so that an install
+# without the browser has none of them and the installer adds and removes them with the browser's files. The licence
+# files come from the components themselves (the NuGet packages for the package; the Node.js zip, the npm packages and
+# the browser builds for the browser package), and from desktop\installer\build\notices\ for a build that carries none;
+# one that is missing stops the script.
 #
 # What comes from the network, and what it is checked against:
 #   - Node.js for Windows x64 (node.exe, and the npm that comes with it, which is used here and not shipped), from
@@ -44,10 +56,11 @@
 #     against the hash in package-lock.json there. No install script of a package runs.
 #   - Chromium (with the headless shell, ffmpeg and winldd), through Playwright's own installer (playwright install
 #     chromium). Which builds it downloads is written in the playwright-core package that npm checked; the installer
-#     itself checks no hash of the files. So this script writes the list of every file it installed under
-#     browser\ms-playwright, with each file's SHA-256, into browser\ms-playwright.sha256, and the SHA-256 of that
-#     list must equal $BrowsersSha256 below. A new Playwright version brings other builds and a new value; take it
-#     only when two builds on different machines and networks print the same one.
+#     itself checks no hash of the files. So this script lists every file it installed under browser\ms-playwright,
+#     with each file's SHA-256, and the SHA-256 of that list must equal $BrowsersSha256 below. A new Playwright version
+#     brings other builds and a new value; take it only when two builds on different machines and networks print the
+#     same one. Then it removes Playwright's ffmpeg build, which Playwright uses only to record video (nothing in RPA
+#     records video), and writes the list without its files into browser\ms-playwright.sha256.
 # npm and Playwright's installer run without what the environment could say about where and how to download: the
 # variables in $DownloadVariables are cleared for them (and only for them).
 # VERSION and browser\VERSION are the <Version> of desktop\Directory.Build.props, the version the runner reports: the
@@ -65,7 +78,7 @@ $ProgressPreference = 'SilentlyContinue'
 
 $NodeVersion = '22.23.4'
 $NodeSha256 = 'cbc74b5e0982c9dbb41525fd8fb5dcd32fbee237863f7829072f4639a1ce5f20'
-# The SHA-256 of browser\ms-playwright.sha256 for the builds Playwright 1.63.0 installs on Windows x64 (609 files), as
+# The SHA-256 of the list of the builds Playwright 1.63.0 installs on Windows x64 (609 files, ffmpeg's among them), as
 # a build on a hosted CI machine and one on another Windows machine printed it on 2026-11-10. It changes together
 # with the Playwright version in images\browser\server\package.json.
 $BrowsersSha256 = '1b178abcd915d6ffa5b465a26ffafcf937544a7c862f5a69061ab68ae7cff240'
@@ -171,6 +184,110 @@ function Get-FileList([string]$Root) {
   $list.ToString()
 }
 
+# A list that Get-FileList made, without the lines of the files below one of its top folders. A folder the list does
+# not name stops the script.
+function Get-ListWithout([string]$List, [string]$Folder) {
+  $below = '  {0}/' -f $Folder
+  $kept = New-Object Text.StringBuilder
+  $dropped = 0
+  foreach ($line in $List.Split([char]10)) {
+    if (-not $line) { continue }
+    if ($line.IndexOf($below, [StringComparison]::Ordinal) -eq 64) { $dropped++; continue }
+    [void]$kept.Append($line).Append("`n")
+  }
+  if ($dropped -eq 0) { throw ('The list of the browser files names nothing below {0}/.' -f $Folder) }
+  $kept.ToString()
+}
+
+# The NuGet packages in the published programs, from the project.assets.json that each publish left: every package with
+# code for win-x64 (a package whose only entry there is "_._" brings none), and the runtime packs a self-contained publish
+# takes the .NET runtime from (*.Runtime.win-x64). Each package once, sorted by name, with its folder: in the first of
+# the restore's package folders (the NuGet packages folder, then any fallback folders) that holds it.
+function Get-NuGetComponents([string[]]$AssetsFiles) {
+  $found = @{}
+  foreach ($file in $AssetsFiles) {
+    $assets = [IO.File]::ReadAllText($file) | ConvertFrom-Json
+    $folders = @($assets.packageFolders.PSObject.Properties | ForEach-Object { $_.Name })
+    $targets = @($assets.targets.PSObject.Properties | Where-Object { $_.Name -like '*/win-x64' })
+    if ($folders.Count -eq 0 -or $targets.Count -ne 1) { throw ('{0} is not the restore of a win-x64 publish.' -f $file) }
+    $packages = @()
+    foreach ($library in $targets[0].Value.PSObject.Properties) {
+      if ($library.Value.type -ne 'package') { continue }
+      $code = @(foreach ($group in 'runtime', 'native') {
+          if ($library.Value.$group) { $library.Value.$group.PSObject.Properties | Where-Object { -not $_.Name.EndsWith('/_._') } }
+        })
+      if ($code.Count -eq 0) { continue }
+      $id, $version = $library.Name.Split('/')
+      $packages += , @($id, $version, $assets.libraries.($library.Name).path)
+    }
+    foreach ($framework in $assets.project.frameworks.PSObject.Properties) {
+      foreach ($pack in @($framework.Value.downloadDependencies | Where-Object { $_.name -like '*.Runtime.win-x64' })) {
+        if ($pack.version -notmatch '^\[([^,\]]+), ?\1\]$') { throw ('{0} names {1} in no single version ({2}).' -f $file, $pack.name, $pack.version) }
+        $packages += , @($pack.name, $Matches[1], ('{0}/{1}' -f $pack.name.ToLowerInvariant(), $Matches[1]))
+      }
+    }
+    foreach ($package in $packages) {
+      $id, $version, $path = $package
+      $folder = @($folders | ForEach-Object { Join-Path $_ $path } | Where-Object { Test-Path -LiteralPath $_ -PathType Container }) + @(Join-Path $folders[0] $path)
+      $found[('{0}/{1}' -f $id, $version)] = [pscustomobject]@{ Id = $id; Version = $version; Folder = $folder[0] }
+    }
+  }
+  @($found.Values | Sort-Object Id, Version)
+}
+
+# The names of the licence and notice files at the top of a component's folder (LICENSE*, NOTICE*,
+# THIRD-PARTY-NOTICES* and ThirdPartyNotices*, in any letter case), sorted. A folder without one stops the script.
+function Get-LicenseFiles([string]$Folder) {
+  if (-not (Test-Path -LiteralPath $Folder -PathType Container)) { throw ('{0} is missing.' -f $Folder) }
+  $names = @(Get-ChildItem -LiteralPath $Folder -File | Where-Object { $_.Name -match '^(LICENSE|NOTICE|THIRD-PARTY-NOTICES|ThirdPartyNotices)' } | ForEach-Object { $_.Name } | Sort-Object)
+  if ($names.Count -eq 0) { throw ('{0} holds no LICENSE, NOTICE or THIRD-PARTY-NOTICES file.' -f $Folder) }
+  $names
+}
+
+# The end of a package's THIRD-PARTY-NOTICES.md: one row for each folder of its licence folder (Name, Version, Files).
+# -Folder is that folder as the file names it: licenses\ in the package, browser\licenses\ in the browser package.
+function Get-NoticesIndex([object[]]$Entries, [string]$Folder) {
+  $text = New-Object Text.StringBuilder
+  [void]$text.Append("`n## The licence texts in this package`n`n")
+  [void]$text.Append(("The build copied these files into ``{0}``, one folder per component, named ``<component>-<version>``.`n`n" -f $Folder))
+  [void]$text.Append("| Component | Version | Files |`n|---|---|---|`n")
+  foreach ($entry in $Entries) {
+    [void]$text.Append(('| {0} | {1} | {2} |' -f $entry.Name, $entry.Version, (@($entry.Files | ForEach-Object { '`{0}`' -f $_ }) -join ', '))).Append("`n")
+  }
+  $text.ToString()
+}
+
+# The section of the repository's THIRD-PARTY-NOTICES.md under the line "## <Heading>", that line included, up to the
+# next heading of that level, without the blank lines at its end; line ends LF whatever the file has. A heading that is
+# not there exactly once stops the script.
+function Get-NoticesSection([string]$Text, [string]$Heading) {
+  $lines = ($Text -replace "`r`n", "`n").Split([char]10)
+  $starts = @(for ($i = 0; $i -lt $lines.Length; $i++) { if ($lines[$i] -ceq ('## ' + $Heading)) { $i } })
+  if ($starts.Count -ne 1) { throw ('THIRD-PARTY-NOTICES.md does not hold the heading "## {0}" exactly once.' -f $Heading) }
+  $end = $starts[0] + 1
+  while ($end -lt $lines.Length -and -not $lines[$end].StartsWith('## ')) { $end++ }
+  ($lines[$starts[0]..($end - 1)] -join "`n").TrimEnd()
+}
+
+# The THIRD-PARTY-NOTICES.md of one package, line ends LF: a short opening, that package's section of the repository's
+# THIRD-PARTY-NOTICES.md (-Text), and the table of what its licence folder (-Folder) holds. It names nothing of the
+# other package.
+function Get-PackageNotices([string]$Text, [string]$Heading, [string]$Folder, [object[]]$Entries) {
+  "# Third-party notices`n`nRPA's own code is under the MIT licence in the package's ``LICENSE``. This file lists the software by others in the zip named below, with its licences. It is not legal advice.`n`n" +
+  (Get-NoticesSection $Text $Heading) + "`n" + (Get-NoticesIndex $Entries $Folder)
+}
+
+# Copies the licence files of each component (-Entries: Name, Version, From, Files) into <Root>\licenses\<name>-<version>\
+# (Copy-Named stops at a file that is missing), and writes <Root>\THIRD-PARTY-NOTICES.md with Windows line ends.
+# -Root is the top of the package, or browser\ in the browser package.
+function Write-PackageNotices([string]$Root, [string]$Folder, [string]$Heading, [object[]]$Entries) {
+  if ($Entries.Count -eq 0) { throw ('No third-party component was found for {0}.' -f $Heading) }
+  foreach ($entry in $Entries) { Copy-Named $entry.From $entry.Files (Join-Path (Join-Path $Root 'licenses') ('{0}-{1}' -f $entry.Name, $entry.Version)) }
+  $text = Get-PackageNotices ([IO.File]::ReadAllText((Join-Path $repo 'THIRD-PARTY-NOTICES.md'))) $Heading $Folder $Entries
+  [IO.File]::WriteAllText((Join-Path $Root 'THIRD-PARTY-NOTICES.md'), ($text -replace "`r?`n", "`r`n"), (New-Object Text.UTF8Encoding $false))
+  Write-Host ('THIRD-PARTY-NOTICES.md, and the licence files of {0} components in {1}' -f $Entries.Count, $Folder)
+}
+
 foreach ($needed in @((Join-Path $RunnerDir 'RpaRunner.exe'), (Join-Path $RunnerDir 'RpaSupervisor.exe'), (Join-Path $PolicyToolDir 'RpaPolicy.exe'), (Join-Path $RecorderDir 'RpaRecorder.exe'),
     (Join-Path $ErpDemoDir 'v1\ErpDemo.exe'), (Join-Path $ErpDemoDir 'v2\ErpDemo.exe'))) {
   if (-not (Test-Path -LiteralPath $needed -PathType Leaf)) { throw ('{0} is missing. Publish it first.' -f $needed) }
@@ -213,6 +330,15 @@ foreach ($ui in 'v1', 'v2') {
   Get-ChildItem -LiteralPath (Join-Path $ErpDemoDir $ui) -File | Where-Object { $_.Extension -ne '.pdb' } | Copy-Item -Destination $target
 }
 
+Write-Host 'The third-party notices of the package'
+# The NuGet packages and runtime packs the published programs were built with, each with its licence files.
+$assetsFiles = @('runner\src\Rpa.Runner', 'runner\src\Rpa.Supervisor', 'runner\src\Rpa.Runner.PolicyTool', 'recorder\src\Rpa.Recorder', 'erp-demo') |
+  ForEach-Object { Join-Path $repo ('desktop\{0}\obj\project.assets.json' -f $_) }
+$packageNotices = @(foreach ($package in Get-NuGetComponents $assetsFiles) {
+    [pscustomobject]@{ Name = $package.Id; Version = $package.Version; From = $package.Folder; Files = @(Get-LicenseFiles $package.Folder) }
+  })
+Write-PackageNotices $stage 'licenses\' ('The Windows package (`{0}.zip`)' -f $PackageName) $packageNotices
+
 Write-Host 'The browser package: its version and its start script'
 $browser = Join-Path $browserStage 'browser'
 New-Item -ItemType Directory -Path $browser | Out-Null
@@ -231,7 +357,6 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 $nodeDir = Join-Path $work $nodeName
 $node = Join-Path $nodeDir 'node.exe'
 Copy-Named $nodeDir @('node.exe') $browser
-Copy-Item -LiteralPath (Join-Path $nodeDir 'LICENSE') -Destination (Join-Path $browser 'LICENSE-node.txt')
 
 Write-Host 'The browser host and the gate'
 Copy-Named (Join-Path $browserSource 'host') @('host.mjs', 'run-server.mjs') (Join-Path $browser 'host')
@@ -260,14 +385,39 @@ foreach ($kind in 'chromium-*', 'chromium_headless_shell-*') {
   if (-not (Get-ChildItem -LiteralPath $browsers -Directory -Filter $kind)) { throw ('{0} holds no {1} after the install.' -f $browsers, $kind) }
 }
 $listFile = Join-Path $browser 'ms-playwright.sha256'
-[IO.File]::WriteAllText($listFile, (Get-FileList $browsers), (New-Object Text.UTF8Encoding $false))
+$installedList = Get-FileList $browsers
+[IO.File]::WriteAllText($listFile, $installedList, (New-Object Text.UTF8Encoding $false))
 $listHash = Get-Sha256 $listFile
 if ($listHash -ne $BrowsersSha256) {
   Get-Content -LiteralPath $listFile | Out-Host
   $expected = if ($BrowsersSha256) { $BrowsersSha256 } else { '(empty)' }
   throw ('The browser files are not the ones this script expects: the SHA-256 of their list (above, written to {0}) is {1}, and $BrowsersSha256 in this script is {2}. The value changes together with the Playwright version in images\browser\server\package.json; take a new one only when two builds on different machines and networks print the same.' -f $listFile, $listHash, $expected)
 }
-Write-Host ('{0} files under browser\ms-playwright, as listed in browser\ms-playwright.sha256 (SHA-256 {1})' -f @(Get-Content -LiteralPath $listFile).Count, $listHash)
+# Playwright's installer puts its ffmpeg build beside Chromium. Playwright runs it only to record video of a page
+# (VideoRecorder in playwright-core), and nothing in RPA records video, so it is not shipped: a client that asks this
+# browser for a video gets Playwright's error that the ffmpeg executable does not exist.
+$builds = @((Get-Content -Raw -LiteralPath (Join-Path $browser 'node_modules\playwright-core\browsers.json') | ConvertFrom-Json).browsers)
+$ffmpeg = 'ffmpeg-{0}' -f @($builds | Where-Object { $_.name -eq 'ffmpeg' })[0].revision
+[IO.Directory]::Delete((Join-Path $browsers $ffmpeg), $true)
+[IO.File]::WriteAllText($listFile, (Get-ListWithout $installedList $ffmpeg), (New-Object Text.UTF8Encoding $false))
+Write-Host ('{0} files under browser\ms-playwright, as listed in browser\ms-playwright.sha256: what Playwright installed (the SHA-256 of its list is {1}) without {2}' -f @(Get-Content -LiteralPath $listFile).Count, $listHash, $ffmpeg)
+
+Write-Host 'The third-party notices of the browser package'
+# Each component's licence files, copied from the component into browser\licenses\<name>-<version>\.
+$chromium = @($builds | Where-Object { $_.name -eq 'chromium' })[0]
+$shell = @($builds | Where-Object { $_.name -eq 'chromium-headless-shell' })[0]
+$winldd = @($builds | Where-Object { $_.name -eq 'winldd' })[0]
+$browserNotices = @(
+  [pscustomobject]@{ Name = 'node'; Version = $NodeVersion; From = $nodeDir; Files = @('LICENSE') }
+  [pscustomobject]@{ Name = 'playwright'; Version = $installed; From = (Join-Path $browser 'node_modules\playwright'); Files = @('LICENSE', 'NOTICE', 'ThirdPartyNotices.txt') }
+  [pscustomobject]@{ Name = 'playwright-core'; Version = $installed; From = (Join-Path $browser 'node_modules\playwright-core'); Files = @('LICENSE', 'NOTICE', 'ThirdPartyNotices.txt') }
+  [pscustomobject]@{ Name = 'chrome-for-testing'; Version = $chromium.browserVersion; From = (Join-Path $browsers ('chromium-{0}\chrome-win64' -f $chromium.revision)); Files = @('ABOUT') }
+  [pscustomobject]@{ Name = 'chrome-headless-shell'; Version = $shell.browserVersion; From = (Join-Path $browsers ('chromium_headless_shell-{0}\chrome-headless-shell-win64' -f $shell.revision)); Files = @('LICENSE.headless_shell') }
+  # The winldd build carries no licence file. This repository keeps the licence headers of its source for one build;
+  # another build stops here until they are checked and kept for it.
+  [pscustomobject]@{ Name = 'winldd'; Version = $winldd.revision; From = (Join-Path $PSScriptRoot ('notices\winldd-{0}' -f $winldd.revision)); Files = @('LICENSE.txt') }
+)
+Write-PackageNotices $browser 'browser\licenses\' ('The browser package (`{0}.zip`)' -f $BrowserPackageName) $browserNotices
 
 Write-Host 'The zips'
 [IO.Directory]::Delete($work, $true)
