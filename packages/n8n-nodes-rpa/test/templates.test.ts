@@ -3,14 +3,15 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { deflateRawSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
-import { NOT_REPLAYED_EVIDENCE_LINE, reviewSteps } from '../nodes/Playwright/format.js';
+import { changeList, NOT_REPLAYED_EVIDENCE_LINE, reviewSteps } from '../nodes/Playwright/format.js';
 import { shownUrl, USE_CASE_WORDS } from 'n8n-rpa-engine';
 import { APPROVER } from './fixtures.js';
 import {
   NodeHelpers, Workflow, type IDataObject, type INodeExecutionData, type INodeParameters, type INodeProperties, type INodeTypes,
 } from 'n8n-workflow';
 import {
-  buildProposal, createMasker, IMPORT_NOT_ADOPTABLE, importSource as realImportSource, proposalDigest, scriptHash, validateScript, type AdoptInput, type AdoptResult,
+  buildProposal, createMasker, IMPORT_NOT_ADOPTABLE, importSource as realImportSource, notReplayedProposal, parseScript, proposalDigest, scriptHash, validateScript,
+  type AdoptInput, type AdoptResult,
   type Proposal, type Script, type TaskResult,
 } from 'n8n-rpa-engine';
 import { zip } from '../../engine/test/zip-fixtures.js';
@@ -598,6 +599,25 @@ describe('3-approve-steps.json', () => {
     // A secret variable is marked as one, as on the review page (the item names them; never a value).
     const secret = render(String(ask.message), { $: (name: string) => ({ item: { json: name === 'Settings' ? { approvalTimeoutHours: 72 } : { ...received, secretVariables: ['username'] } } }) });
     expect(secret).toContain('\n3. Type into User name (secret variable username)\n');
+    // An item from Import Steps carries the steps as the node words them (reviewSteps): the email shows those, so a
+    // description can neither replace the action nor hide the value. The inline wording above stays for an older item.
+    const post = { uia: { path: [{ controlType: 'Button', name: 'Post' }] } };
+    const bare = { uia: { path: [{ controlType: 'Edit' }] } };
+    const misleading = [
+      { intent: 'Read the total', click: post },
+      { intent: 'Read the total', fill: { field: bare, value: '<b>9999</b>' } },
+      { intent: 'Type into User name', fill: { field: { uia: { path: [{ name: 'User name' }] } }, value: '{{var.username}}' } },
+    ];
+    const fromNode = { ...received, secretVariables: ['username'], steps: { ...received.steps, steps: misleading }, reviewSteps: reviewSteps(misleading, { desktop: true, secretVariables: ['username'] }) };
+    const shownSteps = (json: object) => render(String(ask.message), { $: (name: string) => ({ item: { json: name === 'Settings' ? { approvalTimeoutHours: 72 } : json } }) })
+      .split('The steps:\n')[1].split('\n\nClick Review and decide')[0];
+    expect(shownSteps(fromNode)).toBe('1. Click Post (described as: Read the total)\n'
+      + '2. Type &quot;&lt;b&gt;9999&lt;/b&gt;&quot; into a field without a name (described as: Read the total)\n'
+      + '3. Type into User name (secret variable username)');
+    // Without reviewSteps, or with a list that does not match the steps, the email words the steps itself, as before.
+    const { reviewSteps: _r, ...older } = fromNode;
+    expect(shownSteps(older)).toBe('1. Read the total\n2. Type &quot;&lt;b&gt;9999&lt;/b&gt;&quot; into Read the total\n3. Type into User name (secret variable username)');
+    expect(shownSteps({ ...fromNode, reviewSteps: fromNode.reviewSteps.slice(1) })).toBe(shownSteps(older));
     expect(message).toContain('tick the steps that save, send or submit (none is ticked for you), then approve or reject.');
     expect(message).toContain('Ticked steps are allowed to save or send. An unticked step is stopped only when it tries to use a control or key that your administrator has protected on the bot machine.');
     // The full detail below: the item's own change list, evidence and flags.
@@ -1550,6 +1570,44 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       { intent: 'Read the rows', extract: { scope: { css: 'table' }, item: { css: 'tr' } } },
       { intent: 'Read the page title', read: { what: 'title' } },
     ])).toEqual(['Wait for the table', 'Read the rows', 'Read the page title']);
+  });
+
+  it('the change list the email and the details block show says every acting step\'s action and value from the step, whatever its description', () => {
+    // Every description says something else than its step does. The change list is signed and digested: unchanged here.
+    const save = { role: 'button', name: 'Save' };
+    const said = 'Read the total';
+    const steps = [
+      { intent: said, goto: '/acme/pay' },
+      { intent: said, signIn: { username: { label: 'User' }, password: { label: 'Password' }, submit: save } },
+      { intent: said, click: { role: 'button', name: 'Pay now' }, modifiers: ['Ctrl'] },
+      { intent: said, fill: { field: { label: 'Amount' }, value: '9999' } },
+      { intent: said, select: { field: { label: 'Region' }, value: 'north' } },
+      { intent: said, check: { field: { label: 'Agree' }, checked: false } },
+      { intent: said, clickAll: { target: { text: 'Delete' }, max: 5 } },
+      { intent: said, press: { key: 'Enter', target: { label: 'Search' } } },
+      { intent: said, hover: { testId: 'menu' } },
+      { intent: said, popup: { trigger: { text: 'Report' } } },
+      { intent: said, submit: { path: '/pay', button: save } },
+      { intent: said, download: { trigger: { text: 'Export' }, via: { path: '/export' } } },
+      { intent: said, paginate: { next: save, until: 'absent', max: 3, each: [{ intent: said, fill: { field: { label: 'Note' }, value: 'x' } }] } },
+    ];
+    const lines = changeList(notReplayedProposal(parseScript({ name: 'pay', version: 1, startUrl: 'https://a.example/', steps }))).split('\n');
+    expect(lines).toEqual([
+      'Added: Read the total (go to "/acme/pay")',
+      'Added: Read the total (sign in with label "User", label "Password", submit role "button" name "Save")',
+      'Added: Read the total (Ctrl+click role "button" name "Pay now")',
+      'Added: Read the total (fill label "Amount" with "9999")',
+      'Added: Read the total (select "north" in label "Region")',
+      'Added: Read the total (uncheck label "Agree")',
+      'Added: Read the total (click every text "Delete", at most 5)',
+      'Added: Read the total (press Enter on label "Search")',
+      'Added: Read the total (hover over test id "menu")',
+      'Added: Read the total (open a new tab with text "Report")',
+      'Added: Read the total (submit with role "button" name "Save" to POST the start site/pay)',
+      'Added: Read the total (download with text "Export" through POST the start site/export)',
+      'Added: Read the total (paginate next role "button" name "Save" until absent, at most 3 pages)',
+      'Added: Read the total (fill label "Note" with "x")',
+    ]);
   });
 
   it('a recording\'s marks name its secret variables from the import, never a value', async () => {
