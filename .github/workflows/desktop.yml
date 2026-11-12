@@ -33,6 +33,8 @@ on:
       - "images/browser/gate/**"
       - "images/browser/host/**"
       - "images/browser/server/**"
+      # Stage.ps1 copies a section of it into each package.
+      - "THIRD-PARTY-NOTICES.md"
       # The engine files the recorder's tests read in place, and the engine rules the recorder's C# twins.
       - "packages/engine/test/fixtures/import/recording-erp/**"
       - "packages/engine/test/fixtures/desktop/stable-id-samples.json"
@@ -53,6 +55,8 @@ on:
       - "images/browser/gate/**"
       - "images/browser/host/**"
       - "images/browser/server/**"
+      # Stage.ps1 copies a section of it into each package.
+      - "THIRD-PARTY-NOTICES.md"
       # The engine files the recorder's tests read in place, and the engine rules the recorder's C# twins.
       - "packages/engine/test/fixtures/import/recording-erp/**"
       - "packages/engine/test/fixtures/desktop/stable-id-samples.json"
@@ -361,6 +365,18 @@ jobs:
           if ($outside.Count -gt 0) { throw "rpa-browser-windows-x64.zip holds more than browser\ and its start script: $(($outside | Select-Object -First 5) -join ', ')" }
           if (@($entries['rpa-browser-windows-x64']) -notcontains 'browser/VERSION') { throw 'rpa-browser-windows-x64.zip holds no browser\VERSION' }
           "rpa-windows-x64.zip: $($entries['rpa-windows-x64'].Count) entries, none of the browser; rpa-browser-windows-x64.zip: $($entries['rpa-browser-windows-x64'].Count) entries"
+          # The package's third-party notices: THIRD-PARTY-NOTICES.md at its top, a folder in licenses\ for each
+          # component it lists at its end, and nothing of the browser, whose notices come with the browser package.
+          $staged = "$env:OUT\package\rpa-windows-x64"
+          $notices = [IO.File]::ReadAllText("$staged\THIRD-PARTY-NOTICES.md")
+          $rows = @([regex]::Matches($notices, '(?m)^\| (\S+) \| (\S+) \| `') | ForEach-Object { '{0}-{1}' -f $_.Groups[1].Value, $_.Groups[2].Value } | Sort-Object)
+          $folders = @(Get-ChildItem -LiteralPath "$staged\licenses" -Directory | ForEach-Object { $_.Name } | Sort-Object)
+          if ($rows.Count -eq 0 -or ($rows -join ',') -ne ($folders -join ',')) { throw "the package's licenses\ does not hold the $($rows.Count) folders its THIRD-PARTY-NOTICES.md lists ($($folders -join ', '))" }
+          foreach ($prefix in 'Microsoft.NETCore.App.Runtime.win-x64-', 'FlaUI.UIA3-') {
+            if (@($folders | Where-Object { $_.StartsWith($prefix) }).Count -ne 1) { throw "the package's licenses\ does not hold one folder $prefix<version>" }
+          }
+          if ($notices -match '(?i)chrom|node\.js|playwright|winldd|ffmpeg') { throw "the package's THIRD-PARTY-NOTICES.md names the browser's components: $($Matches[0])" }
+          "rpa-windows-x64: THIRD-PARTY-NOTICES.md and the $($folders.Count) folders of licenses\ it lists"
           "sha256=$($hashes['rpa-windows-x64'])" | Out-File -Append -Encoding ascii -LiteralPath $env:GITHUB_OUTPUT
           "browser-sha256=$($hashes['rpa-browser-windows-x64'])" | Out-File -Append -Encoding ascii -LiteralPath $env:GITHUB_OUTPUT
 
@@ -420,6 +436,13 @@ jobs:
           Assert (-not (Get-NetFirewallRule -Name 'RPA-Browser-In' -ErrorAction SilentlyContinue)) 'there is no firewall rule RPA-Browser-In'
           Assert (-not (Test-Path -LiteralPath "$install\browser") -and -not (Test-Path -LiteralPath "$install\scripts\start-browser.ps1")) 'no browser files are installed'
           Assert (-not (Test-Path -LiteralPath "$data\browser-token")) 'there is no browser token'
+          # The package's third-party notices are installed with the programs: THIRD-PARTY-NOTICES.md and a folder in
+          # licenses\ for each component it lists at its end. The browser's (browser\) are not, as no browser file is.
+          $notices = [IO.File]::ReadAllText("$install\THIRD-PARTY-NOTICES.md")
+          Assert ($notices -ceq [IO.File]::ReadAllText("$package\THIRD-PARTY-NOTICES.md")) 'the installed THIRD-PARTY-NOTICES.md is the one in the package'
+          $rows = @([regex]::Matches($notices, '(?m)^\| (\S+) \| (\S+) \| `') | ForEach-Object { '{0}-{1}' -f $_.Groups[1].Value, $_.Groups[2].Value } | Sort-Object)
+          $folders = @(Get-ChildItem -LiteralPath "$install\licenses" -Directory | ForEach-Object { $_.Name } | Sort-Object)
+          Assert ($rows.Count -gt 0 -and ($rows -join ',') -eq ($folders -join ',')) "licenses\ holds the $($rows.Count) folders THIRD-PARTY-NOTICES.md lists ($($folders -join ', '))"
 
           # Who may do what with the files the bot user must not change: the owner is Administrators, nothing is
           # inherited, nobody but SYSTEM and Administrators may write, and the bot user may read.
@@ -619,6 +642,18 @@ jobs:
           $present = @(Get-ChildItem -LiteralPath $root -Recurse -File -Force | ForEach-Object { $_.FullName.Substring($root.Length + 1).Replace('\', '/') })
           $differ = @($present | Where-Object { -not $listed.ContainsKey($_) -or (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root $_)).Hash.ToLowerInvariant() -ne $listed[$_] })
           Assert ($listed.Count -gt 0 -and $present.Count -eq $listed.Count -and $differ.Count -eq 0) "the $($present.Count) installed browser files are the $($listed.Count) files of browser\ms-playwright.sha256, each with its SHA-256 ($($differ.Count) not listed or different: $(($differ | Select-Object -First 5) -join ', '))"
+          Assert (@($listed.Keys | Where-Object { $_ -like 'ffmpeg-*' }).Count -eq 0) "Playwright's ffmpeg build is not installed"
+          # The browser's third-party notices are installed with its files: browser\THIRD-PARTY-NOTICES.md and a folder
+          # in browser\licenses\ for each component it lists at its end. The package's stay as they were.
+          $notices = [IO.File]::ReadAllText("$install\browser\THIRD-PARTY-NOTICES.md")
+          $rows = @([regex]::Matches($notices, '(?m)^\| (\S+) \| (\S+) \| `') | ForEach-Object { '{0}-{1}' -f $_.Groups[1].Value, $_.Groups[2].Value } | Sort-Object)
+          $folders = @(Get-ChildItem -LiteralPath "$install\browser\licenses" -Directory | ForEach-Object { $_.Name } | Sort-Object)
+          Assert ($rows.Count -gt 0 -and ($rows -join ',') -eq ($folders -join ',')) "browser\licenses\ holds the $($rows.Count) folders browser\THIRD-PARTY-NOTICES.md lists ($($folders -join ', '))"
+          foreach ($prefix in 'node-', 'playwright-core-', 'chrome-for-testing-', 'chrome-headless-shell-', 'winldd-') {
+            Assert (@($folders | Where-Object { $_.StartsWith($prefix) }).Count -eq 1) "browser\licenses\ holds one folder $prefix<version>"
+          }
+          Assert ($notices -notmatch '(?i)FlaUI|NETCore') "browser\THIRD-PARTY-NOTICES.md names nothing of the package's components"
+          Assert ((Test-Path -LiteralPath "$install\THIRD-PARTY-NOTICES.md") -and (Test-Path -LiteralPath "$install\licenses")) "the package's THIRD-PARTY-NOTICES.md and licenses\ are still installed"
 
           # The browser token: owned by Administrators, nothing inherited, nobody but SYSTEM and Administrators may
           # write, and the bot user may read.
