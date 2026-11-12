@@ -142,7 +142,7 @@ function Get-RpaUnattendedNotice([string]$User, [int]$RunnerPort, [int]$BrowserP
     $lines += '  - The password of {0} is stored on this machine for the RPA Supervisor. An administrator of this machine' -f $User
     $lines += '    can read it.'
   }
-  if ($Steps -contains 'point the firewall rules at the supervisor') {
+  if ($Steps -contains 'point the firewall rules at the supervisor' -or $Steps -contains 'point the firewall rule at the supervisor') {
     if ($BrowserPort) {
       $lines += '  - The firewall rules for port {0} let connections in to the RPA Supervisor instead of the runner and the' -f $ports
       $lines += '    browser.'
@@ -169,8 +169,8 @@ function Get-RpaBrowserFilesRefusal([hashtable]$Facts, [bool]$Kept) {
   $folder = [string]$Facts.PackageDir
   $version = [string]$Facts.PackageVersion
   if ($Facts.BrowserFiles -ne 'present') {
-    if ($Kept) { return ('This install has the browser, and its files are not in {0}: run Get-Rpa.ps1 -WithBrowser, unpack rpa-browser-windows-x64.zip into that folder, or remove the browser with -NoBrowser.' -f $folder) }
-    return ('The browser files are not in {0}: run Get-Rpa.ps1 -WithBrowser, or unpack rpa-browser-windows-x64.zip into that folder.' -f $folder)
+    if ($Kept) { return ('This install has the browser, and its files are not in {0}: run Get-Rpa.ps1 -WithBrowser, unpack rpa-browser-windows-x64.zip into that folder (Expand-Archive <path of the zip> -DestinationPath "{0}") and run this again, or remove the browser with -NoBrowser.' -f $folder) }
+    return ('The browser files are not in {0}: run Get-Rpa.ps1 -WithBrowser, or unpack rpa-browser-windows-x64.zip into that folder (Expand-Archive <path of the zip> -DestinationPath "{0}") and run this again.' -f $folder)
   }
   if ([string]$Facts.BrowserVersion -eq $version) { return $null }
   if ($Kept) { return ('This install has the browser, and the browser files in {0} are of version {1}, and the package is version {2}: unpack the rpa-browser-windows-x64.zip of version {2} into that folder, or remove the browser with -NoBrowser.' -f $folder, $Facts.BrowserVersion, $version) }
@@ -391,7 +391,8 @@ function Get-RpaInstallPlan {
       }
       if ($allowFrom -and -not $publicNetwork -and $Facts.PublicNetwork) {
         if ($upgrade) {
-          $warnings.Add('This machine is on a network that Windows treats as Public. The firewall rules are for Domain and Private networks, so they let nothing in on that network.')
+          if ($browser) { $warnings.Add('This machine is on a network that Windows treats as Public. The firewall rules are for Domain and Private networks, so they let nothing in on that network.') }
+          else { $warnings.Add('This machine is on a network that Windows treats as Public. The firewall rule is for Domain and Private networks, so it lets nothing in on that network.') }
         } else {
           $refusals.Add("This machine's network is Public, and -AllowFromAnyAddress does not open the ports on a Public network. Use -AllowFrom <n8n address>, or add -IncludePublicNetwork, or use -NoFirewall.")
         }
@@ -435,7 +436,13 @@ function Get-RpaInstallPlan {
       $refusals.Add(('The scheduled task folder {0} exists and is owned by {1}. Check what is in it, remove it, and run the installer again.' -f $script:TaskPath, $Facts.TaskFolderOwner))
     }
 
-    if ($upgrade -and $Facts.RunnerRunning) {
+    # Nobody signed in, and no run holds the runner: the RPA Supervisor's session of the bot user stays for the idle
+    # time after the last connection (the installer's own check of the runner is one), and the runner with it.
+    if ($upgrade -and $Facts.RunnerRunning -and $Facts.RunnerIdle -and $Facts.InstalledMode -eq 'unattended') {
+      $idleSeconds = 15
+      if ($null -ne $Facts.InstalledIdleSeconds) { $idleSeconds = [int]$Facts.InstalledIdleSeconds }
+      if (-not ($Parameters.Force -or $convert)) { $refusals.Add(('No run is in progress: the bot user is still signed in from the last connection to the runner, and the RPA Supervisor signs that session out by itself {0} s after that connection ended. Run this again then, or add -Force.' -f $idleSeconds)) }
+    } elseif ($upgrade -and $Facts.RunnerRunning) {
       $text = 'The runner is running; a run in progress will fail.'
       # A move from automatic sign-in always finds the runner running (Windows signed the bot user in), and signs the
       # bot user out anyway, which its notice says: a refusal here would hide that notice and its question behind
@@ -526,7 +533,8 @@ function Get-RpaInstallPlan {
       if (-not $convert -and (-not $secretKept -or $hasPassword)) { $steps.Add("store the bot user's password for the supervisor") }
       if ($convert) { $steps.Add('sign the bot user out') }
       $steps.Add('register the supervisor service')
-      if ($firewall) { $steps.Add('point the firewall rules at the supervisor') }
+      if ($firewall -and $browser) { $steps.Add('point the firewall rules at the supervisor') }
+      elseif ($firewall) { $steps.Add('point the firewall rule at the supervisor') }
     }
     $steps.Add('add the Start menu shortcut')
     if ($upgrade) { $steps.Add('start tasks') }

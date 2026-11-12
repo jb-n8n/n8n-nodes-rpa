@@ -29,7 +29,8 @@ $script:KnownSteps = @(
   'keep the automatic sign-in password for the supervisor',
   'turn off automatic sign-in', 'allow the bot user to sign in through Remote Desktop', 'turn on Remote Desktop',
   "store the bot user's password for the supervisor", 'sign the bot user out', 'register the supervisor service',
-  'point the firewall rules at the supervisor', 'add the Start menu shortcut', 'start tasks')
+  'point the firewall rules at the supervisor', 'point the firewall rule at the supervisor', 'add the Start menu shortcut',
+  'start tasks')
 
 # Where things are. Program Files keeps its default permissions (users read and run, only administrators change), so
 # the bot user cannot replace what it runs.
@@ -55,6 +56,23 @@ function Get-RpaLayout {
 function Test-RpaAdministrator {
   $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
   (New-Object Security.Principal.WindowsPrincipal $identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+# Whether the installed runner of an unattended install only waits for the RPA Supervisor to sign its session out:
+# every runner process (-Runners, with SessionId) runs in the session the supervisor's state file (-State, its text)
+# names as its own, the runner listens behind the supervisor, and no connection is open to the runner's or the
+# browser's port there (runnerInnerPort, browserInnerPort of -Install; -Connections, with LocalPort and State; each
+# run, and each other connection through the supervisor, holds one). Whatever is missing or does not fit counts as a run: false.
+function Test-RpaRunnerIdle([object[]]$Runners, $Install, [string]$State, [object[]]$Connections) {
+  if (@($Runners).Count -eq 0 -or -not $Install) { return $false }
+  try { $session = (ConvertFrom-Json $State).sessionId } catch { return $false }
+  if ($null -eq $session) { return $false }
+  foreach ($runner in $Runners) { if ([string]$runner.SessionId -ne [string]$session) { return $false } }
+  # The ports install.json names, which the supervisor passes connections to.
+  $ports = @([int]$Install.runnerInnerPort)
+  if ($Install.browser -eq $true) { $ports += [int]$Install.browserInnerPort }
+  if ($ports -contains 0 -or -not @($Connections | Where-Object { [string]$_.State -eq 'Listen' -and [int]$_.LocalPort -eq $ports[0] })) { return $false }
+  @($Connections | Where-Object { [string]$_.State -eq 'Established' -and $ports -contains [int]$_.LocalPort }).Count -eq 0
 }
 
 # install.json as an object, or nothing when there is no install.
@@ -263,6 +281,7 @@ function Get-RpaMachineFacts {
     UserSid                    = $null
     EarlierUsers               = @()
     RunnerRunning              = $false
+    RunnerIdle                 = $false
     DataDir                    = $layout.DataDir
     LogDir                     = $layout.LogDir
     PolicyBackupsDir           = $layout.BackupsDir
@@ -297,7 +316,8 @@ function Get-RpaMachineFacts {
 
   # The installed runner only: a runner someone runs from another folder is not touched by an upgrade.
   $runner = Join-Path (Join-Path $layout.InstallDir 'runner') 'RpaRunner.exe'
-  $facts.RunnerRunning = [bool](Get-CimInstance -ClassName Win32_Process -Filter "Name='RpaRunner.exe'" | Where-Object { $_.ExecutablePath -eq $runner })
+  $runners = @(Get-CimInstance -ClassName Win32_Process -Filter "Name='RpaRunner.exe'" | Where-Object { $_.ExecutablePath -eq $runner })
+  $facts.RunnerRunning = $runners.Count -gt 0
 
   $install = Read-RpaInstallFile $layout.InstallFile
   if ($install) {
@@ -319,6 +339,14 @@ function Get-RpaMachineFacts {
     $records = @($install.signInChanges | Where-Object { $_ -and (Test-RpaUnattendedChange $_) })
     $facts.InstalledSupervisorSecret = [bool]($records | Where-Object { $_.kind -eq 'secret' })
     $facts.InstalledUnattendedChanges = $records.Count -gt 0
+  }
+  # Nobody signed in: whether the runner only waits for the RPA Supervisor to sign its session out. Whatever cannot be
+  # read leaves it false, which the plan takes as a run in progress.
+  if ($facts.RunnerRunning -and $facts.InstalledMode -eq 'unattended') {
+    try {
+      $state = [IO.File]::ReadAllText((Join-Path $layout.SupervisorDir 'supervisor-state.json'))
+      $facts.RunnerIdle = Test-RpaRunnerIdle $runners $install $state @(Get-NetTCPConnection -ErrorAction Stop)
+    } catch { }
   }
   # A product type of 1 is a desktop edition (Windows 10 or 11); 2 and 3 are Windows Server.
   $facts.IsServer = (Get-CimInstance -ClassName Win32_OperatingSystem).ProductType -ne 1
@@ -1848,6 +1876,7 @@ function Invoke-RpaInstallPlan {
           Wait-RpaFirstSignIn $run $runnerPort
         }
         'point the firewall rules at the supervisor' { Set-RpaSupervisorFirewall $run (-not $Parameters.NoBrowser) }
+        'point the firewall rule at the supervisor' { Set-RpaSupervisorFirewall $run (-not $Parameters.NoBrowser) }
         'add the Start menu shortcut' { Add-RpaStartMenuShortcut $run }
         'start tasks' { Start-RpaTasks }
       }

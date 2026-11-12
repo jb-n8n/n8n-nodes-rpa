@@ -607,7 +607,7 @@ jobs:
           $said = @(& (Join-Path $PSHOME 'powershell.exe') -NoProfile -ExecutionPolicy Bypass -File "$package\Install-Rpa.ps1" -User rpa-ci-bot -WithBrowser -Force)
           $code = $LASTEXITCODE
           $said | ForEach-Object { Write-Host "  | $_" }
-          Assert ($code -eq 1 -and $said -contains "The browser files are not in ${package}: run Get-Rpa.ps1 -WithBrowser, or unpack rpa-browser-windows-x64.zip into that folder." -and $said -contains 'Nothing was changed.') '-WithBrowser without the browser files is refused, and says how to get them'
+          Assert ($code -eq 1 -and $said -contains "The browser files are not in ${package}: run Get-Rpa.ps1 -WithBrowser, or unpack rpa-browser-windows-x64.zip into that folder (Expand-Archive <path of the zip> -DestinationPath `"${package}`") and run this again." -and $said -contains 'Nothing was changed.') '-WithBrowser without the browser files is refused, and says how to get them'
 
           Expand-Archive -LiteralPath "$env:OUT\package\rpa-browser-windows-x64.zip" -DestinationPath $package
           Assert ((Get-Content -LiteralPath "$package\browser\VERSION" -TotalCount 1).Trim() -eq (Get-Content -LiteralPath "$package\VERSION" -TotalCount 1).Trim()) 'the browser package is of the package version'
@@ -669,8 +669,50 @@ jobs:
           $record = Get-Content -Raw -LiteralPath "$install\install.json" -Encoding UTF8 | ConvertFrom-Json
           Assert ($record.browser -eq $true -and $record.browserPort -eq 3000 -and (@($record.allowFrom) -join ',') -eq '127.0.0.1') 'install.json records the browser, its port and who may connect'
 
-      # The two start scripts are started by hand again, as in the step before last: the installer stopped the
-      # runner. Both go on running after this step: the upgrade and the uninstall below find them running.
+      # The other way to add the browser: the Get-Rpa.ps1 that Stage.ps1 wrote (it names the version and the SHA-256
+      # of each zip), run again with -WithBrowser for a version whose package folder under Program Files is there
+      # already, as an earlier Get-Rpa.ps1 leaves it, without the browser. It checks only the browser zip, unpacks it
+      # into that folder and starts the installer from there, which installs the same version with the browser. The
+      # GitHub CLI of this machine is not signed in, so the attestation is not checked (these zips have none); the
+      # SHA-256 is. Without -WithBrowser, and once the folder has the browser, it leaves the folder as it is.
+      - name: Add the browser with Get-Rpa.ps1 to a package folder that is there already
+        timeout-minutes: 10
+        shell: powershell
+        run: |
+          function Assert([bool]$ok, [string]$what) { if (-not $ok) { throw "FAILED: $what" }; Write-Host "ok: $what" }
+          $version = (Get-Content -LiteralPath 'C:\rpa-ci\package\rpa-windows-x64\VERSION' -TotalCount 1).Trim()
+          $folder = Join-Path $env:ProgramFiles "RPA package\$version"
+          $package = Join-Path $folder 'rpa-windows-x64'
+          Assert (-not (Test-Path -LiteralPath $folder)) "there is no $folder yet"
+          Expand-Archive -LiteralPath "$env:OUT\package\rpa-windows-x64.zip" -DestinationPath $folder
+          $zips = @('-Zip', "$env:OUT\package\rpa-windows-x64.zip", '-BrowserZip', "$env:OUT\package\rpa-browser-windows-x64.zip")
+          function Invoke-GetRpa([string[]]$More) {
+            $global:LASTEXITCODE = 0
+            $said = @(& (Join-Path $PSHOME 'powershell.exe') -NoProfile -ExecutionPolicy Bypass -File "$env:OUT\package\Get-Rpa.ps1" @zips -User rpa-ci-bot -Force @More)
+            $said | ForEach-Object { Write-Host "  | $_" }
+            @{ Code = $LASTEXITCODE; Said = $said }
+          }
+          $exists = "$folder exists already. To install from it, run $package\Install-Rpa.ps1 with the same parameters; to unpack again, remove $folder first."
+
+          $run = Invoke-GetRpa @()
+          Assert ($run.Code -eq 1 -and $run.Said -contains $exists -and -not (Test-Path -LiteralPath "$package\browser")) 'without -WithBrowser, Get-Rpa.ps1 leaves the folder that is there already as it is'
+
+          $run = Invoke-GetRpa @('-WithBrowser')
+          Assert ($run.Code -eq 0 -and $run.Said -contains 'RPA is installed.') "Get-Rpa.ps1 -WithBrowser exits 0 after the installer it started says that RPA is installed (it was $($run.Code))"
+          Assert ($run.Said -contains "$folder exists already: only the browser zip is checked and unpacked into it, the package zip is not used again." -and $run.Said -contains "Unpacked the browser into $package") 'it says that it added only the browser zip, into that folder'
+          $browserHash = (Get-FileHash -Algorithm SHA256 -LiteralPath "$env:OUT\package\rpa-browser-windows-x64.zip").Hash.ToLowerInvariant()
+          Assert ($run.Said -contains "  The SHA-256 of the browser zip is ${browserHash}: the one in $env:OUT\package\rpa-browser-windows-x64.zip.sha256, and the one this script names.") 'it checked the SHA-256 of the browser zip against its .sha256 file and the one the script names'
+          Assert (@($run.Said | Where-Object { $_ -like '  The build attestation was NOT checked: *rpa-browser-windows-x64.zip*' }).Count -eq 1 -and @($run.Said | Where-Object { $_ -like '*The SHA-256 is *' }).Count -eq 0) 'it asked for the attestation of the browser zip only, and did not read the package zip'
+          Assert ((Get-Content -LiteralPath "$package\browser\VERSION" -TotalCount 1).Trim() -eq $version -and (Test-Path -LiteralPath "$package\scripts\start-browser.ps1")) "the browser of version $version is in $package"
+          $record = Get-Content -Raw -LiteralPath (Join-Path $env:ProgramFiles 'RPA Runner\install.json') -Encoding UTF8 | ConvertFrom-Json
+          Assert ($record.browser -eq $true -and [bool](Get-ScheduledTask -TaskPath '\RPA\' -TaskName 'RPA Browser' -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'RPA Runner\browser\node.exe'))) 'the installer it started installed the browser: install.json, its task and its files'
+
+          $run = Invoke-GetRpa @('-WithBrowser')
+          Assert ($run.Code -eq 1 -and $run.Said -contains "$package has the browser already. To install from it, run $package\Install-Rpa.ps1 with the same parameters; to unpack again, remove $folder first.") 'a second Get-Rpa.ps1 -WithBrowser does not unpack over the browser that is there'
+
+      # The two start scripts are started by hand again, as in the step "Start the installed runner and drive it": the
+      # installer stopped the runner. Both go on running after this step: the upgrade and the uninstall below find
+      # them running.
       - name: Start the installed runner and browser and drive the browser (browser smoke)
         timeout-minutes: 15
         shell: powershell

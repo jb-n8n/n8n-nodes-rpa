@@ -1511,11 +1511,11 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const fileLine = (report: Record<string, unknown>) => page(completion('Imported, with the workflow file').completionMessage, {
       'Import steps': [[{ json: { report, drafts: [] }, binary: { workflow: { fileName: 'bot.workflow.json', data: '', mimeType: 'application/json' } } }], []],
     }).split('\n').at(-1);
-    expect(fileLine({ source: 'recording', steps: 17, items: [] })).toBe('Your browser downloads bot.workflow.json: the workflow that runs the bot. Open it in n8n with Import from file.');
-    expect(fileLine({ source: 'chrome', steps: 9, items: [{ kind: 'untranslated' }] })).toBe('Your browser downloads bot.workflow.json: the workflow that runs the bot. Open it in n8n with Import from file.');
-    expect(fileLine({ source: 'uipath', steps: 9, items: [] })).toBe('Your browser downloads bot.workflow.json: the rest of the bot as an n8n workflow. Open it in n8n with Import from file.');
+    expect(fileLine({ source: 'recording', steps: 17, items: [] })).toBe('Your browser downloads bot.workflow.json: the workflow that runs the bot. Open it in n8n with ⋯ → Import → From File.');
+    expect(fileLine({ source: 'chrome', steps: 9, items: [{ kind: 'untranslated' }] })).toBe('Your browser downloads bot.workflow.json: the workflow that runs the bot. Open it in n8n with ⋯ → Import → From File.');
+    expect(fileLine({ source: 'uipath', steps: 9, items: [] })).toBe('Your browser downloads bot.workflow.json: the rest of the bot as an n8n workflow. Open it in n8n with ⋯ → Import → From File.');
     expect(fileLine({ source: 'uipath', steps: 9, items: [{ kind: 'untranslated' }] }))
-      .toBe('Your browser downloads bot.workflow.json: the rest of the bot as an n8n workflow. Open it in n8n with Import from file; grey notes in it mark what was not translated.');
+      .toBe('Your browser downloads bot.workflow.json: the rest of the bot as an n8n workflow. Open it in n8n with ⋯ → Import → From File; grey notes in it mark what was not translated.');
     // Approval by email: the step lists wait in RPA: 3 (each count in the singular or the plural, "there too" once the workflow was named).
     const email = (drafts: Record<string, unknown>[]) => page(shown.completionMessage, {
       Settings: [[{ json: { ...settingsJson(), approval: 'by email' } }]], 'Import steps': [[{ json: { report: { steps: 9, items: [] }, drafts } }], []],
@@ -1577,7 +1577,8 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const uiMessage = page(withFile.completionMessage, { 'Import steps': [ui, []] });
     expect(uiMessage).toMatch(/^Imported: \d+ steps[;.]/);
     expect(uiMessage).toContain('line-item-export.workflow.json');
-    expect(uiMessage).toContain('Import from file');
+    expect(uiMessage).toContain('⋯ → Import → From File');
+    expect(uiMessage).not.toContain('Import from file');
   });
 
   it('a refusal that names a login page the Site Login does not list: a page that says what to add where, and Import again with the same file', () => {

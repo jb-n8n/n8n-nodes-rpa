@@ -26,7 +26,7 @@ All notable changes to `n8n-nodes-rpa`, the `rpa-browser` image and the Windows 
 - **The default approver.** On the default path, the person who imports a bot approves it on the form. Anyone who can open the form (its Basic Auth credential) can approve, and the row records the address in **Sign steps → Approver Allowlist**. Set `approval` to `by email` in the template's **Settings** for a second person. Template 5's **Approve steps** node ships switched off. Template 3's **Settings** now holds `approver`.
 - **Sign Steps' Approved By** may be empty when the **Approver Allowlist** holds exactly one address.
 - **Windows Server installs are unattended by default**: a first install for a new bot user with no sign-in mode is an `-Unattended` install, where it was refused before.
-- **The Windows package installs no browser by default.** To have the browser on the Windows machine, add `-WithBrowser`: it comes in a second zip, `rpa-browser-windows-x64.zip`, which `Get-Rpa.ps1 -WithBrowser` gets for you. An upgrade keeps the browser an install has, and `-NoBrowser` removes it.
+- **The Windows package installs no browser by default.** To have the browser on the Windows machine, add `-WithBrowser`: it comes in a second zip, `rpa-browser-windows-x64.zip`, which `Get-Rpa.ps1 -WithBrowser` gets for you, also later, into the package folder of a version unpacked already. An upgrade keeps the browser an install has, and `-NoBrowser` removes it.
 - **One-Time Code Workflow** is n8n's workflow picker, and it must be set directly: an expression is now refused. Workflows saved with a typed ID keep working.
 - **Desktop approval texts.** Evidence lines end `mark each step that saves, posts or submits as a write`, and Sign Steps writes `Signed as writes: none` when none was marked. A desktop Repaired steps item made before this change is refused: import it again.
 - **Messages.** A step list that does not parse reads `invalid steps: …` (was `invalid script: …`). A blocked request names its method, host and path and where to allow it. A failed desktop step starts with its number and intent. Guidance texts are shorter.
@@ -46,6 +46,7 @@ All notable changes to `n8n-nodes-rpa`, the `rpa-browser` image and the Windows 
 ### Fixed
 
 - **RPA Recorder**: a file saved through a Save dialog under the name it offers now comes back to n8n, as a typed name does. Before, the run saved it in the bot user's Documents folder and returned no file.
+- An installer run in the seconds after an unattended install, while the bot user's session waits to be signed out and no run holds the runner, says so and how long it stays, instead of "a run in progress will fail".
 - `Get-Rpa.ps1 -Zip` and `rpa policy apply` read a relative path from PowerShell's current folder, not from `C:\Windows\system32`.
 - The recorder's bar keeps six rows of steps in Finished and Saved, and its step buttons fit one row at 360 wide.
 - A desktop locator that matches several elements fails after 3 seconds instead of at the step's timeout, and says what to add.
