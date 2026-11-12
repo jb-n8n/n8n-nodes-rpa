@@ -29,6 +29,22 @@ export function createRedactor() {
   };
 }
 
+/** The most characters of one string from n8n that a message shows. */
+const CLEAN_MAX = 120;
+
+/**
+ * A string that came from n8n (a name, an id, an error message), fit to print or to put in a question: control
+ * characters (U+0000 to U+001F, U+007F to U+009F) and the line and paragraph separators (U+2028, U+2029) removed, cut to
+ * 120 characters. One made only of such characters shows as the fallback (an id), so it cannot change what a line or a
+ * question looks like.
+ */
+const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g;
+export function clean(value, fallback = '?') {
+  const text = String(value ?? '').replace(CONTROL, '').trim();
+  if (!text) return String(fallback).replace(CONTROL, '').slice(0, CLEAN_MAX);
+  return text.length > CLEAN_MAX ? `${text.slice(0, CLEAN_MAX - 1)}…` : text;
+}
+
 /** localhost, 127.0.0.0/8 or ::1: http:// there never leaves the machine. */
 export function isLoopback(hostname) {
   const host = hostname.replace(/^\[|\]$/g, '').toLowerCase();
@@ -96,7 +112,9 @@ export function createClient({ base, apiKey, redact }) {
   /** The server's error message, redacted and cut short; never the raw body of a credential request. */
   function reason(r) {
     const message = typeof r.json?.message === 'string' ? r.json.message : r.text;
-    return redact(`HTTP ${r.status}${message ? `: ${String(message).replace(/\s+/g, ' ').slice(0, 300)}` : ''}`);
+    // Redacted before it is cut, so that no part of a secret is left at the cut.
+    const shown = message ? clean(redact(String(message).replace(/\s+/g, ' ')), '') : '';
+    return redact(`HTTP ${r.status}${shown ? `: ${shown}` : ''}`);
   }
 
   /** Every item of a paginated list (cursor pagination): { ok, items } or { ok: false, response }. */
