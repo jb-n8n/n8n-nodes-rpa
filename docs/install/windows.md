@@ -69,6 +69,10 @@ The install has no browser unless you add `-WithBrowser`. With it, `Get-Rpa.ps1`
 With `-Zip`, give the browser zip with `-BrowserZip <path>`. Without `Get-Rpa.ps1`, unpack `rpa-browser-windows-x64.zip`
 into the `rpa-windows-x64` folder and run `Install-Rpa.ps1 -WithBrowser`.
 
+Each zip carries the licences of the software by others in it: `THIRD-PARTY-NOTICES.md` and the folder `licenses` in
+the package, `browser\THIRD-PARTY-NOTICES.md` and `browser\licenses` in the browser zip. The installer copies them to
+`C:\Program Files\RPA Runner` with the rest of each zip, and `-NoBrowser` removes the browser's with its files.
+
 The installer lists what it will change and asks you to type `YES`. On Windows Server, a first install for a new bot
 user with no sign-in mode is **unattended** (section 4), and the list starts with
 `No sign-in mode was given, so this install is unattended (-Unattended): the default on Windows Server for a new bot user.`

@@ -90,8 +90,8 @@ describe('the README', () => {
   });
 
   it('uses no use-case words', () => {
-    // `sandbox/portal` is a directory name, not UI text.
-    expect(doc.readme.replaceAll('sandbox/portal', 'sandbox/site').match(new RegExp(USE_CASE_WORDS.source, 'gi')) ?? []).toEqual([]);
+    // `sandbox/portal` and `THIRD-PARTY-NOTICES.md` are names of files in the repo, not UI text.
+    expect(doc.readme.replaceAll('sandbox/portal', 'sandbox/site').replaceAll('THIRD-PARTY-NOTICES.md', 'THIRD-PARTY.md').match(new RegExp(USE_CASE_WORDS.source, 'gi')) ?? []).toEqual([]);
   });
 });
 
