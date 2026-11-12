@@ -111,6 +111,11 @@ it can open any address this machine reaches and read any file the bot user can 
 The runner's policy does not limit that. On a machine where the policy must hold against n8n itself, install with
 `-NoBrowser` and run the browser elsewhere. Either way, use `-AllowFrom` with n8n's address.
 
+n8n opens the connection to this machine, and the machine never dials out to n8n. So n8n must be able to reach the
+runner's port: a firewall rule for n8n's address, and `-Address` on `rpa connection` when n8n reaches the machine by
+another name or address. Where n8n cannot reach the machine directly, put a private network or a tunnel between them.
+The product does not provide one.
+
 ## 4. Signing in
 
 The runner drives apps only while the bot user's desktop is signed in and unlocked. On a locked or disconnected desktop
