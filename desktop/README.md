@@ -1,10 +1,10 @@
 # RPA desktop runner and ERP Demo
 
 The runner speaks the desktop protocol and drives Windows apps through UI Automation; Run Steps sends it desktop
-steps ([Steps: Desktop steps](../docs/reference/steps.md#desktop-steps)). To install the runner, the policy tool and the RPA browser
-on a Windows machine, follow the [Windows install guide](../docs/install/windows.md), which uses the package this
-folder builds (`installer/`, released as `rpa-windows-x64.zip`). The RPA browser the package installs serves one
-browser session at a time: a second browser run that starts while one is open waits up to 60 s for it, then fails
+steps ([Steps: Desktop steps](../docs/reference/steps.md#desktop-steps)). To install the runner, the policy tool and,
+with `-WithBrowser`, the RPA browser on a Windows machine, follow the [Windows install guide](../docs/install/windows.md),
+which uses the packages this folder builds (`installer/`, released as `rpa-windows-x64.zip` and, for the browser,
+`rpa-browser-windows-x64.zip`). The RPA browser serves one browser session at a time: a second browser run that starts while one is open waits up to 60 s for it, then fails
 `browser_unavailable` with `The browser service at wss://<host>:3000/ had no free browser session for 60 s. ...`.
 
 | Path | What it is |
@@ -23,7 +23,7 @@ browser session at a time: a second browser run that starts while one is open wa
 | `recorder/test/Rpa.Recorder.Core.Tests` | Unit tests of the recorder's core with fakes (run anywhere). |
 | `recorder/test/Rpa.Recorder.Scenario` | The recorder scenario CI runs on Windows: a stand-in for a person drives the ERP Demo while `RpaRecorder.exe` records it, and the file is compared with a golden one. |
 | `erp-demo` | ERP Demo: a small "legacy ERP" WinForms app with a v1 and a v2 UI. |
-| `installer` | The Windows package: `Install-Rpa.ps1`, `Uninstall-Rpa.ps1` and their module (the package also holds the recorder, in `recorder\`), the start scripts and `Show-RpaConnection.ps1` (`scripts/`), the script that stages the zip (`build/Stage.ps1`) and the Pester tests. |
+| `installer` | The Windows package: `Install-Rpa.ps1`, `Uninstall-Rpa.ps1` and their module (the package also holds the recorder, in `recorder\`), the start scripts and `Show-RpaConnection.ps1` (`scripts/`), the script that stages the two zips (`build/Stage.ps1`) and the Pester tests. |
 
 ## Running the runner
 
@@ -117,12 +117,12 @@ acts with that person's access. Three limits to keep in mind:
   runner will not act on them). `file.retrieve` itself reads only from the run's export directory. A dedicated
   Windows user with AppLocker narrows what that user can start.
 - The RPA browser runs as the same Windows user as the runner when it is installed beside it, which the installer
-  does unless it is given `-NoBrowser`. With the browser installed, whoever holds the browser token and can reach the
+  does only with `-WithBrowser`. With the browser installed, whoever holds the browser token and can reach the
   browser's port acts as the bot user through the browser: it can read the files the bot user can read (the runner's
   token among them), and it can create files with a name and content of its choice where the bot user can write,
   which is a way to run programs as the bot user. The runner's policy does not limit that, so the policy is a limit
-  for the runner token only; on a machine where the policy must hold against n8n itself, install with `-NoBrowser`
-  and run the browser on another machine. On Windows Server 2022 a plain Playwright client with the browser token
+  for the runner token only. On a machine where the policy must hold against n8n itself, install without the browser
+  (the default) and run the browser on another machine. On Windows Server 2022 a plain Playwright client with the browser token
   read a file of the bot user through a `file://` page, and, after a CDP session set the download folder of its
   browser context (`Browser.setDownloadBehavior`), saved a download with the name and content it chose into a folder
   of the bot user's profile; the file belonged to the bot user. A file only administrators could read was refused.
@@ -477,13 +477,14 @@ The UI parts run only on Windows: the `desktop` workflow builds and publishes ev
 Server 2025 in November 2026), starts
 
 the runner and drives the ERP Demo through it with the scenario client, records the same flow with `RpaRecorder.exe`, then builds the Windows package, installs it
-and drives it, and installs it again with `-Unattended` and drives it through the RPA Supervisor. Its artifact `rpa-windows-package` holds the package, `rpa-windows-x64.zip`, with its SHA-256 (see
+without the browser and drives it, adds the browser with `-WithBrowser` and drives that, upgrades and uninstalls it, and installs it again with `-Unattended` (without the browser) and drives it through the RPA Supervisor. Its artifact `rpa-windows-package` holds the two zips, `rpa-windows-x64.zip` and `rpa-browser-windows-x64.zip`, with their SHA-256 and `Get-Rpa.ps1` (see
 "Releasing the Windows package"); the artifacts `rpa-desktop-runner` and `erp-demo` are the self-contained win-x64
 builds of the runner and the demo app (no .NET install needed).
 
 ## Releasing the Windows package
 
-The maintainers release the Windows package, `rpa-windows-x64.zip`, from the `Desktop release` workflow
+The maintainers release the Windows package, `rpa-windows-x64.zip` and the browser package `rpa-browser-windows-x64.zip`,
+from the `Desktop release` workflow
 (`.github/workflows/desktop-release.yml`). Pushing a tag `desktop-v<version>`, where `<version>` is the `<Version>` in
 `desktop/Directory.Build.props` (for example `desktop-v0.2.0`), starts it:
 
@@ -496,14 +497,15 @@ The maintainers release the Windows package, `rpa-windows-x64.zip`, from the `De
 3. It checks the package it built. It downloads the package by the artifact id the `desktop` workflow reports, not by
    the artifact's name, so an artifact of the same name uploaded by another job of the run is not taken; the download
    fails if the archive differs from the digest GitHub recorded for that artifact (when it recorded one). It compares
-   the zip's SHA-256 with the hash the `desktop` workflow computed when it staged the zip (not with the `.sha256` file
-   in the artifact), checks that `rpa-windows-x64.zip.sha256` holds that same hash, and that the `VERSION` file in the
-   zip is the tag's version.
+   each zip's SHA-256 with the hash the `desktop` workflow computed when it staged the zip (not with the `.sha256` file
+   in the artifact), checks that each `.sha256` file holds that same hash, that the `VERSION` file in the package's zip
+   and `browser/VERSION` in the browser's zip are the tag's version, and that `Get-Rpa.ps1` names the version and both
+   hashes.
 4. It waits until a required reviewer of the `desktop-release` environment approves the release (see "Before the
    first release" for what that approval covers). Then it downloads and checks the package again in the same way,
    downloads the notes by the id from step 1 (not by name) and compares them with the SHA-256 from step 1, checks
-   that the tag still names the commit it built, records a build attestation of the zip and creates the GitHub
-   Release `desktop-v<version>` with `rpa-windows-x64.zip` and `rpa-windows-x64.zip.sha256`. It stops if a release
+   that the tag still names the commit it built, records a build attestation of both zips and `Get-Rpa.ps1`, and
+   creates the GitHub Release `desktop-v<version>` with the two zips, their `.sha256` files and `Get-Rpa.ps1`. It stops if a release
    for that tag exists already, a draft included; it does not replace one. The release is not marked as the
    repository's latest release, which stays the node's.
 
@@ -523,10 +525,11 @@ version of `desktop/Directory.Build.props` in place of a tag, and never attests 
 
 Then run the dry run once on `main`.
 
-The package is not code-signed: the zip has no signature, and neither have the runner, the policy tool, the ERP Demo
-or the PowerShell scripts in it (the files it ships from other projects, such as `node.exe` and Chromium, are as those
-projects publish them). What a release has instead is the zip's SHA-256 and a build attestation. Check both before
-you unpack a download, with the release's version in place of `<version>`:
+The package is not code-signed: the zips have no signature, and neither have the runner, the policy tool, the ERP
+Demo or the PowerShell scripts in them (the files the browser package ships from other projects, such as `node.exe`
+and Chromium, are as those projects publish them). What a release has instead is each zip's SHA-256 and a build
+attestation. Check both before you unpack a download, with the release's version in place of `<version>` (and the
+same commands for `rpa-browser-windows-x64.zip`):
 
 ```sh
 gh attestation verify rpa-windows-x64.zip --repo jb-n8n/n8n-nodes-rpa \

@@ -138,9 +138,9 @@ the gated keys and the export folder. n8n cannot switch it off.
   an app's write controls and keys are in the policy, the runner gates no write in it.
 - Whoever holds the RPA Desktop Runner credential can do whatever a marked write could do in the allowed apps. Protect
   it as you would the n8n instance.
-- With the browser installed beside the runner (the installer's default), whoever holds the browser token acts as the
-  bot user through the browser, which the runner's policy does not limit. The
-  [Windows guide](../install/windows.md#3-what-the-install-changes) says when to install with `-NoBrowser`.
+- The installer adds the browser beside the runner only with `-WithBrowser`. With it, whoever holds the browser token
+  acts as the bot user through the browser, which the runner's policy does not limit. Add it only when your bots need a
+  browser on that machine. The [Windows guide](../install/windows.md#who-can-reach-the-ports) says more.
 
 ## Accepted risks
 

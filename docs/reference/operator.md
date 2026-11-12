@@ -41,7 +41,7 @@ node's (1.63).
 |---|---|---|
 | Compose stack (`docker-compose.yml`) | Trying it out, and the reference setup | `ws://browser:3000/` (Private Network Endpoint on, token required) |
 | The `rpa-browser` image with `docker run` | One machine without compose | `ws://127.0.0.1:3000/` and the token |
-| A Windows machine with the [Windows package](../install/windows.md) | Bots that run on that machine | the browser's **Connection Line** |
+| A Windows machine with the [Windows package](../install/windows.md), installed with `-WithBrowser` | Bots that run on that machine | the browser's **Connection Line** |
 | Kubernetes or Amazon ECS (`deploy/`) | Production at scale, next to n8n in queue mode | `ws://rpa-browser.<namespace>.svc.cluster.local:3000/` or `ws://<internal load balancer>:3000/` |
 | A hosted Playwright endpoint such as Browserless | Production without running a browser | `wss://...`, token in the Token field |
 | A browser server with its own certificate | A server on another machine over TLS | `wss://<host>:<port>/`, token, and **Certificate Fingerprint (SHA-256)** |

@@ -66,7 +66,7 @@ The node does not ship a browser. The **RPA Browser** credential points at one:
 | Browser | When |
 |---|---|
 | The compose stack in this repository (`ws://browser:3000/`) | Trying it out ([browser bot guide](docs/guides/browser-bot.md)) |
-| The browser the Windows package installs | Bots on that Windows machine ([Windows guide](docs/install/windows.md)) |
+| The browser the Windows package adds with `-WithBrowser` | Bots on that Windows machine ([Windows guide](docs/install/windows.md)) |
 | The `rpa-browser` image, on Kubernetes or Amazon ECS | Production ([Kubernetes](docs/deploy/kubernetes.md), [Amazon ECS](docs/deploy/aws-ecs.md)) |
 | A hosted browser such as Browserless | No browser to run yourself |
 

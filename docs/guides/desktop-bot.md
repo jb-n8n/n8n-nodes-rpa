@@ -14,7 +14,7 @@ Plan for about 30 minutes.
   `printf 'BROWSER_TOKEN=%s\nN8N_ENCRYPTION_KEY=%s\n' "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" > .env`, then
   `docker compose up --build -d`, then open http://localhost:5678.
 - **A Windows Server 2019 or later machine** (a virtual machine is fine) with an administrator account. n8n must reach
-  it on TCP port 8765 (the runner) and 3000 (the browser). Note n8n's address as the Windows machine sees it.
+  it on TCP port 8765 (the runner). Note n8n's address as the Windows machine sees it.
 - The app your bot drives, installed for all users under `C:\Program Files`. ERP Demo already is.
 
 Two words first. The **bot user** is the Windows account the bots work as: the installer creates `rpa-runner`. A
@@ -41,15 +41,16 @@ the firewall rule and how to remove it all.
 
 ## 2. Connect n8n
 
-In the same PowerShell, print the Connection Lines with their tokens:
+In the same PowerShell, print the Connection Line with its token:
 
 ```powershell
 & "C:\Program Files\RPA Runner\rpa.cmd" connection -ShowTokens
 ```
 
 It prints a line under `Runner connection line, for the Connection Line of the RPA Desktop Runner credential:` that
-starts `rpa-runner://`, and one under `Browser connection line, ...` that starts `rpa-browser://`. Each line holds a
-token: copy it straight into n8n, and close the window when you are done.
+starts `rpa-runner://`. The line holds a token: copy it straight into n8n, and close the window when you are done.
+This guide needs no browser on the Windows machine. To add one, see the [Windows guide](../install/windows.md)
+(`-WithBrowser`).
 
 In n8n's left sidebar, choose **+ → New credential → RPA Desktop Runner**, paste the `rpa-runner://` line into
 **Connection Line**, and click **Save**. The window says `Connection tested successfully`. If n8n reaches the machine
