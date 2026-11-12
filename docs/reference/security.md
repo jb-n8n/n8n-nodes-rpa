@@ -140,14 +140,14 @@ the gated keys and the export folder. n8n cannot switch it off.
   an app's write controls and keys are in the policy, the runner gates no write in it.
 - Whoever holds the RPA Desktop Runner credential can do whatever a marked write could do in the allowed apps. Protect
   it as you would the n8n instance.
-- With the browser installed beside the runner (the installer's default), whoever holds the browser token acts as the
-  bot user through the browser, which the runner's policy does not limit. The
-  [Windows guide](../install/windows.md#3-what-the-install-changes) says when to install with `-NoBrowser`.
+- The installer adds the browser beside the runner only with `-WithBrowser`. With it, whoever holds the browser token
+  acts as the bot user through the browser, which the runner's policy does not limit. Add it only when your bots need a
+  browser on that machine. The [Windows guide](../install/windows.md#who-can-reach-the-ports) says more.
 - In the mode where nobody is signed in, the supervisor signs the bot user in when a connection arrives at the
-  runner's or the browser's port. It does not read the connection or check the sender's address first, and the token
-  is checked afterwards by the runner or the browser. So anyone who can reach those ports can cause a sign-in and
-  keep the session open for a while, but cannot run anything without the token. The firewall rule's `-AllowFrom`
-  addresses are the only limit on who can do that. Give it only n8n's address.
+  runner's port (or the browser's, when it is installed). It does not read the connection or check the sender's
+  address first, and the token is checked afterwards by the runner or the browser. So anyone who can reach those ports
+  can cause a sign-in and keep the session open for a while, but cannot run anything without the token. The firewall
+  rule's `-AllowFrom` addresses are the only limit on who can do that. Give it only n8n's address.
 
 ## Accepted risks
 

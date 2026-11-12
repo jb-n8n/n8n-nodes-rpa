@@ -1,4 +1,4 @@
-# Shows what the n8n credentials need: for the RPA desktop runner and for the RPA browser on this machine, one
+# Shows what the n8n credentials need: for the RPA desktop runner and, when it is installed, for the RPA browser, one
 # connection line to paste into the credential's Connection Line field, and below it the URL and the certificate
 # fingerprint for the separate fields, and whether each program is listening. Run it as the bot user or from an
 # administrator PowerShell (nobody else can read the data directory); rpa.cmd in the install folder runs it:

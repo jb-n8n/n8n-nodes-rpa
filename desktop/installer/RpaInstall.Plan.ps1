@@ -29,6 +29,9 @@ $script:TaskPath = '\RPA\'
 # The data directory's files the bot user may read and never change, and the step that writes each when it is missing.
 $script:DataFiles = [ordered]@{ 'policy.json' = 'write policy'; 'token' = 'write token'; 'browser-token' = 'write browser-token' }
 $script:SignInSteps = @('store sign-in password', 'turn on automatic sign-in', 'keep the desktop unlocked')
+# What the browser package (rpa-browser-windows-x64.zip, unpacked into the package folder) adds to the package: the
+# files an install with the browser needs, below the package folder. browser\VERSION is the version it was built for.
+$script:BrowserFiles = @('browser\VERSION', 'browser\node.exe', 'browser\host\host.mjs', 'browser\host\run-server.mjs', 'browser\gate\gate.mjs', 'browser\node_modules\playwright\cli.js', 'scripts\start-browser.ps1')
 # With -Unattended the runner and the browser listen on 127.0.0.1 at their port plus this, behind the RPA Supervisor.
 $script:InnerPortOffset = 10000
 
@@ -159,16 +162,34 @@ function Test-RpaNoModeGiven([hashtable]$Parameters) {
   -not $Parameters.Unattended -and -not $Parameters.UnattendedGiven -and -not $Parameters.AutoSignIn -and $null -eq $Parameters.UserPassword
 }
 
+# Why the install cannot have the browser that -WithBrowser or the install asks for, or nothing: the package folder
+# (-Facts.PackageDir) lacks the browser files, or holds them for another version. -Kept says that the browser is there
+# because the install has it (no -WithBrowser), which -NoBrowser would remove.
+function Get-RpaBrowserFilesRefusal([hashtable]$Facts, [bool]$Kept) {
+  $folder = [string]$Facts.PackageDir
+  $version = [string]$Facts.PackageVersion
+  if ($Facts.BrowserFiles -ne 'present') {
+    if ($Kept) { return ('This install has the browser, and its files are not in {0}: run Get-Rpa.ps1 -WithBrowser, unpack rpa-browser-windows-x64.zip into that folder, or remove the browser with -NoBrowser.' -f $folder) }
+    return ('The browser files are not in {0}: run Get-Rpa.ps1 -WithBrowser, or unpack rpa-browser-windows-x64.zip into that folder.' -f $folder)
+  }
+  if ([string]$Facts.BrowserVersion -eq $version) { return $null }
+  if ($Kept) { return ('This install has the browser, and the browser files in {0} are of version {1}, and the package is version {2}: unpack the rpa-browser-windows-x64.zip of version {2} into that folder, or remove the browser with -NoBrowser.' -f $folder, $Facts.BrowserVersion, $version) }
+  'The browser files in {0} are of version {1}, and the package is version {2}: unpack the rpa-browser-windows-x64.zip of version {2} into that folder.' -f $folder, $Facts.BrowserVersion, $version
+}
+
 # Decides what an install does. -Parameters holds Install-Rpa.ps1's parameters (User, UserPassword, RunnerPort,
-# BrowserPort, NoBrowser, NoFirewall, AllowFrom, AllowFromAnyAddress, IncludePublicNetwork, AutoSignIn, Unattended,
-# UnattendedGiven, IdleSeconds, IdleSecondsGiven, Force); -Facts is what Get-RpaMachineFacts returns. With a refusal
-# there are no steps: the installer changes nothing. Questions are what the installer has confirmed with YES before the
+# BrowserPort, NoBrowser, WithBrowser, NoFirewall, AllowFrom, AllowFromAnyAddress, IncludePublicNetwork, AutoSignIn,
+# Unattended, UnattendedGiven, IdleSeconds, IdleSecondsGiven, Force); -Facts is what Get-RpaMachineFacts returns. With a
+# refusal there are no steps: the installer changes nothing. Questions are what the installer has confirmed with YES before the
 # first step (with -Force they are warnings). AllowFrom in the result is what the firewall rules let in: addresses and
 # ranges, or the one word any, or nothing without rules; PublicNetwork says whether the rules also apply on networks
 # Windows treats as Public. Notice is what -Unattended changes, in lines to show and confirm before the first step, when
 # an earlier run has not set it up already; without a sign-in mode its first two lines say that the install is
 # unattended for that reason. Unattended and IdleSeconds are the mode and idle time the install gets: an upgrade keeps
-# them from the record unless -Unattended or -IdleSeconds is given.
+# them from the record unless -Unattended or -IdleSeconds is given. Browser says whether the install has the browser:
+# -WithBrowser adds it, an upgrade without -WithBrowser or -NoBrowser keeps what the install has (as it keeps the
+# sign-in mode), and -NoBrowser leaves it out, or removes it from an install that has it. Install-Rpa.ps1 hands it on
+# to Invoke-RpaInstallPlan as NoBrowser.
 function Get-RpaInstallPlan {
   param(
     [Parameter(Mandatory = $true)][hashtable]$Parameters,
@@ -176,7 +197,9 @@ function Get-RpaInstallPlan {
   )
   $user = [string]$Parameters.User
   $hasPassword = $null -ne $Parameters.UserPassword
-  $browser = -not $Parameters.NoBrowser
+  $upgrade = [bool]$Facts.Installed
+  $installedBrowser = $upgrade -and [bool]$Facts.InstalledBrowser
+  $browser = [bool]$Parameters.WithBrowser -or ($installedBrowser -and -not $Parameters.NoBrowser)
   # powershell -File hands a,b over as one string, so every -AllowFrom value is split at its commas.
   $given = @($Parameters.AllowFrom | ForEach-Object { ([string]$_).Split(',') } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
   $any = [bool]$Parameters.AllowFromAnyAddress
@@ -186,7 +209,6 @@ function Get-RpaInstallPlan {
   $noRulesRecorded = [bool]$Facts.Installed -and (@($Facts.InstalledAllowFrom) -contains 'none')
   if ($noRulesRecorded -and $given.Count -eq 0 -and -not $any -and -not $includePublic) { $firewall = $false }
   $autoSignIn = [bool]$Parameters.AutoSignIn
-  $upgrade = [bool]$Facts.Installed
   $runnerPort = [int]$Parameters.RunnerPort
   $browserPort = [int]$Parameters.BrowserPort
   # An install that an earlier run made with -Unattended.
@@ -237,6 +259,12 @@ function Get-RpaInstallPlan {
   }
 
   if ($refusals.Count -eq 0) {
+    if ($Parameters.WithBrowser -and $Parameters.NoBrowser) {
+      $refusals.Add('-WithBrowser and -NoBrowser cannot be used together: -WithBrowser adds the browser, -NoBrowser leaves it out or removes it. Choose one.')
+    } elseif ($browser) {
+      $filesRefusal = Get-RpaBrowserFilesRefusal $Facts (-not $Parameters.WithBrowser)
+      if ($filesRefusal) { $refusals.Add($filesRefusal) }
+    }
     if ($browser -and $runnerPort -eq $browserPort) {
       $refusals.Add(('-RunnerPort and -BrowserPort are both {0}. Give each its own port.' -f $runnerPort))
     } else {
@@ -469,6 +497,10 @@ function Get-RpaInstallPlan {
     }
     $steps.Add('register the runner task')
     if ($browser) { $steps.Add('register the browser task') } elseif ($upgrade) { $steps.Add('remove the browser task') }
+    # An upgrade without the browser, of an install that had it (or that still holds its token): its token and
+    # certificate go as well (its program files go with the copy).
+    $browserToken = $Facts.DataFiles -and $Facts.DataFiles['browser-token'] -and $Facts.DataFiles['browser-token'].Exists
+    if (-not $browser -and $upgrade -and ($installedBrowser -or $browserToken)) { $steps.Add('remove the browser token and certificate') }
     $steps.Add('write install.json')
     if ($back -and -not $hasPassword) { $steps.Add('keep the supervisor password for automatic sign-in') }
     if ($autoSignIn) {
@@ -524,6 +556,7 @@ function Get-RpaInstallPlan {
   @{
     Refusals = $refusals.ToArray(); Warnings = $warnings.ToArray(); Questions = $questions.ToArray(); Steps = $steps.ToArray()
     AllowFrom = $allowFrom; PublicNetwork = $publicNetwork; Notice = $notice; Unattended = $unattended; IdleSeconds = $idleSeconds
+    Browser = $browser
   }
 }
 

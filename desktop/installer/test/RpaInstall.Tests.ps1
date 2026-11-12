@@ -22,12 +22,13 @@ BeforeAll {
   $script:ModuleSource = (($script:ModuleFiles | ForEach-Object { Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir $_) }) -join "`n") -replace "`r`n", "`n"
   $script:DataDir = 'C:\ProgramData\RPA Runner'
 
-  # Install-Rpa.ps1 -AllowFrom 10.0.0.5 and nothing else.
+  # Install-Rpa.ps1 -AllowFrom 10.0.0.5 -WithBrowser and nothing else. Without -WithBrowser a first install has no
+  # browser (Context 'the browser').
   function New-TestParameters([hashtable]$Change = @{}) {
     $parameters = @{
       User = 'rpa-runner'; UserPassword = $null; RunnerPort = 8765; BrowserPort = 3000
       AllowFrom = @('10.0.0.5'); AllowFromAnyAddress = $false; IncludePublicNetwork = $false
-      NoBrowser = $false; NoFirewall = $false; AutoSignIn = $false; Unattended = $false; IdleSeconds = 15; Force = $false
+      NoBrowser = $false; WithBrowser = $true; NoFirewall = $false; AutoSignIn = $false; Unattended = $false; IdleSeconds = 15; Force = $false
     }
     foreach ($key in $Change.Keys) { $parameters[$key] = $Change[$key] }
     $parameters
@@ -46,7 +47,7 @@ BeforeAll {
   }
 
   # A clean, supported machine: an administrator on 64-bit Windows Server 2022, nothing installed, no such user, no
-  # data directory.
+  # data directory; the package folder holds the browser files of its own version.
   function New-TestFacts([hashtable]$Change = @{}) {
     $facts = @{
       IsAdmin = $true; Is64Bit = $true; OsBuild = 20348
@@ -65,12 +66,13 @@ BeforeAll {
       TaskFolderOwner = $null; PublicNetwork = $false
       AutoSignInPassword = $null; SupervisorPassword = $null; IsServer = $true; RemoteDesktopDenied = $false; RemoteDesktopServiceDisabled = $false; RemoteDesktopPort = 3389; InstalledIdleSeconds = $null; InstalledMode = $null; InstalledSupervisorSecret = $false; InstalledUnattendedChanges = $false
       SupervisorDir = "$($script:DataDir)\supervisor"; SupervisorDirState = New-PathState 'missing'
+      PackageDir = 'C:\Program Files\RPA package\0.3.0\rpa-windows-x64'; PackageVersion = '0.3.0'; BrowserFiles = 'present'; BrowserVersion = '0.3.0'
     }
     foreach ($key in $Change.Keys) { $facts[$key] = $Change[$key] }
     $facts
   }
 
-  # The same machine after Install-Rpa.ps1 -AllowFrom 10.0.0.5 -UserPassword ... ran on it.
+  # The same machine after Install-Rpa.ps1 -AllowFrom 10.0.0.5 -WithBrowser -UserPassword ... ran on it.
   function New-InstalledFacts([hashtable]$Change = @{}) {
     $facts = New-TestFacts @{
       Installed = $true; UserExists = $true; UserSid = $script:BotSid; InstalledUser = 'rpa-runner'; InstalledForUser = $true
@@ -174,6 +176,7 @@ Describe 'Get-RpaInstallPlan' {
       $plan.Steps.Count | Should -Be 0
 
       $parameters.NoBrowser = $true
+      $parameters.WithBrowser = $false
       (Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts)).Refusals.Count | Should -Be 0
     }
 
@@ -777,7 +780,7 @@ Describe 'Get-RpaInstallPlan' {
 
     It 'an upgrade for another user with -NoBrowser removes both tokens and writes the runner token only' {
       $facts = New-InstalledFacts @{ InstalledForUser = $false; UserSid = $script:OtherSid }
-      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ User = 'bot2'; NoBrowser = $true }) -Facts $facts
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ User = 'bot2'; NoBrowser = $true; WithBrowser = $false }) -Facts $facts
       $plan.Questions | Should -BeExactly @('bot2 is not the user this install was made for (rpa-runner).', 'rpa-runner could read the tokens in the data directory, so the runner token is replaced and the browser token removed; the n8n credentials then need the new runner token.')
       $plan.Steps | Should -Contain 'remove the old tokens'
       $plan.Steps | Should -Contain 'write token'
@@ -951,7 +954,7 @@ Describe 'Get-RpaInstallPlan' {
     }
 
     It '-NoBrowser leaves out the browser task, port check and firewall rule' {
-      $parameters = New-TestParameters @{ NoBrowser = $true; UserPassword = New-TestPassword }
+      $parameters = New-TestParameters @{ NoBrowser = $true; WithBrowser = $false; UserPassword = New-TestPassword }
       $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts @{ PortsInUse = @{ 3000 = 'node' } })
       $plan.Refusals.Count | Should -Be 0
       foreach ($step in 'register the browser task', 'add the browser firewall rule', 'write browser-token') { $plan.Steps | Should -Not -Contain $step }
@@ -959,7 +962,7 @@ Describe 'Get-RpaInstallPlan' {
     }
 
     It '-NoBrowser on an upgrade removes the browser task and firewall rule of the earlier install' {
-      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ NoBrowser = $true }) -Facts (New-InstalledFacts)
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ NoBrowser = $true; WithBrowser = $false }) -Facts (New-InstalledFacts)
       $plan.Steps | Should -Contain 'remove the browser firewall rule'
       $plan.Steps | Should -Contain 'remove the browser task'
       foreach ($step in 'register the browser task', 'add the browser firewall rule') { $plan.Steps | Should -Not -Contain $step }
@@ -1006,6 +1009,92 @@ Describe 'Get-RpaInstallPlan' {
       $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-InstalledFacts @{ InstalledAutoSignInForUser = $true })
       $plan.Refusals.Count | Should -Be 0
       @($plan.Steps | Where-Object { $script:SignInSteps -contains $_ }) | Should -BeExactly @('store sign-in password')
+    }
+  }
+
+  # The browser is added with -WithBrowser. An upgrade keeps what the install has; -NoBrowser removes it.
+  Context 'the browser' {
+    BeforeAll {
+      $script:BrowserSteps = @('write browser-token', 'add the browser firewall rule', 'register the browser task')
+      $script:RemoveSteps = @('remove the browser firewall rule', 'remove the browser task', 'remove the browser token and certificate')
+      $script:Missing = 'The browser files are not in C:\Program Files\RPA package\0.3.0\rpa-windows-x64: run Get-Rpa.ps1 -WithBrowser, or unpack rpa-browser-windows-x64.zip into that folder.'
+      $script:KeptMissing = 'This install has the browser, and its files are not in C:\Program Files\RPA package\0.3.0\rpa-windows-x64: run Get-Rpa.ps1 -WithBrowser, unpack rpa-browser-windows-x64.zip into that folder, or remove the browser with -NoBrowser.'
+    }
+
+    It 'a first install without -WithBrowser has no browser: no token, firewall rule, task or port check for it' {
+      $parameters = New-TestParameters @{ WithBrowser = $false; UserPassword = New-TestPassword }
+      $plan = Get-RpaInstallPlan -Parameters $parameters -Facts (New-TestFacts @{ PortsInUse = @{ 3000 = 'node' }; BrowserFiles = 'missing'; BrowserVersion = $null })
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Browser | Should -BeFalse
+      foreach ($step in $script:BrowserSteps + $script:RemoveSteps) { $plan.Steps | Should -Not -Contain $step }
+      foreach ($step in 'write token', 'add the runner firewall rule', 'register the runner task') { $plan.Steps | Should -Contain $step }
+    }
+
+    It 'a first install with -WithBrowser has the browser' {
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ UserPassword = New-TestPassword }) -Facts (New-TestFacts)
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Browser | Should -BeTrue
+      foreach ($step in $script:BrowserSteps) { $plan.Steps | Should -Contain $step }
+    }
+
+    It 'refuses -WithBrowser together with -NoBrowser' {
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ NoBrowser = $true; UserPassword = New-TestPassword }) -Facts (New-TestFacts)
+      $plan.Refusals | Should -BeExactly @('-WithBrowser and -NoBrowser cannot be used together: -WithBrowser adds the browser, -NoBrowser leaves it out or removes it. Choose one.')
+      $plan.Steps.Count | Should -Be 0
+    }
+
+    It '-WithBrowser without the browser files in the package folder is refused before the first step, in one sentence that says how to get them' {
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ UserPassword = New-TestPassword }) -Facts (New-TestFacts @{ BrowserFiles = 'missing'; BrowserVersion = $null })
+      $plan.Refusals | Should -BeExactly @($script:Missing)
+      $plan.Steps.Count | Should -Be 0
+      # The same on an upgrade of an install without the browser, which -WithBrowser adds it to.
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-InstalledFacts @{ InstalledBrowser = $false; BrowserFiles = 'missing'; BrowserVersion = $null })
+      $plan.Refusals | Should -BeExactly @($script:Missing)
+    }
+
+    It 'refuses browser files of another version than the package' {
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ UserPassword = New-TestPassword }) -Facts (New-TestFacts @{ BrowserVersion = '0.2.0' })
+      $plan.Refusals | Should -BeExactly @('The browser files in C:\Program Files\RPA package\0.3.0\rpa-windows-x64 are of version 0.2.0, and the package is version 0.3.0: unpack the rpa-browser-windows-x64.zip of version 0.3.0 into that folder.')
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ WithBrowser = $false }) -Facts (New-InstalledFacts @{ BrowserVersion = '0.2.0' })
+      $plan.Refusals | Should -BeExactly @('This install has the browser, and the browser files in C:\Program Files\RPA package\0.3.0\rpa-windows-x64 are of version 0.2.0, and the package is version 0.3.0: unpack the rpa-browser-windows-x64.zip of version 0.3.0 into that folder, or remove the browser with -NoBrowser.')
+    }
+
+    It 'an upgrade of an install with the browser keeps it without either switch, and then needs its files' {
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ WithBrowser = $false }) -Facts (New-InstalledFacts)
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Browser | Should -BeTrue
+      foreach ($step in 'add the browser firewall rule', 'register the browser task') { $plan.Steps | Should -Contain $step }
+      foreach ($step in $script:RemoveSteps) { $plan.Steps | Should -Not -Contain $step }
+
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ WithBrowser = $false }) -Facts (New-InstalledFacts @{ BrowserFiles = 'missing'; BrowserVersion = $null })
+      $plan.Refusals | Should -BeExactly @($script:KeptMissing)
+      $plan.Steps.Count | Should -Be 0
+    }
+
+    It 'an upgrade of an install without the browser stays without it, and does not ask for its files' {
+      $files = @{ 'policy.json' = New-PathState 'ours'; 'token' = New-PathState 'ours'; 'browser-token' = New-PathState 'missing' }
+      $facts = New-InstalledFacts @{ InstalledBrowser = $false; DataFiles = $files; BrowserFiles = 'missing'; BrowserVersion = $null; PortsInUse = @{ 3000 = 'node' } }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ WithBrowser = $false }) -Facts $facts
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Browser | Should -BeFalse
+      foreach ($step in $script:BrowserSteps + 'remove the browser token and certificate') { $plan.Steps | Should -Not -Contain $step }
+    }
+
+    It '-NoBrowser on an upgrade of an install with the browser removes its task, firewall rule, token and certificate, and does not ask for its files' {
+      $facts = New-InstalledFacts @{ BrowserFiles = 'missing'; BrowserVersion = $null }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ NoBrowser = $true; WithBrowser = $false }) -Facts $facts
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Browser | Should -BeFalse
+      @($plan.Steps | Where-Object { $script:RemoveSteps -contains $_ }) | Should -BeExactly $script:RemoveSteps
+      foreach ($step in $script:BrowserSteps) { $plan.Steps | Should -Not -Contain $step }
+      [array]::IndexOf($plan.Steps, 'remove the browser token and certificate') | Should -BeLessThan ([array]::IndexOf($plan.Steps, 'write install.json'))
+    }
+
+    It 'with -Unattended and without the browser names only the runner port' {
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true; WithBrowser = $false }) -Facts (New-TestFacts @{ PortsInUse = @{ 13000 = 'node' } })
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Notice[1] | Should -BeExactly '  - The service RPA Supervisor (RpaSupervisor.exe, running as SYSTEM, started with Windows) listens on port 8765.'
+      $plan.Notice | Should -Contain '  - The firewall rule for port 8765 lets connections in to the RPA Supervisor instead of the runner.'
     }
   }
 
@@ -1419,7 +1508,7 @@ Describe 'Get-RpaInstallPlan' {
     }
 
     It 'with -NoBrowser names only the runner port' {
-      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true; NoBrowser = $true }) -Facts (New-TestFacts)
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true; NoBrowser = $true; WithBrowser = $false }) -Facts (New-TestFacts)
       $plan.Notice[1] | Should -BeExactly '  - The service RPA Supervisor (RpaSupervisor.exe, running as SYSTEM, started with Windows) listens on port 8765.'
       $plan.Notice[3] | Should -BeExactly '    and signs it out again 15 s after the last connection. The runner listens on 127.0.0.1 only, at port 18765.'
     }
@@ -1444,6 +1533,90 @@ Describe 'Remove-RpaOldTokens' {
         { Remove-RpaOldTokens @{ DataDir = $Root } } | Should -Throw -ExpectedMessage "$token has more than one name (a hard link). Check what it is, remove it, and run the installer again."
         $token | Should -Exist
       }
+    } finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+  }
+}
+
+Describe 'Remove-RpaBrowserData' {
+  It 'removes the browser token, certificate and key, a link in their place as the link itself, and refuses a folder' -Skip:($env:OS -ne 'Windows_NT') {
+    $root = Join-Path ([IO.Path]::GetTempPath()) ('rpa-browser-data-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path (Join-Path $root 'elsewhere') | Out-Null
+    try {
+      InModuleScope RpaInstall -Parameters @{ Root = $root } {
+        param($Root)
+        foreach ($name in 'token', 'browser-token', 'browser-cert.pem', 'browser-key.pem') { Set-Content -LiteralPath (Join-Path $Root $name) -Value 'made up' -NoNewline }
+        Remove-RpaBrowserData @{ DataDir = $Root }
+        foreach ($name in 'browser-token', 'browser-cert.pem', 'browser-key.pem') { Join-Path $Root $name | Should -Not -Exist }
+        Join-Path $Root 'token' | Should -Exist
+        # Nothing there: nothing to do.
+        { Remove-RpaBrowserData @{ DataDir = $Root } } | Should -Not -Throw
+
+        $kept = Join-Path (Join-Path $Root 'elsewhere') 'kept.txt'
+        Set-Content -LiteralPath $kept -Value 'made up' -NoNewline
+        & (Join-Path ([Environment]::SystemDirectory) 'cmd.exe') /d /c ('mklink /J "{0}" "{1}"' -f (Join-Path $Root 'browser-cert.pem'), (Join-Path $Root 'elsewhere')) | Out-Null
+        Remove-RpaBrowserData @{ DataDir = $Root }
+        Join-Path $Root 'browser-cert.pem' | Should -Not -Exist
+        $kept | Should -Exist
+
+        $folder = Join-Path $Root 'browser-key.pem'
+        New-Item -ItemType Directory -Path $folder | Out-Null
+        { Remove-RpaBrowserData @{ DataDir = $Root } } | Should -Throw -ExpectedMessage "$folder is a folder. Check what it is, remove it, and run the installer again."
+      }
+    } finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+  }
+}
+
+Describe 'The browser files of a package' {
+  It 'are present when the package folder holds every file the browser needs, with the version of browser\VERSION' {
+    $root = Join-Path ([IO.Path]::GetTempPath()) ('rpa-browser-package-' + [guid]::NewGuid().ToString('N'))
+    try {
+      $files = InModuleScope RpaInstall { $script:BrowserFiles }
+      foreach ($name in @('VERSION') + $files) {
+        $path = Join-Path $root ($name -replace '\\', [IO.Path]::DirectorySeparatorChar)
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $path) | Out-Null
+        if ($name -like '*VERSION') { Set-Content -LiteralPath $path -Value '0.3.0' } else { Set-Content -LiteralPath $path -Value 'made up' }
+      }
+      Set-Content -LiteralPath (Join-Path (Join-Path $root 'browser') 'VERSION') -Value '0.2.0'
+      $facts = InModuleScope RpaInstall -Parameters @{ Root = $root } { param($Root) Get-RpaBrowserPackageFacts $Root }
+      $facts.PackageDir | Should -BeExactly $root
+      $facts.PackageVersion | Should -BeExactly '0.3.0'
+      $facts.BrowserFiles | Should -BeExactly 'present'
+      $facts.BrowserVersion | Should -BeExactly '0.2.0'
+
+      Remove-Item -LiteralPath (Join-Path (Join-Path $root 'scripts') 'start-browser.ps1')
+      $facts = InModuleScope RpaInstall -Parameters @{ Root = $root } { param($Root) Get-RpaBrowserPackageFacts $Root }
+      $facts.BrowserFiles | Should -BeExactly 'missing'
+      $facts.BrowserVersion | Should -BeNullOrEmpty
+    } finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+  }
+
+  It 'the installer needs the same files that the browser package holds' {
+    $files = InModuleScope RpaInstall { $script:BrowserFiles }
+    $files | Should -Contain 'browser\VERSION'
+    $files | Should -Contain 'scripts\start-browser.ps1'
+    @($files | Where-Object { $_ -notlike 'browser\*' -and $_ -ne 'scripts\start-browser.ps1' }).Count | Should -Be 0
+  }
+}
+
+Describe 'Copy-RpaProgramFiles' {
+  It 'without the browser copies no browser file and removes the one an earlier install left; with it copies them' -Skip:($env:OS -ne 'Windows_NT') {
+    $root = Join-Path ([IO.Path]::GetTempPath()) ('rpa-copy-' + [guid]::NewGuid().ToString('N'))
+    $source = Join-Path $root 'package'
+    $target = Join-Path $root 'install'
+    try {
+      foreach ($name in 'VERSION', 'runner\RpaRunner.exe', 'scripts\start-runner.ps1', 'scripts\start-browser.ps1', 'browser\node.exe') {
+        $path = Join-Path $source $name
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $path) | Out-Null
+        Set-Content -LiteralPath $path -Value 'made up'
+      }
+      InModuleScope RpaInstall -Parameters @{ Source = $source; Target = $target } { param($Source, $Target) Copy-RpaProgramFiles $Source $Target $true }
+      Join-Path $target 'browser\node.exe' | Should -Exist
+      Join-Path $target 'scripts\start-browser.ps1' | Should -Exist
+      InModuleScope RpaInstall -Parameters @{ Source = $source; Target = $target } { param($Source, $Target) Copy-RpaProgramFiles $Source $Target $false }
+      Join-Path $target 'browser' | Should -Not -Exist
+      Join-Path $target 'scripts\start-browser.ps1' | Should -Not -Exist
+      Join-Path $target 'scripts\start-runner.ps1' | Should -Exist
+      Join-Path $target 'runner\RpaRunner.exe' | Should -Exist
     } finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
   }
 }
@@ -1578,7 +1751,7 @@ Describe 'Invoke-RpaInstallPlan' {
   Context 'the files a package must hold' {
     BeforeAll {
       $script:Needed = @('VERSION', 'runner\RpaRunner.exe', 'runner\RpaPolicy.exe', 'runner\RpaSupervisor.exe', 'recorder\RpaRecorder.exe', 'scripts\start-loop.ps1', 'scripts\start-runner.ps1', 'scripts\Show-RpaConnection.ps1', 'rpa.cmd', 'scripts\rpa.ps1')
-      $script:BrowserNeeded = @('browser\node.exe', 'browser\host\host.mjs', 'browser\host\run-server.mjs', 'browser\gate\gate.mjs', 'browser\node_modules\playwright\cli.js', 'scripts\start-browser.ps1')
+      $script:BrowserNeeded = @('browser\VERSION', 'browser\node.exe', 'browser\host\host.mjs', 'browser\host\run-server.mjs', 'browser\gate\gate.mjs', 'browser\node_modules\playwright\cli.js', 'scripts\start-browser.ps1')
       # Invoke-RpaInstallPlan reads these; elsewhere than on Windows they are not set.
       $script:Places = @{ ProgramFiles = $env:ProgramFiles; ProgramData = $env:ProgramData; ComputerName = $env:COMPUTERNAME }
       if (-not $env:ProgramFiles) { $env:ProgramFiles = Join-Path $TestDrive 'Program Files' }
@@ -3841,9 +4014,21 @@ Describe 'The installer scripts' {
     $source = Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir 'Install-Rpa.ps1')
     $said = $source.IndexOf("if (`$plan.Steps -contains 'remove the old tokens') {")
     $said | Should -BeGreaterThan $source.IndexOf("Write-Host 'RPA is installed.'")
-    $source.IndexOf("  if (`$NoBrowser) { Write-Host 'The runner token is new and the browser token is removed: the earlier bot user could read them.' }", $said) | Should -BeGreaterThan $said
+    $source.IndexOf("  if (-not `$browser) { Write-Host 'The runner token is new and the browser token is removed: the earlier bot user could read them.' }", $said) | Should -BeGreaterThan $said
     $source.IndexOf("  else { Write-Host 'Both tokens are new: the earlier bot user could read the old ones.' }", $said) | Should -BeGreaterThan $said
     $source.IndexOf("  Write-Host ('Update the n8n credentials with the new tokens, which & `"{0}`" connection -ShowTokens shows.' -f `$rpa)", $said) | Should -BeGreaterThan $said
+  }
+
+  # -WithBrowser, -NoBrowser and the install decide whether it has the browser; the plan says which, from the facts
+  # about the package folder too, and the steps and the closing lines follow the plan.
+  It 'Install-Rpa.ps1 gives the facts the package folder, and hands the plan''s browser on to the steps' {
+    $source = Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir 'Install-Rpa.ps1')
+    $source | Should -Match ([regex]::Escape('(Get-RpaMachineFacts -Parameters $parameters -SourceDir $package)'))
+    $handed = $source.IndexOf('$parameters.NoBrowser = -not $browser')
+    $handed | Should -BeGreaterThan $source.IndexOf('$browser = [bool]$plan.Browser')
+    $handed | Should -BeLessThan $source.IndexOf('Invoke-RpaInstallPlan -Plan $plan')
+    # The closing lines say what the plan decided, not what was typed.
+    $source.Substring($source.IndexOf("Write-Host 'RPA is installed.'")) | Should -Not -Match '\$NoBrowser|\$WithBrowser'
   }
 
   It 'says that it is checking before it reads the files of a package' {
@@ -3995,6 +4180,24 @@ Describe 'Get-Rpa.ps1' {
       [IO.File]::WriteAllText($zip + '.sha256', ('{0}  rpa-windows-x64.zip' -f $Sha256))
       @{ Zip = $zip; Sha = $zip + '.sha256'; Hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant() }
     }
+    # The browser package's zip: browser\VERSION, a browser file and the start script, at the top (it is unpacked into
+    # the package folder), and whatever -Entries adds.
+    function New-TestBrowserZip([string]$Version = '0.3.0', [string[]]$Entries = @(), [string]$Sha256) {
+      $folder = Join-Path $script:GetRoot ('zip-' + [guid]::NewGuid().ToString('N'))
+      New-Item -ItemType Directory -Path $folder | Out-Null
+      $zip = Join-Path $folder 'rpa-browser-windows-x64.zip'
+      $archive = [IO.Compression.ZipFile]::Open($zip, 'Create')
+      try {
+        foreach ($entry in @('browser/VERSION', 'browser/node.exe', 'scripts/start-browser.ps1') + $Entries) {
+          $writer = New-Object IO.StreamWriter ($archive.CreateEntry($entry).Open())
+          try { if ($entry -like '*VERSION') { $writer.Write($Version + "`r`n") } else { $writer.Write("'made up'") } } finally { $writer.Dispose() }
+        }
+      } finally { $archive.Dispose() }
+      if (-not $Sha256) { $Sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant() }
+      [IO.File]::WriteAllText($zip + '.sha256', ('{0}  rpa-browser-windows-x64.zip' -f $Sha256))
+      $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()
+      @{ Zip = $zip; Sha = $zip + '.sha256'; Hash = $hash; Spec = @{ ZipPath = $zip; ShaPath = $zip + '.sha256'; Named = '' } }
+    }
     $script:NoAttestation = { param($Zip, $Version) $null }
     $script:Other = 'ab' * 32
   }
@@ -4014,16 +4217,18 @@ Describe 'Get-Rpa.ps1' {
     $source = (Get-Content -Raw -LiteralPath $script:GetRpa) -replace "`r`n", "`n"
     ([regex]::Matches($source, "(?m)^\`$Version = ''$")).Count | Should -Be 1
     ([regex]::Matches($source, "(?m)^\`$PackageSha256 = ''$")).Count | Should -Be 1
-    @([regex]::Matches($source, 'Invoke-WebRequest')).Count | Should -Be 2
-    @([regex]::Matches($source, 'Invoke-WebRequest -UseBasicParsing -Uri \(Get-RpaDownloadUrl \$Version ')).Count | Should -Be 2
+    ([regex]::Matches($source, "(?m)^\`$BrowserPackageSha256 = ''$")).Count | Should -Be 1
+    # The zip and its .sha256, and the browser zip and its .sha256: all from the release.
+    @([regex]::Matches($source, 'Invoke-WebRequest')).Count | Should -Be 4
+    @([regex]::Matches($source, 'Invoke-WebRequest -UseBasicParsing -Uri \(Get-RpaDownloadUrl \$Version ')).Count | Should -Be 4
   }
 
-  It 'takes the parameters of Install-Rpa.ps1, with their types and checks, and two of its own' {
+  It 'takes the parameters of Install-Rpa.ps1, with their types and checks, and three of its own' {
     $own = [Management.Automation.Language.Parser]::ParseFile($script:GetRpa, [ref]$null, [ref]$null).ParamBlock.Parameters
     $installer = [Management.Automation.Language.Parser]::ParseFile((Join-Path $script:InstallerDir 'Install-Rpa.ps1'), [ref]$null, [ref]$null).ParamBlock.Parameters
     $texts = @($own | ForEach-Object { $_.Extent.Text })
     foreach ($parameter in $installer) { $texts | Should -Contain $parameter.Extent.Text }
-    @($own | ForEach-Object { $_.Name.VariablePath.UserPath } | Where-Object { @($installer | ForEach-Object { $_.Name.VariablePath.UserPath }) -notcontains $_ }) | Should -BeExactly @('Zip', 'RequireAttestation')
+    @($own | ForEach-Object { $_.Name.VariablePath.UserPath } | Where-Object { @($installer | ForEach-Object { $_.Name.VariablePath.UserPath }) -notcontains $_ }) | Should -BeExactly @('Zip', 'BrowserZip', 'RequireAttestation')
   }
 
   It 'passes on to Install-Rpa.ps1 exactly what it was given, a password as the same SecureString, and -Unattended:$false as given' {
@@ -4032,10 +4237,10 @@ Describe 'Get-Rpa.ps1' {
     $installerBlock = [Management.Automation.Language.Parser]::ParseFile((Join-Path $script:InstallerDir 'Install-Rpa.ps1'), [ref]$null, [ref]$null).ParamBlock.Extent.Text
     $fake = [scriptblock]::Create("[CmdletBinding()]`n$installerBlock`n" + '$PSBoundParameters.Keys | Sort-Object | ForEach-Object { "{0}={1}" -f $_, (@($PSBoundParameters[$_]) -join ",") }; if ($UserPassword) { [object]::ReferenceEquals($UserPassword, $script:Secure) }')
     $script:Secure = New-Object Security.SecureString
-    $bound = & $capture -AllowFrom 10.0.0.5, 10.0.0.6 -Unattended:$false -UserPassword $script:Secure -IdleSeconds 30 -Zip 'C:\x.zip' -RequireAttestation -Force
+    $bound = & $capture -AllowFrom 10.0.0.5, 10.0.0.6 -Unattended:$false -UserPassword $script:Secure -IdleSeconds 30 -Zip 'C:\x.zip' -BrowserZip 'C:\b.zip' -WithBrowser -RequireAttestation -Force
     $arguments = Get-RpaInstallArguments $bound
-    @($arguments.Keys | Sort-Object) | Should -BeExactly @('AllowFrom', 'Force', 'IdleSeconds', 'Unattended', 'UserPassword')
-    & $fake @arguments | Should -BeExactly @('AllowFrom=10.0.0.5,10.0.0.6', 'Force=True', 'IdleSeconds=30', 'Unattended=False', 'UserPassword=System.Security.SecureString', 'True')
+    @($arguments.Keys | Sort-Object) | Should -BeExactly @('AllowFrom', 'Force', 'IdleSeconds', 'Unattended', 'UserPassword', 'WithBrowser')
+    & $fake @arguments | Should -BeExactly @('AllowFrom=10.0.0.5,10.0.0.6', 'Force=True', 'IdleSeconds=30', 'Unattended=False', 'UserPassword=System.Security.SecureString', 'WithBrowser=True', 'True')
     # Nothing given, nothing passed: Install-Rpa.ps1 keeps its own defaults.
     (Get-RpaInstallArguments (& $capture)).Count | Should -Be 0
   }
@@ -4049,6 +4254,27 @@ Describe 'Get-Rpa.ps1' {
     Get-RpaPublishedHash ('{0}  rpa-windows-x64.zip' -f ('AB' * 32)) | Should -BeExactly ('ab' * 32)
     Get-RpaPublishedHash ("{0} *rpa-windows-x64.zip`r`nmore" -f ('ab' * 32)) | Should -BeExactly ('ab' * 32)
     foreach ($bad in '', 'abc  rpa-windows-x64.zip', ('{0}0  rpa-windows-x64.zip' -f ('ab' * 32)), ('  {0}' -f ('ab' * 32)), ('g' * 64)) { Get-RpaPublishedHash $bad | Should -BeNullOrEmpty }
+  }
+
+  It 'gets the browser zip with -WithBrowser, or for an install that has the browser unless -NoBrowser, and says what -Zip then needs' {
+    $both = '-WithBrowser and -NoBrowser cannot be used together: -WithBrowser adds the browser, -NoBrowser leaves it out or removes it. Choose one.'
+    # -WithBrowser, -NoBrowser, -Zip, -BrowserZip, the install has the browser: Get, Refusal.
+    foreach ($case in @(
+        ,@($false, $false, '', '', $false, $false, $null)
+        ,@($true, $false, '', '', $false, $true, $null)
+        ,@($false, $false, '', '', $true, $true, $null)
+        ,@($false, $true, '', '', $true, $false, $null)
+        ,@($true, $true, '', '', $false, $false, $both)
+        ,@($true, $false, 'C:\x.zip', 'C:\b.zip', $false, $true, $null)
+        ,@($true, $false, 'C:\x.zip', '', $false, $true, '-Zip with -WithBrowser needs -BrowserZip <path>: the path of rpa-browser-windows-x64.zip, with its .sha256 file beside it.')
+        ,@($false, $false, 'C:\x.zip', '', $true, $true, 'This install has the browser, so -Zip needs -BrowserZip <path> too: the path of rpa-browser-windows-x64.zip, with its .sha256 file beside it. Or remove the browser with -NoBrowser.')
+        ,@($false, $true, 'C:\x.zip', '', $true, $false, $null)
+        ,@($true, $false, '', 'C:\b.zip', $false, $true, '-BrowserZip goes with -Zip. Without -Zip, Get-Rpa.ps1 downloads the browser zip from the release.')
+        ,@($false, $false, 'C:\x.zip', 'C:\b.zip', $false, $false, '-BrowserZip is for an install with the browser. Add -WithBrowser, or leave -BrowserZip out.')
+      )) {
+      $choice = Get-RpaBrowserChoice $case[0] $case[1] $case[2] $case[3] $case[4]
+      "$($case[0..4] -join ' ') -> $($choice.Get) $($choice.Refusal)" | Should -BeExactly "$($case[0..4] -join ' ') -> $($case[5]) $($case[6])"
+    }
   }
 
   # The last check before the installer starts, on the unpacked folder first, then on each folder above it. Both cases
@@ -4128,6 +4354,47 @@ Describe 'Get-Rpa.ps1' {
       if ($env:OS -eq 'Windows_NT') { (Expand-RpaPackage $zip.Zip $zip.Sha '' '' $root $swap).Version | Should -BeExactly '0.3.0' }
       $source = Get-Content -Raw -LiteralPath $script:GetRpa
       $source | Should -Match ([regex]::Escape("[IO.File]::Open(`$ZipPath, 'Open', 'Read', 'Read')"))
+    }
+
+    It 'with the browser zip, unpacks it into the package folder, and asks the attestation of each zip by its name' {
+      $zip = New-TestZip 'rpa-windows-x64.zip'
+      $browser = New-TestBrowserZip
+      $root = Join-Path $script:GetRoot 'browser-ok'
+      $script:Asked = @()
+      $record = { param($Zip, $Version, $Named, $Name) $script:Asked += '{0} {1} {2} {3}' -f $Zip, $Version, $Named, $Name; $null }
+      $spec = $browser.Spec
+      $spec.Named = $browser.Hash
+      $result = Expand-RpaPackage $zip.Zip $zip.Sha '' '' $root $record $spec
+      $result.BrowserHash | Should -BeExactly $browser.Hash
+      Join-Path $result.Package 'Install-Rpa.ps1' | Should -Exist
+      Join-Path (Join-Path $result.Package 'browser') 'node.exe' | Should -Exist
+      Join-Path (Join-Path $result.Package 'scripts') 'start-browser.ps1' | Should -Exist
+      $script:Asked | Should -BeExactly @(('{0} 0.3.0 False rpa-windows-x64.zip' -f $zip.Zip), ('{0} 0.3.0 True rpa-browser-windows-x64.zip' -f $browser.Zip))
+    }
+
+    It 'stops before anything is unpacked when the browser zip <Why>' -ForEach @(
+      @{ Why = 'has another SHA-256 than the one beside it'; Version = '0.3.0'; Sha256 = 'cd' * 32; Entries = @(); Named = ''; Expected = 'The SHA-256 of {0} is {1}, and {2} says {3}: the zip is not the file published beside it. Nothing was unpacked: do not use this zip.' }
+      @{ Why = 'has another SHA-256 than the one the script names'; Version = '0.3.0'; Sha256 = ''; Entries = @(); Named = 'ab' * 32; Expected = 'The SHA-256 of {0} is {1}, and this Get-Rpa.ps1 of release 0.3.0 names {4}. Nothing was unpacked: do not use this zip.' }
+      @{ Why = 'holds an entry outside browser\'; Version = '0.3.0'; Sha256 = ''; Entries = @('scripts/start-runner.ps1'); Named = ''; Expected = '{0} holds scripts/start-runner.ps1, which is not inside browser\ nor scripts\start-browser.ps1. Nothing was unpacked: do not use this zip.' }
+      @{ Why = 'holds an entry that climbs out'; Version = '0.3.0'; Sha256 = ''; Entries = @('browser/../../evil.ps1'); Named = ''; Expected = '{0} holds browser/../../evil.ps1, which is not inside browser\ nor scripts\start-browser.ps1. Nothing was unpacked: do not use this zip.' }
+      @{ Why = 'is of another version'; Version = '0.2.0'; Sha256 = ''; Entries = @(); Named = ''; Expected = '{0} holds the browser of version 0.2.0, and {5} is version 0.3.0. Nothing was unpacked.' }
+    ) {
+      $zip = New-TestZip 'rpa-windows-x64.zip'
+      $browser = New-TestBrowserZip -Version $Version -Entries $Entries -Sha256 $Sha256
+      $spec = $browser.Spec
+      $spec.Named = $Named
+      $root = Join-Path $script:GetRoot ('browser-stop-' + [guid]::NewGuid().ToString('N'))
+      { Expand-RpaPackage $zip.Zip $zip.Sha '' '0.3.0' $root $script:NoAttestation $spec } | Should -Throw -ExpectedMessage ($Expected -f $browser.Zip, $browser.Hash, $browser.Sha, $Sha256, $Named, $zip.Zip)
+      Test-Path -LiteralPath $root | Should -BeFalse
+    }
+
+    It 'stops before anything is unpacked when the attestation check refuses the browser zip' {
+      $zip = New-TestZip 'rpa-windows-x64.zip'
+      $browser = New-TestBrowserZip
+      $root = Join-Path $script:GetRoot 'browser-attest'
+      $refuse = { param($Zip, $Version, $Named, $Name) if ($Name -eq 'rpa-browser-windows-x64.zip') { 'made-up refusal.' } }
+      { Expand-RpaPackage $zip.Zip $zip.Sha '' '' $root $refuse $browser.Spec } | Should -Throw -ExpectedMessage 'made-up refusal. Nothing was unpacked.'
+      Test-Path -LiteralPath $root | Should -BeFalse
     }
   }
 
@@ -4223,8 +4490,16 @@ public static class Program {
       (Test-RpaAttestation $script:FakeGh 'ready' 'C:\x\rpa-windows-x64.zip' '0.3.0' $false $false).Refusal | Should -BeExactly 'gh attestation verify did not accept C:\x\rpa-windows-x64.zip (exit code 1): made-up verify output'
     }
 
-    It 'asks for the attestation when the script names no SHA-256' {
-      (Get-Content -Raw -LiteralPath $script:GetRpa) | Should -Match ([regex]::Escape("Test-RpaAttestation `$gh `$ghState '' `$Version ([bool]`$RequireAttestation) ([bool]`$PackageSha256)"))
+    It 'asks for the attestation when the script names no SHA-256, for each zip' {
+      $source = Get-Content -Raw -LiteralPath $script:GetRpa
+      $source | Should -Match ([regex]::Escape("Test-RpaAttestation `$gh `$ghState '' `$Version ([bool]`$RequireAttestation) ([bool]`$PackageSha256)"))
+      $source | Should -Match ([regex]::Escape("Test-RpaAttestation `$gh `$ghState '' `$Version ([bool]`$RequireAttestation) ([bool]`$BrowserPackageSha256) (`$BrowserPackageName + '.zip')"))
+      $source | Should -Match ([regex]::Escape("@{ ZipPath = `$browserZipPath; ShaPath = `$browserZipPath + '.sha256'; Named = `$BrowserPackageSha256 }"))
+    }
+
+    It 'names the browser zip in the command that checks its attestation elsewhere' {
+      $result = Test-RpaAttestation 'C:\no-gh.exe' 'missing' 'C:\x\rpa-browser-windows-x64.zip' '0.3.0' $false $true 'rpa-browser-windows-x64.zip'
+      $result.Line | Should -Match ([regex]::Escape('To check it on a machine with gh: gh attestation verify rpa-browser-windows-x64.zip --repo jb-n8n/n8n-nodes-rpa'))
     }
 
     It 'stops before the download when -RequireAttestation cannot be met, and otherwise checks before the unpack' {
@@ -4242,22 +4517,38 @@ public static class Program {
       . ([scriptblock]::Create($function[0].Extent.Text))
     }
 
-    It 'writes the version and the SHA-256 of the zip into the Get-Rpa.ps1 it publishes, and changes nothing else' {
+    It 'writes the version and the SHA-256 of each zip into the Get-Rpa.ps1 it publishes, and changes nothing else' {
       $source = Get-Content -Raw -LiteralPath $script:GetRpa
       $hash = 'ab' * 32
-      $made = Get-ReleaseGetRpa $source '0.3.0' $hash
-      $made | Should -BeExactly ($source.Replace("`$Version = ''", "`$Version = '0.3.0'").Replace("`$PackageSha256 = ''", "`$PackageSha256 = '$hash'"))
+      $browserHash = 'cd' * 32
+      $made = Get-ReleaseGetRpa $source '0.3.0' $hash $browserHash
+      $made | Should -BeExactly ($source.Replace("`$Version = ''", "`$Version = '0.3.0'").Replace("`$PackageSha256 = ''", "`$PackageSha256 = '$hash'").Replace("`$BrowserPackageSha256 = ''", "`$BrowserPackageSha256 = '$browserHash'"))
       $made | Should -Not -BeExactly $source
-      { Get-ReleaseGetRpa ($source.Replace("`$Version = ''", '')) '0.3.0' $hash } | Should -Throw -ExpectedMessage "Get-Rpa.ps1 does not hold the line `$Version = '' exactly once."
-      { Get-ReleaseGetRpa $source '0.3' $hash } | Should -Throw
-      { Get-ReleaseGetRpa $source '0.3.0' 'abc' } | Should -Throw
+      { Get-ReleaseGetRpa ($source.Replace("`$Version = ''", '')) '0.3.0' $hash $browserHash } | Should -Throw -ExpectedMessage "Get-Rpa.ps1 does not hold the line `$Version = '' exactly once."
+      { Get-ReleaseGetRpa ($source.Replace("`$BrowserPackageSha256 = ''", '')) '0.3.0' $hash $browserHash } | Should -Throw -ExpectedMessage "Get-Rpa.ps1 does not hold the line `$BrowserPackageSha256 = '' exactly once."
+      { Get-ReleaseGetRpa $source '0.3' $hash $browserHash } | Should -Throw
+      { Get-ReleaseGetRpa $source '0.3.0' 'abc' $browserHash } | Should -Throw
+      { Get-ReleaseGetRpa $source '0.3.0' $hash '' } | Should -Throw
     }
 
-    It 'puts rpa.cmd and scripts\rpa.ps1 into the package, and Get-Rpa.ps1 beside the zip' {
+    It 'puts rpa.cmd and scripts\rpa.ps1 into the package, and Get-Rpa.ps1 beside the zips' {
       $source = Get-Content -Raw -LiteralPath $script:Stage
       $source | Should -Match ([regex]::Escape("'RpaInstall.SignIn.ps1', 'RpaInstall.Machine.ps1', 'rpa.cmd') `$stage"))
       $source | Should -Match ([regex]::Escape("'Show-RpaConnection.ps1', 'rpa.ps1') (Join-Path `$stage 'scripts')"))
-      $source | Should -Match ([regex]::Escape("Get-ReleaseGetRpa (Get-Content -Raw -LiteralPath (Join-Path `$installer 'Get-Rpa.ps1')) `$version `$hash"))
+      $source | Should -Match ([regex]::Escape("Get-ReleaseGetRpa (Get-Content -Raw -LiteralPath (Join-Path `$installer 'Get-Rpa.ps1')) `$version `$hash `$browserHash"))
+    }
+
+    # The browser's files go into the browser package only, laid out to be unpacked into the package folder.
+    It 'puts the browser, its version and its start script into the browser package, and nothing of them into the package' {
+      $source = Get-Content -Raw -LiteralPath $script:Stage
+      $source | Should -Match ([regex]::Escape("`$browser = Join-Path `$browserStage 'browser'"))
+      $source | Should -Match ([regex]::Escape("[IO.File]::WriteAllText((Join-Path `$browser 'VERSION'), `$version"))
+      $source | Should -Match ([regex]::Escape("Copy-Named (Join-Path `$installer 'scripts') @('start-browser.ps1') (Join-Path `$browserStage 'scripts')"))
+      $source | Should -Not -Match "Join-Path \`$stage 'browser'"
+      @([regex]::Matches($source, "'start-browser\.ps1'")).Count | Should -Be 1
+      $source | Should -Match ([regex]::Escape("CreateFromDirectory(`$stage, `$zip, [IO.Compression.CompressionLevel]::Optimal, `$true)"))
+      $source | Should -Match ([regex]::Escape("CreateFromDirectory(`$browserStage, `$browserZip, [IO.Compression.CompressionLevel]::Optimal, `$false)"))
+      $source | Should -Match ([regex]::Escape("`$BrowserPackageName = 'rpa-browser-windows-x64'"))
     }
   }
 }

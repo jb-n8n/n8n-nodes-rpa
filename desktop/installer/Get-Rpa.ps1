@@ -1,7 +1,8 @@
 # Gets the RPA Windows package of the release this file is published with, checks it, unpacks it and starts its
 # installer. Run it from an administrator Windows PowerShell (powershell.exe, 64-bit):
 #
-#   .\Get-Rpa.ps1 -AllowFrom <n8n address> [-RequireAttestation] [-Zip <path>] [the other parameters of Install-Rpa.ps1]
+#   .\Get-Rpa.ps1 -AllowFrom <n8n address> [-RequireAttestation] [-Zip <path> [-BrowserZip <path>]]
+#                 [the other parameters of Install-Rpa.ps1, -WithBrowser among them]
 #
 # What it does, each step said in one line, and stopping with the reason when a check fails:
 #   1. Checks that it runs in a 64-bit Windows PowerShell 5.1 as an administrator, on Windows 10 1809, Windows 11 or
@@ -11,9 +12,13 @@
 #      jb-n8n/n8n-nodes-rpa into <your profile>\Downloads\rpa-<version>. The address is written in this script, and the
 #      version and the zip's SHA-256 are written into it when the release is made. With -Zip <path> it takes a zip that
 #      is there already, as it is, and the .sha256 file beside it (<path>.sha256).
-#   3. Opens the zip once, so that nobody can change it until the unpack has finished, and compares its SHA-256 with
-#      the .sha256 file and with the one this script names. A difference stops it before anything is unpacked.
-#   4. Checks the build attestation of the zip with the GitHub CLI when C:\Program Files\GitHub CLI\gh.exe is
+#      With the browser (-WithBrowser, or an upgrade of an install that has the browser, without -NoBrowser) it gets
+#      rpa-browser-windows-x64.zip and its .sha256 the same way, from the same release; the release writes that zip's
+#      SHA-256 into this script too. With -Zip it needs -BrowserZip <path>, the browser zip beside its .sha256 file.
+#   3. Opens the zip (and the browser zip) once, so that nobody can change it until the unpack has finished, and
+#      compares its SHA-256 with the .sha256 file and with the one this script names. A difference stops it before
+#      anything is unpacked.
+#   4. Checks the build attestation of each zip with the GitHub CLI when C:\Program Files\GitHub CLI\gh.exe is
 #      installed and signed in, as docs/install/windows.md does: the workflow desktop-release.yml of
 #      jb-n8n/n8n-nodes-rpa attested it, for the tag desktop-v<version>. A failed check stops it. Where gh is not
 #      installed or not signed in, the attestation is NOT checked: it says so in one line, with the command that checks
@@ -21,16 +26,18 @@
 #      still have the SHA-256 of the .sha256 file and the one this script names. With -RequireAttestation the check is
 #      mandatory: without a signed-in gh it stops before it downloads anything. A copy that names no SHA-256 (the
 #      repository's own, run with -Zip) has only the .sha256 file beside the zip, from the same place, so there the
-#      check is always mandatory.
+#      check is always mandatory, for each zip it names no SHA-256 for.
 #   5. Unpacks into C:\Program Files\RPA package\<version>, a new folder that takes the access rules of Program Files
 #      (only administrators can change it), refusing an entry outside rpa-windows-x64\, and a folder that is there
-#      already. Then it checks that no account other than Administrators, SYSTEM, TrustedInstaller and you can change
-#      that folder, or delete or rename it or a folder above it, and unblocks the files.
+#      already. The browser zip goes into the package folder rpa-windows-x64\, refusing an entry outside browser\ and
+#      scripts\start-browser.ps1, and a browser zip of another version (its browser\VERSION). Both zips are checked
+#      before either is unpacked. Then it checks that no account other than Administrators, SYSTEM, TrustedInstaller
+#      and you can change that folder, or delete or rename it or a folder above it, and unblocks the files.
 #   6. Starts rpa-windows-x64\Install-Rpa.ps1 from there, in this PowerShell, with the parameters it was given (a
 #      -UserPassword as the same SecureString). The installer then checks the package itself, as it always does.
 #
 # What it trusts: this script itself (check it before you run it: it prints its own SHA-256 first); the GitHub Release
-# for the .sha256 file (the hash shows only that the zip is the file published beside it); the attestation, when gh
+# for the .sha256 files (the hash shows only that a zip is the file published beside it); the attestation, when gh
 # checked it (otherwise nothing shows that this project's release workflow built the zip); Windows PowerShell and gh.exe
 # at their places under Windows and Program Files. It changes nothing on the machine before step 5, and nothing outside
 # the download folder and C:\Program Files\RPA package before the installer starts. Exit codes: those of Install-Rpa.ps1
@@ -38,6 +45,7 @@
 [CmdletBinding()]
 param(
   [string]$Zip,
+  [string]$BrowserZip,
   [switch]$RequireAttestation,
   # The parameters of Install-Rpa.ps1, passed on as they were given (a test compares the two).
   [ValidateNotNullOrEmpty()][string]$User = 'rpa-runner',
@@ -48,6 +56,7 @@ param(
   [switch]$AllowFromAnyAddress,
   [switch]$IncludePublicNetwork,
   [switch]$NoBrowser,
+  [switch]$WithBrowser,
   [switch]$NoFirewall,
   [switch]$AutoSignIn,
   [switch]$Unattended,
@@ -59,10 +68,12 @@ $ErrorActionPreference = 'Stop'
 # Written into the published copy when the release is made (build\Stage.ps1); empty in the repository.
 $Version = ''
 $PackageSha256 = ''
+$BrowserPackageSha256 = ''
 $Repository = 'jb-n8n/n8n-nodes-rpa'
 $PackageName = 'rpa-windows-x64'
+$BrowserPackageName = 'rpa-browser-windows-x64'
 # Install-Rpa.ps1's parameters, in its order: what is passed on, and how it is shown.
-$InstallParameters = @('User', 'UserPassword', 'RunnerPort', 'BrowserPort', 'AllowFrom', 'AllowFromAnyAddress', 'IncludePublicNetwork', 'NoBrowser', 'NoFirewall', 'AutoSignIn', 'Unattended', 'IdleSeconds', 'Force')
+$InstallParameters = @('User', 'UserPassword', 'RunnerPort', 'BrowserPort', 'AllowFrom', 'AllowFromAnyAddress', 'IncludePublicNetwork', 'NoBrowser', 'WithBrowser', 'NoFirewall', 'AutoSignIn', 'Unattended', 'IdleSeconds', 'Force')
 
 # A path the person typed, as a full path: a relative one is resolved against PowerShell's current location (not the
 # process's folder, which .NET uses and which is not where the person is), as the file system would read what was
@@ -108,53 +119,95 @@ function Format-RpaInstallArguments($Arguments) {
   $parts -join ' '
 }
 
+# The SHA-256 of what -Stream holds, read from its start, after it is compared with the .sha256 file -ShaPath and with
+# -Named (when the script names one): a difference stops it.
+function Get-RpaCheckedHash($Stream, [string]$ZipPath, [string]$ShaPath, [string]$Named, [string]$Version) {
+  $sha256 = [Security.Cryptography.SHA256]::Create()
+  try { $hash = (($sha256.ComputeHash($Stream) | ForEach-Object { $_.ToString('x2') }) -join '') } finally { $sha256.Dispose() }
+  $published = Get-RpaPublishedHash ([IO.File]::ReadAllText($ShaPath))
+  if (-not $published) { throw ('{0} does not start with a SHA-256 (64 hexadecimal digits). Nothing was unpacked.' -f $ShaPath) }
+  if ($hash -ne $published) { throw ('The SHA-256 of {0} is {1}, and {2} says {3}: the zip is not the file published beside it. Nothing was unpacked: do not use this zip.' -f $ZipPath, $hash, $ShaPath, $published) }
+  if ($Named -and $hash -ne $Named) { throw ('The SHA-256 of {0} is {1}, and this Get-Rpa.ps1 of release {2} names {3}. Nothing was unpacked: do not use this zip.' -f $ZipPath, $hash, $Version, $Named) }
+  $Stream.Position = 0
+  $hash
+}
+
+# The text of a zip entry, trimmed (a VERSION file), or nothing when the zip has no entry of that name (with / or \).
+function Read-RpaZipText($Archive, [string]$Name) {
+  $entry = $Archive.GetEntry($Name)
+  if (-not $entry) { $entry = $Archive.GetEntry($Name.Replace('/', '\')) }
+  if (-not $entry) { return $null }
+  $reader = New-Object IO.StreamReader ($entry.Open())
+  try { $reader.ReadToEnd().Trim() } finally { $reader.Dispose() }
+}
+
+# Whether a zip entry's name stays inside where it is unpacked: no drive, no .. part.
+function Test-RpaEntryName([string]$Name) {
+  -not $Name.Contains(':') -and @($Name.Split('/') | Where-Object { $_ -eq '..' }).Count -eq 0
+}
+
 # Checks the zip and unpacks it into <Root>\<version>: through one handle that lets others read the zip but not change
 # it, the SHA-256 is compared with -ShaPath's and with -Named (when the script names one), -Attest is asked (with the
-# zip's path and version; it returns a refusal or nothing), and every entry must be inside rpa-windows-x64\. Any of
-# these stops it with the reason before the folder is made. Returns the version, the SHA-256 and the package folder.
-function Expand-RpaPackage([string]$ZipPath, [string]$ShaPath, [string]$Named, [string]$Version, [string]$Root, [scriptblock]$Attest) {
+# zip's path, its version, whether the script names its SHA-256 and the zip's name; it returns a refusal or nothing),
+# and every entry must be inside rpa-windows-x64\. With -Browser (ZipPath, ShaPath, Named: the browser zip) the browser
+# zip gets the same checks through a handle of its own, its entries must be inside browser\ or be
+# scripts\start-browser.ps1, and its browser\VERSION must be the package's version; it is unpacked into the package
+# folder. Any of these stops it with the reason before the folder is made. Returns the version, the SHA-256 of each zip
+# (Hash, BrowserHash) and the package folder.
+function Expand-RpaPackage([string]$ZipPath, [string]$ShaPath, [string]$Named, [string]$Version, [string]$Root, [scriptblock]$Attest, [hashtable]$Browser) {
   Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
-  $stream = [IO.File]::Open($ZipPath, 'Open', 'Read', 'Read')
+  $opened = New-Object Collections.Generic.List[IDisposable]
   try {
-    $sha256 = [Security.Cryptography.SHA256]::Create()
-    try { $hash = (($sha256.ComputeHash($stream) | ForEach-Object { $_.ToString('x2') }) -join '') } finally { $sha256.Dispose() }
-    $published = Get-RpaPublishedHash ([IO.File]::ReadAllText($ShaPath))
-    if (-not $published) { throw ('{0} does not start with a SHA-256 (64 hexadecimal digits). Nothing was unpacked.' -f $ShaPath) }
-    if ($hash -ne $published) { throw ('The SHA-256 of {0} is {1}, and {2} says {3}: the zip is not the file published beside it. Nothing was unpacked: do not use this zip.' -f $ZipPath, $hash, $ShaPath, $published) }
-    if ($Named -and $hash -ne $Named) { throw ('The SHA-256 of {0} is {1}, and this Get-Rpa.ps1 of release {2} names {3}. Nothing was unpacked: do not use this zip.' -f $ZipPath, $hash, $Version, $Named) }
-
-    $stream.Position = 0
+    $stream = [IO.File]::Open($ZipPath, 'Open', 'Read', 'Read')
+    $opened.Add($stream)
+    $hash = Get-RpaCheckedHash $stream $ZipPath $ShaPath $Named $Version
     $archive = New-Object IO.Compression.ZipArchive ($stream, [IO.Compression.ZipArchiveMode]::Read, $true)
-    try {
-      foreach ($entry in $archive.Entries) {
+    $opened.Add($archive)
+    foreach ($entry in $archive.Entries) {
+      $name = $entry.FullName.Replace('\', '/')
+      if (-not $name.StartsWith($PackageName + '/') -or -not (Test-RpaEntryName $name)) {
+        throw ('{0} holds {1}, which is not inside {2}\. Nothing was unpacked: do not use this zip.' -f $ZipPath, $entry.FullName, $PackageName)
+      }
+    }
+    $held = Read-RpaZipText $archive ($PackageName + '/VERSION')
+    if ($held -notmatch '^\d+\.\d+\.\d+$') { throw ('{0} holds no {1}\VERSION with a version. Nothing was unpacked: do not use this zip.' -f $ZipPath, $PackageName) }
+    if ($Version -and $held -ne $Version) { throw ('{0} holds version {1}, and this Get-Rpa.ps1 is for version {2}. Nothing was unpacked.' -f $ZipPath, $held, $Version) }
+    $refusal = & $Attest $ZipPath $held ([bool]$Named) ($PackageName + '.zip')
+    if ($refusal) { throw ('{0} Nothing was unpacked.' -f $refusal) }
+
+    $browserHash = $null
+    $browserArchive = $null
+    if ($Browser) {
+      $browserStream = [IO.File]::Open($Browser.ZipPath, 'Open', 'Read', 'Read')
+      $opened.Add($browserStream)
+      $browserHash = Get-RpaCheckedHash $browserStream $Browser.ZipPath $Browser.ShaPath $Browser.Named $Version
+      $browserArchive = New-Object IO.Compression.ZipArchive ($browserStream, [IO.Compression.ZipArchiveMode]::Read, $true)
+      $opened.Add($browserArchive)
+      foreach ($entry in $browserArchive.Entries) {
         $name = $entry.FullName.Replace('\', '/')
-        if (-not $name.StartsWith($PackageName + '/') -or $name.Contains(':') -or @($name.Split('/') | Where-Object { $_ -eq '..' }).Count -gt 0) {
-          throw ('{0} holds {1}, which is not inside {2}\. Nothing was unpacked: do not use this zip.' -f $ZipPath, $entry.FullName, $PackageName)
+        if (-not ($name.StartsWith('browser/') -or $name -eq 'scripts/start-browser.ps1') -or -not (Test-RpaEntryName $name)) {
+          throw ('{0} holds {1}, which is not inside browser\ nor scripts\start-browser.ps1. Nothing was unpacked: do not use this zip.' -f $Browser.ZipPath, $entry.FullName)
         }
       }
-      $versionEntry = $archive.GetEntry($PackageName + '/VERSION')
-      if (-not $versionEntry) { $versionEntry = $archive.GetEntry($PackageName + '\VERSION') }
-      $held = $null
-      if ($versionEntry) {
-        $reader = New-Object IO.StreamReader ($versionEntry.Open())
-        try { $held = $reader.ReadToEnd().Trim() } finally { $reader.Dispose() }
-      }
-      if ($held -notmatch '^\d+\.\d+\.\d+$') { throw ('{0} holds no {1}\VERSION with a version. Nothing was unpacked: do not use this zip.' -f $ZipPath, $PackageName) }
-      if ($Version -and $held -ne $Version) { throw ('{0} holds version {1}, and this Get-Rpa.ps1 is for version {2}. Nothing was unpacked.' -f $ZipPath, $held, $Version) }
-
-      $refusal = & $Attest $ZipPath $held
+      $browserVersion = Read-RpaZipText $browserArchive 'browser/VERSION'
+      if ($browserVersion -notmatch '^\d+\.\d+\.\d+$') { throw ('{0} holds no browser\VERSION with a version. Nothing was unpacked: do not use this zip.' -f $Browser.ZipPath) }
+      if ($browserVersion -ne $held) { throw ('{0} holds the browser of version {1}, and {2} is version {3}. Nothing was unpacked.' -f $Browser.ZipPath, $browserVersion, $ZipPath, $held) }
+      $refusal = & $Attest $Browser.ZipPath $held ([bool]$Browser.Named) ($BrowserPackageName + '.zip')
       if ($refusal) { throw ('{0} Nothing was unpacked.' -f $refusal) }
+    }
 
-      $folder = Join-Path $Root $held
-      if (Test-Path -LiteralPath $folder) {
-        throw ('{0} exists already. To install from it, run {1} with the same parameters; to unpack again, remove {0} first.' -f $folder, (Join-Path (Join-Path $folder $PackageName) 'Install-Rpa.ps1'))
-      }
-      New-Item -ItemType Directory -Force -Path $Root | Out-Null
-      New-Item -ItemType Directory -Path $folder | Out-Null
-      [IO.Compression.ZipFileExtensions]::ExtractToDirectory($archive, $folder)
-    } finally { $archive.Dispose() }
-  } finally { $stream.Dispose() }
-  @{ Version = $held; Hash = $hash; Package = Join-Path $folder $PackageName }
+    $folder = Join-Path $Root $held
+    if (Test-Path -LiteralPath $folder) {
+      throw ('{0} exists already. To install from it, run {1} with the same parameters; to unpack again, remove {0} first.' -f $folder, (Join-Path (Join-Path $folder $PackageName) 'Install-Rpa.ps1'))
+    }
+    New-Item -ItemType Directory -Force -Path $Root | Out-Null
+    New-Item -ItemType Directory -Path $folder | Out-Null
+    [IO.Compression.ZipFileExtensions]::ExtractToDirectory($archive, $folder)
+    if ($browserArchive) { [IO.Compression.ZipFileExtensions]::ExtractToDirectory($browserArchive, (Join-Path $folder $PackageName)) }
+  } finally {
+    for ($i = $opened.Count - 1; $i -ge 0; $i--) { $opened[$i].Dispose() }
+  }
+  @{ Version = $held; Hash = $hash; BrowserHash = $browserHash; Package = Join-Path $folder $PackageName }
 }
 
 # Whether the GitHub CLI at -Gh can check an attestation: missing, signed out (gh auth status fails) or ready.
@@ -171,8 +224,8 @@ function Get-RpaGhState([string]$Gh) {
 # The attestation check: Refusal (stop before the unpack) or Line (what to say, and go on). A ready gh verifies the
 # zip, and a failed check is a refusal. Without a ready gh the check is not made: a refusal with -Require, or when
 # the script names no SHA-256 (-Named false: then only the attestation ties the zip to a release), otherwise a line
-# that says so, why it matters and how to check it elsewhere.
-function Test-RpaAttestation([string]$Gh, [string]$State, [string]$ZipPath, [string]$Version, [bool]$Require, [bool]$Named = $true) {
+# that says so, why it matters and how to check it elsewhere (for the zip -ZipName, as the release names it).
+function Test-RpaAttestation([string]$Gh, [string]$State, [string]$ZipPath, [string]$Version, [bool]$Require, [bool]$Named = $true, [string]$ZipName = ($PackageName + '.zip')) {
   $workflow = '{0}/.github/workflows/desktop-release.yml' -f $Repository
   $tag = 'refs/tags/desktop-v{0}' -f $Version
   if ($State -eq 'ready') {
@@ -191,8 +244,25 @@ function Test-RpaAttestation([string]$Gh, [string]$State, [string]$ZipPath, [str
   if ($Require) {
     return @{ Refusal = ('-RequireAttestation: the build attestation cannot be checked: {0}. Install the GitHub CLI here and sign it in (gh auth login), then run this again.' -f $reason); Line = $null }
   }
-  $line = "The build attestation was NOT checked: {0}. It shows that this project's release workflow built the zip; the hash only shows that the zip is the file published beside this script. To check it on a machine with gh: gh attestation verify {1}.zip --repo {2} --signer-workflow {3} --source-ref {4}" -f $reason, $PackageName, $Repository, $workflow, $tag
+  $line = "The build attestation was NOT checked: {0}. It shows that this project's release workflow built the zip; the hash only shows that the zip is the file published beside this script. To check it on a machine with gh: gh attestation verify {1} --repo {2} --signer-workflow {3} --source-ref {4}" -f $reason, $ZipName, $Repository, $workflow, $tag
   @{ Refusal = $null; Line = $line }
+}
+
+# Whether to get the browser zip as well (Get) or why this run stops (Refusal). The browser is asked for with
+# -WithBrowser, or kept on an upgrade of an install that has it (-InstalledBrowser, from its install.json), as the
+# installer keeps it, unless -NoBrowser removes it. With -Zip the browser zip is given with -BrowserZip too.
+function Get-RpaBrowserChoice([bool]$WithBrowser, [bool]$NoBrowser, [string]$Zip, [string]$BrowserZip, [bool]$InstalledBrowser) {
+  $choice = @{ Get = $false; Refusal = $null }
+  if ($WithBrowser -and $NoBrowser) { $choice.Refusal = '-WithBrowser and -NoBrowser cannot be used together: -WithBrowser adds the browser, -NoBrowser leaves it out or removes it. Choose one.'; return $choice }
+  $choice.Get = $WithBrowser -or ($InstalledBrowser -and -not $NoBrowser)
+  $file = '{0}.zip, with its .sha256 file beside it' -f $BrowserPackageName
+  if ($BrowserZip -and -not $Zip) { $choice.Refusal = '-BrowserZip goes with -Zip. Without -Zip, Get-Rpa.ps1 downloads the browser zip from the release.' }
+  elseif ($BrowserZip -and -not $choice.Get) { $choice.Refusal = '-BrowserZip is for an install with the browser. Add -WithBrowser, or leave -BrowserZip out.' }
+  elseif ($Zip -and $choice.Get -and -not $BrowserZip) {
+    if ($WithBrowser) { $choice.Refusal = '-Zip with -WithBrowser needs -BrowserZip <path>: the path of {0}.' -f $file }
+    else { $choice.Refusal = 'This install has the browser, so -Zip needs -BrowserZip <path> too: the path of {0}. Or remove the browser with -NoBrowser.' -f $file }
+  }
+  $choice
 }
 
 # The first account other than Administrators, SYSTEM, TrustedInstaller, CREATOR OWNER and the person running this
@@ -259,6 +329,21 @@ if ($ghState -ne 'ready') {
   if ($early.Refusal) { Stop-Rpa ('{0} Nothing was downloaded or unpacked.' -f $early.Refusal) }
 }
 
+# The browser zip too: with -WithBrowser, or for an install that has the browser (install.json under Program Files,
+# which only administrators can change), unless -NoBrowser.
+$installFile = Join-Path (Join-Path $programFiles 'RPA Runner') 'install.json'
+$installedBrowser = $false
+if (Test-Path -LiteralPath $installFile -PathType Leaf) {
+  try { $installedBrowser = (Get-Content -Raw -LiteralPath $installFile -Encoding UTF8 | ConvertFrom-Json).browser -eq $true } catch { }
+}
+$choice = Get-RpaBrowserChoice ([bool]$WithBrowser) ([bool]$NoBrowser) $Zip $BrowserZip $installedBrowser
+if ($choice.Refusal) { Stop-Rpa ('{0} Nothing was downloaded or unpacked.' -f $choice.Refusal) }
+if ($choice.Get -and -not $WithBrowser) { Write-Host 'This install has the browser, so its zip is checked and unpacked too (-NoBrowser removes the browser instead).' }
+if ($choice.Get -and $ghState -ne 'ready') {
+  $early = Test-RpaAttestation $gh $ghState '' $Version ([bool]$RequireAttestation) ([bool]$BrowserPackageSha256) ($BrowserPackageName + '.zip')
+  if ($early.Refusal) { Stop-Rpa ('{0} Nothing was downloaded or unpacked.' -f $early.Refusal) }
+}
+
 $root = Join-Path $programFiles 'RPA package'
 if ($Version -and (Test-Path -LiteralPath (Join-Path $root $Version))) {
   $folder = Join-Path $root $Version
@@ -270,11 +355,18 @@ if ($Zip) {
   try { $zipPath = Get-RpaTypedPath $Zip } catch { Stop-Rpa $_.Exception.Message }
   $shaPath = $zipPath + '.sha256'
   foreach ($file in $zipPath, $shaPath) { if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { Stop-Rpa ('{0} is not there. Give -Zip the path of rpa-windows-x64.zip, with its .sha256 file beside it.' -f $file) } }
+  if ($choice.Get) {
+    try { $browserZipPath = Get-RpaTypedPath $BrowserZip } catch { Stop-Rpa $_.Exception.Message }
+    foreach ($file in $browserZipPath, ($browserZipPath + '.sha256')) { if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { Stop-Rpa ('{0} is not there. Give -BrowserZip the path of {1}.zip, with its .sha256 file beside it.' -f $file, $BrowserPackageName) } }
+  }
 } else {
   $download = Join-Path $env:USERPROFILE ('Downloads\rpa-{0}' -f $Version)
   $zipPath = Join-Path $download ($PackageName + '.zip')
   $shaPath = $zipPath + '.sha256'
+  $browserZipPath = Join-Path $download ($BrowserPackageName + '.zip')
 }
+$browserSpec = $null
+if ($choice.Get) { $browserSpec = @{ ZipPath = $browserZipPath; ShaPath = $browserZipPath + '.sha256'; Named = $BrowserPackageSha256 } }
 
 # Room for the download (unless -Zip), the unpacked package and the install, by drive.
 $needed = @{}
@@ -300,17 +392,33 @@ if (-not $Zip) {
     Write-Host ('Downloading {0}' -f (Get-RpaDownloadUrl $Version ($PackageName + '.zip.sha256')))
     Invoke-WebRequest -UseBasicParsing -Uri (Get-RpaDownloadUrl $Version ($PackageName + '.zip.sha256')) -OutFile $shaPath
   } catch { Stop-Rpa ('The download failed: {0} Nothing was unpacked.' -f $_.Exception.GetBaseException().Message) }
+  if ($choice.Get) {
+    # The browser zip the same way, from the same release.
+    Write-Host ('Downloading {0} to {1}' -f (Get-RpaDownloadUrl $Version ($BrowserPackageName + '.zip')), $browserZipPath)
+    try {
+      Invoke-WebRequest -UseBasicParsing -Uri (Get-RpaDownloadUrl $Version ($BrowserPackageName + '.zip')) -OutFile $browserZipPath
+      Write-Host ('Downloading {0}' -f (Get-RpaDownloadUrl $Version ($BrowserPackageName + '.zip.sha256')))
+      Invoke-WebRequest -UseBasicParsing -Uri (Get-RpaDownloadUrl $Version ($BrowserPackageName + '.zip.sha256')) -OutFile ($browserZipPath + '.sha256')
+    } catch { Stop-Rpa ('The download failed: {0} Nothing was unpacked.' -f $_.Exception.GetBaseException().Message) }
+  }
 }
 
-# Asked while the zip is held open, after its SHA-256 matched; its line is said after the unpack.
-$attest = { param($ZipPath, $Version) $script:Attestation = Test-RpaAttestation $gh $ghState $ZipPath $Version ([bool]$RequireAttestation) ([bool]$PackageSha256); $script:Attestation.Refusal }
-Write-Host ('Checking {0}: its SHA-256, the build attestation and what it holds' -f $zipPath)
-try { $unpacked = Expand-RpaPackage $zipPath $shaPath $PackageSha256 $Version $root $attest }
+# Asked while each zip is held open, after its SHA-256 matched; the lines are said after the unpack.
+$script:AttestationLines = @()
+$attest = { param($ZipPath, $Version, $Named, $ZipName) $result = Test-RpaAttestation $gh $ghState $ZipPath $Version ([bool]$RequireAttestation) $Named $ZipName; $script:AttestationLines += $result.Line; $result.Refusal }
+if ($browserSpec) { Write-Host ('Checking {0} and {1}: their SHA-256, the build attestation and what they hold' -f $zipPath, $browserZipPath) }
+else { Write-Host ('Checking {0}: its SHA-256, the build attestation and what it holds' -f $zipPath) }
+try { $unpacked = Expand-RpaPackage $zipPath $shaPath $PackageSha256 $Version $root $attest $browserSpec }
 catch { Stop-Rpa $_.Exception.Message }
 $named = ''
 if ($PackageSha256) { $named = ', and the one this script names' }
 Write-Host ('  The SHA-256 is {0}: the one in {1}{2}.' -f $unpacked.Hash, $shaPath, $named)
-Write-Host ('  {0}' -f $script:Attestation.Line)
+if ($browserSpec) {
+  $named = ''
+  if ($BrowserPackageSha256) { $named = ', and the one this script names' }
+  Write-Host ('  The SHA-256 of the browser zip is {0}: the one in {1}{2}.' -f $unpacked.BrowserHash, $browserSpec.ShaPath, $named)
+}
+foreach ($line in $script:AttestationLines) { Write-Host ('  {0}' -f $line) }
 Write-Host ('Unpacked into {0}' -f (Split-Path -Parent $unpacked.Package))
 
 $refusal = Get-RpaFolderRefusal (Split-Path -Parent $unpacked.Package)

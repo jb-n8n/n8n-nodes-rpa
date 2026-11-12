@@ -14,7 +14,7 @@ $ErrorActionPreference = 'Stop'
 $installDir = Split-Path -Parent $PSScriptRoot
 $dataDir = Join-Path $env:ProgramData 'RPA Runner'
 $install = Get-Content -Raw -LiteralPath (Join-Path $installDir 'install.json') -Encoding UTF8 | ConvertFrom-Json
-# Installed with -NoBrowser: nothing to start.
+# Installed without the browser: nothing to start.
 if (-not $install.browser) { exit 0 }
 $browserDir = Join-Path $installDir 'browser'
 $exe = Join-Path $browserDir 'node.exe'

@@ -1,10 +1,10 @@
-# Publishes the Windows package (rpa-windows-x64.zip, its SHA-256 and Get-Rpa.ps1, which downloads, checks, unpacks
-# and installs it) as the GitHub Release desktop-v<version> when a
+# Publishes the Windows package (rpa-windows-x64.zip, the browser package rpa-browser-windows-x64.zip, their SHA-256
+# and Get-Rpa.ps1, which downloads, checks, unpacks and installs them) as the GitHub Release desktop-v<version> when a
 # desktop-v<version> tag is pushed and a reviewer of the desktop-release environment approves it. The package is the
 # one the desktop workflow builds, installs and drives: this workflow calls desktop.yml and publishes the artifact it
 # uploads. The package is not code-signed; the release carries the zip's SHA-256 and a build attestation, which shows
 # which workflow, ref and commit of this repository attested the file (not that the commit was reviewed, nor that the
-# zip is what the source code would build elsewhere):
+# zip is what the source code would build elsewhere); the same command checks each zip:
 #   gh attestation verify rpa-windows-x64.zip --repo jb-n8n/n8n-nodes-rpa \
 #     --signer-workflow jb-n8n/n8n-nodes-rpa/.github/workflows/desktop-release.yml \
 #     --source-ref refs/tags/desktop-v<version>
@@ -16,22 +16,22 @@
 #   CHANGELOG.md for the release notes and uploads them; a missing section fails here, before anything is built. Its
 #   outputs are the notes artifact's id and the notes file's SHA-256, as this job computed it.
 # - desktop (needs environment-check and check; contents: read): the reusable desktop workflow, which builds, tests,
-#   stages, installs and drives the package and uploads it as an artifact. Its outputs are the artifact's name and id
-#   and package-sha256, the zip's SHA-256 as its stage step computed it.
+#   stages, installs and drives the package and uploads it as an artifact. Its outputs are the artifact's name and id,
+#   and package-sha256 and browser-package-sha256, each zip's SHA-256 as its stage step computed it.
 # - verify (needs check and desktop; no permissions, no environment): checks the outputs' shape, then downloads the
 #   package by the artifact id, not by name: another job of this run could upload an artifact of the same name, with a
 #   .sha256 file that matches its own zip. The download action compares the archive with the digest GitHub recorded
 #   for that artifact at upload, when there is one, and fails the step on a difference. Then it checks the package:
-#   exactly the three files, the zip's SHA-256 equal to package-sha256 (not to the .sha256 file in the artifact), the
-#   .sha256 file exactly '<package-sha256>  rpa-windows-x64.zip', the version in the zip equal to the tag's, and
-#   Get-Rpa.ps1 naming that version and package-sha256 once each.
+#   exactly the five files, each zip's SHA-256 equal to its output (not to the .sha256 file in the artifact), each
+#   .sha256 file exactly '<sha-256>  <zip name>', the version in each zip (VERSION, browser/VERSION) equal to the tag's,
+#   and Get-Rpa.ps1 naming that version, package-sha256 and browser-package-sha256 once each.
 # - release (needs all four; only for a pushed desktop-v tag; environment desktop-release, so it waits for a reviewer;
 #   contents/id-token/attestations write): no checkout, no repository code, nothing run from the artifact. It downloads
 #   the package by the same id and the notes by the id the check job reports (not by name), checks the package again
 #   as verify does and the notes against the check job's notes-sha256, checks that the tag still names this
 #   run's commit and has no release (a draft included), attests the zip and Get-Rpa.ps1 and creates the release
 #   desktop-v<version>, neither a draft nor a prerelease, and not marked latest (the repository's latest release stays
-#   the npm package's).
+#   the npm package's). Both zips and Get-Rpa.ps1 are attested.
 # Dry run: a manual run (Run workflow, on main) never publishes. Its check uses the version of
 # desktop/Directory.Build.props in place of a tag; the environment check, the build and verify run as for a tag, and
 # release is skipped, so nothing is attested or published.
@@ -158,12 +158,14 @@ jobs:
           ARTIFACT: ${{ needs.desktop.outputs.package-artifact }}
           ARTIFACT_ID: ${{ needs.desktop.outputs.package-artifact-id }}
           PACKAGE_SHA256: ${{ needs.desktop.outputs.package-sha256 }}
+          BROWSER_PACKAGE_SHA256: ${{ needs.desktop.outputs.browser-package-sha256 }}
         run: |
           set -euo pipefail
           test "$ARTIFACT" = rpa-windows-package || { echo "::error::desktop.yml names the artifact '${ARTIFACT}', not rpa-windows-package"; exit 1; }
           [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] || { echo "::error::desktop.yml's package-artifact-id is '${ARTIFACT_ID}', not an artifact id"; exit 1; }
           [[ "$PACKAGE_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::desktop.yml's package-sha256 is '${PACKAGE_SHA256}', not 64 lower-case hex digits"; exit 1; }
-          echo "artifact ${ARTIFACT} (id ${ARTIFACT_ID}), rpa-windows-x64.zip SHA-256 ${PACKAGE_SHA256} (package-sha256)"
+          [[ "$BROWSER_PACKAGE_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::desktop.yml's browser-package-sha256 is '${BROWSER_PACKAGE_SHA256}', not 64 lower-case hex digits"; exit 1; }
+          echo "artifact ${ARTIFACT} (id ${ARTIFACT_ID}), rpa-windows-x64.zip SHA-256 ${PACKAGE_SHA256} (package-sha256), rpa-browser-windows-x64.zip SHA-256 ${BROWSER_PACKAGE_SHA256} (browser-package-sha256)"
       # By id from this run, not by name. With digest-mismatch: error (the default, written out here) the action fails
       # the step when the archive's SHA-256 differs from the digest GitHub recorded for the artifact at upload; it
       # skips that comparison for an artifact with no recorded digest. desktop.yml's package-artifact-digest (the
@@ -184,24 +186,31 @@ jobs:
         env:
           VERSION: ${{ needs.check.outputs.version }}
           PACKAGE_SHA256: ${{ needs.desktop.outputs.package-sha256 }}
+          BROWSER_PACKAGE_SHA256: ${{ needs.desktop.outputs.browser-package-sha256 }}
         run: |
           set -euo pipefail
           shopt -s nullglob dotglob
           files=(*)
-          test "${#files[@]}" -eq 3 || { echo "::error::expected three files in the artifact, found ${#files[@]}"; exit 1; }
-          for f in rpa-windows-x64.zip rpa-windows-x64.zip.sha256 Get-Rpa.ps1; do
+          test "${#files[@]}" -eq 5 || { echo "::error::expected five files in the artifact, found ${#files[@]}"; exit 1; }
+          for f in rpa-windows-x64.zip rpa-windows-x64.zip.sha256 rpa-browser-windows-x64.zip rpa-browser-windows-x64.zip.sha256 Get-Rpa.ps1; do
             [ -f "$f" ] && [ ! -L "$f" ] || { echo "::error::the artifact holds no regular file $f"; exit 1; }
           done
-          actual="$(sha256sum rpa-windows-x64.zip | cut -d' ' -f1)"
-          test "$actual" = "$PACKAGE_SHA256" || { echo "::error::rpa-windows-x64.zip has the SHA-256 $actual, not $PACKAGE_SHA256, the hash desktop.yml computed (package-sha256)"; exit 1; }
-          line="$(cat rpa-windows-x64.zip.sha256)"
-          [[ "$line" =~ ^([0-9a-f]{64})\ \ rpa-windows-x64\.zip$ ]] || { echo "::error::rpa-windows-x64.zip.sha256 is not '<sha-256>  rpa-windows-x64.zip'"; exit 1; }
-          test "${BASH_REMATCH[1]}" = "$PACKAGE_SHA256" || { echo "::error::rpa-windows-x64.zip.sha256 says ${BASH_REMATCH[1]}, not $PACKAGE_SHA256, the hash desktop.yml computed (package-sha256)"; exit 1; }
+          for zip in "rpa-windows-x64:$PACKAGE_SHA256:package-sha256" "rpa-browser-windows-x64:$BROWSER_PACKAGE_SHA256:browser-package-sha256"; do
+            IFS=: read -r name expected output <<<"$zip"
+            actual="$(sha256sum "$name.zip" | cut -d' ' -f1)"
+            test "$actual" = "$expected" || { echo "::error::$name.zip has the SHA-256 $actual, not $expected, the hash desktop.yml computed ($output)"; exit 1; }
+            line="$(cat "$name.zip.sha256")"
+            [[ "$line" =~ ^([0-9a-f]{64})\ \ ([a-z0-9-]+)\.zip$ ]] && [ "${BASH_REMATCH[2]}" = "$name" ] || { echo "::error::$name.zip.sha256 is not '<sha-256>  $name.zip'"; exit 1; }
+            test "${BASH_REMATCH[1]}" = "$expected" || { echo "::error::$name.zip.sha256 says ${BASH_REMATCH[1]}, not $expected, the hash desktop.yml computed ($output)"; exit 1; }
+          done
           packaged="$(unzip -p rpa-windows-x64.zip 'rpa-windows-x64[/\\]VERSION' | tr -d '\r\n')" || { echo "::error::rpa-windows-x64.zip holds no rpa-windows-x64/VERSION"; exit 1; }
           test "$packaged" = "$VERSION" || { echo "::error::the package's VERSION is '${packaged}', not ${VERSION}"; exit 1; }
+          packaged="$(unzip -p rpa-browser-windows-x64.zip 'browser[/\\]VERSION' | tr -d '\r\n')" || { echo "::error::rpa-browser-windows-x64.zip holds no browser/VERSION"; exit 1; }
+          test "$packaged" = "$VERSION" || { echo "::error::the browser package's browser/VERSION is '${packaged}', not ${VERSION}"; exit 1; }
           test "$(tr -d '\r' < Get-Rpa.ps1 | grep -cxF "\$Version = '${VERSION}'")" -eq 1 || { echo "::error::Get-Rpa.ps1 does not name the version ${VERSION} once"; exit 1; }
           test "$(tr -d '\r' < Get-Rpa.ps1 | grep -cxF "\$PackageSha256 = '${PACKAGE_SHA256}'")" -eq 1 || { echo "::error::Get-Rpa.ps1 does not name the zip's SHA-256 ${PACKAGE_SHA256} once"; exit 1; }
-          echo "rpa-windows-x64.zip ${VERSION}, SHA-256 ${actual}"
+          test "$(tr -d '\r' < Get-Rpa.ps1 | grep -cxF "\$BrowserPackageSha256 = '${BROWSER_PACKAGE_SHA256}'")" -eq 1 || { echo "::error::Get-Rpa.ps1 does not name the browser zip's SHA-256 ${BROWSER_PACKAGE_SHA256} once"; exit 1; }
+          echo "rpa-windows-x64.zip and rpa-browser-windows-x64.zip ${VERSION}, SHA-256 ${PACKAGE_SHA256} and ${BROWSER_PACKAGE_SHA256}"
 
   release:
     needs: [environment-check, check, desktop, verify]
@@ -228,12 +237,14 @@ jobs:
           ARTIFACT: ${{ needs.desktop.outputs.package-artifact }}
           ARTIFACT_ID: ${{ needs.desktop.outputs.package-artifact-id }}
           PACKAGE_SHA256: ${{ needs.desktop.outputs.package-sha256 }}
+          BROWSER_PACKAGE_SHA256: ${{ needs.desktop.outputs.browser-package-sha256 }}
         run: |
           set -euo pipefail
           test "$ARTIFACT" = rpa-windows-package || { echo "::error::desktop.yml names the artifact '${ARTIFACT}', not rpa-windows-package"; exit 1; }
           [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] || { echo "::error::desktop.yml's package-artifact-id is '${ARTIFACT_ID}', not an artifact id"; exit 1; }
           [[ "$PACKAGE_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::desktop.yml's package-sha256 is '${PACKAGE_SHA256}', not 64 lower-case hex digits"; exit 1; }
-          echo "artifact ${ARTIFACT} (id ${ARTIFACT_ID}), rpa-windows-x64.zip SHA-256 ${PACKAGE_SHA256} (package-sha256)"
+          [[ "$BROWSER_PACKAGE_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::desktop.yml's browser-package-sha256 is '${BROWSER_PACKAGE_SHA256}', not 64 lower-case hex digits"; exit 1; }
+          echo "artifact ${ARTIFACT} (id ${ARTIFACT_ID}), rpa-windows-x64.zip SHA-256 ${PACKAGE_SHA256} (package-sha256), rpa-browser-windows-x64.zip SHA-256 ${BROWSER_PACKAGE_SHA256} (browser-package-sha256)"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ needs.desktop.outputs.package-artifact-id }}
@@ -265,6 +276,7 @@ jobs:
           REF: ${{ github.ref }}
           CHECKED_VERSION: ${{ needs.check.outputs.version }}
           PACKAGE_SHA256: ${{ needs.desktop.outputs.package-sha256 }}
+          BROWSER_PACKAGE_SHA256: ${{ needs.desktop.outputs.browser-package-sha256 }}
           NOTES_SHA256: ${{ needs.check.outputs.notes-sha256 }}
         run: |
           set -euo pipefail
@@ -273,27 +285,36 @@ jobs:
           version="${BASH_REMATCH[1]}"
           test "$version" = "$CHECKED_VERSION" || { echo "::error::the tag's version ${version} is not the checked version ${CHECKED_VERSION}"; exit 1; }
           files=(*)
-          test "${#files[@]}" -eq 3 || { echo "::error::expected three files in the artifact, found ${#files[@]}"; exit 1; }
-          for f in rpa-windows-x64.zip rpa-windows-x64.zip.sha256 Get-Rpa.ps1; do
+          test "${#files[@]}" -eq 5 || { echo "::error::expected five files in the artifact, found ${#files[@]}"; exit 1; }
+          for f in rpa-windows-x64.zip rpa-windows-x64.zip.sha256 rpa-browser-windows-x64.zip rpa-browser-windows-x64.zip.sha256 Get-Rpa.ps1; do
             [ -f "$f" ] && [ ! -L "$f" ] || { echo "::error::the artifact holds no regular file $f"; exit 1; }
           done
-          actual="$(sha256sum rpa-windows-x64.zip | cut -d' ' -f1)"
-          test "$actual" = "$PACKAGE_SHA256" || { echo "::error::rpa-windows-x64.zip has the SHA-256 $actual, not $PACKAGE_SHA256, the hash desktop.yml computed (package-sha256)"; exit 1; }
-          line="$(cat rpa-windows-x64.zip.sha256)"
-          [[ "$line" =~ ^([0-9a-f]{64})\ \ rpa-windows-x64\.zip$ ]] || { echo "::error::rpa-windows-x64.zip.sha256 is not '<sha-256>  rpa-windows-x64.zip'"; exit 1; }
-          test "${BASH_REMATCH[1]}" = "$PACKAGE_SHA256" || { echo "::error::rpa-windows-x64.zip.sha256 says ${BASH_REMATCH[1]}, not $PACKAGE_SHA256, the hash desktop.yml computed (package-sha256)"; exit 1; }
+          for zip in "rpa-windows-x64:$PACKAGE_SHA256:package-sha256" "rpa-browser-windows-x64:$BROWSER_PACKAGE_SHA256:browser-package-sha256"; do
+            IFS=: read -r name expected output <<<"$zip"
+            actual="$(sha256sum "$name.zip" | cut -d' ' -f1)"
+            test "$actual" = "$expected" || { echo "::error::$name.zip has the SHA-256 $actual, not $expected, the hash desktop.yml computed ($output)"; exit 1; }
+            line="$(cat "$name.zip.sha256")"
+            [[ "$line" =~ ^([0-9a-f]{64})\ \ ([a-z0-9-]+)\.zip$ ]] && [ "${BASH_REMATCH[2]}" = "$name" ] || { echo "::error::$name.zip.sha256 is not '<sha-256>  $name.zip'"; exit 1; }
+            test "${BASH_REMATCH[1]}" = "$expected" || { echo "::error::$name.zip.sha256 says ${BASH_REMATCH[1]}, not $expected, the hash desktop.yml computed ($output)"; exit 1; }
+          done
           packaged="$(unzip -p rpa-windows-x64.zip 'rpa-windows-x64[/\\]VERSION' | tr -d '\r\n')" || { echo "::error::rpa-windows-x64.zip holds no rpa-windows-x64/VERSION"; exit 1; }
           test "$packaged" = "$version" || { echo "::error::the package's VERSION is '${packaged}', not ${version}"; exit 1; }
+          packaged="$(unzip -p rpa-browser-windows-x64.zip 'browser[/\\]VERSION' | tr -d '\r\n')" || { echo "::error::rpa-browser-windows-x64.zip holds no browser/VERSION"; exit 1; }
+          test "$packaged" = "$version" || { echo "::error::the browser package's browser/VERSION is '${packaged}', not ${version}"; exit 1; }
           test "$(tr -d '\r' < Get-Rpa.ps1 | grep -cxF "\$Version = '${version}'")" -eq 1 || { echo "::error::Get-Rpa.ps1 does not name the version ${version} once"; exit 1; }
           test "$(tr -d '\r' < Get-Rpa.ps1 | grep -cxF "\$PackageSha256 = '${PACKAGE_SHA256}'")" -eq 1 || { echo "::error::Get-Rpa.ps1 does not name the zip's SHA-256 ${PACKAGE_SHA256} once"; exit 1; }
+          test "$(tr -d '\r' < Get-Rpa.ps1 | grep -cxF "\$BrowserPackageSha256 = '${BROWSER_PACKAGE_SHA256}'")" -eq 1 || { echo "::error::Get-Rpa.ps1 does not name the browser zip's SHA-256 ${BROWSER_PACKAGE_SHA256} once"; exit 1; }
           notes=("$RUNNER_TEMP"/notes/*)
           test "${#notes[@]}" -eq 1 || { echo "::error::expected one file in the notes artifact, found ${#notes[@]}"; exit 1; }
           [ -f "$RUNNER_TEMP/notes/release-notes.md" ] && [ ! -L "$RUNNER_TEMP/notes/release-notes.md" ] || { echo "::error::the notes artifact holds no regular file release-notes.md"; exit 1; }
           notes_sha256="$(sha256sum "$RUNNER_TEMP/notes/release-notes.md" | cut -d' ' -f1)"
           test "$notes_sha256" = "$NOTES_SHA256" || { echo "::error::release-notes.md has the SHA-256 ${notes_sha256}, not ${NOTES_SHA256}, the hash the check job computed (notes-sha256)"; exit 1; }
           grep -q '[^[:space:]]' "$RUNNER_TEMP/notes/release-notes.md" || { echo "::error::the release notes are empty"; exit 1; }
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "sha256=${actual}" >> "$GITHUB_OUTPUT"
+          {
+            echo "version=${version}"
+            echo "sha256=${PACKAGE_SHA256}"
+            echo "browser-sha256=${BROWSER_PACKAGE_SHA256}"
+          } >> "$GITHUB_OUTPUT"
       # Before anything is attested. The tag may have been moved while the job waited for approval or before a re-run:
       # it must still name the commit this run built. A release for the tag, published or draft (a failed run can leave
       # a draft), is never replaced; an API error fails the step rather than reading as "no release".
@@ -311,11 +332,12 @@ jobs:
             exit 1
           fi
       # Storage records need an organization-owned repository and artifact-metadata: write; this posture grants neither.
-      # Get-Rpa.ps1 is attested too: it names the zip's SHA-256, so checking its attestation covers the zip.
+      # Get-Rpa.ps1 is attested too: it names the SHA-256 of each zip, so checking its attestation covers the zips.
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
             ${{ runner.temp }}/release/rpa-windows-x64.zip
+            ${{ runner.temp }}/release/rpa-browser-windows-x64.zip
             ${{ runner.temp }}/release/Get-Rpa.ps1
           create-storage-record: false
       # Not a draft, not a prerelease, and --latest=false: the npm package's release stays the repository's latest.
@@ -325,6 +347,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.check.outputs.version }}
           SHA256: ${{ steps.check.outputs.sha256 }}
+          BROWSER_SHA256: ${{ steps.check.outputs.browser-sha256 }}
         run: |
           set -euo pipefail
           tag="desktop-v${VERSION}"
@@ -335,26 +358,29 @@ jobs:
             echo
             echo '### Windows package'
             echo
-            echo "${tick}rpa-windows-x64.zip${tick} holds the RPA runner, the policy tool, the browser host, the ERP Demo app and the installer for Windows x64. It is not code-signed: it comes with its SHA-256 and a build attestation. Check both before you unpack it:"
+            echo "${tick}rpa-windows-x64.zip${tick} holds the RPA runner, the policy tool, the recorder, the ERP Demo app and the installer for Windows x64. ${tick}rpa-browser-windows-x64.zip${tick} holds the RPA browser (the browser host and Chromium), which the installer adds with ${tick}-WithBrowser${tick} when it is unpacked into the package folder. Neither is code-signed: each comes with its SHA-256 and a build attestation. Check both before you unpack a zip:"
             echo
             echo "${fence}sh"
             echo "gh attestation verify rpa-windows-x64.zip --repo ${GITHUB_REPOSITORY} \\"
             echo "  --signer-workflow ${GITHUB_REPOSITORY}/.github/workflows/desktop-release.yml --source-ref refs/tags/${tag}"
             echo "sha256sum -c rpa-windows-x64.zip.sha256   # ${SHA256}"
+            echo "sha256sum -c rpa-browser-windows-x64.zip.sha256   # ${BROWSER_SHA256}"
             echo "${fence}"
             echo
             echo "In PowerShell, this prints True when the hash matches:"
             echo
             echo "${fence}powershell"
             echo "(Get-FileHash rpa-windows-x64.zip -Algorithm SHA256).Hash -eq '${SHA256}'"
+            echo "(Get-FileHash rpa-browser-windows-x64.zip -Algorithm SHA256).Hash -eq '${BROWSER_SHA256}'"
             echo "${fence}"
             echo
-            echo "The attestation shows which workflow of this repository attested the zip, from which tag and commit. It does not show that the commit was reviewed, or that the zip is what the source code would build elsewhere."
+            echo "Run the same ${tick}gh attestation verify${tick} command for ${tick}rpa-browser-windows-x64.zip${tick}. The attestation shows which workflow of this repository attested a zip, from which tag and commit. It does not show that the commit was reviewed, or that the zip is what the source code would build elsewhere."
             echo
-            echo "${tick}Get-Rpa.ps1${tick} does the download, the hash check, the unpack and the install in one command, in an administrator Windows PowerShell: ${tick}.\\Get-Rpa.ps1 -AllowFrom <n8n address>${tick}. It checks the attestation too where the GitHub CLI is installed and signed in, and otherwise says that it did not; ${tick}-RequireAttestation${tick} makes that check mandatory. It names the zip's SHA-256 and is attested too, so the command above run on ${tick}Get-Rpa.ps1${tick} covers the zip."
+            echo "${tick}Get-Rpa.ps1${tick} does the download, the hash check, the unpack and the install in one command, in an administrator Windows PowerShell: ${tick}.\\Get-Rpa.ps1 -AllowFrom <n8n address>${tick}, with ${tick}-WithBrowser${tick} for the browser as well. It checks the attestation too where the GitHub CLI is installed and signed in, and otherwise says that it did not; ${tick}-RequireAttestation${tick} makes that check mandatory. It names the SHA-256 of each zip and is attested too, so the command above run on ${tick}Get-Rpa.ps1${tick} covers the zips."
             echo
             echo "Details: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${tag}/desktop/README.md#releasing-the-windows-package"
           } > "$RUNNER_TEMP/notes/notes.md"
-          gh release create "$tag" rpa-windows-x64.zip rpa-windows-x64.zip.sha256 Get-Rpa.ps1 \
+          gh release create "$tag" rpa-windows-x64.zip rpa-windows-x64.zip.sha256 \
+            rpa-browser-windows-x64.zip rpa-browser-windows-x64.zip.sha256 Get-Rpa.ps1 \
             --repo "$GITHUB_REPOSITORY" --verify-tag --latest=false \
             --title "RPA Windows package ${VERSION}" --notes-file "$RUNNER_TEMP/notes/notes.md"
