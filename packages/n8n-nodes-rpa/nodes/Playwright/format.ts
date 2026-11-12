@@ -182,7 +182,12 @@ function targetName(t: unknown): string {
   return own ? String(own.name ?? own.automationId ?? '') : '';
 }
 
-/** A desktop step's sentence: its verb, the value it types or chooses (never a variable's) and its field, as the recorder's bar words it. */
+/**
+ * A desktop step's sentence, as the recorder's bar words it. For every step that acts on the app (type, choose, check,
+ * press, click) the action, the control and the value come from the step itself, never from its intent: the page is
+ * what a person approves, and the intent is the author's own description (a step document's or a UiPath project's
+ * author may be someone else). A variable's value is never shown.
+ */
 function desktopSentence(s: Json): string {
   const fill = s.fill === undefined ? undefined : asJson(s.fill);
   const select = s.select === undefined ? undefined : asJson(s.select);
@@ -194,12 +199,15 @@ function desktopSentence(s: Json): string {
     const file = /^\{\{\$exportDir\}\}[\\/](.+)$/.exec(String(fill.value ?? ''));
     if (file) return `Save ${file[1]} into the run's export folder`;
   }
-  // A control with neither a name nor an id: the step's own intent says it better than "Type … into <intent>". The
-  // typed or chosen value still shows when the intent does not say it (never a variable's).
-  const intent = String(s.intent ?? '').trim();
-  if (!named && (fill || select || check) && intent) {
-    const value = fill ? fill.value : select ? select.option : undefined;
-    return typeof value === 'string' && !holdsVariable(value) && !intent.includes(value) ? `${intent}: "${value}"` : intent;
+  // A control with neither a name nor an id. What the step does and the value it types or chooses come from the step
+  // itself, as for a named control: this page is what a person approves, and the intent is only the author's own
+  // description, so it is shown as that, in brackets, and never in place of the action or the value.
+  const described = String(s.intent ?? '').replace(/\s+/g, ' ').trim();
+  if (!named && (fill || select || check)) {
+    const says = described ? ` (described as: ${described})` : '';
+    if (fill) return `${holdsVariable(fill.value) ? 'Type' : `Type "${String(fill.value)}"`} into a field without a name${says}`;
+    if (select) return `${holdsVariable(select.option) ? 'Choose an item' : `Choose "${String(select.option)}"`} in a field without a name${says}`;
+    return `${asJson(check).checked === false ? 'Uncheck' : 'Check'} a box without a name${says}`;
   }
   if (fill) {
     return holdsVariable(fill.value) ? `Type into ${field}` : `Type "${String(fill.value)}" into ${field}`;
@@ -211,6 +219,12 @@ function desktopSentence(s: Json): string {
   if (s.read !== undefined) {
     const name = ownCondition(asJson(s.read).target)?.name;
     return typeof name === 'string' && name.trim() ? `Read ${name.trim()}` : 'Read a value from the app';
+  }
+  // A click: the control comes from the step itself. The author's description stands beside it when it says something else.
+  for (const [verb, word] of [['click', 'Click'], ['doubleClick', 'Double-click']] as const) {
+    if (s[verb] === undefined) continue;
+    const text = `${word} ${targetName(s[verb]) || 'a control without a name'}`;
+    return described && described.toLowerCase() !== text.toLowerCase() ? `${text} (described as: ${described})` : text;
   }
   return String(s.intent ?? '');
 }

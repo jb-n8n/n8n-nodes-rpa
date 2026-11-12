@@ -1423,17 +1423,36 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       { text: 'Read a value from the app', marks: ['gives its text to n8n as out_result_count'] },
       { text: 'Read Result count', marks: ['gives its text to n8n as out_result_count'] },
     ]);
-    // A control with neither a name nor an id: the step's own intent, with the typed or chosen value when the intent
-    // does not say it, and never a variable's value.
+    // A control with neither a name nor an id: the action and the value come from the step, as for a named control. The
+    // intent is the author's own description and is shown as that: it can neither replace the action nor hide the value.
     const bare = { uia: { path: [{ controlType: 'Edit' }] } };
     expect(reviewSteps([
       { intent: 'Type into the date field', fill: { field: bare, value: '2026-01-20' } },
-      { intent: 'Type 2026-01-20 as the date', fill: { field: bare, value: '2026-01-20' } },
+      { intent: 'Read the total (a value such as a)', fill: { field: bare, value: 'a' } },
       { intent: 'Type the date', fill: { field: bare, value: '{{var.date}}' } },
       { intent: 'Pick the plant', select: { field: bare, option: '1000' } },
-      { intent: 'Tick the box', check: { field: bare, checked: true } },
+      { intent: 'Uncheck the box', check: { field: bare, checked: true } },
+      { intent: '', check: { field: bare, checked: false } },
     ], { desktop: true }).map((r) => r.text)).toEqual([
-      'Type into the date field: "2026-01-20"', 'Type 2026-01-20 as the date', 'Type the date', 'Pick the plant: "1000"', 'Tick the box',
+      'Type "2026-01-20" into a field without a name (described as: Type into the date field)',
+      'Type "a" into a field without a name (described as: Read the total (a value such as a))',
+      'Type into a field without a name (described as: Type the date)',
+      'Choose "1000" in a field without a name (described as: Pick the plant)',
+      'Check a box without a name (described as: Uncheck the box)',
+      'Uncheck a box without a name',
+    ]);
+    // A click names its control from the step, too. A description that says something else stands beside it, in brackets.
+    const post = { uia: { path: [{ controlType: 'Button', name: 'Post' }] } };
+    expect(reviewSteps([
+      { intent: 'Click Post', click: post },
+      { intent: 'Read the total', click: post },
+      { intent: 'Open the row', doubleClick: post },
+      { intent: 'Look at the list', click: { uia: { path: [{ controlType: 'Pane' }] } } },
+    ], { desktop: true }).map((r) => r.text)).toEqual([
+      'Click Post',
+      'Click Post (described as: Read the total)',
+      'Double-click Post (described as: Open the row)',
+      'Click a control without a name (described as: Look at the list)',
     ]);
   });
 
