@@ -409,18 +409,18 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
   for (const o of outcomes) {
     if (o.kind === 'adopted') {
       const item = await repairedStepsItem(ctx, engine, withLeftOut(o.proposal));
-      repaired.push({ ...item, json: withReviewSteps(item.json), pairedItem: paired });
+      repaired.push({ ...item, json: withReviewSteps(engine, item.json), pairedItem: paired });
     }
-    if (o.kind === 'forApproval') repaired.push({ json: withReviewSteps(o.review), pairedItem: paired });
+    if (o.kind === 'forApproval') repaired.push({ json: withReviewSteps(engine, o.review), pairedItem: paired });
   }
   for (const o of desktopOut) if (o.review) repaired.push({ json: o.review, pairedItem: paired });
   return { kind: 'ok', data: { json: fields, pairedItem: paired, ...binaryField }, repaired };
 }
 
 /** A browser Repaired steps item with its steps as the review page lists them (shown only, never signed or reviewed). */
-function withReviewSteps(json: IDataObject): IDataObject {
+function withReviewSteps(engine: Pick<Engine, 'shownUrl'>, json: IDataObject): IDataObject {
   const steps = (json.steps as { steps?: unknown } | null)?.steps;
-  return { ...json, reviewSteps: reviewSteps(Array.isArray(steps) ? steps : [], { desktop: false }) as unknown as IDataObject[] };
+  return { ...json, reviewSteps: reviewSteps(Array.isArray(steps) ? steps : [], { desktop: false, shownUrl: engine.shownUrl }) as unknown as IDataObject[] };
 }
 
 /**

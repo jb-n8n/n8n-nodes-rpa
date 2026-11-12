@@ -329,7 +329,7 @@ describe('Import Steps: execution', () => {
     const leftOut = (data[0].json.report as { items: { kind: string; at: string; what: string; reason: string }[] }).items
       .filter((i) => i.kind === 'untranslated' || (i.kind === 'dropped' && !(i as { notNeeded?: true }).notNeeded)).map((i) => `${i.at}, ${i.what}: ${i.reason}`);
     expect(repaired[0].json).toEqual({
-      ...repairedStepsJson(engine, { ...proposal.proposal, leftOut }, 'after'), reviewSteps: reviewSteps(proposal.proposal.steps.steps, { desktop: false }),
+      ...repairedStepsJson(engine, { ...proposal.proposal, leftOut }, 'after'), reviewSteps: reviewSteps(proposal.proposal.steps.steps, { desktop: false, shownUrl: real.shownUrl }),
     });
     expect(repaired[0].json).toMatchObject({ name: 'sap-export', baseVersion: null, version: 1 });
     expect(repaired[0].binary?.after).toMatchObject({ mimeType: 'image/png', fileName: 'after-v1.png' });
@@ -1231,6 +1231,38 @@ describe('Import Steps: a step document', () => {
       const without = await notReplayed({ startUrl: START, steps: [SIGN_IN, OPEN, SUBMIT] }, { playwrightSiteLoginApi: siteLoginData(SITE) });
       expect(without.data[0].json.error).toBeUndefined();
       expect(without.repaired).toHaveLength(1);
+    });
+
+    it('the review page words each step from the step, the description beside it; what is signed is unchanged', async () => {
+      // Descriptions that say something else than their steps do.
+      const doc = { startUrl: START, steps: [
+        SIGN_IN,
+        { intent: 'Open the help page', goto: '/acme/reports?session=abc' },
+        { intent: 'Read the total', fill: { field: { label: 'Amount' }, value: '9999' } },
+        { intent: 'Click Cancel', click: { role: 'button', name: 'Pay now' } },
+        { ...SUBMIT, intent: 'Close the dialog' },
+      ] };
+      const { engine, repaired } = await notReplayed(doc);
+      const item = repaired[0].json;
+      expect((item.reviewSteps as IDataObject[]).map((r) => r.text)).toEqual([
+        'Sign in',
+        'Open /acme/reports (described as: Open the help page)',
+        'Type into Amount: "9999" (described as: Read the total)',
+        'Click Pay now (described as: Click Cancel)',
+        'Click Export CSV to submit a form to POST the start site at /acme/reports/export (described as: Close the dialog)',
+      ]);
+      // What is signed does not change: the steps with their intents and the hash are those of the document's own
+      // proposal, the digest covers the item without the shown-only list, and Sign Steps signs it with and without alike.
+      const script = real.parseScript({ ...doc, name: 'sap-export', version: 1 });
+      const proposal = real.notReplayedProposal(script);
+      expect(item.steps).toEqual(proposal.steps);
+      expect((item.steps as { steps: { intent: string }[] }).steps.map((s) => s.intent)).toEqual(doc.steps.map((s) => s.intent));
+      expect(item.hash).toBe(proposal.hash);
+      const { reviewSteps: _r, ...bare } = item;
+      expect(item.digest).toBe(real.proposalDigest({ ...(bare as unknown as real.Proposal) }));
+      const [withShown, without] = [await sign(engine, item), await sign(engine, bare)];
+      expect(withShown).toMatchObject({ status: 'active' });
+      for (const key of ['steps', 'hash', 'signature']) expect(withShown[key], key).toEqual(without[key]);
     });
 
     it.each(Object.entries(DOCS))('the same for %s', async (_kind, doc) => {
