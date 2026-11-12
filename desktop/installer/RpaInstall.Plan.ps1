@@ -435,7 +435,13 @@ function Get-RpaInstallPlan {
       $refusals.Add(('The scheduled task folder {0} exists and is owned by {1}. Check what is in it, remove it, and run the installer again.' -f $script:TaskPath, $Facts.TaskFolderOwner))
     }
 
-    if ($upgrade -and $Facts.RunnerRunning) {
+    # Nobody signed in, and no run holds the runner: the RPA Supervisor's session of the bot user stays for the idle
+    # time after the last connection (the installer's own check of the runner is one), and the runner with it.
+    if ($upgrade -and $Facts.RunnerRunning -and $Facts.RunnerIdle -and $Facts.InstalledMode -eq 'unattended') {
+      $idleSeconds = 15
+      if ($null -ne $Facts.InstalledIdleSeconds) { $idleSeconds = [int]$Facts.InstalledIdleSeconds }
+      if (-not ($Parameters.Force -or $convert)) { $refusals.Add(('No run is in progress: the bot user is still signed in from the last connection to the runner, and the RPA Supervisor signs that session out by itself {0} s after that connection ended. Run this again then, or add -Force.' -f $idleSeconds)) }
+    } elseif ($upgrade -and $Facts.RunnerRunning) {
       $text = 'The runner is running; a run in progress will fail.'
       # A move from automatic sign-in always finds the runner running (Windows signed the bot user in), and signs the
       # bot user out anyway, which its notice says: a refusal here would hide that notice and its question behind

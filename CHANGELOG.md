@@ -46,6 +46,7 @@ All notable changes to `n8n-nodes-rpa`, the `rpa-browser` image and the Windows 
 ### Fixed
 
 - **RPA Recorder**: a file saved through a Save dialog under the name it offers now comes back to n8n, as a typed name does. Before, the run saved it in the bot user's Documents folder and returned no file.
+- An installer run in the seconds after an unattended install, while the bot user's session waits to be signed out and no run holds the runner, says so and how long it stays, instead of "a run in progress will fail".
 - `Get-Rpa.ps1 -Zip` and `rpa policy apply` read a relative path from PowerShell's current folder, not from `C:\Windows\system32`.
 - The recorder's bar keeps six rows of steps in Finished and Saved, and its step buttons fit one row at 360 wide.
 - A desktop locator that matches several elements fails after 3 seconds instead of at the step's timeout, and says what to add.

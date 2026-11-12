@@ -53,7 +53,7 @@ BeforeAll {
       IsAdmin = $true; Is64Bit = $true; OsBuild = 20348
       UserExists = $false; UserIsDomain = $false; UserIsAdmin = $false; UserAdminUnknown = $false
       UserPasswordExpires = $false; UserPasswordWrong = $false; UserPasswordProblem = $null
-      PortsInUse = @{}; Installed = $false; RunnerRunning = $false
+      PortsInUse = @{}; Installed = $false; RunnerRunning = $false; RunnerIdle = $false
       InstalledRunnerPort = $null; InstalledBrowserPort = $null; InstalledBrowser = $false
       InstalledAllowFrom = $null; InstalledPublicNetwork = $false
       InstalledAutoSignInForUser = $false; InstalledAutoSignInUser = $null; InstalledUser = $null; InstalledForUser = $false
@@ -248,6 +248,58 @@ Describe 'Get-RpaInstallPlan' {
       $plan.Refusals.Count | Should -Be 0
       $plan.Warnings | Should -BeExactly @($text)
       $plan.Steps[0] | Should -BeExactly 'stop running services'
+    }
+
+    # Nobody signed in: the RPA Supervisor's session of the bot user stays for the idle time after the last connection
+    # (the installer's own check of the runner among them), and the runner with it.
+    It 'on an upgrade of an unattended install whose runner no run holds, says that the session ends by itself' {
+      $idle = 'No run is in progress: the bot user is still signed in from the last connection to the runner, and the RPA Supervisor signs that session out by itself {0} s after that connection ended. Run this again then, or add -Force.'
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-UnattendedFacts @{ RunnerRunning = $true; RunnerIdle = $true })
+      $plan.Refusals | Should -BeExactly @($idle -f 15)
+      $plan.Steps.Count | Should -Be 0
+      (Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-UnattendedFacts @{ RunnerRunning = $true; RunnerIdle = $true; InstalledIdleSeconds = 40 })).Refusals | Should -BeExactly @($idle -f 40)
+      # With -Force it goes on, and warns of no run that would fail.
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Force = $true }) -Facts (New-UnattendedFacts @{ RunnerRunning = $true; RunnerIdle = $true })
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Warnings | Should -Not -Contain 'The runner is running; a run in progress will fail.'
+      $plan.Steps[0] | Should -BeExactly 'stop running services'
+    }
+
+    It 'on an upgrade whose runner a run may hold, refuses as before: <Why>' -ForEach @(
+      @{ Why = 'unattended, and a run holds it'; Change = @{ InstalledMode = 'unattended'; RunnerIdle = $false } }
+      @{ Why = 'not unattended'; Change = @{ InstalledMode = $null; RunnerIdle = $true } }
+    ) {
+      $Change.RunnerRunning = $true
+      (Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-UnattendedFacts $Change)).Refusals | Should -BeExactly @('The runner is running; a run in progress will fail. Use -Force to continue.')
+    }
+
+    # What Get-RpaMachineFacts reads for RunnerIdle: the runner's processes, install.json, the supervisor's state file
+    # and the machine's TCP connections. Whatever is missing or does not fit counts as a run.
+    It 'counts the runner as held by no run only in the supervisor''s session, listening, with no connection open: <Why>' -ForEach @(
+      @{ Why = 'idle'; Sessions = @(3); State = '{"sessionId":3,"logonTime":"2026-11-12T21:00:00+00:00","lastFailure":null}'; Connections = @(); Idle = $true }
+      @{ Why = 'a connection to the runner'; Sessions = @(3); State = '{"sessionId":3}'; Connections = @(@{ LocalPort = 18765; State = 'Established' }); Idle = $false }
+      @{ Why = 'a connection to the browser'; Sessions = @(3); State = '{"sessionId":3}'; Connections = @(@{ LocalPort = 13000; State = 'Established' }); Idle = $false }
+      @{ Why = 'a connection elsewhere only'; Sessions = @(3); State = '{"sessionId":3}'; Connections = @(@{ LocalPort = 18765; State = 'TimeWait' }, @{ LocalPort = 3389; State = 'Established' }); Idle = $true }
+      @{ Why = 'a runner in another session'; Sessions = @(3, 4); State = '{"sessionId":3}'; Connections = @(); Idle = $false }
+      @{ Why = 'no session in the state file'; Sessions = @(3); State = '{"sessionId":null,"lastFailure":"x"}'; Connections = @(); Idle = $false }
+      @{ Why = 'a state file that does not parse'; Sessions = @(3); State = 'not json'; Connections = @(); Idle = $false }
+      @{ Why = 'no runner listening behind the supervisor'; Sessions = @(3); State = '{"sessionId":3}'; Connections = $null; Idle = $false }
+      @{ Why = 'an install.json without the inner ports'; Sessions = @(3); State = '{"sessionId":3}'; Connections = @(); Idle = $false; Old = $true }
+    ) {
+      $runners = @($Sessions | ForEach-Object { [pscustomobject]@{ SessionId = $_ } })
+      $install = [pscustomobject]@{ runnerPort = 8765; browserPort = 3000; browser = $true; runnerInnerPort = 18765; browserInnerPort = 13000 }
+      if ($Old) { $install = [pscustomobject]@{ runnerPort = 8765; browserPort = 3000; browser = $true } }
+      $listening = @([pscustomobject]@{ LocalPort = 18765; State = 'Listen' })
+      if ($null -eq $Connections) { $all = @() } else { $all = $listening + @($Connections | ForEach-Object { [pscustomobject]$_ }) }
+      InModuleScope RpaInstall -Parameters @{ Runners = $runners; Install = $install; State = $State; All = $all } {
+        param($Runners, $Install, $State, $All)
+        Test-RpaRunnerIdle $Runners $Install $State $All
+      } | Should -Be $Idle
+    }
+
+    It 'reads RunnerIdle for an unattended install with the runner running only, and an error leaves it false' {
+      $script:ModuleSource | Should -Match ([regex]::Escape("if (`$facts.RunnerRunning -and `$facts.InstalledMode -eq 'unattended') {"))
+      $script:ModuleSource | Should -Match ([regex]::Escape("`$facts.RunnerIdle = Test-RpaRunnerIdle `$runners `$install `$state @(Get-NetTCPConnection -ErrorAction Stop)"))
     }
   }
 
