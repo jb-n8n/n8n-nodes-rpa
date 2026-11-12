@@ -50,6 +50,24 @@ const recording = (): INodeExecutionData => {
   const bytes = Buffer.from(FIXTURE.split('http://localhost:8080').join(portal.url));
   return { json: {}, binary: { data: { data: bytes.toString('base64'), mimeType: 'application/json', fileName: 'sap-export.json', bytes: bytes.length } } };
 };
+/**
+ * The UiPath project recorded against the light web GUI (a sign-in with an authentication code, then the export), zipped
+ * as a user uploads it, pointed at the sandbox.
+ */
+const uipathLight = (): INodeExecutionData => {
+  const root = fileURLToPath(new URL('../../engine/test/fixtures/import/uipath-sap-light/', import.meta.url));
+  const entries: Record<string, Uint8Array> = {};
+  const walk = (dir: string) => {
+    for (const name of readdirSync(dir)) {
+      const path = join(dir, name);
+      if (statSync(path).isDirectory()) walk(path);
+      else entries[`SAP Line Item Export/${relative(root, path).split('\\').join('/')}`] = strToU8(readFileSync(path, 'utf8').split('http://localhost:8080').join(portal.url));
+    }
+  };
+  walk(root);
+  const project = Buffer.from(zipSync(entries));
+  return { json: {}, binary: { data: { data: project.toString('base64'), mimeType: 'application/zip', fileName: 'project.zip', bytes: project.length } } };
+};
 async function sign(json: IDataObject): Promise<IDataObject> {
   const params = signStepsParams();
   const [out] = await executeSignSteps(nodeContext({ params, rawParameters: params, items: [{ json }], credentials: credentials(), continueOnFail: true }), engine);
@@ -126,19 +144,24 @@ describe('Import Steps against the sandbox (real engine)', () => {
     expect(await posts()).toEqual([{ path: '/public/form/submit', name: 'Ada Lovelace' }]);
   }, 180_000);
 
+  it('a UiPath browser project with the Expected File template 5 sends (name pattern and columns) replays its download and signs', async () => {
+    portal.setState({ mfa: 'totp' });
+    const expectedFile = { file: { namePattern: '^LINEITEMS_1000_', requiredColumns: 'Document, Amount' } };
+    const params = { ...importParams, source: 'uipath', stepsName: 'line-item-export', expectedFile };
+    const [data, repaired] = await executeImportSteps(nodeContext({
+      params, rawParameters: params, credentials: credentials(), continueOnFail: true, items: [uipathLight()],
+    }), engine, { executionsMode: 'regular' });
+    expect(data[0].json.error, JSON.stringify(data[0].json).slice(0, 1500)).toBeUndefined();
+    expect(JSON.stringify(data[0].json.report)).not.toContain('stays a click');
+    expect(repaired).toHaveLength(1);
+    expect(repaired[0].json.evidence).toMatchObject({ file: { fileName: SEPTEMBER } });
+    const record = await sign(repaired[0].json);
+    expect(record, JSON.stringify(record).slice(0, 1500)).toMatchObject({ name: 'line-item-export-1', version: 1, status: 'active' });
+  }, 180_000);
+
   it('the code is in neither the report, the Data output nor the generated workflow', async () => {
     // The UiPath project recorded against the light web GUI: a sign-in with an authentication code, then the export.
-    const root = fileURLToPath(new URL('../../engine/test/fixtures/import/uipath-sap-light/', import.meta.url));
-    const entries: Record<string, Uint8Array> = {};
-    const walk = (dir: string) => {
-      for (const name of readdirSync(dir)) {
-        const path = join(dir, name);
-        if (statSync(path).isDirectory()) walk(path);
-        else entries[`SAP Line Item Export/${relative(root, path).split('\\').join('/')}`] = strToU8(readFileSync(path, 'utf8').split('http://localhost:8080').join(portal.url));
-      }
-    };
-    walk(root);
-    const project = Buffer.from(zipSync(entries));
+    const project = Buffer.from(uipathLight().binary!.data.data, 'base64');
     portal.setState({ mfa: 'totp' });
     // The Site Login has no TOTP Secret: the code can only come from the One-Time Code Workflow, which reads it as an
     // authenticator app would.

@@ -47,6 +47,7 @@ All notable changes to `n8n-nodes-rpa`, the `rpa-browser` image and the Windows 
 - A desktop locator that matches several elements fails after 3 seconds instead of at the step's timeout, and says what to add.
 - A WinForms list row is found by its name, not its position.
 - Sign Steps signs a declared `submit` on the start site without a Site Login, as Run Steps runs it.
+- **RPA: 5 Import a bot** asks about the file it downloads for a UiPath project too. A UiPath browser bot that downloads a file can now be approved: before, its export stayed a click and nothing could be signed.
 
 ### Security
 

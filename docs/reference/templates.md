@@ -18,8 +18,9 @@ Templates 2, 3 and 5 create the two Data Tables when they are missing.
 
 - **Settings**: `approval` is `on this form` (the default) or `by email`. `showDetails` (false) puts each step list's
   safety flags, evidence and change list on the review page.
-- **Import a bot** asks for the **Bot file**, **Source (optional)** and **Name for the steps**. For a browser bot it asks
-  on a second page, **The file it downloads**, for a file name pattern and required columns.
+- **Import a bot** asks for the **Bot file**, **Source (optional)** and **Name for the steps**. For every upload but an
+  RPA recording it asks on a second page, **The file it downloads**, for a file name pattern and required columns.
+  Leave both empty when the bot downloads nothing in a browser.
 - **Review and approve** shows each step list: what it opens, whether it signs in, forms it submits, files it returns,
   what the replay proved, the steps it left out, and the numbered steps. For desktop steps it asks "Which of these steps
   save, send or submit?". The **Decision** is **Approve and sign** or **Reject**. A page left unanswered for an hour

@@ -172,7 +172,7 @@
           "conditions": [
             {
               "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005b5",
-              "leftValue": "={{ !['RPA recording', 'UiPath project'].includes($json.source) && !/\\.(?:rpa-recording\\.json|zip|xaml)$/i.test(String($json.bot?.filename ?? '')) }}",
+              "leftValue": "={{ $json.source !== 'RPA recording' && !/\\.rpa-recording\\.json$/i.test(String($json.bot?.filename ?? '')) }}",
               "rightValue": "",
               "operator": {
                 "type": "boolean",
@@ -193,7 +193,7 @@
         440,
         0
       ],
-      "notes": "A recording or a UiPath project never asks: their steps say which file they return. Every other upload gets the optional download question on a second page."
+      "notes": "A recording never asks: the recorder makes its export step. Every other upload, a UiPath project too, gets the optional download question on a second page."
     },
     {
       "parameters": {
@@ -220,7 +220,7 @@
         "resumeUnit": "hours",
         "options": {
           "formTitle": "The file it downloads",
-          "formDescription": "If the bot downloads a file, say which: the replay checks that it gets that file. Leave both empty when it downloads nothing.",
+          "formDescription": "If the bot downloads a file in a browser, say which: the replay checks that it gets that file. Leave both empty when it downloads nothing, or when a desktop app saves the file.",
           "buttonLabel": "Import"
         }
       },
@@ -232,7 +232,7 @@
         660,
         -120
       ],
-      "notes": "Browser sources only (see Asks about a download?). The run pauses here until the person submits, at most 1 hour."
+      "notes": "Every upload but a recording (see Asks about a download?). The run pauses here until the person submits, at most 1 hour."
     },
     {
       "parameters": {
