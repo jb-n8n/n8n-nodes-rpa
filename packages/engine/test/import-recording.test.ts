@@ -47,7 +47,7 @@ describe('the ERP Demo recording', () => {
       'Click Search',
       'Click Vendor Row 1',
       'Click File',
-      'Wait for the window erpdemo.exe',
+      'Wait for the next window of erpdemo.exe',
       'Click Export...',
       'Wait for the window Export line items',
       'Type into File name:',

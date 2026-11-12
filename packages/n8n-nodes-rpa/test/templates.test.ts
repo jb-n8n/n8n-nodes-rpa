@@ -1275,7 +1275,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       + [
         added('Wait for the window ERP Demo - Sign in'), 'Type &quot;clerk&quot; into User name', 'Type into Password <em>· secret variable password</em>', 'Press Enter in Password',
         added('Wait for the window ERP Demo - Line items'), 'Choose &quot;2000&quot; in Company code', 'Type &quot;2026-01-20&quot; into Date from', 'Type &quot;2026-11-30&quot; into Date to',
-        'Click Search', 'Click Vendor Row 1', 'Click File', added('Wait for the window erpdemo.exe'), 'Click Export...', added('Wait for the window Export line items'),
+        'Click Search', 'Click Vendor Row 1', 'Click File', added('Wait for the next window of erpdemo.exe'), 'Click Export...', added('Wait for the window Export line items'),
         'Save line-items.csv into the run&#39;s export folder', 'Click Save', added('Return the exported file line-items.csv <em>· returns a file</em>'),
       ].map((l) => `<li>${l}</li>`).join('') + `</ol>${POINTER}`);
     // The parenthesis names the returned file only when one of the added steps returns it.
@@ -1417,6 +1417,12 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       .toEqual([{ text: 'Type the note', marks: ['variable note'] }]);
     expect(reviewSteps([{ intent: 'Pick', select: { field: { uia: { path: [{ controlType: 'ComboBox', name: 'Plant' }] } }, option: '{{ var.plant }}' } }], { desktop: true }))
       .toEqual([{ text: 'Choose an item in Plant', marks: ['variable plant'] }]);
+    // A desktop read names its control by the name a person sees, never by its automation id, and says the output once.
+    const read = (cond: Record<string, string>) => ({ intent: `Read ${cond.name ?? cond.automationId} as out_result_count`, read: { target: { uia: { window: { exe: 'erpdemo.exe' }, path: [{ automationId: 'gridResults' }, cond] } }, as: 'out_result_count' } });
+    expect(reviewSteps([read({ controlType: 'Text', automationId: 'lblResultCount' }), read({ controlType: 'Text', automationId: 'lblCount', name: ' Result count ' })], { desktop: true })).toEqual([
+      { text: 'Read a value from the app', marks: ['gives its text to n8n as out_result_count'] },
+      { text: 'Read Result count', marks: ['gives its text to n8n as out_result_count'] },
+    ]);
   });
 
   it('a recording\'s marks name its secret variables from the import, never a value', async () => {
