@@ -157,8 +157,11 @@ export function importAddedSteps(steps: readonly DesktopStep[]): number[] {
   return steps.flatMap((s, i) => ('waitFor' in s || 'expectFile' in s ? [i + 1] : []));
 }
 
-/** One step as the review page lists it: its sentence, its marks (variables, a returned file, a sign-in), and whether the import added it. */
-export interface ReviewStep { text: string; marks: string[]; added?: true }
+/**
+ * One step as the review page lists it: its sentence, its marks (variables, a returned file, a sign-in), whether the
+ * import added it, and for a browser `paginate` (the only step that holds steps) the steps it runs on each page.
+ */
+export interface ReviewStep { text: string; marks: string[]; added?: true; each?: ReviewStep[] }
 /** A candidate write as the review page asks about it; `signsIn`: a key pressed in a secret field (signInKeySteps), asked unticked. */
 export interface ReviewWrite { step: number; intent: string; signsIn?: true }
 
@@ -367,18 +370,26 @@ export function reviewSteps(
   o: { desktop: true; secretVariables?: readonly string[]; startValues?: Readonly<Record<string, string>>; added?: readonly number[] }
     | { desktop: false; shownUrl: (url: string) => string; secretVariables?: undefined; startValues?: undefined; added?: undefined },
 ): ReviewStep[] {
-  return steps.map((raw, j) => {
+  const review = (raw: unknown, j: number): ReviewStep => {
     const s = asJson(raw);
+    // A paginate's own marks leave out its body: each step of the body is listed under it with its own.
+    const body = s.paginate !== undefined && Array.isArray(asJson(s.paginate).each) ? (asJson(s.paginate).each as unknown[]) : undefined;
+    const own = body ? { ...s, paginate: { ...asJson(s.paginate), each: [] } } : raw;
     const secret = (v: string): boolean =>
       (o.desktop ? (o.secretVariables ?? []).includes(v) : Boolean(asJson(s.fill).secret) || Boolean(asJson(s.signIn).changePassword));
     const marks = [
-      ...stepVariables(raw).map((v) => (secret(v) ? `secret variable ${v}` : `variable ${v}${o.startValues?.[v] !== undefined ? `, starts as ${o.startValues[v]}` : ''}`)),
+      ...stepVariables(own).map((v) => (secret(v) ? `secret variable ${v}` : `variable ${v}${o.startValues?.[v] !== undefined ? `, starts as ${o.startValues[v]}` : ''}`)),
       ...(s.expectFile || s.download ? ['returns a file'] : []),
       ...(s.read && asJson(s.read).as ? [`gives its text to n8n as ${String(asJson(s.read).as)}`] : []),
       ...(s.signIn ? ['signs in with the RPA Site Login'] : []),
     ];
-    return { text: o.desktop ? desktopSentence(s) : browserSentence(s, o.shownUrl), marks, ...((o.added ?? []).includes(j + 1) ? { added: true as const } : {}) };
-  });
+    return {
+      text: o.desktop ? desktopSentence(s) : browserSentence(s, o.shownUrl), marks,
+      ...((o.added ?? []).includes(j + 1) ? { added: true as const } : {}),
+      ...(body?.length ? { each: body.map((b) => review(b, -1)) } : {}),
+    };
+  };
+  return steps.map(review);
 }
 
 /** For the review page only: a desktop step list's candidate writes (desktopWriteCandidates), each with its intent on one line. */

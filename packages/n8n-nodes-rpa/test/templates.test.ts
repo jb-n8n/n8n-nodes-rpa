@@ -1610,6 +1610,40 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     ]);
   });
 
+  it('a paginate lists the steps it runs on each page under its own line, each worded from the step, with its own marks', () => {
+    // paginate is the only step that holds steps (no nested paginate, no signIn inside): its body comes under it.
+    const steps = [
+      { intent: 'Open the list', goto: 'https://a.example/list' },
+      { intent: 'Go through the pages', paginate: { next: { role: 'button', name: 'Next' }, until: 'absent', max: 3, each: [
+        { intent: 'Read the rows', extract: { scope: { css: 'table' }, item: { css: 'tr' } } },
+        { intent: 'Close the banner', fill: { field: { label: 'Note' }, value: '<b>{{var.note}}</b>' } },
+        { intent: 'Close the banner', click: { text: 'Delete <all>' } },
+      ] } },
+      { intent: 'Download with Export', download: { trigger: { text: 'Export' } } },
+    ];
+    const listed = reviewSteps(steps, { desktop: false, shownUrl });
+    expect(listed[1]).toEqual({
+      text: 'Page through with Next, at most 3 pages, 3 steps on each (described as: Go through the pages)', marks: [],
+      each: [
+        { text: 'Read the rows', marks: [] },
+        { text: 'Type into Note: a variable (described as: Close the banner)', marks: ['variable note'] },
+        { text: 'Click Delete <all> (described as: Close the banner)', marks: [] },
+      ],
+    });
+    expect(listed.map((r) => r.each === undefined)).toEqual([true, false, true]);
+    // On the page: nested under the paginate's item, so the numbers of the steps after it do not move. Escaped once.
+    const item = { name: 'feed', version: 1, steps: { startUrl: 'https://a.example/', steps }, safetyFlags: [], safetyLine: 'none', evidenceLine: '3 rows', changeList: '', reviewSteps: listed };
+    const ran = { Settings: [[{ json: settingsJson() }]], 'Import steps': [[{ json: { report: { steps: 3, items: [] }, drafts: [] } }], [{ json: item }]] } as Record<string, INodeExecutionData[][]>;
+    const html = String(jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan(ran) })[0].html);
+    expect(html).toContain('<ol><li>Open a.example/list (described as: Open the list)</li>'
+      + '<li>Page through with Next, at most 3 pages, 3 steps on each (described as: Go through the pages)<ul>'
+      + '<li>On each page: Read the rows</li>'
+      + '<li>On each page: Type into Note: a variable (described as: Close the banner) <em>· variable note</em></li>'
+      + '<li>On each page: Click Delete &lt;all&gt; (described as: Close the banner)</li></ul></li>'
+      + '<li>Download with Export <em>· returns a file</em></li></ol>');
+    expect(html).toContain('Returns a file to n8n: step 3.');
+  });
+
   it('a recording\'s marks name its secret variables from the import, never a value', async () => {
     const { repaired, ran } = await importedRecording();
     const data = ran['Import steps'][0][0].json as { drafts: IDataObject[] };
