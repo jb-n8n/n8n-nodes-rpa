@@ -2,6 +2,7 @@
 // run, a missing node, a wrong key, an http address that is not this machine, a Connection Line that does not parse, and
 // that no secret reaches the output on any path, also when n8n echoes a request.
 import { execFile, spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
@@ -9,7 +10,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 const CLI = fileURLToPath(new URL('../dist/setup.mjs', import.meta.url));
 const FAKE_TTY = fileURLToPath(new URL('./fixtures/fake-tty.mjs', import.meta.url));
-const API_KEY = 'n8n-api-key-0123456789-abcdefghij-KLMNOP';
+const TEMPLATE = fileURLToPath(new URL('../templates/5-import-a-bot.json', import.meta.url));
+// n8n 2.x API keys are JWTs whose subject is the user (PublicApiKeyService). The fake's: the owner's, and a key of
+// another form (an older n8n's), which does not say whose it is.
+const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
+const PLAIN_KEY = 'n8n-api-key-0123456789-abcdefghij-KLMNOP';
+const API_KEY = [b64({ alg: 'HS256', typ: 'JWT' }), b64({ sub: 'u-owner', iss: 'n8n', aud: 'public-api' }), PLAIN_KEY].join('.');
 const FINGERPRINT = 'AB'.repeat(32);
 const RUNNER_TOKEN = 'runner-token-ZYXWVUTSRQPONMLKJIHGFEDCBA-98765';
 const LINE = `rpa-runner://win-1.example.internal:8765/rpa/v1#token=${RUNNER_TOKEN}&fingerprint=${FINGERPRINT}`;
@@ -21,17 +27,33 @@ const FIELDS: Record<string, string[]> = {
   httpBasicAuth: ['user', 'password'],
 };
 
-interface Cred { id: string; name: string; type: string; data: Record<string, any> }
-interface Wf { id: string; name: string; active: boolean; versionId: string; nodes: any[]; connections: unknown; settings: unknown }
-interface Options { knowsNode?: boolean; echo?: 'credentials' | 'activate'; credentials?: Cred[]; patch?: boolean }
+interface Cred { id: string; name: string; type: string; data: Record<string, any>; projectId?: string }
+interface Wf { id: string; name: string; active: boolean; versionId: string; nodes: any[]; connections: unknown; settings: unknown; projectId?: string; updatedAt?: string }
+interface Options { knowsNode?: boolean; echo?: 'credentials' | 'activate'; credentials?: Cred[]; workflows?: Wf[]; patch?: boolean; ownership?: boolean }
+
+// The fake's projects, as n8n 2.45 describes them: two personal projects and a team project.
+const PROJECTS: Record<string, { id: string; name: string; type: string; creatorId: string | null }> = {
+  'P-owner': { id: 'P-owner', name: 'Owner <owner@example.com>', type: 'personal', creatorId: 'u-owner' },
+  'P-other': { id: 'P-other', name: 'Other <other@example.com>', type: 'personal', creatorId: 'u-other' },
+  'P-team': { id: 'P-team', name: 'Ops', type: 'team', creatorId: 'u-other' },
+};
+const HOME = 'P-owner'; // the owner's personal project: where a call without projectId puts things
 
 /**
- * A fake n8n: the public API routes the command uses (two items a page, so lists page), the API key check, the form
- * (401 without the login once its workflow is active), and a request log. `echo` makes a POST fail with the request
- * body in its message, as a careless proxy or server might.
+ * A fake n8n 2.45: the public API routes the command uses (two items a page, so lists page), the API key check, who owns
+ * what (credential list items: shared[] { id, name, role }; workflow list items: shared[] { role, workflowId,
+ * projectId }; GET /workflows/{id}: shared[].project { id, type, creatorId }; `ownership: false` leaves all of it out),
+ * the form (401 without the login once its workflow is active), and a request log. `echo` makes a call fail with the
+ * request body in its message, as a careless proxy or server might.
  */
 async function fakeN8n(o: Options = {}) {
-  const state = { credentials: [...(o.credentials ?? [])] as Cred[], workflows: [] as Wf[], requests: [] as { method: string; path: string; body: string }[] };
+  const own = o.ownership !== false;
+  const state = {
+    credentials: (o.credentials ?? []).map((c) => ({ projectId: HOME, ...c })) as Cred[],
+    workflows: (o.workflows ?? []).map((w) => ({ projectId: HOME, ...w })) as Wf[],
+    requests: [] as { method: string; path: string; body: string }[],
+  };
+  let n = 0;
   const server = createServer((req, res) => {
     let body = '';
     req.on('data', (c) => { body += c; });
@@ -41,15 +63,22 @@ async function fakeN8n(o: Options = {}) {
       const send = (status: number, json: unknown) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(json)); };
       const form = /^\/form\/(.+)$/.exec(url.pathname);
       if (form) {
-        const live = state.workflows.some((w) => w.active && w.nodes.some((n) => n.webhookId === form[1]));
+        const live = state.workflows.some((w) => w.active && w.nodes.some((x) => x.webhookId === form[1]));
         return live ? send(401, { message: 'Authorization is required!' }) : send(404, { message: 'not registered' });
       }
-      if (req.headers['x-n8n-api-key'] !== API_KEY) return send(401, { message: "'X-N8N-API-KEY' header required" });
+      if (req.headers['x-n8n-api-key'] !== API_KEY && req.headers['x-n8n-api-key'] !== PLAIN_KEY) return send(401, { message: "'X-N8N-API-KEY' header required" });
       const page = (items: unknown[]) => {
         const offset = Number(url.searchParams.get('cursor') ?? 0);
         const limit = Math.min(Number(url.searchParams.get('limit') ?? 100), 2);
         return { data: items.slice(offset, offset + limit), nextCursor: offset + limit < items.length ? String(offset + limit) : null };
       };
+      const credItem = ({ data: _d, projectId, ...c }: Cred) => ({
+        ...c, ...(own ? { shared: [{ id: projectId, name: PROJECTS[projectId!]?.name, role: 'credential:owner' }] } : {}),
+      });
+      const wfItem = ({ projectId, ...w }: Wf, full = false) => ({
+        ...w,
+        ...(own ? { shared: [{ role: 'workflow:owner', workflowId: w.id, projectId, ...(full ? { project: PROJECTS[projectId!] } : {}) }] } : {}),
+      });
       const route = `${req.method} ${url.pathname}`;
       let m: RegExpExecArray | null;
       if ((m = /^GET \/api\/v1\/credentials\/schema\/(\w+)$/.exec(route))) {
@@ -57,38 +86,41 @@ async function fakeN8n(o: Options = {}) {
         if (!fields || (o.knowsNode === false && m[1] !== 'httpBasicAuth')) return send(404, { message: 'Not Found' });
         return send(200, { additionalProperties: false, type: 'object', properties: Object.fromEntries(fields.map((f) => [f, { type: 'string' }])), required: [] });
       }
-      if (route === 'GET /api/v1/credentials') return send(200, page(state.credentials.map(({ data: _d, ...c }) => c)));
+      if (route === 'GET /api/v1/credentials') return send(200, page(state.credentials.map(credItem)));
       if (route === 'POST /api/v1/credentials') {
         if (o.echo === 'credentials') return send(400, { message: `request.body.data is not valid: ${body}` });
         const c = JSON.parse(body);
-        const created = { id: `c${state.credentials.length + 1}`, name: c.name, type: c.type, data: c.data };
+        const created = { id: `c${++n}`, name: c.name, type: c.type, data: c.data, projectId: c.projectId ?? HOME };
         state.credentials.push(created);
         return send(200, { id: created.id, name: created.name, type: created.type });
       }
-      if ((m = /^PATCH \/api\/v1\/credentials\/(\w+)$/.exec(route))) {
+      if ((m = /^PATCH \/api\/v1\/credentials\/([\w-]+)$/.exec(route))) {
         if (o.patch === false) return send(405, { message: 'Method not allowed' });
         const c = state.credentials.find((x) => x.id === m![1]);
         if (!c) return send(404, { message: 'Not Found' });
         c.data = JSON.parse(body).data;
         return send(200, { id: c.id, name: c.name, type: c.type });
       }
-      if (route === 'GET /api/v1/workflows') return send(200, page(state.workflows.map(({ nodes: _n, ...w }) => w)));
+      if (route === 'GET /api/v1/workflows') return send(200, page(state.workflows.map((w) => wfItem(w))));
       if (route === 'POST /api/v1/workflows') {
         const w = JSON.parse(body);
-        const created: Wf = { id: `w${state.workflows.length + 1}`, active: false, versionId: `v-${state.workflows.length + 1}`, ...w };
+        const created: Wf = { id: `w${++n}`, active: false, versionId: `v-${n}`, ...w, projectId: w.projectId ?? HOME, updatedAt: new Date().toISOString() };
         state.workflows.push(created);
-        return send(200, created);
+        return send(200, wfItem(created));
       }
-      if ((m = /^GET \/api\/v1\/workflows\/(\w+)$/.exec(route))) {
-        const w = state.workflows.find((x) => x.id === m![1]);
-        return w ? send(200, w) : send(404, { message: 'Not Found' });
+      if ((m = /^(GET|PUT|DELETE) \/api\/v1\/workflows\/([\w-]+)$/.exec(route))) {
+        const w = state.workflows.find((x) => x.id === m![2]);
+        if (!w) return send(404, { message: 'Not Found' });
+        if (m[1] === 'PUT') Object.assign(w, JSON.parse(body), { versionId: `v-${++n}` });
+        if (m[1] === 'DELETE') state.workflows = state.workflows.filter((x) => x !== w);
+        return send(200, wfItem(w, true));
       }
-      if ((m = /^POST \/api\/v1\/workflows\/(\w+)\/activate$/.exec(route))) {
-        if (o.echo === 'activate') return send(400, { message: `could not activate: ${JSON.stringify(state.workflows[0])}` });
+      if ((m = /^POST \/api\/v1\/workflows\/([\w-]+)\/(activate|archive)$/.exec(route))) {
+        if (o.echo === 'activate' && m[2] === 'activate') return send(400, { message: `could not activate: ${JSON.stringify(state.workflows[0])}` });
         const w = state.workflows.find((x) => x.id === m![1]);
         if (!w) return send(404, { message: 'Not Found' });
-        w.active = true;
-        return send(200, w);
+        if (m[2] === 'activate') w.active = true;
+        return send(200, wfItem(w));
       }
       return send(404, { message: `no route ${route}` });
     });
@@ -366,9 +398,10 @@ describe('npx n8n-nodes-rpa setup', () => {
     const failed = await run(setup(echo.url), { ...ENV, RPA_CONNECTION_LINE: LINE });
     expect(failed.code).toBe(1);
     expect(failed.out).toMatch(/Could not create the credential "RPA import form" \(HTTP 400: request\.body\.data is not valid: .*\*\*\*/);
-    const sent = echo.state.requests.filter((r) => r.method === 'POST').map((r) => JSON.parse(r.body).data.password as string);
+    const sent = echo.state.requests.filter((r) => r.method === 'POST' && r.path === '/api/v1/credentials').map((r) => JSON.parse(r.body).data.password as string);
     expect(sent).toHaveLength(1);
     expectNoSecrets(failed.out, sent);
+    expect(echo.state.workflows, 'the workflow it started without credentials is removed again').toEqual([]);
 
     const unpublished = await n8n({ echo: 'activate' });
     const notPublished = await run(setup(unpublished.url), ENV);
@@ -393,6 +426,116 @@ describe('npx n8n-nodes-rpa setup', () => {
     expect(conflict.code).toBe(1);
     expect(conflict.out).toMatch(/"RPA Step Signing" \(id c9\) has the type httpHeaderAuth.*Rename it/);
     expect(taken.state.workflows).toEqual([]);
+  });
+
+  describe('ownership: only what this run\'s project owns is reused', () => {
+    const SIGNING_ELSEWHERE: Cred = { id: 'c-planted', name: 'RPA Step Signing', type: 'playwrightScriptSigningApi', data: { secretKey: 'k'.repeat(64) }, projectId: 'P-other' };
+    const FORM_ELSEWHERE: Cred = { id: 'c-form-other', name: 'RPA import form', type: 'httpBasicAuth', data: { user: 'rpa', password: 'p'.repeat(32) }, projectId: 'P-other' };
+    const template = () => JSON.parse(readFileSync(TEMPLATE, 'utf8')) as { nodes: any[]; connections: unknown };
+    const planted = (projectId: string, change?: (nodes: any[]) => void): Wf => {
+      const t = template();
+      change?.(t.nodes);
+      return { id: `w-${projectId}`, name: 'RPA: 5 Import a bot', active: false, versionId: 'v-0', nodes: t.nodes, connections: t.connections, settings: { executionOrder: 'v1' }, projectId };
+    };
+
+    it('a same-name signing credential and form login in another project are left alone: its own are made, and the ids named', async () => {
+      const fake = await n8n({ credentials: [SIGNING_ELSEWHERE, FORM_ELSEWHERE] });
+      const { code } = await run(setup(fake.url, '--new-form-password', '--replace-signing-key'), ENV);
+      // --replace-signing-key asks for the typed word whenever a key of that name exists: no terminal here, so it stops.
+      expect(code).toBe(2);
+      expect(fake.posts()).toEqual([]);
+      const ok = await run(setup(fake.url, '--new-form-password'), ENV);
+      expect(ok.code, ok.out).toBe(0);
+      expect(fake.state.credentials.find((c) => c.id === 'c-planted')!.data.secretKey, 'never changed').toBe('k'.repeat(64));
+      expect(fake.state.credentials.find((c) => c.id === 'c-form-other')!.data.password, 'never changed').toBe('p'.repeat(32));
+      expect(fake.state.requests.some((r) => r.method === 'PATCH')).toBe(false);
+      const mine = fake.state.credentials.filter((c) => c.projectId === HOME);
+      expect(mine.map((c) => c.name).sort()).toEqual(['RPA Step Signing', 'RPA import form']);
+      const [wf] = fake.state.workflows;
+      expect(wf.nodes.find((x) => x.name === 'Sign steps').credentials.playwrightScriptSigningApi.id).not.toBe('c-planted');
+      expect(ok.stdout).toMatch(/left alone credential "RPA Step Signing" \(playwrightScriptSigningApi, id c-planted\): it belongs to another project or user/);
+      expect(ok.stdout).toMatch(/more than one credential named "RPA Step Signing": this run's is id c\d+\. Do not pick ids c-planted/);
+      expect(ok.stdout).not.toContain('k'.repeat(64));
+    });
+
+    it('a same-name workflow in another project is left alone and never published: its own is made under a dated name', async () => {
+      const fake = await n8n({ workflows: [planted('P-other')] });
+      const { code, out } = await run(setup(fake.url), ENV);
+      expect(code, out).toBe(0);
+      const theirs = fake.state.workflows.find((w) => w.id === 'w-P-other')!;
+      expect(theirs.active).toBe(false);
+      expect(fake.state.requests.some((r) => r.path.startsWith('/api/v1/workflows/w-P-other') && r.method !== 'GET')).toBe(false);
+      const mine = fake.state.workflows.find((w) => w.projectId === HOME)!;
+      expect(mine.name).toMatch(/^RPA: 5 Import a bot \(\d{4}-\d{2}-\d{2}\)$/);
+      expect(mine.active).toBe(true);
+      expect(out).toMatch(/left alone workflow "RPA: 5 Import a bot" \(id w-P-other\): it belongs to another project or user/);
+      // The second run finds its own (dated) workflow and creates nothing.
+      const before = fake.posts().length;
+      const again = await run(['setup', '--url', fake.url], ENV);
+      expect(again.code, again.out).toBe(0);
+      expect(fake.posts().length).toBe(before);
+      expect(again.out).toMatch(/reused +workflow "RPA: 5 Import a bot \(\d{4}-\d{2}-\d{2}\)"/);
+    });
+
+    it('a workflow in its own project that differs from the template is not published; --new-workflow makes a fresh one', async () => {
+      const fake = await n8n({ workflows: [planted(HOME, (nodes) => { nodes.find((x) => x.name === 'Sign steps').type = 'n8n-nodes-base.noOp'; })] });
+      const first = await run(setup(fake.url), ENV);
+      expect(first.code, first.out).toBe(1);
+      expect(first.out).toMatch(/"RPA: 5 Import a bot" \(id w-P-owner\) in your project differs from the template: its node "Sign steps" is not a n8n-nodes-rpa\.playwright node\. It was not published.*--new-workflow/);
+      expect(first.out).not.toMatch(/The import form is ready|\/form\//);
+      expect(fake.posts()).toEqual([]);
+
+      const fresh = await run(setup(fake.url, '--new-workflow'), ENV);
+      expect(fresh.code, fresh.out).toBe(0);
+      expect(fake.state.workflows.find((w) => w.id === 'w-P-owner')!.active).toBe(false);
+      expect(fake.state.workflows.find((w) => w.id !== 'w-P-owner')!.name).toMatch(/\(\d{4}-\d{2}-\d{2}\)$/);
+
+      // A node with a credential of another project also differs.
+      const other = await n8n({ credentials: [SIGNING_ELSEWHERE], workflows: [planted(HOME, (nodes) => { nodes.find((x) => x.name === 'Sign steps').credentials = { playwrightScriptSigningApi: { id: 'c-planted', name: 'RPA Step Signing' } }; })] });
+      const r = await run(setup(other.url), ENV);
+      expect(r.code).toBe(1);
+      expect(r.out).toMatch(/a credential on "Sign steps" \(id c-planted\) belongs to another project or user/);
+      expect(other.state.workflows[0].active).toBe(false);
+    });
+
+    it('--project-id: works in that project, and leaves the same names in the personal project alone', async () => {
+      const fake = await n8n({ credentials: [{ ...SIGNING_ELSEWHERE, id: 'c-personal', projectId: HOME }] });
+      const { code, out } = await run(setup(fake.url, '--project-id', 'P-team'), ENV);
+      expect(code, out).toBe(0);
+      for (const r of fake.state.requests.filter((x) => x.method === 'POST' && /\/(credentials|workflows)$/.test(x.path))) expect(JSON.parse(r.body).projectId).toBe('P-team');
+      expect(fake.state.workflows[0].projectId).toBe('P-team');
+      expect(out).toMatch(/left alone credential "RPA Step Signing" \(playwrightScriptSigningApi, id c-personal\)/);
+      const again = await run(['setup', '--url', fake.url, '--project-id', 'P-team'], ENV);
+      expect(again.code, again.out).toBe(0);
+      expect(again.out).not.toMatch(/^created/m);
+      expect((await run(setup(fake.url, '--project-id', 'bad id!'), ENV)).code).toBe(2);
+    });
+
+    it('when n8n does not say who owns what, nothing of the same name is reused: fresh credentials are made', async () => {
+      const fake = await n8n({ ownership: false, credentials: [{ ...SIGNING_ELSEWHERE, projectId: HOME }] });
+      const { code, out } = await run(setup(fake.url, '--show-signing-key'), ENV);
+      expect(code, out).toBe(0);
+      expect(out).toMatch(/does not say which project owns the new workflow, so no credential of the same name is reused/);
+      expect(out).toMatch(/left alone credential "RPA Step Signing" \(playwrightScriptSigningApi, id c-planted\): this run could not tell which project is yours/);
+      const signing = fake.state.credentials.filter((c) => c.name === 'RPA Step Signing');
+      expect(signing).toHaveLength(2);
+      const made = signing.find((c) => c.id !== 'c-planted')!;
+      expect(fake.state.workflows[0].nodes.find((x) => x.name === 'Sign steps').credentials.playwrightScriptSigningApi.id).toBe(made.id);
+      expect(count(out, made.data.secretKey)).toBe(1);
+      expect(out).not.toContain('k'.repeat(64));
+    });
+
+    it('a key that does not say whose it is: its own earlier workflow is not taken on trust, the credentials of its project are', async () => {
+      const fake = await n8n();
+      expect((await run(setup(fake.url), ENV)).code).toBe(0);
+      const creds = fake.state.credentials.map((c) => c.id);
+      const r = await run(setup(fake.url), { N8N_API_KEY: PLAIN_KEY });
+      expect(r.code, r.out).toBe(0);
+      expect(r.out).toMatch(/left alone workflow "RPA: 5 Import a bot" \(id w\d+\): the API key does not say whose it is/);
+      // The new workflow tells the project, so the credentials made there before are reused, and nothing else.
+      expect(fake.state.credentials.map((c) => c.id)).toEqual(creds);
+      expect(fake.state.workflows).toHaveLength(2);
+    });
   });
 
   it('prints its usage, and names the command', async () => {
