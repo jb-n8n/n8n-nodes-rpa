@@ -20,7 +20,7 @@ public static partial class StepText
     {
         StepKind.Launch => $"Start {step.Exe}",
         StepKind.Click => $"{(step.Double ? "Double-click" : "Click")} {step.Label}",
-        StepKind.Fill when step.ExportFile is not null => $"Save {step.ExportFile} into the run's export folder ({step.Label})",
+        StepKind.Fill when step.ExportFile is not null => $"Save {step.ExportFile} into the run's export folder",
         StepKind.Fill => $"Type {Shown(step.Value!, step.Secret)} into {step.Label}",
         StepKind.Select => $"Choose {Shown(step.Option!, false)} in {step.Label}",
         StepKind.Check => $"{(step.Checked ? "Check" : "Uncheck")} {step.Label}",
