@@ -20,7 +20,8 @@ node's **Import Steps** operation. Set it up once:
 
 Then, for each bot:
 
-1. Upload the file. **Source** works it out from the file name, or choose it. Give the steps a **Name**.
+1. Upload the file. **Source** works it out from the file name, or choose it. Give the steps a **Name**: they are
+   saved and run under that name.
 2. The next page, **The file it downloads**, comes for every upload but an RPA recording. For a browser bot that
    downloads a file, a UiPath one too, give the file name pattern and the required columns. The replay checks that the
    bot gets that file. Leave both empty when the bot downloads nothing in a browser.

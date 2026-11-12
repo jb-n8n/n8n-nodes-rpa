@@ -1571,11 +1571,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(sticky(t, 'Set once').color).toBe(COLOUR.green);
     expect(sticky(t, 'Approval by email').color).toBe(COLOUR.grey);
     expect(sticky(t, 'Why approval').color).toBe(COLOUR.grey);
+    // Three sentences. What is replayed, what is not and how step lists are named are on the review page and in move-a-bot.md.
     const form = (byName(t, 'Import a bot').parameters as { formDescription?: string }).formDescription ?? '';
-    expect(form).toContain('a step document that submits a form, downloads through a form, types a secret or changes a password is not run at all and goes to approval marked not replayed');
-    expect(form).toContain('shown to you for approval on the next page');
-    // One name: the review page, the table row and the generated workflow use the Name the person typed (UiPath: -1, -2).
-    expect(form).toContain('The steps are named after your Name; a UiPath project gives one step list per sequence, named with -1, -2 and so on at the end.');
+    expect(form).toBe('Upload a bot: an RPA recording, a UiPath project (ZIP or XAML), a Chrome Recorder export (JSON), Playwright code, or steps you wrote (JSON). You review every step on the next page. Nothing runs until you approve it.');
     const about = sticky(t, 'About this workflow').content;
     for (const s of ['Chrome Recorder', 'Playwright code', 'UiPath', 'RPA: 2 Data feed', 'each step list gets its own approval',
       '**step document**', 'this is how hand-written steps get approved and signed']) expect(about, s).toContain(s);

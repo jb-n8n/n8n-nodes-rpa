@@ -69,7 +69,7 @@
       "parameters": {
         "authentication": "basicAuth",
         "formTitle": "Import a bot",
-        "formDescription": "Upload a Chrome Recorder export (JSON), Playwright code (JavaScript or TypeScript), a UiPath project (ZIP or XAML), a step document you wrote (JSON) or an RPA recording (.rpa-recording.json). The steps are replayed in a fresh browser and shown to you for approval on the next page, and desktop steps without a replay; a step document that submits a form, downloads through a form, types a secret or changes a password is not run at all and goes to approval marked not replayed. The steps are named after your Name; a UiPath project gives one step list per sequence, named with -1, -2 and so on at the end. Nothing runs on a schedule until a person approves it.",
+        "formDescription": "Upload a bot: an RPA recording, a UiPath project (ZIP or XAML), a Chrome Recorder export (JSON), Playwright code, or steps you wrote (JSON). You review every step on the next page. Nothing runs until you approve it.",
         "formFields": {
           "values": [
             {
