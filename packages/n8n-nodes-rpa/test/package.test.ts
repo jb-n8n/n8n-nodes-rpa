@@ -32,6 +32,10 @@ describe('the published package', () => {
     expect(pkg.publishConfig).toEqual({ access: 'public', provenance: true });
     expect(pkg.files).toContain('dist');
   });
+  it('has the setup command as its bin, and an optional n8n-workflow peer, so npx does not install n8n-workflow', () => {
+    expect(pkg.bin).toEqual({ 'n8n-nodes-rpa': 'dist/setup.mjs' });
+    expect(pkg.peerDependenciesMeta).toEqual({ 'n8n-workflow': { optional: true } });
+  });
   it('lists every credential the package builds', () => {
     const creds = (pkg.n8n as { credentials: string[] }).credentials;
     expect(creds).toContain('dist/credentials/PlaywrightRedisApi.credentials.js');
@@ -70,6 +74,7 @@ describe('the packed tarball (scripts/pack.mjs, what publish.yml publishes)', ()
       const files = execFileSync('tar', ['-tzf', tgz], { encoding: 'utf8' });
       expect(files).toContain('package/dist/engine/index.js');
       expect(files).toContain('package/dist/schema/steps.schema.json');
+      expect(files).toContain('package/dist/setup.mjs');
       expect(files).not.toMatch(/\.d\.ts$/m);
     } finally {
       rmSync(dir, { recursive: true, force: true });
