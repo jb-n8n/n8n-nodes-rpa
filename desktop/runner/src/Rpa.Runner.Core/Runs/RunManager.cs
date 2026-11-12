@@ -71,6 +71,10 @@ public sealed class RunManager : IDisposable
     public const long MinLeaseMs = 5000;
     public const long MaxLeaseMs = 600000;
 
+    /// <summary>How long the launched apps get, in total, to close by themselves after the close request.</summary>
+    public static readonly TimeSpan CloseWait = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan ClosePoll = TimeSpan.FromMilliseconds(100);
+
     private readonly object _gate = new();
     private readonly string _exportRoot;
     private readonly IProcessHost _processes;
@@ -145,6 +149,10 @@ public sealed class RunManager : IDisposable
         }
     }
 
+    /// <summary>Ends the run. The answer does not wait for the apps to close: cleanup (close request, up to
+    /// <see cref="CloseWait"/>, stop, delete the export folder) goes on after it, and run.begin stays busy until it
+    /// has finished. Before the close wait existed the answer came after the cleanup; with it the answer could take
+    /// longer than the engine's 5 seconds for run.end.</summary>
     public void End(string? runId)
     {
         RunState run;
@@ -153,7 +161,13 @@ public sealed class RunManager : IDisposable
             run = Get(runId);
             Detach(run);
         }
-        Cleanup(run, "run.end");
+        _ = CleanupAsync(run, "run.end", polite: true);
+    }
+
+    /// <summary>Completes when no cleanup is running (the one after run.end or a lease that ran out).</summary>
+    public Task WaitForCleanupAsync()
+    {
+        lock (_gate) return _cleanup ?? Task.CompletedTask;
     }
 
     public bool HasActiveRun
@@ -189,7 +203,7 @@ public sealed class RunManager : IDisposable
             Detach(run);
             expired = run;
         }
-        Cleanup(expired, "lease expired");
+        _ = CleanupAsync(expired, "lease expired", polite: true);
     }
 
     // Under _gate: the run is no longer active, so new requests for it get no_run; run.begin stays busy until Cleanup
@@ -204,18 +218,59 @@ public sealed class RunManager : IDisposable
     }
 
     private RunState? _cleaning;
+    private Task? _cleanup;
 
-    private void Cleanup(RunState run, string reason)
+    // Starts on the caller's thread and returns at its first wait, so the caller is not held up by the close wait.
+    private async Task CleanupAsync(RunState run, string reason, bool polite)
     {
-        foreach (var pid in run.Processes)
+        Task done;
+        var finished = new TaskCompletionSource();
+        lock (_gate) { done = finished.Task; _cleanup = done; }
+        try
         {
-            try { _processes.KillTree(pid); }
-            catch (Exception e) { _log.Warn($"could not stop a process the run launched ({e.GetType().Name})"); }
+            var pids = run.Processes;
+            var asked = new HashSet<int>();
+            if (polite)
+            {
+                // Ask first. Nothing is typed, clicked or answered: an app that asks "Save changes?" gets no answer
+                // and is stopped when the wait is over.
+                foreach (var pid in pids)
+                {
+                    if (SafeHasExited(pid)) continue;
+                    asked.Add(pid);
+                    try { _processes.RequestClose(pid); }
+                    catch (Exception e) { _log.Warn($"could not ask a process the run launched to close ({e.GetType().Name})"); }
+                }
+                var until = _time.GetUtcNow() + CloseWait;
+                while (asked.Any(pid => !SafeHasExited(pid)) && _time.GetUtcNow() < until)
+                    await Task.Delay(ClosePoll, _time).ConfigureAwait(false);
+            }
+            foreach (var pid in pids)
+            {
+                var ended = SafeHasExited(pid);
+                _log.Info(!ended && !polite ? $"app pid={pid} was stopped"
+                    : !ended ? $"app pid={pid} did not close in {CloseWait.TotalSeconds:0} seconds and was stopped"
+                    : asked.Contains(pid) ? $"app pid={pid} closed by itself after the close request"
+                    : $"app pid={pid} had already ended");
+                // Called for every process, also an ended one: it releases the job (and so stops helpers the app left).
+                try { _processes.KillTree(pid); }
+                catch (Exception e) { _log.Warn($"could not stop a process the run launched ({e.GetType().Name})"); }
+            }
+            DeleteDirectory(run.ExportDir);
         }
-        DeleteDirectory(run.ExportDir);
-        lock (_gate) { if (ReferenceEquals(_cleaning, run)) _cleaning = null; }
-        _log.Info($"run ended ({reason})");
-        RunEnded?.Invoke(run.RunId, reason);
+        finally
+        {
+            lock (_gate) { if (ReferenceEquals(_cleaning, run)) _cleaning = null; }
+            _log.Info($"run ended ({reason})");
+            try { RunEnded?.Invoke(run.RunId, reason); }
+            finally { finished.SetResult(); }
+        }
+    }
+
+    private bool SafeHasExited(int pid)
+    {
+        try { return _processes.HasExited(pid); }
+        catch (Exception) { return false; }
     }
 
     private void DeleteDirectory(string dir)
@@ -251,7 +306,8 @@ public sealed class RunManager : IDisposable
             run = _active;
             if (run is not null) Detach(run);
         }
-        if (run is not null) Cleanup(run, "runner stopping");
+        // The runner is stopping: no close wait (the apps also die with the runner's jobs).
+        if (run is not null) CleanupAsync(run, "runner stopping", polite: false).GetAwaiter().GetResult();
     }
 
     private sealed class Scope(RunManager owner, RunState run) : IDisposable

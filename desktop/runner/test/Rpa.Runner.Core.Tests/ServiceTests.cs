@@ -56,12 +56,22 @@ public sealed class ServiceTests : IDisposable
     }
 
     [Fact]
-    public void Run_end_closes_the_processes_the_run_launched()
+    public async Task Run_end_asks_the_apps_the_run_launched_to_close_and_stops_them_after_the_wait()
     {
-        _h.BeginWithApp();
-        var pid = _h.Processes.Names.Keys.Single();
-        _h.Ok("run.end", new { runId = Harness.RunId });
-        Assert.Equal([pid], _h.Processes.Killed);
+        using var h = new Harness(realTime: false);
+        h.BeginWithApp();
+        var pid = h.Processes.Names.Keys.Single();
+        h.Ok("run.end", new { runId = Harness.RunId });
+        Assert.Equal([pid], h.Processes.CloseRequested);
+        Assert.Empty(h.Processes.Killed);
+        var done = h.Runs.WaitForCleanupAsync();
+        for (var i = 0; i < 100 && !done.IsCompleted; i++)
+        {
+            h.Time!.Advance(TimeSpan.FromMilliseconds(100));
+            await Task.WhenAny(done, Task.Delay(10));
+        }
+        await done.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal([pid], h.Processes.Killed);
     }
 
     [Fact]
