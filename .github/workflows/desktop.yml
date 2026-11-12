@@ -709,6 +709,8 @@ jobs:
 
           $run = Invoke-GetRpa @('-WithBrowser')
           Assert ($run.Code -eq 1 -and $run.Said -contains "$package has the browser already. To install from it, run $package\Install-Rpa.ps1 with the same parameters; to unpack again, remove $folder first.") 'a second Get-Rpa.ps1 -WithBrowser does not unpack over the browser that is there'
+          # The refusal above ends with exit code 1, as it should. The step itself has passed.
+          $global:LASTEXITCODE = 0
 
       # The two start scripts are started by hand again, as in the step "Start the installed runner and drive it": the
       # installer stopped the runner. Both go on running after this step: the upgrade and the uninstall below find
