@@ -3,7 +3,7 @@ import { createServer as createHttpServer } from 'node:http';
 import { createServer, type AddressInfo } from 'node:net';
 import { describe, expect, it, vi } from 'vitest';
 import { USE_CASE_WORDS } from 'n8n-rpa-engine';
-import type { ICredentialType, INodeProperties } from 'n8n-workflow';
+import { NodeHelpers, type ICredentialType, type INodeParameters, type INodeProperties } from 'n8n-workflow';
 import * as engine from 'n8n-rpa-engine';
 import { bound } from '../../engine/test/timing.js';
 import { PlaywrightBrowserApi } from '../credentials/PlaywrightBrowserApi.credentials.js';
@@ -12,7 +12,7 @@ import { PlaywrightScriptSigningApi } from '../credentials/PlaywrightScriptSigni
 import { PlaywrightSiteLoginApi } from '../credentials/PlaywrightSiteLoginApi.credentials.js';
 import { RpaDesktopRunnerApi } from '../credentials/RpaDesktopRunnerApi.credentials.js';
 import { RpaSecretVariablesApi } from '../credentials/RpaSecretVariablesApi.credentials.js';
-import { CREDENTIALS } from '../nodes/Playwright/config.js';
+import { CREDENTIALS, desktopRunnerConfig } from '../nodes/Playwright/config.js';
 import { browserTestResult, CREDENTIAL_TEST_WAIT_MS, scriptSigningResult, secretVariablesTestResult, siteLoginTestResult } from '../nodes/Playwright/credential-tests.js';
 
 // The Local Browser test needs playwright-core to find no Chromium. vi.hoisted runs before the imports above, so
@@ -142,9 +142,9 @@ describe('v2 credential types', () => {
   });
   it('RPA Desktop Runner: says where its Connection Line and its three values come from', () => {
     const props = new RpaDesktopRunnerApi().properties;
-    expect(props[0].displayName).toContain('on that machine, as an administrator, & "C:\\Program Files\\RPA Runner\\rpa.cmd" connection -ShowTokens prints it again');
-    expect(props[0].displayName).toContain('Windows guide, section 6');
-    expect(props[0].displayName).toContain('Paste the Connection Line');
+    expect(props[0].displayName).toBe(
+      'Paste the Connection Line the installer printed on the Windows machine. To print it again there, as an administrator: & "C:\\Program Files\\RPA Runner\\rpa.cmd" connection -ShowTokens',
+    );
     expect(props.find((p) => p.name === 'fingerprint')?.description).toContain('as rpa connection prints it');
     // The installer and its closing lines name the rpa command; the credentials name it too, not the script behind it.
     expect(JSON.stringify(props)).not.toContain('Show-RpaConnection');
@@ -153,6 +153,28 @@ describe('v2 credential types', () => {
     expect(line?.description).toBe(
       'The one line the Windows installer prints for the runner. It holds the address, the token and the certificate fingerprint: keep it as secret as the token. When it is filled, the three fields below are not used.',
     );
+  });
+  it('RPA Desktop Runner: a saved credential keeps working through what n8n does to it on save and on read', () => {
+    const props = new RpaDesktopRunnerApi().properties;
+    // n8n drops the values of fields displayOptions hide: the dialog saves getNodeParameters(…, false, false) and a run
+    // reads getNodeParameters(…, true, false). No field of this credential may be hidden, or old credentials would empty.
+    for (const p of props) expect(p.displayOptions, p.name).toBeUndefined();
+    const separate: INodeProperties = { displayName: 'Switch', name: 'separate', type: 'boolean', default: false };
+    const switched = [...props, separate].map((p): INodeProperties => (p.name === 'url' ? { ...p, displayOptions: { show: { separate: [true] } } } : p));
+    expect(NodeHelpers.getNodeParameters(switched, { url: 'wss://x' }, true, false, null, null)?.url).toBeUndefined(); // the drop itself
+    const saved = (data: INodeParameters) => NodeHelpers.getNodeParameters(props, data, false, false, null, null) ?? {};
+    const read = (data: INodeParameters) => desktopRunnerConfig(NodeHelpers.getNodeParameters(props, saved(data), true, false, null, null) ?? {});
+    const fields = { url: 'wss://runner.example.net:8765/rpa/v1', token: 'saved-token', fingerprint: 'ab'.repeat(32) };
+    const fixture = JSON.parse(readFileSync(new URL('./fixtures/connection-lines.json', import.meta.url), 'utf8')) as { samples: { kind: string; line: string; url: string; token: string; fingerprint: string }[] };
+    const runners = fixture.samples.filter((s) => s.kind === 'runner');
+    expect(runners.length).toBeGreaterThan(0);
+    // As saved before the Connection Line existed: the three fields only.
+    expect(read(fields)).toEqual(fields);
+    for (const s of runners) {
+      expect(read({ connectionLine: s.line })).toEqual({ url: s.url, token: s.token, fingerprint: s.fingerprint });
+      // Both filled: the Connection Line wins, as it always has.
+      expect(read({ ...fields, connectionLine: s.line })).toEqual({ url: s.url, token: s.token, fingerprint: s.fingerprint });
+    }
   });
   it('RPA Secret Variables: name and value pairs, the value a password-type field, and what the node does with them', () => {
     const c = new RpaSecretVariablesApi();

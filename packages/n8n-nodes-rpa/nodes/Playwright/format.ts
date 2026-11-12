@@ -171,11 +171,15 @@ const stepVariables = (s: unknown): string[] =>
   [...new Set([...(JSON.stringify(s ?? null) ?? '').matchAll(/\{\{\s*var\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g)].map((m) => m[1]))];
 
 /** The name of a desktop target's own (last) condition, or ''. */
-function targetName(t: unknown): string {
+/** A target's own condition: the last one of its UI Automation path. */
+function ownCondition(t: unknown): Json | undefined {
   const path = asJson(asJson(t).uia).path;
-  if (!Array.isArray(path) || !path.length) return '';
-  const own = asJson(path[path.length - 1]);
-  return String(own.name ?? own.automationId ?? '');
+  return Array.isArray(path) && path.length ? asJson(path[path.length - 1]) : undefined;
+}
+
+function targetName(t: unknown): string {
+  const own = ownCondition(t);
+  return own ? String(own.name ?? own.automationId ?? '') : '';
 }
 
 /** A desktop step's sentence: its verb, the value it types or chooses (never a variable's) and its field, as the recorder's bar words it. */
@@ -193,6 +197,11 @@ function desktopSentence(s: Json): string {
   if (select) return holdsVariable(select.option) ? `Choose an item in ${field}` : `Choose "${String(select.option)}" in ${field}`;
   if (key) return `Press ${String(key.key)}${field ? ` in ${field}` : ''}`;
   if (check) return `${check.checked === false ? 'Uncheck ' : 'Check '}${field}`;
+  // A read: the name a person sees, never the control's automation id; the output name is the step's mark.
+  if (s.read !== undefined) {
+    const name = ownCondition(asJson(s.read).target)?.name;
+    return typeof name === 'string' && name.trim() ? `Read ${name.trim()}` : 'Read a value from the app';
+  }
   return String(s.intent ?? '');
 }
 

@@ -54,8 +54,15 @@ function targetName(t: UiaTarget | undefined): string {
 function shown(label: string): string {
   return /[()"]/.test(label) ? `"${label.replaceAll('"', "'")}"` : label;
 }
-function windowName(w: WindowSel | undefined): string {
-  return cleanLabel(w?.title ?? w?.titlePattern ?? w?.exe ?? '');
+/**
+ * The window a window wait names: by its title; a window without one (a menu's drop-down) as the next window of its
+ * program, since the program file is not a window.
+ */
+function windowWaitIntent(w: WindowSel): string {
+  const title = cleanLabel(w.title ?? w.titlePattern ?? '');
+  if (title) return `Wait for the window ${shown(title)}`;
+  const exe = cleanLabel(w.exe ?? '');
+  return exe ? `Wait for the next window of ${shown(exe)}` : 'Wait for the window of the app';
 }
 
 /**
@@ -147,9 +154,8 @@ export function buildDesktopDraft(seq: DesktopSequence, report: ImportReport, o:
     // A step that runs only when its element shows cannot be the one the window wait waits for: the next one is.
     if (pendingWindow && target && !e.when) {
       const window = pendingWindow.window ?? target.window;
-      const shownWindow = windowName(window);
       if (window) {
-        push({ intent: `Wait for the window ${shown(shownWindow || 'of the app')}`, waitFor: { target: { uia: { window: { ...window }, path: target.path.map((c) => ({ ...c })) } } } }, pendingWindow.at);
+        push({ intent: windowWaitIntent(window), waitFor: { target: { uia: { window: { ...window }, path: target.path.map((c) => ({ ...c })) } } } }, pendingWindow.at);
       }
       pendingWindow = undefined;
     }
