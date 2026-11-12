@@ -116,6 +116,10 @@ runner's port: a firewall rule for n8n's address, and `-Address` on `rpa connect
 another name or address. Where n8n cannot reach the machine directly, put a private network or a tunnel between them.
 The product does not provide one.
 
+In the mode where nobody is signed in, any connection that reaches the runner's port makes the supervisor sign the bot
+user in, before the token is checked. Without the token nothing runs. Give `-AllowFrom` only n8n's address, so that
+nothing else can cause a sign-in.
+
 ## 4. Signing in
 
 The runner drives apps only while the bot user's desktop is signed in and unlocked. On a locked or disconnected desktop
