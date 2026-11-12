@@ -27,16 +27,16 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 // Shared with `npx n8n-nodes-rpa setup`: the API client, the redaction and the URL checks.
-import { createClient, createRedactor, findCredential, parseN8nUrl } from '../../packages/n8n-nodes-rpa/setup/n8n-api.mjs';
+import {
+  browserCredentialData, createClient, createRedactor, findCredential, MIN_BROWSER_TOKEN_LENGTH, parseBrowserUrl, parseN8nUrl,
+} from '../../packages/n8n-nodes-rpa/setup/n8n-api.mjs';
 
 const CREDENTIAL_NAME = 'RPA Browser';
-// Stored identifiers (never renamed): the credential type and the mode value of Browser Server.
+// Stored identifier (never renamed): the credential type.
 const CREDENTIAL_TYPE = 'playwrightBrowserApi';
-const BROWSER_SERVER_MODE = 'playwright';
 const NODE_PACKAGE = 'n8n-nodes-rpa';
 const TEMPLATE_FILES = ['0-connection-check.json', '2-data-feed.json', '3-approve-steps.json', 'hello-world.json'];
 const DEFAULT_TEMPLATES = fileURLToPath(new URL('../../packages/n8n-nodes-rpa/templates/', import.meta.url));
-const MIN_TOKEN_LENGTH = 32; // the gate refuses a shorter token
 const USAGE = [
   'Usage: node deploy/scripts/configure-n8n.mjs --n8n-url <url> --endpoint <ws-url> [--templates <dir>] [--project-id <id>]',
   '  with N8N_API_KEY and RPA_BROWSER_TOKEN exported, never typed inline (shell history):',
@@ -78,18 +78,14 @@ function readConfig(argv, env) {
   if (n8n.problem) throw new UsageError(`${n8n.problem}\n${USAGE}`);
   const projectId = values['project-id'];
   if (projectId !== undefined && !/^[A-Za-z0-9_-]{1,64}$/.test(projectId)) throw new UsageError('--project-id must be an n8n project id (letters, digits, _ and -).');
-  let endpoint;
-  try { endpoint = new URL(values.endpoint ?? ''); } catch { endpoint = null; }
-  if (!endpoint || (endpoint.protocol !== 'ws:' && endpoint.protocol !== 'wss:')) {
-    throw new UsageError(`--endpoint must be the browser service's ws:// or wss:// address (the browser_endpoint output).\n${USAGE}`);
-  }
-  if (endpoint.username || endpoint.password || endpoint.search) throw new UsageError('--endpoint must not carry a user, password or query: the token goes in RPA_BROWSER_TOKEN.');
+  const endpoint = parseBrowserUrl(values.endpoint, '--endpoint', "the browser service's ws:// or wss:// address (the browser_endpoint output)");
+  if (endpoint.problem) throw new UsageError(`${endpoint.problem}\n${USAGE}`);
 
   const apiKey = env.N8N_API_KEY ?? '';
   if (!apiKey.trim()) throw new UsageError(`N8N_API_KEY is not set. Create an API key in n8n (Settings -> n8n API), as the owner or an admin, and export it.\n${USAGE}`);
   const token = env.RPA_BROWSER_TOKEN ?? '';
   if (!token) throw new UsageError(`RPA_BROWSER_TOKEN is not set. Read the gate token into it (the n8n_settings notes show how), never paste it into a flag.\n${USAGE}`);
-  if (token.length < MIN_TOKEN_LENGTH) throw new UsageError(`RPA_BROWSER_TOKEN is shorter than ${MIN_TOKEN_LENGTH} characters; the browser service refuses such a token.`);
+  if (token.length < MIN_BROWSER_TOKEN_LENGTH) throw new UsageError(`RPA_BROWSER_TOKEN is shorter than ${MIN_BROWSER_TOKEN_LENGTH} characters; the browser service refuses such a token.`);
 
   const templatesDir = values.templates ?? DEFAULT_TEMPLATES;
   const missing = TEMPLATE_FILES.filter((f) => !existsSync(join(templatesDir, f)));
@@ -115,7 +111,7 @@ async function configureCredential(cfg) {
   }
   if (schema.status === 401) return { fatal: `n8n refused the API key (${cfg.reason(schema)}). Check N8N_API_KEY.` };
   if (schema.status !== 200) return { fatal: `Could not read the ${CREDENTIAL_TYPE} credential schema (${cfg.reason(schema)}). Is this n8n 2.41 or later with the public API on?` };
-  const data = { mode: BROWSER_SERVER_MODE, wsUrl: cfg.endpoint, token: cfg.token, privateNetwork: new URL(cfg.endpoint).protocol === 'ws:' };
+  const data = browserCredentialData(cfg.endpoint, cfg.token);
   const known = Object.keys(schema.json?.properties ?? {});
   const unknown = Object.keys(data).filter((k) => !known.includes(k));
   if (unknown.length) return { fatal: `The installed ${NODE_PACKAGE} has no credential field ${unknown.join(', ')}: update the package, or this script.` };

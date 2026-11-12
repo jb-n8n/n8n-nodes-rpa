@@ -49,6 +49,26 @@ export function parseN8nUrl(value, flag) {
   return { origin, base: `${origin}/api/v1`, plaintext: url.protocol === 'http:' && !isLoopback(url.hostname) };
 }
 
+/** The browser service's gate refuses a shorter token. */
+export const MIN_BROWSER_TOKEN_LENGTH = 32;
+
+/** The browser service's ws:// or wss:// address → { href }, or { problem } in words that name the flag. */
+export function parseBrowserUrl(value, flag, what = "the browser service's ws:// or wss:// address") {
+  let url;
+  try { url = new URL(value ?? ''); } catch { url = null; }
+  if (!url || (url.protocol !== 'ws:' && url.protocol !== 'wss:')) return { problem: `${flag} must be ${what}.` };
+  if (url.username || url.password || url.search) return { problem: `${flag} must not carry a user, password or query: the token goes in RPA_BROWSER_TOKEN.` };
+  return { href: url.href };
+}
+
+/**
+ * The RPA Browser credential's data (Browser Server mode). A ws:// address is on a private network (a cluster, a VPC,
+ * the compose network): the engine accepts it only with Private Network Endpoint on, and the token.
+ */
+export function browserCredentialData(href, token) {
+  return { mode: 'playwright', wsUrl: href, token, privateNetwork: new URL(href).protocol === 'ws:' };
+}
+
 /**
  * A client for one n8n: api() never throws on an HTTP status, only on a network failure (its message redacted);
  * listAll() pages through a list; reason() is the server's error message, redacted and cut short.
