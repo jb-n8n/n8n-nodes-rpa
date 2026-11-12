@@ -96,6 +96,46 @@ test('every sign-in POST is counted', async () => {
   assert.equal(portal.state().logins, 2);
 });
 
+const post = (path, body, cookie) => fetch(`${portal.url}${path}`, {
+  method: 'POST', redirect: 'manual',
+  headers: { 'content-type': 'application/x-www-form-urlencoded', ...(cookie ? { cookie } : {}) },
+  body: new URLSearchParams(body),
+});
+const homeOf = async (cookie) => (await fetch(`${portal.url}/acme/home`, { headers: { cookie } })).text();
+
+test('each dealer account signs in with its own password and sees its own home page', async () => {
+  const { harbor, lakeside } = SANDBOX.accounts;
+  const summit = await homeOf(await login());
+  assert.match(summit, /Welcome, Summit Motors<\/h2><p>Dealer code SM-7702\./);
+  const res = await post('/acme/login', { username: harbor.username, password: harbor.password });
+  assert.equal(res.headers.get('location'), '/acme/home');
+  const home = await homeOf(res.headers.get('set-cookie').split(';')[0]);
+  assert.match(home, /Welcome, Harbor Cars<\/h2><p>Dealer code HB-2290\./);
+  assert.match(home, /22 units allocated/);
+  // One account's password never signs in another.
+  for (const [username, password] of [[harbor.username, SANDBOX.password], [SANDBOX.username, harbor.password], [lakeside.username, harbor.password], ['toString', 'x']]) {
+    assert.equal((await post('/acme/login', { username, password })).headers.get('location'), '/acme/login?error=1', username);
+  }
+});
+
+test('lakeside-ops always asks for a code from its own authenticator secret', async () => {
+  const { lakeside } = SANDBOX.accounts;
+  const { totp } = await import('../totp.js');
+  const res = await post('/acme/login', { username: lakeside.username, password: lakeside.password });
+  assert.equal(res.headers.get('location'), '/acme/mfa');
+  const cookie = res.headers.get('set-cookie').split(';')[0];
+  assert.equal((await post('/acme/mfa', { code: totp(SANDBOX.totpSecret) }, cookie)).headers.get('location'), '/acme/mfa?error=1');
+  assert.equal((await post('/acme/mfa', { code: totp(lakeside.totpSecret) }, cookie)).headers.get('location'), '/acme/home');
+  assert.match(await homeOf(cookie), /Welcome, Lakeside Auto<\/h2><p>Dealer code LA-4410\./);
+});
+
+test("the release's MFA and an expired password apply to summit-ops only", async () => {
+  const { harbor } = SANDBOX.accounts;
+  portal.setState({ mfa: 'totp', forcePasswordChange: true });
+  assert.equal((await post('/acme/login', { username: harbor.username, password: harbor.password })).headers.get('location'), '/acme/home');
+  assert.equal((await post('/acme/login', { username: SANDBOX.username, password: SANDBOX.password })).headers.get('location'), '/acme/mfa');
+});
+
 test('a locked account refuses every sign-in with lockout wording', async () => {
   portal.setState({ locked: true });
   const res = await fetch(`${portal.url}/acme/login`, {
