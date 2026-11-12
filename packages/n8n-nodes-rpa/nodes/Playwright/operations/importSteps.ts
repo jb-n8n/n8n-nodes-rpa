@@ -283,7 +283,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
       const file = workflowFile(flow, imported.drafts, {
         name: p.name, desktopDrafts, source,
         ...(p.codeWorkflowId ? { codeWorkflow: { id: p.codeWorkflowId, timeoutSeconds: p.codeTimeoutMs / 1000 } } : {}),
-        run: { maxSeconds: p.common.maxSeconds, allowedHosts: p.common.allowedHosts },
+        run: { maxSeconds: p.common.maxSeconds, allowedHosts: p.common.allowedHosts, allowPrivateNetwork: p.common.allowPrivateNetwork },
       });
       workflow = { binary: { workflow: await ctx.helpers.prepareBinaryData(file.data, file.fileName, file.mimeType) }, name: file.name };
     } catch (error) {

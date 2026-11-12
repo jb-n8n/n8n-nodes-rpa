@@ -397,6 +397,32 @@ describe('Import Steps: execution', () => {
     expect(data[0].binary?.workflow).toMatchObject({ mimeType: 'application/json', fileName: 'sap-report.workflow.json' });
   });
 
+  it('the generated workflow\'s Run steps has Allow Private Network on exactly when the import had it on; an expression there is refused', async () => {
+    const runNode = async (options: Record<string, unknown>) => {
+      const engine = importEngine((input) => proved(input));
+      const [data] = await run(engine, { params: params({}, options) });
+      expect(data[0].json.error).toBeUndefined();
+      const wf = JSON.parse(binaryText(data[0], 'workflow').toString('utf8')) as { nodes: { type: string; parameters: { operation?: string; options?: IDataObject }; notes?: string }[] };
+      const runs = wf.nodes.filter((n) => n.parameters.operation === 'runSteps');
+      expect(runs).toHaveLength(1);
+      return runs[0];
+    };
+    const on = await runNode({ allowPrivateNetwork: true });
+    expect(on.parameters.options?.allowPrivateNetwork).toBe(true);
+    expect(on.notes).toContain('Options → Allow Private Network is on because the import had it on');
+    for (const options of [{ allowPrivateNetwork: false }, {}]) {
+      const off = await runNode(options);
+      expect(off.parameters.options, JSON.stringify(options)).not.toHaveProperty('allowPrivateNetwork');
+      expect(off.notes).toContain('For a site on your own network, turn on Options → Allow Private Network here.');
+    }
+    // Import Steps reads it as a literal, as Run Steps does: an expression stops the item before anything is imported.
+    const engine = importEngine((input) => proved(input));
+    const p = params({}, { allowPrivateNetwork: '={{ true }}' });
+    const [refused] = await run(engine, { params: { ...p, options: { ...(p.options as IDataObject), allowPrivateNetwork: true } }, rawParameters: p });
+    expect(String(refused[0].json.error)).toContain('Allow Private Network');
+    expect(engine.imports).toHaveLength(0);
+  });
+
   describe('a very large UiPath project gives bounded outputs', () => {
     const NS = 'xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" xmlns:ui="http://schemas.uipath.com/workflow/activities" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"';
     const xaml = (cls: string, body: string) => `<Activity x:Class="${cls}" ${NS}><Sequence DisplayName="${cls}">${body}</Sequence></Activity>`;

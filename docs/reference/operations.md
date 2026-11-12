@@ -197,7 +197,9 @@ Login. A step found by a row position (`Vendor Row 1`) is reported, because a la
   Pattern, no file check) come out here with `adopted: false` and the reason, never on Repaired Steps. Binary
   `workflow` (`<name>.workflow.json`) is an n8n workflow that runs the steps: **Get active steps** → **Run steps**, a
   manual trigger and a switched-off **On a schedule**. For a UiPath project it also holds the rest of the bot (If,
-  For Each, Excel, HTTP, email and delays as n8n nodes, with notes on what was not translated).
+  For Each, Excel, HTTP, email and delays as n8n nodes, with notes on what was not translated). Its browser **Run
+  steps** keep the import's **Max Seconds**, **Also Allow These Sites** and **One-Time Code Workflow**. They have
+  **Allow Private Network** on only when the import had it on, typed as a plain value, and their note says so.
 - **Error output** (output 2): a configuration problem, nothing imported, or every step list failed. A failed step
   list's trace and screenshot are binary `trace` and `screenshot`.
 
