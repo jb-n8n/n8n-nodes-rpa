@@ -1098,6 +1098,43 @@ describe('Import Steps: a step document', () => {
     expect(String((await sign(engine, { ...item, evidenceLine: 'Not replayed.' })).error)).toContain('changed after it was reviewed');
   });
 
+  it('a desktop step set that types a variable into a password field: shown as a secret, the key in it unticked, no plain variable; what is signed is unchanged', async () => {
+    const password = { uia: { path: [{ controlType: 'Edit', name: 'Password' }] } };
+    const doc = {
+      surface: 'desktop', app: { exe: 'ErpDemo.exe' },
+      steps: [
+        { intent: 'Type the user name', fill: { field: uia('txtUser'), value: '{{var.username}}' } },
+        { intent: 'Type the password', fill: { field: password, value: '{{var.password}}' } },
+        { intent: 'Press Enter in Password', key: { key: 'Enter', target: password } },
+        { intent: 'Click Save', click: uia('btnSave', 'Button') },
+      ],
+    };
+    const engine = importEngine(() => { throw new Error('a desktop step set is never adopted in a browser'); });
+    const [data, repaired] = await run(engine, { params: docParams(doc, { stepsName: 'erp' }), items: textItem, credentials: {} });
+    expect(data[0].json.error).toBeUndefined();
+    expect(drafts(data[0])).toEqual([expect.objectContaining({ variables: ['username', 'password'], secretVariables: ['password'], writeCandidates: [3, 4] })]);
+    const item = repaired[0].json;
+    // The review page: the password is a secret variable, and the key pressed in its field signs in (asked unticked).
+    expect((item.reviewSteps as IDataObject[])[1]).toEqual({ text: 'Type into Password', marks: ['secret variable password'] });
+    expect(item.writeCandidates).toEqual([{ step: 3, intent: 'Press Enter in Password', signsIn: true }, { step: 4, intent: 'Click Save' }]);
+    // The generated workflow: no plain variable for it; the note names RPA Secret Variables.
+    const wf = JSON.parse(binaryText(data[0], 'workflow').toString('utf8')) as WorkflowJson;
+    const runNode = wf.nodes.find((n) => n.parameters.operation === 'runSteps')!;
+    expect((runNode.parameters.options as { variables: unknown }).variables).toEqual({ values: [{ name: 'username', value: '' }] });
+    expect(runNode.notes).toContain('password: put it in an RPA Secret Variables credential');
+
+    // What is signed does not change: the steps, hash and digest are those of the document's own proposal, the same as
+    // with no secret variable, and Sign Steps signs the item with and without the shown-only fields alike.
+    const proposal = real.desktopProposal(real.parseDesktopScript({ ...doc, name: 'erp', version: 1 }));
+    expect(item.steps).toEqual(proposal.steps);
+    expect(item.hash).toBe(proposal.hash);
+    expect(item.digest).toBe(real.proposalDigest(proposal));
+    const { secretVariables: _s, reviewSteps: _r, writeCandidates: _w, ...bare } = item;
+    const [withShown, without] = [await sign(engine, item, '4'), await sign(engine, bare, '4')];
+    expect(withShown).toMatchObject({ status: 'active', writeSteps: [{ step: 4, intent: 'Click Save' }] });
+    for (const key of ['steps', 'hash', 'signature', 'writeSteps']) expect(withShown[key], key).toEqual(without[key]);
+  });
+
   it("a document without a start address takes the Site Login's when Start URL is empty, as Run Steps does", async () => {
     const engine = importEngine((input) => proved(input));
     const doc = { steps: [

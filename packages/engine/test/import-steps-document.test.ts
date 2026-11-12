@@ -194,6 +194,30 @@ describe('a step document as an import source: reading it', () => {
     });
   });
 
+  it('a desktop step set: a variable typed into a password, PIN or secret field (by its name or automationId) is a secret variable; the steps are unchanged', () => {
+    const doc = {
+      surface: 'desktop', app: { exe: 'ErpDemo.exe' },
+      steps: [
+        { intent: 'Type the user name', fill: { field: uia('txtUser'), value: '{{var.user}}' } },
+        { intent: 'Type the password', fill: { field: { uia: { path: [{ controlType: 'Window', name: 'Sign in' }, { controlType: 'Edit', name: 'Password' }] } }, value: '{{ var.password }}' } },
+        { intent: 'Press Enter', key: { key: 'Enter', target: { uia: { path: [{ controlType: 'Edit', name: 'Password' }] } } } },
+        { intent: 'Type the PIN', fill: { field: uia('PIN'), value: '{{var.pin}}' } },
+        { intent: 'Type the code', fill: { field: uia('txtCompanyCode'), value: '{{var.company}}' } },
+        // Only the field itself counts: a password window around a plain field does not make its value secret.
+        { intent: 'Type a note', fill: { field: { uia: { window: { title: 'Password reset' }, path: [{ controlType: 'Window', name: 'Password' }, { controlType: 'Edit', name: 'Note' }] } }, value: '{{var.note}}' } },
+      ],
+    };
+    const r = importSource('steps', json(doc), { name: 'd', hasSiteLogin: false });
+    const [draft] = r.desktopDrafts!;
+    expect(draft.variables).toEqual(['user', 'password', 'pin', 'company', 'note']);
+    expect(draft.secretVariables).toEqual(['password', 'pin']);
+    // The steps are exactly the document's (named d, version 1): nothing that is signed changes.
+    expect(draft.script).toEqual(parseDesktopScript({ ...doc, name: 'd', version: 1 }));
+    // A document with no such field has none, as before.
+    const plain = importSource('steps', json({ ...doc, steps: [doc.steps[0], doc.steps[4]] }), { name: 'd', hasSiteLogin: false });
+    expect(plain.desktopDrafts![0].secretVariables).toEqual([]);
+  });
+
   it('a copied row of the steps table (steps as text) is refused with a hint to paste its steps column first', () => {
     const steps = [{ intent: 'Open the report', goto: 'https://erp.example.com/acme/reports' }];
     const row = { name: 'line-item-export', version: 3, steps: json(steps), hash: 'c'.repeat(64), signature: 'd'.repeat(64), approvedBy: 'someone@example.com', status: 'active' };

@@ -180,7 +180,9 @@ any import. Browser steps that submit a form, download through a form, type a se
 they go to approval as written, marked
 `Not replayed: these browser steps were never run by the import, because they submit a form, download through a form, type a secret or change a password. Check every step, each form's target and each download before you approve.`
 Desktop steps go to approval without a replay, and a `write` mark in the document is removed for the approver to
-decide. Once approved, an import becomes the version that runs under its name, also when a higher version was active.
+decide. A variable a desktop step types into a password, PIN or secret field is a secret variable, as in a recording:
+the generated workflow leaves it to **RPA Secret Variables**, and the review page asks about a key pressed in that
+field unticked. Once approved, an import becomes the version that runs under its name, also when a higher version was active.
 
 **Recordings.** A file the RPA recorder saved (`.rpa-recording.json`, format `rpa-recording/1`, at most 5 MiB and
 400 events, 200 steps) becomes one desktop step list under the Name. A variable the person made keeps its recorded
