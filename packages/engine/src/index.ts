@@ -27,6 +27,8 @@ export { PolicyError } from './steps/errors.js';
 export { sanitizeFileName, sniffMime, DEFAULT_MAX_BYTES, DEFAULT_MIME, MIME, binaryName } from './steps/handlers/files.js';
 export { MAX_TEXT_BYTES, MAX_SCREENSHOT_HEIGHT, MAX_CAPTURE_BYTES } from './steps/handlers/capture.js';
 export { MAX_RUN_BINARY_BYTES } from './steps/limits.js';
+// How a page address may be shown: the node's review page shows each goto with it.
+export { shownUrl } from './steps/urls.js';
 // runScriptLane and startScriptLane are internal: runTask is the only entry point.
 export {
   CANCELLED, DEFAULT_BUDGET_MS, MAX_BUDGET_MS, clampBudget, laneFailure, laneMasker, maskLog, openLaneRuntime, screenshotMasks,

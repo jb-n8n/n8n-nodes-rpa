@@ -329,7 +329,7 @@ describe('Import Steps: execution', () => {
     const leftOut = (data[0].json.report as { items: { kind: string; at: string; what: string; reason: string }[] }).items
       .filter((i) => i.kind === 'untranslated' || (i.kind === 'dropped' && !(i as { notNeeded?: true }).notNeeded)).map((i) => `${i.at}, ${i.what}: ${i.reason}`);
     expect(repaired[0].json).toEqual({
-      ...repairedStepsJson(engine, { ...proposal.proposal, leftOut }, 'after'), reviewSteps: reviewSteps(proposal.proposal.steps.steps, { desktop: false }),
+      ...repairedStepsJson(engine, { ...proposal.proposal, leftOut }, 'after'), reviewSteps: reviewSteps(proposal.proposal.steps.steps, { desktop: false, shownUrl: real.shownUrl }),
     });
     expect(repaired[0].json).toMatchObject({ name: 'sap-export', baseVersion: null, version: 1 });
     expect(repaired[0].binary?.after).toMatchObject({ mimeType: 'image/png', fileName: 'after-v1.png' });
@@ -535,6 +535,17 @@ describe('Import Steps: execution', () => {
     expect(String(tampered.error)).toMatch(/^Sign Steps refused: /);
     expect(String(tampered.error)).toContain('the repaired steps changed after they were reviewed');
     expect(tampered).not.toHaveProperty('signature');
+
+    // The steps shown for approval (reviewSteps, shown only, outside the digest) must be those the steps give.
+    const REFUSED = 'Sign Steps refused: the steps shown for approval are not the steps to sign: import the steps again';
+    const shown = repaired[0].json.reviewSteps as { text: string; marks: string[] }[];
+    const forged = await sign({ ...repaired[0].json, reviewSteps: shown.map((r) => (r.text.startsWith('Type into') ? { ...r, text: 'Type into From: "2026-01-01"' } : r)) as unknown as IDataObject[] });
+    expect(forged.error).toBe(REFUSED);
+    expect(forged).not.toHaveProperty('signature');
+    expect((await sign({ ...repaired[0].json, reviewSteps: shown.slice(0, -1) as unknown as IDataObject[] })).error).toBe(REFUSED);
+    expect((await sign({ ...repaired[0].json, reviewSteps: 'Click Save' })).error).toBe(REFUSED);
+    const { reviewSteps: _r, ...older } = repaired[0].json;
+    expect(await sign(older)).toMatchObject({ status: 'active' });
   });
 
   it('files over 20 MiB are a configuration error', async () => {
@@ -1231,6 +1242,55 @@ describe('Import Steps: a step document', () => {
       const without = await notReplayed({ startUrl: START, steps: [SIGN_IN, OPEN, SUBMIT] }, { playwrightSiteLoginApi: siteLoginData(SITE) });
       expect(without.data[0].json.error).toBeUndefined();
       expect(without.repaired).toHaveLength(1);
+    });
+
+    it('the review page words each step from the step, the description beside it; what is signed is unchanged', async () => {
+      // Descriptions that say something else than their steps do.
+      const doc = { startUrl: START, steps: [
+        SIGN_IN,
+        { intent: 'Open the help page', goto: '/acme/reports?session=abc' },
+        { intent: 'Read the total', fill: { field: { label: 'Amount' }, value: '9999' } },
+        { intent: 'Click Cancel', click: { role: 'button', name: 'Pay now' } },
+        { ...SUBMIT, intent: 'Close the dialog' },
+      ] };
+      const { engine, repaired } = await notReplayed(doc);
+      const item = repaired[0].json;
+      expect((item.reviewSteps as IDataObject[]).map((r) => r.text)).toEqual([
+        'Sign in',
+        'Open /acme/reports (described as: Open the help page)',
+        'Type into Amount: "9999" (described as: Read the total)',
+        'Click Pay now (described as: Click Cancel)',
+        'Click Export CSV to submit a form to POST the start site at /acme/reports/export (described as: Close the dialog)',
+      ]);
+      // What is signed does not change: the steps with their intents and the hash are those of the document's own
+      // proposal, the digest covers the item without the shown-only list, and Sign Steps signs it with and without alike.
+      const script = real.parseScript({ ...doc, name: 'sap-export', version: 1 });
+      const proposal = real.notReplayedProposal(script);
+      expect(item.steps).toEqual(proposal.steps);
+      expect((item.steps as { steps: { intent: string }[] }).steps.map((s) => s.intent)).toEqual(doc.steps.map((s) => s.intent));
+      expect(item.hash).toBe(proposal.hash);
+      const { reviewSteps: _r, ...bare } = item;
+      expect(item.digest).toBe(real.proposalDigest({ ...(bare as unknown as real.Proposal) }));
+      const [withShown, without] = [await sign(engine, item), await sign(engine, bare)];
+      expect(withShown).toMatchObject({ status: 'active' });
+      for (const key of ['steps', 'hash', 'signature']) expect(withShown[key], key).toEqual(without[key]);
+    });
+
+    it('a paginate\'s inner lines are checked by Sign Steps too: honest, the item signs; one inner line forged, it is refused', async () => {
+      const doc = { startUrl: START, steps: [SIGN_IN, OPEN,
+        { intent: 'Go through the pages', paginate: { next: { role: 'button', name: 'Next' }, until: 'absent', max: 3, each: [{ intent: 'Open the row', click: { text: 'Row' } }] } },
+        SUBMIT] };
+      const { engine, repaired } = await notReplayed(doc);
+      const item = repaired[0].json;
+      const shown = item.reviewSteps as { text: string; marks: string[]; each?: { text: string; marks: string[] }[] }[];
+      expect(shown[2].each).toEqual([{ text: 'Click Row (described as: Open the row)', marks: [] }]);
+      expect(await sign(engine, item)).toMatchObject({ status: 'active' });
+      const forged = shown.map((r, i) => (i === 2 ? { ...r, each: [{ text: 'Open the row', marks: [] }] } : r));
+      const out = await sign(engine, { ...item, reviewSteps: forged as unknown as IDataObject[] });
+      expect(out.error).toBe('Sign Steps refused: the steps shown for approval are not the steps to sign: import the steps again');
+      expect(out).not.toHaveProperty('signature');
+      // An inner list dropped is refused as well.
+      expect((await sign(engine, { ...item, reviewSteps: shown.map(({ each: _e, ...r }) => r) as unknown as IDataObject[] })).error).toMatch(/not the steps to sign/);
     });
 
     it.each(Object.entries(DOCS))('the same for %s', async (_kind, doc) => {

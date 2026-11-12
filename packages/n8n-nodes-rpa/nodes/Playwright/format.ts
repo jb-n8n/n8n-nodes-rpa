@@ -157,8 +157,11 @@ export function importAddedSteps(steps: readonly DesktopStep[]): number[] {
   return steps.flatMap((s, i) => ('waitFor' in s || 'expectFile' in s ? [i + 1] : []));
 }
 
-/** One step as the review page lists it: its sentence, its marks (variables, a returned file, a sign-in), and whether the import added it. */
-export interface ReviewStep { text: string; marks: string[]; added?: true }
+/**
+ * One step as the review page lists it: its sentence, its marks (variables, a returned file, a sign-in), whether the
+ * import added it, and for a browser `paginate` (the only step that holds steps) the steps it runs on each page.
+ */
+export interface ReviewStep { text: string; marks: string[]; added?: true; each?: ReviewStep[] }
 /** A candidate write as the review page asks about it; `signsIn`: a key pressed in a secret field (signInKeySteps), asked unticked. */
 export interface ReviewWrite { step: number; intent: string; signsIn?: true }
 
@@ -229,33 +232,168 @@ function desktopSentence(s: Json): string {
   return String(s.intent ?? '');
 }
 
-/** A browser step's sentence: its intent, and a typed value the intent does not say (never a secret's or a variable's). */
-function browserSentence(s: Json): string {
-  const intent = String(s.intent ?? '');
-  const fill = s.fill === undefined ? undefined : asJson(s.fill);
-  return fill && !fill.secret && typeof fill.value === 'string' && !holdsVariable(fill.value) && !intent.includes(fill.value) ? `${intent}: "${fill.value}"` : intent;
+/** Names, values, selectors and addresses in a browser step's sentence are at most this many characters (the importer's label length). */
+const MAX_SHOWN = 80;
+/** The author's description beside a browser step's sentence is at most this many characters. */
+const MAX_DESCRIBED = 120;
+
+/** Text on one line, as the importer cleans a label: format characters dropped, control characters and runs of spaces one space, cut with an ellipsis. */
+function clean(v: unknown, max: number): string {
+  const t = String(v ?? '').replace(/[\p{Cf}\p{Cs}]/gu, '').replace(/[\p{Cc}\u2028\u2029]/gu, ' ').replace(/\s+/g, ' ').trim();
+  const chars = Array.from(t);
+  return chars.length > max ? `${chars.slice(0, max).join('').trimEnd()}…` : t;
+}
+
+/**
+ * A name as the importer's descriptions show it (import/draft.ts `shown`): quoted when it has a bracket or a double quote,
+ * so page text cannot fake the `(described as: …)` group.
+ */
+const shownName = (name: string): string => (/[()"]/.test(name) ? `"${name.replaceAll('"', "'")}"` : name);
+
+/** A typed or chosen value or a selector: JSON-quoted on one line (a quote or a line break in it shows escaped), cut to MAX_SHOWN with an ellipsis. */
+function shownValue(v: unknown): string {
+  const chars = Array.from(String(v ?? ''));
+  return oneLine(JSON.stringify(chars.slice(0, MAX_SHOWN).join(''))) + (chars.length > MAX_SHOWN ? '…' : '');
+}
+
+/**
+ * The element a browser locator finds, as a person recognises it: the name of a role (else "the <role>"), a label, a
+ * visible text or a test id, as the importer names it; for a CSS selector the selector itself. Only the primary
+ * locator: it is what the step uses, and a fallback is tried only when it finds nothing.
+ */
+function browserTarget(l: unknown): string {
+  const loc = asJson(l);
+  if (typeof loc.role === 'string') {
+    const name = clean(loc.name, MAX_SHOWN);
+    return name ? shownName(name) : `the ${shownName(clean(loc.role, MAX_SHOWN))}`;
+  }
+  for (const k of ['label', 'text', 'testId'] as const) {
+    if (typeof loc[k] === 'string') return shownName(clean(loc[k], MAX_SHOWN)) || 'an element without a name';
+  }
+  if (typeof loc.css === 'string') return `the element matching ${shownValue(loc.css)}`;
+  return 'an element';
+}
+
+/** A form a submit step or a download's `via` sends: method, host (the start site's when absent) and path. */
+function shownForm(t: unknown): string {
+  const f = asJson(t);
+  const host = typeof f.host === 'string' ? clean(f.host, MAX_SHOWN) : 'the start site';
+  return `${clean(f.method ?? 'POST', 10).toUpperCase()} ${host}${typeof f.host === 'string' ? '' : ' at '}${clean(f.path, MAX_SHOWN)}`;
+}
+
+/**
+ * The browser steps that only read or wait: their sentence is the author's description, as before. They change nothing
+ * on the site and send nothing to it, and what they give to n8n is in the step's marks (a file, a read's output) and in
+ * the details block.
+ */
+const READ_OR_WAIT = ['waitFor', 'extract', 'extractTable', 'read', 'detect', 'screenshot', 'pdf'] as const;
+
+/**
+ * What a browser step does, from the step itself: `core` is the action and its target in the importer's words, `more` the
+ * value or detail after it (a typed value, the keys held, the form it sends), `alike` another wording of the same that a
+ * description may use (a plain http address without its scheme). undefined for a step that only reads or waits.
+ */
+function browserAction(s: Json, shownUrl: (url: string) => string): { core: string; more: string; alike?: string } | undefined {
+  const value = (v: unknown, secret: boolean) => (secret ? 'a secret' : holdsVariable(v) ? 'a variable' : shownValue(v));
+  if (typeof s.goto === 'string') {
+    // Host and path, never the query or fragment, without "https://" as the importer words it. A plain http address
+    // keeps its "http://": the page then says the site is not encrypted. The importer's wording, without it, still matches.
+    const place = shownUrl(s.goto).replace(/^https:\/\//i, '').replace(/^((?:http:\/\/)?[^/]+)\/$/i, '$1');
+    const open = (p: string) => `Open ${shownName(clean(p, MAX_SHOWN))}`;
+    const plain = place.replace(/^http:\/\//i, '');
+    return { core: open(place), more: '', ...(plain !== place ? { alike: open(plain) } : {}) };
+  }
+  if (s.signIn !== undefined) {
+    const sign = asJson(s.signIn);
+    return { core: sign.totp ? 'Sign in with an authentication code' : 'Sign in', more: sign.changePassword ? ', and set a new password if the site asks for one' : '' };
+  }
+  if (s.click !== undefined) {
+    const held = Array.isArray(s.modifiers) && s.modifiers.length ? `, holding ${s.modifiers.map((m) => clean(m, 10)).join('+')}` : '';
+    return { core: `Click ${browserTarget(s.click)}`, more: held };
+  }
+  if (s.fill !== undefined) {
+    const f = asJson(s.fill);
+    return { core: `Type into ${browserTarget(f.field)}`, more: `: ${value(f.value, Boolean(f.secret))}` };
+  }
+  if (s.select !== undefined) {
+    const f = asJson(s.select);
+    const chosen = [f.value].flat().map((v) => (holdsVariable(v) ? 'an option set by a variable' : shownValue(v))).join(', ');
+    return { core: `Choose ${chosen} in ${browserTarget(f.field)}`, more: '' };
+  }
+  if (s.check !== undefined) return { core: `${asJson(s.check).checked === false ? 'Uncheck' : 'Check'} ${browserTarget(asJson(s.check).field)}`, more: '' };
+  if (s.clickAll !== undefined) return { core: `Click every ${browserTarget(asJson(s.clickAll).target)}`, more: `, at most ${Number(asJson(s.clickAll).max)}` };
+  if (s.press !== undefined) {
+    const p = asJson(s.press);
+    return { core: `Press ${clean(p.key, MAX_SHOWN)}${p.target === undefined ? '' : ` in ${browserTarget(p.target)}`}`, more: '' };
+  }
+  if (s.hover !== undefined) return { core: `Hover over ${browserTarget(s.hover)}`, more: '' };
+  if (s.popup !== undefined) return { core: `Open ${browserTarget(asJson(s.popup).trigger)} in a new tab`, more: '' };
+  // A submit is the steps' declared write: the sites line says that a form is sent, this line says which step sends it.
+  if (s.submit !== undefined) return { core: `Click ${browserTarget(asJson(s.submit).button)} to submit a form`, more: ` to ${shownForm(s.submit)}` };
+  if (s.download !== undefined) {
+    const d = asJson(s.download);
+    return { core: `Download with ${browserTarget(d.trigger)}`, more: d.via === undefined ? '' : `, through a form sent to ${shownForm(d.via)}` };
+  }
+  if (s.paginate !== undefined) {
+    const p = asJson(s.paginate);
+    const each = Array.isArray(p.each) ? p.each.length : 0;
+    return { core: `Page through with ${browserTarget(p.next)}`, more: `, at most ${Number(p.max)} pages, ${each} ${each === 1 ? 'step' : 'steps'} on each` };
+  }
+  return undefined;
+}
+
+/** Text as compared with the author's description: no case, no double quotes, single spaces. */
+const comparable = (t: string): string => t.replaceAll('"', '').replace(/\s+/g, ' ').trim().toLowerCase();
+
+/**
+ * A browser step's sentence. For every step that acts on the page or sends something, the action, the target and the
+ * value come from the step itself, never from its intent: the page is what a person approves, and the intent is the
+ * author's own description (a step document's or a UiPath project's author may be someone else). The description
+ * stands beside the sentence, in brackets, when it says something else: neither the action alone nor all of it, compared
+ * without case, double quotes or extra spaces. An import's descriptions (import/draft.ts describeEvent) say the action
+ * in the same words, so a recording reads without brackets. A secret's and a variable's value is never shown.
+ */
+function browserSentence(s: Json, shownUrl: (url: string) => string): string {
+  const described = clean(s.intent, MAX_DESCRIBED);
+  if (READ_OR_WAIT.some((v) => s[v] !== undefined)) return String(s.intent ?? '');
+  const action = browserAction(s, shownUrl);
+  if (!action) return String(s.intent ?? '');
+  const text = `${action.core}${action.more}`;
+  const same = [action.core, text, action.alike ?? text].some((t) => comparable(t) === comparable(described));
+  return described && !same ? `${text} (described as: ${described})` : text;
 }
 
 /**
  * For the review page only (shown, never signed or reviewed): each step's short sentence and marks. A desktop step names
  * a variable secret when the import says so (`secretVariables`); a browser step, when it is a secret fill or a password
- * change. `startValues`: a recording's start values; `added`: the step numbers (from 1) the import added.
+ * change. `startValues`: a recording's start values; `added`: the step numbers (from 1) the import added. `shownUrl`: the
+ * engine's, for the address a browser goto opens.
  */
 export function reviewSteps(
-  steps: readonly unknown[], o: { desktop: boolean; secretVariables?: readonly string[]; startValues?: Readonly<Record<string, string>>; added?: readonly number[] },
+  steps: readonly unknown[],
+  o: { desktop: true; secretVariables?: readonly string[]; startValues?: Readonly<Record<string, string>>; added?: readonly number[] }
+    | { desktop: false; shownUrl: (url: string) => string; secretVariables?: undefined; startValues?: undefined; added?: undefined },
 ): ReviewStep[] {
-  return steps.map((raw, j) => {
+  const review = (raw: unknown, j: number): ReviewStep => {
     const s = asJson(raw);
+    // A paginate's own marks leave out its body: each step of the body is listed under it with its own.
+    const body = s.paginate !== undefined && Array.isArray(asJson(s.paginate).each) ? (asJson(s.paginate).each as unknown[]) : undefined;
+    const own = body ? { ...s, paginate: { ...asJson(s.paginate), each: [] } } : raw;
     const secret = (v: string): boolean =>
       (o.desktop ? (o.secretVariables ?? []).includes(v) : Boolean(asJson(s.fill).secret) || Boolean(asJson(s.signIn).changePassword));
     const marks = [
-      ...stepVariables(raw).map((v) => (secret(v) ? `secret variable ${v}` : `variable ${v}${o.startValues?.[v] !== undefined ? `, starts as ${o.startValues[v]}` : ''}`)),
+      ...stepVariables(own).map((v) => (secret(v) ? `secret variable ${v}` : `variable ${v}${o.startValues?.[v] !== undefined ? `, starts as ${o.startValues[v]}` : ''}`)),
       ...(s.expectFile || s.download ? ['returns a file'] : []),
       ...(s.read && asJson(s.read).as ? [`gives its text to n8n as ${String(asJson(s.read).as)}`] : []),
       ...(s.signIn ? ['signs in with the RPA Site Login'] : []),
     ];
-    return { text: o.desktop ? desktopSentence(s) : browserSentence(s), marks, ...((o.added ?? []).includes(j + 1) ? { added: true as const } : {}) };
-  });
+    return {
+      text: o.desktop ? desktopSentence(s) : browserSentence(s, o.shownUrl), marks,
+      ...((o.added ?? []).includes(j + 1) ? { added: true as const } : {}),
+      ...(body?.length ? { each: body.map((b) => review(b, -1)) } : {}),
+    };
+  };
+  return steps.map(review);
 }
 
 /** For the review page only: a desktop step list's candidate writes (desktopWriteCandidates), each with its intent on one line. */
