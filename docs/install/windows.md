@@ -66,8 +66,12 @@ its `.sha256` beside it).
 
 The install has no browser unless you add `-WithBrowser`. With it, `Get-Rpa.ps1` also downloads
 `rpa-browser-windows-x64.zip` from the same release, checks it the same way, and unpacks it into the package folder.
-With `-Zip`, give the browser zip with `-BrowserZip <path>`. Without `Get-Rpa.ps1`, unpack `rpa-browser-windows-x64.zip`
-into the `rpa-windows-x64` folder and run `Install-Rpa.ps1 -WithBrowser`.
+With `-Zip`, give the browser zip with `-BrowserZip <path>`. To add the browser later, run the same `Get-Rpa.ps1` again
+with `-WithBrowser`: when `C:\Program Files\RPA package\<version>` is there already, it gets and checks only the browser
+zip, unpacks it into that folder's `rpa-windows-x64` and starts the installer. It does so only when that folder holds
+the package of the same version, only administrators can change it, and it has no browser yet; otherwise it stops and
+says why. Without `Get-Rpa.ps1`, unpack `rpa-browser-windows-x64.zip` into the `rpa-windows-x64` folder
+(`Expand-Archive <path of the zip> -DestinationPath "<that folder>"`) and run `Install-Rpa.ps1 -WithBrowser`.
 
 Each zip carries the licences of the software by others in it: `THIRD-PARTY-NOTICES.md` and the folder `licenses` in
 the package, `browser\THIRD-PARTY-NOTICES.md` and `browser\licenses` in the browser zip. The installer copies them to
@@ -293,7 +297,8 @@ A change only adds. To remove an entry, edit `C:\ProgramData\RPA Runner\policy.j
 when a run may be going on. An upgrade keeps the bot user, the policy, the tokens, the certificates, the firewall
 addresses, the sign-in mode and the browser or its absence, so the n8n credentials stay as they are. For an install
 with the browser, `Get-Rpa.ps1` gets the browser zip too (with `-Zip`, give `-BrowserZip`). `-WithBrowser` adds the
-browser to an install without it. `-NoBrowser` removes it: its task, firewall rule, token, certificate and files.
+browser to an install without it, also with the `Get-Rpa.ps1` of the installed version, whose package folder is there
+already (see [Install](#2-install)). `-NoBrowser` removes it: its task, firewall rule, token, certificate and files.
 
 **Another bot user.** Uninstall with `-RemoveData`, then install for the new user. That is a first install: a new
 policy, new tokens and certificates, and new Connection Lines in n8n.
@@ -355,7 +360,7 @@ Start with `& "C:\Program Files\RPA Runner\rpa.cmd" status`. Logs are in `C:\Pro
 | `The browser service at wss://...:3000/ had no free browser session for 60 s.` | The browser here serves one session at a time. | Start fewer browser runs at once. |
 | `Save as PDF needs headless Chromium` | The browser here shows a window. | Run Save as PDF on another browser ([Operator guide](../reference/operator.md#where-the-browser-runs)). |
 | `Port 3000 is in use by <process>. Choose another with -RunnerPort or -BrowserPort.` | Another program holds the port. | Stop it, or install with another port. |
-| `The browser files are not in ...` or `This install has the browser, and its files are not in ...` | The browser zip was not unpacked into the package folder. | Run `Get-Rpa.ps1 -WithBrowser`, or unpack `rpa-browser-windows-x64.zip` there. To remove the browser instead, add `-NoBrowser`. |
+| `The browser files are not in ...` or `This install has the browser, and its files are not in ...` | The browser zip was not unpacked into the package folder. | Run `Get-Rpa.ps1 -WithBrowser`, or unpack `rpa-browser-windows-x64.zip` there with the `Expand-Archive` command the message gives, and run `Install-Rpa.ps1` again. To remove the browser instead, add `-NoBrowser`. |
 | `... can be changed by <account>. Unpack the package in a folder only you or administrators can change, and run it from there.` | The package folder is not protected. | Use `Get-Rpa.ps1`, which unpacks under `C:\Program Files`. |
 | The script `cannot be loaded because running scripts is disabled on this system` | The execution policy. | Run `Set-ExecutionPolicy -Scope Process Bypass -Force` in that window first. |
 

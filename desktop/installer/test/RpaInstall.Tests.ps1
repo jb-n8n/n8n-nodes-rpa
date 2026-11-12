@@ -1017,8 +1017,8 @@ Describe 'Get-RpaInstallPlan' {
     BeforeAll {
       $script:BrowserSteps = @('write browser-token', 'add the browser firewall rule', 'register the browser task')
       $script:RemoveSteps = @('remove the browser firewall rule', 'remove the browser task', 'remove the browser token and certificate')
-      $script:Missing = 'The browser files are not in C:\Program Files\RPA package\0.3.0\rpa-windows-x64: run Get-Rpa.ps1 -WithBrowser, or unpack rpa-browser-windows-x64.zip into that folder.'
-      $script:KeptMissing = 'This install has the browser, and its files are not in C:\Program Files\RPA package\0.3.0\rpa-windows-x64: run Get-Rpa.ps1 -WithBrowser, unpack rpa-browser-windows-x64.zip into that folder, or remove the browser with -NoBrowser.'
+      $script:Missing = 'The browser files are not in C:\Program Files\RPA package\0.3.0\rpa-windows-x64: run Get-Rpa.ps1 -WithBrowser, or unpack rpa-browser-windows-x64.zip into that folder (Expand-Archive <path of the zip> -DestinationPath "C:\Program Files\RPA package\0.3.0\rpa-windows-x64") and run this again.'
+      $script:KeptMissing = 'This install has the browser, and its files are not in C:\Program Files\RPA package\0.3.0\rpa-windows-x64: run Get-Rpa.ps1 -WithBrowser, unpack rpa-browser-windows-x64.zip into that folder (Expand-Archive <path of the zip> -DestinationPath "C:\Program Files\RPA package\0.3.0\rpa-windows-x64") and run this again, or remove the browser with -NoBrowser.'
     }
 
     It 'a first install without -WithBrowser has no browser: no token, firewall rule, task or port check for it' {
@@ -4238,7 +4238,7 @@ Describe 'Get-Rpa.ps1' {
   AfterAll { Remove-Item -LiteralPath $script:GetRoot -Recurse -Force -ErrorAction SilentlyContinue }
 
   It 'dot-sourced, defines its functions and does nothing else' {
-    Get-Command Expand-RpaPackage, Get-RpaInstallArguments, Get-RpaPublishedHash -CommandType Function | Should -HaveCount 3
+    Get-Command Expand-RpaPackage, Add-RpaBrowser, Open-RpaBrowserZip, Get-RpaInstallArguments, Get-RpaPublishedHash -CommandType Function | Should -HaveCount 5
   }
 
   It 'downloads from the release it belongs to, at an address written in the script' {
@@ -4429,6 +4429,116 @@ Describe 'Get-Rpa.ps1' {
       $refuse = { param($Zip, $Version, $Named, $Name) if ($Name -eq 'rpa-browser-windows-x64.zip') { 'made-up refusal.' } }
       { Expand-RpaPackage $zip.Zip $zip.Sha '' '' $root $refuse $browser.Spec } | Should -Throw -ExpectedMessage 'made-up refusal. Nothing was unpacked.'
       Test-Path -LiteralPath $root | Should -BeFalse
+    }
+  }
+
+  # -WithBrowser when <root>\<version> is there already: only the browser zip, into the package unpacked earlier.
+  Context 'the browser added to a package unpacked earlier' {
+    BeforeAll {
+      # <root>\<version>\rpa-windows-x64 as Expand-RpaPackage leaves it without the browser (VERSION -Version, or none
+      # with $null), and the files -Files adds.
+      function New-TestUnpacked([AllowNull()][string]$Version = '0.3.0', [string[]]$Files = @()) {
+        $folder = Join-Path (Join-Path $script:GetRoot ('unpacked-' + [guid]::NewGuid().ToString('N'))) '0.3.0'
+        $package = Join-Path $folder 'rpa-windows-x64'
+        New-Item -ItemType Directory -Path $package | Out-Null
+        [IO.File]::WriteAllText((Join-Path $package 'Install-Rpa.ps1'), "'made up'")
+        if ($Version) { [IO.File]::WriteAllText((Join-Path $package 'VERSION'), $Version + "`r`n") }
+        foreach ($file in $Files) {
+          $path = Join-Path $package $file
+          New-Item -ItemType Directory -Force -Path (Split-Path -Parent $path) | Out-Null
+          [IO.File]::WriteAllText($path, "'made up'")
+        }
+        @{ Folder = $folder; Package = $package }
+      }
+      # What the folder check was asked about; it finds nobody.
+      $script:Judged = @()
+      $script:NobodyElse = { param($Path) $script:Judged += $Path; $null }
+      function Get-TestBrowserFiles([string]$Package) { @('browser', 'scripts') | Where-Object { Test-Path -LiteralPath (Join-Path $Package $_) } }
+    }
+
+    It 'unpacks only the browser zip into the package folder, after the folder check on it and on the version folder, and asks the attestation by its name' {
+      $unpacked = New-TestUnpacked
+      $browser = New-TestBrowserZip
+      $spec = $browser.Spec
+      $spec.Named = $browser.Hash
+      $script:Asked = @()
+      $record = { param($Zip, $Version, $Named, $Name) $script:Asked += '{0} {1} {2} {3}' -f $Zip, $Version, $Named, $Name; $null }
+      $script:Judged = @()
+      $result = Add-RpaBrowser $unpacked.Folder '0.3.0' $record $spec $script:NobodyElse
+      $result.Version | Should -BeExactly '0.3.0'
+      $result.BrowserHash | Should -BeExactly $browser.Hash
+      $result.Package | Should -BeExactly $unpacked.Package
+      Join-Path (Join-Path $unpacked.Package 'browser') 'node.exe' | Should -Exist
+      Join-Path (Join-Path $unpacked.Package 'scripts') 'start-browser.ps1' | Should -Exist
+      Join-Path $unpacked.Package 'Install-Rpa.ps1' | Should -Exist
+      $script:Asked | Should -BeExactly @(('{0} 0.3.0 True rpa-browser-windows-x64.zip' -f $browser.Zip))
+      $script:Judged | Should -BeExactly @($unpacked.Package, $unpacked.Folder)
+    }
+
+    It 'unpacks nothing into a folder that <Why>' -ForEach @(
+      @{ Why = 'holds the package of another version'; Version = '0.2.0'; Files = @(); Expected = '{0} does not hold the package of version 0.3.0 ({2}), so the browser is not added to it: to unpack again, remove {0} first. Nothing was unpacked.' }
+      @{ Why = 'holds no package version'; Version = $null; Files = @(); Expected = '{0} does not hold the package of version 0.3.0 ({2}), so the browser is not added to it: to unpack again, remove {0} first. Nothing was unpacked.' }
+      @{ Why = 'has the browser already'; Version = '0.3.0'; Files = @('browser/VERSION'); Expected = '{1} has the browser already. To install from it, run {3} with the same parameters; to unpack again, remove {0} first.' }
+      @{ Why = 'has the browser''s start script already'; Version = '0.3.0'; Files = @('scripts/start-browser.ps1'); Expected = '{1} has the browser already. To install from it, run {3} with the same parameters; to unpack again, remove {0} first.' }
+    ) {
+      $unpacked = New-TestUnpacked -Version $Version -Files $Files
+      $before = @(Get-ChildItem -LiteralPath $unpacked.Package -Recurse -Force | ForEach-Object { $_.FullName })
+      $browser = New-TestBrowserZip
+      $expected = $Expected -f $unpacked.Folder, $unpacked.Package, (Join-Path $unpacked.Package 'VERSION'), (Join-Path $unpacked.Package 'Install-Rpa.ps1')
+      { Add-RpaBrowser $unpacked.Folder '0.3.0' $script:NoAttestation $browser.Spec $script:NobodyElse } | Should -Throw -ExpectedMessage $expected
+      @(Get-ChildItem -LiteralPath $unpacked.Package -Recurse -Force | ForEach-Object { $_.FullName }) | Should -BeExactly $before
+    }
+
+    It 'unpacks nothing into a folder the folder check refuses, and says why' {
+      $unpacked = New-TestUnpacked
+      $browser = New-TestBrowserZip
+      $refuse = { param($Path) if ($Path -eq $unpacked.Folder) { 'made-up: others can change it.' } }.GetNewClosure()
+      { Add-RpaBrowser $unpacked.Folder '0.3.0' $script:NoAttestation $browser.Spec $refuse } | Should -Throw -ExpectedMessage 'made-up: others can change it. Nothing was unpacked.'
+      Get-TestBrowserFiles $unpacked.Package | Should -BeNullOrEmpty
+    }
+
+    It 'judges the folder with Get-RpaFolderRefusal unless told otherwise' {
+      $ast = [Management.Automation.Language.Parser]::ParseFile($script:GetRpa, [ref]$null, [ref]$null)
+      $function = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Add-RpaBrowser' }, $false)
+      $judge = @($function.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'Judge' })
+      $judge[0].DefaultValue.Extent.Text | Should -BeExactly '{ param($Path) Get-RpaFolderRefusal $Path }'
+    }
+
+    It 'unpacks nothing when the browser zip <Why>' -ForEach @(
+      @{ Why = 'has another SHA-256 than the one beside it'; Version = '0.3.0'; Sha256 = 'cd' * 32; Entries = @(); Named = ''; Expected = 'The SHA-256 of {0} is {1}, and {2} says {3}: the zip is not the file published beside it. Nothing was unpacked: do not use this zip.' }
+      @{ Why = 'has another SHA-256 than the one the script names'; Version = '0.3.0'; Sha256 = ''; Entries = @(); Named = 'ab' * 32; Expected = 'The SHA-256 of {0} is {1}, and this Get-Rpa.ps1 of release 0.3.0 names {4}. Nothing was unpacked: do not use this zip.' }
+      @{ Why = 'holds an entry outside browser\'; Version = '0.3.0'; Sha256 = ''; Entries = @('scripts/start-runner.ps1'); Named = ''; Expected = '{0} holds scripts/start-runner.ps1, which is not inside browser\ nor scripts\start-browser.ps1. Nothing was unpacked: do not use this zip.' }
+      @{ Why = 'holds an entry that climbs out'; Version = '0.3.0'; Sha256 = ''; Entries = @('browser/../../evil.ps1'); Named = ''; Expected = '{0} holds browser/../../evil.ps1, which is not inside browser\ nor scripts\start-browser.ps1. Nothing was unpacked: do not use this zip.' }
+      @{ Why = 'is of another version'; Version = '0.2.0'; Sha256 = ''; Entries = @(); Named = ''; Expected = '{0} holds the browser of version 0.2.0, and {5} is version 0.3.0. Nothing was unpacked.' }
+    ) {
+      $unpacked = New-TestUnpacked
+      $browser = New-TestBrowserZip -Version $Version -Entries $Entries -Sha256 $Sha256
+      $spec = $browser.Spec
+      $spec.Named = $Named
+      { Add-RpaBrowser $unpacked.Folder '0.3.0' $script:NoAttestation $spec $script:NobodyElse } | Should -Throw -ExpectedMessage ($Expected -f $browser.Zip, $browser.Hash, $browser.Sha, $Sha256, $Named, $unpacked.Package)
+      Get-TestBrowserFiles $unpacked.Package | Should -BeNullOrEmpty
+    }
+
+    It 'unpacks nothing when the attestation check refuses the browser zip' {
+      $unpacked = New-TestUnpacked
+      $browser = New-TestBrowserZip
+      $refuse = { param($Zip, $Version, $Named, $Name) if ($Name -eq 'rpa-browser-windows-x64.zip') { 'made-up refusal.' } }
+      { Add-RpaBrowser $unpacked.Folder '0.3.0' $refuse $browser.Spec $script:NobodyElse } | Should -Throw -ExpectedMessage 'made-up refusal. Nothing was unpacked.'
+      Get-TestBrowserFiles $unpacked.Package | Should -BeNullOrEmpty
+    }
+
+    # The script itself (it needs an administrator Windows PowerShell): the version folder there already is left as it
+    # is without -WithBrowser; with it, only the browser zip is downloaded or read, and Add-RpaBrowser unpacks it.
+    It 'uses Add-RpaBrowser for -WithBrowser and a version folder that is there already, and nothing else changes for that folder' {
+      $source = Get-Content -Raw -LiteralPath $script:GetRpa
+      $source | Should -Match ([regex]::Escape("if (-not `$WithBrowser) { Stop-Rpa ('{0} exists already. To install from it, run {1} with the same parameters; to unpack again, remove {0} first.' -f `$folder, (Join-Path (Join-Path `$folder `$PackageName) 'Install-Rpa.ps1')) }"))
+      $source | Should -Match ([regex]::Escape("try { `$unpacked = Add-RpaBrowser (Join-Path `$root `$Version) `$Version `$attest `$browserSpec }"))
+      # The package zip is neither downloaded nor read then: its download and its -Zip checks wait for -not $adding.
+      $adding = $source.IndexOf('if (-not $adding) {')
+      $adding | Should -BeGreaterThan 0
+      $source.IndexOf('if (-not $adding) {', $adding + 1) | Should -BeGreaterThan 0
+      $source.IndexOf('if (-not $adding) {') | Should -BeLessThan $source.IndexOf('$zipPath = Get-RpaTypedPath $Zip')
+      $source.LastIndexOf('if (-not $adding) {') | Should -BeLessThan $source.IndexOf("-OutFile `$zipPath")
     }
   }
 

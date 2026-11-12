@@ -33,6 +33,10 @@
 #      scripts\start-browser.ps1, and a browser zip of another version (its browser\VERSION). Both zips are checked
 #      before either is unpacked. Then it checks that no account other than Administrators, SYSTEM, TrustedInstaller
 #      and you can change that folder, or delete or rename it or a folder above it, and unblocks the files.
+#      With -WithBrowser, when that folder is there already (the package unpacked earlier without the browser), it gets
+#      and checks only the browser zip, as above, and unpacks it into that package folder: only when the folder holds
+#      the package of this version (its VERSION), the same check finds nobody else who can change it, and it has no
+#      browser yet. Otherwise it stops with the reason, and unpacks nothing over it.
 #   6. Starts rpa-windows-x64\Install-Rpa.ps1 from there, in this PowerShell, with the parameters it was given (a
 #      -UserPassword as the same SecureString). The installer then checks the package itself, as it always does.
 #
@@ -146,14 +150,38 @@ function Test-RpaEntryName([string]$Name) {
   -not $Name.Contains(':') -and @($Name.Split('/') | Where-Object { $_ -eq '..' }).Count -eq 0
 }
 
+# Opens the browser zip -Browser (ZipPath, ShaPath, Named) through a handle of its own that lets others read it but
+# not change it (added to -Opened, which the caller closes) and checks it: the SHA-256 against its .sha256 file and
+# against -Browser.Named (when the script of release -Release names one), every entry inside browser\ or
+# scripts\start-browser.ps1, its browser\VERSION equal to -Version (the version of -Of, the package it goes with), and
+# -Attest. Any of these stops it with the reason. Returns the archive and the SHA-256.
+function Open-RpaBrowserZip([hashtable]$Browser, [string]$Release, [string]$Version, [string]$Of, [scriptblock]$Attest, $Opened) {
+  $stream = [IO.File]::Open($Browser.ZipPath, 'Open', 'Read', 'Read')
+  $Opened.Add($stream)
+  $hash = Get-RpaCheckedHash $stream $Browser.ZipPath $Browser.ShaPath $Browser.Named $Release
+  $archive = New-Object IO.Compression.ZipArchive ($stream, [IO.Compression.ZipArchiveMode]::Read, $true)
+  $Opened.Add($archive)
+  foreach ($entry in $archive.Entries) {
+    $name = $entry.FullName.Replace('\', '/')
+    if (-not ($name.StartsWith('browser/') -or $name -eq 'scripts/start-browser.ps1') -or -not (Test-RpaEntryName $name)) {
+      throw ('{0} holds {1}, which is not inside browser\ nor scripts\start-browser.ps1. Nothing was unpacked: do not use this zip.' -f $Browser.ZipPath, $entry.FullName)
+    }
+  }
+  $held = Read-RpaZipText $archive 'browser/VERSION'
+  if ($held -notmatch '^\d+\.\d+\.\d+$') { throw ('{0} holds no browser\VERSION with a version. Nothing was unpacked: do not use this zip.' -f $Browser.ZipPath) }
+  if ($held -ne $Version) { throw ('{0} holds the browser of version {1}, and {2} is version {3}. Nothing was unpacked.' -f $Browser.ZipPath, $held, $Of, $Version) }
+  $refusal = & $Attest $Browser.ZipPath $Version ([bool]$Browser.Named) ($BrowserPackageName + '.zip')
+  if ($refusal) { throw ('{0} Nothing was unpacked.' -f $refusal) }
+  @{ Archive = $archive; Hash = $hash }
+}
+
 # Checks the zip and unpacks it into <Root>\<version>: through one handle that lets others read the zip but not change
 # it, the SHA-256 is compared with -ShaPath's and with -Named (when the script names one), -Attest is asked (with the
 # zip's path, its version, whether the script names its SHA-256 and the zip's name; it returns a refusal or nothing),
 # and every entry must be inside rpa-windows-x64\. With -Browser (ZipPath, ShaPath, Named: the browser zip) the browser
-# zip gets the same checks through a handle of its own, its entries must be inside browser\ or be
-# scripts\start-browser.ps1, and its browser\VERSION must be the package's version; it is unpacked into the package
-# folder. Any of these stops it with the reason before the folder is made. Returns the version, the SHA-256 of each zip
-# (Hash, BrowserHash) and the package folder.
+# zip gets the checks of Open-RpaBrowserZip, for the package's version, and is unpacked into the package folder. Any of
+# these stops it with the reason before the folder is made. Returns the version, the SHA-256 of each zip (Hash,
+# BrowserHash) and the package folder.
 function Expand-RpaPackage([string]$ZipPath, [string]$ShaPath, [string]$Named, [string]$Version, [string]$Root, [scriptblock]$Attest, [hashtable]$Browser) {
   Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
   $opened = New-Object Collections.Generic.List[IDisposable]
@@ -178,22 +206,9 @@ function Expand-RpaPackage([string]$ZipPath, [string]$ShaPath, [string]$Named, [
     $browserHash = $null
     $browserArchive = $null
     if ($Browser) {
-      $browserStream = [IO.File]::Open($Browser.ZipPath, 'Open', 'Read', 'Read')
-      $opened.Add($browserStream)
-      $browserHash = Get-RpaCheckedHash $browserStream $Browser.ZipPath $Browser.ShaPath $Browser.Named $Version
-      $browserArchive = New-Object IO.Compression.ZipArchive ($browserStream, [IO.Compression.ZipArchiveMode]::Read, $true)
-      $opened.Add($browserArchive)
-      foreach ($entry in $browserArchive.Entries) {
-        $name = $entry.FullName.Replace('\', '/')
-        if (-not ($name.StartsWith('browser/') -or $name -eq 'scripts/start-browser.ps1') -or -not (Test-RpaEntryName $name)) {
-          throw ('{0} holds {1}, which is not inside browser\ nor scripts\start-browser.ps1. Nothing was unpacked: do not use this zip.' -f $Browser.ZipPath, $entry.FullName)
-        }
-      }
-      $browserVersion = Read-RpaZipText $browserArchive 'browser/VERSION'
-      if ($browserVersion -notmatch '^\d+\.\d+\.\d+$') { throw ('{0} holds no browser\VERSION with a version. Nothing was unpacked: do not use this zip.' -f $Browser.ZipPath) }
-      if ($browserVersion -ne $held) { throw ('{0} holds the browser of version {1}, and {2} is version {3}. Nothing was unpacked.' -f $Browser.ZipPath, $browserVersion, $ZipPath, $held) }
-      $refusal = & $Attest $Browser.ZipPath $held ([bool]$Browser.Named) ($BrowserPackageName + '.zip')
-      if ($refusal) { throw ('{0} Nothing was unpacked.' -f $refusal) }
+      $checked = Open-RpaBrowserZip $Browser $Version $held $ZipPath $Attest $opened
+      $browserHash = $checked.Hash
+      $browserArchive = $checked.Archive
     }
 
     $folder = Join-Path $Root $held
@@ -208,6 +223,35 @@ function Expand-RpaPackage([string]$ZipPath, [string]$ShaPath, [string]$Named, [
     for ($i = $opened.Count - 1; $i -ge 0; $i--) { $opened[$i].Dispose() }
   }
   @{ Version = $held; Hash = $hash; BrowserHash = $browserHash; Package = Join-Path $folder $PackageName }
+}
+
+# Adds the browser to the package of -Version that is unpacked already in -Folder (<root>\<version>): only when that
+# package folder holds the package of -Version (its VERSION), -Judge (Get-RpaFolderRefusal) finds nobody else who can
+# change it or -Folder, and it has no browser yet (neither browser\ nor scripts\start-browser.ps1). The browser zip
+# gets the checks of Open-RpaBrowserZip, for -Version. Any of these stops it with the reason before anything is
+# unpacked. Returns the version, the browser zip's SHA-256 (BrowserHash) and the package folder.
+function Add-RpaBrowser([string]$Folder, [string]$Version, [scriptblock]$Attest, [hashtable]$Browser, [scriptblock]$Judge = { param($Path) Get-RpaFolderRefusal $Path }) {
+  $package = Join-Path $Folder $PackageName
+  $versionFile = Join-Path $package 'VERSION'
+  $there = $null
+  if (Test-Path -LiteralPath $versionFile -PathType Leaf) { $there = [IO.File]::ReadAllText($versionFile).Trim() }
+  if ($there -ne $Version) { throw ('{0} does not hold the package of version {1} ({2}), so the browser is not added to it: to unpack again, remove {0} first. Nothing was unpacked.' -f $Folder, $Version, $versionFile) }
+  foreach ($path in $package, $Folder) {
+    $refusal = & $Judge $path
+    if ($refusal) { throw ('{0} Nothing was unpacked.' -f $refusal) }
+  }
+  if ((Test-Path -LiteralPath (Join-Path $package 'browser')) -or (Test-Path -LiteralPath (Join-Path (Join-Path $package 'scripts') 'start-browser.ps1'))) {
+    throw ('{0} has the browser already. To install from it, run {1} with the same parameters; to unpack again, remove {2} first.' -f $package, (Join-Path $package 'Install-Rpa.ps1'), $Folder)
+  }
+  Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+  $opened = New-Object Collections.Generic.List[IDisposable]
+  try {
+    $checked = Open-RpaBrowserZip $Browser $Version $Version $package $Attest $opened
+    [IO.Compression.ZipFileExtensions]::ExtractToDirectory($checked.Archive, $package)
+  } finally {
+    for ($i = $opened.Count - 1; $i -ge 0; $i--) { $opened[$i].Dispose() }
+  }
+  @{ Version = $Version; BrowserHash = $checked.Hash; Package = $package }
 }
 
 # Whether the GitHub CLI at -Gh can check an attestation: missing, signed out (gh auth status fails) or ready.
@@ -345,16 +389,23 @@ if ($choice.Get -and $ghState -ne 'ready') {
 }
 
 $root = Join-Path $programFiles 'RPA package'
+# The package of this version unpacked already (by an earlier Get-Rpa.ps1): -WithBrowser adds the browser to it, with
+# the browser zip only (Add-RpaBrowser says when it does not); without -WithBrowser the folder is left as it is.
+$adding = $false
 if ($Version -and (Test-Path -LiteralPath (Join-Path $root $Version))) {
   $folder = Join-Path $root $Version
-  Stop-Rpa ('{0} exists already. To install from it, run {1} with the same parameters; to unpack again, remove {0} first.' -f $folder, (Join-Path (Join-Path $folder $PackageName) 'Install-Rpa.ps1'))
+  if (-not $WithBrowser) { Stop-Rpa ('{0} exists already. To install from it, run {1} with the same parameters; to unpack again, remove {0} first.' -f $folder, (Join-Path (Join-Path $folder $PackageName) 'Install-Rpa.ps1')) }
+  $adding = $true
+  Write-Host ('{0} exists already: only the browser zip is checked and unpacked into it, the package zip is not used again.' -f $folder)
 }
 
 if ($Zip) {
   # .NET resolves a relative path against the process's folder, not PowerShell's current location (cd): make it full.
-  try { $zipPath = Get-RpaTypedPath $Zip } catch { Stop-Rpa $_.Exception.Message }
-  $shaPath = $zipPath + '.sha256'
-  foreach ($file in $zipPath, $shaPath) { if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { Stop-Rpa ('{0} is not there. Give -Zip the path of rpa-windows-x64.zip, with its .sha256 file beside it.' -f $file) } }
+  if (-not $adding) {
+    try { $zipPath = Get-RpaTypedPath $Zip } catch { Stop-Rpa $_.Exception.Message }
+    $shaPath = $zipPath + '.sha256'
+    foreach ($file in $zipPath, $shaPath) { if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { Stop-Rpa ('{0} is not there. Give -Zip the path of rpa-windows-x64.zip, with its .sha256 file beside it.' -f $file) } }
+  }
   if ($choice.Get) {
     try { $browserZipPath = Get-RpaTypedPath $BrowserZip } catch { Stop-Rpa $_.Exception.Message }
     foreach ($file in $browserZipPath, ($browserZipPath + '.sha256')) { if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { Stop-Rpa ('{0} is not there. Give -BrowserZip the path of {1}.zip, with its .sha256 file beside it.' -f $file, $BrowserPackageName) } }
@@ -386,12 +437,14 @@ if (-not $Zip) {
   [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
   $ProgressPreference = 'SilentlyContinue'
   New-Item -ItemType Directory -Force -Path $download | Out-Null
-  Write-Host ('Downloading {0} to {1}' -f (Get-RpaDownloadUrl $Version ($PackageName + '.zip')), $zipPath)
-  try {
-    Invoke-WebRequest -UseBasicParsing -Uri (Get-RpaDownloadUrl $Version ($PackageName + '.zip')) -OutFile $zipPath
-    Write-Host ('Downloading {0}' -f (Get-RpaDownloadUrl $Version ($PackageName + '.zip.sha256')))
-    Invoke-WebRequest -UseBasicParsing -Uri (Get-RpaDownloadUrl $Version ($PackageName + '.zip.sha256')) -OutFile $shaPath
-  } catch { Stop-Rpa ('The download failed: {0} Nothing was unpacked.' -f $_.Exception.GetBaseException().Message) }
+  if (-not $adding) {
+    Write-Host ('Downloading {0} to {1}' -f (Get-RpaDownloadUrl $Version ($PackageName + '.zip')), $zipPath)
+    try {
+      Invoke-WebRequest -UseBasicParsing -Uri (Get-RpaDownloadUrl $Version ($PackageName + '.zip')) -OutFile $zipPath
+      Write-Host ('Downloading {0}' -f (Get-RpaDownloadUrl $Version ($PackageName + '.zip.sha256')))
+      Invoke-WebRequest -UseBasicParsing -Uri (Get-RpaDownloadUrl $Version ($PackageName + '.zip.sha256')) -OutFile $shaPath
+    } catch { Stop-Rpa ('The download failed: {0} Nothing was unpacked.' -f $_.Exception.GetBaseException().Message) }
+  }
   if ($choice.Get) {
     # The browser zip the same way, from the same release.
     Write-Host ('Downloading {0} to {1}' -f (Get-RpaDownloadUrl $Version ($BrowserPackageName + '.zip')), $browserZipPath)
@@ -406,20 +459,27 @@ if (-not $Zip) {
 # Asked while each zip is held open, after its SHA-256 matched; the lines are said after the unpack.
 $script:AttestationLines = @()
 $attest = { param($ZipPath, $Version, $Named, $ZipName) $result = Test-RpaAttestation $gh $ghState $ZipPath $Version ([bool]$RequireAttestation) $Named $ZipName; $script:AttestationLines += $result.Line; $result.Refusal }
-if ($browserSpec) { Write-Host ('Checking {0} and {1}: their SHA-256, the build attestation and what they hold' -f $zipPath, $browserZipPath) }
-else { Write-Host ('Checking {0}: its SHA-256, the build attestation and what it holds' -f $zipPath) }
-try { $unpacked = Expand-RpaPackage $zipPath $shaPath $PackageSha256 $Version $root $attest $browserSpec }
-catch { Stop-Rpa $_.Exception.Message }
-$named = ''
-if ($PackageSha256) { $named = ', and the one this script names' }
-Write-Host ('  The SHA-256 is {0}: the one in {1}{2}.' -f $unpacked.Hash, $shaPath, $named)
+if ($adding) {
+  Write-Host ('Checking {0}: its SHA-256, the build attestation and what it holds' -f $browserZipPath)
+  try { $unpacked = Add-RpaBrowser (Join-Path $root $Version) $Version $attest $browserSpec }
+  catch { Stop-Rpa $_.Exception.Message }
+} else {
+  if ($browserSpec) { Write-Host ('Checking {0} and {1}: their SHA-256, the build attestation and what they hold' -f $zipPath, $browserZipPath) }
+  else { Write-Host ('Checking {0}: its SHA-256, the build attestation and what it holds' -f $zipPath) }
+  try { $unpacked = Expand-RpaPackage $zipPath $shaPath $PackageSha256 $Version $root $attest $browserSpec }
+  catch { Stop-Rpa $_.Exception.Message }
+  $named = ''
+  if ($PackageSha256) { $named = ', and the one this script names' }
+  Write-Host ('  The SHA-256 is {0}: the one in {1}{2}.' -f $unpacked.Hash, $shaPath, $named)
+}
 if ($browserSpec) {
   $named = ''
   if ($BrowserPackageSha256) { $named = ', and the one this script names' }
   Write-Host ('  The SHA-256 of the browser zip is {0}: the one in {1}{2}.' -f $unpacked.BrowserHash, $browserSpec.ShaPath, $named)
 }
 foreach ($line in $script:AttestationLines) { Write-Host ('  {0}' -f $line) }
-Write-Host ('Unpacked into {0}' -f (Split-Path -Parent $unpacked.Package))
+if ($adding) { Write-Host ('Unpacked the browser into {0}' -f $unpacked.Package) }
+else { Write-Host ('Unpacked into {0}' -f (Split-Path -Parent $unpacked.Package)) }
 
 $refusal = Get-RpaFolderRefusal (Split-Path -Parent $unpacked.Package)
 if ($refusal) { Stop-Rpa ('{0} Nothing was installed.' -f $refusal) }

@@ -169,8 +169,8 @@ function Get-RpaBrowserFilesRefusal([hashtable]$Facts, [bool]$Kept) {
   $folder = [string]$Facts.PackageDir
   $version = [string]$Facts.PackageVersion
   if ($Facts.BrowserFiles -ne 'present') {
-    if ($Kept) { return ('This install has the browser, and its files are not in {0}: run Get-Rpa.ps1 -WithBrowser, unpack rpa-browser-windows-x64.zip into that folder, or remove the browser with -NoBrowser.' -f $folder) }
-    return ('The browser files are not in {0}: run Get-Rpa.ps1 -WithBrowser, or unpack rpa-browser-windows-x64.zip into that folder.' -f $folder)
+    if ($Kept) { return ('This install has the browser, and its files are not in {0}: run Get-Rpa.ps1 -WithBrowser, unpack rpa-browser-windows-x64.zip into that folder (Expand-Archive <path of the zip> -DestinationPath "{0}") and run this again, or remove the browser with -NoBrowser.' -f $folder) }
+    return ('The browser files are not in {0}: run Get-Rpa.ps1 -WithBrowser, or unpack rpa-browser-windows-x64.zip into that folder (Expand-Archive <path of the zip> -DestinationPath "{0}") and run this again.' -f $folder)
   }
   if ([string]$Facts.BrowserVersion -eq $version) { return $null }
   if ($Kept) { return ('This install has the browser, and the browser files in {0} are of version {1}, and the package is version {2}: unpack the rpa-browser-windows-x64.zip of version {2} into that folder, or remove the browser with -NoBrowser.' -f $folder, $Facts.BrowserVersion, $version) }
