@@ -81,7 +81,7 @@ internal sealed class Scenario(Uri url, string token, string fingerprint, string
         });
         ok &= await Step("run.begin returns a fresh, empty export dir", async () =>
         {
-            exportDir = (await Call("run.begin", new { runId = _runId, leaseMs = 120000 }))["exportDir"]!.GetValue<string>();
+            exportDir = (await BeginRun(_runId, 120000))["exportDir"]!.GetValue<string>();
             Expect(Path.IsPathFullyQualified(exportDir) && Directory.Exists(exportDir), "the export dir exists");
             Expect(Directory.GetFileSystemEntries(exportDir).Length == 0, "the export dir is empty");
         });
@@ -243,9 +243,19 @@ internal sealed class Scenario(Uri url, string token, string fingerprint, string
             if (_results.Any(r => !r.Ok)) await CaptureFailure("main");
             await Step("run.end closes the app, deletes the export dir and releases the lock", async () =>
             {
+                // run.end answers before the cleanup (close request, up to 3 s, stop, delete the folder): the answer
+                // must come within the engine's 5 s, and the app and the folder go after it.
+                var ended = Stopwatch.StartNew();
                 await Call("run.end", new { runId = _runId });
-                if (pid > 0) Expect(Exited(pid), "ErpDemo.exe was closed");
-                Expect(!Directory.Exists(exportDir), "the export dir is gone");
+                var answered = ended.Elapsed;
+                Expect(answered < TimeSpan.FromSeconds(5), $"run.end answered within 5 s (took {answered.TotalSeconds:0.0} s)");
+                if (pid > 0)
+                {
+                    var gone = await WaitForCleanup(pid, exportDir, ended, "run.end");
+                    Observe($"run.end answered after {answered.TotalSeconds:0.0} s, the app and the export dir were gone after {gone.TotalSeconds:0.0} s");
+                    await ExpectClosedByItself(pid);
+                }
+                else Expect(!Directory.Exists(exportDir), "the export dir is gone");
                 await ExpectError(-32008, () => Call("snapshot", new { runId = _runId }));
             });
         }
@@ -256,7 +266,7 @@ internal sealed class Scenario(Uri url, string token, string fingerprint, string
         _runId = "v2-" + Guid.NewGuid().ToString("N")[..8];
         await Step("v2 build: Search became Find, Export moved to Reports with a confirmation", async () =>
         {
-            await Call("run.begin", new { runId = _runId, leaseMs = 60000 });
+            await BeginRun(_runId, 60000);
             try
             {
                 await Call("app.launch", new { runId = _runId, app = new { exe = appV2Path } });
@@ -299,7 +309,7 @@ internal sealed class Scenario(Uri url, string token, string fingerprint, string
         {
             if (!await Step("repair (v2): run.begin, launch the v2 build, sign in", async () =>
                 {
-                    await Call("run.begin", new { runId = _runId, leaseMs = 120000 });
+                    await BeginRun(_runId, 120000);
                     begun = true;
                     appPid = (await Call("app.launch", new { runId = _runId, app = new { exe = appV2Path } }))["pid"]!.GetValue<int>();
                     await SignIn("btnFind");
@@ -621,14 +631,15 @@ internal sealed class Scenario(Uri url, string token, string fingerprint, string
         _runId = "lease-" + Guid.NewGuid().ToString("N")[..8];
         await Step("an expired lease ends the run like run.end", async () =>
         {
-            var exportDir = (await Call("run.begin", new { runId = _runId, leaseMs = 5000 }))["exportDir"]!.GetValue<string>();
+            var exportDir = (await BeginRun(_runId, 5000))["exportDir"]!.GetValue<string>();
             var pid = (await Call("app.launch", new { runId = _runId, app = new { exe = appPath } }))["pid"]!.GetValue<int>();
-            await Task.Delay(TimeSpan.FromSeconds(8));
-            Expect(Exited(pid), "the app the run launched was closed");
-            Expect(!Directory.Exists(exportDir), "the export dir was deleted");
+            // The lease ends after 5 s, then the close request, up to 3 s of waiting, the stop and the delete follow.
+            var lease = Stopwatch.StartNew();
+            await Task.Delay(TimeSpan.FromSeconds(5));
+            await WaitForCleanup(pid, exportDir, lease, "the lease's end", 5);
             await ExpectError(-32008, () => Call("run.heartbeat", new { runId = _runId }));
             var next = "after-" + _runId;
-            await Call("run.begin", new { runId = next, leaseMs = 5000 });
+            await BeginRun(next, 5000);
             await Call("run.end", new { runId = next });
         });
     }
@@ -712,22 +723,73 @@ internal sealed class Scenario(Uri url, string token, string fingerprint, string
         if (!p.WaitForExit(30000) || p.ExitCode != 0) throw new InvalidOperationException("Set-Clipboard failed");
     }
 
-    private static bool Exited(int pid)
+    /// <summary>run.begin, retried while the runner is still cleaning up after the run before (runner_busy, -32001):
+    /// every 300 ms for up to 15 s.</summary>
+    private async Task<JsonNode> BeginRun(string runId, long leaseMs)
     {
-        for (var i = 0; i < 50; i++)
+        var waited = Stopwatch.StartNew();
+        for (;;)
         {
             try
             {
-                using var p = Process.GetProcessById(pid);
-                if (p.HasExited) return true;
+                return await Call("run.begin", new { runId, leaseMs });
             }
-            catch (ArgumentException)
+            catch (RunnerError e) when (e.Code == -32001)
             {
-                return true;
+                if (waited.Elapsed > TimeSpan.FromSeconds(15))
+                    throw new InvalidOperationException($"expected: run.begin after the earlier run ended, but the runner stayed busy for {waited.Elapsed.TotalSeconds:0} s");
+                await Task.Delay(300);
             }
-            Thread.Sleep(100);
         }
-        return false;
+    }
+
+    /// <summary>Polls every 200 ms, up to 15 s after <paramref name="since"/> started plus <paramref name="alreadyPassedS"/>
+    /// seconds, until the app has ended and the export folder is gone. Returns the time since <paramref name="since"/>.</summary>
+    private static async Task<TimeSpan> WaitForCleanup(int pid, string exportDir, Stopwatch since, string after, double alreadyPassedS = 0)
+    {
+        var limit = TimeSpan.FromSeconds(15 + alreadyPassedS);
+        for (;;)
+        {
+            var appGone = ExitedNow(pid);
+            var dirGone = !Directory.Exists(exportDir);
+            if (appGone && dirGone) return since.Elapsed;
+            if (since.Elapsed > limit)
+                throw new InvalidOperationException("expected: the cleanup after " + after + " to finish, but after " +
+                    $"{since.Elapsed.TotalSeconds:0.0} s " + (!appGone ? "the app had not ended" : "") + (!appGone && !dirGone ? " and " : "") + (!dirGone ? "the export dir was not deleted" : ""));
+            await Task.Delay(200);
+        }
+    }
+
+    private static bool ExitedNow(int pid)
+    {
+        try
+        {
+            using var p = Process.GetProcessById(pid);
+            return p.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return true;
+        }
+    }
+
+    /// <summary>The runner's file log says how the app ended. Asserted where the log is readable: it is at
+    /// ProgramData\RPA Runner\logs for the installed runner and the supervisor run.</summary>
+    private async Task ExpectClosedByItself(int pid)
+    {
+        var logs = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "RPA Runner", "logs");
+        string? line = null;
+        for (var i = 0; i < 25 && line is null; i++)
+        {
+            if (Directory.Exists(logs))
+                line = Directory.GetFiles(logs)
+                    .SelectMany(f => { using var r = new StreamReader(new FileStream(f, FileMode.Open, FileAccess.Read, FileShare.ReadWrite)); return r.ReadToEnd().Split('\n'); })
+                    .FirstOrDefault(l => l.Contains($"app pid={pid} ", StringComparison.Ordinal) && !l.Contains("app.launch", StringComparison.Ordinal));
+            if (line is null) await Task.Delay(200);
+        }
+        Expect(line is not null, $"the runner's log says how the app (pid {pid}) ended");
+        Console.WriteLine($"    LOG: {line!.Trim()}");
+        Expect(line.Contains("closed by itself after the close request", StringComparison.Ordinal), "the ERP Demo closed by itself after the close request");
     }
 
     private static void Expect(bool condition, string what)
