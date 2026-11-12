@@ -5,7 +5,7 @@ namespace Rpa.Recorder.Core;
 public sealed record NameQuestion(string Title, string Text, string NameLabel, string Suggested, string Action);
 
 /// <summary>A question before something is lost or replaced: its title, its text and its action button.</summary>
-public sealed record Question(string Title, string Text, string Action);
+public sealed record Question(string Title, string Text, string Action, string Cancel = DialogText.Cancel);
 
 /// <summary>The texts of the bar's small windows. Each says what it acts on; its action comes first, then Cancel.</summary>
 public static class DialogText
@@ -31,6 +31,15 @@ public static class DialogText
 
     public const string FolderTitle = "Choose the folder for the recording";
     public const string NoticesTitle = "Earlier notices";
+
+    public const string Ok = "OK";
+    public const string AddressTitle = "The import form's address";
+    public const string AddressLabel = "Address of n8n's Import a bot form";
+    public const string AddressNote = "The setup command prints it. It looks like https://your-n8n/form/…";
+
+    /// <summary>An http address that leaves this machine and its private network (<see cref="ImportForm.Check"/>).
+    /// Back, the default, returns to the address.</summary>
+    public static readonly Question PlainHttp = new(AddressTitle, "This address starts with http://, so the form's login would travel unencrypted.", "Continue", "Back");
 
     public static string WindowEntry(string title, string exe) => $"{title} ({exe})";
 

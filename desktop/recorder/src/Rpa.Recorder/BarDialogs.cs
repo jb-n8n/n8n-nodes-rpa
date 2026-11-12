@@ -234,7 +234,43 @@ internal sealed class QuestionDialog : SmallDialog
     public QuestionDialog(Form bar, Question question) : base(bar, question.Title)
     {
         AddText(question.Text);
-        Finish(question.Action, safeDefault: true);
+        Finish(question.Action, question.Cancel, safeDefault: true);
+    }
+}
+
+/// <summary>The import form's address: one box (filled in when the address is changed), the line that says where the
+/// address comes from, and what is wrong with it while it is refused. OK is enabled once the address is not refused.</summary>
+internal sealed class AddressDialog : SmallDialog
+{
+    private readonly TextBox _box;
+    private readonly Label _problem;
+    private readonly Button _action;
+
+    public AddressDialog(Form bar, string filled) : base(bar, DialogText.AddressTitle)
+    {
+        AddText(DialogText.AddressLabel);
+        _box = new TextBox { Text = filled, Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, BarLayout.Tight), AccessibleName = DialogText.AddressLabel };
+        Add(_box);
+        AddText(DialogText.AddressNote, quiet: true);
+        _problem = AddText("", top: BarLayout.Tight);
+        _problem.ForeColor = RecorderBar.Amber;
+        _action = Finish(DialogText.Ok);
+        _box.TextChanged += (_, _) => Check();
+        Shown += (_, _) => { _box.Focus(); _box.SelectAll(); };
+        Check();
+    }
+
+    public string Typed => _box.Text;
+
+    /// <summary>The address as <see cref="ImportForm.Check"/> judges it: the only way the bar gets one to open.</summary>
+    public FormAddress Address => ImportForm.Check(_box.Text);
+
+    private void Check()
+    {
+        var address = Address;
+        _action.Enabled = address.Verdict != AddressVerdict.Refused;
+        // An empty box needs no warning: the disabled button and the label say what is missing.
+        _problem.Text = _box.Text.Trim().Length == 0 ? "" : address.Problem ?? "";
     }
 }
 
