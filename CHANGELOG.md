@@ -8,6 +8,7 @@ All notable changes to `n8n-nodes-rpa`, the `rpa-browser` image and the Windows 
 
 ### Added
 
+- **Set up the import form in one command**: `npx n8n-nodes-rpa setup` creates the form's login, the RPA Step Signing key and, with a Connection Line, the RPA Desktop Runner credential, then imports and publishes **RPA: 5 Import a bot** with your address as the approver. It prints the form's address and password once, and reuses what it made when run again.
 - **The RPA Recorder** on the Windows machine (Start menu: **RPA Recorder**). It records a person's work in a Windows app as steps, asks once after **Finish** which values change from run to run, saves to `Documents\RPA recordings`, and allows the recorded app with one button (**Allow this app…**). It does not read password boxes. Tried on WinForms and Win32 apps.
 - **Install in one command**: `.\Get-Rpa.ps1 -AllowFrom <n8n address>` downloads the Windows package, checks its SHA-256 (and its build attestation where the GitHub CLI is signed in), unpacks it under `C:\Program Files\RPA package\<version>` and runs the installer.
 - **The `rpa` command** in `C:\Program Files\RPA Runner\rpa.cmd`: `rpa connection [-ShowTokens] [-Address …]`, `rpa status`, `rpa policy apply <file>`.

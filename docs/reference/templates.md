@@ -35,6 +35,20 @@ Templates 2, 3 and 5 create the two Data Tables when they are missing.
   **Max Seconds** (for nginx, `proxy_read_timeout`). Do not submit the form again after a timeout: the first import
   still finishes, and its result is in **Executions**.
 
+### Set it up by hand
+
+`npx n8n-nodes-rpa setup` does this in one command ([desktop bot guide](../guides/desktop-bot.md#4-import-and-approve)).
+By hand:
+
+1. Import `packages/n8n-nodes-rpa/templates/5-import-a-bot.json` and follow its green **Set once** note.
+2. On **Import a bot**, create a **Basic Auth** credential with a user name and password of your choice.
+3. On **Sign steps**, create an **RPA Step Signing** credential with a key of 32 or more random characters, for
+   example from `openssl rand -hex 32`. Keep a copy where you keep recovery secrets.
+4. In **Sign steps → Approver Allowlist**, replace `approver@example.com` with your email address.
+5. Browser bots only: pick **RPA Browser** on **Import steps**, and the same **RPA Site Login** on **Import steps** and
+   **Sign steps** when the bot signs in.
+6. Click **Publish**. The form's address is the production URL on **Import a bot**.
+
 ## RPA: 2 Data feed
 
 The self-healing data feed reads data from a site that has no API (sign-in, second factor, filters) on a schedule.

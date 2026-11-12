@@ -9,7 +9,7 @@
 // request). The form's password is printed once, on the line that shows it; the signing key only with
 // --show-signing-key. Nothing is written to a file.
 //
-// Safe to run again: it lists credentials and workflows first and reuses those with the same name, saying so. n8n's
+// Run it again at any time: it lists credentials and workflows first and reuses those with the same name, saying so. n8n's
 // API never returns a secret, so a second run cannot show a password made earlier: --new-form-password replaces it.
 import { randomBytes, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -37,7 +37,7 @@ const USAGE = [
   'Usage: npx n8n-nodes-rpa setup [--url <n8n address>] [--approver <email>] [options]',
   '',
   'Sets up n8n for importing a bot: the import form and its login, the RPA Step Signing credential, and the workflow',
-  `"${WORKFLOW_NAME}", published. Safe to run again: it reuses what is there.`,
+  `"${WORKFLOW_NAME}", published. Run it again at any time: it reuses what is there.`,
   '',
   `  --url <address>        n8n's address (default ${DEFAULT_URL}). http:// only on this machine.`,
   '  --approver <email>     your email address: it goes into the Approver Allowlist of Sign steps.',
