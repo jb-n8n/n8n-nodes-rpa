@@ -787,6 +787,12 @@ internal sealed class Scenario(Uri url, string token, string fingerprint, string
                     .FirstOrDefault(l => l.Contains($"app pid={pid} ", StringComparison.Ordinal) && !l.Contains("app.launch", StringComparison.Ordinal));
             if (line is null) await Task.Delay(200);
         }
+        // A runner started with another data directory writes its log elsewhere: nothing to read here, so say so.
+        if (line is null && !Directory.Exists(logs))
+        {
+            Console.WriteLine($"    OBSERVE: no runner log under {logs}; how the app ended was not checked in the log");
+            return;
+        }
         Expect(line is not null, $"the runner's log says how the app (pid {pid}) ended");
         Console.WriteLine($"    LOG: {line!.Trim()}");
         Expect(line.Contains("closed by itself after the close request", StringComparison.Ordinal), "the ERP Demo closed by itself after the close request");
