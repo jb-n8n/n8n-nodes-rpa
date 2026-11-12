@@ -59,7 +59,7 @@ Click **Save**. The window says `Connection tested successfully`.
 
 ## 3. Take a first screenshot
 
-Create a workflow, then **⋯ → Import from File** and pick `packages/n8n-nodes-rpa/templates/hello-world.json`. Pick your
+Create a workflow, then **⋯ → Import → From File** and pick `packages/n8n-nodes-rpa/templates/hello-world.json`. Pick your
 RPA Browser credential on both RPA nodes, and click **Execute workflow**.
 
 - **Screenshot example.com** returns `title`, `status: 200` and a PNG (open the **Binary** tab).
@@ -94,8 +94,9 @@ secrets.
   - Pages Where the Password May Be Typed `sandbox:8080/acme/login` and `sandbox:8080/acme/mfa` (one per line)
   - Forms It May Submit `POST sandbox:8080/acme/reports/export`
   - Requests That Only Read `POST sandbox:8080/sap*/bc/gui/sap/its/webgui` and `POST sandbox:8080/sap/opu/odata/sap/ZLINEITEMS_SRV/$batch` (one per line)
-- **RPA Step Signing**: a key of 32 or more random characters. Let your password manager generate one. **Signing** is
-  how a person's approval is attached to steps: the bot runs only steps whose signature matches this key.
+- **RPA Step Signing**: a key of 32 or more random characters. Let your password manager generate one, or run
+  `openssl rand -hex 32`. **Signing** is how a person's approval is attached to steps: the bot runs only steps whose
+  signature matches this key.
 - **Anthropic** (or another chat model n8n supports): your API key. The data feed's chat model builds the bot's first
   steps and repairs them when the site changes.
 - **SMTP**: Host `mailpit`, Port `1025`, SSL/TLS off, no user or password.

@@ -225,7 +225,7 @@ the lines the tool prints, type `y` and Enter. It answers
 `Policy updated. The runner restarts within 10 seconds and uses the new policy.`
 
 **Run it.** Download [`erp-demo.workflow.json`](samples/erp-demo.workflow.json) and import it in n8n
-(**⋯ → Import from File**). On **Export ERP Demo line items**, pick your RPA Desktop Runner credential and click
+(**⋯ → Import → From File**). On **Export ERP Demo line items**, pick your RPA Desktop Runner credential and click
 **Execute workflow**. The sample runs its steps unsigned (**Require Signed Steps** off), and its variables hold ERP
 Demo's documented sign-in (`clerk` / `demo1234`). For your own bots keep signing on, and give passwords from an
 RPA Secret Variables credential. The output has `values` (`out_ResultCount`: `12 line items`) and `line-items.csv` in

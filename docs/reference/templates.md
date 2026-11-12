@@ -1,8 +1,8 @@
 # Templates reference
 
 The package ships workflow templates in `packages/n8n-nodes-rpa/templates/` (also in the npm package's `templates/`
-folder). Import one with **⋯ → Import from File** in a new workflow. Each has a green **Set once** note that lists what
-to pick, in order.
+folder). Import one with **⋯ → Import → From File** in a new workflow. In some n8n versions the **⋯** menu says
+**Import from File**. Each has a green **Set once** note that lists what to pick, in order.
 
 | File | Workflow | What it does |
 |---|---|---|
