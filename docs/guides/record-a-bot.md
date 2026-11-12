@@ -41,6 +41,10 @@ without detours. Each step appears in the numbered list as a sentence, such as `
 - **Pause** stops recording (the top line says `Paused`, with an amber dot), and **Resume** goes on.
 - To return a value to n8n, point at it in the app and press **F9**: `Point at a value in the app and press F9 to read it on every run.`
   The bar asks for an output name (for example `out_result_count`) and adds `Read "6 line items" as out_result_count`.
+- End on something you can check. A run that finishes with the app on an unexpected window still counts as done,
+  unless a step notices. Read a value with **F9** as the last step, or end on a step that only works in the expected
+  window. When a run ends, the runner asks the app to close and stops it after 3 seconds if it has not closed. Work
+  that was not saved is lost.
 - To fix a mistake, select the step and choose **Delete step**.
 - **Make secret…** turns a selected step's typed value into a secret. Values that change from run to run become
   variables after **Finish**.

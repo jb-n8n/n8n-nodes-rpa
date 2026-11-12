@@ -20,6 +20,7 @@ All notable changes to `n8n-nodes-rpa`, the `rpa-browser` image and the Windows 
 
 ### Changed
 
+- **The desktop runner asks the apps to close before it stops them.** When a run ends, it sends each launched app a close request (like the close button, with no typing, clicking or answering), waits up to 3 seconds in total, then stops what is still running as before. `run.end` now answers at once and the cleanup goes on after it. The log says how each app ended.
 - **The default approver.** On the default path, the person who imports a bot approves it on the form. Anyone who can open the form (its Basic Auth credential) can approve, and the row records the address in **Sign steps → Approver Allowlist**. Set `approval` to `by email` in the template's **Settings** for a second person. Template 5's **Approve steps** node ships switched off. Template 3's **Settings** now holds `approver`.
 - **Sign Steps' Approved By** may be empty when the **Approver Allowlist** holds exactly one address.
 - **Windows Server installs are unattended by default**: a first install for a new bot user with no sign-in mode is an `-Unattended` install, where it was refused before.

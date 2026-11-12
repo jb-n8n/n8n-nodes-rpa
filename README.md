@@ -109,6 +109,7 @@ Known limits:
 - **Not released yet:** the Windows package and node version 0.2.0. The Windows package is not code-signed.
 - **Windows:** tested on Windows Server 2022 (CI also installs it on Windows Server 2025). Windows 10 and 11 were not
   tested. The recorder was tried on WinForms and Win32 apps only.
+- **n8n connects in to the Windows machine.** The machine never dials out to n8n, so n8n must reach it on the runner's port. Where it cannot, a private network or tunnel between them is needed, and the product does not provide one ([Windows guide](docs/install/windows.md#who-can-reach-the-ports)).
 - **Desktop steps** have no AI repair, no replay before approval, no loops and no right-click, scroll or drag
   ([Steps](docs/reference/steps.md#desktop-steps)).
 - **AI-built and AI-repaired steps** read record IDs only, and AI repair does not write.

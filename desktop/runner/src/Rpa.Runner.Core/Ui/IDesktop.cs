@@ -136,6 +136,15 @@ public interface IProcessHost
     /// </summary>
     bool IsDescendantOf(int pid, IReadOnlyCollection<int> roots);
 
+    /// <summary>
+    /// Asks the process to close the way a person closing its windows would (a close request to its top-level
+    /// windows). Never types, clicks or answers a question the app asks. Returns at once and does not wait.
+    /// </summary>
+    void RequestClose(int pid);
+
+    /// <summary>True when the process has ended, or is not one this host started.</summary>
+    bool HasExited(int pid);
+
     /// <summary>Kills the process and its descendants; ignores processes that already exited.</summary>
     void KillTree(int pid);
 }

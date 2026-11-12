@@ -141,6 +141,11 @@ the gated keys and the export folder. n8n cannot switch it off.
 - With the browser installed beside the runner (the installer's default), whoever holds the browser token acts as the
   bot user through the browser, which the runner's policy does not limit. The
   [Windows guide](../install/windows.md#3-what-the-install-changes) says when to install with `-NoBrowser`.
+- In the mode where nobody is signed in, the supervisor signs the bot user in when a connection arrives at the
+  runner's or the browser's port. It does not read the connection or check the sender's address first, and the token
+  is checked afterwards by the runner or the browser. So anyone who can reach those ports can cause a sign-in and
+  keep the session open for a while, but cannot run anything without the token. The firewall rule's `-AllowFrom`
+  addresses are the only limit on who can do that. Give it only n8n's address.
 
 ## Accepted risks
 

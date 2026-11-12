@@ -111,6 +111,15 @@ it can open any address this machine reaches and read any file the bot user can 
 The runner's policy does not limit that. On a machine where the policy must hold against n8n itself, install with
 `-NoBrowser` and run the browser elsewhere. Either way, use `-AllowFrom` with n8n's address.
 
+n8n opens the connection to this machine, and the machine never dials out to n8n. So n8n must be able to reach the
+runner's port: a firewall rule for n8n's address, and `-Address` on `rpa connection` when n8n reaches the machine by
+another name or address. Where n8n cannot reach the machine directly, put a private network or a tunnel between them.
+The product does not provide one.
+
+In the mode where nobody is signed in, any connection that reaches the runner's port makes the supervisor sign the bot
+user in, before the token is checked. Without the token nothing runs. Give `-AllowFrom` only n8n's address, so that
+nothing else can cause a sign-in.
+
 ## 4. Signing in
 
 The runner drives apps only while the bot user's desktop is signed in and unlocked. On a locked or disconnected desktop
@@ -322,6 +331,7 @@ Start with `& "C:\Program Files\RPA Runner\rpa.cmd" status`. Logs are in `C:\Pro
 | `runner_unavailable: the desktop runner's Windows session is locked ...` | The bot user's desktop is locked or disconnected (signed-in modes). | Sign in again, or hand the session back to the console (section 4). |
 | `The desktop runner at ... refused the token.` or `The browser server at ... refused the token.` | The token in n8n is not the machine's. | Paste the Connection Line again (section 6). |
 | `... presented a certificate with fingerprint ..., which is not the fingerprint in the RPA Desktop Runner credential.` or `The browser server's certificate does not match ...` | The certificate changed, or something else answers at that address. | If you did not change the certificate on purpose, find out what did before you accept the new fingerprint. |
+| A run is done, but the app was on an unexpected window at the end | Nothing checked the last window, so the run counted as done. | Record a last step that reads a value with F9, or only works in the expected window. The runner then asks the app to close and stops it after 3 seconds, so unsaved work is lost. |
 | `policy_violation: the desktop runner is not allowed to start ErpDemo.exe. On the Windows machine, allow it: ...` | The policy does not allow the app. | Allow it (sections 7 and 8). `RpaPolicy.exe show` prints the policy. |
 | `runner_unavailable: the desktop runner could not start ErpDemo.exe: it is not installed at the path the runner's policy names ...` | The app is not where the policy says. | Install the app there, or allow it at its real path. |
 | `busy: the desktop runner is busy with another run` | One run at a time: another one held the runner longer than this run waited (45 s). | Run less often, or at other times. |
