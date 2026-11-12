@@ -18,6 +18,8 @@ node's **Import Steps** operation. Set it up once:
    Signing** (and the same Site Login) on **Sign steps**, and your address in **Sign steps → Approver Allowlist**.
 2. Click **Publish** and open the form's production URL.
 
+<img src="../images/import-form.png" alt="The Import a bot form: a file, an optional source and a name for the steps" width="360">
+
 Then, for each bot:
 
 1. Upload the file. **Source** works it out from the file name, or choose it. Give the steps a **Name**: they are
@@ -31,8 +33,8 @@ Then, for each bot:
    import left a step out, a **Left out by the import** block lists it. Choose **Approve and sign** or **Reject**.
 5. The last page says what was signed, and counts the values removed as secrets and the steps not translated. It
    downloads the workflow that runs the bot. For a UiPath project, notes in that workflow show what was not
-   translated, such as a credential lookup or a log message. Import it in n8n, pick the credentials its notes name,
-   and click **Execute workflow**.
+   translated, such as a credential lookup. A log message is dropped without a note. Import the workflow in n8n, pick
+   the credentials its notes name, and run it (the **Execute** button at the bottom of the canvas).
 
 To have a second person approve by email instead, follow the template's **Approval by email** note. The
 [desktop bot guide](desktop-bot.md) walks the whole path with a recording.

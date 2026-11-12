@@ -45,7 +45,7 @@ without detours. Each step appears in the numbered list as a sentence, such as `
 - **Make secret…** turns a selected step's typed value into a secret. Values that change from run to run become
   variables after **Finish**.
 
-<!-- screenshot: recorder-bar-recording.png -->
+<img src="../images/recorder-bar-recording.png" alt="The RPA Recorder bar while recording: a numbered list of steps as plain sentences" width="406">
 
 **Which of these change from run to run?** After **Finish**, the top line says `Almost done · <n> steps` and the bar
 lists every step that typed a value or chose an item. Tick each value that changes from run to run, such as a date or
@@ -53,7 +53,7 @@ a company code. It becomes a variable with the name under it, which you can chan
 start value. Leave the rest unticked: they stay as recorded. A secret shows as a secret and stays one. Choose
 **Continue**, or **Back** to record more.
 
-<!-- screenshot: recorder-values-page.png -->
+<img src="../images/recorder-values-page.png" alt="The page that asks which recorded values change from run to run" width="406">
 
 **Finished.** `Finished · <n> steps` and `Check the steps, then name the recording and save it.` **Name** starts as
 `<program> recording`. The folder is `Documents\RPA recordings`. **Change folder…** picks another. Choose **Save**. It
@@ -74,7 +74,7 @@ asks before it replaces a file. **Back** returns to the values page, to tick ano
 The bar writes each stage and each button you press, with the time, to `%LOCALAPPDATA%\RPA Recorder\bar.log`. The log
 holds no step, no typed value and no file name. It starts again at 200 KB.
 
-<!-- screenshot: recorder-bar-saved.png -->
+<img src="../images/recorder-bar-saved.png" alt="The bar after saving, with the two things left to do" width="406">
 
 ## What it records
 

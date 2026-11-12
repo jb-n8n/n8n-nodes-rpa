@@ -56,6 +56,8 @@ In n8n's left sidebar, choose **+ → New credential → RPA Desktop Runner**, p
 by another name or address than the one in the line (a NAT, a tunnel), run the command again with
 `-Address <that name or address>`.
 
+<img src="../images/credential-connection-line.png" alt="A new RPA Desktop Runner credential with its Connection Line field" width="640">
+
 ## 3. Record the bot
 
 1. On the Windows machine, sign in to **your own administrator session** (not as the bot user). Open **RPA Recorder**
@@ -96,6 +98,9 @@ by another name or address than the one in the line (a NAT, a tunnel), run the c
 5. The next page, **Review and approve**, lists the steps by number. The lighter, grey steps are the ones the import added (a wait
    for each window, and one for the file the bot returns). Under **Which of these steps save, send or submit?**, keep
    **Click Save** ticked, and untick a step that does not save or send. Choose **Approve and sign**, then **Submit**.
+
+   <img src="../images/import-review-page.png" alt="The Review and approve page for the ERP Demo recording: the numbered steps, the tick boxes and the decision" width="360">
+
 6. The last page says `Approved and signed: erp-line-items v1 is now the version that runs under that name.` Your
    browser downloads `erp-line-items.workflow.json`, the workflow that runs the bot.
 

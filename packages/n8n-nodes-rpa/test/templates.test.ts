@@ -1423,6 +1423,18 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       { text: 'Read a value from the app', marks: ['gives its text to n8n as out_result_count'] },
       { text: 'Read Result count', marks: ['gives its text to n8n as out_result_count'] },
     ]);
+    // A control with neither a name nor an id: the step's own intent, with the typed or chosen value when the intent
+    // does not say it, and never a variable's value.
+    const bare = { uia: { path: [{ controlType: 'Edit' }] } };
+    expect(reviewSteps([
+      { intent: 'Type into the date field', fill: { field: bare, value: '2026-01-20' } },
+      { intent: 'Type 2026-01-20 as the date', fill: { field: bare, value: '2026-01-20' } },
+      { intent: 'Type the date', fill: { field: bare, value: '{{var.date}}' } },
+      { intent: 'Pick the plant', select: { field: bare, option: '1000' } },
+      { intent: 'Tick the box', check: { field: bare, checked: true } },
+    ], { desktop: true }).map((r) => r.text)).toEqual([
+      'Type into the date field: "2026-01-20"', 'Type 2026-01-20 as the date', 'Type the date', 'Pick the plant: "1000"', 'Tick the box',
+    ]);
   });
 
   it('a recording\'s marks name its secret variables from the import, never a value', async () => {

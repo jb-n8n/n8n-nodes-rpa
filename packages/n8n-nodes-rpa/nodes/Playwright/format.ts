@@ -188,10 +188,20 @@ function desktopSentence(s: Json): string {
   const select = s.select === undefined ? undefined : asJson(s.select);
   const key = s.key === undefined ? undefined : asJson(s.key);
   const check = s.check === undefined ? undefined : asJson(s.check);
-  const field = targetName(fill?.field ?? select?.field ?? key?.target ?? check?.field) || String(s.intent ?? '');
+  const named = targetName(fill?.field ?? select?.field ?? key?.target ?? check?.field);
+  const field = named || String(s.intent ?? '');
   if (fill) {
     const file = /^\{\{\$exportDir\}\}[\\/](.+)$/.exec(String(fill.value ?? ''));
     if (file) return `Save ${file[1]} into the run's export folder`;
+  }
+  // A control with neither a name nor an id: the step's own intent says it better than "Type … into <intent>". The
+  // typed or chosen value still shows when the intent does not say it (never a variable's).
+  const intent = String(s.intent ?? '').trim();
+  if (!named && (fill || select || check) && intent) {
+    const value = fill ? fill.value : select ? select.option : undefined;
+    return typeof value === 'string' && !holdsVariable(value) && !intent.includes(value) ? `${intent}: "${value}"` : intent;
+  }
+  if (fill) {
     return holdsVariable(fill.value) ? `Type into ${field}` : `Type "${String(fill.value)}" into ${field}`;
   }
   if (select) return holdsVariable(select.option) ? `Choose an item in ${field}` : `Choose "${String(select.option)}" in ${field}`;
