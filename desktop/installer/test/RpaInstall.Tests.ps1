@@ -4046,8 +4046,11 @@ Describe 'The installer scripts' {
       $script:Area = Join-Path ([IO.Path]::GetTempPath()) $script:Leaf
       $script:Package = Join-Path $script:Area 'package'
       $script:Unpack = 'Unpack the package in a folder only you or administrators can change, and run it from there.'
+      # A refusal the plan gives whatever the machine is like, and only after the package's files passed their check:
+      # the two browser switches together. It shows that the installer ran as far as its plan, and changed nothing.
+      $script:RanToThePlan = '-WithBrowser and -NoBrowser cannot be used together: -WithBrowser adds the browser, -NoBrowser leaves it out or removes it. Choose one.'
       function Invoke-TestInstaller {
-        $output = @(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $script:Package 'Install-Rpa.ps1') -RunnerPort 7 -BrowserPort 7 -AllowFromAnyAddress)
+        $output = @(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $script:Package 'Install-Rpa.ps1') -WithBrowser -NoBrowser -AllowFromAnyAddress)
         @{ Output = $output; ExitCode = $LASTEXITCODE }
       }
       if ($env:OS -eq 'Windows_NT') {
@@ -4070,7 +4073,7 @@ Describe 'The installer scripts' {
     It 'Install-Rpa.ps1 runs from a package only administrators, SYSTEM and the person running it can change' -Skip:($env:OS -ne 'Windows_NT') {
       $run = Invoke-TestInstaller
       ($run.Output -join "`n") | Should -Not -Match 'can be changed by|is a link|local drive'
-      $run.Output | Should -Contain '-RunnerPort and -BrowserPort are both 7. Give each its own port.'
+      $run.Output | Should -Contain $script:RanToThePlan
       $run.ExitCode | Should -Be 1
     }
 
@@ -4117,11 +4120,11 @@ Describe 'The installer scripts' {
       & cmd.exe /d /c ('mklink /J "{0}" "{1}"' -f $via, $script:Area) | Out-Null
       try {
         $started = Join-Path (Join-Path $via 'package') 'Install-Rpa.ps1'
-        $output = @(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $started -RunnerPort 7 -BrowserPort 7 -AllowFromAnyAddress)
-        $output | Should -Contain '-RunnerPort and -BrowserPort are both 7. Give each its own port.'
+        $output = @(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $started -WithBrowser -NoBrowser -AllowFromAnyAddress)
+        $output | Should -Contain $script:RanToThePlan
 
         & icacls.exe $file /grant '*S-1-5-32-545:M' | Out-Null
-        $output = @(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $started -RunnerPort 7 -BrowserPort 7 -AllowFromAnyAddress)
+        $output = @(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $started -WithBrowser -NoBrowser -AllowFromAnyAddress)
         $output[1] | Should -Match ([regex]::Escape("$($script:Leaf)\package\RpaInstall.Plan.ps1 can be changed by $($script:Users). $($script:Unpack)") + '$')
         $output[1] | Should -Not -Match 'via'
       } finally {
