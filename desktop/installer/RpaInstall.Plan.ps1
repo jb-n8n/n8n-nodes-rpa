@@ -142,7 +142,7 @@ function Get-RpaUnattendedNotice([string]$User, [int]$RunnerPort, [int]$BrowserP
     $lines += '  - The password of {0} is stored on this machine for the RPA Supervisor. An administrator of this machine' -f $User
     $lines += '    can read it.'
   }
-  if ($Steps -contains 'point the firewall rules at the supervisor') {
+  if ($Steps -contains 'point the firewall rules at the supervisor' -or $Steps -contains 'point the firewall rule at the supervisor') {
     if ($BrowserPort) {
       $lines += '  - The firewall rules for port {0} let connections in to the RPA Supervisor instead of the runner and the' -f $ports
       $lines += '    browser.'
@@ -391,7 +391,8 @@ function Get-RpaInstallPlan {
       }
       if ($allowFrom -and -not $publicNetwork -and $Facts.PublicNetwork) {
         if ($upgrade) {
-          $warnings.Add('This machine is on a network that Windows treats as Public. The firewall rules are for Domain and Private networks, so they let nothing in on that network.')
+          if ($browser) { $warnings.Add('This machine is on a network that Windows treats as Public. The firewall rules are for Domain and Private networks, so they let nothing in on that network.') }
+          else { $warnings.Add('This machine is on a network that Windows treats as Public. The firewall rule is for Domain and Private networks, so it lets nothing in on that network.') }
         } else {
           $refusals.Add("This machine's network is Public, and -AllowFromAnyAddress does not open the ports on a Public network. Use -AllowFrom <n8n address>, or add -IncludePublicNetwork, or use -NoFirewall.")
         }
@@ -532,7 +533,8 @@ function Get-RpaInstallPlan {
       if (-not $convert -and (-not $secretKept -or $hasPassword)) { $steps.Add("store the bot user's password for the supervisor") }
       if ($convert) { $steps.Add('sign the bot user out') }
       $steps.Add('register the supervisor service')
-      if ($firewall) { $steps.Add('point the firewall rules at the supervisor') }
+      if ($firewall -and $browser) { $steps.Add('point the firewall rules at the supervisor') }
+      elseif ($firewall) { $steps.Add('point the firewall rule at the supervisor') }
     }
     $steps.Add('add the Start menu shortcut')
     if ($upgrade) { $steps.Add('start tasks') }

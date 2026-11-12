@@ -416,6 +416,7 @@ Describe 'Get-RpaInstallPlan' {
     BeforeAll {
       $script:PublicRefusal = "This machine's network is Public, and -AllowFromAnyAddress does not open the ports on a Public network. Use -AllowFrom <n8n address>, or add -IncludePublicNetwork, or use -NoFirewall."
       $script:PublicWarning = 'This machine is on a network that Windows treats as Public. The firewall rules are for Domain and Private networks, so they let nothing in on that network.'
+      $script:PublicWarningOne = 'This machine is on a network that Windows treats as Public. The firewall rule is for Domain and Private networks, so it lets nothing in on that network.'
     }
 
     It 'with -AllowFrom addresses the rules apply on every network, also a Public one' {
@@ -494,6 +495,12 @@ Describe 'Get-RpaInstallPlan' {
       $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ AllowFrom = @(); AllowFromAnyAddress = $true }) -Facts $facts
       $plan.Refusals.Count | Should -Be 0
       $plan.Warnings | Should -BeExactly @($script:PublicWarning)
+
+      # Without the browser there is one rule.
+      $facts.InstalledBrowser = $false
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ AllowFrom = @(); WithBrowser = $false }) -Facts $facts
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Warnings | Should -BeExactly @($script:PublicWarningOne)
     }
 
     It '-IncludePublicNetwork alone does not say which addresses may connect' {
@@ -1147,6 +1154,8 @@ Describe 'Get-RpaInstallPlan' {
       $plan.Refusals.Count | Should -Be 0
       $plan.Notice[1] | Should -BeExactly '  - The service RPA Supervisor (RpaSupervisor.exe, running as SYSTEM, started with Windows) listens on port 8765.'
       $plan.Notice | Should -Contain '  - The firewall rule for port 8765 lets connections in to the RPA Supervisor instead of the runner.'
+      $plan.Steps | Should -Contain 'point the firewall rule at the supervisor'
+      $plan.Steps | Should -Not -Contain 'point the firewall rules at the supervisor'
     }
   }
 
@@ -3075,6 +3084,15 @@ Describe 'Moving an install with automatic sign-in to -Unattended' {
     $closing | Should -Not -Match 'ExecutionPolicy Bypass -File'
   }
 
+  It 'Install-Rpa.ps1 names one token, certificate and line without the browser, and two with it' {
+    $source = Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir 'Install-Rpa.ps1')
+    $closing = $source.Substring($source.IndexOf("Write-Host 'RPA is installed.'"))
+    $closing | Should -Match ([regex]::Escape("if (-not `$browser) { Write-Host ('  Data:      {0} (policy.json, the token, the certificate, logs)' -f `$layout.DataDir) }"))
+    $closing | Should -Match ([regex]::Escape("else { Write-Host ('  Data:      {0} (policy.json, the tokens, the certificates, logs)' -f `$layout.DataDir) }"))
+    $closing | Should -Match ([regex]::Escape("`$shown = 'The connection lines could not be shown'"))
+    $closing | Should -Match ([regex]::Escape("if (-not `$browser) { `$shown = 'The connection line could not be shown' }"))
+  }
+
   It 'Install-Rpa.ps1 says after a failed move that the bot user stays signed out until the next start' {
     $source = Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir 'Install-Rpa.ps1')
     $source | Should -Match ([regex]::Escape("if (`$_.Exception.Data['SignedOut'])"))
@@ -3713,6 +3731,18 @@ Describe 'Show-RpaConnection.ps1' {
       ($output -join "`n") | Should -Not -Match 'add -Address'
     }
 
+    It 'without the browser says one token and one line' {
+      $file = Join-Path $script:MadeUpInstall 'install.json'
+      Set-Content -LiteralPath $file -Value ($script:InstallJson -replace '"browser":\s*true', '"browser": false') -Encoding UTF8
+      try {
+        $output = @(& $script:ShowScript)
+        $output | Should -Contain ('The token is hidden in the line (token={0}). For the line to paste, run as an administrator: {1}' -f $script:Hidden, $script:Hint)
+        ($output -join "`n") | Should -Not -Match 'The tokens are hidden|For the lines'
+      } finally {
+        Set-Content -LiteralPath $file -Value $script:InstallJson -Encoding UTF8
+      }
+    }
+
     It 'refuses an -Address that is not a host name or an IP address, and prints nothing else' {
       $output = @(& $script:ShowScript -Address 'evil.example/#token=x')
       $output | Should -BeExactly @('-Address: evil.example/#token=x is not a host name, an IPv4 address or an IPv6 address.')
@@ -4099,7 +4129,8 @@ Describe 'The installer scripts' {
     $said | Should -BeGreaterThan $source.IndexOf("Write-Host 'RPA is installed.'")
     $source.IndexOf("  if (-not `$browser) { Write-Host 'The runner token is new and the browser token is removed: the earlier bot user could read them.' }", $said) | Should -BeGreaterThan $said
     $source.IndexOf("  else { Write-Host 'Both tokens are new: the earlier bot user could read the old ones.' }", $said) | Should -BeGreaterThan $said
-    $source.IndexOf("  Write-Host ('Update the n8n credentials with the new tokens, which & `"{0}`" connection -ShowTokens shows.' -f `$rpa)", $said) | Should -BeGreaterThan $said
+    $source.IndexOf("  if (-not `$browser) { Write-Host ('Update the n8n credential with the new runner token, which & `"{0}`" connection -ShowTokens shows.' -f `$rpa) }", $said) | Should -BeGreaterThan $said
+    $source.IndexOf("  else { Write-Host ('Update the n8n credentials with the new tokens, which & `"{0}`" connection -ShowTokens shows.' -f `$rpa) }", $said) | Should -BeGreaterThan $said
   }
 
   # -WithBrowser, -NoBrowser and the install decide whether it has the browser; the plan says which, from the facts

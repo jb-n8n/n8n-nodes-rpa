@@ -359,7 +359,8 @@ $layout = Get-RpaLayout
 Write-Host ''
 Write-Host 'RPA is installed.'
 Write-Host ('  Programs:  {0}' -f $layout.InstallDir)
-Write-Host ('  Data:      {0} (policy.json, the tokens, the certificates, logs)' -f $layout.DataDir)
+if (-not $browser) { Write-Host ('  Data:      {0} (policy.json, the token, the certificate, logs)' -f $layout.DataDir) }
+else { Write-Host ('  Data:      {0} (policy.json, the tokens, the certificates, logs)' -f $layout.DataDir) }
 Write-Host ('  Policy:    {0}' -f (Join-Path $layout.DataDir 'policy.json'))
 $policyTool = Join-Path (Join-Path $layout.InstallDir 'runner') 'RpaPolicy.exe'
 if ($plan.Steps -contains 'write policy') { Write-Host ('             It is new and allows no app. Change it with {0}' -f $policyTool) }
@@ -388,7 +389,8 @@ $rpa = Join-Path $layout.InstallDir 'rpa.cmd'
 if ($plan.Steps -contains 'remove the old tokens') {
   if (-not $browser) { Write-Host 'The runner token is new and the browser token is removed: the earlier bot user could read them.' }
   else { Write-Host 'Both tokens are new: the earlier bot user could read the old ones.' }
-  Write-Host ('Update the n8n credentials with the new tokens, which & "{0}" connection -ShowTokens shows.' -f $rpa)
+  if (-not $browser) { Write-Host ('Update the n8n credential with the new runner token, which & "{0}" connection -ShowTokens shows.' -f $rpa) }
+  else { Write-Host ('Update the n8n credentials with the new tokens, which & "{0}" connection -ShowTokens shows.' -f $rpa) }
 }
 $autoSignIn = $plan.Steps -contains 'turn on automatic sign-in'
 if ($plan.Unattended) {
@@ -399,7 +401,11 @@ if ($plan.Unattended) {
   # What the n8n credentials need, as rpa connection shows it (the tokens hidden). The installer prints no secret.
   Write-Host ''
   try { & (Join-Path (Join-Path $layout.InstallDir 'scripts') 'Show-RpaConnection.ps1') | Out-Host }
-  catch { Write-Host ('The connection lines could not be shown ({0}). Run: & "{1}" connection' -f $_.Exception.Message, $rpa) }
+  catch {
+    $shown = 'The connection lines could not be shown'
+    if (-not $browser) { $shown = 'The connection line could not be shown' }
+    Write-Host ('{0} ({1}). Run: & "{2}" connection' -f $shown, $_.Exception.Message, $rpa)
+  }
   Write-Host ''
   Write-Host ('For how the supervisor is doing: & "{0}" status' -f $rpa)
   Write-Host ('While someone is signed in as {0}, runs are refused: sign {0} out after looking at something.' -f $User)

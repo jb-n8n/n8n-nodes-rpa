@@ -190,7 +190,8 @@ foreach ($service in $services) {
 if (-not $Status -and -not $ShowTokens) {
   $command = '& "{0}" connection -ShowTokens' -f (Join-Path $installDir 'rpa.cmd')
   if ($givenAddress) { $command += ' -Address {0}' -f $givenAddress }
-  Write-Output ('The tokens are hidden in the lines (token={0}). For the lines to paste, run as an administrator: {1}' -f $hidden, $command)
+  if ($services.Count -eq 1) { Write-Output ('The token is hidden in the line (token={0}). For the line to paste, run as an administrator: {1}' -f $hidden, $command) }
+  else { Write-Output ('The tokens are hidden in the lines (token={0}). For the lines to paste, run as an administrator: {1}' -f $hidden, $command) }
 }
 if (-not $Status -and -not $givenAddress) { Write-Output 'Where n8n reaches this machine by another name or address (a NAT, a tunnel), add -Address <that name or address>.' }
 

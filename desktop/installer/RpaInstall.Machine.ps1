@@ -29,7 +29,8 @@ $script:KnownSteps = @(
   'keep the automatic sign-in password for the supervisor',
   'turn off automatic sign-in', 'allow the bot user to sign in through Remote Desktop', 'turn on Remote Desktop',
   "store the bot user's password for the supervisor", 'sign the bot user out', 'register the supervisor service',
-  'point the firewall rules at the supervisor', 'add the Start menu shortcut', 'start tasks')
+  'point the firewall rules at the supervisor', 'point the firewall rule at the supervisor', 'add the Start menu shortcut',
+  'start tasks')
 
 # Where things are. Program Files keeps its default permissions (users read and run, only administrators change), so
 # the bot user cannot replace what it runs.
@@ -1875,6 +1876,7 @@ function Invoke-RpaInstallPlan {
           Wait-RpaFirstSignIn $run $runnerPort
         }
         'point the firewall rules at the supervisor' { Set-RpaSupervisorFirewall $run (-not $Parameters.NoBrowser) }
+        'point the firewall rule at the supervisor' { Set-RpaSupervisorFirewall $run (-not $Parameters.NoBrowser) }
         'add the Start menu shortcut' { Add-RpaStartMenuShortcut $run }
         'start tasks' { Start-RpaTasks }
       }
