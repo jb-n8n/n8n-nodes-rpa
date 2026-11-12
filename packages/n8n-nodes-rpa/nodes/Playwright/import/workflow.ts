@@ -43,8 +43,11 @@ export interface BuildWorkflowOptions {
   desktopDrafts?: DesktopDraft[];
   /** The import's One-Time Code Workflow: each browser Run steps takes its code from it too. */
   codeWorkflow?: { id: string; timeoutSeconds: number };
-  /** The import's run options that the steps were proven with: Max Seconds (when not the default) and Also Allow These Sites. */
-  run?: { maxSeconds?: number; allowedHosts?: string[] };
+  /**
+   * The import's run options that the steps were proven with: Max Seconds (when not the default), Also Allow These Sites
+   * and Allow Private Network (only when the import had it on, a literal true: Import Steps refuses an expression there).
+   */
+  run?: { maxSeconds?: number; allowedHosts?: string[]; allowPrivateNetwork?: boolean };
   /** Where the flow came from. Only the texts that name it differ. */
   source?: ImportedFrom;
 }
@@ -61,6 +64,9 @@ const FROM = {
 const DEFAULT_MAX_SECONDS = 180;
 /** The credential type a run's secret variables come from. */
 const SECRET_VARIABLES = '**RPA Secret Variables**';
+/** The browser Run steps' note on Allow Private Network: off (the default), or on because the import had it on. */
+export const PRIVATE_NETWORK_OFF = 'For a site on your own network, turn on Options → Allow Private Network here.';
+export const PRIVATE_NETWORK_ON = 'Options → Allow Private Network is on because the import had it on: the steps may open addresses on your own network.';
 /** Where the steps get approved by default. */
 const IMPORT_FORM = 'RPA: 5 Import a bot';
 
@@ -210,14 +216,22 @@ class Builder {
   /** Run variables that come from the RPA Secret Variables credential, over every Run steps. */
   readonly secretVariables = new Set<string>();
 
-  /** The run options the import was proven with: Max Seconds when it is not the default, and Also Allow These Sites. */
-  private runOptions(browser: boolean): Record<string, string | number> {
+  /**
+   * The run options the import was proven with: Max Seconds when it is not the default, and on browser steps Also Allow
+   * These Sites and Allow Private Network (written as a plain true, only when the import had it on).
+   */
+  private runOptions(browser: boolean): Record<string, string | number | boolean> {
     const max = this.run.maxSeconds;
     const hosts = (this.run.allowedHosts ?? []).map((h) => literal(h)).filter((h): h is string => h !== undefined);
     return {
       ...(max !== undefined && max !== DEFAULT_MAX_SECONDS ? { maxSeconds: max } : {}),
       ...(browser && hosts.length ? { allowedHosts: hosts.join(', ') } : {}),
+      ...(browser && this.privateNetwork ? { allowPrivateNetwork: true } : {}),
     };
+  }
+  /** True only when the import ran with Allow Private Network on. */
+  private get privateNetwork(): boolean {
+    return this.run.allowPrivateNetwork === true;
   }
   /** Options → Variables for the steps' run variables: not secret ones, each with its start value or empty; secret ones are left out. */
   private variablesOption(all: string[], secret: Set<string>, start: Record<string, string> = {}): Record<string, unknown> {
@@ -447,7 +461,7 @@ class Builder {
           options: { name: draftName, expectedVersion: '={{ $json.version }}', ...this.codeOptions(), ...this.runOptions(true), ...this.variablesOption(vars.all, new Set(vars.secret)) },
         }, {
           notes: [
-            `Runs the signed steps ${draftName} (${plural(draft.script.steps.length, 'step')} ${FROM[this.source].steps} "${line(n.displayName, 120)}"). Pick RPA Browser, RPA Site Login and RPA Step Signing here. For a site on your own network, turn on Options → Allow Private Network here.${vars.secret.length ? ` ${vars.secret.join(', ')}: put ${vars.secret.length === 1 ? 'it' : 'them'} in an RPA Secret Variables credential (type rpaSecretVariablesApi, field Variables) and select it here.` : ''}`,
+            `Runs the signed steps ${draftName} (${plural(draft.script.steps.length, 'step')} ${FROM[this.source].steps} "${line(n.displayName, 120)}"). Pick RPA Browser, RPA Site Login and RPA Step Signing here. ${this.privateNetwork ? PRIVATE_NETWORK_ON : PRIVATE_NETWORK_OFF}${vars.secret.length ? ` ${vars.secret.join(', ')}: put ${vars.secret.length === 1 ? 'it' : 'them'} in an RPA Secret Variables credential (type rpaSecretVariablesApi, field Variables) and select it here.` : ''}`,
             'To let it repair itself when the site changes:',
             '1. Connect a chat model to its Model input (after step 2).',
             `2. Turn on AI Repair here and write the Goal in plain words.`,

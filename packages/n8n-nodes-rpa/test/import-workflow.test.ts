@@ -205,7 +205,7 @@ describe('buildWorkflow', () => {
       options: { name: 'sap-report-1', expectedVersion: '={{ $json.version }}', variables: { values: [{ name: 'company', value: '' }, { name: 'from', value: '' }, { name: 'to', value: '' }] } },
     });
     expect(byName(w, 'Use Browser Chrome: SAP Logon').notes).toMatch(/sap-report-1/);
-    // Allow Private Network is never set: the note says when a person may need it.
+    // Allow Private Network is not set (this import had it off): the note says when a person may need it.
     expect(byName(w, 'Use Browser Chrome: SAP Logon').notes).toContain('For a site on your own network, turn on Options → Allow Private Network here.');
     expect(JSON.stringify(w)).not.toContain('allowPrivateNetwork');
 
@@ -613,6 +613,31 @@ describe('buildWorkflow', () => {
     expect(runOptions(plain, 'Log in')).not.toHaveProperty('allowedHosts');
     // A host that n8n would read as an expression is not written.
     expect(runOptions(buildWorkflow(flow, [draft('o-1')], { name: 'o', run: { allowedHosts: ['={{ 1 }}'] } }), 'Log in')).not.toHaveProperty('allowedHosts');
+  });
+
+  it('Allow Private Network is on in the browser Run steps exactly when the import had it on, as a plain true, and the note says why', () => {
+    const runOptions = (w: WorkflowJson, run: string) => (byName(w, run).parameters as { options: Record<string, unknown> }).options;
+    const flow = flowOf([{ kind: 'browser', sequence: 1, displayName: 'Log in' }]);
+    const on = buildWorkflow(flow, [draft('p-1')], { name: 'p', run: { allowPrivateNetwork: true } });
+    expect(runOptions(on, 'Log in').allowPrivateNetwork).toBe(true);
+    expect(byName(on, 'Log in').notes).toContain('Options → Allow Private Network is on because the import had it on: the steps may open addresses on your own network.');
+    expect(byName(on, 'Log in').notes).not.toContain('turn on Options → Allow Private Network');
+    // Off, not given, or anything but a plain true: never written, and the note says when to turn it on.
+    for (const run of [{ allowPrivateNetwork: false }, {}, { allowPrivateNetwork: 'true' as unknown as boolean }, { allowPrivateNetwork: '={{ true }}' as unknown as boolean }]) {
+      const off = buildWorkflow(flow, [draft('p-1')], { name: 'p', run });
+      expect(JSON.stringify(off), JSON.stringify(run)).not.toContain('allowPrivateNetwork');
+      expect(byName(off, 'Log in').notes).toContain('For a site on your own network, turn on Options → Allow Private Network here.');
+    }
+    const none = buildWorkflow(flow, [draft('p-1')], { name: 'p' });
+    expect(JSON.stringify(none)).not.toContain('allowPrivateNetwork');
+    // Desktop steps open no web address: their Run steps never gets it.
+    const desktop = {
+      name: 'q', writeCandidates: [], variables: [], secretVariables: [],
+      script: { surface: 'desktop' as const, name: 'q', version: 1, app: { exe: 'App.exe' }, steps: [{ intent: 'Click', click: { uia: { path: [{ name: 'x' }] } } }] },
+    };
+    const d = buildWorkflow({ name: 'q', nodes: [{ kind: 'desktop', sequence: 1, displayName: 'Desk', draft: 'q' }] }, [], { name: 'q', desktopDrafts: [desktop as never], source: 'recording', run: { allowPrivateNetwork: true } });
+    expect(byName(d, 'Desk').parameters).toMatchObject({ operation: 'runSteps' });
+    expect(JSON.stringify(d)).not.toContain('allowPrivateNetwork');
   });
 
   it('a desktop step list starts its variables with their recorded values; a value n8n would read as an expression starts empty; a secret is never listed', () => {

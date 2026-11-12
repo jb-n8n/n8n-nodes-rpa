@@ -65,7 +65,7 @@ public class CaptureRulesTests
         var fileName = El("Edit", "1001", "File name:", "Edit", false, false, El("ComboBox", "FileNameControlHost", "File name:"));
         var export = Record(Typed(1, fileName, new("app.exe", "Save As", "#32770")),
             Left(2, fileName, @"C:\out\report.csv", window: new("app.exe", "Save As", "#32770"))).Steps[0];
-        Assert.Equal("Save report.csv into the run's export folder (File name:)", StepText.Action(export));
+        Assert.Equal("Save report.csv into the run's export folder", StepText.Action(export));
         var unchecking = Record(Click(1, box with { IsChecked = true })).Steps[0];
         Assert.Equal("Uncheck All companies", StepText.Action(unchecking));
         var longValue = Record(Typed(1, Name), Left(2, Name, new string('x', 100))).Steps[0];

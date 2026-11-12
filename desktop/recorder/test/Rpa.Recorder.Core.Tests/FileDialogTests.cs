@@ -28,7 +28,7 @@ public class FileDialogTests
     public void The_offered_name_accepted_by_a_click_on_Save_is_saved_into_the_export_folder()
     {
         var s = Record(Click(1, Export), Accepted(2, "report"), Click(2, SaveButton, window: SaveAs));
-        Assert.Equal(["Click Export...", "Save report into the run's export folder (File name:)", "Click Save"], s.Steps.Select(x => StepText.Action(x)));
+        Assert.Equal(["Click Export...", "Save report into the run's export folder", "Click Save"], s.Steps.Select(x => StepText.Action(x)));
         var export = s.Steps[1];
         Assert.Equal((StepKind.Fill, "{{$exportDir}}\\report", "report"), (export.Kind, export.Value, export.ExportFile));
         Assert.Equal(new RecordedWindow("app.exe", "Save As", "#32770"), export.Target!.Window);
@@ -43,11 +43,11 @@ public class FileDialogTests
     public void The_offered_name_accepted_by_Enter_or_Space_is_saved_into_the_export_folder()
     {
         var s = Record(Accepted(1, "line-items.csv"), Key(1, NameBox, "Enter", SaveAs));
-        Assert.Equal(["Save line-items.csv into the run's export folder (File name:)", "Press Enter in File name:"], s.Steps.Select(x => StepText.Action(x)));
+        Assert.Equal(["Save line-items.csv into the run's export folder", "Press Enter in File name:"], s.Steps.Select(x => StepText.Action(x)));
         s = Record(Accepted(1, "line-items"), Key(1, SaveButton, "Enter", SaveAs));
-        Assert.Equal(["Save line-items into the run's export folder (File name:)", "Press Enter in Save"], s.Steps.Select(x => StepText.Action(x)));
+        Assert.Equal(["Save line-items into the run's export folder", "Press Enter in Save"], s.Steps.Select(x => StepText.Action(x)));
         s = Record(Accepted(1, "line-items"), new Activated(At(1), SaveAs, SaveButton));
-        Assert.Equal(["Save line-items into the run's export folder (File name:)", "Click Save"], s.Steps.Select(x => StepText.Action(x)));
+        Assert.Equal(["Save line-items into the run's export folder", "Click Save"], s.Steps.Select(x => StepText.Action(x)));
     }
 
     [Fact]
@@ -76,7 +76,7 @@ public class FileDialogTests
         // The Windows layer does not read it then; a value given all the same is not used.
         s.Add(Accepted(3, "report.csv"));
         s.Add(Click(3, SaveButton, window: SaveAs));
-        Assert.Equal(["Save report.csv into the run's export folder (File name:)", "Click Save"], s.Steps.Select(x => StepText.Action(x)));
+        Assert.Equal(["Save report.csv into the run's export folder", "Click Save"], s.Steps.Select(x => StepText.Action(x)));
         Assert.Single(s.Steps, x => x.ExportFile is not null);
         Assert.False(s.TakeSaveNotice());
 
@@ -148,7 +148,7 @@ public class FileDialogTests
         // when the person keeps the name the Save dialog offers.
         var golden = RepoFile("packages", "engine", "test", "fixtures", "import", "recording-erp", "erp-default-name.rpa-recording.json");
         var s = Record(ErpDemoObservations.DefaultName());
-        Assert.Equal("Save line-items into the run's export folder (File name:)", StepText.Action(s.Steps[^2]));
+        Assert.Equal("Save line-items into the run's export folder", StepText.Action(s.Steps[^2]));
         Assert.Equal(golden.ReplaceLineEndings("\n").TrimEnd(), s.ToFile("ERP Demo line items").ToJson().ReplaceLineEndings("\n").TrimEnd());
     }
 }

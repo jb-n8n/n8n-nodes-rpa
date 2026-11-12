@@ -3,6 +3,7 @@
 // evaluated. A browser document becomes one draft and a desktop step set one desktop draft, under the import's Name and
 // as version 1, so each goes the way every import's drafts go: a browser draft is run once and replayed without writes,
 // a desktop draft goes to approval as written. A signature that came with the document is not imported.
+import { CREDENTIAL_FIELD } from '../secrets/credential-field.js';
 import { createMasker } from '../secrets/mask.js';
 import { isDesktopDocument, parseDesktopScript, parseScript, ScriptShapeError } from '../steps/parse.js';
 import type { DesktopScript, Script } from '../types.js';
@@ -26,6 +27,20 @@ const SIGNATURE_DROPPED =
   'imported steps are a first version for approval, so the signature and Approved By the document carried were not imported: Sign Steps signs the steps when a person approves them';
 const RENAMED = (name: string) => `the steps are named ${JSON.stringify(name)}, version 1: imported steps are a first version under the import's Name`;
 const EXPECTED_FILE_UNUSED = 'the download steps of a step document carry their own checks: Expected File is not used';
+
+/**
+ * The variables a desktop step set types into a credential field (CREDENTIAL_FIELD: password words, PIN, secret), by
+ * the field's own name or automationId, as the recording importer judges a field. They hold a secret, as a recording's
+ * secretVariables do: shown as secret and left to RPA Secret Variables. Nothing signed depends on them.
+ */
+function secretFieldVariables(script: DesktopScript): string[] {
+  return [...new Set(script.steps.flatMap((s) => {
+    if (!('fill' in s)) return [];
+    const own = s.fill.field.uia.path.at(-1);
+    if (![own?.name, own?.automationId].some((t) => typeof t === 'string' && CREDENTIAL_FIELD.test(t))) return [];
+    return [...s.fill.value.matchAll(/\{\{\s*var\.([A-Za-z0-9_]+)\s*\}\}/g)].map((m) => m[1]);
+  }))];
+}
 
 const issuesOf = (err: unknown): string[] => (err instanceof ScriptShapeError ? err.issues : [err instanceof Error ? err.message : String(err)]);
 
@@ -76,7 +91,7 @@ export function importStepsDocument(data: unknown, opts: ImportOptions, report: 
     } catch (err) {
       return fail(NOT_STEPS(issuesOf(err)));
     }
-    return { drafts: [], desktopDrafts: [desktopDraftOf(opts.name, script, report, { authorMarked: declared })], report };
+    return { drafts: [], desktopDrafts: [desktopDraftOf(opts.name, script, report, { authorMarked: declared, secretVariables: secretFieldVariables(script) })], report };
   }
 
   let script: Script;

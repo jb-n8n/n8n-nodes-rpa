@@ -13,22 +13,26 @@ to n8n.
 Template **RPA: 5 Import a bot** (`packages/n8n-nodes-rpa/templates/5-import-a-bot.json`) is a form in front of the
 node's **Import Steps** operation. Set it up once:
 
-1. Import the template (**⋯ → Import from File**) and follow its green **Set once** note: a Basic Auth credential on
+1. Import the template (**⋯ → Import → From File**) and follow its green **Set once** note: a Basic Auth credential on
    **Import a bot**, **RPA Browser** (and **RPA Site Login** when the bot signs in) on **Import steps**, **RPA Step
    Signing** (and the same Site Login) on **Sign steps**, and your address in **Sign steps → Approver Allowlist**.
 2. Click **Publish** and open the form's production URL.
 
 Then, for each bot:
 
-1. Upload the file. **Source** works it out from the file name, or choose it. Give the steps a **Name**.
-2. For a browser bot that downloads a file, the next page, **The file it downloads**, asks for the file name pattern
-   and the required columns. The replay checks that the bot gets that file.
+1. Upload the file. **Source** works it out from the file name, or choose it. Give the steps a **Name**: they are
+   saved and run under that name.
+2. The next page, **The file it downloads**, comes for every upload but an RPA recording. For a browser bot that
+   downloads a file, a UiPath one too, give the file name pattern and the required columns. The replay checks that the
+   bot gets that file. Leave both empty when the bot downloads nothing in a browser.
 3. The import runs browser steps once and replays them in a fresh browser with every write blocked. Desktop steps are
    not replayed.
-4. **Review and approve** shows each step list: what it opens, whether it signs in, the steps the import left out, and
-   the numbered steps. Choose **Approve and sign** or **Reject**.
-5. The last page says what was signed and downloads the workflow that runs the bot. Import it in n8n, pick the
-   credentials its notes name, and click **Execute workflow**.
+4. **Review and approve** shows each step list: what it opens, whether it signs in, and the numbered steps. When the
+   import left a step out, a **Left out by the import** block lists it. Choose **Approve and sign** or **Reject**.
+5. The last page says what was signed, and counts the values removed as secrets and the steps not translated. It
+   downloads the workflow that runs the bot. For a UiPath project, notes in that workflow show what was not
+   translated, such as a credential lookup or a log message. Import it in n8n, pick the credentials its notes name,
+   and click **Execute workflow**.
 
 To have a second person approve by email instead, follow the template's **Approval by email** note. The
 [desktop bot guide](desktop-bot.md) walks the whole path with a recording.

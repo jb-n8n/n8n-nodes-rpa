@@ -911,17 +911,20 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     });
     return executeImportSteps(ctx, importEngine(adopt), { executionsMode: 'regular' });
   };
-  /** The engine's UiPath fixture project, zipped as a user uploads it. */
-  function uipathZip(): Buffer {
-    const dir = fileURLToPath(new URL('../../engine/test/fixtures/import/uipath-sap-report/', import.meta.url));
+  /**
+   * One of the engine's UiPath fixture projects, zipped under `folder` as a user uploads it; `toSite` points its sandbox
+   * address at SITE.
+   */
+  function uipathZip(fixtureName = 'uipath-sap-report', folder = 'SAP Line Item Report', toSite = false): Buffer {
+    const dir = fileURLToPath(new URL(`../../engine/test/fixtures/import/${fixtureName}/`, import.meta.url));
     const entries: { name: string; raw: Buffer; usize: number }[] = [];
     const walk = (d: string) => {
       for (const name of readdirSync(d)) {
         const path = join(d, name);
         if (statSync(path).isDirectory()) walk(path);
         else {
-          const data = readFileSync(path);
-          entries.push({ name: `SAP Line Item Report/${relative(dir, path).split('\\').join('/')}`, raw: deflateRawSync(data), usize: data.length });
+          const data = toSite ? Buffer.from(readFileSync(path, 'utf8').split('http://localhost:8080').join(SITE.url)) : readFileSync(path);
+          entries.push({ name: `${folder}/${relative(dir, path).split('\\').join('/')}`, raw: deflateRawSync(data), usize: data.length });
         }
       }
     };
@@ -957,13 +960,13 @@ describe('5-import-a-bot.json (the first-day import)', () => {
    * The review page answered with `answer` (n8n gives each field under its fieldName), then Step lists, Step lists to sign
    * (one item per list, Split Out) and Sign steps with its parameters resolved per item, as n8n resolves them.
    */
-  async function signAfterReview(ran: Record<string, INodeExecutionData[][]>, answer: IDataObject, over: IDataObject = {}) {
+  async function signAfterReview(ran: Record<string, INodeExecutionData[][]>, answer: IDataObject, over: IDataObject = {}, withSiteLogin = false) {
     const after = { ...ran, [REVIEW]: [[{ json: { ...answer, submittedAt: '2026-11-11T10:00:00.000Z', formMode: 'production' } }]] };
     const { lists } = evaluate(String(byName(t, 'Step lists').parameters.jsonOutput), { $: nodesRan(after) }) as { lists: IDataObject[] };
     expect(byName(t, 'Step lists to sign').parameters).toEqual({ fieldToSplitOut: 'lists', options: {} });
     const sign = { ...byName(t, 'Sign steps').parameters, ...over };
     const params = (i: number) => Object.fromEntries(Object.entries(sign).map(([k, v]) => [k, typeof v === 'string' && v.startsWith('=') ? evaluate(v, { $: nodesRan(after), $itemIndex: i }) : v]));
-    const ctx = harness({ params, rawParameters: sign, items: lists.map((json) => ({ json })), credentials: { playwrightScriptSigningApi: { secretKey: 'k'.repeat(32) } }, continueOnFail: true });
+    const ctx = harness({ params, rawParameters: sign, items: lists.map((json) => ({ json })), credentials: { playwrightScriptSigningApi: { secretKey: 'k'.repeat(32) }, ...(withSiteLogin ? { playwrightSiteLoginApi: siteLoginData(SITE) } : {}) }, continueOnFail: true });
     const out = await executeSignSteps(ctx, importEngine(() => NOT_ADOPTABLE), () => new Date('2026-11-11T10:00:01.000Z'));
     const items = out[0].map((i) => i.json);
     return { lists, signed: items.filter((j) => j.error === undefined), errors: items.filter((j) => j.error !== undefined) };
@@ -1089,23 +1092,27 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     ]);
   });
 
-  it('the form asks for the bot file, an optional source (worked out from the file to start with) and a name; the download only for a browser source, on a second page', () => {
+  it('the form asks for the bot file, an optional source (worked out from the file to start with) and a name; the download, on a second page, for every upload but a recording', () => {
     expect(fields.map((f) => [f.fieldName, f.fieldType, f.requiredField === true])).toEqual([['bot', 'file', true], ['source', 'dropdown', false], ['name', 'text', true]]);
     expect(fields[1].fieldLabel).toBe('Source (optional)');
     const page = byName(t, 'The file it downloads');
     expect(page).toMatchObject({ type: COMPLETION, typeVersion: 2.5, parameters: { operation: 'page', options: { formTitle: 'The file it downloads', buttonLabel: 'Import' } } });
     expect((page.parameters.formFields as { values: FormField[] }).values.map((f) => [f.fieldName, f.fieldType, f.requiredField === true])).toEqual([['expectedFileName', 'text', false], ['columns', 'text', false]]);
-    // Asked unless the Source or the file name says recording or UiPath (their steps say which file they return).
+    // Asked unless the Source or the file name says recording (the recorder makes its export step). A UiPath project is
+    // asked too: its browser steps need the Expected File to make their download a checked one.
     const asks = (byName(t, 'Asks about a download?').parameters as { conditions: { conditions: { leftValue: string }[] } }).conditions.conditions[0].leftValue;
     const ask = (source: string | null, filename: string) => evaluate(asks, { $json: { source, bot: { filename } } });
     expect(ask(null, 'export.json')).toBe(true);
     expect(ask('Chrome Recorder', 'export.json')).toBe(true);
     expect(ask('Step document', 'steps.json')).toBe(true);
+    expect(ask(null, 'Project.ZIP')).toBe(true);
+    expect(ask(null, 'Main.xaml')).toBe(true);
+    expect(ask('UiPath project', 'p.json')).toBe(true);
     expect(ask(null, 'erp.rpa-recording.json')).toBe(false);
-    expect(ask(null, 'Project.ZIP')).toBe(false);
-    expect(ask(null, 'Main.xaml')).toBe(false);
+    expect(ask(null, 'ERP.RPA-Recording.JSON')).toBe(false);
     expect(ask('RPA recording', 'renamed.json')).toBe(false);
-    expect(ask('UiPath project', 'p.json')).toBe(false);
+    const page_ = page.parameters.options as { formDescription: string };
+    expect(page_.formDescription).toBe('If the bot downloads a file in a browser, say which: the replay checks that it gets that file. Leave both empty when it downloads nothing, or when a desktop app saves the file.');
     // The upload: the file from the first page (Settings passed it on), its Name and Source, and the download answers when asked.
     const upload = byName(t, 'The upload');
     expect(upload).toMatchObject({ type: 'n8n-nodes-base.set', typeVersion: 3.4 });
@@ -1141,6 +1148,94 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // AI Repair off: no Model input; the two outputs and n8n's error output stay.
     expect(loaded.inputs).toEqual(['main']);
     expect(loaded.outputs).toEqual(['Data', 'Repaired Steps', 'Error']);
+  });
+
+  /**
+   * The first page's submission through Settings, Asks about a download? and, when it asks, The file it downloads
+   * answered with `answer` (null: the page was not asked), then The upload as Import steps reads it.
+   */
+  function throughTheDownloadPage(first: INodeExecutionData, answer: IDataObject | null): { asked: boolean; upload: INodeExecutionData } {
+    const settings = { json: { ...first.json, ...settingsJson() }, binary: first.binary };
+    const asks = (byName(t, 'Asks about a download?').parameters as { conditions: { conditions: { leftValue: string }[] } }).conditions.conditions[0].leftValue;
+    const asked = evaluate(asks, { $json: settings.json }) === true;
+    const pageRan = asked && answer !== null;
+    const scope = { $: (name: string) => (name === 'Settings' ? { first: () => settings } : { isExecuted: pageRan, last: () => ({ json: answer ?? {} }) }) };
+    const values = (byName(t, 'The upload').parameters.assignments as { assignments: { name: string; value: string; type: string }[] }).assignments;
+    const json: IDataObject = {};
+    let binary: INodeExecutionData['binary'];
+    for (const a of values) {
+      const v = evaluate(a.value, scope);
+      if (a.type === 'binary') binary = { [a.name]: v as NonNullable<INodeExecutionData['binary']>[string] };
+      else json[a.name] = v as string;
+    }
+    return { asked, upload: { json, ...(binary ? { binary } : {}) } };
+  }
+  /** A draft "proved" by the real proposal builder (no browser), as the replay would return it, with the file it downloaded. */
+  const provedWithoutBrowser = (seen: AdoptInput[]) => (input: AdoptInput): AdoptResult => {
+    seen.push(input);
+    const script: Script = { ...input.draft, version: 1 };
+    const file = script.steps.some((s) => 'download' in s)
+      ? { file: { fileName: 'LINEITEMS_1000_2026-09-01_2026-09-30.csv', mimeType: 'text/csv', bytes: 357, columns: ['Document', 'Amount'], rows: 8 } } : {};
+    const prove = { ok: true, rows: [], total: null, reasons: [], diff: { missing: [], extra: [] }, policyViolation: false, readPosts: [], ...file } as unknown as Parameters<typeof buildProposal>[0]['prove'];
+    const proposal = buildProposal({ script, prove, masker: createMasker([]), safetyFlags: validateScript(script, { policy: input.policy, secrets: input.secrets, mode: 'proposal' }).safetyFlags });
+    return { ok: true, lane: 'script', proposal, digest: proposalDigest(proposal), llmCalls: 0, durationMs: 1 };
+  };
+
+  it('a UiPath browser project that downloads a file is asked about the file, imports its export as a checked download and can be signed', async () => {
+    const project = uipathZip('uipath-sap-light', 'SAP Line Item Export', true);
+    const answer = { expectedFileName: '^LINEITEMS_1000_', columns: 'Document, Amount' };
+    for (const [source, fileName] of [['UiPath project', 'bot'], [null, 'SAP Line Item Export.zip']] as const) {
+      const first = formItem(source as string, project);
+      (first.json.bot as IDataObject).filename = fileName;
+      expect(throughTheDownloadPage(first, answer).asked, String(source)).toBe(true);
+    }
+    const { upload } = throughTheDownloadPage(formItem('UiPath project', project), answer);
+    expect(upload.json).toMatchObject({ source: 'UiPath project', ...answer });
+    expect(resolved(upload)).toMatchObject({ source: 'uipath', expectedFile: { file: { namePattern: '^LINEITEMS_1000_', requiredColumns: 'Document, Amount' } } });
+    const seen: AdoptInput[] = [];
+    const [data, repaired] = await runImport(upload, provedWithoutBrowser(seen));
+    expect(data[0].json.error, JSON.stringify(data[0].json).slice(0, 800)).toBeUndefined();
+    // The Export click became the download step the Expected File checks; nothing says it stays a click.
+    const download = seen[0].draft.steps.find((s) => 'download' in s) as { download: { check: IDataObject } } | undefined;
+    expect(download?.download.check).toEqual({ name: '^LINEITEMS_1000_', columns: ['Document', 'Amount'] });
+    const report = JSON.stringify(data[0].json.report);
+    expect(report).toContain('the click the source marked as a download became the download step the Expected File checks');
+    expect(report).not.toContain('stays a click');
+    expect(data[0].json.drafts).toEqual([expect.objectContaining({ adopted: true })]);
+    expect(repaired).toHaveLength(1);
+    // The review page and Sign steps, as the template wires them: approved, it is signed as the active version 1.
+    const ran = { Settings: [[{ json: settingsJson() }]], 'Import steps': [data, repaired] } as Record<string, INodeExecutionData[][]>;
+    expect(jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan(ran) }).map((f) => f.fieldType)).toEqual(['html', 'radio']);
+    // Sign steps holds the same Site Login as Import steps (the Set once note says so).
+    const approved = await signAfterReview(ran, { decision_0: 'Approve and sign' }, {}, true);
+    expect(approved.errors).toEqual([]);
+    expect(approved.signed).toEqual([expect.objectContaining({ status: 'active', name: repaired[0].json.name, version: 1 })]);
+    const signedSteps = JSON.parse(String(approved.signed[0].steps)) as { steps: IDataObject[] };
+    expect(signedSteps.steps.some((s) => 'download' in s)).toBe(true);
+
+    // Before this fix the page was skipped: no Expected File, the export stayed a click and nothing could be signed.
+    const skipped = throughTheDownloadPage(formItem('UiPath project', project), null).upload;
+    const [before] = await runImport(skipped, provedWithoutBrowser([]));
+    expect(JSON.stringify(before[0].json.report)).toContain('without an Expected File this download stays a click');
+  });
+
+  it('a UiPath desktop project with both download fields left empty imports exactly as it did without the page', async () => {
+    const project = uipathZip('uipath-erp-desktop', 'ERP Demo Line Items');
+    const never = () => {
+      throw new Error('desktop steps are never replayed');
+    };
+    const { asked, upload } = throughTheDownloadPage(formItem('UiPath project', project), { expectedFileName: null, columns: null });
+    expect(asked).toBe(true);
+    expect(upload.json).toMatchObject({ expectedFileName: '', columns: '' });
+    const withPage = await runImport(upload, never);
+    const withoutPage = await runImport(throughTheDownloadPage(formItem('UiPath project', project), null).upload, never);
+    expect(withPage[0][0].json.error).toBeUndefined();
+    const drafts = withPage[0][0].json.drafts as IDataObject[];
+    expect(drafts.length).toBeGreaterThan(0);
+    for (const d of drafts) expect(d).toMatchObject({ surface: 'desktop', forApproval: true });
+    expect(withPage[1]).toHaveLength(drafts.length);
+    const shape = (out: INodeExecutionData[][]) => out.map((items) => items.map((i) => ({ json: i.json, binary: Object.fromEntries(Object.entries(i.binary ?? {}).map(([k, b]) => [k, { fileName: b.fileName, data: b.data }])) })));
+    expect(shape(withPage)).toEqual(shape(withoutPage));
   });
 
   it('a form submission reaches the import: the file is read from the form binary and the report comes back on Data', async () => {
@@ -1476,11 +1571,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(sticky(t, 'Set once').color).toBe(COLOUR.green);
     expect(sticky(t, 'Approval by email').color).toBe(COLOUR.grey);
     expect(sticky(t, 'Why approval').color).toBe(COLOUR.grey);
+    // Three sentences. What is replayed, what is not and how step lists are named are on the review page and in move-a-bot.md.
     const form = (byName(t, 'Import a bot').parameters as { formDescription?: string }).formDescription ?? '';
-    expect(form).toContain('a step document that submits a form, downloads through a form, types a secret or changes a password is not run at all and goes to approval marked not replayed');
-    expect(form).toContain('shown to you for approval on the next page');
-    // One name: the review page, the table row and the generated workflow use the Name the person typed (UiPath: -1, -2).
-    expect(form).toContain('The steps are named after your Name; a UiPath project gives one step list per sequence, named with -1, -2 and so on at the end.');
+    expect(form).toBe('Upload a bot: an RPA recording, a UiPath project (ZIP or XAML), a Chrome Recorder export (JSON), Playwright code, or steps you wrote (JSON). You review every step on the next page. Nothing runs until you approve it.');
     const about = sticky(t, 'About this workflow').content;
     for (const s of ['Chrome Recorder', 'Playwright code', 'UiPath', 'RPA: 2 Data feed', 'each step list gets its own approval',
       '**step document**', 'this is how hand-written steps get approved and signed']) expect(about, s).toContain(s);

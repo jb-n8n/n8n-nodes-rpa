@@ -81,14 +81,16 @@ by another name or address than the one in the line (a NAT, a tunnel), run the c
 
 ## 4. Import and approve
 
-1. In n8n, create a workflow, **⋯ → Import from File**, and pick `packages/n8n-nodes-rpa/templates/5-import-a-bot.json`
+1. In n8n, create a workflow, **⋯ → Import → From File**, and pick `packages/n8n-nodes-rpa/templates/5-import-a-bot.json`
    (**RPA: 5 Import a bot**).
 2. Follow its green **Set once** note. A desktop bot needs lines 1 to 3 and 6:
    - On **Import a bot**, create a **Basic Auth** credential (a user name and password of your choice). The form asks
      for it.
    - On **Sign steps**, create an **RPA Step Signing** credential: a key of 32 or more random characters from your
-     password manager. **Signing** marks steps as approved, and the bot runs only steps whose signature matches.
-   - On **Sign steps**, type your email address in **Approver Allowlist**. It is recorded as the approver.
+     password manager, or from one command: `openssl rand -hex 32`. **Signing** marks steps as approved, and the bot
+     runs only steps whose signature matches.
+   - On **Sign steps**, **Approver Allowlist** holds `approver@example.com`: replace it with your email address. It is
+     recorded as the approver.
 3. Click **Publish**, then open the form: on **Import a bot**, copy the production URL and open it in your browser.
 4. Upload the recording, give the steps a name such as `erp-line-items`, and submit.
 5. The next page, **Review and approve**, lists the steps by number. The lighter, grey steps are the ones the import added (a wait
@@ -99,7 +101,7 @@ by another name or address than the one in the line (a NAT, a tunnel), run the c
 
 ## 5. Run it
 
-1. In n8n, create a workflow, **⋯ → Import from File**, and pick the downloaded `erp-line-items.workflow.json`.
+1. In n8n, create a workflow, **⋯ → Import → From File**, and pick the downloaded `erp-line-items.workflow.json`.
 2. On the RPA node, named after your recording (here **ErpDemo recording**), pick the **RPA Desktop Runner**
    credential and the **RPA Step Signing** credential.
 3. The password is a secret variable. Create an **RPA Secret Variables** credential on that node, with one variable:
