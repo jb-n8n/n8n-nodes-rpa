@@ -78,7 +78,8 @@ by another name or address than the one in the line (a NAT, a tunnel), run the c
    and the policy tool shows what it will allow and asks: type `y` and Enter. The **policy** is the list of apps the
    bot may start, kept on this machine. The bar then says the app is allowed.
 8. Next to **2. Import the recording in n8n**, choose **Show the file**. Copy that `.rpa-recording.json` file to the
-   computer you use n8n from.
+   computer you use n8n from. If this Windows machine can reach n8n and the import form is set up (section 4), choose
+   **Open the import form** instead and paste the file's path in the form's file box (Ctrl+V).
 
 [Record a bot](record-a-bot.md) explains every stage of the bar.
 

@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using Rpa.Recorder.Core;
 
 namespace Rpa.Recorder;
@@ -27,6 +28,10 @@ internal sealed class RecorderBar : Form
     private readonly string? _policyTool;
     private readonly NoticeLine _notices = new();
     private readonly BarLog _log = new(BarLog.PathIn(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)), () => DateTimeOffset.Now);
+    private readonly string? _formPath = ImportForm.PathIn(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
+    // The import form's kept address (ImportForm.Kept), and what Open the import form did for the saved recording.
+    private FormAddress? _form;
+    private FormOpened? _formOpened;
     private Capture _capture;
     private BarStage _stage = BarStage.Ready;
     private string? _starting;
@@ -89,6 +94,9 @@ internal sealed class RecorderBar : Form
     private readonly TextBox _allowCommand = new() { ReadOnly = true, Dock = DockStyle.Fill, BackColor = SystemColors.Window, Margin = new Padding(0, 0, 0, BarLayout.Tight) };
     private readonly Button _allowButton = SmallDialog.NewButton(NextSteps.AllowButton);
     private readonly Button _showFile = SmallDialog.NewButton(NextSteps.ShowFile);
+    private readonly FlowLayoutPanel _importRow = Row();
+    private readonly Button _openForm = SmallDialog.NewButton(NextSteps.OpenForm);
+    private readonly LinkLabel _changeAddress = new() { Text = NextSteps.ChangeAddress, AutoSize = true, UseMnemonic = false, Margin = new Padding(BarLayout.Space, 6, 0, 0) };
     private readonly Button _recordAnother = SmallDialog.NewButton(BarText.RecordAnother);
 
     public RecorderBar()
@@ -110,6 +118,7 @@ internal sealed class RecorderBar : Form
         _documents = documents.Length > 0 ? documents : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         _folder = SaveNames.DefaultFolder(_documents);
         _policyTool = NextSteps.FindPolicyTool(AppContext.BaseDirectory, Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), File.Exists);
+        _form = ImportForm.Kept(_formPath);
 
         _guidance = Wrap();
         _readyText = Wrap(ReadyText());
@@ -132,6 +141,7 @@ internal sealed class RecorderBar : Form
                      (_startApp, BarButton.StartApp), (_useOpen, BarButton.UseOpenApp), (_pause, BarButton.PauseOrResume), (_finish, BarButton.Finish),
                      (_back, BarButton.Back), (_finishedBack, BarButton.Back), (_continue, BarButton.Continue), (_delete, BarButton.DeleteStep), (_secret, BarButton.MakeSecret),
                      (_changeFolder, BarButton.ChangeFolder), (_save, BarButton.Save), (_allowButton, BarButton.Allow), (_showFile, BarButton.ShowFile),
+                     (_openForm, BarButton.OpenImportForm),
                      (_recordAnother, BarButton.RecordAnother),
                  })
             button.Click += (_, _) => _log.Pressed(name, _stage);
@@ -151,6 +161,12 @@ internal sealed class RecorderBar : Form
         _save.Click += (_, _) => Save();
         _allowButton.Click += async (_, _) => await Allow();
         _showFile.Click += (_, _) => ShowFile();
+        _openForm.Click += (_, _) => OpenImportForm();
+        _changeAddress.LinkClicked += (_, _) =>
+        {
+            _log.Pressed(BarButton.ChangeFormAddress, _stage);
+            AskAddress(_form?.Target ?? "");
+        };
         _recordAnother.Click += (_, _) => RecordAnother();
         _earlier.LinkClicked += (_, _) => ShowEarlierNotices();
         _layout.SizeChanged += (_, _) => FitSizes();
@@ -253,10 +269,14 @@ internal sealed class RecorderBar : Form
 
         _allowTitle.Margin = new Padding(0, BarLayout.Group, 0, 0);
         _importTitle.Margin = new Padding(0, BarLayout.Group, 0, 0);
-        foreach (var b in new[] { _allowButton, _showFile, _recordAnother }) b.Margin = new Padding(0, BarLayout.Tight, 0, 0);
+        _allowButton.Margin = new Padding(0, BarLayout.Tight, 0, 0);
+        // Show the file, Open the import form and, once an address is kept, Change address…: one row that wraps on a narrow bar.
+        Buttons(_importRow, BarLayout.Space, _showFile, _openForm);
+        _importRow.Controls.Add(_changeAddress);
+        _importRow.Margin = new Padding(0, BarLayout.Tight, 0, 0);
         _recordAnother.Margin = new Padding(0, BarLayout.Group, 0, 0);
         _recordAnother.Anchor = AnchorStyles.Right;
-        _nextBlock.Controls.AddRange([_allowTitle, _allowDetail, _allowCommand, _allowButton, _importTitle, _importDetail, _showFile, _recordAnother]);
+        _nextBlock.Controls.AddRange([_allowTitle, _allowDetail, _allowCommand, _allowButton, _importTitle, _importDetail, _importRow, _recordAnother]);
 
         Control[] rows = [header, _guidance, noticeRow, _startRow, _readyText, _recordRow, _valuesIntro, _listArea, _readHint, _actionHint, _actionRow, _valuesProblem, _valuesButtons, _saveBlock, _nextBlock];
         // Each part in its own row, by number. Added without a position, a part goes into the next free cell, and a
@@ -385,9 +405,10 @@ internal sealed class RecorderBar : Form
             _allowCommand.Visible = allow.Command is not null;
             _allowButton.Visible = allow.Button is not null;
             _allowButton.Enabled = allow.ButtonEnabled;
-            var import = NextSteps.Import();
+            var import = NextSteps.Import(_formOpened);
             _importTitle.Text = import.Title;
             _importDetail.Text = import.Detail;
+            _changeAddress.Visible = _form is not null;
         }
         AcceptButton = BarText.Primary(stage, allow) switch
         {
@@ -762,6 +783,7 @@ internal sealed class RecorderBar : Form
             (_savedRecording, _savedChange) = _capture.Save(_folder, name, overwrite: existing.Length > 0);
             _saved = saved;
             _allow = AllowState.NotDone;
+            _formOpened = null;
             ShowStage(BarStage.Saved);
         }
         catch (Exception e) when (e is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException)
@@ -832,6 +854,61 @@ internal sealed class RecorderBar : Form
     }
 
     /// <summary>
+    /// Open the import form: the recording's full path goes on the clipboard, and the default browser opens the kept
+    /// address (asked for the first time). The recorder uploads nothing and holds no login. It opens only the
+    /// normalised address of <see cref="ImportForm.Check"/>, never the box's text, and the bar log names only the button.
+    /// </summary>
+    private void OpenImportForm()
+    {
+        if (_savedRecording is not { } recording) return;
+        if ((_form ?? AskAddress("")) is not { Verdict: not AddressVerdict.Refused, Target: { } target }) return;
+        var copied = CopyPath(recording);
+        try { Process.Start(new ProcessStartInfo(target) { UseShellExecute = true })?.Dispose(); }
+        catch (Win32Exception e)
+        {
+            _formOpened = null;
+            ShowStage(_stage);
+            Say(NextSteps.BrowserNotStarted(e.Message));
+            return;
+        }
+        _formOpened = new FormOpened(copied, Path.GetFileName(recording), SaveNames.FolderShown(Path.GetDirectoryName(recording)!, _documents));
+        ShowStage(_stage);
+    }
+
+    /// <summary>Asks for the import form's address (filled in with <paramref name="filled"/>), and for an http address
+    /// that leaves this machine and its network, whether to continue (Back returns to the address). Keeps the answer.</summary>
+    private FormAddress? AskAddress(string filled)
+    {
+        while (true)
+        {
+            FormAddress address;
+            using (var dialog = new AddressDialog(this, filled))
+            {
+                if (!Ask(dialog)) return null;
+                address = dialog.Address;
+                filled = dialog.Typed;
+            }
+            if (address.Verdict == AddressVerdict.Refused) return null;
+            if (address.Verdict == AddressVerdict.AskFirst && !Confirm(DialogText.PlainHttp)) continue;
+            ImportForm.Keep(_formPath, address);
+            _form = address;
+            if (_stage == BarStage.Saved) ShowStage(_stage);
+            return address;
+        }
+    }
+
+    /// <summary>Puts the path on the clipboard; false when the clipboard is held by another program and stays so.</summary>
+    private static bool CopyPath(string path)
+    {
+        try
+        {
+            Clipboard.SetDataObject(path, copy: true, retryTimes: 5, retryDelay: 100);
+            return true;
+        }
+        catch (ExternalException) { return false; }
+    }
+
+    /// <summary>
     /// Starts over with a new recording, after asking when the steps are not saved. The question takes the foreground
     /// when it opens (SmallDialog), also when another program had it; without a question the bar goes to Ready at once.
     /// The stage is Ready before the list is emptied, so the list's selection change does not show Saved again on the
@@ -851,6 +928,7 @@ internal sealed class RecorderBar : Form
         _valueRows = null;
         _ended = false;
         _allow = AllowState.NotDone;
+        _formOpened = null;
         _name.Text = "";
         _list.ShowRows([], followNewest: false);
         ClearNotices();

@@ -4,7 +4,7 @@ using System.Text;
 namespace Rpa.Recorder.Core;
 
 /// <summary>The bar's buttons as the bar log names them. PauseOrResume is one button: the stage says which it was.</summary>
-public enum BarButton { StartApp, UseOpenApp, PauseOrResume, Finish, Back, Continue, DeleteStep, MakeSecret, ChangeFolder, Save, Allow, ShowFile, RecordAnother }
+public enum BarButton { StartApp, UseOpenApp, PauseOrResume, Finish, Back, Continue, DeleteStep, MakeSecret, ChangeFolder, Save, Allow, ShowFile, OpenImportForm, ChangeFormAddress, RecordAnother }
 
 /// <summary>
 /// A log of the bar's own actions, so that a bar that seemed to do nothing leaves a trace: one line per stage change

@@ -11,6 +11,10 @@ public sealed record NextLine(string Title, string Detail, string? Button, strin
 /// none).</summary>
 public sealed record AllowOutcome(bool Allowed, string? Notice, NoticeTone Tone);
 
+/// <summary>Open the import form was used: whether the recording's path went on the clipboard, and the file's name and
+/// folder as the bar shows them.</summary>
+public sealed record FormOpened(bool PathCopied, string File, string Folder);
+
 /// <summary>
 /// What the bar says after saving. 1: allow the recorded app on this machine. The bar starts the policy tool of the
 /// install it belongs to (<c>RpaPolicy.exe apply</c> on the saved change file, as administrator, in its own window,
@@ -21,15 +25,28 @@ public static class NextSteps
     public const string PolicyToolFile = "RpaPolicy.exe";
     public const string AllowButton = "Allow this app…";
     public const string ShowFile = "Show the file";
+    public const string OpenForm = "Open the import form";
+    public const string ChangeAddress = "Change address…";
+    public const string FormOpenedText = "The form is open in your browser. In its file box, paste the path (Ctrl+V): it is on the clipboard.";
     public const string Cancelled = "The administrator prompt was cancelled, so the policy tool did not start.";
 
     /// <summary>The tool's option that closes its own window after a successful apply, without waiting for Enter (after
     /// a refusal or an error it still waits, so that the person can read why).</summary>
     public const string CloseOnSuccess = "--close-on-success";
 
-    /// <summary>2: import the recording. The steps the import adds (a wait for each window, one for each file the bot
-    /// returns) are said on n8n's review page, where they show.</summary>
-    public static NextLine Import() => new("2. Import the recording in n8n", "Upload it in n8n's Import a bot form.", ShowFile, null, true);
+    /// <summary>2: import the recording, with Show the file and <see cref="OpenForm"/> beside it. Once the form is open
+    /// (<paramref name="opened"/>), the line says to paste the path, or, when it could not go on the clipboard, which
+    /// file to choose. The steps the import adds (a wait for each window, one for each file the bot returns) are said
+    /// on n8n's review page, where they show.</summary>
+    public static NextLine Import(FormOpened? opened = null) => new("2. Import the recording in n8n", opened switch
+    {
+        null => "Upload it in n8n's Import a bot form.",
+        { PathCopied: true } => FormOpenedText,
+        _ => $"Choose the file {opened.File} in {opened.Folder}.",
+    }, ShowFile, null, true);
+
+    /// <summary>The notice when the browser did not start: Show the file stays the way to the file.</summary>
+    public static string BrowserNotStarted(string reason) => $"The browser did not start: {reason.Trim().TrimEnd('.')}. Choose {ShowFile} instead.";
 
     /// <param name="app">The recorded program's file name.</param>
     /// <param name="tool">The policy tool (<see cref="FindPolicyTool"/>), or null when there is none to start.</param>
