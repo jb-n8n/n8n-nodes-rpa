@@ -68,6 +68,8 @@ const USAGE = [
   '                         RPA_BROWSER_TOKEN, and sets it on Import steps.',
   '  --project-id <id>      the n8n project to work in (default: the API key owner\'s personal project). Only what that',
   '                         project owns is reused.',
+  '  --reuse-project-credentials  in a shared project, use the credentials and the workflow of these names found there',
+  '                         without asking (anyone in the project could have made them).',
   `  --new-workflow         leave a "${WORKFLOW_NAME}" that differs from the template alone and make a fresh one, with the date in its name.`,
   '',
   'Secrets never go in flags. The command asks for them, or reads them from the environment:',
@@ -100,6 +102,7 @@ interface Options {
   browserUrl?: string;
   projectId?: string;
   newWorkflow: boolean;
+  reuseProject: boolean;
 }
 
 function readOptions(argv: string[]): Options | 'help' {
@@ -111,7 +114,7 @@ function readOptions(argv: string[]): Options | 'help' {
         url: { type: 'string' }, approver: { type: 'string' }, 'allow-http': { type: 'boolean' }, 'show-signing-key': { type: 'boolean' },
         'replace-signing-key': { type: 'boolean' },
         'new-form-password': { type: 'boolean' }, 'browser-url': { type: 'string' }, 'project-id': { type: 'string' },
-        'new-workflow': { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
+        'new-workflow': { type: 'boolean' }, 'reuse-project-credentials': { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
       },
       strict: true,
       allowPositionals: true,
@@ -136,6 +139,7 @@ function readOptions(argv: string[]): Options | 'help' {
     browserUrl: values['browser-url'],
     projectId: values['project-id'],
     newWorkflow: values['new-workflow'] === true,
+    reuseProject: values['reuse-project-credentials'] === true,
   };
 }
 
@@ -290,6 +294,40 @@ async function personalProject(client: Client, workflows: any[], userId: string 
   return undefined;
 }
 
+/** The project's owner entry on a workflow read with GET (it carries the project's type and creator). */
+const ownerEntryProject = (json: any) => (Array.isArray(json?.shared) ? json.shared.find((s: any) => s?.role === 'workflow:owner')?.project : undefined);
+
+/**
+ * Whether this run's project is shared, and what to call it. Only the API key owner's own personal project is not
+ * shared; a team project, someone else's personal project, or a project whose type n8n does not tell, is.
+ */
+const shared = { is: false, label: '', reuse: false, announced: false };
+function setProject(project: any, id: string, userId: string | undefined, callersOwn = false) {
+  // callersOwn: the project n8n put a workflow in that this key made without a projectId, which is the key owner's own.
+  const mine = callersOwn || (userId !== undefined && project?.creatorId === userId);
+  shared.is = !(project?.id === id && project.type === 'personal' && mine);
+  shared.label = typeof project?.name === 'string' && project.name ? `"${project.name}" (id ${id})` : `id ${id}`;
+  if (shared.is && !shared.announced) {
+    shared.announced = true;
+    say(`The project ${shared.label} is shared: everyone in it can use the form's login and the signing key this command sets up there. A personal project keeps them to one person.`);
+  }
+}
+
+/** The project's details, from a workflow it owns; undefined when it owns none this key can see. */
+async function projectOf(client: Client, workflows: any[], id: string) {
+  const w = workflows.find((x) => ownerProject(x, 'workflow') === id);
+  if (!w) return undefined;
+  const r = await client.api('GET', `/workflows/${encodeURIComponent(String(w.id))}`);
+  return r.status === 200 ? ownerEntryProject(r.json) : undefined;
+}
+
+/** In a shared project, something of this name found there is used only when the person says so (or the flag does). */
+async function trustShared(kind: string, name: string): Promise<boolean> {
+  if (!shared.is || shared.reuse) return true;
+  if (!interactive()) return false;
+  return /^y(es)?$/i.test(await ask(`"${name}" (${kind}) already exists in the shared project ${shared.label}. Anyone in that project could have made it. Use it? [y/N] `));
+}
+
 /** n8n answers, the key works, the node is installed (n8n knows its credential types), with the fields used here. */
 async function checkN8n({ client, origin }: Inputs, types: { type: string; fields: string[] }[]) {
   let r;
@@ -342,13 +380,14 @@ function leftAlone(kind: string, item: any, typeOrNothing: string, home: string 
 async function credential(client: Client, items: any[], home: string | undefined, projectId: string | undefined, spec: { name: string; type: string }, data: () => Record<string, unknown>, keptNote: string) {
   const { mine, others } = sameName(items, spec, home);
   for (const o of others) leftAlone('credential', o, String(o.type), home);
-  if (mine) {
+  if (mine && (await trustShared('credential', spec.name))) {
     say(`reused   credential "${spec.name}" (id ${mine.id}): ${keptNote}`);
     return { ref: { id: String(mine.id), name: spec.name }, created: false };
   }
   const r = await client.api('POST', '/credentials', { name: spec.name, type: spec.type, data: data(), ...(projectId ? { projectId } : {}) });
   if ((r.status !== 200 && r.status !== 201) || !r.json?.id) throw new Stop(`Could not create the credential "${spec.name}" (${client.reason(r)}).`);
   say(`created  credential "${spec.name}" (id ${r.json.id})`);
+  if (mine) say(`         the "${spec.name}" already in the shared project (id ${mine.id}) was left alone: this run's is id ${r.json.id}.`);
   if (others.length) say(`         n8n now has more than one credential named "${spec.name}": this run's is id ${r.json.id}. Do not pick ids ${others.map((o) => o.id).join(', ')}.`);
   return { ref: { id: String(r.json.id), name: spec.name }, created: true };
 }
@@ -464,7 +503,9 @@ async function run(inputs: Inputs): Promise<number> {
   // The project this run works in. Without --project-id, the key owner's personal project, learned from a workflow that
   // lives there; when none does, it is learned from the workflow this run makes, before any credential is chosen.
   const projectId = options.projectId;
+  shared.reuse = options.reuseProject;
   let home = projectId ?? (await personalProject(client, workflows.items, inputs.userId));
+  if (projectId) setProject(await projectOf(client, workflows.items, projectId), projectId, inputs.userId);
 
   // The workflow: one of this project's, of the template's name (or the dated name), that matches the template.
   const named = workflows.items.filter((w) => WORKFLOW_NAMES.test(String(w?.name ?? '')));
@@ -479,8 +520,12 @@ async function run(inputs: Inputs): Promise<number> {
     // Read again, from the workflow itself: it is used only when it still belongs to this project.
     const why = ownerProject(r.json, 'workflow') !== home ? 'n8n does not say it belongs to your project' : templateDifference(r.json, list.items, home as string);
     if (!why) {
-      workflow = r.json;
-      break;
+      if (await trustShared('workflow', String(w.name))) {
+        workflow = r.json;
+        break;
+      }
+      say(`left alone workflow "${w.name}" (id ${w.id}) in the shared project: this run makes its own.`);
+      continue;
     }
     differs ??= { id: String(w.id), name: String(w.name), why };
   }
@@ -517,6 +562,7 @@ async function run(inputs: Inputs): Promise<number> {
       halfMade = { client, id: String(made.id) };
       const r = await client.api('GET', `/workflows/${encodeURIComponent(String(made.id))}`);
       home = r.status === 200 ? ownerProject(r.json, 'workflow') : undefined;
+      if (home) setProject(ownerEntryProject(r.json), home, inputs.userId, !projectId);
       if (!home) say('Note: n8n does not say which project owns the new workflow, so no credential of the same name is reused: fresh ones are made.');
     }
   }

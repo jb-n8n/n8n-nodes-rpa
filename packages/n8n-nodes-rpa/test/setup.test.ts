@@ -505,10 +505,66 @@ describe('npx n8n-nodes-rpa setup', () => {
       for (const r of fake.state.requests.filter((x) => x.method === 'POST' && /\/(credentials|workflows)$/.test(x.path))) expect(JSON.parse(r.body).projectId).toBe('P-team');
       expect(fake.state.workflows[0].projectId).toBe('P-team');
       expect(out).toMatch(/left alone credential "RPA Step Signing" \(playwrightScriptSigningApi, id c-personal\)/);
-      const again = await run(['setup', '--url', fake.url, '--project-id', 'P-team'], ENV);
+      const again = await run(['setup', '--url', fake.url, '--project-id', 'P-team', '--reuse-project-credentials'], ENV);
       expect(again.code, again.out).toBe(0);
       expect(again.out).not.toMatch(/^created/m);
       expect((await run(setup(fake.url, '--project-id', 'bad id!'), ENV)).code).toBe(2);
+    });
+
+    describe('a shared project: what is found there is used only when the person says so', () => {
+      const TEAM_KEY: Cred = { id: 'c-team', name: 'RPA Step Signing', type: 'playwrightScriptSigningApi', data: { secretKey: 't'.repeat(64) }, projectId: 'P-team' };
+      // A workflow of another name tells the fake's project type (team), as n8n tells it on GET /workflows/{id}.
+      const OTHER_WORK: Wf = { id: 'w-team-other', name: 'Team work', active: false, versionId: 'v', nodes: [], connections: {}, settings: {}, projectId: 'P-team' };
+      const signingOf = (fake: { state: { workflows: Wf[] } }) => fake.state.workflows.find((w) => WF.test(w.name))!.nodes.find((x) => x.name === 'Sign steps').credentials.playwrightScriptSigningApi.id;
+      const WF = /^RPA: 5 Import a bot/;
+
+      it('no terminal and no flag: not reused, a new one is made, both ids named, and the shared project is said', async () => {
+        const fake = await n8n({ credentials: [TEAM_KEY], workflows: [OTHER_WORK] });
+        const { code, out } = await run(setup(fake.url, '--project-id', 'P-team'), ENV);
+        expect(code, out).toBe(0);
+        expect(out).toMatch(/The project "Ops" \(id P-team\) is shared: everyone in it can use the form's login and the signing key this command sets up there\. A personal project keeps them to one person\./);
+        const made = fake.state.credentials.find((c) => c.name === 'RPA Step Signing' && c.id !== 'c-team')!;
+        expect(made.projectId).toBe('P-team');
+        expect(signingOf(fake)).toBe(made.id);
+        expect(out).toMatch(new RegExp(`already in the shared project \\(id c-team\\) was left alone: this run's is id ${made.id}`));
+        expect(fake.state.credentials.find((c) => c.id === 'c-team')!.data.secretKey).toBe('t'.repeat(64));
+      });
+
+      it('--reuse-project-credentials: reused', async () => {
+        const fake = await n8n({ credentials: [TEAM_KEY], workflows: [OTHER_WORK] });
+        const { code, out } = await run(setup(fake.url, '--project-id', 'P-team', '--reuse-project-credentials'), ENV);
+        expect(code, out).toBe(0);
+        expect(signingOf(fake)).toBe('c-team');
+        expect(out).toMatch(/reused +credential "RPA Step Signing" \(id c-team\)/);
+      });
+
+      it('"y" typed at a terminal: reused; anything else: not', async () => {
+        const yes = await n8n({ credentials: [TEAM_KEY], workflows: [OTHER_WORK] });
+        const r = await runAtTerminal(setup(yes.url, '--project-id', 'P-team'), ENV,
+          [[/Connect a Windows machine now/, 'n'], [/"RPA Step Signing" \(credential\) already exists in the shared project "Ops" \(id P-team\)\. Anyone in that project could have made it\. Use it\? \[y\/N\]/, 'y']]);
+        expect(r.code, r.out).toBe(0);
+        expect(signingOf(yes)).toBe('c-team');
+        const no = await n8n({ credentials: [TEAM_KEY], workflows: [OTHER_WORK] });
+        const n = await runAtTerminal(setup(no.url, '--project-id', 'P-team'), ENV, [[/Connect a Windows machine now/, 'n'], [/Use it\?/, '']]);
+        expect(n.code, n.out).toBe(0);
+        expect(signingOf(no)).not.toBe('c-team');
+      });
+
+      it('the personal project: reused without a question', async () => {
+        const fake = await n8n({ credentials: [{ ...TEAM_KEY, id: 'c-mine', projectId: HOME }], workflows: [{ ...OTHER_WORK, id: 'w-mine', projectId: HOME }] });
+        const r = await runAtTerminal(setup(fake.url), ENV, [[/Connect a Windows machine now/, 'n']]);
+        expect(r.code, r.out).toBe(0);
+        expect(signingOf(fake)).toBe('c-mine');
+        expect(r.out).not.toMatch(/shared|Use it\?/);
+      });
+
+      it('a project whose type n8n does not tell (no workflow of it to read) is treated as shared', async () => {
+        const fake = await n8n({ credentials: [TEAM_KEY] });
+        const { code, out } = await run(setup(fake.url, '--project-id', 'P-team'), ENV);
+        expect(code, out).toBe(0);
+        expect(out).toMatch(/The project id P-team is shared/);
+        expect(signingOf(fake)).not.toBe('c-team');
+      });
     });
 
     it('when n8n does not say who owns what, nothing of the same name is reused: fresh credentials are made', async () => {
