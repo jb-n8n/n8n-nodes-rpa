@@ -71,7 +71,10 @@ asks before it replaces a file. **Back** returns to the values page, to tick ano
    administrator instead.
 2. **Import the recording in n8n**, with **Show the file**: `Upload it in n8n's Import a bot form.` Upload the
    `.rpa-recording.json` file there ([desktop bot guide](desktop-bot.md#4-import-and-approve)). Its review page also
-   lists the steps the import adds: a wait for each window, and one for each file the bot returns.
+   lists the steps the import adds: a wait for each window, and one for each file the bot returns. When this machine
+   can reach n8n, choose **Open the import form** instead: it opens the form in your browser and puts the file's path
+   on the clipboard, to paste in the form's file box (Ctrl+V). It asks for the form's address the first time, and
+   **Change address…** changes it.
 
 **Record another** starts over. It asks first when the steps are not saved, and so does closing the bar.
 
