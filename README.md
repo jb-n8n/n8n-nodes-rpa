@@ -91,6 +91,7 @@ run `rpa status` there. Every option, the token gate, TLS and version matching:
 | [Operator guide](docs/reference/operator.md) | Installing the node, the browser service, queue mode |
 | [Deploying the browser](docs/deploy/kubernetes.md) | Kubernetes and EKS, and [Amazon ECS](docs/deploy/aws-ecs.md) |
 | [Licensing note](docs/install/licensing.md) | What Microsoft's terms say about unattended automation on Windows |
+| [Third-party licences](THIRD-PARTY-NOTICES.md) | The software by others in the two Windows zips, the browser image and the npm package, with its licences (each zip carries its own part and the licence texts) |
 | [Changelog](CHANGELOG.md), [Security policy](SECURITY.md) | What changed, and how to report a vulnerability |
 
 ## Project status

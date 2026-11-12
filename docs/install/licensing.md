@@ -6,8 +6,11 @@ Microsoft licensing partner, reseller or legal team). We read the sources on **1
 its terms; read the current versions, and the agreement your organisation actually signed, which may differ from the
 public pages. Where the sources below are unclear, this note says so and draws no conclusion.
 
-The RPA desktop runner and browser are open source (MIT). They do not include any Windows licence, and nothing in
-this project changes what your Windows licence allows.
+The RPA desktop runner and browser host are open source (MIT). The third-party software the two zips bring keeps its
+own licences: .NET in the package, and Chromium and Node.js in the browser package
+([THIRD-PARTY-NOTICES.md](../../THIRD-PARTY-NOTICES.md)). Each zip carries the notices and licence texts of what it
+holds. The package does not include any Windows licence, and nothing in this project changes what your Windows
+licence allows.
 
 ## What the RPA package does that licensing may care about
 

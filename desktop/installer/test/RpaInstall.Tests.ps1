@@ -1619,6 +1619,37 @@ Describe 'Copy-RpaProgramFiles' {
       Join-Path $target 'runner\RpaRunner.exe' | Should -Exist
     } finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
   }
+
+  # Stage.ps1 puts the package's notices at its top and the browser package's in browser\.
+  It 'installs the package''s notices always, and the browser''s with the browser only: without it, added, removed' -Skip:($env:OS -ne 'Windows_NT') {
+    $root = Join-Path ([IO.Path]::GetTempPath()) ('rpa-copy-' + [guid]::NewGuid().ToString('N'))
+    $source = Join-Path $root 'package'
+    $target = Join-Path $root 'install'
+    $main = @('THIRD-PARTY-NOTICES.md', 'licenses\FlaUI.UIA3-5.0.0\LICENSE.txt')
+    $browser = @('browser\THIRD-PARTY-NOTICES.md', 'browser\licenses\node-22.23.4\LICENSE')
+    function Copy-Package([bool]$Browser) { InModuleScope RpaInstall -Parameters @{ Source = $source; Target = $target; Browser = $Browser } { param($Source, $Target, $Browser) Copy-RpaProgramFiles $Source $Target $Browser } }
+    function Add-Files([string[]]$Names) {
+      foreach ($name in $Names) {
+        $path = Join-Path $source $name
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $path) | Out-Null
+        Set-Content -LiteralPath $path -Value 'made up'
+      }
+    }
+    try {
+      Add-Files (@('VERSION', 'runner\RpaRunner.exe') + $main)
+      Copy-Package $false
+      foreach ($name in $main) { Join-Path $target $name | Should -Exist }
+      Join-Path $target 'browser' | Should -Not -Exist
+      # The browser package unpacked into the package folder, and the install run again with the browser.
+      Add-Files (@('browser\node.exe', 'scripts\start-browser.ps1') + $browser)
+      Copy-Package $true
+      foreach ($name in $main + $browser) { Join-Path $target $name | Should -Exist }
+      # -NoBrowser on that install.
+      Copy-Package $false
+      foreach ($name in $main) { Join-Path $target $name | Should -Exist }
+      Join-Path $target 'browser' | Should -Not -Exist
+    } finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+  }
 }
 
 Describe 'Protect-RpaDataDirectory' {
@@ -4516,8 +4547,39 @@ public static class Program {
     BeforeAll {
       $script:Stage = Join-Path (Join-Path $script:InstallerDir 'build') 'Stage.ps1'
       $ast = [Management.Automation.Language.Parser]::ParseFile($script:Stage, [ref]$null, [ref]$null)
-      $function = $ast.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-ReleaseGetRpa' }, $false)
-      . ([scriptblock]::Create($function[0].Extent.Text))
+      foreach ($name in 'Get-ReleaseGetRpa', 'Get-NuGetComponents', 'Get-LicenseFiles', 'Get-ListWithout', 'Get-NoticesIndex', 'Get-NoticesSection', 'Get-PackageNotices') {
+        $function = @($ast.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $false))
+        if ($function.Count -ne 1) { throw "Stage.ps1 defines no function $name" }
+        . ([scriptblock]::Create($function[0].Extent.Text))
+      }
+      # The repository's THIRD-PARTY-NOTICES.md, and the headings of the two packages' sections in it.
+      $script:Notices = (Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir '../../THIRD-PARTY-NOTICES.md')) -replace "`r`n", "`n"
+      $script:PackageHeading = 'The Windows package (`rpa-windows-x64.zip`)'
+      $script:BrowserHeading = 'The browser package (`rpa-browser-windows-x64.zip`)'
+
+      # A project.assets.json as a restore for win-x64 writes it: the packages, each with the files it brings for
+      # win-x64, a project reference, and the packs the publish downloads ('<name> <version range>').
+      function New-TestAssets([string]$Path, [string[]]$NuGet, [hashtable]$Packages, [string[]]$Packs, [string]$Target = 'net8.0-windows7.0/win-x64') {
+        $libraries = @{ 'Rpa.Runner.Core/1.0.0' = @{ type = 'project'; path = '../Rpa.Runner.Core/Rpa.Runner.Core.csproj' } }
+        $entries = @{ 'Rpa.Runner.Core/1.0.0' = @{ type = 'project'; runtime = @{ 'bin/placeholder/Rpa.Runner.Core.dll' = @{} } } }
+        foreach ($key in $Packages.Keys) {
+          $libraries[$key] = @{ type = 'package'; path = $key.ToLowerInvariant() }
+          $runtime = @{}
+          foreach ($file in $Packages[$key]) { $runtime[$file] = @{} }
+          $entries[$key] = @{ type = 'package'; runtime = $runtime }
+        }
+        $folders = [ordered]@{}
+        foreach ($folder in $NuGet) { $folders[$folder + '/'] = @{} }
+        $download = @($Packs | ForEach-Object { $packName, $range = $_ -split ' ', 2; @{ name = $packName; version = $range } })
+        $assets = @{
+          version        = 3
+          targets        = @{ 'net8.0-windows7.0' = @{}; $Target = $entries }
+          libraries      = $libraries
+          packageFolders = $folders
+          project        = @{ frameworks = @{ 'net8.0-windows7.0' = @{ downloadDependencies = $download } } }
+        }
+        [IO.File]::WriteAllText($Path, ($assets | ConvertTo-Json -Depth 10))
+      }
     }
 
     It 'writes the version and the SHA-256 of each zip into the Get-Rpa.ps1 it publishes, and changes nothing else' {
@@ -4552,6 +4614,158 @@ public static class Program {
       $source | Should -Match ([regex]::Escape("CreateFromDirectory(`$stage, `$zip, [IO.Compression.CompressionLevel]::Optimal, `$true)"))
       $source | Should -Match ([regex]::Escape("CreateFromDirectory(`$browserStage, `$browserZip, [IO.Compression.CompressionLevel]::Optimal, `$false)"))
       $source | Should -Match ([regex]::Escape("`$BrowserPackageName = 'rpa-browser-windows-x64'"))
+    }
+
+    It 'takes the NuGet packages that bring code for win-x64, and the runtime packs, from the restores of the published programs' {
+      $nuget = Join-Path $TestDrive 'nuget'
+      $runner = Join-Path $TestDrive 'runner.assets.json'
+      $supervisor = Join-Path $TestDrive 'supervisor.assets.json'
+      New-TestAssets $runner $nuget @{
+        'FlaUI.Core/5.0.0'                  = @('lib/net8.0-windows7.0/FlaUI.Core.dll')
+        'Microsoft.NETCore.Platforms/5.0.0' = @('lib/netstandard1.0/_._')
+      } @('Microsoft.AspNetCore.App.Runtime.win-x64 [8.0.33, 8.0.33]', 'Microsoft.NETCore.App.Host.win-x64 [8.0.33, 8.0.33]', 'Microsoft.NETCore.App.Runtime.win-x64 [8.0.33, 8.0.33]', 'Microsoft.WindowsDesktop.App.Ref [8.0.33, 8.0.33]')
+      New-TestAssets $supervisor $nuget @{
+        'FlaUI.Core/5.0.0'                              = @('lib/net8.0-windows7.0/FlaUI.Core.dll')
+        'System.ServiceProcess.ServiceController/8.0.1' = @('runtimes/win/lib/net8.0/System.ServiceProcess.ServiceController.dll')
+      } @('Microsoft.NETCore.App.Runtime.win-x64 [8.0.33, 8.0.33]', 'Microsoft.WindowsDesktop.App.Runtime.win-x64 [8.0.33, 8.0.33]')
+
+      $found = @(Get-NuGetComponents @($runner, $supervisor))
+      @($found | ForEach-Object { '{0} {1}' -f $_.Id, $_.Version }) | Should -Be @(
+        'FlaUI.Core 5.0.0', 'Microsoft.AspNetCore.App.Runtime.win-x64 8.0.33', 'Microsoft.NETCore.App.Runtime.win-x64 8.0.33',
+        'Microsoft.WindowsDesktop.App.Runtime.win-x64 8.0.33', 'System.ServiceProcess.ServiceController 8.0.1')
+      $found[0].Folder | Should -Be (Join-Path ($nuget + '/') 'flaui.core/5.0.0')
+      $found[2].Folder | Should -Be (Join-Path ($nuget + '/') 'microsoft.netcore.app.runtime.win-x64/8.0.33')
+    }
+
+    It 'finds a package in the first of the restore''s package folders that holds it' {
+      $nuget = Join-Path $TestDrive 'packages'
+      $fallback = Join-Path $TestDrive 'fallback'
+      New-Item -ItemType Directory -Force -Path (Join-Path $fallback 'flaui.core/5.0.0'), (Join-Path $nuget 'microsoft.netcore.app.runtime.win-x64/8.0.33'), (Join-Path $fallback 'microsoft.netcore.app.runtime.win-x64/8.0.33') | Out-Null
+      $assets = Join-Path $TestDrive 'fallback.assets.json'
+      New-TestAssets $assets @($nuget, $fallback) @{ 'FlaUI.Core/5.0.0' = @('lib/net8.0-windows7.0/FlaUI.Core.dll'); 'FlaUI.UIA3/5.0.0' = @('lib/net8.0-windows7.0/FlaUI.UIA3.dll') } @('Microsoft.NETCore.App.Runtime.win-x64 [8.0.33, 8.0.33]')
+      $found = @(Get-NuGetComponents @($assets))
+      @($found | ForEach-Object { $_.Folder }) | Should -Be @(
+        (Join-Path ($fallback + '/') 'flaui.core/5.0.0'),
+        # In none of them: the NuGet packages folder, where Get-LicenseFiles then finds it missing.
+        (Join-Path ($nuget + '/') 'flaui.uia3/5.0.0'),
+        (Join-Path ($nuget + '/') 'microsoft.netcore.app.runtime.win-x64/8.0.33'))
+    }
+
+    It 'stops at a restore that is not for win-x64, and at a runtime pack without one version' {
+      $nuget = Join-Path $TestDrive 'nuget'
+      $other = Join-Path $TestDrive 'other.assets.json'
+      New-TestAssets $other $nuget @{ 'FlaUI.Core/5.0.0' = @('lib/net8.0-windows7.0/FlaUI.Core.dll') } @() 'net8.0-windows7.0/win-arm64'
+      { Get-NuGetComponents @($other) } | Should -Throw -ExpectedMessage "$other is not the restore of a win-x64 publish."
+      $range = Join-Path $TestDrive 'range.assets.json'
+      New-TestAssets $range $nuget @{} @('Microsoft.NETCore.App.Runtime.win-x64 [8.0.0, )')
+      { Get-NuGetComponents @($range) } | Should -Throw -ExpectedMessage ([WildcardPattern]::Escape("$range names Microsoft.NETCore.App.Runtime.win-x64 in no single version ([8.0.0, ))."))
+    }
+
+    It 'names the licence and notice files at the top of a component folder, and stops at a folder without one' {
+      $package = Join-Path $TestDrive 'system.drawing.common'
+      New-Item -ItemType Directory -Force -Path (Join-Path $package 'lib') | Out-Null
+      foreach ($name in 'THIRD-PARTY-NOTICES.TXT', 'LICENSE.TXT', 'Icon.png', 'PACKAGE.md', 'system.drawing.common.nuspec', 'lib/LICENSE') { Set-Content -LiteralPath (Join-Path $package $name) -Value 'x' }
+      @(Get-LicenseFiles $package) | Should -Be @('LICENSE.TXT', 'THIRD-PARTY-NOTICES.TXT')
+      $desktop = Join-Path $TestDrive 'windowsdesktop'
+      New-Item -ItemType Directory -Force -Path $desktop | Out-Null
+      foreach ($name in 'LICENSE', 'Icon.png') { Set-Content -LiteralPath (Join-Path $desktop $name) -Value 'x' }
+      @(Get-LicenseFiles $desktop) | Should -Be @('LICENSE')
+      $none = Join-Path $TestDrive 'none'
+      New-Item -ItemType Directory -Force -Path $none | Out-Null
+      Set-Content -LiteralPath (Join-Path $none 'Icon.png') -Value 'x'
+      { Get-LicenseFiles $none } | Should -Throw -ExpectedMessage "$none holds no LICENSE, NOTICE or THIRD-PARTY-NOTICES file."
+      $missing = Join-Path $TestDrive 'missing'
+      { Get-LicenseFiles $missing } | Should -Throw -ExpectedMessage "$missing is missing."
+    }
+
+    It 'leaves the files below one top folder out of the list of the browser files' {
+      $list = ('a' * 64) + "  chromium-1243/chrome-win64/chrome.exe`n" + ('b' * 64) + "  ffmpeg-1011/COPYING.LGPLv2.1`n" + ('c' * 64) + "  ffmpeg-1011/ffmpeg-win64.exe`n" +
+        ('d' * 64) + "  ffmpeg-10110/other`n" + ('e' * 64) + "  winldd-1007/PrintDeps.exe`n"
+      Get-ListWithout $list 'ffmpeg-1011' | Should -BeExactly (('a' * 64) + "  chromium-1243/chrome-win64/chrome.exe`n" + ('d' * 64) + "  ffmpeg-10110/other`n" + ('e' * 64) + "  winldd-1007/PrintDeps.exe`n")
+      { Get-ListWithout $list 'ffmpeg-1012' } | Should -Throw -ExpectedMessage 'The list of the browser files names nothing below ffmpeg-1012/.'
+    }
+
+    It 'ends the notices of each package with what its licence folder holds' {
+      $entries = @(
+        [pscustomobject]@{ Name = 'node'; Version = '22.23.4'; Files = @('LICENSE') },
+        [pscustomobject]@{ Name = 'playwright-core'; Version = '1.63.0'; Files = @('LICENSE', 'NOTICE', 'ThirdPartyNotices.txt') })
+      Get-NoticesIndex $entries 'browser\licenses\' | Should -BeExactly ("`n## The licence texts in this package`n`n" +
+        "The build copied these files into ``browser\licenses\``, one folder per component, named ``<component>-<version>``.`n`n" +
+        "| Component | Version | Files |`n|---|---|---|`n" +
+        "| node | 22.23.4 | ``LICENSE`` |`n" +
+        "| playwright-core | 1.63.0 | ``LICENSE``, ``NOTICE``, ``ThirdPartyNotices.txt`` |`n")
+      Get-NoticesIndex @($entries[0]) 'licenses\' | Should -BeExactly ("`n## The licence texts in this package`n`n" +
+        "The build copied these files into ``licenses\``, one folder per component, named ``<component>-<version>``.`n`n" +
+        "| Component | Version | Files |`n|---|---|---|`n" +
+        "| node | 22.23.4 | ``LICENSE`` |`n")
+    }
+
+    It 'puts each package''s THIRD-PARTY-NOTICES.md and licenses\ into it, and leaves out Playwright''s FFmpeg after checking the browser files' {
+      $source = (Get-Content -Raw -LiteralPath $script:Stage) -replace "`r`n", "`n"
+      foreach ($project in 'runner\src\Rpa.Runner', 'runner\src\Rpa.Supervisor', 'runner\src\Rpa.Runner.PolicyTool', 'recorder\src\Rpa.Recorder', 'erp-demo') {
+        $source | Should -Match ([regex]::Escape("'$project'"))
+      }
+      # The package's notices: the NuGet packages, at the top of the package. The browser package's: the browser's
+      # components, in browser\, which the installer copies and removes with the browser.
+      $source | Should -Match ([regex]::Escape("Write-PackageNotices `$stage 'licenses\' ('The Windows package (``{0}.zip``)' -f `$PackageName) `$packageNotices"))
+      $source | Should -Match ([regex]::Escape("Write-PackageNotices `$browser 'browser\licenses\' ('The browser package (``{0}.zip``)' -f `$BrowserPackageName) `$browserNotices"))
+      $source | Should -Match ([regex]::Escape("[IO.File]::WriteAllText((Join-Path `$Root 'THIRD-PARTY-NOTICES.md')"))
+      $source | Should -Match ([regex]::Escape("(Join-Path (Join-Path `$Root 'licenses')"))
+      foreach ($name in 'node', 'playwright', 'playwright-core', 'chrome-for-testing', 'chrome-headless-shell', 'winldd') {
+        $source | Should -Match ("(?m)^  \[pscustomobject\]@\{{ Name = '{0}';" -f [regex]::Escape($name))
+      }
+      $source.IndexOf('$browserNotices = @(') | Should -BeGreaterThan $source.IndexOf("`$browser = Join-Path `$browserStage 'browser'")
+      $source | Should -Not -Match 'LICENSE-node'
+      $source.IndexOf('-ne $BrowsersSha256)') | Should -BeGreaterThan 0
+      $source.IndexOf('-ne $BrowsersSha256)') | Should -BeLessThan $source.IndexOf('Get-ListWithout $installedList')
+      $source.IndexOf('Get-ListWithout $installedList') | Should -BeLessThan $source.IndexOf('CreateFromDirectory')
+      # Both notices are written before the work folder, which holds the Node.js zip's LICENSE, is deleted.
+      $source.IndexOf("Write-PackageNotices `$browser") | Should -BeLessThan $source.IndexOf('[IO.Directory]::Delete($work, $true)')
+    }
+
+    It 'THIRD-PARTY-NOTICES.md names the versions the build pins, each in the section of the package that holds it' {
+      $repo = Join-Path $script:InstallerDir '../..'
+      $package = Get-NoticesSection $script:Notices $script:PackageHeading
+      $browser = Get-NoticesSection $script:Notices $script:BrowserHeading
+      $stageSource = (Get-Content -Raw -LiteralPath $script:Stage) -replace "`r`n", "`n"
+      $stageSource -match "\`$NodeVersion = '([0-9.]+)'" | Should -BeTrue
+      $browser | Should -Match ('\| Node\.js \| {0} \|' -f [regex]::Escape($Matches[1]))
+      $playwright = (Get-Content -Raw -LiteralPath (Join-Path $repo 'images/browser/server/package.json') | ConvertFrom-Json).dependencies.playwright
+      $browser | Should -Match ('\| Playwright \(`playwright`, `playwright-core`\) \| {0} \|' -f [regex]::Escape($playwright))
+      $references = @(Get-ChildItem -LiteralPath (Join-Path $repo 'desktop') -Recurse -Filter '*.csproj' | Where-Object { $_.FullName -notmatch '[\\/]test[\\/]' } |
+          ForEach-Object { [regex]::Matches((Get-Content -Raw -LiteralPath $_.FullName), '<PackageReference Include="([^"]+)" Version="([^"]+)"') })
+      $references.Count | Should -BeGreaterThan 0
+      foreach ($reference in $references) {
+        $id = $reference.Groups[1].Value
+        $package | Should -Match ('(?m)^\| [^|\n]*\b{0}\b[^|\n]* \| {1} \|' -f [regex]::Escape($id), [regex]::Escape($reference.Groups[2].Value)) -Because "$id is pinned"
+      }
+      Test-Path -LiteralPath (Join-Path $script:InstallerDir 'build/notices/winldd-1007/LICENSE.txt') -PathType Leaf | Should -BeTrue
+    }
+
+    It 'takes a section of THIRD-PARTY-NOTICES.md up to the next heading, with either line end, and stops at a heading that is not there once' {
+      $text = "# Notices`r`n`r`nIntro.`r`n`r`n## A (``a.zip``)`r`n`r`n| x | 1 |`r`n### Inside`r`nmore`r`n`r`n## B`r`n`r`nb`r`n"
+      Get-NoticesSection $text 'A (`a.zip`)' | Should -BeExactly "## A (``a.zip``)`n`n| x | 1 |`n### Inside`nmore"
+      Get-NoticesSection ($text -replace "`r`n", "`n") 'B' | Should -BeExactly "## B`n`nb"
+      { Get-NoticesSection $text 'C' } | Should -Throw -ExpectedMessage 'THIRD-PARTY-NOTICES.md does not hold the heading "## C" exactly once.'
+      { Get-NoticesSection ($text + "## B`n") 'B' } | Should -Throw -ExpectedMessage 'THIRD-PARTY-NOTICES.md does not hold the heading "## B" exactly once.'
+    }
+
+    # A person who installs without the browser is not told that they have it, and the browser's notices name all of it.
+    It 'writes into each package''s notices its own section only: the browser''s components in the browser package''s' {
+      $entries = @([pscustomobject]@{ Name = 'x'; Version = '1'; Files = @('LICENSE') })
+      $package = Get-PackageNotices $script:Notices $script:PackageHeading 'licenses\' $entries
+      $browser = Get-PackageNotices $script:Notices $script:BrowserHeading 'browser\licenses\' $entries
+      foreach ($made in $package, $browser) {
+        $made | Should -Match '\A# Third-party notices\n'
+        $made | Should -Not -Match '(?m)^## The (browser image|npm package)$'
+        @([regex]::Matches($made, '(?m)^## ')).Count | Should -Be 2
+      }
+      $package | Should -Match ('(?m)^## {0}$' -f [regex]::Escape($script:PackageHeading))
+      $package | Should -Not -Match '(?i)chrom|node\.js|playwright|winldd|ffmpeg|browser'
+      foreach ($name in 'Microsoft.NETCore.App', 'FlaUI.UIA3', 'System.ServiceProcess.ServiceController') { $package | Should -Match ([regex]::Escape($name)) }
+      $browser | Should -Match ('(?m)^## {0}$' -f [regex]::Escape($script:BrowserHeading))
+      foreach ($name in '| Node.js |', '| Playwright (`playwright`', '| Google Chrome for Testing |', '| Chrome Headless Shell |', '(Playwright''s winldd)', 'ffmpeg-1011') { $browser | Should -Match ([regex]::Escape($name)) }
+      $browser | Should -Not -Match '(?i)FlaUI|NETCore|NuGet'
     }
   }
 }
