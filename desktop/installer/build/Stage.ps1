@@ -1,13 +1,14 @@
-# Stages the Windows package: one folder that Install-Rpa.ps1 installs from, a zip of it with its SHA-256, and the
-# Get-Rpa.ps1 that is published beside the zip, with the version and the zip's SHA-256 written into it.
+# Stages the Windows package in two parts: the package, one folder that Install-Rpa.ps1 installs from, and the browser
+# package, the files that Install-Rpa.ps1 -WithBrowser needs in that folder besides. Each goes into a zip with its
+# SHA-256, and the Get-Rpa.ps1 that is published beside the zips gets the version and both SHA-256 written into it.
 # The desktop workflow (.github/workflows/desktop.yml) runs it, and it can be run by hand on a Windows machine with
 # Windows PowerShell 5.1 or PowerShell 7, from a checkout of this repository:
 #
 #   .\Stage.ps1 -Out <dir> -RunnerDir <dir> -PolicyToolDir <dir> -RecorderDir <dir> -ErpDemoDir <dir>
 #
-#   -Out            where the package goes: <Out>\rpa-windows-x64\ (the tree below), <Out>\rpa-windows-x64.zip,
-#                   <Out>\rpa-windows-x64.zip.sha256 and <Out>\Get-Rpa.ps1. What is there under those four names is
-#                   replaced.
+#   -Out            where the packages go: <Out>\rpa-windows-x64\ and <Out>\rpa-browser-windows-x64\ (the trees below),
+#                   <Out>\rpa-windows-x64.zip, <Out>\rpa-browser-windows-x64.zip, their .sha256 files and
+#                   <Out>\Get-Rpa.ps1. What is there under those seven names is replaced.
 #   -RunnerDir      the folder with the published RpaRunner.exe (dotnet publish desktop/runner/src/Rpa.Runner) and
 #                   RpaSupervisor.exe (dotnet publish desktop/runner/src/Rpa.Supervisor, into the same folder)
 #   -PolicyToolDir  the folder with the published RpaPolicy.exe (dotnet publish
@@ -25,10 +26,15 @@
 #     RpaInstall.Machine.ps1  rpa.cmd  LICENSE  VERSION
 #     runner\    RpaRunner.exe  RpaSupervisor.exe  RpaPolicy.exe  *.dll (their native libraries)  policy.example.json
 #     recorder\  RpaRecorder.exe  *.dll (its native libraries)
-#     browser\   node.exe  LICENSE-node.txt  host\{host.mjs,run-server.mjs}  gate\{gate.mjs,ecs.mjs,selfsigned.mjs}
-#                node_modules\ (playwright)  ms-playwright\ (Chromium)  ms-playwright.sha256
-#     scripts\   start-loop.ps1  start-runner.ps1  start-browser.ps1  Show-RpaConnection.ps1  rpa.ps1
+#     scripts\   start-loop.ps1  start-runner.ps1  Show-RpaConnection.ps1  rpa.ps1
 #     erp-demo\  v1\  v2\
+#
+#   rpa-browser-windows-x64\ (its zip holds what is in this folder, without the folder itself, so that unpacking it into
+#   rpa-windows-x64\ adds these to the package)
+#     browser\   VERSION  node.exe  LICENSE-node.txt  host\{host.mjs,run-server.mjs}
+#                gate\{gate.mjs,ecs.mjs,selfsigned.mjs}  node_modules\ (playwright)  ms-playwright\ (Chromium)
+#                ms-playwright.sha256
+#     scripts\   start-browser.ps1
 #
 # What comes from the network, and what it is checked against:
 #   - Node.js for Windows x64 (node.exe, and the npm that comes with it, which is used here and not shipped), from
@@ -44,7 +50,8 @@
 #     only when two builds on different machines and networks print the same one.
 # npm and Playwright's installer run without what the environment could say about where and how to download: the
 # variables in $DownloadVariables are cleared for them (and only for them).
-# VERSION is the <Version> of desktop\Directory.Build.props, the version the runner reports.
+# VERSION and browser\VERSION are the <Version> of desktop\Directory.Build.props, the version the runner reports: the
+# installer refuses browser files of another version than the package.
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)][string]$Out,
@@ -63,6 +70,7 @@ $NodeSha256 = 'cbc74b5e0982c9dbb41525fd8fb5dcd32fbee237863f7829072f4639a1ce5f20'
 # with the Playwright version in images\browser\server\package.json.
 $BrowsersSha256 = '1b178abcd915d6ffa5b465a26ffafcf937544a7c862f5a69061ab68ae7cff240'
 $PackageName = 'rpa-windows-x64'
+$BrowserPackageName = 'rpa-browser-windows-x64'
 
 # What Node's HTTPS client and Playwright 1.63.0's browser installer read about where and how to download: another
 # download server (Playwright reads each PLAYWRIGHT_ name also as npm_config_<name> and npm_package_config_<name> in
@@ -80,15 +88,15 @@ $repo = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..\..')).Provide
 $installer = Join-Path $repo 'desktop\installer'
 $browserSource = Join-Path $repo 'images\browser'
 
-# desktop\installer\Get-Rpa.ps1 as it is published beside the zip: the same text with the version and the zip's
-# SHA-256 written into its two empty lines for them.
-function Get-ReleaseGetRpa([string]$Source, [string]$Version, [string]$Sha256) {
+# desktop\installer\Get-Rpa.ps1 as it is published beside the zips: the same text with the version and the SHA-256 of
+# each zip written into its three empty lines for them.
+function Get-ReleaseGetRpa([string]$Source, [string]$Version, [string]$Sha256, [string]$BrowserSha256) {
   if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw ('{0} is not a version.' -f $Version) }
-  if ($Sha256 -notmatch '^[0-9a-f]{64}$') { throw ('{0} is not a SHA-256.' -f $Sha256) }
-  foreach ($line in "`$Version = ''", "`$PackageSha256 = ''") {
+  foreach ($hash in $Sha256, $BrowserSha256) { if ($hash -notmatch '^[0-9a-f]{64}$') { throw ('{0} is not a SHA-256.' -f $hash) } }
+  foreach ($line in "`$Version = ''", "`$PackageSha256 = ''", "`$BrowserPackageSha256 = ''") {
     if (([regex]::Matches($Source, ('(?m)^{0}\r?$' -f [regex]::Escape($line)))).Count -ne 1) { throw ('Get-Rpa.ps1 does not hold the line {0} exactly once.' -f $line) }
   }
-  $Source.Replace("`$Version = ''", ("`$Version = '{0}'" -f $Version)).Replace("`$PackageSha256 = ''", ("`$PackageSha256 = '{0}'" -f $Sha256))
+  $Source.Replace("`$Version = ''", ("`$Version = '{0}'" -f $Version)).Replace("`$PackageSha256 = ''", ("`$PackageSha256 = '{0}'" -f $Sha256)).Replace("`$BrowserPackageSha256 = ''", ("`$BrowserPackageSha256 = '{0}'" -f $BrowserSha256))
 }
 
 function Get-Sha256([string]$File) {
@@ -175,16 +183,18 @@ $ErpDemoDir = (Resolve-Path -LiteralPath $ErpDemoDir).ProviderPath
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
 $Out = (Resolve-Path -LiteralPath $Out).ProviderPath
 $stage = Join-Path $Out $PackageName
+$browserStage = Join-Path $Out $BrowserPackageName
 $zip = Join-Path $Out ($PackageName + '.zip')
+$browserZip = Join-Path $Out ($BrowserPackageName + '.zip')
 $work = Join-Path $Out 'stage-work'
-foreach ($old in $stage, $work) { if (Test-Path -LiteralPath $old) { [IO.Directory]::Delete($old, $true) } }
+foreach ($old in $stage, $browserStage, $work) { if (Test-Path -LiteralPath $old) { [IO.Directory]::Delete($old, $true) } }
 $getRpa = Join-Path $Out 'Get-Rpa.ps1'
-foreach ($old in $zip, ($zip + '.sha256'), $getRpa) { if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old -Force } }
-New-Item -ItemType Directory -Path $stage, $work | Out-Null
+foreach ($old in $zip, ($zip + '.sha256'), $browserZip, ($browserZip + '.sha256'), $getRpa) { if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old -Force } }
+New-Item -ItemType Directory -Path $stage, $browserStage, $work | Out-Null
 
 Write-Host 'The installer, the license and the version'
 Copy-Named $installer @('Install-Rpa.ps1', 'Uninstall-Rpa.ps1', 'RpaInstall.psd1', 'RpaInstall.Plan.ps1', 'RpaInstall.SignIn.ps1', 'RpaInstall.Machine.ps1', 'rpa.cmd') $stage
-Copy-Named (Join-Path $installer 'scripts') @('start-loop.ps1', 'start-runner.ps1', 'start-browser.ps1', 'Show-RpaConnection.ps1', 'rpa.ps1') (Join-Path $stage 'scripts')
+Copy-Named (Join-Path $installer 'scripts') @('start-loop.ps1', 'start-runner.ps1', 'Show-RpaConnection.ps1', 'rpa.ps1') (Join-Path $stage 'scripts')
 Copy-Named $repo @('LICENSE') $stage
 $properties = Get-Content -Raw -LiteralPath (Join-Path $repo 'desktop\Directory.Build.props')
 if ($properties -notmatch '<Version>(\d+\.\d+\.\d+)</Version>') { throw 'desktop\Directory.Build.props names no <Version>.' }
@@ -203,6 +213,12 @@ foreach ($ui in 'v1', 'v2') {
   Get-ChildItem -LiteralPath (Join-Path $ErpDemoDir $ui) -File | Where-Object { $_.Extension -ne '.pdb' } | Copy-Item -Destination $target
 }
 
+Write-Host 'The browser package: its version and its start script'
+$browser = Join-Path $browserStage 'browser'
+New-Item -ItemType Directory -Path $browser | Out-Null
+[IO.File]::WriteAllText((Join-Path $browser 'VERSION'), $version + "`r`n", [Text.Encoding]::ASCII)
+Copy-Named (Join-Path $installer 'scripts') @('start-browser.ps1') (Join-Path $browserStage 'scripts')
+
 Write-Host ('Node.js {0}' -f $NodeVersion)
 $nodeName = 'node-v{0}-win-x64' -f $NodeVersion
 $nodeZip = Join-Path $work ($nodeName + '.zip')
@@ -214,7 +230,6 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 [IO.Compression.ZipFile]::ExtractToDirectory($nodeZip, $work)
 $nodeDir = Join-Path $work $nodeName
 $node = Join-Path $nodeDir 'node.exe'
-$browser = Join-Path $stage 'browser'
 Copy-Named $nodeDir @('node.exe') $browser
 Copy-Item -LiteralPath (Join-Path $nodeDir 'LICENSE') -Destination (Join-Path $browser 'LICENSE-node.txt')
 
@@ -254,14 +269,21 @@ if ($listHash -ne $BrowsersSha256) {
 }
 Write-Host ('{0} files under browser\ms-playwright, as listed in browser\ms-playwright.sha256 (SHA-256 {1})' -f @(Get-Content -LiteralPath $listFile).Count, $listHash)
 
-Write-Host 'The zip'
+Write-Host 'The zips'
 [IO.Directory]::Delete($work, $true)
+# The package's zip holds its folder; the browser package's holds what is in its folder, for unpacking into the
+# package's folder.
 [IO.Compression.ZipFile]::CreateFromDirectory($stage, $zip, [IO.Compression.CompressionLevel]::Optimal, $true)
+[IO.Compression.ZipFile]::CreateFromDirectory($browserStage, $browserZip, [IO.Compression.CompressionLevel]::Optimal, $false)
 $hash = Get-Sha256 $zip
+$browserHash = Get-Sha256 $browserZip
 [IO.File]::WriteAllText(($zip + '.sha256'), ('{0}  {1}.zip' -f $hash, $PackageName), [Text.Encoding]::ASCII)
-[IO.File]::WriteAllText($getRpa, (Get-ReleaseGetRpa (Get-Content -Raw -LiteralPath (Join-Path $installer 'Get-Rpa.ps1')) $version $hash), [Text.Encoding]::ASCII)
+[IO.File]::WriteAllText(($browserZip + '.sha256'), ('{0}  {1}.zip' -f $browserHash, $BrowserPackageName), [Text.Encoding]::ASCII)
+[IO.File]::WriteAllText($getRpa, (Get-ReleaseGetRpa (Get-Content -Raw -LiteralPath (Join-Path $installer 'Get-Rpa.ps1')) $version $hash $browserHash), [Text.Encoding]::ASCII)
 
-$files = @(Get-ChildItem -LiteralPath $stage -Recurse -File)
-$bytes = ($files | Measure-Object -Property Length -Sum).Sum
-Write-Host ('{0} {1}: {2} files, {3:N1} MB unpacked' -f $PackageName, $version, $files.Count, ($bytes / 1MB))
-Write-Host ('{0}.zip: {1:N1} MB, SHA-256 {2}' -f $PackageName, ((Get-Item -LiteralPath $zip).Length / 1MB), $hash)
+foreach ($part in @(@{ Name = $PackageName; Folder = $stage; Zip = $zip; Hash = $hash }, @{ Name = $BrowserPackageName; Folder = $browserStage; Zip = $browserZip; Hash = $browserHash })) {
+  $files = @(Get-ChildItem -LiteralPath $part.Folder -Recurse -File)
+  $bytes = ($files | Measure-Object -Property Length -Sum).Sum
+  Write-Host ('{0} {1}: {2} files, {3:N1} MB unpacked' -f $part.Name, $version, $files.Count, ($bytes / 1MB))
+  Write-Host ('{0}.zip: {1:N1} MB, SHA-256 {2}' -f $part.Name, ((Get-Item -LiteralPath $part.Zip).Length / 1MB), $part.Hash)
+}

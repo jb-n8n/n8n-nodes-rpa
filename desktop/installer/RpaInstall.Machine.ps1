@@ -24,7 +24,7 @@ $script:KnownSteps = @(
   'stop running services', 'copy program files', 'create user', 'remove the old tokens', 'protect the data directory',
   'write policy', 'write token', 'write browser-token', 'add the runner firewall rule', 'add the browser firewall rule',
   'remove the browser firewall rule', 'register the runner task', 'register the browser task',
-  'remove the browser task', 'write install.json', 'put back what -Unattended changed', 'store sign-in password',
+  'remove the browser task', 'remove the browser token and certificate', 'write install.json', 'put back what -Unattended changed', 'store sign-in password',
   'keep the supervisor password for automatic sign-in', 'turn on automatic sign-in', 'keep the desktop unlocked',
   'keep the automatic sign-in password for the supervisor',
   'turn off automatic sign-in', 'allow the bot user to sign in through Remote Desktop', 'turn on Remote Desktop',
@@ -209,9 +209,32 @@ function Test-RpaStoredPassword($Stored, [hashtable]$Account) {
   @{ State = 'ok'; Problem = $problem }
 }
 
-# The facts Get-RpaInstallPlan judges. Changes nothing.
+# The first line of a VERSION file, trimmed, or nothing when the file is not there.
+function Read-RpaVersionFile([string]$Path) {
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+  ([string](Get-Content -LiteralPath $Path -TotalCount 1)).Trim()
+}
+
+# What the package folder -SourceDir holds of the browser, which the browser package (rpa-browser-windows-x64.zip)
+# adds when it is unpacked there: BrowserFiles is present when every file an install with the browser needs is there
+# ($script:BrowserFiles), else missing; BrowserVersion is the version in browser\VERSION, PackageVersion the one in
+# VERSION.
+function Get-RpaBrowserPackageFacts([string]$SourceDir) {
+  $result = @{ PackageDir = $SourceDir; PackageVersion = $null; BrowserFiles = 'missing'; BrowserVersion = $null }
+  if (-not $SourceDir) { return $result }
+  $result.PackageVersion = Read-RpaVersionFile (Join-Path $SourceDir 'VERSION')
+  $missing = @($script:BrowserFiles | Where-Object { -not (Test-Path -LiteralPath (Join-Path $SourceDir $_) -PathType Leaf) })
+  if ($missing.Count -eq 0) {
+    $result.BrowserFiles = 'present'
+    $result.BrowserVersion = Read-RpaVersionFile (Join-Path $SourceDir 'browser\VERSION')
+  }
+  $result
+}
+
+# The facts Get-RpaInstallPlan judges, about the machine and about the package in -SourceDir (the folder Install-Rpa.ps1
+# runs from). Changes nothing.
 function Get-RpaMachineFacts {
-  param([Parameter(Mandatory = $true)][hashtable]$Parameters)
+  param([Parameter(Mandatory = $true)][hashtable]$Parameters, [string]$SourceDir)
   $ErrorActionPreference = 'Stop'
   $layout = Get-RpaLayout
   $account = Get-RpaAccount -User $Parameters.User -ComputerName $env:COMPUTERNAME
@@ -267,6 +290,8 @@ function Get-RpaMachineFacts {
     SupervisorDir              = $layout.SupervisorDir
     SupervisorDirState         = $null
   }
+  $package = Get-RpaBrowserPackageFacts $SourceDir
+  foreach ($name in $package.Keys) { $facts[$name] = $package[$name] }
   # The plan refuses on these before it reads the rest, and an older Windows lacks the commands used below.
   if (-not $facts.IsAdmin -or -not $facts.Is64Bit -or $facts.OsBuild -lt $script:MinimumBuild) { return $facts }
 
@@ -483,10 +508,11 @@ function Remove-RpaTree([string]$Path, [string]$From, [scriptblock]$BeforeOpen) 
 # Replaces each file and folder of the package in the install directory. install.json is not in the package, so an
 # upgrade keeps it. Folders are copied with robocopy, which copies paths longer than 260 characters (Copy-Item in
 # Windows PowerShell 5.1 does not) and takes the destination folder's access rules for what it writes.
-function Copy-RpaProgramFiles([string]$SourceDir, [string]$InstallDir) {
+function Copy-RpaProgramFiles([string]$SourceDir, [string]$InstallDir, [bool]$Browser) {
   New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
   foreach ($item in Get-ChildItem -LiteralPath $SourceDir -Force) {
     $target = Join-Path $InstallDir $item.Name
+    if (-not $Browser -and $item.Name -eq 'browser') { continue }
     if ($item.PSIsContainer) {
       Remove-RpaTree $target
       & (Get-RpaSystemTool 'robocopy.exe') $item.FullName $target /E /XJ /R:2 /W:2 /NFL /NDL /NJH /NJS /NP | Out-Null
@@ -495,6 +521,13 @@ function Copy-RpaProgramFiles([string]$SourceDir, [string]$InstallDir) {
     } else {
       Copy-Item -LiteralPath $item.FullName -Destination $target -Force
     }
+  }
+  # Without the browser: what an earlier install with it left goes, and the package's browser files (when it holds
+  # them) are not copied.
+  if (-not $Browser) {
+    Remove-RpaTree (Join-Path $InstallDir 'browser')
+    $start = Join-Path (Join-Path $InstallDir 'scripts') 'start-browser.ps1'
+    if (Test-Path -LiteralPath $start) { Remove-Item -LiteralPath $start -Force }
   }
 }
 
@@ -1216,6 +1249,20 @@ function Remove-RpaOldTokens([hashtable]$Layout) {
   }
 }
 
+# Removes what the browser keeps in the data directory, when -NoBrowser removes the browser from an install: its token,
+# and the certificate and key the browser host made (as the bot user) at its first start. The bot user can create files
+# in the data directory, so a link or junction in one of these places is removed as the link itself, which leaves what
+# it points to as it is; a file with a second name loses this name only. A folder of one of these names is refused.
+function Remove-RpaBrowserData([hashtable]$Layout) {
+  foreach ($name in 'browser-token', 'browser-cert.pem', 'browser-key.pem') {
+    $path = Join-Path $Layout.DataDir $name
+    $state = Get-RpaPathState $path
+    if (-not $state.Exists) { continue }
+    if ($state.IsFolder -and -not $state.IsLink) { throw ('{0} is a folder. Check what it is, remove it, and run the installer again.' -f $path) }
+    if ($state.IsFolder) { [IO.Directory]::Delete($path) } else { [IO.File]::Delete($path) }
+  }
+}
+
 # Writes a new file the bot user may only read (or, with -AdministratorsOnly, nobody but SYSTEM and Administrators):
 # created with its owner and access rules in one call, and only when nothing is there (a file someone put there in
 # the meantime makes this fail). A link in the file's place is refused, and the create does not follow one that gets
@@ -1707,11 +1754,9 @@ function Invoke-RpaInstallPlan {
 
   $source = (Resolve-Path -LiteralPath $SourceDir).ProviderPath.TrimEnd('\')
   if ($source -eq $layout.InstallDir) { throw 'Run Install-Rpa.ps1 from the unpacked package, not from the install directory.' }
-  # The programs, the tools the closing lines name, and what the browser host loads.
+  # The programs, the tools the closing lines name, and, with the browser, what the browser host loads.
   $needed = @('VERSION', 'runner\RpaRunner.exe', 'runner\RpaPolicy.exe', 'runner\RpaSupervisor.exe', 'recorder\RpaRecorder.exe', 'scripts\start-loop.ps1', 'scripts\start-runner.ps1', 'scripts\Show-RpaConnection.ps1', 'rpa.cmd', 'scripts\rpa.ps1')
-  if (-not $Parameters.NoBrowser) {
-    $needed += 'browser\node.exe', 'browser\host\host.mjs', 'browser\host\run-server.mjs', 'browser\gate\gate.mjs', 'browser\node_modules\playwright\cli.js', 'scripts\start-browser.ps1'
-  }
+  if (-not $Parameters.NoBrowser) { $needed += $script:BrowserFiles }
   foreach ($file in $needed) {
     if (-not (Test-Path -LiteralPath (Join-Path $source $file))) {
       throw ('{0} is missing from {1}. Unpack the whole package and run Install-Rpa.ps1 from that folder.' -f $file, $source)
@@ -1750,7 +1795,7 @@ function Invoke-RpaInstallPlan {
           $run.Stopped = $true
           Stop-RpaServices $layout.InstallDir
         }
-        'copy program files' { Copy-RpaProgramFiles $source $layout.InstallDir }
+        'copy program files' { Copy-RpaProgramFiles $source $layout.InstallDir (-not $Parameters.NoBrowser) }
         'create user' {
           $run.Password = New-RpaUser $account $run.Password
           $run.CreatedUser = $true
@@ -1767,6 +1812,7 @@ function Invoke-RpaInstallPlan {
         'register the runner task' { Register-RpaTask $script:RunnerTask (Join-Path $scripts 'start-runner.ps1') $account.Qualified }
         'register the browser task' { Register-RpaTask $script:BrowserTask (Join-Path $scripts 'start-browser.ps1') $account.Qualified }
         'remove the browser task' { Unregister-RpaTask $script:BrowserTask }
+        'remove the browser token and certificate' { Remove-RpaBrowserData $layout }
         'write install.json' {
           $version = ([string](Get-Content -LiteralPath (Join-Path $layout.InstallDir 'VERSION') -TotalCount 1)).Trim()
           # What an earlier uninstall could not put back becomes the first records, when its list can be trusted.
