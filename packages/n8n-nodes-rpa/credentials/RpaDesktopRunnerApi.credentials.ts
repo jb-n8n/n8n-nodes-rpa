@@ -12,7 +12,7 @@ export class RpaDesktopRunnerApi implements ICredentialType {
   properties: INodeProperties[] = [
     {
       displayName:
-        'The desktop runner runs on the Windows machine whose apps desktop steps drive. Paste the Connection Line the installer prints for the runner when it finishes; on that machine, as an administrator, & "C:\\Program Files\\RPA Runner\\rpa.cmd" connection -ShowTokens prints it again, and the three values below for a credential that uses them (Windows guide, section 6). Run Steps uses this credential for desktop steps (surface "desktop") only.',
+        'Paste the Connection Line the installer printed on the Windows machine. To print it again there, as an administrator: & "C:\\Program Files\\RPA Runner\\rpa.cmd" connection -ShowTokens',
       name: 'about',
       type: 'notice',
       default: '',
@@ -30,6 +30,9 @@ export class RpaDesktopRunnerApi implements ICredentialType {
       description:
         'The one line the Windows installer prints for the runner. It holds the address, the token and the certificate fingerprint: keep it as secret as the token. When it is filled, the three fields below are not used.',
     },
+    // The three fields always show: n8n drops the value of a credential field its displayOptions hide, both when the
+    // dialog saves and when a run reads the credential (NodeHelpers.getNodeParameters), so a switch that hid them would
+    // empty credentials saved with these three fields.
     {
       displayName: 'Runner URL',
       name: 'url',
