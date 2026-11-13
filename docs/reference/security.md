@@ -92,7 +92,10 @@ an **RPA Step Signing** credential that its own project owns, and never one of t
   page of the form and chooses **Approve and sign** or **Reject**. Who can approve depends on how the form signs
   people in:
   - **n8n's sign-in (the default).** The form opens only for n8n users who may run the workflow. Every later page
-    asks for an n8n sign-in too, but any signed-in n8n user who has a page's address can open and submit it. So the
+    asks for an n8n sign-in too, but any signed-in n8n user who has a page's address can open and submit it. A later
+    page's address, such as the review page's `/form-waiting/<execution>?signature=…`, carries a signature n8n made,
+    so the execution number alone does not open it. A signed-in user who has the whole address can read the steps
+    there; approving still needs a place on the Approver Allowlist. So the
     approver is the n8n user who submits **Review and approve**, as n8n reports it. Sign Steps signs only when that
     user is on **Sign steps → Approver Allowlist**, and the row records their n8n address. Nobody signed in, or a user
     not on the list, signs nothing. Removing a person from n8n, or from the list, ends their access. An n8n user who
