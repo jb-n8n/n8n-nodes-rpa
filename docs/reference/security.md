@@ -127,8 +127,11 @@ an **RPA Step Signing** credential that its own project owns, and never one of t
   whoever wrote the steps. When it says something else than the sentence, it is shown beside it in grey, as `(the
   author calls it: …)`. It is shown in red, as `(described differently as: …)`, when its first word names another kind
   of action than the step does (for example "Read" on a step that clicks), or when it names a site that is not the
-  step's own or the start site. The red mark catches a description that names another action or site. It does not
-  judge the rest of the words: the sentence built from the step is what will run, whatever the description says. The
+  step's own or the start site, or when it states a value that none of the step's own fields holds: a text it puts in
+  double quotes, an ISO date, or a number of three or more digits (for example `"2026-09-30"` on a step that types
+  2026-09-15, as after a value was changed and the description was not). A description that states no such value is
+  judged by the action and the site alone. The red mark catches a description that names another action, site or
+  value. It does not judge the rest of the words: the sentence built from the step is what will run, whatever the description says. The
   approval emails show the same sentences and the same marks. Sign Steps refuses to sign when the step sentences shown for approval differ from the steps it is asked to sign.
 - **Desktop writes.** The review page asks "Which of these steps save, send or submit?". The ticked steps are signed as
   writes. A write mark only matters where the runner's policy lists the control or key (see [Desktop runs](#desktop-runs)).

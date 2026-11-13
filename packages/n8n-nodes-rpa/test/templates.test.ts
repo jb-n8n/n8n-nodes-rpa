@@ -1980,6 +1980,39 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     ]);
   });
 
+  it('a description that states another value than the step holds is a warning: a quoted text, an ISO date, a number of three or more digits (IB-6)', () => {
+    const one = (step: IDataObject, startUrl?: string) => reviewSteps([step], { desktop: false, shownUrl, ...(startUrl ? { startUrl } : {}) })[0];
+    const to = (value: string) => ({ fill: { field: { label: 'To' }, value } });
+    // The live case: the value changed, the description kept the old one. It was quiet; now it is a warning.
+    expect(one({ intent: 'Type into To: "2026-09-30"', ...to('2026-09-15') })).toEqual({ text: 'Type into To: "2026-09-15"', describedAs: 'Type into To: "2026-09-30"', marks: [] });
+    for (const [intent, step, quiet] of [
+      // Quoted text: held by a field (case aside, a part of a value counts), or not.
+      ['Type into To: "2026-09-15" (the month end)', to('2026-09-15'), true],
+      ['Click "line item report" for the month', { click: { role: 'button', name: 'Line Item Report' } }, true],
+      ['Click “Execute”', { click: { role: 'button', name: 'Run' } }, false],
+      ['Click "Line Item Report"', { click: { role: 'button', name: 'G/L Line Items' } }, false],
+      // An ISO date or a number of three or more digits, outside quotes.
+      ['Set the end date to 2026-09-30', to('2026-09-15'), false],
+      ['Set the end date to 2026-09-15', to('2026-09-15'), true],
+      ['Enter company 2000', { fill: { field: { label: 'Company' }, value: '3000' } }, false],
+      ['Enter company 2000', { fill: { field: { label: 'Company' }, value: '2000' } }, true],
+      ['Open page 100', { goto: 'https://a.example/list?page=100' }, true],
+      // Fewer than three digits, a host's port and an address are not values: hosts are checked on their own.
+      ['Enter 12 rows', { fill: { field: { label: 'Rows' }, value: '50' } }, true],
+      ['Open http://sandbox:8080/acme/login', { goto: '/acme/login' }, true],
+      ['Open the list on sandbox:8080', { goto: '/acme/list' }, true],
+      // Nothing quoted or stated: quiet, as before.
+      ['Type the end date', to('2026-09-15'), true],
+    ] as const) {
+      const r = one({ intent, ...step }, 'http://sandbox:8080/');
+      expect(r.describedAs, intent).toBe(intent);
+      expect(r.quiet === true, intent).toBe(quiet);
+    }
+    // Desktop steps alike: the control's name and the value are the step's own fields.
+    const save = (intent: string) => ({ intent, click: { uia: { path: [{ name: 'Save' }] } } });
+    expect(reviewSteps([save('Click "Save" to keep it'), save('Click "Save all"'), save('Post it for 2026-09-30')], { desktop: true }).map((r) => r.quiet === true)).toEqual([true, false, false]);
+  });
+
   it('a browser step\'s sentence comes from the step itself; the description stands beside it only when it says something else', () => {
     const texts = (steps: object[]) => reviewSteps(steps, { desktop: false, shownUrl }).map(line);
     const save = { role: 'button', name: 'Save', exact: true };
@@ -2241,6 +2274,28 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       expect(text).toMatch(/\n1\. Choose \S+2000\S+ in Company code/);
       expect(text).not.toContain('variable company_code');
     }
+  });
+
+  it('a description that quotes the old value is red on the review page, and Sign steps rebuilds it the same and signs (IB-6)', async () => {
+    const save = (company: string) => ({ intent: 'Click "Save" for company 2000', click: { uia: { path: [{ name: `Save ${company}` }] } } });
+    const doc = { surface: 'desktop', name: 'erp', version: 1, app: { exe: 'ErpDemo.exe' }, steps: [save('2000')] };
+    const fixed = { ...doc, steps: [save('3000')] };
+    const { ran } = changePath('erp', [{ id: 1, name: 'erp', version: 1, steps: JSON.stringify(doc), status: 'active' }]);
+    const [data, repaired] = await runImport(changedUpload(ran, JSON.stringify(fixed)), () => {
+      throw new Error('desktop steps are never replayed');
+    }, ran);
+    expect(data[0].json.error).toBeUndefined();
+    expect(repaired[0].json.reviewSteps).toEqual([{ text: 'Click Save 3000', describedAs: 'Click "Save" for company 2000', marks: [] }]);
+    const after = { ...ran, 'Change or sign again': [[{ json: { changedSteps: JSON.stringify(fixed) } }]], [COMPARED]: [[{ json: compared(ran, JSON.stringify(fixed)) }]], 'Import steps': [data, repaired] };
+    expect(String(reviewFields({ $: nodesRan(after) })[0].html)).toContain('<strong>(described differently as: Click &quot;Save&quot; for company 2000)</strong>');
+    const signed = await signAfterReview(after, { decision_0: 'Approve and sign' });
+    expect(signed.errors).toEqual([]);
+    expect(signed.signed[0]).toMatchObject({ status: 'active', version: 2 });
+    // An item whose page showed that description quietly (made by an earlier version) is refused: it was shown as less.
+    const quiet = { ...repaired[0], json: { ...repaired[0].json, reviewSteps: [{ text: 'Click Save 3000', describedAs: 'Click "Save" for company 2000', quiet: true, marks: [] }] } };
+    const refused = await signAfterReview({ ...after, 'Import steps': [data, [quiet]] }, { decision_0: 'Approve and sign' });
+    expect(refused.signed).toEqual([]);
+    expect(String(refused.errors[0].error)).toContain('the steps shown for approval are not the steps to sign');
   });
 
   it('an import with an untranslated step puts it into leftOut and both emails show it', async () => {
