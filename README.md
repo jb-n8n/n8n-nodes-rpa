@@ -36,11 +36,11 @@ Guide: [Your first browser bot](docs/guides/browser-bot.md).
 
 ### A Windows desktop bot
 
-1. On Windows Server, run `.\Get-Rpa.ps1 -AllowFrom <n8n address>` in an administrator PowerShell.
-2. Paste the **Connection Line** it gives you into an **RPA Desktop Runner** credential in n8n.
-3. Record the work with the **RPA Recorder**, and allow the app with one button.
-4. Upload the recording on the **Import a bot** form, review the steps and approve them.
-5. Import the workflow the form gives you and run it.
+1. On Windows Server, run `.\Get-Rpa.ps1 -AllowFrom <n8n address>` as administrator. It gives a **Connection Line**.
+2. Set up n8n with one command: the **Import a bot** form, and the Windows machine from the line you paste.
+3. Record the work with the **RPA Recorder**, allow the app with one button, and choose **Open the import form**.
+4. Upload the recording on the form, review the steps and approve them.
+5. Import the workflow the form gives you, add the password, and run it.
 
 Guide: [Your first Windows desktop bot](docs/guides/desktop-bot.md).
 
