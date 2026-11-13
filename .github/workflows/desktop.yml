@@ -1005,7 +1005,7 @@ jobs:
           $shown | ForEach-Object { Write-Host "  | $_" }
           Assert ($shown -contains 'Mode: unattended. The RPA Supervisor signs rpa-ci-unattended in when n8n connects, and out 15 s after the last connection.' -and $shown -contains 'Supervisor: running') 'Show-RpaConnection.ps1 shows the mode and that the supervisor runs'
           Assert (($shown -join "`n") -notmatch '(?i)browser') 'Show-RpaConnection.ps1 says nothing about a browser'
-          Assert (@($shown | Where-Object { $_ -like 'rpa-runner://rpa-ci.example:8765/rpa/v1#*' }).Count -eq 1 -and $shown -contains "The line's address is rpa-ci.example, the one the installer was given with -Address. To use another, run this again with -Address <that name or address>.") 'rpa connection, run again without -Address, carries the name install.json keeps, and says where it comes from'
+          Assert (@($shown | Where-Object { $_ -like 'rpa-runner://rpa-ci.example:8765/rpa/v1#*' }).Count -eq 1 -and $shown -contains "The line's address is rpa-ci.example, the one the installer was given (with -Address or at its question). To use another, run this again with -Address <that name or address>.") 'rpa connection, run again without -Address, carries the name install.json keeps, and says where it comes from'
           Get-Content "$data\supervisor\supervisor.log" -ErrorAction SilentlyContinue | Select-Object -Last 20 | ForEach-Object { Write-Host "  log | $_" }
 
       # The sign-in through the supervisor: every session of the bot user is signed out, then the scenario connects to

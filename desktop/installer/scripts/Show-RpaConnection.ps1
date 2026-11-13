@@ -271,7 +271,7 @@ if (-not $Status -and -not $ShowTokens) {
 if ($route) {
   if (-not $outside) { Write-Output ("The line's address is {0}: the one this machine has towards {1}. If n8n reaches this machine by another name or address, run this again with -Address <that name or address>." -f $route.Address, $route.Towards) }
 }
-elseif ($recorded) { Write-Output ("The line's address is {0}, the one the installer was given with -Address. To use another, run this again with -Address <that name or address>." -f $recorded) }
+elseif ($recorded) { Write-Output ("The line's address is {0}, the one the installer was given (with -Address or at its question). To use another, run this again with -Address <that name or address>." -f $recorded) }
 elseif (-not $Status -and -not $givenAddress -and -not $noLine) { Write-Output ("The line's address is this computer's name, {0}. If n8n cannot find it by that name, run this again with -Address <an address n8n can reach>." -f $lineHost) }
 
 if ($Status -and $install.mode -ne 'unattended') {

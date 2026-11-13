@@ -4126,7 +4126,7 @@ Describe 'Show-RpaConnection.ps1' {
       Get-LineHosts $output | Should -BeExactly @('rpa.corp.example', 'rpa.corp.example')
       $output | Should -Contain ('Runner URL: wss://rpa.corp.example:{0}/rpa/v1' -f $script:RunnerPort)
       ($output -join "`n") | Should -Not -Match 'a private one'
-      $output[-1] | Should -BeExactly "The line's address is rpa.corp.example, the one the installer was given with -Address. To use another, run this again with -Address <that name or address>."
+      $output[-1] | Should -BeExactly "The line's address is rpa.corp.example, the one the installer was given (with -Address or at its question). To use another, run this again with -Address <that name or address>."
       # The command for the lines with tokens finds it again: it needs no -Address.
       ($output -join "`n") | Should -Not -Match 'connection -ShowTokens -Address'
       Get-LineHosts (Invoke-WithRoute @('203.0.113.5') (New-RouteAnswer '10.90.0.10') -Recorded 'fd00::7') | Should -BeExactly @('[fd00::7]', '[fd00::7]')
