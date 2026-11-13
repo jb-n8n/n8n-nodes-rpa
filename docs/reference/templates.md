@@ -53,7 +53,9 @@ first, before anything reads or writes them.
 - The last page says `Approved and signed: <name> v<version> is now the version that runs under that name.`, or
   `Rejected: <name> v<version>. Nothing was signed.` An import is version 1. A file uploaded under the name of an
   approved bot is its next version (**Running versions** and **What it replaces** read what runs under that name, and
-  the step lists named after it, `<name>-1`, `<name>-2`): the review page says `version 5, replacing version 4`, and
+  the step lists named after it, `<name>-1`, `<name>-2`): the review page says `version 5, replacing version 4`, its
+  first line says which steps differ from version 4 (**Compared with the running version**, the change path's
+  comparison, with the steps the import built), and
   the last page `Approved and signed: <name> version 5 is now the version that runs, replacing version 4.` or
   `Rejected: <name> v5. Nothing was signed. Version 4 keeps running.` After a change or a re-sign it says
   `Signed again: <name> version N, unchanged.`, `Changed: <name> version N is now the version that runs, replacing
