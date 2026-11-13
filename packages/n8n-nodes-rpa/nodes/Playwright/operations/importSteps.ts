@@ -442,8 +442,10 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
 
 /** A browser Repaired steps item with its steps as the review page lists them (shown only, never signed or reviewed). */
 function withReviewSteps(engine: Pick<Engine, 'shownUrl'>, json: IDataObject): IDataObject {
-  const steps = (json.steps as { steps?: unknown } | null)?.steps;
-  return { ...json, reviewSteps: reviewSteps(Array.isArray(steps) ? steps : [], { desktop: false, shownUrl: engine.shownUrl }) as unknown as IDataObject[] };
+  const doc = json.steps as { steps?: unknown; startUrl?: unknown } | null;
+  const steps = doc?.steps;
+  const startUrl = typeof doc?.startUrl === 'string' ? doc.startUrl : undefined;
+  return { ...json, reviewSteps: reviewSteps(Array.isArray(steps) ? steps : [], { desktop: false, shownUrl: engine.shownUrl, startUrl }) as unknown as IDataObject[] };
 }
 
 /**

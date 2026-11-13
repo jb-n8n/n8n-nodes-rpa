@@ -1311,7 +1311,8 @@ describe('Import Steps: a step document', () => {
       const { engine, repaired } = await notReplayed(doc);
       const item = repaired[0].json;
       const shown = item.reviewSteps as { text: string; marks: string[]; each?: { text: string; marks: string[] }[] }[];
-      expect(shown[2].each).toEqual([{ text: 'Click Row', describedAs: 'Open the row', marks: [] }]);
+      // A click may open: the description is shown quietly, as the author's words.
+      expect(shown[2].each).toEqual([{ text: 'Click Row', describedAs: 'Open the row', quiet: true, marks: [] }]);
       expect(await sign(engine, item)).toMatchObject({ status: 'active' });
       const forged = shown.map((r, i) => (i === 2 ? { ...r, each: [{ text: 'Open the row', marks: [] }] } : r));
       const out = await sign(engine, { ...item, reviewSteps: forged as unknown as IDataObject[] });
@@ -1334,12 +1335,12 @@ describe('Import Steps: a step document', () => {
       ] };
       const { engine, repaired } = await notReplayed(doc);
       const item = repaired[0].json;
-      const shown = item.reviewSteps as { text: string; describedAs?: string; marks: string[] }[];
+      const shown = item.reviewSteps as { text: string; describedAs?: string; quiet?: true; marks: string[] }[];
       expect(shown.slice(1, 4)).toEqual([
         { text: 'Type into Amount: "1"', describedAs: `Open the list${MARK}Click Pay now) <b>`, marks: [] },
         // A name with a bracket is quoted (shownName), so it reads as one name; the description stays apart.
-        { text: `Click "Save${MARK}Delete all) <i>"`, describedAs: 'Click it', marks: [] },
-        { text: `Type into Note: "x${MARK}y) <b>z</b>"`, describedAs: 'Type it', marks: [] },
+        { text: `Click "Save${MARK}Delete all) <i>"`, describedAs: 'Click it', quiet: true, marks: [] },
+        { text: `Type into Note: "x${MARK}y) <b>z</b>"`, describedAs: 'Type it', quiet: true, marks: [] },
       ]);
       expect(await sign(engine, item)).toMatchObject({ status: 'active' });
       const refused = async (reviewSteps: object[]) => (await sign(engine, { ...item, reviewSteps: reviewSteps as unknown as IDataObject[] })).error;
@@ -1348,6 +1349,11 @@ describe('Import Steps: a step document', () => {
       expect(await refused(shown.map((r, i) => (i === 1 ? { ...r, describedAs: 'Type the amount' } : r)))).toBe(NOT_THE_STEPS);
       expect(await refused(shown.map((r, i) => (i === 1 ? { text: r.text, marks: r.marks } : r)))).toBe(NOT_THE_STEPS);
       expect(await refused(shown.map((r, i) => (i === 0 ? { ...r, describedAs: 'Sign in as the admin' } : r)))).toBe(NOT_THE_STEPS);
+      // The warning ("Open the list" on a step that types) made quiet is refused; a quiet one shown as a warning, as an
+      // item made before the mark shows it, says more and is signed.
+      expect(await refused(shown.map((r, i) => (i === 1 ? { ...r, quiet: true } : r)))).toBe(NOT_THE_STEPS);
+      expect(await refused(shown.map((r, i) => (i === 2 ? { ...r, quiet: 'yes' } : r)))).toBe(NOT_THE_STEPS);
+      expect((await sign(engine, { ...item, reviewSteps: shown.map(({ quiet: _q, ...r }) => r) as unknown as IDataObject[] })).status).toBe('active');
       // An item made before the description had its own field carries it inside the sentence: refused, never signed.
       const older = shown.map(({ describedAs, ...r }) => (describedAs === undefined ? r : { ...r, text: `${r.text} (described as: ${describedAs})` }));
       expect(await refused(older)).toBe(NOT_THE_STEPS);

@@ -141,6 +141,9 @@ function sameReviewStep(shown: unknown, built: ReviewStep): boolean {
   // item made before the description had its own field carries it inside `text`, which then differs: it is refused,
   // so nothing is signed that a person saw worded another way.
   if (shown.describedAs !== built.describedAs) return false;
+  // Shown quietly only when the rebuilt step is quiet too. An item made before the mark existed has none: its page and
+  // emails showed every description as a warning, which says more, never less, than the rebuilt one.
+  if (shown.quiet !== undefined && !(shown.quiet === true && built.quiet === true)) return false;
   const marks = shown.marks.map((m) => (typeof m === 'string' ? m.replace(STARTS_AS, '$1') : m));
   if (marks.length !== built.marks.length || marks.some((m, i) => m !== built.marks[i])) return false;
   // Only a step the import may add (a wait for a window, a returned file) may be shown as added.
@@ -167,7 +170,7 @@ function reviewStepsProblem(engine: Engine, p: ParsedProposal, json: IDataObject
     const secretVariables = Array.isArray(json.secretVariables) ? json.secretVariables.filter((v): v is string => typeof v === 'string') : [];
     built = engine.isDesktopDocument(p.steps)
       ? reviewSteps(steps, { desktop: true, secretVariables, added: importAddedSteps(steps as never) })
-      : reviewSteps(steps, { desktop: false, shownUrl: engine.shownUrl });
+      : reviewSteps(steps, { desktop: false, shownUrl: engine.shownUrl, startUrl: isObject(p.steps) && typeof p.steps.startUrl === 'string' ? p.steps.startUrl : undefined });
   } catch {
     return REVIEW_STEPS_CHANGED;
   }

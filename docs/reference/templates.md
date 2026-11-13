@@ -117,7 +117,7 @@ with no model call.
 Called by the data feed, or by template 5 with `approval` set to `by email`. It writes a `pending` row that expires
 after `approvalTimeoutHours` (72), then:
 - **Browser steps**: a review email with the safety flags first, in red, then the steps the import left out, the steps
-  as the review page words them (a description that says something else in red), the evidence, the change list and the
+  as the review page words them (a description that says something else in grey, in red when it names another action or site), the evidence, the change list and the
   before and after screenshots. Then an approval email with the same steps (⚠ before such a description), **Approve**
   and **Reject**. The steps show when the item carries them (an import's step lists do): Sign Steps builds them again
   and refuses to sign when they differ.

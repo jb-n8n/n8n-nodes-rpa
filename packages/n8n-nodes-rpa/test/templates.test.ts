@@ -856,7 +856,7 @@ describe('template 3 emails lead with what browser steps do (reviewSteps), as th
   const steps = [
     { intent: 'Type the first day of September 2026 into From', fill: { field: { label: 'From', exact: true }, value: '2026-09-01' } },
     { intent: 'Click Export <b>.', click: { role: 'button', name: 'Export <b>' } },
-    { intent: 'Read every page', paginate: { next: { text: 'Next' }, until: 'absent', max: 3, each: [{ intent: 'Close the banner', click: { role: 'button', name: 'Delete' } }] } },
+    { intent: 'Read every page', paginate: { next: { text: 'Next' }, until: 'absent', max: 3, each: [{ intent: 'Read the total', click: { role: 'button', name: 'Delete' } }] } },
   ];
   const reviewed = reviewSteps(steps, { desktop: false, shownUrl: (u: string) => u });
   const item = {
@@ -865,12 +865,12 @@ describe('template 3 emails lead with what browser steps do (reviewSteps), as th
   };
   const ask = (json: object) => render(message, { $: (name: string) => ({ item: { json: name === 'Settings' ? { approvalTimeoutHours: 72 } : json } }) });
 
-  it('the review email: the sentences built from the steps, a misleading description in red, then the change list in the details', () => {
+  it('the review email: the sentences built from the steps, a description that names another action in red, a harmless one in grey, then the change list in the details', () => {
     const out = render(html, { $json: item });
-    expect(out).toContain('<ol><li>Type into From: &quot;2026-09-01&quot; <b style="color:#b00020">(described differently as: Type the first day of September 2026 into From)</b></li>'
+    expect(out).toContain('<ol><li>Type into From: &quot;2026-09-01&quot; <i style="color:#7e8186">(the author calls it: Type the first day of September 2026 into From)</i></li>'
       + '<li>Click Export &lt;b&gt;</li>'
-      + '<li>Page through with Next, at most 3 pages, 1 step on each <b style="color:#b00020">(described differently as: Read every page)</b>'
-      + '<ul><li>On each page: Click Delete <b style="color:#b00020">(described differently as: Close the banner)</b></li></ul></li></ol>');
+      + '<li>Page through with Next, at most 3 pages, 1 step on each <i style="color:#7e8186">(the author calls it: Read every page)</i>'
+      + '<ul><li>On each page: Click Delete <b style="color:#b00020">(described differently as: Read the total)</b></li></ul></li></ol>');
     // What the steps do comes before the evidence and the change list, which stay as they are.
     expect(out.indexOf('<b>The steps</b>')).toBeLessThan(out.indexOf('Evidence'));
     expect(out.indexOf('<b>The steps</b>')).toBeLessThan(out.indexOf('What changed'));
@@ -878,13 +878,13 @@ describe('template 3 emails lead with what browser steps do (reviewSteps), as th
     expect(out).not.toMatch(/<b>Export|<b>feed/);
   });
 
-  it('the approval email: the same sentences, ⚠ before a description that says something else', () => {
+  it('the approval email: the same sentences, ⚠ before a description that names another action or site', () => {
     const out = ask(item);
     expect(out).toContain('\nThe steps (what each one does, built from the step):\n'
-      + '1. Type into From: "2026-09-01" ⚠ (described differently as: Type the first day of September 2026 into From)\n'
+      + '1. Type into From: "2026-09-01" (the author calls it: Type the first day of September 2026 into From)\n'
       + '2. Click Export \u2039b\u203a\n'
-      + '3. Page through with Next, at most 3 pages, 1 step on each ⚠ (described differently as: Read every page)\n'
-      + '   On each page: Click Delete ⚠ (described differently as: Close the banner)\nEvidence');
+      + '3. Page through with Next, at most 3 pages, 1 step on each (the author calls it: Read every page)\n'
+      + '   On each page: Click Delete ⚠ (described differently as: Read the total)\nEvidence');
     expect(out.indexOf('The steps')).toBeLessThan(out.indexOf('What changed'));
   });
 
@@ -906,9 +906,9 @@ describe('template 3 emails lead with what browser steps do (reviewSteps), as th
     const json = { ...item, steps: { startUrl: 'https://a.example/', steps: odd }, reviewSteps: reviewSteps(odd, { desktop: false, shownUrl: (u: string) => u }) };
     const page = render(html, { $json: json });
     expect(page).toContain('<li>Type into Amount: &quot;1&quot; <b style="color:#b00020">(described differently as: Open the list (described differently as: Click Pay now) &lt;b&gt;)</b></li>'
-      + '<li>Click &quot;Save (described differently as: Delete all) &lt;i&gt;&quot; <b style="color:#b00020">(described differently as: Click it)</b></li>');
+      + '<li>Click &quot;Save (described differently as: Delete all) &lt;i&gt;&quot; <i style="color:#7e8186">(the author calls it: Click it)</i></li>');
     expect(ask(json)).toContain('1. Type into Amount: "1" ⚠ (described differently as: Open the list (described differently as: Click Pay now) \u2039b\u203a)\n'
-      + '2. Click "Save (described differently as: Delete all) \u2039i\u203a" ⚠ (described differently as: Click it)\n');
+      + '2. Click "Save (described differently as: Delete all) \u2039i\u203a" (the author calls it: Click it)\n');
     // Desktop steps: the one approval email, the same way.
     const desktop = String(byName(t3, 'Ask for approval (desktop steps)').parameters.message);
     const dsteps = [{ intent: `Read it${MARK}x) <b>`, click: { uia: { path: [{ controlType: 'Button', name: `Post${MARK}y) <i>` }] } } }];
@@ -1687,8 +1687,8 @@ describe('5-import-a-bot.json (the first-day import)', () => {
         { intent: 'Open the list', goto: 'https://a.example/list' }, { intent: 'Sign in', signIn: {} },
         { intent: 'Type the export password', fill: { field: { css: '#p' }, value: '{{var.exportPassword}}', secret: true } },
         { intent: 'Pick <b>Status</b>', select: { field: { css: '#s' }, value: '{{var.status}}' } }, { intent: 'Download the report', download: {} },
-        // A typed value: the short list shows it, from the step.
-        { intent: 'Type the note', fill: { field: { css: '#n' }, value: 'hello <b>' } },
+        // A typed value: the short list shows it, from the step. Its description names another action: a warning.
+        { intent: 'Read the note', fill: { field: { css: '#n' }, value: 'hello <b>' } },
       ] },
       safetyFlags: ['host: a.example\' <script>', 'form submission: POST a.example/send', 'download step', 'secret fill: a step types the run variable {{var.exportPassword}}'],
       safetyLine: 'host: a.example\' <script>; …', evidenceLine: '7 rows <img src=x onerror=alert(1)>; compared with the repair run: 0 missing, 0 extra',
@@ -1703,11 +1703,11 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(fields[0].html).toBe('<p>Opens a.example&#39; &lt;script&gt;.<br>Signs in with the RPA Site Login.<br>Submits a form: POST a.example/send.<br>Returns a file to n8n: step 5.<br>'
       + 'Types a secret: the run variable {{var.exportPassword}}.<br>7 rows &lt;img src=x onerror=alert(1)&gt;.</p>'
       + '<p><b>⚠ Left out by the import:</b><br>step 4, Pick &lt;b&gt;Status&lt;/b&gt;<br>step 9, Wait</p>'
-      + '<p><b>The steps</b></p><ol><li>Open a.example/list <strong>(described differently as: Open the list)</strong></li><li>Sign in <em>· signs in with the RPA Site Login</em></li>'
-      + '<li>Type into the element matching &quot;#p&quot;: a secret <strong>(described differently as: Type the export password)</strong> <em>· secret variable exportPassword</em></li>'
-      + '<li>Choose an option set by a variable in the element matching &quot;#s&quot; <strong>(described differently as: Pick &lt;b&gt;Status&lt;/b&gt;)</strong> <em>· variable status</em></li>'
-      + '<li>Download with an element <strong>(described differently as: Download the report)</strong> <em>· returns a file</em></li>'
-      + '<li>Type into the element matching &quot;#n&quot;: &quot;hello &lt;b&gt;&quot; <strong>(described differently as: Type the note)</strong></li></ol>' + POINTER);
+      + '<p><b>The steps</b></p><ol><li>Open a.example/list <em>(the author calls it: Open the list)</em></li><li>Sign in <em>· signs in with the RPA Site Login</em></li>'
+      + '<li>Type into the element matching &quot;#p&quot;: a secret <em>(the author calls it: Type the export password)</em> <em>· secret variable exportPassword</em></li>'
+      + '<li>Choose an option set by a variable in the element matching &quot;#s&quot; <em>(the author calls it: Pick &lt;b&gt;Status&lt;/b&gt;)</em> <em>· variable status</em></li>'
+      + '<li>Download with an element <em>(the author calls it: Download the report)</em> <em>· returns a file</em></li>'
+      + '<li>Type into the element matching &quot;#n&quot;: &quot;hello &lt;b&gt;&quot; <strong>(described differently as: Read the note)</strong></li></ol>' + POINTER);
     // Every flag the opening lines do not already say in their own words is worded as a sentence, never shown raw.
     const opening = (safetyFlags: string[]) => String(reviewFields({
       $: nodesRan({ ...ran, 'Import steps': [ran['Import steps'][0], [{ json: { ...withLines, safetyFlags, leftOutList: undefined, evidenceLine: 'Proven in a fresh browser: 7 rows (the page states no total)' } }]] }),
@@ -1741,7 +1741,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(notRun[0].html).not.toContain('Screenshots');
     // A variable written with spaces gets its mark too (the page's own regex used to miss it).
     expect(reviewSteps([{ intent: 'Type the note', fill: { field: { label: 'Note' }, value: '{{ var.note }}' } }], { desktop: false, shownUrl }))
-      .toEqual([{ text: 'Type into Note: a variable', describedAs: 'Type the note', marks: ['variable note'] }]);
+      .toEqual([{ text: 'Type into Note: a variable', describedAs: 'Type the note', quiet: true, marks: ['variable note'] }]);
     expect(reviewSteps([{ intent: 'Pick', select: { field: { uia: { path: [{ controlType: 'ComboBox', name: 'Plant' }] } }, option: '{{ var.plant }}' } }], { desktop: true }))
       .toEqual([{ text: 'Choose an item in Plant', marks: ['variable plant'] }]);
     // A desktop read names its control by the name a person sees, never by its automation id, and says the output once.
@@ -1780,6 +1780,50 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       'Click Post (described differently as: Read the total)',
       'Double-click Post (described differently as: Open the row)',
       'Click a control without a name (described differently as: Look at the list)',
+    ]);
+  });
+
+  it('a description is the author\'s words, shown quietly; a warning only when it names another kind of action or another site', () => {
+    const one = (step: IDataObject, startUrl?: string) => reviewSteps([step], { desktop: false, shownUrl, ...(startUrl ? { startUrl } : {}) })[0];
+    // The samples of the films: a harmless rewording is quiet.
+    expect(one({ intent: 'Type the PIN', fill: { field: { label: 'PIN' }, value: '{{var.pin}}', secret: true } }))
+      .toEqual({ text: 'Type into PIN: a secret', describedAs: 'Type the PIN', quiet: true, marks: ['secret variable pin'] });
+    expect(one({ intent: 'Open the products page', goto: 'http://sandbox:8080/public/table' }))
+      .toEqual({ text: 'Open http://sandbox:8080/public/table', describedAs: 'Open the products page', quiet: true, marks: [] });
+    // Another kind of action: a warning.
+    expect(one({ intent: 'Read the total', click: { role: 'button', name: 'Delete all' } })).toEqual({ text: 'Click Delete all', describedAs: 'Read the total', marks: [] });
+    // Another site: a warning, whatever the verb; the step's own host, or the start site's, is quiet.
+    expect(one({ intent: 'Open https://bank.example', goto: 'https://evil.example/login' })).toEqual({ text: 'Open evil.example/login', describedAs: 'Open https://bank.example', marks: [] });
+    expect(one({ intent: 'Open bank.example', goto: 'https://evil.example/login' })).not.toHaveProperty('quiet');
+    expect(one({ intent: 'Open https://evil.example', goto: 'https://evil.example/login' })).toMatchObject({ quiet: true });
+    expect(one({ intent: 'Open https://shop.example/orders', goto: '/orders' }, 'https://shop.example/')).toMatchObject({ quiet: true });
+    expect(one({ intent: 'Open https://bank.example/orders', goto: '/orders' }, 'https://shop.example/')).not.toHaveProperty('quiet');
+    expect(one({ intent: 'Type user@mail.example', fill: { field: { label: 'Email' }, value: 'user@mail.example' } })).toMatchObject({ quiet: true });
+    expect(one({ intent: 'Type the address of bank.example', fill: { field: { label: 'Email' }, value: 'x' } })).not.toHaveProperty('quiet');
+    // A file name is not a site.
+    expect(one({ intent: 'Download report.csv', download: { trigger: { text: 'Export' } } })).toMatchObject({ quiet: true });
+    // The same words as the sentence: nothing beside it, as before.
+    expect(one({ intent: 'Click Delete all.', click: { role: 'button', name: 'Delete all' } })).toEqual({ text: 'Click Delete all', marks: [] });
+    // A first word the table does not know is quiet; each kind its own words, two-word ones included.
+    expect(one({ intent: 'Remove the banner', click: { text: 'OK' } })).toMatchObject({ quiet: true });
+    for (const [intent, step, quiet] of [
+      ['Navigate to the list', { goto: 'https://a.example/list' }, true], ['Visit the list', { goto: 'https://a.example/list' }, true],
+      ['Click the list', { goto: 'https://a.example/list' }, false], ['Enter 5', { fill: { field: { label: 'N' }, value: '5' } }, true],
+      ['Wait for the total', { fill: { field: { label: 'N' }, value: '5' } }, false], ['Tap Save', { click: { text: 'Save' } }, true],
+      ['Open the order', { click: { text: 'Order 7' } }, true], ['Export the list', { click: { text: 'Export' } }, true],
+      ['Tick Agree', { check: { field: { label: 'Agree' } } }, true], ['Get the rows', { check: { field: { label: 'Agree' } } }, false],
+      ['Pick north', { select: { field: { label: 'Region' }, value: 'north' } }, true], ['Upload the file', { click: { text: 'Send' } }, false],
+      ['Log in as the admin', { signIn: {} }, true], ['Sign in as the admin', { click: { text: 'Delete' } }, false],
+      ['Save the order', { submit: { path: '/save', button: { text: 'Save' } } }, true], ['Read the order', { submit: { path: '/save', button: { text: 'Save' } } }, false],
+    ] as const) {
+      const r = one({ intent, ...step });
+      expect(r.describedAs, intent).toBe(intent);
+      expect(r.quiet === true, intent).toBe(quiet);
+    }
+    // Desktop steps alike.
+    const field = { uia: { path: [{ name: 'Total' }] } };
+    expect(reviewSteps([{ intent: 'Read the total', click: field }, { intent: 'Press the button', click: field }], { desktop: true })).toEqual([
+      { text: 'Click Total', describedAs: 'Read the total', marks: [] }, { text: 'Click Total', describedAs: 'Press the button', quiet: true, marks: [] },
     ]);
   });
 
@@ -1969,18 +2013,19 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       { intent: 'Open the list', goto: 'https://a.example/list' },
       { intent: 'Go through the pages', paginate: { next: { role: 'button', name: 'Next' }, until: 'absent', max: 3, each: [
         { intent: 'Read the rows', extract: { scope: { css: 'table' }, item: { css: 'tr' } } },
-        { intent: 'Close the banner', fill: { field: { label: 'Note' }, value: '<b>{{var.note}}</b>' } },
+        { intent: 'Read the note', fill: { field: { label: 'Note' }, value: '<b>{{var.note}}</b>' } },
         { intent: 'Close the banner', click: { text: 'Delete <all>' } },
       ] } },
       { intent: 'Download with Export', download: { trigger: { text: 'Export' } } },
     ];
     const listed = reviewSteps(steps, { desktop: false, shownUrl });
     expect(listed[1]).toEqual({
-      text: 'Page through with Next, at most 3 pages, 3 steps on each', describedAs: 'Go through the pages', marks: [],
+      text: 'Page through with Next, at most 3 pages, 3 steps on each', describedAs: 'Go through the pages', quiet: true, marks: [],
       each: [
         { text: 'Read the rows', marks: [] },
-        { text: 'Type into Note: a variable', describedAs: 'Close the banner', marks: ['variable note'] },
-        { text: 'Click Delete <all>', describedAs: 'Close the banner', marks: [] },
+        // "Read" names another kind of action than typing: a warning. "Close" is not in the table: the author's words.
+        { text: 'Type into Note: a variable', describedAs: 'Read the note', marks: ['variable note'] },
+        { text: 'Click Delete <all>', describedAs: 'Close the banner', quiet: true, marks: [] },
       ],
     });
     expect(listed.map((r) => r.each === undefined)).toEqual([true, false, true]);
@@ -1988,12 +2033,13 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const item = { name: 'feed', version: 1, steps: { startUrl: 'https://a.example/', steps }, safetyFlags: [], safetyLine: 'none', evidenceLine: '3 rows', changeList: '', reviewSteps: listed };
     const ran = { Settings: [[{ json: settingsJson() }]], 'Import steps': [[{ json: { report: { steps: 3, items: [] }, drafts: [] } }], [{ json: item }]] } as Record<string, INodeExecutionData[][]>;
     const html = String(reviewFields({ $: nodesRan(ran) })[0].html);
-    // A description that says something else is a warning: <strong>, which the page's style shows in red.
-    expect(html).toContain('<ol><li>Open a.example/list <strong>(described differently as: Open the list)</strong></li>'
-      + '<li>Page through with Next, at most 3 pages, 3 steps on each <strong>(described differently as: Go through the pages)</strong><ul>'
+    // A description that names another kind of action is a warning: <strong>, which the page's style shows in red. Any
+    // other description stands beside the sentence quietly (<em>, grey), as the author's words.
+    expect(html).toContain('<ol><li>Open a.example/list <em>(the author calls it: Open the list)</em></li>'
+      + '<li>Page through with Next, at most 3 pages, 3 steps on each <em>(the author calls it: Go through the pages)</em><ul>'
       + '<li>On each page: Read the rows</li>'
-      + '<li>On each page: Type into Note: a variable <strong>(described differently as: Close the banner)</strong> <em>· variable note</em></li>'
-      + '<li>On each page: Click Delete &lt;all&gt; <strong>(described differently as: Close the banner)</strong></li></ul></li>'
+      + '<li>On each page: Type into Note: a variable <strong>(described differently as: Read the note)</strong> <em>· variable note</em></li>'
+      + '<li>On each page: Click Delete &lt;all&gt; <em>(the author calls it: Close the banner)</em></li></ul></li>'
       + '<li>Download with Export <em>· returns a file</em></li></ol>');
     expect(html).toContain('Returns a file to n8n: step 3.');
     expect(String(review.parameters.options && (review.parameters.options as IDataObject).customCss)).toContain('div.html strong { color: #b00020; font-weight: 600; }');
@@ -2016,7 +2062,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // The value changed to a fixed 2000 on the change page, the description left as it was: no variable mark, and the
     // description shows beside the sentence as saying something else.
     const fixed = { ...doc, steps: [choose('2000')] };
-    expect(reviewSteps(fixed.steps, { desktop: true })).toEqual([{ text: 'Choose "2000" in Company code', describedAs: 'Choose {{var.company_code}} in Company code', marks: [] }]);
+    expect(reviewSteps(fixed.steps, { desktop: true })).toEqual([{ text: 'Choose "2000" in Company code', describedAs: 'Choose {{var.company_code}} in Company code', quiet: true, marks: [] }]);
     // A browser step alike.
     expect(reviewSteps([{ intent: 'Type {{var.code}} into Code', fill: { field: { label: 'Code' }, value: '2000' } }], { desktop: false, shownUrl: (u: string) => u })[0].marks).toEqual([]);
     const { ran } = changePath('erp', [{ id: 1, name: 'erp', version: 1, steps: JSON.stringify(doc), status: 'active' }]);
@@ -2024,10 +2070,10 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       throw new Error('desktop steps are never replayed');
     }, ran);
     expect(data[0].json.error).toBeUndefined();
-    expect(repaired[0].json.reviewSteps).toEqual([{ text: 'Choose "2000" in Company code', describedAs: 'Choose {{var.company_code}} in Company code', marks: [] }]);
+    expect(repaired[0].json.reviewSteps).toEqual([{ text: 'Choose "2000" in Company code', describedAs: 'Choose {{var.company_code}} in Company code', quiet: true, marks: [] }]);
     const after = { ...ran, 'Change or sign again': [[{ json: { changedSteps: JSON.stringify(fixed) } }]], [COMPARED]: [[{ json: compared(ran, JSON.stringify(fixed)) }]], 'Import steps': [data, repaired] };
     const page = String(reviewFields({ $: nodesRan(after) })[0].html);
-    expect(page).toContain('<li>Choose &quot;2000&quot; in Company code <strong>(described differently as: Choose {{var.company_code}} in Company code)</strong></li>');
+    expect(page).toContain('<li>Choose &quot;2000&quot; in Company code <em>(the author calls it: Choose {{var.company_code}} in Company code)</em></li>');
     expect(page).not.toContain('variable company_code');
     // Sign steps rebuilds the same sentence and marks, and signs.
     const signed = await signAfterReview(after, { decision_0: 'Approve and sign' });
