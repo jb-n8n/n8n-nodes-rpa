@@ -1181,7 +1181,14 @@ Describe 'Get-RpaInstallPlan' {
       $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ WithBrowser = $false }) -Facts $facts
       $plan.Refusals.Count | Should -Be 0
       $plan.Browser | Should -BeFalse
-      foreach ($step in $script:BrowserSteps + 'remove the browser token and certificate') { $plan.Steps | Should -Not -Contain $step }
+      # Nothing of the browser is there to remove, so the list of steps names none of it (also with -NoBrowser).
+      foreach ($step in $script:BrowserSteps + $script:RemoveSteps) { $plan.Steps | Should -Not -Contain $step }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ NoBrowser = $true; WithBrowser = $false }) -Facts $facts
+      foreach ($step in $script:BrowserSteps + $script:RemoveSteps) { $plan.Steps | Should -Not -Contain $step }
+      # A browser token left over from an earlier install with the browser: what is left of it goes, as before.
+      $files['browser-token'] = New-PathState 'ours'
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ WithBrowser = $false }) -Facts $facts
+      @($plan.Steps | Where-Object { $script:RemoveSteps -contains $_ }) | Should -BeExactly $script:RemoveSteps
     }
 
     It '-NoBrowser on an upgrade of an install with the browser removes its task, firewall rule, token and certificate, and does not ask for its files' {
@@ -1410,6 +1417,45 @@ Describe 'Get-RpaInstallPlan' {
       $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true; UserPassword = New-TestPassword }) -Facts (New-TestFacts @{ UserExists = $true })
       $plan.Refusals.Count | Should -Be 0
       $plan.Steps | Should -Contain "store the bot user's password for the supervisor"
+    }
+
+    # Uninstall-Rpa.ps1 without -RemoveData removes install.json and the stored password, and keeps the bot user and the
+    # data directory (with the supervisor's folder in it). The install after it must not end signed in without a word.
+    It 'after a plain uninstall of an unattended install, stops before any step and names the ways out, also with -Force' {
+      $afterUninstall = New-TestFacts @{
+        UserExists = $true; UserSid = $script:BotSid; EarlierUsers = @(@{ Sid = $script:BotSid; Name = 'rpa-runner' })
+        DataDirState = New-PathState 'ours'; LogDirState = New-PathState 'ours'; PolicyBackupsState = New-PathState 'ours'; PolicyChangesState = New-PathState 'ours'
+        DataFiles = @{ 'policy.json' = New-PathState 'ours'; 'token' = New-PathState 'ours'; 'browser-token' = New-PathState 'missing' }
+        SupervisorDirState = New-PathState 'ours'
+      }
+      $text = 'rpa-runner was the bot user of an install with -Unattended. Uninstall-Rpa.ps1 removed the password stored for it, and the password the installer generated is not known to anyone, so this install cannot sign rpa-runner in unattended. Either set a new password for rpa-runner and run this again with -Unattended -UserPassword <that password> (the runner then cannot read its certificate: remove it and put the new fingerprint into the n8n credential, docs/install/windows.md, section 10); or run Uninstall-Rpa.ps1 -RemoveData, remove rpa-runner and install again, which makes new tokens and Connection Lines. To have a person sign rpa-runner in instead, add -Unattended:$false.'
+      foreach ($change in @(@{ WithBrowser = $false }, @{ WithBrowser = $false; Force = $true }, @{ WithBrowser = $false; Unattended = $true; UnattendedGiven = $true })) {
+        $plan = Get-RpaInstallPlan -Parameters (New-TestParameters $change) -Facts $afterUninstall
+        $plan.Refusals | Should -BeExactly @($text)
+        $plan.Steps.Count | Should -Be 0
+        $plan.Unattended | Should -Be ([bool]$change.Unattended)
+      }
+      # The ways out it names: a new password, or the signed-in mode asked for in so many words.
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ WithBrowser = $false; Unattended = $true; UnattendedGiven = $true; UserPassword = New-TestPassword }) -Facts $afterUninstall
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Unattended | Should -BeTrue
+      $plan.Steps | Should -Contain "store the bot user's password for the supervisor"
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ WithBrowser = $false; UnattendedGiven = $true }) -Facts $afterUninstall
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Unattended | Should -BeFalse
+      # After an install that was signed in (no supervisor folder kept), an install without a mode stays signed in, as before.
+      $signedIn = New-TestFacts @{
+        UserExists = $true; UserSid = $script:BotSid; EarlierUsers = @(@{ Sid = $script:BotSid; Name = 'rpa-runner' })
+        DataDirState = New-PathState 'ours'; LogDirState = New-PathState 'ours'; PolicyBackupsState = New-PathState 'ours'; PolicyChangesState = New-PathState 'ours'
+        DataFiles = @{ 'policy.json' = New-PathState 'ours'; 'token' = New-PathState 'ours'; 'browser-token' = New-PathState 'missing' }
+      }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ WithBrowser = $false; Force = $true }) -Facts $signedIn
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Unattended | Should -BeFalse
+      # The supervisor's folder of another user's install says nothing about this user.
+      $other = $afterUninstall.Clone()
+      $other.EarlierUsers = @(@{ Sid = 'S-1-5-21-1-2-3-1002'; Name = 'rpa-old' })
+      (Get-RpaInstallPlan -Parameters (New-TestParameters @{ WithBrowser = $false }) -Facts $other).Refusals | Should -Not -Contain $text
     }
 
     It 'on an upgrade of an unattended install keeps the stored password unless -UserPassword is given' {
@@ -4126,7 +4172,7 @@ Describe 'Show-RpaConnection.ps1' {
       Get-LineHosts $output | Should -BeExactly @('rpa.corp.example', 'rpa.corp.example')
       $output | Should -Contain ('Runner URL: wss://rpa.corp.example:{0}/rpa/v1' -f $script:RunnerPort)
       ($output -join "`n") | Should -Not -Match 'a private one'
-      $output[-1] | Should -BeExactly "The line's address is rpa.corp.example, the one the installer was given with -Address. To use another, run this again with -Address <that name or address>."
+      $output[-1] | Should -BeExactly "The line's address is rpa.corp.example, the one the installer was given (with -Address or at its question). To use another, run this again with -Address <that name or address>."
       # The command for the lines with tokens finds it again: it needs no -Address.
       ($output -join "`n") | Should -Not -Match 'connection -ShowTokens -Address'
       Get-LineHosts (Invoke-WithRoute @('203.0.113.5') (New-RouteAnswer '10.90.0.10') -Recorded 'fd00::7') | Should -BeExactly @('[fd00::7]', '[fd00::7]')

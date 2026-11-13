@@ -240,9 +240,10 @@ run whether a user is signed in or not), or with input that comes from a file or
   local drive (`the change file must be on a local drive` for a UNC or device path). Two things only a change file
   may have, both shown in the question and never written into the policy: a `name` in a `writeControls` entry (the
   control's name), and `leftOutControls`, entries of `exe`, `automationId` and `name` for controls that were not
-  proposed because their ids, 1 to 11, are those of Windows' standard dialog buttons (OK, Cancel, Yes, No and the
-  like), which every dialog of an app shares. A `leftOutControls` entry with any other id is refused
-  (`the change: leftOutControls lists only the ids 1 to 11 of Windows' standard dialog buttons, not "<id>"`). The
+  proposed because their ids are those of Windows' standard dialog buttons (OK, Cancel, Yes, No and the like), which
+  every dialog of an app shares: 1 to 11 in a classic dialog, `CommandButton_1` to `CommandButton_11` in a task dialog
+  (such as "Confirm Save As"). A `leftOutControls` entry with any other id is refused
+  (`the change: leftOutControls lists only the ids of Windows' standard dialog buttons (1 to 11, CommandButton_1 to CommandButton_11), not "<id>"`). The
   recorder's change file has both: the buttons its recording clicked that the engine's review page ticks as writes
   (`recorder/src/Rpa.Recorder.Core/WriteRules.cs`), and the standard dialog buttons among them.
 - The change file and the application are paths chosen by whoever started the tool, and the tool works with
@@ -306,20 +307,21 @@ into), with the file's path or `the current policy` in place of `the change`.
 
 The first line names the policy file: `Creating a new policy at <path>.` or
 `Changing the policy at <path> (<n> app(s), <m> helper process pattern(s) today).` Then one line for each thing the
-change does. Lines that only tighten the policy come first, lines that widen what may run come after them, and a count
-line is last, directly above the prompt:
+change does. Lines that only tighten the policy come first, lines that widen what may run come after them, then the
+controls a change leaves out (they change nothing), and a count line is last, directly above the prompt:
 
 | Line | Meaning |
 |---|---|
 | `Add write control "<exe>" / "<automationId>"` | A new `writeControls` entry. |
 | `Protect "<name>" ("<automationId>") of "<exe>" as a write control` | A new `writeControls` entry with a `name`. Under the last of them: `A run must then mark a step as a write to press one of these, and to press any key but Tab, arrows, Home, End, PageUp, PageDown or Escape while a window that holds one is open.` |
-| `Not protected: "<name>" ("<automationId>") of "<exe>": 1 to 11 are the ids of Windows' standard dialog buttons, which every dialog of the app shares` | A `leftOutControls` entry the policy does not protect. Nothing is written for it, and a change that has nothing else gets no question. |
+| `Bots of "<exe>" approved earlier stop where they press one of these buttons, or a key other than Tab, arrows, Home, End, PageUp, PageDown or Escape while a window that holds one is open, unless that step was ticked as a write. Sign such a bot again on the import form with that step ticked.` | Under the write controls a change adds for an app the policy already allowed: bots of that app may exist, approved without such a step marked as a write. |
 | `Add gated key "<chord>"` | A new `gatedKeys` entry. |
 | `Allow app "<exe>" at "<path>"` | A new `allowedApps` entry. ` (SHA-256 pinned <64 hex digits>)` follows when it sets `sha256`. |
 | `Update app "<exe>" at "<path>" (<what changes>)` | The existing entry for this exe and path changes. In the parentheses, joined by `; `: `SHA-256 pinned <hash>` (it had no pin), `SHA-256 pin changed from <hash> to <hash>`, `allowed arguments added`, `user-writable path allowed`. |
 | `  with arguments: "<arg>" "<arg>" ...` | Under an `Allow app` or `Update app` line, one line for each `allowedArgs` list it adds; `  with arguments: (none)` for an empty list. |
 | `Add helper process "<exe>" at "<pathPattern>"` | A new `helperProcesses` entry. |
 | `Turn on clipboard read` | `clipboardRead` becomes `true`. |
+| `Not protected: "<name>" ("<automationId>") of "<exe>": 1 to 11 are the ids of Windows' standard dialog buttons, which every dialog of the app shares` | A `leftOutControls` entry the policy does not protect. Nothing is written for it, and a change that has nothing else gets no question. For a task dialog's button the reason reads `: CommandButton_1 to CommandButton_11 are the ids of the standard buttons of Windows' task dialogs, which every task dialog of the app shares`. |
 | `This change: <a> app(s) allowed or updated, <h> helper process pattern(s), <w> write control(s), <k> gated key(s).` | The count of the lines above (`, clipboard read turned on` before the full stop when it is). Compare it with what you read: if lines scrolled out of view, the counts still show them. |
 
 The tool breaks a long line itself, into rows of at most 76 characters, and starts every row after the first with

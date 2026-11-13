@@ -276,7 +276,9 @@ jobs:
 
       # The recorder records the reference flow that a stand-in for a person performs with synthetic input (the same
       # ERP Demo build, then with --ui v2), and the scenario checks the recording against the engine's golden file. A third
-      # pass keeps the name the Save dialog offers, and checks that the recording still saves it into the export folder.
+      # pass keeps the name the Save dialog offers, and checks that the recording still saves it into the export folder. A
+      # fourth clicks Post and saves over a file that is there: Yes to "Confirm Save As" must be no step of the recording
+      # (a run saves into a new folder, where Windows does not ask), and the recorder says so.
       # continue-on-error: low-level hooks and synthetic input together have not been seen on a hosted runner yet, and a
       # failure here must not keep the package from being uploaded. Its result shows on the step; the check is made on
       # a real Windows Server in any case.
@@ -304,6 +306,14 @@ jobs:
           $change = "$env:OUT\recorder-scenario\v1-post\saved\ERP Demo line items.policy-change.json"
           New-Item -ItemType Directory -Force "$env:OUT\logs" | Out-Null
           Assert (Test-Path -LiteralPath $change) "the recorder scenario's Post pass saved its policy change file"
+          # The Post pass saved over a file that was there and answered Yes to "Confirm Save As". A run saves into a new
+          # folder, where Windows does not ask: the answer is no step, and the recorder said so once.
+          $events = @((Get-Content -Raw -LiteralPath "$env:OUT\recorder-scenario\v1-post\saved\ERP Demo line items.rpa-recording.json" | ConvertFrom-Json).events)
+          $notices = @(Get-Content -LiteralPath "$env:OUT\recorder-scenario\v1-post\recorder-stderr.txt" | Where-Object { $_ -like 'notice OverwriteLeftOut *' })
+          $last = $events[-1]
+          Assert ($notices.Count -eq 1) 'the recorder said once that Yes to replacing the file is not a step'
+          Assert (-not @($events | Where-Object { $_.window.title -eq 'Confirm Save As' -or $_.target.window.title -eq 'Confirm Save As' -or $_.label -eq 'Yes' })) 'the recording has no step of Confirm Save As'
+          Assert ($last.kind -eq 'click' -and $last.target.path[-1].automationId -eq '1' -and $events[-2].exportFile -eq 'line-items.csv') 'the recording ends with the Save into the run''s export folder'
           # allowUserWritable: the workspace belongs to this job's (admin) user, as in the protocol scenario.
           @{ allowedApps = @(@{ exe = 'ErpDemo.exe'; path = $v1; allowUserWritable = $true }); maxFileBytes = 20971520 } |
             ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 $policy
@@ -341,6 +351,14 @@ jobs:
           Assert ($code -eq 0 -and $said -contains 'Policy updated. The runner restarts within 10 seconds and uses the new policy.') "RpaPolicy.exe apply updates the policy (exit code $code)"
           Assert ($said -contains 'Protect "Post" ("btnPost") of "ErpDemo.exe" as a write control') 'its question lists Post (btnPost) to protect'
           Assert (@($said | Where-Object { $_ -like 'Not protected: "Save" ("1") of "ErpDemo.exe": 1 to 11 *' }).Count -eq 1) 'its question names the Save dialog''s button 1 as left out, and why'
+          # The policy allowed the app already, so bots of it may exist: the question says where they stop. What is
+          # protected comes first, what is left out last.
+          $rowOf = { param($like) for ($i = 0; $i -lt $said.Count; $i++) { if ($said[$i] -like $like) { return $i } }; -1 }
+          $protectRow = & $rowOf 'Protect "Post" ("btnPost") of "ErpDemo.exe" as a write control'
+          $botsRow = & $rowOf 'Bots of "ErpDemo.exe" approved earlier stop where they press one of these*'
+          $leftRow = & $rowOf 'Not protected: "Save" ("1") of "ErpDemo.exe": *'
+          Assert ($botsRow -gt $protectRow -and ((($said[$botsRow..($leftRow - 1)] | ForEach-Object { $_.Trim() }) -join ' ') -like '*Sign such a bot again on the import form with that step ticked.*')) 'its question says that bots of ErpDemo.exe approved earlier stop at Post, and how to sign them again'
+          Assert ($leftRow -gt $botsRow) 'the left-out Save comes after what is protected'
           $new = Get-Content -Raw -LiteralPath $policy | ConvertFrom-Json
           Assert ((@($new.writeControls | ForEach-Object { '{0}/{1}' -f $_.exe, $_.automationId }) -join ',') -eq 'ErpDemo.exe/btnPost') 'policy.json protects btnPost of ErpDemo.exe and no other control'
           Assert (@($new.gatedKeys).Count -eq 0 -and @($new.allowedApps).Count -eq 1) 'policy.json has no gated key and still the one app'
@@ -987,7 +1005,7 @@ jobs:
           $shown | ForEach-Object { Write-Host "  | $_" }
           Assert ($shown -contains 'Mode: unattended. The RPA Supervisor signs rpa-ci-unattended in when n8n connects, and out 15 s after the last connection.' -and $shown -contains 'Supervisor: running') 'Show-RpaConnection.ps1 shows the mode and that the supervisor runs'
           Assert (($shown -join "`n") -notmatch '(?i)browser') 'Show-RpaConnection.ps1 says nothing about a browser'
-          Assert (@($shown | Where-Object { $_ -like 'rpa-runner://rpa-ci.example:8765/rpa/v1#*' }).Count -eq 1 -and $shown -contains "The line's address is rpa-ci.example, the one the installer was given with -Address. To use another, run this again with -Address <that name or address>.") 'rpa connection, run again without -Address, carries the name install.json keeps, and says where it comes from'
+          Assert (@($shown | Where-Object { $_ -like 'rpa-runner://rpa-ci.example:8765/rpa/v1#*' }).Count -eq 1 -and $shown -contains "The line's address is rpa-ci.example, the one the installer was given (with -Address or at its question). To use another, run this again with -Address <that name or address>.") 'rpa connection, run again without -Address, carries the name install.json keeps, and says where it comes from'
           Get-Content "$data\supervisor\supervisor.log" -ErrorAction SilentlyContinue | Select-Object -Last 20 | ForEach-Object { Write-Host "  log | $_" }
 
       # The sign-in through the supervisor: every session of the bot user is signed out, then the scenario connects to
@@ -1036,7 +1054,8 @@ jobs:
           Assert ((Get-BotSessions).Count -eq 0) 'the supervisor signed rpa-ci-unattended out after the idle time'
           Assert ([bool](Get-Content "$data\supervisor\supervisor.log" | Select-String 'No connection for 15 s; signing rpa-ci-unattended out\.')) 'the log says why it signed out'
 
-      # The uninstall puts back what -Unattended changed: the service, the group membership, Remote Desktop as found.
+      # The uninstall puts back what -Unattended changed: the service, the group membership, Remote Desktop as found. Then
+      # an install without a mode for the same bot user is refused (the password stored for it is gone).
       - name: Uninstall the install with -Unattended
         timeout-minutes: 10
         shell: powershell
@@ -1056,6 +1075,16 @@ jobs:
           $deny = (Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections).fDenyTSConnections
           Assert ($deny -eq $before.deny) "Remote Desktop is as it was found (fDenyTSConnections $deny)"
           Assert (@(Get-NetFirewallRule -Name 'RPA-*' -ErrorAction SilentlyContinue).Count -eq 0) 'the firewall rule is gone'
+
+          # The uninstall kept the bot user and the data directory, and removed the stored password nobody knows. An
+          # install without a mode then stops before any step and names the ways out, also with -Force: it does not end
+          # signed in without a word.
+          $global:LASTEXITCODE = 0
+          $said = @(& 'C:\rpa-ci\package\rpa-windows-x64\Install-Rpa.ps1' -User rpa-ci-unattended -AllowFrom 127.0.0.1 -Force 6>&1 | ForEach-Object { "$_" })
+          $code = $LASTEXITCODE
+          $said | ForEach-Object { Write-Host "  | $_" }
+          Assert ($code -eq 1 -and @($said | Where-Object { $_ -like 'rpa-ci-unattended was the bot user of an install with -Unattended. *Uninstall-Rpa.ps1 -RemoveData*add -Unattended:$false.' }).Count -eq 1) "Install-Rpa.ps1 without a mode after that uninstall refuses and names the ways out (exit code $code)"
+          Assert (-not (Test-Path -LiteralPath "$install\install.json") -and @(Get-ScheduledTask -TaskPath '\RPA\' -ErrorAction SilentlyContinue).Count -eq 0) 'and it changed nothing: no install.json, no task'
 
       - name: Collect the installed programs' logs
         if: always()

@@ -66,7 +66,9 @@
 #                  time without -Unattended; Uninstall-Rpa.ps1, and an install with -Unattended:$false, put these
 #                  back. Given none of -Unattended, -AutoSignIn and -UserPassword, a first install for a new bot user
 #                  on Windows Server is an unattended install, and its list says so first; on Windows 10 and 11 it is
-#                  refused.
+#                  refused. After Uninstall-Rpa.ps1 without -RemoveData, which keeps the bot user and the data but
+#                  removes the stored password, an install for that user given no mode, or -Unattended without
+#                  -UserPassword, is refused and says the ways out (a new password, -RemoveData, or -Unattended:$false).
 #   -Force         Do not ask (about -AutoSignIn, -Unattended, the browser added or removed, or another -User than the
 #                  one of the install), and upgrade even while the runner is running (a run in progress fails).
 #

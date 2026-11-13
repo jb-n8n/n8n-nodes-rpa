@@ -13,9 +13,12 @@ namespace Rpa.Recorder.Scenario;
 /// Pass 1 (v1) must equal the golden recording apart from timestamps; pass 2 (<c>--ui v2</c>) must be a valid recording
 /// with the v2 controls; in pass 3 (v1 again) the person keeps the name the Save dialog offers, and the recording must
 /// save that name into the run's export folder all the same; in pass 4 (v1 again) the person also clicks Post, and the
-/// policy change file must propose to protect Post and name the Save dialog's button as left out. In no pass may the
-/// demo password occur in a file the recorder wrote or in what it printed. The change file of pass 4 stays in
-/// <c>&lt;out&gt;\v1-post\saved</c>, where the workflow's next step applies it with the policy tool.
+/// policy change file must propose to protect Post and name the Save dialog's button as left out; the person also saves
+/// over a file that is there, answers Yes to Windows' question whether to replace it, and that answer must be no step
+/// (a run saves into a new folder, where the question never comes), said by the recorder's notice. In no pass may the
+/// demo password occur in a file the recorder wrote or in what it printed. The change file and the recording of pass 4
+/// stay in <c>&lt;out&gt;\v1-post\saved</c>, and what the recorder printed on standard error in
+/// <c>&lt;out&gt;\v1-post\recorder-stderr.txt</c>, where the workflow's next step reads them.
 /// Exit code 0 when every check passed.
 /// </summary>
 internal static class Program
@@ -51,12 +54,13 @@ internal static class Program
         }
         var offered = Record(recorder, app, [], Path.Combine(output, "v1-offered"), v2: false, seed: 73, keepOfferedName: true);
         if (offered is { } third) CheckOfferedName(third.Recording);
-        var posted = Record(recorder, app, [], Path.Combine(output, "v1-post"), v2: false, seed: 74, post: true);
+        var posted = Record(recorder, app, [], Path.Combine(output, "v1-post"), v2: false, seed: 74, post: true, overwrite: true);
         if (posted is { } fourth)
         {
             var events = fourth.Recording["events"]!.AsArray().Select(e => e!).ToList();
             Check("v1, Post: the click on Post is a step", events.Any(e => Kind(e) == "click" && Id(e) == "btnPost"), () => string.Join("\n", events.Select(Shown)));
             CheckPolicyChange("v1, Post", fourth.PolicyChange, app, [], [("btnPost", "Post")], [("1", "Save")]);
+            CheckOverwrite(events, fourth.Errors);
         }
 
         Console.WriteLine();
@@ -64,9 +68,10 @@ internal static class Program
         return Results.Count > 0 && Results.All(r => r.Ok) ? 0 : 1;
     }
 
-    /// <summary>One pass: the recorder records the flow; null when the pass could not finish.</summary>
-    private static (JsonNode Recording, JsonNode PolicyChange)? Record(string recorder, string app, string[] appArgs, string folder, bool v2, int seed,
-        bool keepOfferedName = false, bool post = false)
+    /// <summary>One pass: the recorder records the flow; null when the pass could not finish. <c>Errors</c> is what the
+    /// recorder printed on standard error (the kind of each notice).</summary>
+    private static (JsonNode Recording, JsonNode PolicyChange, string Errors)? Record(string recorder, string app, string[] appArgs, string folder, bool v2, int seed,
+        bool keepOfferedName = false, bool post = false, bool overwrite = false)
     {
         var pass = v2 ? "v2" : keepOfferedName ? "v1, offered name" : post ? "v1, Post" : "v1";
         if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
@@ -92,7 +97,7 @@ internal static class Program
         try
         {
             using var person = new Person(appProcess, seed);
-            var flowed = Try(() => person.ErpFlow(Password, v2, keepOfferedName ? null : Path.Combine(folder, "export", "line-items.csv"), post), out var failure);
+            var flowed = Try(() => person.ErpFlow(Password, v2, keepOfferedName ? null : Path.Combine(folder, "export", "line-items.csv"), post, overwrite), out var failure);
             Check($"{pass}: the person performs the flow", flowed, () => failure);
             process.StandardInput.Close();
             var ended = process.WaitForExit(60000);
@@ -107,7 +112,11 @@ internal static class Program
             var recording = Path.Combine(saved, $"{Name}.rpa-recording.json");
             var change = Path.Combine(saved, $"{Name}.policy-change.json");
             if (!Check($"{pass}: the recording file and the policy change file are there", File.Exists(recording) && File.Exists(change), () => string.Join(", ", Directory.Exists(saved) ? Directory.GetFiles(saved) : []))) return null;
-            return (JsonNode.Parse(File.ReadAllText(recording))!, JsonNode.Parse(File.ReadAllText(change))!);
+            string printedErrors;
+            lock (errors) printedErrors = errors.ToString();
+            // Kept for the workflow's next step, which checks the notices of the Post pass (kinds and times only).
+            File.WriteAllText(Path.Combine(folder, "recorder-stderr.txt"), printedErrors);
+            return (JsonNode.Parse(File.ReadAllText(recording))!, JsonNode.Parse(File.ReadAllText(change))!, printedErrors);
         }
         finally
         {
@@ -152,6 +161,23 @@ internal static class Program
             && next is not null && Kind(next) == "click" && Id(next) == "1",
             () => "expected: one fill of the name box (1001) with exportFile line-items or line-items.csv and the value {{$exportDir}}\\<that name>, "
                 + "then a click on Save (1); recorded:\n" + string.Join("\n", events.Select(Shown)));
+    }
+
+    /// <summary>
+    /// Pass 4: the person saved over a file that was there and answered Yes to "Confirm Save As". The recording saves into
+    /// the run's export folder and clicks Save (control 1) last, with nothing of the question (no scope of its window, no
+    /// click on Yes), and the recorder said so once.
+    /// </summary>
+    private static void CheckOverwrite(List<JsonNode> events, string errors)
+    {
+        var fill = events.FindLastIndex(e => Kind(e) == "fill" && e["exportFile"]?.GetValue<string>() == "line-items.csv");
+        Check("v1, Post: Yes to replacing the file is no step, and the Save into the run's export folder is the last",
+            fill >= 0 && fill + 2 == events.Count && Kind(events[^1]) == "click" && Id(events[^1]) == "1"
+            && !events.Any(e => Kind(e) == "scope" && e["window"]?["title"]?.GetValue<string>() == "Confirm Save As")
+            && !events.Any(e => Id(e) is "CommandButton_6" or "6" || NameOf(e) == "Yes"),
+            () => "expected: the fill of line-items.csv, then a click on Save (1), last, and no step of Confirm Save As; recorded:\n" + string.Join("\n", events.Select(Shown)));
+        Check("v1, Post: the recorder says once that Yes to replacing the file is not a step",
+            errors.Split('\n').Count(l => l.StartsWith("notice OverwriteLeftOut ", StringComparison.Ordinal)) == 1, () => errors);
     }
 
     /// <summary>An event as a failed check shows it: its kind, its element's id, its label, and a fill's value and file.</summary>

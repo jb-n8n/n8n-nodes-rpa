@@ -32,6 +32,38 @@ public static class FileDialogs
     private static bool IsDefaultButton(WindowFacts window, ElementFacts element) =>
         window.ClassName == "#32770" && element.ControlType == "Button" && element.AutomationId == "1";
 
+    /// <summary>
+    /// Whether <paramref name="o"/> answers Yes to the question Windows asks when a Save dialog of
+    /// <paramref name="saveDialog"/> names a file that is there already ("Confirm Save As", a task dialog): a click,
+    /// Space or Enter on a task dialog's Yes button (IDYES, <c>CommandButton_6</c>) in another <c>#32770</c> window of
+    /// the same program. A message box's Yes (<c>6</c>) is an app's own question, and stays a step.
+    /// </summary>
+    public static bool AnswersReplace(Observation o, WindowFacts saveDialog)
+    {
+        var (window, button) = o switch
+        {
+            MouseDown m => (m.Window, m.Element),
+            Activated a => (a.Window, a.Element),
+            KeyDown { Typing: false, Chord: "Enter" } k => (k.Window, k.Focused),
+            _ => (null, null),
+        };
+        return window is not null && button is not null && IsQuestion(window, saveDialog)
+               && button.ControlType == "Button" && button.AutomationId == "CommandButton_6";
+    }
+
+    /// <summary>Whether <paramref name="window"/> may be the question a Save of <paramref name="saveDialog"/> asks:
+    /// another <c>#32770</c> window of the same program.</summary>
+    public static bool IsQuestion(WindowFacts window, WindowFacts saveDialog) =>
+        window != saveDialog && window.ClassName == "#32770" && string.Equals(window.Exe, saveDialog.Exe, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Whether a run that saved <paramref name="earlier"/> into its export folder holds the file a Save of
+    /// <paramref name="file"/> writes: the same name in any letter case, or the same name without an extension that the
+    /// app adds.</summary>
+    public static bool SameFile(string earlier, string file) =>
+        string.Equals(earlier, file, StringComparison.OrdinalIgnoreCase)
+        || (!Path.HasExtension(earlier) || !Path.HasExtension(file))
+           && string.Equals(Path.GetFileNameWithoutExtension(earlier), Path.GetFileNameWithoutExtension(file), StringComparison.OrdinalIgnoreCase);
+
     /// <summary>A file name without a folder, as the importer takes it (FILE_NAME in recording.ts).</summary>
     public static bool IsFileName(string name) =>
         name.Length is > 0 and <= 255 && name is not "." and not ".." && !name.Any(c => c is '\\' or '/' or ':' or '*' or '?' or '"' or '<' or '>' or '|' || char.IsControl(c));

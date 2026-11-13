@@ -12,9 +12,10 @@ namespace Rpa.Recorder.Core;
 /// <c>cleanLabel</c>) or in the name or automation id of a condition of its locator. A test holds the words and the
 /// way they are read to the engine's. Keys are never proposed.
 /// <para>
-/// The ids 1 to 11 are those of Windows' standard dialog buttons (OK, Cancel, Yes, No and the like): every dialog and
-/// message box of an app has them, so protecting one would gate them all. Such a control is left out, and the change
-/// file names it (<see cref="IsDialogButtonId"/>, the policy tool's rule).
+/// The ids 1 to 11 are those of Windows' standard dialog buttons (OK, Cancel, Yes, No and the like), and a task dialog
+/// (such as "Confirm Save As") names the same buttons CommandButton_1 to CommandButton_11: every dialog and message box
+/// of an app has them, so protecting one would gate them all. Such a control is left out, and the change file names it
+/// (<see cref="IsDialogButtonId"/>, the policy tool's rule).
 /// </para>
 /// </summary>
 public static partial class WriteRules
@@ -29,7 +30,7 @@ public static partial class WriteRules
     [GeneratedRegex(@"\b(" + Words + @")\b", RegexOptions.ECMAScript)] private static partial Regex WriteWord();
     [GeneratedRegex("([a-z0-9])([A-Z])", RegexOptions.ECMAScript)] private static partial Regex Hump();
     [GeneratedRegex(@"[_.\-]+", RegexOptions.ECMAScript)] private static partial Regex Separators();
-    [GeneratedRegex(@"^(?:[1-9]|1[01])\z", RegexOptions.ECMAScript)] private static partial Regex DialogButton();
+    [GeneratedRegex(@"^(?:CommandButton_)?(?:[1-9]|1[01])\z", RegexOptions.ECMAScript)] private static partial Regex DialogButton();
 
     /// <summary>The engine's <c>words</c>: <c>btnPost</c> -> <c>btn Post</c>, <c>save_as</c> -> <c>save as</c>.</summary>
     public static string SplitWords(string text) => Separators().Replace(Hump().Replace(text, "$1 $2"), " ");
@@ -52,7 +53,8 @@ public static partial class WriteRules
         return HasWriteWord(SplitWords(CleanLabel(step.Label))) || HasWriteWord(locator);
     }
 
-    /// <summary>The engine's <c>IsDialogButtonId</c> twin: one of Windows' standard dialog button ids, 1 to 11.</summary>
+    /// <summary>The policy tool's <c>IsDialogButtonId</c> twin: one of Windows' standard dialog button ids, 1 to 11, or
+    /// CommandButton_1 to CommandButton_11 in a task dialog.</summary>
     public static bool IsDialogButtonId(string automationId) => DialogButton().IsMatch(automationId);
 
     // JavaScript's \s, every code point of it (as StableIds spells it out).

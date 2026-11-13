@@ -1,7 +1,7 @@
 namespace Rpa.Recorder.Core;
 
 /// <summary>The kinds of notice the Windows layer gives (headless mode prints the kind, never the text).</summary>
-public enum NoticeKind { Late, HookLost, Elevated, NotStarted, OtherProgram, NotRead, TooManySteps, CtrlAltDropped, SaveKeepsFolder }
+public enum NoticeKind { Late, HookLost, Elevated, NotStarted, OtherProgram, NotRead, TooManySteps, CtrlAltDropped, SaveKeepsFolder, OverwriteLeftOut }
 
 /// <summary>
 /// What the recorder tells the person, on its bar's notice line (and, in headless mode, as its kind on standard error).
@@ -37,6 +37,11 @@ public static class Notices
     /// cannot type), so no export step was made (<see cref="Session.TakeSaveNotice"/>).</summary>
     public const string SaveKeepsFolder =
         "This Save keeps the app's own folder, so the file does not come back to n8n. To get it back, type a file name in the Save dialog.";
+
+    /// <summary>Yes to Windows' question whether to replace the file, after a Save into the run's export folder, was not
+    /// made a step (<see cref="Session.TakeOverwriteNotice"/>).</summary>
+    public const string OverwriteLeftOut =
+        "Yes to replacing the file is not a step: a run saves into a new folder of its own, where the file is not there yet.";
 
     public const string OtherPrograms ="Input in other programs is not recorded.";
 
