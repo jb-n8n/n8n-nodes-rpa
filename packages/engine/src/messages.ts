@@ -156,6 +156,33 @@ export const countMismatch = (expected: number, stated: string, found: number): 
 export const notReachedNetworkIdle = (seconds: number): string => `the page did not reach network idle within ${seconds} s`;
 export const notLoaded = (seconds: number): string => `the page did not finish loading within ${seconds} s`;
 export const BROWSER_ERROR_PAGE = 'the browser showed an error page instead of the site';
+
+/** What the browser's network errors that a first run meets mean, by Chromium's name for them (net::ERR_…). */
+const NETWORK_SENTENCES: [RegExp, (host: string) => string][] = [
+  [/^ERR_NAME_NOT_RESOLVED$/, (h) => `${h} could not be found: no site answers to that name. Check the address, and that the site is up.`],
+  [/^ERR_CONNECTION_REFUSED$/, (h) => `${h} refused the connection: nothing answers at that address and port. Check the address, and that the site is up.`],
+  [/^ERR_(CONNECTION_)?TIMED_OUT$/, (h) => `${h} did not answer in time. Check the address, or try again later.`],
+  [/^ERR_(CERT_[A-Z_]+|SSL_[A-Z_]+|BAD_SSL_CLIENT_AUTH_CERT)$/, (h) => `The certificate of ${h} was not accepted: it may have expired, be made by the site itself, or name another site. Check the address, or the site's certificate.`],
+];
+/**
+ * A browser error that names a network failure (`page.goto: net::ERR_NAME_NOT_RESOLVED at http://site/x`) as a sentence
+ * that names the site and says what happened, with the browser's own text after it in brackets for support; any other
+ * text unchanged. The bracketed text keeps `net::ERR_`, which classify.ts reads (site_down).
+ */
+export function networkSentence(text: string): string {
+  const m = /net::(ERR_[A-Z_]+)(?: at (\S+))?/.exec(text);
+  if (!m) return text;
+  const say = NETWORK_SENTENCES.find(([re]) => re.test(m[1]))?.[1];
+  if (!say) return text;
+  const url = m[2] !== undefined && URL.canParse(m[2]) ? new URL(m[2]) : undefined;
+  return `${say(url ? url.host : 'The site')} (browser: ${text.trim()})`;
+}
+
+/** The part of a fill's failure that says the field did not take the value: classify.ts reads it (policy_violation). */
+export const VALUE_NOT_TAKEN = ' did not take the value ';
+/** A fill whose value the field's type refuses (Playwright's "Malformed value", for example text in a date field). */
+export const valueNotTaken = (field: string, value: string, raw: string): string =>
+  `the field ${field}${VALUE_NOT_TAKEN}${value}: it does not fit that field, for example text in a date field (browser: ${raw.trim()})`;
 export const tooManyRows = (n: number): string => `limit: more than ${n} rows`;
 
 // Capture verbs and output limits.

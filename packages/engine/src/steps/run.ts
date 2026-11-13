@@ -11,7 +11,7 @@ import { renderVars } from '../secrets/render.js';
 import type { SecretTypingLimit } from '../secrets/secret-targets.js';
 import { PolicyError } from './errors.js';
 import { shownMessage } from './urls.js';
-import { BLOCKED_STOP } from '../messages.js';
+import { BLOCKED_STOP, networkSentence } from '../messages.js';
 import { surfaceOf } from '../surface/browser.js';
 import type { Surface } from '../surface/surface.js';
 
@@ -94,7 +94,7 @@ function coverHint(raw: string): string {
 /** The single choke point for step failure messages: first line, URLs shown without query string, masked, capped. */
 function messageOf(err: unknown, masker: Masker): string {
   const raw = err instanceof Error ? err.message : String(err);
-  return shownMessage(raw.split('\n')[0] + coverHint(raw), masker).slice(0, 500);
+  return shownMessage(networkSentence(raw.split('\n')[0]) + coverHint(raw), masker).slice(0, 500);
 }
 
 /** The log entry's `output` for a step that produced one: read values, or the binary name (never the bytes). */

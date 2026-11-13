@@ -4,6 +4,7 @@ import { openSession, type Session } from '../src/browser/session.js';
 import type { Page } from 'playwright-core';
 import { INPUT_CONTAINS_SECRET, offListSite, PASSWORD_FILL_REFUSED_STEPS, SIGNIN_NEEDS_SITE_LOGIN } from '../src/messages.js';
 import { createMasker } from '../src/secrets/mask.js';
+import { classifyFailure, shownFailure } from '../src/classify/classify.js';
 import { runSteps, type StepContext } from '../src/steps/run.js';
 import type { Step } from '../src/types.js';
 import { baselineScript, LOCAL, policyFor, SECRETS, SIGN_IN_STEPS } from './helpers.js';
@@ -97,6 +98,22 @@ describe('runSteps basics', () => {
       expect(r.failure).toMatchObject({ index: 1, intent: 'Find the password' });
       expect(r.failure.message).not.toContain('demo-password');
       expect(r.failure.message).toContain('[secret]');
+    } finally { await session.close(); }
+  });
+  it('a value the field\'s type refuses (text in a date field) says which field and value, keeps the browser\'s text, and is not drift (IB-10)', async () => {
+    const ctx = await ctxFor();
+    try {
+      await logIn(ctx.page);
+      const r = await runSteps(ctx, [
+        { intent: 'Open the reports', goto: '/acme/reports' },
+        { intent: 'Type into From: "2026-09-01"', fill: { field: { label: 'From' }, value: 'first of September' } },
+      ]);
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.failure).toMatchObject({ index: 1, intent: 'Type into From: "2026-09-01"' });
+      expect(r.failure.message).toMatch(/^the field "From" did not take the value "first of September": it does not fit that field, for example text in a date field \(browser: locator\.fill: .*Malformed value.*\)$/);
+      expect(classifyFailure({ violations: [], failure: r.failure })).toBe('policy_violation');
+      expect(shownFailure(r.failure.intent, r.failure.message, r.failure.index)).toMatch(/^Step 2 \(Type into From: "2026-09-01"\): the field "From" did not take the value "first of September"/);
     } finally { await session.close(); }
   });
   it('the fill verb refuses a password field with a fatal sign-in violation, before typing', async () => {
