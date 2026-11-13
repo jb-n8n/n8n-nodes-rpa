@@ -26,6 +26,7 @@ import {
 } from './script-lane.js';
 import { openStartPage, startPageFailure } from './start-page.js';
 import type { DownloadTemplate } from '../steps/file-check.js';
+import type { SecretTargets } from '../secrets/secret-targets.js';
 import { isEmptySteps, type TrustInput } from './trust.js';
 
 export { MAX_AGENT_ACTIONS, MAX_AGENT_TOKENS, PROVE_RESERVE_MS } from './agent-lane.js';
@@ -70,6 +71,11 @@ export interface TaskInput {
    * everything the run returns and shows, refused by every template except a secret fill's (registerSecretVars).
    */
   secretVars?: string[];
+  /**
+   * Where the secret variables' values may be typed (in n8n, the RPA Secret Variables credential's May Be Typed Into):
+   * hosts for browser steps, checked right before a step types one of the values. Absent: no limit.
+   */
+  secretTargets?: SecretTargets;
   budgetMs?: number;
   defaultStepTimeoutMs?: number;
   viewport?: { width: number; height: number };

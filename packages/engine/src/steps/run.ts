@@ -8,6 +8,7 @@ import { desktopVerbOf, verbOf } from './parse.js';
 import { renderLocators } from './render-locators.js';
 import { registerSecretFills } from '../secrets/secret-fills.js';
 import { renderVars } from '../secrets/render.js';
+import type { SecretTypingLimit } from '../secrets/secret-targets.js';
 import { PolicyError } from './errors.js';
 import { shownMessage } from './urls.js';
 import { BLOCKED_STOP } from '../messages.js';
@@ -32,6 +33,11 @@ export interface StepContext {
   codeTimeoutMs?: number;
   /** True when the trust gate verified a signature for these steps (script lane); only then does a fill with `secret` type. */
   signed?: boolean;
+  /**
+   * The RPA Secret Variables credential's May Be Typed Into for a browser run (secretTypingLimit): a step that types one
+   * of its values checks the page's and the field's frame's host first (steps/secret-target.ts). Absent: no limit.
+   */
+  secretTyping?: SecretTypingLimit;
   vars: Record<string, string>;
   masker: Masker;
   defaultTimeoutMs: number;

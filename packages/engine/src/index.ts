@@ -9,6 +9,7 @@ export * from './sign.js';
 export * from './secrets/totp.js';
 export { createMasker, type Masker } from './secrets/mask.js';
 export * from './secrets/render.js';
+export type { SecretTargets } from './secrets/secret-targets.js';
 export * from './steps/parse.js';
 export { fileFacts, checkFile, FILE_CHECK_FAILED_PREFIX } from './steps/file-check.js';
 export type { DownloadTemplate } from './steps/file-check.js';

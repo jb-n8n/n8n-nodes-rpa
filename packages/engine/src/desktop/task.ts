@@ -9,12 +9,13 @@ import { CANCELLED, clampBudget, laneFailure, type LaneSuccess } from '../lane/s
 import type { TaskFailure } from '../lane/task.js';
 import { hasSignature, type TrustInput, type TrustResult } from '../lane/trust.js';
 import {
-  DESKTOP_UNSIGNED_WRITES, desktopNotInteractive, desktopStepFailure, inputTooLong, nameMismatch, RUNNER_BUSY, runnerAppMissing, runnerAppNotAllowed, SIGNATURE_INVALID, SIGNATURE_WITHOUT_KEY,
+  DESKTOP_UNSIGNED_WRITES, desktopNotInteractive, desktopStepFailure, inputTooLong, nameMismatch, RUNNER_BUSY, runnerAppMissing, runnerAppNotAllowed, secretAppNotListed, SIGNATURE_INVALID, SIGNATURE_WITHOUT_KEY,
   UNSIGNED_REQUIRED, UNSIGNED_SECRET_VARIABLE, versionMismatch,
 } from '../messages.js';
 import { createMasker, type Masker } from '../secrets/mask.js';
 import { MAX_RENDERED } from '../secrets/render.js';
 import { registerSecretVars } from '../secrets/secret-fills.js';
+import { appFileName, appListed, type SecretTargets } from '../secrets/secret-targets.js';
 import { scriptHash, verifyScript } from '../sign.js';
 import { FILE_CHECK_FAILED_PREFIX } from '../steps/file-check.js';
 import { runBinaryProblem } from '../steps/limits.js';
@@ -44,6 +45,12 @@ export interface DesktopTaskInput {
    * by signed steps.
    */
   secretVars?: string[];
+  /**
+   * Where the secret variables' values may be typed (in n8n, the RPA Secret Variables credential's May Be Typed Into):
+   * a run whose app.exe file name is not one of `apps` is refused (policy_violation) before it connects to the runner, so
+   * before the app starts. Absent: no limit.
+   */
+  secretTargets?: SecretTargets;
   budgetMs?: number;
   defaultStepTimeoutMs?: number;
   signal?: AbortSignal;
@@ -215,6 +222,8 @@ export async function runDesktopTask(input: DesktopTaskInput): Promise<DesktopTa
   const version = script.version;
   const hash = scriptHash(input.script);
   const ids = { ...(version !== undefined ? { version } : {}), hash };
+  // The secrets' owner limits where their values may be typed: an app not listed never starts with them.
+  if (input.secretTargets && !appListed(input.secretTargets, script.app.exe)) return fail('policy_violation', secretAppNotListed(appFileName(script.app.exe)), ids);
   for (const [name, value] of Object.entries(input.vars ?? {})) {
     if (typeof value === 'string' && value.length > MAX_RENDERED) return fail('incomplete', stripShownPrefix(inputTooLong(name.slice(0, 100), MAX_RENDERED)), ids);
   }

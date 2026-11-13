@@ -38,6 +38,12 @@ export const UNSIGNED_SECRET_FILL =
   'Unsigned steps cannot type a secret into a password field (fill with secret: true). Sign them with Sign Steps; Allow Unsigned Writes does not cover it.';
 /** A desktop fill of a secret variable in unsigned steps: as a secret fill in the browser, only signed steps type one. */
 export const UNSIGNED_SECRET_VARIABLE = 'Unsigned steps cannot type a secret variable. Sign them with Sign Steps; Allow Unsigned Writes does not cover it.';
+/** A value of the RPA Secret Variables credential would be typed on a host its May Be Typed Into does not list. */
+export const secretHostNotListed = (where: string) =>
+  `A value from the RPA Secret Variables credential may not be typed on ${where}: the credential's May Be Typed Into does not list it.`;
+/** A desktop run of an app the RPA Secret Variables credential's May Be Typed Into does not list: refused before the app starts. */
+export const secretAppNotListed = (app: string) =>
+  `The RPA Secret Variables credential's May Be Typed Into does not list ${app}, so this run may not start it. Add ${app} there, or remove the credential from this node.`;
 /**
  * A signIn with changePassword in unsigned steps: refused at the trust gate before the browser opens, whatever Allow
  * Unsigned Writes says, and by the step itself before anything is typed.
