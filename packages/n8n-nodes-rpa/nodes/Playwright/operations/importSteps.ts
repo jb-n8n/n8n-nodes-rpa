@@ -64,7 +64,7 @@ export const WRITES_FOR_APPROVAL =
   "These browser steps are not replayed at import, because they submit a form, download through a form, type a secret or change a password: they go to approval as written. Review every step, each form's target and each download, and supply the variables in Run steps.";
 /** The guidance for a step document that goes to approval as written and fails the check Sign Steps will make: nothing ran. */
 export const CHECKED_NOT_RUN =
-  "The steps were checked against the rules that Sign Steps and Run Steps apply, and were not run: the first line says which rule they break. Correct the step document, or the Site Login's settings, and import it again.";
+  "The steps were checked against the rules that Sign Steps and Run Steps apply, and were not run: the message says which rule they break. Correct the step document, or the Site Login's settings, and import it again.";
 /** A UiPath project with browser sequences, imported without an RPA Browser credential (its desktop sequences need none). */
 export const IMPORT_BROWSER_NEEDED = 'The project has browser steps: attach an RPA Browser credential to replay them.';
 

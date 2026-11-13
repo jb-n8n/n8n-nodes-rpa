@@ -1405,7 +1405,7 @@ describe('Import Steps: a step document', () => {
       const thrown = await run(watched(), { params: docParams(doc, {}, { variables }), items: textItem, continueOnFail: false }).catch((e: unknown) => e);
       expect(thrown).toBeInstanceOf(NodeOperationError);
       expect((thrown as NodeOperationError).description).toBe(
-        'policy_violation: The steps were checked against the rules that Sign Steps and Run Steps apply, and were not run: the first line says which rule they break. Correct the step document, or the Site Login\'s settings, and import it again.',
+        'policy_violation: The steps were checked against the rules that Sign Steps and Run Steps apply, and were not run: the message says which rule they break. Correct the step document, or the Site Login\'s settings, and import it again.',
       );
       // Sign Steps, given the same steps for approval, refuses them with the same reason.
       const script = real.parseScript({ ...doc, name: 'sap-export', version: 1 });
