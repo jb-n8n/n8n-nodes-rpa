@@ -126,8 +126,12 @@ Signs a **Repaired steps** item once a person approved it (**Approved** on), or 
 No browser opens. Template **RPA: 5 Import a bot** and template **RPA: 3 Approve steps** use it for you.
 
 - **Approver Allowlist**: the addresses that may approve. Type it, not as an expression.
+- **Approver**: where the approver comes from. **Approved By** (the default), or **Who Signed In to n8n on the Approval
+  Form**: the n8n user who submitted the form page named in **Approval Form Page** (`Review and approve`), as n8n's
+  form reports it. That form must use n8n User Auth. Nobody signed in there is refused, even with one address on the
+  allowlist. Template 5 picks it from the form's **Authentication**.
 - **Approved By**: who decided. It must be on the allowlist. Leave it empty when the allowlist holds exactly one
-  address: that address is recorded.
+  address: that address is recorded. Not used when the approver is who signed in to n8n.
 - **Write Steps** (desktop steps only): the numbers of the steps that save, post or submit (`16`, or `7, 9`). Sign
   Steps marks exactly those steps `"write": true` and says so in `writeLine`: `Signed as writes: step 16 (Click Save)`,
   or `Signed as writes: none`.

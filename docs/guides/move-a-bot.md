@@ -15,11 +15,13 @@ node's **Import Steps** operation. Set it up once, with one command (Node.js 22 
 **Settings → n8n API**):
 
 ```sh
-npx n8n-nodes-rpa setup --url http://localhost:5678 --approver you@example.com
+npx n8n-nodes-rpa setup --url http://localhost:5678
 ```
 
-It creates the form's login, the **RPA Step Signing** key and the workflow, with your address as the approver, and
-publishes it. It prints the form's address, its user name and its password, once. For browser bots, add
+It creates the **RPA Step Signing** key and the workflow, and publishes it. The form opens with your n8n sign-in: it
+has no password of its own. Your n8n address goes on **Sign steps → Approver Allowlist** (the API key's owner, or
+`--approver`). It prints the form's address. For approvers with no n8n account, `--form-login basic` gives the form a
+user name and password instead, printed once. For browser bots, add
 `--browser-url <ws-url>` with the browser service's token in `RPA_BROWSER_TOKEN`: it creates **RPA Browser** and
 picks it on **Import steps**. With a Connection Line it creates **RPA Desktop Runner**. It puts the signing key and
 the desktop runner on **Import steps** too, in two slots marked "only passed on to the workflow file": the import never
@@ -41,7 +43,9 @@ Then, for each bot:
 3. The import runs browser steps once and replays them in a fresh browser with every write blocked. Desktop steps are
    not replayed.
 4. **Review and approve** shows each step list: what it opens, whether it signs in, and the numbered steps. When the
-   import left a step out, a **Left out by the import** block lists it. Choose **Approve and sign** or **Reject**.
+   import left a step out, a **Left out by the import** block lists it. Choose **Approve and sign** or **Reject**. The
+   n8n user who submits this page is the approver: they must be on **Sign steps → Approver Allowlist**, or nothing is
+   signed. The row records their n8n address.
 5. The last page says what was signed, and counts the values removed as secrets and the steps not translated. It
    downloads the workflow that runs the bot. For a UiPath project, notes in that workflow show what was not
    translated, such as a credential lookup. A log message is dropped without a note. Import the workflow in n8n. Its
