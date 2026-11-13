@@ -138,6 +138,32 @@ describe('Run Steps routes by the steps\' surface', () => {
     expect(runner.tcpConnections).toBe(0);
   });
 
+  it('Runs On only chooses the slots: the steps still decide where they run, and a slot it hides is named in the message', async () => {
+    runner = await FakeRunner.start();
+    const eng = fakeEngine(() => scriptOk());
+    const both = { rpaDesktopRunnerApi: { ...runner.endpoint }, playwrightBrowserApi: { mode: 'local' }, playwrightScriptSigningApi: { secretKey: KEY } };
+    // Desktop steps on a node set to A browser: n8n hides (and drops) the runner slot, so the node does not use it.
+    const [onBrowser] = await executeRunSteps(ctx(both, params(DESKTOP_STEPS, { runsOn: 'browser' })), eng);
+    expect(onBrowser[0].json.error).toBe(
+      'These are desktop steps (surface "desktop"): they run on a desktop runner. Attach an RPA Desktop Runner credential. Its slot shows when Runs On is A Windows desktop app or Browser and desktop apps.',
+    );
+    // Browser steps on a node set to A Windows desktop app.
+    const [onDesktop] = await executeRunSteps(ctx(both, params(BROWSER_STEPS, { runsOn: 'desktop' })), eng);
+    expect(onDesktop[0].json.error).toBe(
+      'These are browser steps: they run in a browser. Attach an RPA Browser credential. Its slot shows when Runs On is A browser or Browser and desktop apps.',
+    );
+    expect(eng.calls).toHaveLength(0);
+    expect(runner.tcpConnections).toBe(0);
+    // When the slot shows, the message stands as it was.
+    const [missing] = await executeRunSteps(ctx({ playwrightScriptSigningApi: { secretKey: KEY } }, params(DESKTOP_STEPS, { runsOn: 'desktop' })), eng);
+    expect(missing[0].json.error).toBe('These are desktop steps (surface "desktop"): they run on a desktop runner. Attach an RPA Desktop Runner credential.');
+    // Desktop steps on a node set to A Windows desktop app run on the runner, never in a browser.
+    const [ran] = await executeRunSteps(ctx(both, params(DESKTOP_STEPS, { runsOn: 'desktop' })), eng);
+    expect(ran[0].json.error).toBeUndefined();
+    expect(ran[0].json).toMatchObject({ name: 'erp-orders', values: { count: '2 results' } });
+    expect(eng.calls).toHaveLength(0);
+  });
+
   it('desktop steps refuse a Site Login and AI repair (not available for desktop steps yet)', async () => {
     runner = await FakeRunner.start();
     const eng = fakeEngine(() => scriptOk());

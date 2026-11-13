@@ -272,6 +272,7 @@ describe('2-data-feed.json', () => {
     expect(run).toMatchObject({ type: NODE_TYPE, typeVersion: 1, onError: 'continueErrorOutput' });
     expect(run.parameters).toEqual({
       operation: 'runSteps',
+      runsOn: 'browser',
       steps: "={{ $('Get active steps').item.json.steps ?? '' }}",
       requireSignedSteps: true,
       signature: "={{ $('Get active steps').item.json.signature }}",

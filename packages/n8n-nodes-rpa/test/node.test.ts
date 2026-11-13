@@ -49,7 +49,7 @@ describe('RPA node', () => {
     const run = d.properties.filter((p) => p.displayOptions?.show?.operation?.includes('runSteps'));
     expect(run.some((p) => p.name === 'singleProcessNotice')).toBe(false);
     expect(d.credentials?.find((c) => c.name === 'playwrightRedisApi')).toEqual({
-      name: 'playwrightRedisApi', displayName: 'RPA Redis', required: false, testedBy: 'guardRedisTest', displayOptions: { show: { operation: ['runSteps', 'importSteps'] } },
+      name: 'playwrightRedisApi', displayName: 'RPA Redis', required: false, testedBy: 'guardRedisTest', displayOptions: { show: { operation: ['runSteps', 'importSteps'] }, hide: { runsOn: ['desktop'] } },
     });
   });
   it('the Redis test reports OK, or an unreachable message without the run wording', async () => {

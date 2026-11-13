@@ -9,6 +9,22 @@ export const CREDENTIALS = {
   secretVariables: 'rpaSecretVariablesApi',
 } as const;
 
+/**
+ * Runs On (Run Steps and Import Steps): which credential slots the node shows. It never decides where steps run: the
+ * steps' own surface does. The default shows every slot, so a node saved without it keeps every credential it holds
+ * (n8n drops a credential whose slot is hidden).
+ */
+export type RunsOn = 'browserAndDesktop' | 'browser' | 'desktop';
+export const RUNS_ON_DEFAULT: RunsOn = 'browserAndDesktop';
+export const RUNS_ON_NAMES: Record<RunsOn, string> = { browserAndDesktop: 'Browser and desktop apps', browser: 'A browser', desktop: 'A Windows desktop app' };
+/** The operations that show Runs On. */
+export const RUNS_ON_OPERATIONS: readonly string[] = ['runSteps', 'importSteps'];
+/** The credential types each narrower choice hides. The credentials' displayOptions in Playwright.node.ts say the same (test/runs-on.test.ts). */
+export const HIDDEN_BY_RUNS_ON: Record<Exclude<RunsOn, 'browserAndDesktop'>, readonly string[]> = {
+  browser: [CREDENTIALS.desktopRunner],
+  desktop: [CREDENTIALS.browser, CREDENTIALS.siteLogin, CREDENTIALS.redis],
+};
+
 /** The most Max Seconds may be, in seconds. A test pins it to the engine's MAX_BUDGET_MS; the node must not import the engine at load time. */
 export const MAX_SECONDS = 600;
 

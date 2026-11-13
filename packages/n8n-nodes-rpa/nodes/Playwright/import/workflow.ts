@@ -566,6 +566,7 @@ class Builder {
     const creds = this.slots(DESKTOP_SLOTS);
     this.add(T.rpa, run, [runX, y], {
       operation: 'runSteps',
+      runsOn: 'desktop',
       steps: "={{ $json.steps ?? '' }}",
       requireSignedSteps: true,
       signature: '={{ $json.signature }}',
@@ -612,6 +613,7 @@ class Builder {
         // picked first). The note says how to add it.
         this.add(T.rpa, run, [runX, y], {
           operation: 'runSteps',
+          runsOn: 'browser',
           steps: "={{ $json.steps ?? '' }}",
           requireSignedSteps: true,
           signature: '={{ $json.signature }}',

@@ -128,7 +128,7 @@ describe('Run Steps and Sign Steps fields', () => {
       .filter((p) => p.displayOptions?.show?.operation?.includes('runSteps'))
       .filter((p) => Object.keys(p.displayOptions?.show ?? {}).every((k) => k === 'operation'))
       .map((p) => p.name);
-    expect(always).toEqual(['steps', 'startUrl', 'requireSignedSteps', 'signature', 'approvedBy', 'aiRepair', 'options']);
+    expect(always).toEqual(['runsOn', 'steps', 'startUrl', 'requireSignedSteps', 'signature', 'approvedBy', 'aiRepair', 'options']);
     expect(field('requireSignedSteps')).toMatchObject({ displayName: 'Require Signed Steps', type: 'boolean', default: true, noDataExpression: true });
     expect(field('aiRepair')).toMatchObject({ displayName: 'AI Repair', type: 'boolean', default: false });
     expect(field('goal').displayOptions?.show).toEqual({ operation: ['runSteps'], aiRepair: [true] });

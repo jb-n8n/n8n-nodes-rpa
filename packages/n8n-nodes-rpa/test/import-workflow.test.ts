@@ -225,6 +225,7 @@ describe('buildWorkflow', () => {
     // Run steps: signed steps from that row, Name and Expected Version, AI Repair off (it runs as generated).
     expect(byName(w, 'Use Browser Chrome: SAP Logon').parameters).toEqual({
       operation: 'runSteps',
+      runsOn: 'browser',
       steps: "={{ $json.steps ?? '' }}",
       requireSignedSteps: true,
       signature: '={{ $json.signature }}',
@@ -356,7 +357,7 @@ describe('buildWorkflow', () => {
     const workflow = new Workflow({ nodes: structuredClone(w.nodes) as unknown as INode[], connections: w.connections as unknown as IConnections, nodeTypes, active: false });
     const run = workflow.getNode('Use Browser Chrome: SAP Logon');
     expect(run?.parameters).toMatchObject({
-      operation: 'runSteps', steps: "={{ $json.steps ?? '' }}", requireSignedSteps: true, signature: '={{ $json.signature }}', approvedBy: '={{ $json.approvedBy }}', aiRepair: false,
+      operation: 'runSteps', runsOn: 'browser', steps: "={{ $json.steps ?? '' }}", requireSignedSteps: true, signature: '={{ $json.signature }}', approvedBy: '={{ $json.approvedBy }}', aiRepair: false,
       options: { name: 'sap-report-1', expectedVersion: '={{ $json.version }}' },
     });
     for (const [from, byType] of Object.entries(w.connections)) {
