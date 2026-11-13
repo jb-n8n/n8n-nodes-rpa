@@ -3720,7 +3720,7 @@ Describe 'Show-RpaConnection.ps1' {
       $output[$at + 1] | Should -BeExactly $browser
       [array]::IndexOf($output, "Browser fingerprint: $($script:BrowserFingerprint)") | Should -BeGreaterThan ($at + 1)
       $output | Should -Contain ('The tokens are hidden in the lines (token={0}). For the lines to paste, run as an administrator: {1}' -f $script:Hidden, $script:Hint)
-      $output[-1] | Should -BeExactly 'Where n8n reaches this machine by another name or address (a NAT, a tunnel), add -Address <that name or address>.'
+      $output[-1] | Should -BeExactly ("The line's address is this computer's name, {0}. If n8n cannot find it by that name, run this again with -Address <an address n8n can reach>." -f $script:Machine)
     }
 
     It 'puts the address given with -Address into the lines, and into the command it names' {
@@ -3728,7 +3728,7 @@ Describe 'Show-RpaConnection.ps1' {
       $output[1] | Should -BeLike ('rpa-runner://`[fd00::20`]:{0}/rpa/v1#token=*' -f $script:RunnerPort)
       @($output | Where-Object { $_ -like 'rpa-browser://`[fd00::20`]:*' }).Count | Should -Be 1
       $output | Should -Contain ('The tokens are hidden in the lines (token={0}). For the lines to paste, run as an administrator: {1} -Address fd00::20' -f $script:Hidden, $script:Hint)
-      ($output -join "`n") | Should -Not -Match 'add -Address'
+      ($output -join "`n") | Should -Not -Match "-Address <|The line's address"
     }
 
     It 'without the browser says one token and one line' {
@@ -3773,6 +3773,150 @@ Describe 'Show-RpaConnection.ps1' {
       $output | Should -Contain ('rpa-runner://203.0.113.10:{0}/rpa/v1#token={1}&fingerprint={2}' -f $script:RunnerPort, $script:RunnerToken, $script:RunnerFingerprint.Replace(':', '').ToLowerInvariant())
       $output | Should -Contain ('rpa-browser://203.0.113.10:{0}/#token={1}&fingerprint={2}' -f $script:BrowserPort, $script:BrowserToken, $script:BrowserFingerprint.Replace(':', '').ToLowerInvariant())
       ($output -join "`n") | Should -Not -Match 'tokens are hidden'
+    }
+  }
+
+  # Without -Address the lines carry the address this machine has on its route to the one n8n address install.json
+  # records, else the computer's name. A function of the cmdlet's name stands in for Find-NetRoute (it takes
+  # precedence over a cmdlet) and records what it was asked.
+  Context 'the address of the lines' {
+    BeforeAll {
+      $script:Machine = [Net.Dns]::GetHostName()
+      $script:ByName = "The line's address is this computer's name, {0}. If n8n cannot find it by that name, run this again with -Address <an address n8n can reach>." -f $script:Machine
+      function Invoke-WithRoute($AllowFrom, $Answer, [hashtable]$Arguments = @{}, [switch]$NoAllowFrom) {
+        $install = $script:InstallJson | ConvertFrom-Json
+        if (-not $NoAllowFrom) { $install | Add-Member -NotePropertyName allowFrom -NotePropertyValue $AllowFrom }
+        Set-Content -LiteralPath (Join-Path $script:MadeUpInstall 'install.json') -Value ($install | ConvertTo-Json) -Encoding UTF8
+        $global:RpaRouteAnswer = $Answer
+        $global:RpaRouteAsked = @()
+        function global:Find-NetRoute {
+          [CmdletBinding()] param([string]$RemoteIPAddress)
+          $global:RpaRouteAsked += $RemoteIPAddress
+          if ($global:RpaRouteAnswer -is [scriptblock]) { & $global:RpaRouteAnswer } else { $global:RpaRouteAnswer }
+        }
+        try { @(& $script:ShowScript @Arguments) }
+        finally {
+          Remove-Item -LiteralPath function:\Find-NetRoute
+          Set-Content -LiteralPath (Join-Path $script:MadeUpInstall 'install.json') -Value $script:InstallJson -Encoding UTF8
+        }
+      }
+      # What Find-NetRoute returns: the route, then the local address on it (an MSFT_NetRoute has no IPAddress).
+      function New-RouteAnswer([string]$Local) {
+        [pscustomobject]@{ DestinationPrefix = '0.0.0.0/0'; NextHop = '10.0.0.1'; InterfaceIndex = 4 }
+        [pscustomobject]@{ IPAddress = $Local; InterfaceIndex = 4; PrefixLength = 24 }
+      }
+      function Get-LineHosts($Output) {
+        @($Output | Where-Object { $_ -match '^rpa-(runner|browser)://(.+):\d+/' } | ForEach-Object { $Matches[2] })
+      }
+    }
+    AfterAll { Remove-Variable -Scope Global -Name RpaRouteAnswer, RpaRouteAsked -ErrorAction SilentlyContinue }
+
+    It 'carries the address on the route to the one IPv4 address that may connect, in both lines, and says so' {
+      $output = Invoke-WithRoute @('10.0.0.5') (New-RouteAnswer '10.0.0.20')
+      $global:RpaRouteAsked | Should -BeExactly @('10.0.0.5')
+      Get-LineHosts $output | Should -BeExactly @('10.0.0.20', '10.0.0.20')
+      $output[-1] | Should -BeExactly "The line's address is 10.0.0.20: the one this machine has towards 10.0.0.5. If n8n reaches this machine by another name or address, run this again with -Address <that name or address>."
+      @($output | Where-Object { $_ -like "The line's address*" }).Count | Should -Be 1
+      # The command for the lines with tokens finds the same address again: it needs no -Address.
+      ($output -join "`n") | Should -Not -Match 'connection -ShowTokens -Address'
+    }
+
+    It 'carries the address on the route to one IPv6 address, in brackets, and names it without them' {
+      $output = Invoke-WithRoute 'fd00::5' (New-RouteAnswer 'fd00::20')
+      $global:RpaRouteAsked | Should -BeExactly @('fd00::5')
+      Get-LineHosts $output | Should -BeExactly @('[fd00::20]', '[fd00::20]')
+      $output[-1] | Should -BeExactly "The line's address is fd00::20: the one this machine has towards fd00::5. If n8n reaches this machine by another name or address, run this again with -Address <that name or address>."
+    }
+
+    It 'without the browser carries the routed address in the one line' {
+      $install = $script:InstallJson -replace '"browser":\s*true', '"browser": false'
+      $saved = $script:InstallJson
+      $script:InstallJson = $install
+      try { $output = Invoke-WithRoute @('10.0.0.5') (New-RouteAnswer '10.0.0.20') }
+      finally { $script:InstallJson = $saved; Set-Content -LiteralPath (Join-Path $script:MadeUpInstall 'install.json') -Value $saved -Encoding UTF8 }
+      Get-LineHosts $output | Should -BeExactly @('10.0.0.20')
+    }
+
+    It 'asks for no route and carries the computer''s name when allowFrom is <Why>' -ForEach @(
+      @{ Why = 'several addresses'; AllowFrom = @('10.0.0.5', '10.0.0.6') }
+      @{ Why = 'a range'; AllowFrom = @('10.0.0.0/24') }
+      @{ Why = 'any address'; AllowFrom = 'any' }
+      @{ Why = 'none (an install with -NoFirewall)'; AllowFrom = 'none' }
+      @{ Why = 'a name'; AllowFrom = @('n8n.example') }
+      @{ Why = 'a loopback address, as in the desktop workflow'; AllowFrom = @('127.0.0.1') }
+      @{ Why = 'the IPv6 loopback address'; AllowFrom = @('::1') }
+      @{ Why = 'the unspecified address'; AllowFrom = @('0.0.0.0') }
+      @{ Why = 'not an address'; AllowFrom = @('10.0.0.256') }
+      @{ Why = 'empty'; AllowFrom = @() }
+    ) {
+      $output = Invoke-WithRoute $AllowFrom (New-RouteAnswer '10.0.0.20')
+      $global:RpaRouteAsked.Count | Should -Be 0
+      Get-LineHosts $output | Should -BeExactly @($script:Machine, $script:Machine)
+      $output[-1] | Should -BeExactly $script:ByName
+    }
+
+    It 'asks for no route and carries the computer''s name when install.json has no allowFrom' {
+      $output = Invoke-WithRoute $null (New-RouteAnswer '10.0.0.20') -NoAllowFrom
+      $global:RpaRouteAsked.Count | Should -Be 0
+      Get-LineHosts $output | Should -BeExactly @($script:Machine, $script:Machine)
+      $output[-1] | Should -BeExactly $script:ByName
+    }
+
+    It 'carries the computer''s name when the route lookup gives <Why>' -ForEach @(
+      @{ Why = 'no route'; Answer = $null }
+      @{ Why = 'a route without a local address'; Answer = { [pscustomobject]@{ DestinationPrefix = '0.0.0.0/0'; NextHop = '10.0.0.1' } } }
+      @{ Why = 'a loopback address'; Answer = { [pscustomobject]@{ IPAddress = '127.0.0.1' } } }
+      @{ Why = 'the unspecified address'; Answer = { [pscustomobject]@{ IPAddress = '0.0.0.0' } } }
+      @{ Why = 'a link-local IPv6 address with its zone'; Answer = { [pscustomobject]@{ IPAddress = 'fe80::1%12' } } }
+      @{ Why = 'text that is not an address'; Answer = { [pscustomobject]@{ IPAddress = 'evil.example/#token=x' } } }
+      @{ Why = 'an error'; Answer = { throw 'No matching MSFT_NetRoute objects found' } }
+      @{ Why = 'no such command'; Answer = { throw (New-Object Management.Automation.CommandNotFoundException 'Find-NetRoute') } }
+    ) {
+      $output = Invoke-WithRoute @('10.0.0.5') $Answer
+      $global:RpaRouteAsked | Should -BeExactly @('10.0.0.5')
+      Get-LineHosts $output | Should -BeExactly @($script:Machine, $script:Machine)
+      $output[-1] | Should -BeExactly $script:ByName
+    }
+
+    It 'carries the computer''s name where Find-NetRoute is not there at all' -Skip:([bool](Get-Command Find-NetRoute -ErrorAction SilentlyContinue)) {
+      $install = $script:InstallJson | ConvertFrom-Json
+      $install | Add-Member -NotePropertyName allowFrom -NotePropertyValue @('10.0.0.5')
+      Set-Content -LiteralPath (Join-Path $script:MadeUpInstall 'install.json') -Value ($install | ConvertTo-Json) -Encoding UTF8
+      try { $output = @(& $script:ShowScript) }
+      finally { Set-Content -LiteralPath (Join-Path $script:MadeUpInstall 'install.json') -Value $script:InstallJson -Encoding UTF8 }
+      Get-LineHosts $output | Should -BeExactly @($script:Machine, $script:Machine)
+      $output[-1] | Should -BeExactly $script:ByName
+    }
+
+    It 'with -Address carries that address, asks for no route and prints no line about the address' {
+      $output = Invoke-WithRoute @('10.0.0.5') (New-RouteAnswer '10.0.0.20') -Arguments @{ Address = 'rpa.corp.example' }
+      $global:RpaRouteAsked.Count | Should -Be 0
+      Get-LineHosts $output | Should -BeExactly @('rpa.corp.example', 'rpa.corp.example')
+      ($output -join "`n") | Should -Not -Match "The line's address"
+    }
+
+    It 'with -Status asks for no route' {
+      $output = Invoke-WithRoute @('10.0.0.5') (New-RouteAnswer '10.0.0.20') -Arguments @{ Status = $true }
+      $output | Should -Contain ('Runner: listening on port {0}' -f $script:RunnerPort)
+      $global:RpaRouteAsked.Count | Should -Be 0
+      ($output -join "`n") | Should -Not -Match "The line's address|10\.0\.0\.20"
+    }
+
+    # The line only chooses a text: the script looks the route up in this machine's table and sends nothing to n8n.
+    It 'reaches nothing on the network to choose the address' {
+      $source = Get-Content -Raw -LiteralPath $script:ShowScript
+      $source | Should -Not -Match 'Test-NetConnection|Test-Connection|Resolve-DnsName|GetHostEntry|GetHostAddresses|Invoke-WebRequest|Invoke-RestMethod|TcpClient|UdpClient|NetworkInformation\.Ping|WebClient|HttpClient'
+      $source | Should -Match ([regex]::Escape('Find-NetRoute -RemoteIPAddress $target -ErrorAction Stop'))
+    }
+
+    # Install-Rpa.ps1 shows the lines by running this same script without -Address, so its lines carry the same address.
+    It "the installer's closing lines run this script without -Address, and tell to run rpa connection without it" {
+      $source = Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir 'Install-Rpa.ps1')
+      $closing = $source.Substring($source.IndexOf("Write-Host 'RPA is installed.'"))
+      @([regex]::Matches($closing, 'Show-RpaConnection\.ps1')).Count | Should -Be 1
+      $closing | Should -Match ([regex]::Escape("try { & (Join-Path (Join-Path `$layout.InstallDir 'scripts') 'Show-RpaConnection.ps1') | Out-Host }"))
+      $closing | Should -Match ([regex]::Escape("Write-Host ('  & `"{0}`" connection' -f `$rpa)"))
+      $closing | Should -Not -Match '-Address'
     }
   }
 

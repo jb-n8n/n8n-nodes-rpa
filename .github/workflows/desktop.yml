@@ -571,6 +571,10 @@ jobs:
           $runner = @($shown | Where-Object { $_ -match '^Runner fingerprint: ((?:[0-9A-F]{2}:){31}[0-9A-F]{2})$' } | ForEach-Object { $Matches[1] })
           Assert ($runner.Count -eq 1 -and $runnerLine.Line.EndsWith($runner[0])) "Show-RpaConnection.ps1 prints the runner's fingerprint, the one of its start line"
           Assert (@($shown | Where-Object { $_ -like 'rpa-runner://*' }).Count -eq 1 -and @($shown | Where-Object { $_ -like 'rpa-browser://*' }).Count -eq 0) 'Show-RpaConnection.ps1 prints one connection line, the runner''s'
+          # allowFrom is 127.0.0.1, a loopback address: the line carries this computer's name, and says so.
+          $name = [Net.Dns]::GetHostName()
+          Assert (@($shown | Where-Object { $_ -like "rpa-runner://${name}:8765/rpa/v1#*" }).Count -eq 1) "the runner's line carries this computer's name ($name)"
+          Assert ($shown -contains ("The line's address is this computer's name, {0}. If n8n cannot find it by that name, run this again with -Address <an address n8n can reach>." -f $name)) 'Show-RpaConnection.ps1 says that the line carries the computer''s name, and how to choose another address'
           $text = $shown -join "`n"
           Assert ($text -notmatch '(?i)browser') 'Show-RpaConnection.ps1 says nothing about a browser'
           Assert (-not $text.Contains(([IO.File]::ReadAllText((Join-Path $data 'token'))).Trim())) 'the output of Show-RpaConnection.ps1 does not hold what is in token'
@@ -748,6 +752,9 @@ jobs:
           Assert ($runner.Count -eq 1 -and $browser.Count -eq 1) 'Show-RpaConnection.ps1 prints two fingerprints of 32 hex pairs'
           Assert ($runnerLine.Line.EndsWith($runner[0]) -and $browserLine.Line.EndsWith($browser[0])) 'they are the fingerprints of the two start lines'
           Assert (@($shown | Where-Object { $_ -like 'rpa-runner://*' }).Count -eq 1 -and @($shown | Where-Object { $_ -like 'rpa-browser://*' }).Count -eq 1) 'Show-RpaConnection.ps1 prints two connection lines, the runner''s and the browser''s'
+          # allowFrom is 127.0.0.1, a loopback address: both lines carry this computer's name.
+          $name = [Net.Dns]::GetHostName()
+          Assert (@($shown | Where-Object { $_ -like "rpa-runner://${name}:*" -or $_ -like "rpa-browser://${name}:*" }).Count -eq 2) "both lines carry this computer's name ($name)"
           $text = $shown -join "`n"
           foreach ($name in 'token', 'browser-token') { Assert (-not $text.Contains(([IO.File]::ReadAllText((Join-Path $data $name))).Trim())) "the output of Show-RpaConnection.ps1 does not hold what is in $name" }
           Assert ($text -notmatch 'not listening') 'both programs are listening'

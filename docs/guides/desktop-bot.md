@@ -53,8 +53,9 @@ This guide needs no browser on the Windows machine. To add one, see the [Windows
 (`-WithBrowser`).
 
 In n8n's left sidebar, choose **+ → New credential → RPA Desktop Runner**, paste the `rpa-runner://` line into
-**Connection Line**, and click **Save**. The window says `Connection tested successfully`. If n8n reaches the machine
-by another name or address than the one in the line (a NAT, a tunnel), run the command again with
+**Connection Line**, and click **Save**. The window says `Connection tested successfully`. The line's address is the
+one this machine has towards the n8n address you gave `-AllowFrom`, or else the computer's name. The command says
+which. If n8n reaches the machine by another name or address (a NAT, a tunnel), run the command again with
 `-Address <that name or address>`.
 
 <img src="../images/credential-connection-line.png" alt="A new RPA Desktop Runner credential with its Connection Line field" width="640">
