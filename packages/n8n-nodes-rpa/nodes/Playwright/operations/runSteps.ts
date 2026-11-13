@@ -134,6 +134,7 @@ async function runStepsItem(ctx: NodeContext, engine: Engine, i: number, deps: R
     ...(p.output ? { output: p.output } : {}),
     vars: p.vars,
     ...(p.secretVars.length ? { secretVars: p.secretVars } : {}),
+    ...(p.secretTargets ? { secretTargets: p.secretTargets } : {}),
     budgetMs,
     defaultStepTimeoutMs: p.common.timeoutMs,
     viewport: p.common.viewport,

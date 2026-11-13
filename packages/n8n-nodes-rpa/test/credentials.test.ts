@@ -179,7 +179,7 @@ describe('v2 credential types', () => {
   it('RPA Secret Variables: name and value pairs, the value a password-type field, and what the node does with them', () => {
     const c = new RpaSecretVariablesApi();
     expect({ name: c.name, displayName: c.displayName }).toEqual({ name: 'rpaSecretVariablesApi', displayName: 'RPA Secret Variables' });
-    const [about, variables, ...rest] = c.properties;
+    const [about, variables, typedInto, ...rest] = c.properties;
     expect(rest).toEqual([]);
     expect(about.type).toBe('notice');
     for (const text of ['{{var.name}}', 'Run Steps', 'masks', 'Only signed steps type one', 'at least 4 characters', 'Options → Variables']) expect(about.displayName, text).toContain(text);
@@ -187,6 +187,13 @@ describe('v2 credential types', () => {
     const [pair] = (variables.options ?? []) as { name: string; values: INodeProperties[] }[];
     expect(pair.name).toBe('values');
     expect(pair.values.map((v) => [v.name, v.type, v.typeOptions?.password === true])).toEqual([['name', 'string', false], ['value', 'string', true]]);
+    // Optional, typed in (never an expression), one app or host per line; the description says what an empty field allows.
+    expect(typedInto).toMatchObject({ displayName: 'May Be Typed Into', name: 'mayBeTypedInto', type: 'string', default: '', noDataExpression: true, typeOptions: { rows: 3 } });
+    expect(typedInto.required).toBeUndefined();
+    expect(typedInto.placeholder).toBe('ErpDemo.exe\nerp.example.com');
+    expect(typedInto.description).toBe(
+      "Where these values may be typed, one per line: an app's program file name for desktop steps (ErpDemo.exe), or a site's exact host for browser steps (erp.example.com). A desktop run of an app not listed is refused before the app starts, and a browser step is refused before it types a value on a site not listed. Empty means the values may be typed into any app or site the signed steps use.",
+    );
   });
   it('RPA Site Login: the login page, the secrets and the six allowlist fields, in order', () => {
     const props = new PlaywrightSiteLoginApi().properties.filter((p) => p.type !== 'notice');
@@ -334,6 +341,32 @@ describe('v2 credential tests', () => {
     });
     // A row left empty is not a variable.
     expect(secretVariablesTestResult(pairs({ name: '', value: '' }, { name: ' pw ', value: 'Pw-5513-xyz' }))).toEqual({ status: 'OK', message: 'Valid: 1 secret variable(s): pw' });
+  });
+  it('Secret Variables: May Be Typed Into counts the apps and sites, or names the line that is neither, never a value', () => {
+    const withTargets = (mayBeTypedInto: unknown) => ({ variables: { values: [{ name: 'pw', value: 'Pw-5513-xyz' }] }, mayBeTypedInto });
+    expect(secretVariablesTestResult(withTargets('ErpDemo.exe\n\nerp.example.com\nhttps://Login.Example.com:8443\nerpdemo.EXE'))).toEqual({
+      status: 'OK', message: 'Valid: 1 secret variable(s): pw. May be typed into 1 app(s) and 2 site(s) only',
+    });
+    expect(secretVariablesTestResult(withTargets('  \n'))).toEqual({ status: 'OK', message: 'Valid: 1 secret variable(s): pw' });
+    const line = (n: number, rest: string) => `Line ${n} of May Be Typed Into in the RPA Secret Variables credential${rest}`;
+    const refused = (mayBeTypedInto: unknown) => secretVariablesTestResult(withTargets(mayBeTypedInto));
+    expect(refused('ErpDemo.exe\nC:\\Apps\\ErpDemo.exe')).toEqual({
+      status: 'Error', message: line(2, ' ("C:\\Apps\\ErpDemo.exe"): it is neither a program file name such as ErpDemo.exe nor a site host such as erp.example.com.'),
+    });
+    expect(refused('erp.example.com/login?token=abc')).toEqual({
+      status: 'Error', message: line(1, ' ("erp.example.com/login"): it is neither a program file name such as ErpDemo.exe nor a site host such as erp.example.com.'),
+    });
+    expect(refused('*.example.com')).toEqual({ status: 'Error', message: line(1, ' ("*.example.com"): wildcards are not allowed, list each exact host.') });
+    expect(refused(`${'a'.repeat(50)}/x`).message).toBe(line(1, ` ("${'a'.repeat(40)}…"): it is neither a program file name such as ErpDemo.exe nor a site host such as erp.example.com.`));
+    // A line that holds a value, or a user:password@ part, is never shown.
+    expect(refused('ftp://Pw-5513-xyz')).toEqual({ status: 'Error', message: line(1, ": it holds one of this credential's values: list where they may be typed, not the values.") });
+    expect(refused('erp.example.com\nhttps://me:Hunter-22@erp.example.com/')).toEqual({
+      status: 'Error', message: line(2, ': it is neither a program file name such as ErpDemo.exe nor a site host such as erp.example.com.'),
+    });
+    // Typed in, never an expression.
+    for (const v of ['={{ $json.hosts }}', '{{ $json.hosts }}', ['erp.example.com'], 42]) {
+      expect(refused(v), String(v)).toEqual({ status: 'Error', message: 'May Be Typed Into in the RPA Secret Variables credential must be typed in, not set with an expression.' });
+    }
   });
   it('Step Signing: a key of 31 characters is refused, 32 accepted', () => {
     expect(scriptSigningResult({ secretKey: 'k'.repeat(31) })).toEqual({

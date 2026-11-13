@@ -1,6 +1,6 @@
 import type { INodeCredentialTestResult } from 'n8n-workflow';
 import type { PortalPolicy } from 'n8n-rpa-engine';
-import { browserConfig, desktopRunnerConfig, secretVariablesConfig, signingKey, siteLoginConfig, type CredentialData } from './config.js';
+import { browserConfig, desktopRunnerConfig, secretTargetsConfig, secretVariablesConfig, signingKey, siteLoginConfig, type CredentialData } from './config.js';
 import type { Engine } from './engine.js';
 import { pingRedis } from './redis-store.js';
 
@@ -83,11 +83,17 @@ export function siteLoginTestResult(data: CredentialData): INodeCredentialTestRe
   }
 }
 
-/** Checks the RPA Secret Variables credential's names and values; the message names the variables, never a value. */
+/**
+ * Checks the RPA Secret Variables credential's names, values and May Be Typed Into; the message names the variables and
+ * counts the apps and sites, never a value.
+ */
 export function secretVariablesTestResult(data: CredentialData): INodeCredentialTestResult {
   try {
-    const names = Object.keys(secretVariablesConfig(data));
-    return { status: 'OK', message: `Valid: ${names.length} secret variable(s)${names.length ? `: ${names.join(', ')}` : ''}` };
+    const secret = secretVariablesConfig(data);
+    const names = Object.keys(secret);
+    const targets = secretTargetsConfig(data, Object.values(secret));
+    const where = targets ? `. May be typed into ${targets.apps.length} app(s) and ${targets.hosts.length} site(s) only` : '';
+    return { status: 'OK', message: `Valid: ${names.length} secret variable(s)${names.length ? `: ${names.join(', ')}` : ''}${where}` };
   } catch (error) {
     return { status: 'Error', message: reason(error) };
   }

@@ -49,5 +49,16 @@ export class RpaSecretVariablesApi implements ICredentialType {
         },
       ],
     },
+    {
+      displayName: 'May Be Typed Into',
+      name: 'mayBeTypedInto',
+      type: 'string',
+      typeOptions: { rows: 3 },
+      default: '',
+      noDataExpression: true,
+      placeholder: 'ErpDemo.exe\nerp.example.com',
+      description:
+        "Where these values may be typed, one per line: an app's program file name for desktop steps (ErpDemo.exe), or a site's exact host for browser steps (erp.example.com). A desktop run of an app not listed is refused before the app starts, and a browser step is refused before it types a value on a site not listed. Empty means the values may be typed into any app or site the signed steps use.",
+    },
   ];
 }

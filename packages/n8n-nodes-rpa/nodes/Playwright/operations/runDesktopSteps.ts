@@ -47,7 +47,8 @@ export async function runDesktopStepsItem(ctx: NodeContext, engine: Engine, i: n
   let r: TaskResult;
   try {
     r = await engine.runDesktopTask({
-      script: raw, trust, runner, vars: p.vars, ...(p.secretVars.length ? { secretVars: p.secretVars } : {}), budgetMs: p.common.maxSeconds * 1000, defaultStepTimeoutMs: p.common.timeoutMs, ...(signal ? { signal } : {}),
+      script: raw, trust, runner, vars: p.vars, ...(p.secretVars.length ? { secretVars: p.secretVars } : {}), ...(p.secretTargets ? { secretTargets: p.secretTargets } : {}),
+      budgetMs: p.common.maxSeconds * 1000, defaultStepTimeoutMs: p.common.timeoutMs, ...(signal ? { signal } : {}),
     });
   } catch (error) {
     return configError(errorMessage(error));

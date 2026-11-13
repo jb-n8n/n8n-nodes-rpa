@@ -1,4 +1,4 @@
-import type { BrowserEndpoint, PortalPolicy, PortalSecrets } from 'n8n-rpa-engine';
+import type { BrowserEndpoint, PortalPolicy, PortalSecrets, SecretTargets } from 'n8n-rpa-engine';
 
 export const CREDENTIALS = {
   browser: 'playwrightBrowserApi',
@@ -327,6 +327,63 @@ export function secretVariablesConfig(data: CredentialData): Record<string, stri
     vars[name] = value;
   });
   return vars;
+}
+
+/** The RPA Secret Variables credential's field that limits where its values may be typed. */
+export const MAY_BE_TYPED_INTO = 'May Be Typed Into';
+const IN_SECRET_VARIABLES = 'in the RPA Secret Variables credential';
+/** A program file name as the desktop runner's allowedApps names one: no folder, no drive, ends in .exe. */
+const APP_FILE_NAME = /^[^\\/:*?"<>|\u0000-\u001f]+\.exe$/i;
+export const MAY_BE_TYPED_INTO_EXPRESSION = `${MAY_BE_TYPED_INTO} ${IN_SECRET_VARIABLES} must be typed in, not set with an expression.`;
+/**
+ * A May Be Typed Into line that is refused. It names the line's number and at most its first 40 characters (without a
+ * query or fragment), and nothing of a line that holds one of the credential's values or a user:password@ part.
+ */
+export const mayBeTypedIntoLineRefused = (n: number, line: string, hidden: 'value' | 'userinfo' | false): string => {
+  // A query or fragment (which can carry a token) is cut first, as in every other entry a message shows.
+  const cut = line.replace(/[?#]\S*/g, '');
+  const shownLine = hidden ? '' : ` ("${cut.length > 40 ? `${cut.slice(0, 40)}…` : cut}")`;
+  const why = hidden === 'value'
+    ? "it holds one of this credential's values: list where they may be typed, not the values"
+    : line.includes('*') ? 'wildcards are not allowed, list each exact host' : 'it is neither a program file name such as ErpDemo.exe nor a site host such as erp.example.com';
+  return `Line ${n} of ${MAY_BE_TYPED_INTO} ${IN_SECRET_VARIABLES}${shownLine}: ${why}.`;
+};
+
+/** The host of an Also Allow These Sites entry (allowedHost), or undefined: kept out of a catch block, the caller throws. */
+function hostEntry(entry: string): string | undefined {
+  try {
+    return allowedHost(entry);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The RPA Secret Variables credential's May Be Typed Into → the engine's SecretTargets; undefined when it is empty, which
+ * means no limit. One entry per line: a program file name (ErpDemo.exe, compared without case by the engine) or a site
+ * host, read by the same function as Also Allow These Sites (allowedHost: an exact host, or an http(s) site, no
+ * wildcard, no path). The field takes no expression: a value that is not text, starts with "=" or holds "{{" is refused,
+ * as the node refuses an expression in its literal-only settings. `values` are the credential's secret values, never shown.
+ */
+export function secretTargetsConfig(data: CredentialData, values: readonly string[] = []): SecretTargets | undefined {
+  const raw = data.mayBeTypedInto;
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== 'string' || raw.trimStart().startsWith('=') || raw.includes('{{')) throw new ConfigError(MAY_BE_TYPED_INTO_EXPRESSION);
+  const apps: string[] = [];
+  const hosts: string[] = [];
+  raw.split(/\r?\n/).forEach((text, i) => {
+    const line = text.trim();
+    if (!line) return;
+    if (values.some((v) => v !== '' && line.includes(v))) throw new ConfigError(mayBeTypedIntoLineRefused(i + 1, line, 'value'));
+    if (line.length <= 260 && APP_FILE_NAME.test(line)) {
+      if (!apps.some((a) => a.toLowerCase() === line.toLowerCase())) apps.push(line);
+      return;
+    }
+    const host = line.includes('*') ? undefined : hostEntry(line);
+    if (host === undefined) throw new ConfigError(mayBeTypedIntoLineRefused(i + 1, line, line.split(/\s+/).some(hasUserinfo) ? 'userinfo' : false));
+    if (!hosts.includes(host)) hosts.push(host);
+  });
+  return apps.length || hosts.length ? { apps, hosts } : undefined;
 }
 
 export function signingKey(data: CredentialData): string {
