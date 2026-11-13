@@ -340,8 +340,7 @@
         0
       ],
       "alwaysOutputData": true,
-      "onError": "continueRegularOutput",
-      "notes": "Every active row of playwright_steps, as this workflow may read them, so that an upload under the name of an approved bot becomes its next version. No table yet, or no row: nothing runs under the name."
+      "notes": "Every active row of playwright_steps, as this workflow may read them, so that an upload under the name of an approved bot becomes its next version. Create steps table made the table first; no row: nothing runs under the name."
     },
     {
       "parameters": {
@@ -473,8 +472,7 @@
         240
       ],
       "alwaysOutputData": true,
-      "onError": "continueRegularOutput",
-      "notes": "Every active row of playwright_steps, as this workflow may read them. No table yet, or no row: nothing is found."
+      "notes": "Every active row of playwright_steps, as this workflow may read them. Create steps table made the table first; no row: nothing is found."
     },
     {
       "parameters": {
@@ -789,9 +787,10 @@
       "type": "n8n-nodes-base.dataTable",
       "typeVersion": 1.1,
       "position": [
-        2860,
-        -120
-      ]
+        660,
+        -200
+      ],
+      "notes": "Runs first, before anything reads playwright_steps (n8n runs the topmost branch after Settings first): makes the table when it is missing, as on a new n8n."
     },
     {
       "parameters": {
@@ -867,9 +866,10 @@
       "type": "n8n-nodes-base.dataTable",
       "typeVersion": 1.1,
       "position": [
-        3080,
-        -120
-      ]
+        880,
+        -200
+      ],
+      "notes": "Makes playwright_runs when it is missing, for the workflow the form hands over."
     },
     {
       "parameters": {
@@ -882,8 +882,8 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [
-        3300,
-        -420
+        2860,
+        -120
       ],
       "executeOnce": true,
       "notes": "The version that runs now: after Change or sign again, the active row as The bot to change read it; for an upload under the name of an approved bot, its active row (What it replaces). Sign steps checks it before the review page. For a new bot: an empty item, and Sign steps only names its Site Login."
@@ -1474,6 +1474,11 @@
       "main": [
         [
           {
+            "node": "Create steps table",
+            "type": "main",
+            "index": 0
+          },
+          {
             "node": "Change an approved bot?",
             "type": "main",
             "index": 0
@@ -1522,7 +1527,7 @@
       "main": [
         [
           {
-            "node": "Create steps table",
+            "node": "The approved version",
             "type": "main",
             "index": 0
           }
@@ -1541,17 +1546,6 @@
         [
           {
             "node": "Create run log table",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Create run log table": {
-      "main": [
-        [
-          {
-            "node": "The approved version",
             "type": "main",
             "index": 0
           }

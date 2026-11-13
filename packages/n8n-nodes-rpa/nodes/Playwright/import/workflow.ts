@@ -12,7 +12,7 @@
 import type { DesktopDraft, Draft, FlowNode, UiPathFlow } from 'n8n-rpa-engine';
 import { CREDENTIALS } from '../config.js';
 import { RPA_NODE_TYPE } from '../node-type.js';
-import { RUN_TABLE, RUN_TABLE_COLUMNS, STEPS_TABLE } from '../rows.js';
+import { RUN_TABLE, RUN_TABLE_COLUMNS, STEPS_TABLE, STEPS_TABLE_COLUMNS } from '../rows.js';
 
 export interface WorkflowNode {
   id: string;
@@ -237,6 +237,8 @@ const LOG = {
   create: 'Create run log table', run: 'Log run', write: 'Write run row', failed: 'Log failed run', writeFailed: 'Write failed run row', stop: 'Stop and Error',
 } as const;
 const LOG_NODES = Object.keys(LOG).length;
+/** Drawn before the run log's table, first after the triggers: every Get active steps reads playwright_steps after it. */
+const STEPS_CREATE = 'Create steps table';
 /** n8n's Data Table insert writing the item it gets, column by column (the item holds only the table's columns). */
 const autoRow = () => ({
   mappingMode: 'autoMapInputData',
@@ -886,20 +888,28 @@ export function buildWorkflow(flow: UiPathFlow, drafts: Draft[], opts: BuildWork
   });
   b.reserve('About this import', 'Set once');
   let start: Tail[] = [{ node: 'Run the bot', output: 0 }, { node: 'On a schedule', output: 0 }];
-  // A flow with a Run steps keeps a run log: the table is made when missing, first, as the templates do.
+  // A flow with a Run steps reads the steps table and keeps a run log: both tables are made when missing, first, as the
+  // templates do, so that on an n8n without them Get active steps finds nothing (Run steps then says so) and the log is written.
   const logged = b.hasBrowser([flow.nodes]);
   if (logged) {
-    b.reserve(...Object.values(LOG));
-    b.add(T.dataTable, LOG.create, [STEP, 0], {
+    b.reserve(STEPS_CREATE, ...Object.values(LOG));
+    b.add(T.dataTable, STEPS_CREATE, [STEP, 0], {
+      resource: 'table', operation: 'create', tableName: STEPS_TABLE, columns: { column: STEPS_TABLE_COLUMNS.map((c) => ({ name: c.name, type: c.type })) }, options: { createIfNotExists: true },
+    }, { notes: `Creates ${STEPS_TABLE} when it is missing, before Get active steps reads it.` });
+    b.add(T.dataTable, LOG.create, [2 * STEP, 0], {
       resource: 'table', operation: 'create', tableName: RUN_TABLE, columns: { column: RUN_TABLE_COLUMNS.map((c) => ({ name: c.name, type: c.type })) }, options: { createIfNotExists: true },
     }, { notes: `Creates the run log ${RUN_TABLE} when it is missing.` });
-    b.connect(start, LOG.create);
+    b.connect(start, STEPS_CREATE);
+    b.connect([{ node: STEPS_CREATE, output: 0 }], LOG.create);
     start = [{ node: LOG.create, output: 0 }];
     b.kept = LOG_NODES - 1;
   }
-  b.overflow(b.walk(flow.nodes, start, logged ? 2 * STEP : STEP, 0));
-  // No Run steps fitted under the cap: no run log, and the triggers start the flow directly.
-  if (logged && !b.allRuns.length) b.unlink(LOG.create, ['Run the bot', 'On a schedule']);
+  b.overflow(b.walk(flow.nodes, start, logged ? 3 * STEP : STEP, 0));
+  // No Run steps fitted under the cap: no tables, and the triggers start the flow directly.
+  if (logged && !b.allRuns.length) {
+    b.unlink(LOG.create, [STEPS_CREATE]);
+    b.unlink(STEPS_CREATE, ['Run the bot', 'On a schedule']);
+  }
   b.runLog();
 
   const project = line(flow.name, 120).replace(/^=+/, '').trim() || opts.name;

@@ -12,7 +12,8 @@ folder). Import one with **⋯ → Import → From File** in a new workflow. In 
 | `3-approve-steps.json` | `RPA: 3 Approve steps` | Approval by email: emails the evidence, waits for a person's answer, signs the steps |
 | `5-import-a-bot.json` | `RPA: 5 Import a bot` | A form: upload a bot, review and approve it on the next page, download the workflow that runs it ([Move a bot](../guides/move-a-bot.md)) |
 
-Templates 2, 3 and 5 create the two Data Tables when they are missing.
+Templates 2, 3 and 5, and the workflow the import form hands over, create the two Data Tables when they are missing,
+first, before anything reads or writes them.
 
 ## RPA: 5 Import a bot
 

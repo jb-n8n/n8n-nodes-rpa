@@ -13,6 +13,7 @@ import { Playwright } from '../nodes/Playwright/Playwright.node.js';
 import { RUN_TABLE, RUN_TABLE_COLUMNS, RUN_TABLE_FIRST_COLUMNS, STEPS_TABLE, STEPS_TABLE_COLUMNS } from '../nodes/Playwright/rows.js';
 import { CONFIG_GUIDANCE, GUIDANCE } from '../nodes/Playwright/errors.js';
 import { WORKFLOW_NODE_TYPES } from './fixtures.js';
+import { tablesNotMadeFirst } from './tables-made-first.js';
 
 const PACKAGE = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { name: string };
 const NODE_TYPE = `${PACKAGE.name}.playwright`;
@@ -126,6 +127,8 @@ function lint(w: WorkflowJson): void {
     const p = n.parameters as { steps: string; signature: string; approvedBy: string; options: { expectedVersion: string } };
     expect({ steps: p.steps, signature: p.signature, approvedBy: p.approvedBy, expectedVersion: p.options.expectedVersion }, n.name).toEqual(rowRead(feeds[0]));
   }
+  // On an n8n without the Data Tables (another n8n the file is moved to), each is made before anything reads or writes it.
+  expect(tablesNotMadeFirst(w)).toEqual([]);
   // Naming: only stored identifiers say Playwright.
   expect(text.replaceAll(NODE_TYPE, '').replaceAll(STEPS_TABLE, '').replaceAll(RUN_TABLE, '').match(/playwright/gi) ?? []).toEqual([]);
   // RPA nodes: only parameters the node defines, and always the operation.
@@ -193,6 +196,7 @@ describe('buildWorkflow', () => {
     expect(working(w).map((n) => [n.name, n.type])).toEqual([
       ['Run the bot', 'n8n-nodes-base.manualTrigger'],
       ['On a schedule', 'n8n-nodes-base.scheduleTrigger'],
+      ['Create steps table', 'n8n-nodes-base.dataTable'],
       ['Create run log table', 'n8n-nodes-base.dataTable'],
       ['Get active steps (sap-report-1)', 'n8n-nodes-base.dataTable'],
       ['sap-report-1', NODE_TYPE],
@@ -208,10 +212,11 @@ describe('buildWorkflow', () => {
       ['Write failed run row', 'n8n-nodes-base.dataTable'],
       ['Stop and Error', 'n8n-nodes-base.stopAndError'],
     ]);
-    expect(targets(w, 'Run the bot')).toEqual([['Create run log table']]);
+    expect(targets(w, 'Run the bot')).toEqual([['Create steps table']]);
+    expect(targets(w, 'Create steps table')).toEqual([['Create run log table']]);
     expect(targets(w, 'Create run log table')).toEqual([['Get active steps (sap-report-1)']]);
     // The Schedule Trigger starts the same nodes, and is off until a person sets the time.
-    expect(targets(w, 'On a schedule')).toEqual([['Create run log table']]);
+    expect(targets(w, 'On a schedule')).toEqual([['Create steps table']]);
     expect(byName(w, 'On a schedule')).toMatchObject({ disabled: true, parameters: { rule: { interval: [{ field: 'days', triggerAtHour: 6 }] } } });
     expect(byName(w, 'On a schedule').notes).toBe('Set the time, then turn this node on and publish the workflow. Until then the bot runs only when you click Execute.');
     expect(content(byName(w, 'About this import'))).toContain('- **Run the bot** runs it now. **On a schedule** is off: set the time, turn it on, publish.');
@@ -789,13 +794,14 @@ describe('buildWorkflow', () => {
     const flow = flowOf(Array.from({ length: total }, (_, i): FlowNode => ({ kind: 'browser', sequence: i + 1, displayName: `Browser ${i + 1}` })));
     const w = buildWorkflow(flow, Array.from({ length: total }, (_, i) => draft(`cap-${i + 1}`)), { name: 'cap' });
     lint(w);
-    // The two triggers, the six run log nodes and 246 pairs of two nodes: a 247th would take the workflow past MAX_WORKFLOW_NODES.
+    // The two triggers, the steps table, the six run log nodes and 245 pairs of two nodes: a 246th would take the
+    // workflow past MAX_WORKFLOW_NODES (one node is left, and a pair is never drawn by half).
     const runs = w.nodes.filter((n) => n.type === NODE_TYPE);
-    expect(runs).toHaveLength(246);
-    expect(w.nodes.filter((n) => n.type === 'n8n-nodes-base.dataTable')).toHaveLength(246 + 3);
-    expect(working(w)).toHaveLength(MAX_WORKFLOW_NODES);
+    expect(runs).toHaveLength(245);
+    expect(w.nodes.filter((n) => n.type === 'n8n-nodes-base.dataTable')).toHaveLength(245 + 4);
+    expect(working(w)).toHaveLength(MAX_WORKFLOW_NODES - 1);
     expect(w.nodes.length).toBeLessThanOrEqual(MAX_WORKFLOW_NODES + 3);
-    expect(content(byName(w, '54 more activities'))).toContain('see the report');
+    expect(content(byName(w, '55 more activities'))).toContain('see the report');
     // After a pair that did not fit, nothing smaller is drawn out of order.
     const mixed = buildWorkflow(flowOf([
       ...Array.from({ length: 491 }, (_, i): FlowNode => ({ kind: 'wait', seconds: 1, displayName: `W ${i}` })),
@@ -805,6 +811,9 @@ describe('buildWorkflow', () => {
     lint(mixed);
     expect(mixed.nodes.map((n) => n.name)).not.toContain('Small');
     expect(mixed.nodes.map((n) => n.name)).not.toContain('Get active steps (mx-1)');
+    // No Run steps drawn: no tables either, and the triggers start the flow.
+    expect(mixed.nodes.filter((n) => n.type === 'n8n-nodes-base.dataTable')).toEqual([]);
+    expect(targets(mixed, 'Run the bot')).toEqual([['W 0']]);
     expect(content(byName(mixed, '2 more activities'))).toContain('see the report');
   });
 
@@ -853,13 +862,18 @@ describe('buildWorkflow', () => {
   it('every run writes the run log, and a failed run still ends as failed: Create run log table → … → Run steps → Log run, error → Log failed run → Stop and Error', () => {
     const w = buildWorkflow(flowOf([{ kind: 'browser', sequence: 1, displayName: 'bot', draft: 'bot' }]), [draft('bot')], { name: 'bot', source: 'chrome' });
     lint(w);
-    // Small: 6 nodes before the run log (two stickies, two triggers, Get active steps, Run steps), 12 with it.
+    // Small: 6 nodes before the tables and the run log (two stickies, two triggers, Get active steps, Run steps), 13 with them.
     expect(w.nodes.map((n) => n.name)).toEqual([
-      'About this import', 'Set once', 'Run the bot', 'On a schedule', 'Create run log table', 'Get active steps (bot)', 'bot',
+      'About this import', 'Set once', 'Run the bot', 'On a schedule', 'Create steps table', 'Create run log table', 'Get active steps (bot)', 'bot',
       'Log run', 'Write run row', 'Log failed run', 'Write failed run row', 'Stop and Error',
     ]);
-    expect(targets(w, 'Run the bot')).toEqual([['Create run log table']]);
-    expect(targets(w, 'On a schedule')).toEqual([['Create run log table']]);
+    expect(targets(w, 'Run the bot')).toEqual([['Create steps table']]);
+    expect(targets(w, 'On a schedule')).toEqual([['Create steps table']]);
+    // On an n8n without the tables (the file moved to another n8n), Get active steps finds nothing: Run steps then says so.
+    expect(targets(w, 'Create steps table')).toEqual([['Create run log table']]);
+    expect(byName(w, 'Create steps table').parameters).toEqual({
+      resource: 'table', operation: 'create', tableName: 'playwright_steps', columns: { column: STEPS_TABLE_COLUMNS.map((c) => ({ name: c.name, type: c.type })) }, options: { createIfNotExists: true },
+    });
     expect(targets(w, 'Create run log table')).toEqual([['Get active steps (bot)']]);
     expect(targets(w, 'bot')).toEqual([['Log run'], ['Log failed run']]);
     expect(targets(w, 'Log run')).toEqual([['Write run row']]);
