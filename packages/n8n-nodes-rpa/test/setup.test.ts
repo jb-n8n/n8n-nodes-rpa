@@ -522,7 +522,7 @@ describe('npx n8n-nodes-rpa setup', () => {
     const e = await run(setup(editor.url), { ...ENV, N8N_EDITOR_BASE_URL: 'https://example.com/n8n' });
     expect(e.stdout).toContain(`  Address:    https://example.com/n8n/form/${formOf(editor)}\n`);
     // Nothing usable from the environment: the address as reached, and one line to say what to change.
-    for (const env of [{}, { WEBHOOK_URL: 'https://user:made-up@n8n.example.com/' }, { WEBHOOK_URL: 'ftp://n8n.example.com/' }, { WEBHOOK_URL: 'not an address' }]) {
+    for (const env of [{}, { WEBHOOK_URL: 'https://user:made-up@n8n.example.com/' }, { WEBHOOK_URL: 'ftp://n8n.example.com/' }, { WEBHOOK_URL: 'not an address' }] as Record<string, string>[]) {
       const fake = await n8n();
       const o = await run(setup(fake.url), { ...ENV, ...env });
       expect(o.code, o.out).toBe(0);
