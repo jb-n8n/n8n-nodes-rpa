@@ -264,8 +264,11 @@ export const LOG_RUN_ROW = rowExpression([
   'durationMs: $json.durationMs ?? null', 'llmTokens: $json.llmTokens ?? null', "code: ''", 'executionId: $execution.id',
   "message: ''", "guidance: ''", "file: [].concat($json.files ?? []).map((f) => f?.fileName).filter((n) => n).join(', ')", "account: $json.account ?? ''",
 ].join(', '));
-/** The run log keeps at most this many characters of a failure's message (the rest is in Run steps' error item). */
-export const LOGGED_MESSAGE_CHARS = 300;
+/**
+ * The run log keeps at most this many characters of a failure's message (the rest is in Run steps' error item). Long
+ * enough for the longest message that ends in a command to run (the runner's policy and connection messages).
+ */
+export const LOGGED_MESSAGE_CHARS = 1000;
 /**
  * A failed run: Run steps' error item, its facts under details (a configuration error has no code: config_error), the
  * message as the node gives it (masked: the node error's own message without its code), cut to LOGGED_MESSAGE_CHARS

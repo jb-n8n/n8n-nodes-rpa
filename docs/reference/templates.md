@@ -56,7 +56,8 @@ first, before anything reads or writes them.
   the step lists named after it, `<name>-1`, `<name>-2`): the review page says `version 5, replacing version 4`, the
   part of each step list that has a running version says how it differs from that version (**Compared with the
   running version**, the change path's comparison, for each list: `<name>: changed from the approved version 4: step
-  6.`, or `unchanged`, or that it could not be compared; a new list says nothing), and
+  6.`, or `unchanged`, or that it could not be compared; a new list says nothing; which desktop steps are writes is
+  chosen again on the review page, so that mark is not compared, and the line says so), and
   the last page `Approved and signed: <name> version 5 is now the version that runs, replacing version 4.` or
   `Rejected: <name> v5. Nothing was signed. Version 4 keeps running.` After a change or a re-sign it says
   `Signed again: <name> version N, unchanged.`, `Changed: <name> version N is now the version that runs, replacing
@@ -170,7 +171,7 @@ after `approvalTimeoutHours` (72), then:
 | `llmTokens` | number | Model tokens used |
 | `code` | string | Error code, empty on success |
 | `executionId` | string | The n8n execution |
-| `message` | string | What failed, as Run Steps' error item says it (masked as the node masks it), cut to 300 characters. Empty on success |
+| `message` | string | What failed, as Run Steps' error item says it (masked as the node masks it), cut to 1,000 characters. Empty on success |
 | `guidance` | string | What to do about it: the same text as the node error's description. Empty on success |
 | `file` | string | The name of the file the run returned, empty when none |
 | `account` | string | The user name the RPA Site Login signed in with, empty without one. Never the password |

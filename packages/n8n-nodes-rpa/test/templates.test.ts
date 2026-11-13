@@ -2927,6 +2927,17 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       .toEqual(Array(2).fill('line-item-export: could not be compared with the approved version 4: two step lists have this name. Read every step.'));
     // A new bot: no line anywhere.
     expect(page([], [imported('line-item-export', '2026-09-30', 1)]).item).toEqual({ lists: [] });
+    // Desktop steps: the approved version holds which steps are writes (chosen on the review page); a file never does.
+    // That mark alone is not a change, the line says that it is not compared, and a real change is still named by its step.
+    const desk = (save: string, write: boolean) => ({ surface: 'desktop', name: 'line-item-export', app: { exe: 'ErpDemo.exe' }, steps: [{ intent: 'Type the date', fill: { uia: { path: [{ name: 'To' }] }, value: '2026-09-30' } }, { intent: 'Click Save', click: { uia: { path: [{ name: save }] } }, ...(write ? { write: true } : {}) }] });
+    const deskRow = (save: string) => ({ ...row('line-item-export', 3), steps: JSON.stringify({ ...desk(save, true), version: 3 }) });
+    const deskFile = (save: string) => ({ json: { ...list('line-item-export', 4).json, steps: { ...desk(save, false), version: 4 } } });
+    const NOT_COMPARED = ' Which steps are writes is not compared: it is chosen again on this page.';
+    expect(page([deskRow('Save')], [deskFile('Save')]).item).toEqual({ lists: [{ name: 'line-item-export', unchanged: true, compared: `line-item-export: unchanged from the approved version 3.${NOT_COMPARED}` }] });
+    expect(page([deskRow('Save')], [deskFile('Save all')]).item).toEqual({ lists: [{ name: 'line-item-export', unchanged: false, compared: `line-item-export: changed from the approved version 3: step 2.${NOT_COMPARED}` }] });
+    // Only a step's own mark is left out: a field named write deeper in a step still counts.
+    const deep = { json: { ...list('line-item-export', 4).json, steps: { ...desk('Save', false), version: 4, steps: [desk('Save', false).steps[0], { ...desk('Save', false).steps[1], click: { uia: { path: [{ name: 'Save' }] }, write: true } }] } } };
+    expect(page([deskRow('Save')], [deep]).item).toMatchObject({ lists: [{ unchanged: false, compared: `line-item-export: changed from the approved version 3: step 2.${NOT_COMPARED}` }] });
     // The change path keeps its own line at the top (Compared with the approved version); this node finds no upload there.
     expect(evaluate(String(byName(t, RUNNING).parameters.jsonOutput), { $: nodesRan({ Settings: [[{ json: { name: 'line-item-export' } }]], 'Import steps': [[{ json: {} }], [imported('line-item-export', '2026-09-30')]] }) })).toEqual({ lists: [] });
     // The version that runs is what Sign steps checks before the review page, as on a change.

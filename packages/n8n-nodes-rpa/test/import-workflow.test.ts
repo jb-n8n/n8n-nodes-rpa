@@ -5,6 +5,7 @@ import { deflateRawSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { Workflow, type IConnections, type INode, type INodeProperties, type INodeTypes } from 'n8n-workflow';
 import { importSource, type Draft, type FlowNode, type ImportOptions, type UiPathFlow } from 'n8n-rpa-engine';
+import { runnerAppNotAllowed, runnerNoTcpAnswer } from '../../engine/src/messages.js';
 import { bound } from '../../engine/test/timing.js';
 import { zip } from '../../engine/test/zip-fixtures.js';
 import { buildWorkflow, fromRow, jsName, LOG_FAILED_ROW, LOGGED_MESSAGE_CHARS, LOG_RUN_ROW, MAX_WORKFLOW_NODES, STOP_MESSAGE, workflowFile, type WorkflowJson, type WorkflowNode } from '../nodes/Playwright/import/workflow.js';
@@ -916,13 +917,19 @@ describe('buildWorkflow', () => {
     const failedRow = shape(LOG_FAILED_ROW, lockedOut, all);
     expect(Object.keys(failedRow)).toEqual(RUN_TABLE_COLUMNS.map((c) => c.name));
     expect(failedRow).toMatchObject({ code: 'locked_out', name: 'bot', executionId: '22', message: lockedOut.message, guidance: GUIDANCE.locked_out });
-    // A long message is cut to 300 characters (a character outside the BMP counts once), so the owner's view of the
+    // A long message is cut to 1,000 characters (a character outside the BMP counts once), so the owner's view of the
     // table stays readable; the whole message is on Run steps' error item.
-    const long = 'é'.repeat(250) + '😀'.repeat(100);
+    expect(LOGGED_MESSAGE_CHARS).toBe(1000);
+    const long = 'é'.repeat(950) + '😀'.repeat(100);
     const cut = String(shape(LOG_FAILED_ROW, { ...lockedOut, message: long }, all).message);
     expect(Array.from(cut)).toHaveLength(LOGGED_MESSAGE_CHARS);
-    expect(cut).toBe(`${'é'.repeat(250)}${'😀'.repeat(49)}…`);
-    expect(shape(LOG_FAILED_ROW, { ...lockedOut, message: 'x'.repeat(300) }, all).message).toBe('x'.repeat(300));
+    expect(cut).toBe(`${'é'.repeat(950)}${'😀'.repeat(49)}…`);
+    expect(shape(LOG_FAILED_ROW, { ...lockedOut, message: 'x'.repeat(1000) }, all).message).toBe('x'.repeat(1000));
+    // The longest messages that end in what to run are kept whole: the app the runner may not start, no answer from a private address.
+    for (const whole of [runnerAppNotAllowed('ErpDemo.exe'), runnerNoTcpAnswer('10.0.0.5:8765', 10, '10.0.0.5')]) {
+      expect(whole.length).toBeLessThan(LOGGED_MESSAGE_CHARS);
+      expect(shape(LOG_FAILED_ROW, { ...lockedOut, message: whole }, all).message).toBe(whole);
+    }
     // A table made by an earlier version: the row has only its ten columns, so n8n's insert never refuses it.
     expect(Object.keys(shape(LOG_FAILED_ROW, lockedOut, first))).toEqual(RUN_TABLE_FIRST_COLUMNS.map((c) => c.name));
     expect(Object.keys(shape(LOG_RUN_ROW, { name: 'bot', lane: 'script', version: 1, hash: 'h', durationMs: 900 }, first))).toEqual(RUN_TABLE_FIRST_COLUMNS.map((c) => c.name));

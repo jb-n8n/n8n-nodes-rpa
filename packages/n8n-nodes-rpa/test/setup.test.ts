@@ -7,6 +7,7 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { runnerNoTcpAnswer } from '../../engine/src/messages.js';
 
 const CLI = fileURLToPath(new URL('../dist/setup.mjs', import.meta.url));
 const FAKE_TTY = fileURLToPath(new URL('./fixtures/fake-tty.mjs', import.meta.url));
@@ -43,6 +44,8 @@ interface Options {
   users?: boolean;
   /** POST /credentials/{id}/test: the node's own message, a failed test, or 403 (a key without credential:read). */
   test?: 'ok' | 'error' | 'forbidden';
+  /** What a failed test says (default RUNNER_UNREACHABLE). */
+  testMessage?: string;
 }
 
 // The fake's projects, as n8n 2.45 describes them: two personal projects and a team project.
@@ -122,7 +125,7 @@ async function fakeN8n(o: Options = {}) {
       if ((m = /^POST \/api\/v1\/credentials\/([\w-]+)\/test$/.exec(route))) {
         if (o.test === 'forbidden') return send(403, { message: 'Forbidden' });
         if (!state.credentials.some((x) => x.id === m![1])) return send(404, { message: 'Not Found' });
-        if (o.test === 'error') return send(200, { status: 'Error', message: RUNNER_UNREACHABLE });
+        if (o.test === 'error') return send(200, { status: 'Error', message: o.testMessage ?? RUNNER_UNREACHABLE });
         return send(200, { status: 'OK', message: RUNNER_CONNECTED });
       }
       if ((m = /^PATCH \/api\/v1\/credentials\/([\w-]+)$/.exec(route))) {
@@ -706,6 +709,11 @@ describe('npx n8n-nodes-rpa setup', () => {
       expect(f.code, f.out).toBe(0);
       expect(f.out).toContain(`tested   credential "RPA Desktop Runner account" (id c-hand), and it failed: ${RUNNER_UNREACHABLE}`);
       expectNoSecrets(f.out);
+      // The node's longest message ends in the command to run on the Windows machine: it is printed whole.
+      const long = runnerNoTcpAnswer('wss://10.0.0.5:8765/rpa/v1', 10, '10.0.0.5');
+      expect(long.length).toBeGreaterThan(300);
+      const l = await run(setup((await n8n({ credentials: [HAND], test: 'error', testMessage: long })).url), ENV);
+      expect(l.out).toContain(`and it failed: ${long}`);
       const forbidden = await n8n({ credentials: [HAND], test: 'forbidden' });
       const r = await run(setup(forbidden.url), ENV);
       expect(r.code, r.out).toBe(0);

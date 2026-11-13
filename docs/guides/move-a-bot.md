@@ -135,8 +135,8 @@ form asks for nothing more. Without one, the last page says:
    and choose **Approve and sign** or **Reject**.
 
 With the box left empty, the steps are the active row's steps as the workflow reads them from the Data Table: they do
-not pass through your browser. Pasted text is taken as you typed it. The review page's first line says whether the
-steps differ from the approved version, and which steps or settings do. Text that is not a step document ends on a
+not pass through your browser. Pasted text is taken as you typed it. A line near the top of the review page, in bold, says
+whether the steps differ from the approved version, and which steps or settings do. Text that is not a step document ends on a
 page that says so, and nothing changes.
 
 Approved, the steps become the next version under that name (version 2 replaces version 1), signed with the current

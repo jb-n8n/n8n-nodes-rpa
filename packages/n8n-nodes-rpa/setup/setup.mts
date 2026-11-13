@@ -498,7 +498,7 @@ function noDesktopRunner(name: string, items: any[], home: string | undefined): 
 }
 
 /** A message from n8n fit for one printed line: control characters removed, spaces collapsed, cut at 300 characters. */
-const oneLine = (text: unknown) => String(text ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300);
+const oneLine = (text: unknown, most = 300) => String(text ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, most);
 
 /**
  * Asks n8n to test the RPA Desktop Runner credential (POST /credentials/{id}/test): n8n runs the node's own test, which
@@ -510,7 +510,8 @@ async function testRunner(client: Client, ref: Ref) {
   say(`testing  ${what}: n8n connects to the Windows machine (up to a minute)`);
   const r = await client.api('POST', `/credentials/${encodeURIComponent(ref.id)}/test`, undefined, { timeoutMs: 90_000 }).catch(() => undefined);
   const status = r?.status === 200 ? r.json?.status : undefined;
-  const message = oneLine(r?.json?.message);
+  // The node's own message, whole: the longest ends in the command to run on the Windows machine.
+  const message = oneLine(r?.json?.message, 1200);
   if (status === 'OK') say(`tested   ${what}: ${message || 'OK'}`);
   else if (status === 'Error') say(`tested   ${what}, and it failed: ${message || 'n8n gave no reason'}`);
   else {
