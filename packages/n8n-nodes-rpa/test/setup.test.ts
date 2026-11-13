@@ -29,7 +29,7 @@ const NEW_TOKEN = 'made-up-new-runner-token';
 const NEW_LINE = `rpa-runner://rpa.example.com:8765/rpa/v1#token=${NEW_TOKEN}&fingerprint=${'CD'.repeat(32)}`;
 const BROWSER_TOKEN = 'browser-token-abcdefghijklmnopqrstuvwxyz-0123456789';
 // The node's own test messages for an RPA Desktop Runner (the engine's runnerConnected and runnerUnreachable).
-const RUNNER_CONNECTED = 'Connected to the desktop runner (session not interactive)';
+const RUNNER_CONNECTED = 'Connected to the desktop runner (it has no Windows session to work in yet)';
 const RUNNER_UNREACHABLE = 'Could not connect to the desktop runner at wss://win-1.example.internal:8765/rpa/v1 (no answer within 60 s). Is it running, and is the port open?';
 const FIELDS: Record<string, string[]> = {
   playwrightScriptSigningApi: ['notice', 'secretKey'],

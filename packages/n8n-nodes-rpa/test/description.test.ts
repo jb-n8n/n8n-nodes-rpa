@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
 import { NO_MODEL } from '../nodes/Playwright/operations/common.js';
@@ -6,12 +6,12 @@ import { USE_CASE_WORDS } from 'n8n-rpa-engine';
 import {
   NodeHelpers, Workflow, type INodeCredentialDescription, type INodeParameters, type INodeProperties, type INodePropertyOptions, type INodeType, type INodeTypes,
 } from 'n8n-workflow';
-import { parseScript } from 'n8n-rpa-engine';
+import { networkSentence, parseScript, VALUE_NOT_TAKEN, valueNotTaken } from 'n8n-rpa-engine';
 import { INPUTS_EXPRESSION, nodeInputs, nodeOutputs, OUTPUTS_EXPRESSION } from '../nodes/Playwright/description/io.js';
 import { OPERATIONS, properties, SUBTITLE, URL_HINT } from '../nodes/Playwright/description/index.js';
 import { ALL_OPERATIONS, ID_PATTERN_OPTION, QUICK_OPERATIONS } from '../nodes/Playwright/description/options.js';
 import { STEPS_PLACEHOLDER, UNSIGNED_NOTICE } from '../nodes/Playwright/description/runSteps.js';
-import { CODE_WORKFLOW_GUIDANCE, GUIDANCE, guidanceFor, LOGIN_PAGE_GUIDANCE, NO_TOTP_SECRET_GUIDANCE, PASSWORD_CHANGED_GUIDANCE } from '../nodes/Playwright/errors.js';
+import { CODE_WORKFLOW_GUIDANCE, GUIDANCE, guidanceFor, LOGIN_PAGE_GUIDANCE, NO_TOTP_SECRET_GUIDANCE, PASSWORD_CHANGED_GUIDANCE, SITE_ADDRESS_GUIDANCE, VALUE_NOT_TAKEN_GUIDANCE, writeMarkGuidance } from '../nodes/Playwright/errors.js';
 import { SITE_LOGIN_PASSWORD_CHANGED, siteLoginLockedOut } from '../nodes/Playwright/execute.js';
 import { COMPILERS, quickFieldNames, type QuickOp } from '../nodes/Playwright/operations/quick.js';
 import { executeRunSteps, STEPS_EMPTY_NEEDS_REPAIR } from '../nodes/Playwright/operations/runSteps.js';
@@ -368,12 +368,12 @@ describe('wording and guidance', () => {
       auth_blocked: 'The site asked for a second factor that this run could not answer; the message says which. A push message or a hardware key needs a person to sign in.',
       site_down: 'The site did not answer, returned a server error, or the first page did not finish loading in time. Try again later.',
       browser_unavailable: 'The browser server could not be reached or was rejected. Check the RPA Browser credential (README: Where the browser runs).',
-      drift_detected: 'A step did not find what it expected; the message says which step and what it found. Correct that step, or record it again, and approve the new version. Browser steps can also repair themselves with AI Repair.',
+      drift_detected: 'A step did not find what it expected; the message says which step and what it looked for. Correct that step, or record it again, and approve the new version. Browser steps can also repair themselves with AI Repair.',
       not_found: 'The page or the data was not found.',
       incomplete: 'Not every row the page states was read, a capture failed, a limit was hit, the run timed out, or it was cancelled.',
-      script_untrusted: 'Nothing ran: the steps are not signed, or their signature does not fit this node (another Step Signing key, Site Login, name, version or start site). Approve the steps again, or set the node up as it was when they were signed.',
+      script_untrusted: 'Nothing ran: the steps are not signed, or their signature does not fit this node (another Step Signing key, Site Login, name, version or start site), or their row was changed after they were approved. Approve the steps again after reading every step, or set the node up as it was when they were signed.',
       policy_violation: 'The run tried something its rules do not allow and stopped; the message says what was refused. If that was meant, change the rule that refused it where it is kept: in the RPA Site Login, the RPA Secret Variables credential, this node\'s Options, or the desktop runner\'s policy on the Windows machine. For a desktop step that saves or sends, the rule is its mark as a write, set when its steps are approved.',
-      locked_out: 'No login was tried, because an earlier login of this account failed. Correct the username or password in the RPA Site Login credential, or, when its Username and Password are expressions, in the data they read, and run again: a changed login gets one try. If the login was right, or the account is unlocked now, type a new value (any text) in Options → Login Breaker Reset Key.',
+      locked_out: 'Correct the username or password in the RPA Site Login credential, or, when its Username and Password are expressions, in the data they read, and run again: a changed login gets one try. If the login was right, or the account is unlocked now, type a new value (any text) in Options → Login Breaker Reset Key.',
       busy: 'Another run using this Site Login or desktop runner is in progress. This run was skipped.',
       password_change_failed: 'The site did not confirm the new password: its change-password page came back, or still showed when the wait for its answer ran out (then the new password may or may not be in force). The login breaker stays closed. Keep the pending password, and check the site\'s password rules and the run variable that holds it.',
       runner_unavailable: 'n8n could not use the desktop runner; the message says why. Check the RPA Desktop Runner credential, then run rpa status on the runner machine.',
@@ -392,6 +392,26 @@ describe('wording and guidance', () => {
     expect(guidanceFor('policy_violation', notListed)).toBe(LOGIN_PAGE_GUIDANCE);
     expect(guidanceFor('policy_violation', 'Blocked: the page tried to open cdn.other.com, which is not allowed.')).toBe(GUIDANCE.policy_violation);
     expect(guidanceFor('locked_out', SITE_LOGIN_PASSWORD_CHANGED)).toBe(PASSWORD_CHANGED_GUIDANCE);
+    // IB-10: the engine's sentences for a site the browser could not reach, and for a value a field did not take.
+    expect(guidanceFor('site_down', networkSentence('page.goto: net::ERR_NAME_NOT_RESOLVED at http://sandbox:8080/acme/login'))).toBe(SITE_ADDRESS_GUIDANCE);
+    expect(guidanceFor('site_down', 'Open: page.goto: net::ERR_CONNECTION_REFUSED at http://a/')).toBe(SITE_ADDRESS_GUIDANCE);
+    expect(guidanceFor('site_down', 'HTTP 503 at the start page')).toBe(GUIDANCE.site_down);
+    expect(guidanceFor('policy_violation', `Step 2 (Type into From): ${valueNotTaken('"From"', '"x"', 'locator.fill: Error: Malformed value')}`)).toBe(VALUE_NOT_TAKEN_GUIDANCE);
+    for (const g of [SITE_ADDRESS_GUIDANCE, VALUE_NOT_TAKEN_GUIDANCE]) expect(g).not.toMatch(/[<>]/);
+    // IW-4: a desktop step that pressed a protected button or key without its write mark. The runner's refusals of that
+    // kind (its source, the only place the words are made) all say "needs write: true"; the guidance names the step.
+    const runner = readFileSync(new URL('../../../desktop/runner/src/Rpa.Runner.Core/RunnerService.cs', import.meta.url), 'utf8');
+    const writeRefusals = [...runner.matchAll(/PolicyRefused\(\$?"([^"]*write: true[^"]*)"\)/g)].map((m) => m[1]);
+    expect(writeRefusals.length).toBeGreaterThanOrEqual(4);
+    for (const r of writeRefusals) expect(r).toContain('needs write: true');
+    const refused = 'Step 9 (Click Post): the target is a declared write control and needs write: true';
+    expect(runner).toContain('is a declared write control and needs write: true');
+    expect(guidanceFor('policy_violation', refused)).toBe(writeMarkGuidance('9'));
+    expect(writeMarkGuidance('9')).toContain('tick step 9 under "Which of these steps save, send or submit?"');
+    expect(guidanceFor('policy_violation', 'the key Enter could reach a declared write control of this run and needs write: true (only Tab, arrows, Home, End, PageUp, PageDown and Escape do not)')).toBe(writeMarkGuidance());
+    expect(writeMarkGuidance()).not.toMatch(/[<>]|undefined/);
+    // errors.ts matches the engine's text by its words (the node never loads the engine to read a constant).
+    expect(VALUE_NOT_TAKEN).toBe(' did not take the value ');
     expect(guidanceFor('locked_out', siteLoginLockedOut('example.com'))).toBe(GUIDANCE.locked_out);
     // No message names a version: the history of the breaker is in the changelog.
     for (const text of [...Object.values(GUIDANCE), CODE_WORKFLOW_GUIDANCE, NO_TOTP_SECRET_GUIDANCE, LOGIN_PAGE_GUIDANCE, PASSWORD_CHANGED_GUIDANCE]) {

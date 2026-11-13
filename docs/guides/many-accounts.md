@@ -49,8 +49,10 @@ It makes and publishes **RPA: 5 Import a bot (Sample accounts)**, with this Site
 steps**, and prints its address: `/form/rpa-import-sample-accounts`. Run again, also after the Site Login was renamed,
 it finds that form by the Site Login it holds and makes no second one. It signs with the same **RPA Step Signing** key
 and leaves your first form as it is. Leave out `--allow-private-network` for a site on the internet. Use this form for
-the bots of this Site Login: the workflow it hands over has the Site Login on its RPA node. A bot is changed or signed
-again on the form it was approved on.
+the bots of this Site Login: the workflow it hands over has the Site Login on its RPA node, and its note names this form
+and its address. A bot is changed or signed again on the form it was approved on. Every form lists every approved
+bot, so a bot opened on another Site Login's form gets a red warning on its review page: change it on its own form.
+Approved there, it would run only with that form's Site Login, and its own runs would stop.
 
 ## Try it on the sample site
 
@@ -73,8 +75,8 @@ The sample site of [Your first browser bot](browser-bot.md) has three accounts: 
    ```
 
 4. Click **Execute workflow**. The Data output of **sandbox-rows-accounts** has two items, `account` `summit-ops` and
-   `lakeside-ops`, each with the notices it read. Its error output has harbor-ops: `login_failed`, with `guidance` that
-   says what to do. **Log failed run** writes its row, and the execution ends as failed at **Stop and Error**.
+   `lakeside-ops`, each with the notices it read. Its error output has harbor-ops: `login_failed`, with `details.guidance`,
+   which says what to do. **Log failed run** writes its row, and the execution ends as failed at **Stop and Error**.
 5. Execute it again: harbor-ops fails `locked_out` and tries no login, the other two run. Change its password to
    `harbor-password` in **Get accounts** and execute again: all three run.
 

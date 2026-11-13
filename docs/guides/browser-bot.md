@@ -109,7 +109,7 @@ steps written as JSON. It signs in, opens the sandbox's SAP report screen, runs 
    The next page lists the steps, says where the bot signs in, and shows the proof: `downloaded
    "LINEITEMS_1000_2026-09-01_2026-09-30.csv"`. The page builds each step's sentence from the step itself. A
    step's own description stands beside it in grey, as `(the author calls it: …)`, and in red when it names another
-   action or site: read the red ones twice. The sample shows none. Under **Decision**, choose **Approve and sign**, then **Submit**.
+   action or site, or a value the step does not hold: read the red ones twice. The sample shows none. Under **Decision**, choose **Approve and sign**, then **Submit**.
 4. The last page says `Approved and signed: sandbox-line-items version 1 is now the version that runs under that name.` Your
    browser downloads `sandbox-line-items.workflow.json`, the workflow that runs the bot.
 
@@ -133,8 +133,8 @@ If the last page says `Nothing to approve`, it names the problem:
 
 Each run writes one row to `playwright_runs`, a table in n8n's Data Tables (**Log run**). A failed run writes its
 error code there (**Log failed run**) and then stops at **Stop and Error**, so it shows as failed under **Executions**.
-After a failed run, open the RPA node: the failed item on its error output has a `guidance` field that says what to
-do. **Stop and Error** and the run log's row show it too.
+After a failed run, open the RPA node: the failed item on its error output has `details.guidance`, which says what
+to do. **Stop and Error** and the run log's row show it too.
 To run the bot on a schedule, open **On a schedule**, set the time, turn the node on, and **Publish** the workflow.
 
 **A bot that reads rows.** `docs/samples/sandbox-rows.steps.json` signs in and reads the sample site's notices. Import

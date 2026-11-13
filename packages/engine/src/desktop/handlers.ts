@@ -2,7 +2,7 @@
 // its own floor (allowed apps and windows, declared write controls, gated keys); a step declared `write: true` by its
 // owner is the only one that carries the write marker.
 
-import { runBinaryTooLarge, UNSIGNED_SECRET_VARIABLE } from '../messages.js';
+import { emptyChoice, runBinaryTooLarge, UNSIGNED_SECRET_VARIABLE } from '../messages.js';
 import { renderVars, SECRET_FILL_VALUE } from '../secrets/render.js';
 import { secretFillValues } from '../secrets/secret-fills.js';
 import { FILE_CHECK_FAILED_PREFIX, checkFile } from '../steps/file-check.js';
@@ -124,7 +124,11 @@ const fill: Handler = async (ctx, step, state, timeout) => {
 const select: Handler = async (ctx, step, state, timeout) => {
   const s = step as unknown as D<'select'>;
   // An option is the name of an item the app lists, not typed text: rendered, not masked.
-  return (await actOn(ctx, s, s.select.field, 'select', state, timeout, { value: renderVars(s.select.option, ctx.vars, ctx.masker) })).candidate;
+  const value = renderVars(s.select.option, ctx.vars, ctx.masker);
+  // Run variables that are empty name no item: said now, instead of after the wait for an item without a name.
+  const names = [...String(s.select.option).matchAll(/\{\{\s*var\.([A-Za-z0-9_]+)\s*\}\}/g)].map((m) => m[1]);
+  if (value.trim() === '' && names.length) throw new Error(emptyChoice([...new Set(names)]));
+  return (await actOn(ctx, s, s.select.field, 'select', state, timeout, { value })).candidate;
 };
 
 const check: Handler = async (ctx, step, state, timeout) => {

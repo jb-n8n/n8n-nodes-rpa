@@ -1,3 +1,4 @@
+import { VALUE_NOT_TAKEN } from '../messages.js';
 import type { ErrorCode, StepFailure, Violation } from '../types.js';
 
 /** Prefix of a step failure message that reports a named detect outcome (e.g. `detected:login_failed`). */
@@ -25,10 +26,15 @@ export function stripShownPrefix(message: string): string {
   const p = SHOWN_PREFIXES.find((x) => message.startsWith(x));
   return p ? message.slice(p.length) : message;
 }
-/** The lane message for a failed step: `<intent>: <message>`, or the bare text of a limit or capture failure. */
-export function shownFailure(intent: string, message: string): string {
+/**
+ * The lane message for a failed step: `<intent>: <message>`, or the bare text of a limit or capture failure. A value
+ * the field did not take names the step by its number first (`index`, from 0): its intent may still name an old value.
+ */
+export function shownFailure(intent: string, message: string, index?: number): string {
   const stripped = stripShownPrefix(message);
-  return stripped !== message ? stripped : `${intent}: ${message}`;
+  if (stripped !== message) return stripped;
+  if (index !== undefined && message.startsWith('the field ') && message.includes(VALUE_NOT_TAKEN)) return `Step ${index + 1} (${intent}): ${message}`;
+  return `${intent}: ${message}`;
 }
 
 /** Maps a failure class to its public error code ('drift' becomes 'drift_detected'). */
@@ -56,6 +62,8 @@ export function classifyFailure(f: FailureFacts): FailureClass {
   if (msg.startsWith(`${DETECTED_PREFIX}password_change_failed`)) return 'password_change_failed';
   if (lockedText) return 'account_locked';
   if (INCOMPLETE_PREFIXES.some((p) => msg.startsWith(p))) return 'incomplete';
+  // A value the field's type refuses (handlers/basic.ts fill): the step does not fit the page, the page did not drift.
+  if (msg.startsWith('the field ') && msg.includes(VALUE_NOT_TAKEN)) return 'policy_violation';
   if (NETWORK.test(msg)) return 'site_down';
   return 'drift';
 }

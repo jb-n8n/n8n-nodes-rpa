@@ -31,6 +31,7 @@ export const LOOKS_DESTRUCTIVE = 'looks like it deletes, cancels, pays, sends or
 export const UNSIGNED_REQUIRED =
   'The steps are not signed, or the signature is not valid, and Require Signed Steps is on. '
   + 'To sign a bot again, for example after the signing key changed, open the import form, leave Bot file empty and type the bot\'s name. '
+  + 'Its steps may also have been changed in the Data Table after they were approved: read every step on the form before you approve. '
   + 'Steps used without the form: sign them with Sign Steps first.';
 export const SIGNATURE_INVALID =
   'The signature is not valid for these steps: it does not match their name, version, start site, Site Login or approver.';
@@ -147,6 +148,15 @@ const locatorSuggestion = (desc: string): string =>
   desc.startsWith('Visible Text ') || desc.startsWith('Form Label ')
     ? 'Check the spelling or try Find by: Role and Name.'
     : 'Check the spelling or try Find by: Visible Text.';
+/**
+ * For signed steps, in place of locatorSuggestion: their owner cannot change a locator on the node ("Find by" is a field
+ * of a node whose steps are typed in), so the message names the two ways on.
+ */
+export const SIGNED_CONTROL_GONE =
+  'The page no longer has that control. To go on, change the bot on the import form, or let self-repair fix it if it is set up (AI Repair on the RPA node).';
+/** A step failure of signed steps: the Find-by advice of locatorNotFound replaced by SIGNED_CONTROL_GONE; anything else unchanged. */
+export const signedStepMessage = (message: string): string =>
+  message.replace(/Check the spelling or try Find by: (?:Visible Text|Role and Name)\./, SIGNED_CONTROL_GONE);
 export const locatorNotFound = (desc: string, url: string, seconds: number): string =>
   `No element found for ${desc} on ${url} after ${seconds} s. ${locatorSuggestion(desc)}`;
 export const locatorNotUnique = (desc: string, count: number): string =>
@@ -156,6 +166,37 @@ export const countMismatch = (expected: number, stated: string, found: number): 
 export const notReachedNetworkIdle = (seconds: number): string => `the page did not reach network idle within ${seconds} s`;
 export const notLoaded = (seconds: number): string => `the page did not finish loading within ${seconds} s`;
 export const BROWSER_ERROR_PAGE = 'the browser showed an error page instead of the site';
+
+/** What the browser's network errors that a first run meets mean, by Chromium's name for them (net::ERR_…). */
+const NETWORK_SENTENCES: [RegExp, (host: string) => string][] = [
+  [/^ERR_NAME_NOT_RESOLVED$/, (h) => `${h} could not be found: no site answers to that name. Check the address, and that the site is up.`],
+  [/^ERR_CONNECTION_REFUSED$/, (h) => `${h} refused the connection: nothing answers at that address and port. Check the address, and that the site is up.`],
+  [/^ERR_(CONNECTION_)?TIMED_OUT$/, (h) => `${h} did not answer in time. Check the address, or try again later.`],
+  [/^ERR_(CERT_[A-Z_]+|SSL_[A-Z_]+|BAD_SSL_CLIENT_AUTH_CERT)$/, (h) => `The certificate of ${h.replace(/^The site/, 'the site')} was not accepted: it may have expired, be made by the site itself, or name another site. Check the address, or the site's certificate.`],
+];
+/**
+ * A browser error that names a network failure (`page.goto: net::ERR_NAME_NOT_RESOLVED at http://site/x`) as a sentence
+ * that names the site and says what happened, with the browser's own text after it in brackets for support; any other
+ * text unchanged. The bracketed text keeps `net::ERR_`, which classify.ts reads (site_down).
+ */
+export function networkSentence(text: string): string {
+  const m = /net::(ERR_[A-Z_]+)(?: at (\S+))?/.exec(text);
+  if (!m) return text;
+  const say = NETWORK_SENTENCES.find(([re]) => re.test(m[1]))?.[1];
+  if (!say) return text;
+  const url = m[2] !== undefined && URL.canParse(m[2]) ? new URL(m[2]) : undefined;
+  // "The site …" first: a message may be shown with its first letter in capitals, which a host name must not get.
+  return `${say(url ? `The site ${url.host}` : 'The site')} (browser: ${text.trim()})`;
+}
+
+/** A desktop choose step whose option is only run variables that are all empty: there is no item to look for. */
+export const emptyChoice = (names: readonly string[]): string =>
+  `the run variable ${names.map((n) => `"${n}"`).join(' and ')} is empty, so there is no item to choose: give it a value in Options → Variables of the RPA node`;
+/** The part of a fill's failure that says the field did not take the value: classify.ts reads it (policy_violation). */
+export const VALUE_NOT_TAKEN = ' did not take the value ';
+/** A fill whose value the field's type refuses (Playwright's "Malformed value", for example text in a date field). */
+export const valueNotTaken = (field: string, value: string, raw: string): string =>
+  `the field ${field}${VALUE_NOT_TAKEN}${value}: it does not fit that field, for example text in a date field (browser: ${raw.trim()})`;
 export const tooManyRows = (n: number): string => `limit: more than ${n} rows`;
 
 // Capture verbs and output limits.
@@ -283,4 +324,4 @@ export const desktopStepFailure = (number: number, intent: string, runnerSays: s
 
 /** The credential test's success message, with the Windows session's state as the runner reports it. */
 export const runnerConnected = (session: { interactive?: boolean; locked?: boolean }) =>
-  `Connected to the desktop runner (session ${session?.locked ? 'locked' : session?.interactive ? 'interactive' : 'not interactive'})`;
+  `Connected to the desktop runner (${session?.locked ? 'its Windows session is locked: a run fails until it is unlocked' : session?.interactive ? 'its Windows session is ready for a run' : 'it has no Windows session to work in yet'})`;

@@ -324,7 +324,7 @@ async function executeScript(
     const pageText = await maskedPageText(ctx.page, masker);
     const loginConfirmed = Object.values(res.state.detected).includes('logged_in');
     const cls = classifyFailure({ violations: session.violations, failure: res.failure, pageText, loginConfirmed });
-    return { result: fail(toErrorCode(cls), masker.mask(shownFailure(res.failure.intent, res.failure.message)), base), ...keep };
+    return { result: fail(toErrorCode(cls), masker.mask(shownFailure(res.failure.intent, res.failure.message, res.failure.index)), base), ...keep };
   }
   const tail = {
     violations: session.violations, log: maskLog(res.state.log, masker),

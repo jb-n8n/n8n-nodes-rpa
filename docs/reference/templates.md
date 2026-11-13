@@ -27,20 +27,23 @@ first, before anything reads or writes them.
 - **Bot file** may be left empty to change an approved bot or sign it again. **Approved bots** reads the rows of
   `playwright_steps` (the `active` ones are the approved bots), and **Change or sign again** shows the newest active steps of the name typed, to read
   and copy, a required choice, **Sign the approved steps again, unchanged** or **Change the steps**, and one box that is
-  empty to start with. **Choice fits the box?** lets through only sign again with the box empty, or change with text in
-  it; any other answer ends on **Choice and box differ**, which says which of the two to correct, and nothing is
+  empty to start with. **Choice fits the box?** lets through only sign again with the box empty or holding the approved
+  steps unchanged (compared as JSON), or change with text in it; any other answer goes back through **Page
+  answered?** to **Change or sign again**, which then says at its top which of the two to correct and keeps the choice
+  and the pasted text. A page not answered in time ends on **Choice and box differ**, and nothing is
   imported or signed. **Compared with the approved version** takes the steps to review: signed again, the active row's
   steps as **The bot to change** read them from the table (they never pass through the browser); changed, the text in
   the box. It also gives the review page its first line: unchanged,
   or which steps differ and how: for each changed step, at most three, its number and its changed values, old → new
-  (`step 6: value "2026-09-15" → "2026-09-30"`), each on one line and cut at 60 characters, `several fields` for a
+  (`step 6: typed value "2026-09-15" → "2026-09-30"`, in the review page's words: typed value, chosen option, address,
+  description, control name, field label, visible text, selector), each on one line and cut at 60 characters, `several fields` for a
   step with more than three, then the other steps by number. **Review** sends those steps to **Import steps** as a step document, then to the same review
   page and **Sign steps**. Text that is not a step document ends on **Import failed**, which says the old version keeps
   running.
   The steps get the next version: **Import steps → Options → Version** is one more than the highest version any row
   of that name has, active, rejected or superseded, read by **The bot to change** (never from the box). A rejected
-  attempt keeps its number and the next attempt takes a new one, so the table never holds two rows of one name and
-  version. The review page names the version that runs: `version 2, replacing version 1`, or after a rejected
+  attempt keeps its number and the next attempt takes a new one, and an answer is refused when another one of that name
+  came first (see the review page below), so the table does not hold two rows of one name and version. The review page names the version that runs: `version 2, replacing version 1`, or after a rejected
   attempt `version 3, replacing version 1`. Signing the same steps again also gives the next version: it is a new
   approval. The workflow that runs the bot
   reads Expected Version from the active row, so it keeps running. Approved, the new row supersedes the old one. Rejected, the old one keeps running. This path gives no workflow file:
@@ -53,12 +56,27 @@ first, before anything reads or writes them.
   does not fit, a warning at the top says so: it was signed for another Site Login than this form's (browser steps),
   or with another signing key, or its row was changed after it was approved. The page cannot tell which, so it says to
   read every step before approving: approving signs the steps shown with this form's key, which is the way back after
-  a new signing key; if the bot's workflow uses another Site Login, a version approved here will not run there. Its
-  first sentence stands again directly above the **Decision**. The page does not refuse.
+  a new signing key. For browser steps it first says: if the bot was approved on the import form of another Site
+  Login, change it on that form, because approved here it would run only with this form's Site Login. Its
+  first sentence stands again directly above the **Decision**. The page does not refuse. The comparison line then
+  never calls that version approved and never says unchanged: `<name>: these are the steps of the stored version 4,
+  whose signature does not fit this form (the warning says what that can mean).`, or `changed from the stored
+  version 4, whose signature does not fit this form: …`, on the change path and for an upload alike.
 - **Review and approve** shows each step list: what it opens, whether it signs in, forms it submits, files it returns,
   what the replay proved, the steps it left out, and the numbered steps. For desktop steps it asks "Which of these steps
-  save, send or submit?". The **Decision** is **Approve and sign** or **Reject**. A page left unanswered for an hour
-  signs nothing.
+  save, send or submit?". A new bot's ticks start from the rule (every candidate but a key pressed in a secret
+  field); a bot changed, signed again or uploaded again under its name starts from its approved version's own marks,
+  ticked boxes and typed numbers alike, only when **Sign steps**' check says that version's signature fits this form,
+  and the page says so. When it does not fit or could not be checked, the stored row's marks are not shown (it may have
+  been edited in the table): the rule, an empty numbers box, and a sentence saying why. A step that differs from the
+  approved one always falls back to the rule. The
+  **Decision** is **Approve and sign** or **Reject**. A page left unanswered for an hour
+  signs nothing. Once it is answered, **Versions now** reads the steps table again and **Still the next version?**
+  checks that no row of a name on the page has that version or a higher one: another review page of the same bot,
+  open at the same time, may have been answered first. Then nothing is signed or rejected, and **Approved meanwhile**
+  says that another version was approved or rejected meanwhile and to start again. The check runs a moment before
+  **Save signed steps** writes, not in one step with it (n8n has no transaction across nodes): two answers sent within
+  that moment, well under a second, can still both be saved.
 - The last page says `Approved and signed: <name> version <version> is now the version that runs under that name.`,
   or `Rejected: <name> version <version>. Nothing was signed.` An import of a new name is version 1. A file uploaded
   under a name used before gets the number after the highest any row of that name has (**Running versions** and
@@ -66,7 +84,7 @@ first, before anything reads or writes them.
   the name of an approved bot it replaces what runs: the review page says `version 5, replacing version 4`, the
   part of each step list that has a running version says how it differs from that version (**Compared with the
   running version**, the change path's comparison, for each list: `<name>: changed from the approved version 4: step
-  6: value "2026-09-15" → "2026-09-30".`, or `unchanged`, or that it could not be compared; a new list says nothing; which desktop steps are writes is
+  6: typed value "2026-09-15" → "2026-09-30".`, or `unchanged`, or that it could not be compared; a new list says nothing; which desktop steps are writes is
   chosen again on the review page, so that mark is not compared, and the line says so), and
   the last page `Approved and signed: <name> version 5 is now the version that runs, replacing version 4.` or
   `Rejected: <name> version 5. Nothing was signed. Version 4 keeps running.` After a change or a re-sign it says
@@ -180,7 +198,7 @@ made now has its columns in this order, the ones a person reads first.
 | `message` | string | What failed, as Run Steps' error item says it (masked as the node masks it), cut to 1,000 characters. Empty on success |
 | `guidance` | string | What to do about it: the same text as the node error's description. Empty on success |
 | `file` | string | The name of the file the run returned, empty when none |
-| `account` | string | The user name the RPA Site Login signed in with, empty without one. Never the password |
+| `account` | string | The user name of the RPA Site Login on the RPA node, empty without one: the account the run signs in as, and whose failed logins stop its runs (`locked_out`). Filled also when the run stopped before the site or before a sign-in, so a failed run of one of many accounts says which. Never the password |
 | `lane` | string | `script` (signed steps) or `agent` (a repair or a first run) |
 | `version` | number | The version used, 0 (the data feed) or empty when none |
 | `hash` | string | Hash of those steps: the same as the `hash` of their row in `playwright_steps` |

@@ -8,12 +8,12 @@ export const GUIDANCE: Record<ErrorCode, string> = {
   auth_blocked: 'The site asked for a second factor that this run could not answer; the message says which. A push message or a hardware key needs a person to sign in.',
   site_down: 'The site did not answer, returned a server error, or the first page did not finish loading in time. Try again later.',
   browser_unavailable: 'The browser server could not be reached or was rejected. Check the RPA Browser credential (README: Where the browser runs).',
-  drift_detected: 'A step did not find what it expected; the message says which step and what it found. Correct that step, or record it again, and approve the new version. Browser steps can also repair themselves with AI Repair.',
+  drift_detected: 'A step did not find what it expected; the message says which step and what it looked for. Correct that step, or record it again, and approve the new version. Browser steps can also repair themselves with AI Repair.',
   not_found: 'The page or the data was not found.',
   incomplete: 'Not every row the page states was read, a capture failed, a limit was hit, the run timed out, or it was cancelled.',
-  script_untrusted: 'Nothing ran: the steps are not signed, or their signature does not fit this node (another Step Signing key, Site Login, name, version or start site). Approve the steps again, or set the node up as it was when they were signed.',
+  script_untrusted: 'Nothing ran: the steps are not signed, or their signature does not fit this node (another Step Signing key, Site Login, name, version or start site), or their row was changed after they were approved. Approve the steps again after reading every step, or set the node up as it was when they were signed.',
   policy_violation: 'The run tried something its rules do not allow and stopped; the message says what was refused. If that was meant, change the rule that refused it where it is kept: in the RPA Site Login, the RPA Secret Variables credential, this node\'s Options, or the desktop runner\'s policy on the Windows machine. For a desktop step that saves or sends, the rule is its mark as a write, set when its steps are approved.',
-  locked_out: 'No login was tried, because an earlier login of this account failed. Correct the username or password in the RPA Site Login credential, or, when its Username and Password are expressions, in the data they read, and run again: a changed login gets one try. If the login was right, or the account is unlocked now, type a new value (any text) in Options → Login Breaker Reset Key.',
+  locked_out: 'Correct the username or password in the RPA Site Login credential, or, when its Username and Password are expressions, in the data they read, and run again: a changed login gets one try. If the login was right, or the account is unlocked now, type a new value (any text) in Options → Login Breaker Reset Key.',
   busy: 'Another run using this Site Login or desktop runner is in progress. This run was skipped.',
   password_change_failed: 'The site did not confirm the new password: its change-password page came back, or still showed when the wait for its answer ran out (then the new password may or may not be in force). The login breaker stays closed. Keep the pending password, and check the site\'s password rules and the run variable that holds it.',
   runner_unavailable: 'n8n could not use the desktop runner; the message says why. Check the RPA Desktop Runner credential, then run rpa status on the runner machine.',
@@ -31,6 +31,20 @@ export const NO_TOTP_SECRET_GUIDANCE =
 /** policy_violation because a sign-in met an address the Site Login does not list as a login page (the engine's signIn refusals). */
 export const LOGIN_PAGE_GUIDANCE =
   'The sign-in stopped at an address that is not listed as a login page. Add the address the message names to Pages Where the Password May Be Typed in the RPA Site Login, then run again.';
+/**
+ * policy_violation because a desktop step pressed a button or key the runner's policy protects without its mark as a
+ * write. The runner's refusals of that kind all say "needs write: true" (desktop/runner RunnerService.cs; the policy_refused
+ * code is shared by every policy refusal, so the words are the only signal; description.test.ts pins them to that file).
+ * `step`: the step's number when the message names it.
+ */
+export const writeMarkGuidance = (step?: string): string =>
+  `The Windows machine protects the button or key that ${step ? `step ${step}` : 'this step'} uses, and the step was not ticked as one that saves or sends when the bot was approved. If it should save or send: open the import form, leave Bot file empty, type the bot's name, choose Sign the approved steps again, unchanged, and tick ${step ? `step ${step}` : 'that step'} under "Which of these steps save, send or submit?". If it should not, change the step.`;
+/** site_down because the browser could not reach the site's address: a name not found, a refused connection, a certificate. */
+export const SITE_ADDRESS_GUIDANCE =
+  'The browser could not reach the site at its address; the message says what it met. Check the address the steps open (and the start site), and that the site is up, then run again.';
+/** policy_violation because a field did not take a step's value (the engine's valueNotTaken: text in a date field). */
+export const VALUE_NOT_TAKEN_GUIDANCE =
+  "A step's value does not fit its field; the message says which step and field. Correct that value in the steps (on the import form: Change the steps), or record the step again, and approve the new version.";
 /** locked_out because a run changed the Site Login's password earlier in this execution (execute.ts SITE_LOGIN_PASSWORD_CHANGED). */
 export const PASSWORD_CHANGED_GUIDANCE =
   'A run changed this Site Login\'s password earlier in this execution. Store the new password where the Site Login reads it, then run again.';
@@ -51,6 +65,9 @@ export function guidanceFor(code: ErrorCode, message: string): string {
   if (code === 'auth_blocked' && message.includes('one-time code workflow')) return CODE_WORKFLOW_GUIDANCE;
   if (code === 'auth_blocked' && message.includes('detected:mfa_totp:')) return NO_TOTP_SECRET_GUIDANCE;
   if (code === 'policy_violation' && message.includes('Pages Where the Password May Be Typed')) return LOGIN_PAGE_GUIDANCE;
+  if (code === 'policy_violation' && message.includes(' did not take the value ')) return VALUE_NOT_TAKEN_GUIDANCE;
+  if (code === 'policy_violation' && message.includes('needs write: true')) return writeMarkGuidance(/\bStep (\d+)\b/.exec(message)?.[1]);
+  if (code === 'site_down' && /net::ERR_(NAME_NOT_RESOLVED|CONNECTION_REFUSED|CERT_|SSL_)/.test(message)) return SITE_ADDRESS_GUIDANCE;
   if (code === 'locked_out' && message.includes('was changed earlier in this execution')) return PASSWORD_CHANGED_GUIDANCE;
   return GUIDANCE[code];
 }

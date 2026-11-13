@@ -64,7 +64,7 @@ describe('RPA Desktop Runner credential', () => {
     const { host } = new URL(runner.endpoint.url);
     const hex = runner.endpoint.fingerprint.replace(/:/g, '');
     const line = `rpa-runner://${host}/rpa/v1#token=${runner.endpoint.token}&fingerprint=${hex}`;
-    expect(await desktopRunnerTestResult({ connectionLine: line }, engine)).toEqual({ status: 'OK', message: 'Connected to the desktop runner (session interactive)' });
+    expect(await desktopRunnerTestResult({ connectionLine: line }, engine)).toEqual({ status: 'OK', message: 'Connected to the desktop runner (its Windows session is ready for a run)' });
     const wrongKind = await desktopRunnerTestResult({ connectionLine: line.replace('rpa-runner://', 'rpa-browser://').replace('/rpa/v1#', '/#') }, engine);
     expect(wrongKind.status).toBe('Error');
     expect(wrongKind.message).toContain("is the browser's line (rpa-browser://)");
@@ -74,9 +74,9 @@ describe('RPA Desktop Runner credential', () => {
 
   it('the credential test connects (pinned), calls hello and reports the session', async () => {
     runner = await FakeRunner.start();
-    expect(await desktopRunnerTestResult(runner.endpoint, engine)).toEqual({ status: 'OK', message: 'Connected to the desktop runner (session interactive)' });
+    expect(await desktopRunnerTestResult(runner.endpoint, engine)).toEqual({ status: 'OK', message: 'Connected to the desktop runner (its Windows session is ready for a run)' });
     runner.session = { interactive: true, locked: true };
-    expect(await desktopRunnerTestResult(runner.endpoint, engine)).toEqual({ status: 'OK', message: 'Connected to the desktop runner (session locked)' });
+    expect(await desktopRunnerTestResult(runner.endpoint, engine)).toEqual({ status: 'OK', message: 'Connected to the desktop runner (its Windows session is locked: a run fails until it is unlocked)' });
     const node = new Playwright();
     const viaNode = await node.methods.credentialTest.desktopRunnerTest.call({} as ICredentialTestFunctions, {
       id: 'd1', name: 'Runner', type: 'rpaDesktopRunnerApi', data: { ...runner.endpoint },

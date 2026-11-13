@@ -14,6 +14,7 @@ const SAMPLE_ARGS: Record<string, unknown[]> = {
   describeForUser: [{ text: 'Sign In' }],
   formPostsElsewhere: ['other.example', ['example.com']],
   expectedFileInvalid: [['check.name is not a valid regex']],
+  emptyChoice: [['company_code']],
 };
 
 /** Every string export of messages.ts as text; builders are called with neutral sample arguments. */

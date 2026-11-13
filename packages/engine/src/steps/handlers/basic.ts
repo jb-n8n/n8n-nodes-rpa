@@ -1,8 +1,8 @@
 import type { BrowserContext, Locator as PwLocator, Request } from 'playwright-core';
-import { formPostsElsewhere, notHttp, offListSite, PASSWORD_FILL_REFUSED, PASSWORD_FILL_REFUSED_STEPS, secretFillValue, UNSIGNED_SECRET_FILL } from '../../messages.js';
+import { formPostsElsewhere, notHttp, offListSite, PASSWORD_FILL_REFUSED, PASSWORD_FILL_REFUSED_STEPS, secretFillValue, UNSIGNED_SECRET_FILL, valueNotTaken } from '../../messages.js';
 import { renderVars, SECRET_FILL_VALUE } from '../../secrets/render.js';
 import { renderSecretValue } from '../../secrets/secret-fills.js';
-import type { RunState, Step } from '../../types.js';
+import type { Locator, RunState, Step } from '../../types.js';
 import { PolicyError } from '../errors.js';
 import { formTarget as formTargetInPage, type FormTarget } from '../form-target.js';
 import { build, resolveUnique } from '../locator.js';
@@ -220,9 +220,21 @@ const fill: Handler = async (ctx, step, _state, timeout) => {
   const { locator, candidate } = await resolveUnique(ctx.page, s.fill.field, timeout);
   // A secret fill types a value of the RPA Secret Variables credential only where its May Be Typed Into allows
   // (typeSecret). A plain fill never types one: renderVars refuses every value the masker holds.
-  await withoutPasswords(ctx, locator, () => (value !== undefined ? typeSecret(ctx, locator, value, timeout) : locator.fill(renderVars(s.fill.value, ctx.vars, ctx.masker), { timeout })), secret);
+  await withoutPasswords(ctx, locator, () => (value !== undefined ? typeSecret(ctx, locator, value, timeout) : locator.fill(renderVars(s.fill.value, ctx.vars, ctx.masker), { timeout }).catch((err: unknown) => {
+    // The field's type refuses the value (Playwright: "Malformed value", for example text in a date field): the step
+    // does not fit the field, the page did not change. Said with the field and the value as the step writes them.
+    const raw = err instanceof Error ? err.message.split('\n')[0] : String(err);
+    if (!/Malformed value/i.test(raw)) throw err;
+    throw new Error(valueNotTaken(fieldShown(s.fill.field), JSON.stringify(Array.from(String(s.fill.value)).slice(0, 80).join('')), raw));
+  })), secret);
   return candidate;
 };
+
+/** A field as a person names it: its accessible name, label, visible text or test id, else its selector; quoted. */
+function fieldShown(loc: Locator): string {
+  const name = 'role' in loc ? (loc.name ?? loc.role) : 'label' in loc ? loc.label : 'text' in loc ? loc.text : 'testId' in loc ? loc.testId : loc.css;
+  return JSON.stringify(Array.from(String(name)).slice(0, 80).join(''));
+}
 
 const select: Handler = async (ctx, step, _state, timeout) => {
   const s = step as S<'select'>;

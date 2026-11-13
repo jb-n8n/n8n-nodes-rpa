@@ -437,9 +437,35 @@ function hostsIn(text: string): string[] {
   return hosts;
 }
 
+/** Text in double quotes, straight or curly. */
+const QUOTED = /"([^"]*)"|\u201c([^\u201d]*)\u201d/g;
+/** An ISO date. */
+const ISO_DATE = /\b\d{4}-\d{2}-\d{2}\b/g;
+/**
+ * The values a description states: each text it puts in double quotes, each ISO date and each number of three or more
+ * digits outside the quotes, an address (hosts are checked on their own, hostsIn) and a host's port.
+ */
+export function statedValues(described: string): string[] {
+  const quoted = [...described.matchAll(QUOTED)].map((m) => (m[1] ?? m[2] ?? '').trim()).filter((q) => q !== '');
+  const rest = described.replace(QUOTED, ' ').replace(/\b[a-z][a-z0-9+.-]*:\/\/\S*/gi, ' ').replace(/[\w.-]+:\d+/g, ' ');
+  const dates = rest.match(ISO_DATE) ?? [];
+  const numbers = rest.replace(ISO_DATE, ' ').match(/\d{3,}/g) ?? [];
+  return [...quoted, ...dates, ...numbers];
+}
+
+/** Every text and number a step's own fields hold (its intent left out), lower case. */
+function ownValues(v: unknown, acc: string[] = []): string[] {
+  if (typeof v === 'string' || typeof v === 'number') acc.push(String(v).toLowerCase());
+  else if (Array.isArray(v)) v.forEach((x) => ownValues(x, acc));
+  else if (v !== null && typeof v === 'object') for (const [k, x] of Object.entries(v)) if (k !== 'intent') ownValues(x, acc);
+  return acc;
+}
+
 /**
  * Whether the author's description of a step can be shown quietly: it names a kind of action the step may be (VERBS,
- * STEP_KINDS), or none the table knows, and no host but the step's own (any host its fields name, and the start site's).
+ * STEP_KINDS), or none the table knows, no host but the step's own (any host its fields name, and the start site's),
+ * and no value the step's own fields do not hold (statedValues: a quoted text, an ISO date, a number of three or more
+ * digits; one field must hold it, case aside). A description that states no value is judged by the first two alone.
  * Otherwise the page shows it as a warning. What runs is the sentence built from the step, whatever the description says.
  */
 function describedQuietly(step: Json, described: string, startUrl: string | undefined): boolean {
@@ -448,7 +474,9 @@ function describedQuietly(step: Json, described: string, startUrl: string | unde
   if (kind !== undefined && !stepKinds.includes(kind)) return false;
   const own = JSON.stringify(Object.fromEntries(Object.entries(step).filter(([k]) => k !== 'intent'))).replace(/\\\\/g, '').toLowerCase();
   const start = startUrl && URL.canParse(startUrl) ? new URL(startUrl).hostname.toLowerCase() : undefined;
-  return hostsIn(described).every((h) => h === start || own.includes(h));
+  if (!hostsIn(described).every((h) => h === start || own.includes(h))) return false;
+  const values = ownValues(step);
+  return statedValues(described).every((v) => values.some((x) => x.includes(v.toLowerCase())));
 }
 
 /**
