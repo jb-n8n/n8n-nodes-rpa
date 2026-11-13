@@ -2779,7 +2779,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // Sign steps refused (an approver not on the list), or the review page not answered: the old version keeps running too.
     const refused = await review('', { writes_0: [], decision_0: 'Approve and sign' }, signedIn('member@example.com'));
     expect(lastPage(refused).text.split('\n')).toEqual([
-      `Not signed: ${String(old.name)} v2. Sign Steps refused: The n8n user who submitted the approval form is not on the Approver Allowlist. Ask a person on the Approver Allowlist to approve it on this form.`,
+      `Not signed: ${String(old.name)} v2. Sign Steps refused: The n8n user who submitted the approval form is not on the Approver Allowlist. Ask the person who set up this form to approve it, or to put you on its Approver Allowlist.`,
       `Nothing changed: ${String(old.name)} version 1 keeps running.`,
     ]);
     expect(lastPage({ after: rejected.after, signed: [], errors: [] }, { name: 'steps table' }).text.split('\n')).toEqual([
@@ -2938,7 +2938,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       [REVIEW]: [[{ json: { decision_0: 'Approve and sign' } }]], 'Sign steps': [[], [{ json: { error, details: { name: 'feed', version: 1 } } }]],
     }) }).split('\n');
     const member = page('Sign Steps refused: The n8n user who submitted the approval form is not on the Approver Allowlist');
-    expect(member).toEqual(['Imported: 2 steps.', 'Not signed: feed v1. Sign Steps refused: The n8n user who submitted the approval form is not on the Approver Allowlist. Ask a person on the Approver Allowlist to approve it on this form.']);
+    expect(member).toEqual(['Imported: 2 steps.', 'Not signed: feed v1. Sign Steps refused: The n8n user who submitted the approval form is not on the Approver Allowlist. Ask the person who set up this form to approve it, or to put you on its Approver Allowlist.']);
     expect(page('Sign Steps refused: Approved By is not on the Approver Allowlist').join('\n')).not.toContain(POINTER);
     // Any other refusal: the owner reads the execution, so the page still says where the full report is.
     expect(page('Sign Steps refused: the steps do not match the hash that was reviewed')).toEqual(['Imported: 2 steps.', 'Not signed: feed v1. Sign Steps refused: the steps do not match the hash that was reviewed.', POINTER]);
