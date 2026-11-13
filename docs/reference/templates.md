@@ -25,16 +25,22 @@ Templates 2, 3 and 5 create the two Data Tables when they are missing.
   rows of `playwright_steps`, and **Change or sign again** shows the newest active steps of the name typed, in a box.
   **Review** sends the box to **Import steps** as a step document, then to the same review page and **Sign steps**.
   **Compared with the approved version** gives the review page its first line: unchanged, or which steps differ.
-  Approved, the new row supersedes the old one. Rejected, the old one keeps running. This path gives no workflow file:
+  The steps get the next version: **Import steps → Options → Version** is the approved version plus one, read by
+  **The bot to change** from the active row (never from the box), so the review page says `version 2, replacing version
+  1`. Signing the same steps again also gives the next version: it is a new approval. The workflow that runs the bot
+  reads Expected Version from the active row, so it keeps running. Approved, the new row supersedes the old one. Rejected, the old one keeps running. This path gives no workflow file:
   the bot's workflow exists already. A name with no active row ends on **No approved bot**, which lists the approved
   names.
 - **Review and approve** shows each step list: what it opens, whether it signs in, forms it submits, files it returns,
   what the replay proved, the steps it left out, and the numbered steps. For desktop steps it asks "Which of these steps
   save, send or submit?". The **Decision** is **Approve and sign** or **Reject**. A page left unanswered for an hour
   signs nothing.
-- The last page says `Approved and signed: <name> v1 is now the version that runs under that name.`, or
-  `Rejected: <name> v1. Nothing was signed.` When a step list was approved, it also downloads the workflow that runs
-  the bot.
+- The last page says `Approved and signed: <name> v<version> is now the version that runs under that name.`, or
+  `Rejected: <name> v<version>. Nothing was signed.` An import is version 1. When Sign steps signed a step list, it
+  also downloads the workflow that runs the bot. When nothing was signed (rejected, or Sign steps refused), it neither
+  gives the file nor says it does.
+- In another n8n, or once a credential the workflow file picks is deleted, n8n picks the only credential of the same
+  name if there is one: otherwise pick it on the node again.
 - **Add the login page** shows when the sign-in stopped at an address the Site Login does not list. Add it under
   **Pages Where the Password May Be Typed**, then choose **Import again**.
 - **Import a bot** opens with n8n's sign-in (**Authentication**: n8n User Auth, with **Require Workflow Execute

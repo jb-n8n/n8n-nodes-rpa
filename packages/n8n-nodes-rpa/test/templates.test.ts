@@ -990,8 +990,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     };
   }
   /** Import steps' parameters as n8n resolves them for one form item: every "={{ … }}" evaluated with $json. */
-  function resolved(item: INodeExecutionData): Record<string, unknown> {
-    const walk = (v: unknown): unknown => typeof v === 'string' && v.startsWith('=') ? evaluate(v, { $json: item.json })
+  /** Import steps' parameters as n8n resolves them for one form item, with the nodes that ran before it (`ran`). */
+  function resolved(item: INodeExecutionData, ran: Record<string, INodeExecutionData[][]> = {}): Record<string, unknown> {
+    const walk = (v: unknown): unknown => typeof v === 'string' && v.startsWith('=') ? evaluate(v, { $json: item.json, $: nodesRan(ran) })
       : typeof v === 'object' && v !== null && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x)])) : v;
     return walk(imp.parameters) as Record<string, unknown>;
   }
@@ -1006,8 +1007,8 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     ok: false, code, message, violations: [], log: [], blockedRequests: [], durationMs: 900, lane: 'script', ...over,
   });
   const NOT_ADOPTABLE = failure('policy_violation', IMPORT_NOT_ADOPTABLE, { adoptable: false, configError: true });
-  const runImport = async (item: INodeExecutionData, adopt: (input: AdoptInput) => AdoptResult) => {
-    const params = resolved(item);
+  const runImport = async (item: INodeExecutionData, adopt: (input: AdoptInput) => AdoptResult, ran: Record<string, INodeExecutionData[][]> = {}) => {
+    const params = resolved(item, ran);
     const ctx = nodeContext({
       params, rawParameters: imp.parameters, items: [item], continueOnFail: true,
       credentials: { playwrightBrowserApi: { mode: 'local', headless: true }, playwrightSiteLoginApi: siteLoginData(SITE) },
@@ -2256,8 +2257,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const review = async (text: string, answer: IDataObject) => {
       const upload = changedUpload(ran, text);
       expect(upload.json).toMatchObject({ name: old.name, source: 'Step document', expectedFileName: '', columns: '' });
-      expect(resolved(upload)).toMatchObject({ source: 'steps', inputFrom: 'binary', binaryPropertyName: 'bot', stepsName: old.name });
-      const [data, repaired] = await runImport(upload, never);
+      // The next version: the approved one plus one, from The bot to change (the active row), never from the box.
+      expect(resolved(upload, ran)).toMatchObject({ source: 'steps', inputFrom: 'binary', binaryPropertyName: 'bot', stepsName: old.name, options: { version: 2 } });
+      const [data, repaired] = await runImport(upload, never, ran);
       expect(data[0].json.error, JSON.stringify(data[0].json).slice(0, 600)).toBeUndefined();
       expect(repaired).toHaveLength(1);
       const compared = compare(ran, text);
@@ -2279,8 +2281,14 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(again.fields[1].defaultValue).toBe('Step 16: Click Save');
     expect(again.errors).toEqual([]);
     const fresh = again.signed[0];
-    expect(fresh).toMatchObject({ status: 'active', name: old.name, version: 1, approvedBy: APPROVER, writeLine: 'Signed as writes: step 16 (Click Save)' });
-    expect(JSON.parse(String(fresh.steps))).toEqual(JSON.parse(String(old.steps)));
+    // Signed again with unchanged steps: a new approval, so the next version, and the steps as they were apart from it.
+    expect(fresh).toMatchObject({ status: 'active', name: old.name, version: 2, approvedBy: APPROVER, writeLine: 'Signed as writes: step 16 (Click Save)' });
+    expect({ ...JSON.parse(String(fresh.steps)), version: 1 }).toEqual(JSON.parse(String(old.steps)));
+    expect(JSON.parse(String(fresh.steps)).version).toBe(2);
+    // The review page names it, and what it replaces; the item it shows is the item Sign steps signed.
+    const title = evaluate(String((byName(t, REVIEW).parameters.options as IDataObject).formTitle), { $: nodesRan(again.after) });
+    expect(title).toBe(`${old.name}, version 2, replacing version 1`);
+    expect(again.lists[0]).toMatchObject({ version: 2, baseVersion: null });
     expect(fresh.signature).not.toBe(old.signature);
     expect(trust(fresh.steps, fresh.signature, NEW_KEY)).toEqual({ ok: true, signed: true });
     // Saved as a new row, Supersede older versions turns the old row (and only it) superseded.

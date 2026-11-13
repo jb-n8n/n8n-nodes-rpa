@@ -39,6 +39,7 @@ export const FILE_TOO_LARGE = 'The file is larger than 20 MiB, so it was not rea
 export const TEXT_TOO_LARGE = 'Recording or Code is larger than 20 MiB, so it was not read.';
 export const NAME_REQUIRED = 'Name is required: it names the imported steps.';
 export const NAME_EQUALS = 'Name must not start with "=".';
+export const VERSION_INVALID = 'Options → Version must be a whole number of 1 or more.';
 export const SOURCE_UNKNOWN =
   'Source must be Work It Out From the File, Chrome Recorder (JSON), Playwright Code (JavaScript or TypeScript), UiPath Project (ZIP or XAML), Step Document (JSON) or RPA Recording';
 /** Source → Work It Out From the File, for a file whose name and content say nothing Import Steps knows. */
@@ -92,6 +93,8 @@ interface ImportParams {
   codeWorkflowId: string;
   /** Options → Code Timeout (Seconds), in ms. */
   codeTimeoutMs: number;
+  /** Options → Version: the version every draft gets (1 by default). */
+  version: number;
   common: CommonOptions;
 }
 
@@ -107,6 +110,8 @@ function readImportParams(ctx: NodeContext, i: number): ImportParams {
   const source = asString(get('source', 'chrome'));
   if (!SOURCES.includes(source)) throw new ConfigError(SOURCE_UNKNOWN);
   const idPattern = asString(get('idPattern', '')).trim();
+  const version = Number(ctx.getNodeParameter('options.version', i, 1));
+  if (!Number.isSafeInteger(version) || version < 1) throw new ConfigError(VERSION_INVALID);
   return {
     source: source as ImportSource | 'auto',
     // A UiPath project and an RPA recording are always a file (Input From is hidden for them).
@@ -120,6 +125,7 @@ function readImportParams(ctx: NodeContext, i: number): ImportParams {
     expectedFile: get('expectedFile', {}),
     vars: variablesOption(ctx.getNodeParameter('options.variables', i, {})),
     breakerResetKey,
+    version,
     ...codeWorkflowOptions(ctx, (option) => field(ctx.getNodeParameter('options', i, {}), option)),
     common,
   };
@@ -265,6 +271,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
     hasSiteLogin: siteLogin !== undefined,
     // With a One-Time Code Workflow, a recorded code becomes a sign-in that takes its code from that workflow.
     ...(p.codeWorkflowId ? { codeFromWorkflow: true } : {}),
+    ...(p.version !== 1 ? { version: p.version } : {}),
   };
   const imported = engine.importSource(source, data, opts);
   const report = maskDeep<ImportReport>(imported.report, mask);

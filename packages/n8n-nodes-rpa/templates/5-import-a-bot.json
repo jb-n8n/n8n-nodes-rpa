@@ -463,7 +463,7 @@
       "parameters": {
         "operation": "page",
         "defineForm": "json",
-        "jsonOutput": "={{ JSON.stringify(((b, e, signedIn) => [{ fieldType: 'html', html: '<p>The steps that run now as <b>' + e(b.name) + '</b> (version ' + e(b.version) + ' in the playwright_steps Data Table). Change what you need, or leave them as they are to sign them again, for example after the signing key changed or after a move to another n8n. <b>Review</b> opens the review page of an import. Approved there, these steps become the version that runs under this name. Rejected, or not answered within an hour, the version that runs now keeps running.</p><p><em>This form cannot tell steps signed with an older key from steps changed in the Data Table after they were approved: to the current key both look the same. So read every step on the next page: you approve the steps as that page shows them. Desktop steps signed as writes come back as candidates: check the ticks again.</em></p><p><em>' + (signedIn ? 'Any signed-in n8n user who has the address of this page can open it and read these steps.' : 'Anyone who has the address of this page can open it and read these steps.') + ' Do not share it.</em></p>' }, { fieldLabel: 'Steps (a step document, JSON)', fieldName: 'steps', fieldType: 'textarea', defaultValue: b.steps, requiredField: true }])($('The bot to change').first().json, (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]), $('Import a bot').params.authentication === 'n8nUserAuth')).split('$').join('\\\\u0024') }}",
+        "jsonOutput": "={{ JSON.stringify(((b, e, signedIn) => [{ fieldType: 'html', html: '<p>The steps that run now as <b>' + e(b.name) + '</b> (version ' + e(b.version) + ' in the playwright_steps Data Table). Change what you need, or leave them as they are to sign them again, for example after the signing key changed or after a move to another n8n. <b>Review</b> opens the review page of an import. Approved there, these steps become version ' + e(Number(b.version) + 1) + ', the version that runs under this name. Rejected, or not answered within an hour, the version that runs now keeps running.</p><p><em>This form cannot tell steps signed with an older key from steps changed in the Data Table after they were approved: to the current key both look the same. So read every step on the next page: you approve the steps as that page shows them. Desktop steps signed as writes come back as candidates: check the ticks again.</em></p><p><em>' + (signedIn ? 'Any signed-in n8n user who has the address of this page can open it and read these steps.' : 'Anyone who has the address of this page can open it and read these steps.') + ' Do not share it.</em></p>' }, { fieldLabel: 'Steps (a step document, JSON)', fieldName: 'steps', fieldType: 'textarea', defaultValue: b.steps, requiredField: true }])($('The bot to change').first().json, (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]), $('Import a bot').params.authentication === 'n8nUserAuth')).split('$').join('\\\\u0024') }}",
         "limitWaitTime": true,
         "limitType": "afterTimeInterval",
         "resumeAmount": 1,
@@ -556,7 +556,9 @@
             "requiredColumns": "={{ $json.columns ?? '' }}"
           }
         },
-        "options": {}
+        "options": {
+          "version": "={{ $('The bot to change').isExecuted ? Number($('The bot to change').first().json.version) + 1 : 1 }}"
+        }
       },
       "id": "3d6f1a20-7b4c-4e8a-9c11-000000000505",
       "name": "Import steps",
@@ -567,7 +569,7 @@
         0
       ],
       "onError": "continueErrorOutput",
-      "notes": "Outputs: Data (0), Repaired Steps (1), error (2)."
+      "notes": "Outputs: Data (0), Repaired Steps (1), error (2). Options → Version: 1 for an import; after Change or sign again, the approved version plus one (from The bot to change, which read the active row), so a change, or the same steps signed again, is the next version."
     },
     {
       "parameters": {
@@ -810,7 +812,7 @@
         "resumeAmount": 1,
         "resumeUnit": "hours",
         "options": {
-          "formTitle": "={{ ((lists) => (lists.length === 1 ? String(lists[0].json.name ?? '') + ', version ' + String(lists[0].json.version ?? '') : 'Review ' + lists.length + ' step lists'))($('Import steps').all(1)) }}",
+          "formTitle": "={{ ((lists) => (lists.length === 1 ? String(lists[0].json.name ?? '') + ', version ' + String(lists[0].json.version ?? '') + ($('The bot to change').isExecuted ? ', replacing version ' + String($('The bot to change').first().json.version ?? '') : '') : 'Review ' + lists.length + ' step lists'))($('Import steps').all(1)) }}",
           "formDescription": "Approve and sign: these steps are signed and run under this name. Reject: nothing is signed.",
           "buttonLabel": "Submit",
           "customCss": "div.html em { font-style: normal; color: #7e8186; font-size: 12px; }\ndiv.html ol { margin-top: 8px; }\ndiv.html li { margin-bottom: 4px; }\ndiv.html h4 { margin-top: 24px; font-weight: 600; }\ndiv.html li:has(> i) { color: #7e8186; }\ndiv.html li > i { font-style: normal; color: #7e8186; }\ndiv.html strong { color: #b00020; font-weight: 600; }"

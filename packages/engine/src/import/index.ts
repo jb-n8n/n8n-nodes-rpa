@@ -30,6 +30,22 @@ function draftFrom(parse: (report: ImportReport) => ReturnType<typeof chromeEven
  * no draft.
  */
 export function importSource(source: ImportSource, data: Buffer | Uint8Array | string, opts: ImportOptions): ImportResult {
+  const version = opts.version ?? 1;
+  if (!Number.isSafeInteger(version) || version < 1) return failed({ source, steps: 0, items: [] }, 'the version must be a whole number of 1 or more');
+  const r = importAt(source, data, opts);
+  return version === 1 ? r : withVersion(r, version);
+}
+
+/** The drafts at `version`: the version is part of the steps, so it is set before anything is hashed or replayed. */
+function withVersion(r: ImportResult, version: number): ImportResult {
+  return {
+    ...r,
+    drafts: r.drafts.map((d) => ({ ...d, script: { ...d.script, version } })),
+    ...(r.desktopDrafts ? { desktopDrafts: r.desktopDrafts.map((d) => ({ ...d, script: { ...d.script, version } })) } : {}),
+  };
+}
+
+function importAt(source: ImportSource, data: Buffer | Uint8Array | string, opts: ImportOptions): ImportResult {
   const report: ImportReport = { source, steps: 0, items: [] };
   try {
     switch (source) {

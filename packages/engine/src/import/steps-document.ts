@@ -25,7 +25,8 @@ const LOOKS_LIKE_ROW = 'this looks like a row of the steps table: paste the valu
 const NAMES_SECRET = "the step document names a value of the RPA Site Login, so it was not imported: a signIn step types the Site Login's values";
 const SIGNATURE_DROPPED =
   'imported steps are a first version for approval, so the signature and Approved By the document carried were not imported: Sign Steps signs the steps when a person approves them';
-const RENAMED = (name: string) => `the steps are named ${JSON.stringify(name)}, version 1: imported steps are a first version under the import's Name`;
+const RENAMED = (name: string, version: number) =>
+  `the steps are named ${JSON.stringify(name)}, version ${version}: imported steps are a first version under the import's Name`;
 const EXPECTED_FILE_UNUSED = 'the download steps of a step document carry their own checks: Expected File is not used';
 
 /**
@@ -65,12 +66,14 @@ export function importStepsDocument(data: unknown, opts: ImportOptions, report: 
   const { signature: _signature, approvedBy: _approvedBy, ...doc } = raw;
   // A note, not a step left out (the approval lists dropped steps as left out).
   if (Object.hasOwn(raw, 'signature') || Object.hasOwn(raw, 'approvedBy')) report.items.push({ at: '', kind: 'converted', what: 'Signature', reason: SIGNATURE_DROPPED });
-  if ((doc.name !== undefined && doc.name !== opts.name) || (doc.version !== undefined && doc.version !== 1)) {
-    report.items.push({ at: '', kind: 'converted', what: 'Name and version', reason: masker.mask(RENAMED(opts.name)) });
+  const version = opts.version ?? 1;
+  // A document's own version is never used: the import gives the version (Import Steps → Options → Version).
+  if ((doc.name !== undefined && doc.name !== opts.name) || (doc.version !== undefined && doc.version !== version)) {
+    report.items.push({ at: '', kind: 'converted', what: 'Name and version', reason: masker.mask(RENAMED(opts.name, version)) });
   }
   // A note, not a step the import could not take.
   if (opts.download) report.items.push({ at: '', kind: 'converted', what: 'Expected File', reason: EXPECTED_FILE_UNUSED });
-  const named: Json = { ...doc, name: opts.name, version: 1 };
+  const named: Json = { ...doc, name: opts.name, version };
   // Defence in depth behind the run's own checks: a document that names a Site Login secret is never a draft.
   if (masker.containsSecret(JSON.stringify(named))) return fail(NAMES_SECRET);
 

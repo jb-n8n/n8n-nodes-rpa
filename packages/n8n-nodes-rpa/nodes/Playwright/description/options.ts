@@ -319,6 +319,16 @@ export const OPTION_ENTRIES: INodeProperties[] = [
     displayOptions: only(['runSteps', 'importSteps']),
   },
   {
+    displayName: 'Version',
+    name: 'version',
+    type: 'number',
+    default: 1,
+    typeOptions: { minValue: 1, numberPrecision: 0 },
+    description:
+      'The version the imported steps get. 1 for a new bot. To change an approved bot, give its approved version plus one, so the new steps are a new version under the same name: the import form does this. A version in a step document is never used.',
+    displayOptions: only(['importSteps']),
+  },
+  {
     displayName: 'Login Breaker Reset Key',
     name: 'breakerResetKey',
     type: 'string',
