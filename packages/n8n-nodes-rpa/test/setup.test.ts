@@ -22,6 +22,9 @@ const FINGERPRINT = 'AB'.repeat(32);
 const RUNNER_TOKEN = 'runner-token-ZYXWVUTSRQPONMLKJIHGFEDCBA-98765';
 const LINE = `rpa-runner://win-1.example.internal:8765/rpa/v1#token=${RUNNER_TOKEN}&fingerprint=${FINGERPRINT}`;
 const BROWSER_TOKEN = 'browser-token-abcdefghijklmnopqrstuvwxyz-0123456789';
+// The node's own test messages for an RPA Desktop Runner (the engine's runnerConnected and runnerUnreachable).
+const RUNNER_CONNECTED = 'Connected to the desktop runner (session not interactive)';
+const RUNNER_UNREACHABLE = 'Could not connect to the desktop runner at wss://win-1.example.internal:8765/rpa/v1 (no answer within 60 s). Is it running, and is the port open?';
 const FIELDS: Record<string, string[]> = {
   playwrightScriptSigningApi: ['notice', 'secretKey'],
   rpaDesktopRunnerApi: ['about', 'connectionLine', 'url', 'token', 'fingerprint'],
@@ -35,6 +38,8 @@ interface Options {
   teamName?: string; knowsNode?: boolean; echo?: 'credentials' | 'activate'; credentials?: Cred[]; workflows?: Wf[]; patch?: boolean; ownership?: boolean;
   /** GET /users/{id}: false answers 403 (a key whose owner may not read users). */
   users?: boolean;
+  /** POST /credentials/{id}/test: the node's own message, a failed test, or 403 (a key without credential:read). */
+  test?: 'ok' | 'error' | 'forbidden';
 }
 
 // The fake's projects, as n8n 2.45 describes them: two personal projects and a team project.
@@ -110,6 +115,12 @@ async function fakeN8n(o: Options = {}) {
         const created = { id: `c${++n}`, name: c.name, type: c.type, data: c.data, projectId: c.projectId ?? HOME };
         state.credentials.push(created);
         return send(200, { id: created.id, name: created.name, type: created.type });
+      }
+      if ((m = /^POST \/api\/v1\/credentials\/([\w-]+)\/test$/.exec(route))) {
+        if (o.test === 'forbidden') return send(403, { message: 'Forbidden' });
+        if (!state.credentials.some((x) => x.id === m![1])) return send(404, { message: 'Not Found' });
+        if (o.test === 'error') return send(200, { status: 'Error', message: RUNNER_UNREACHABLE });
+        return send(200, { status: 'OK', message: RUNNER_CONNECTED });
       }
       if ((m = /^PATCH \/api\/v1\/credentials\/([\w-]+)$/.exec(route))) {
         if (o.patch === false) return send(405, { message: 'Method not allowed' });
@@ -321,7 +332,7 @@ describe('npx n8n-nodes-rpa setup', () => {
     expect(count(out, form.data.password)).toBe(1);
     expect(stdout).toMatch(new RegExp(`Password: +${form.data.password} +\\(shown once: keep it in your password manager\\)`));
     expect(out).not.toContain(signing.data.secretKey);
-    expect(stdout).toMatch(/kept in n8n only.*never shows it again. A lost key means approving every bot again.*--replace-signing-key before you approve a bot/);
+    expect(stdout).toContain('  Signing key: made by this run and kept in n8n, which does not show it again. To have a copy, run this again now, before you approve a bot, with --replace-signing-key --show-signing-key.');
     expect(stdout).toMatch(/1\. Record a bot.*\n.*2\. Open the form.*\n.*3\. Upload the file/);
     for (const name of ['RPA import form', 'RPA Step Signing', 'RPA: 5 Import a bot']) expect(stdout).toMatch(new RegExp(`created .*${name}`));
     expect(out).not.toMatch(/Note:|WARNING/);
@@ -407,6 +418,22 @@ describe('npx n8n-nodes-rpa setup', () => {
     expect(patches()).toBe(1);
     expect(yes.out).not.toContain(key);
     expectNoSecrets(yes.out);
+
+    // What the first run's note says to do for a copy: the new key once, the old one never.
+    const both = await runAtTerminal(['setup', '--url', fake.url, '--replace-signing-key', '--show-signing-key'], ENV, [[/Connect a Windows machine now/, 'n'], [/Type REPLACE/, 'REPLACE']]);
+    expect(both.code, both.out).toBe(0);
+    const third = signingKeyOf(fake);
+    expect(third).not.toBe(replaced);
+    expect(count(both.out, third)).toBe(1);
+    expect(both.out).toMatch(/Signing key: +[0-9a-f]{64} +\(shown once/);
+    expect(both.out).not.toContain(replaced);
+    // A run that does not make a key shows none, with or without --show-signing-key.
+    for (const extra of [[], ['--show-signing-key']]) {
+      const plain = await run(['setup', '--url', fake.url, ...extra], ENV);
+      expect(plain.code, plain.out).toBe(0);
+      expect(plain.out).not.toContain(third);
+      expect(plain.out).not.toMatch(/Signing key: +[0-9a-f]{64}/);
+    }
   });
 
   it('a missing node: says how to install it and stops before creating anything', async () => {
@@ -488,12 +515,139 @@ describe('npx n8n-nodes-rpa setup', () => {
     expect(fake.state.workflows[0].nodes.find((n) => n.name === 'Import steps').credentials).toEqual({
       playwrightScriptSigningApi: { id: signing.id, name: 'RPA Step Signing' }, rpaDesktopRunnerApi: { id: runner!.id, name: 'RPA Desktop Runner' },
     });
-    expect(out).toContain('The Windows machine is connected: the workflow the form gives you already uses "RPA Desktop Runner".');
+    // n8n tests it with the node's own test, once, after the form is published; the line shows the node's message.
+    expect(fake.state.requests.filter((r) => r.path === `/api/v1/credentials/${runner!.id}/test`).map((r) => r.method)).toEqual(['POST']);
+    expect(out).toContain(`tested   credential "RPA Desktop Runner" (id ${runner!.id}): ${RUNNER_CONNECTED}`);
+    expect(out.indexOf('published workflow')).toBeLessThan(out.indexOf('testing  credential'));
+    expect(out).toContain(`The workflow the form gives you already uses the RPA Desktop Runner "RPA Desktop Runner" (id ${runner!.id}).`);
     expectNoSecrets(out);
     const again = await run(['setup', '--url', fake.url], { ...ENV, RPA_CONNECTION_LINE: LINE });
     expect(again.code).toBe(0);
     expect(again.out).toMatch(/reused .*RPA Desktop Runner/);
     expect(fake.state.credentials.filter((c) => c.type === 'rpaDesktopRunnerApi')).toHaveLength(1);
+  });
+
+  describe('no Connection Line: the RPA Desktop Runner the project has', () => {
+    const HAND: Cred = { id: 'c-hand', name: 'RPA Desktop Runner account', type: 'rpaDesktopRunnerApi', data: { connectionLine: LINE } };
+    const SECOND: Cred = { id: 'c-second', name: 'Night shift', type: 'rpaDesktopRunnerApi', data: { connectionLine: LINE } };
+    const ELSEWHERE: Cred = { id: 'c-else', name: 'RPA Desktop Runner', type: 'rpaDesktopRunnerApi', data: { connectionLine: LINE }, projectId: 'P-other' };
+    const onImport = (fake: Fake) => fake.state.workflows.find((w) => w.projectId === HOME)!.nodes.find((n) => n.name === 'Import steps').credentials;
+    /** Only listed: never read one by one, never changed. */
+    const neverRead = (fake: Fake) => {
+      expect(fake.state.requests.filter((r) => /^\/api\/v1\/credentials\/c-/.test(r.path) && !r.path.endsWith('/test'))).toEqual([]);
+    };
+
+    it('exactly one, whatever its name: picked on Import steps by id and name, said, and tested by n8n', async () => {
+      // Another user's runner is not this project's: it does not count, and it is never picked.
+      const fake = await n8n({ credentials: [HAND, ELSEWHERE] });
+      const { code, out } = await run(setup(fake.url), ENV);
+      expect(code, out).toBe(0);
+      expect(onImport(fake).rpaDesktopRunnerApi).toEqual({ id: 'c-hand', name: 'RPA Desktop Runner account' });
+      expect(out).toContain('picked   credential "RPA Desktop Runner account" (id c-hand): the only RPA Desktop Runner in your project');
+      expect(out).toContain(`tested   credential "RPA Desktop Runner account" (id c-hand): ${RUNNER_CONNECTED}`);
+      expect(out).toContain('The workflow the form gives you already uses the RPA Desktop Runner "RPA Desktop Runner account" (id c-hand).');
+      expect(out).not.toContain('c-else');
+      expect(fake.state.credentials.filter((c) => c.type === 'rpaDesktopRunnerApi')).toHaveLength(2);
+      neverRead(fake);
+      expectNoSecrets(out);
+    });
+
+    it('none: nothing picked, no test, and it says how to give the line', async () => {
+      const fake = await n8n({ credentials: [ELSEWHERE] });
+      const { code, out } = await run(setup(fake.url), ENV);
+      expect(code, out).toBe(0);
+      expect(onImport(fake).rpaDesktopRunnerApi).toBeUndefined();
+      expect(fake.state.requests.some((r) => r.path.endsWith('/test'))).toBe(false);
+      expect(out).toContain("No RPA Desktop Runner is set, so a desktop bot's workflow asks for one. To connect a Windows machine, run this again and paste its Connection Line when it asks.");
+      // A browser user is not told: a browser bot's workflow has no runner slot.
+      const browser = await n8n();
+      const b = await run(setup(browser.url, '--browser-url', 'ws://browser:3000/'), { ...ENV, RPA_BROWSER_TOKEN: BROWSER_TOKEN });
+      expect(b.code, b.out).toBe(0);
+      expect(b.out).not.toMatch(/RPA Desktop Runner/);
+    });
+
+    it('several: none without --desktop-runner, each listed; the one it names with it; a name it does not have stops before anything is made', async () => {
+      const fake = await n8n({ credentials: [HAND, SECOND] });
+      const none = await run(setup(fake.url), ENV);
+      expect(none.code, none.out).toBe(0);
+      expect(onImport(fake).rpaDesktopRunnerApi).toBeUndefined();
+      expect(none.out).toContain('not picked: your project has 2 RPA Desktop Runners, "RPA Desktop Runner account" (id c-hand), "Night shift" (id c-second), and this run picks one only by --desktop-runner <name>. Pick one on "Import steps" in n8n, so the workflow the form hands over uses it.');
+      expect(fake.state.requests.some((r) => r.path.endsWith('/test'))).toBe(false);
+
+      const named = await n8n({ credentials: [HAND, SECOND] });
+      const r = await run(setup(named.url, '--desktop-runner', 'Night shift'), ENV);
+      expect(r.code, r.out).toBe(0);
+      expect(onImport(named).rpaDesktopRunnerApi).toEqual({ id: 'c-second', name: 'Night shift' });
+      expect(r.out).toContain('picked   credential "Night shift" (id c-second): the RPA Desktop Runner --desktop-runner names');
+      expect(r.out).toContain(`tested   credential "Night shift" (id c-second): ${RUNNER_CONNECTED}`);
+      neverRead(named);
+
+      const wrong = await n8n({ credentials: [HAND, SECOND, ELSEWHERE] });
+      const w = await run(setup(wrong.url, '--desktop-runner', 'RPA Desktop Runner'), ENV);
+      expect(w.code).toBe(2);
+      expect(w.out).toContain('No RPA Desktop Runner named "RPA Desktop Runner" in your project. Your project\'s RPA Desktop Runners: "RPA Desktop Runner account" (id c-hand), "Night shift" (id c-second).');
+      // The workflow made to learn the project is removed again; no credential is made.
+      expect(wrong.state.workflows).toEqual([]);
+      expect(wrong.state.credentials.map((c) => c.id)).toEqual(['c-hand', 'c-second', 'c-else']);
+    });
+
+    it('--desktop-runner: with a Connection Line too, or a name that is not one, refused before anything is sent', async () => {
+      const fake = await n8n({ credentials: [HAND] });
+      const both = await run(setup(fake.url, '--desktop-runner', 'RPA Desktop Runner account'), { ...ENV, RPA_CONNECTION_LINE: LINE });
+      expect(both.code).toBe(2);
+      expect(both.out).toMatch(/Give a Connection Line \(RPA_CONNECTION_LINE\) or --desktop-runner, not both.*Nothing was sent to n8n\./);
+      expectNoSecrets(both.out);
+      for (const name of ['', 'RPA Step Signing', 'two\nlines']) expect((await run(setup(fake.url, '--desktop-runner', name), ENV)).code, name).toBe(2);
+      expect(fake.state.requests).toEqual([]);
+      // At a terminal it does not ask for a line: the flag picks one.
+      const t = await runAtTerminal(setup(fake.url, '--desktop-runner', 'RPA Desktop Runner account'), ENV, []);
+      expect(t.code, t.out).toBe(0);
+      expect(t.out).not.toMatch(/Connect a Windows machine now/);
+      expect((await run(['--help'])).out).toContain('--desktop-runner <name>');
+    });
+
+    it('the test: a failed one is said with the node\'s message, without the token, and the run still ends well; a key that may not test says how', async () => {
+      const failing = await n8n({ credentials: [HAND], test: 'error' });
+      const f = await run(setup(failing.url), ENV);
+      expect(f.code, f.out).toBe(0);
+      expect(f.out).toContain(`tested   credential "RPA Desktop Runner account" (id c-hand), and it failed: ${RUNNER_UNREACHABLE}`);
+      expectNoSecrets(f.out);
+      const forbidden = await n8n({ credentials: [HAND], test: 'forbidden' });
+      const r = await run(setup(forbidden.url), ENV);
+      expect(r.code, r.out).toBe(0);
+      expect(r.out).toContain('not tested credential "RPA Desktop Runner account" (id c-hand) (HTTP 403: Forbidden). To test it, open it in n8n, which tests it as it opens. For this command to test it, the API key needs the scope credential:read.');
+      expect(onImport(forbidden).rpaDesktopRunnerApi).toEqual({ id: 'c-hand', name: 'RPA Desktop Runner account' });
+    });
+
+    it('a workflow there already is left alone: it says to pick the runner on Import steps, by name and id', async () => {
+      const fake = await n8n();
+      expect((await run(setup(fake.url), ENV)).code).toBe(0);
+      const [wf] = fake.state.workflows;
+      fake.state.credentials.push({ ...HAND, projectId: HOME });
+      const before = fake.state.requests.length;
+      const r = await run(setup(fake.url), ENV);
+      expect(r.code, r.out).toBe(0);
+      expect(fake.state.requests.slice(before).filter((q) => q.method !== 'GET').map((q) => q.path)).toEqual(['/api/v1/credentials/c-hand/test']);
+      expect(wf.nodes.find((n) => n.name === 'Import steps').credentials.rpaDesktopRunnerApi).toBeUndefined();
+      expect(r.out).toContain('its credentials were left as they are: pick "RPA Desktop Runner account" (id c-hand) on "Import steps" in n8n, so the workflow file the form hands over carries them.');
+      expect(r.out).toContain('The workflow the form gives you does not use "RPA Desktop Runner account" yet: pick it on "Import steps" in n8n (see above).');
+    });
+
+    it('in a shared project: picked only with the set, after the question or --reuse-project-credentials', async () => {
+      const TEAM_RUNNER: Cred = { ...HAND, id: 'c-team-runner', projectId: 'P-team' };
+      const OTHER_WORK: Wf = { id: 'w-team-other', name: 'Team work', active: false, versionId: 'v', nodes: [], connections: {}, settings: {}, projectId: 'P-team' };
+      const teamImport = (fake: Fake) => fake.state.workflows.find((w) => w.projectId === 'P-team' && w.id !== 'w-team-other')!.nodes.find((n) => n.name === 'Import steps').credentials;
+      const no = await n8n({ credentials: [TEAM_RUNNER], workflows: [OTHER_WORK] });
+      const n = await run(setup(no.url, '--project-id', 'P-team'), ENV);
+      expect(n.code, n.out).toBe(0);
+      expect(n.out).toMatch(/Found in the shared project "Ops" \(id P-team\):\n {2}credential "RPA Desktop Runner account" \(id c-team-runner\)\n/);
+      expect(n.out).toContain('not used credential "RPA Desktop Runner account": this run does not use what it found in the shared project');
+      expect(teamImport(no).rpaDesktopRunnerApi).toBeUndefined();
+      const yes = await n8n({ credentials: [TEAM_RUNNER], workflows: [OTHER_WORK] });
+      const y = await run(setup(yes.url, '--project-id', 'P-team', '--reuse-project-credentials'), ENV);
+      expect(y.code, y.out).toBe(0);
+      expect(teamImport(yes).rpaDesktopRunnerApi).toEqual({ id: 'c-team-runner', name: 'RPA Desktop Runner account' });
+    });
   });
 
   it('--browser-url: the RPA Browser credential with the token from RPA_BROWSER_TOKEN, set on Import steps', async () => {
