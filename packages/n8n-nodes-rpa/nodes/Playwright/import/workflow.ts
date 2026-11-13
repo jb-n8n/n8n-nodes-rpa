@@ -444,6 +444,14 @@ class Builder {
     this.names.add(candidate);
     return candidate;
   }
+  /**
+   * The name of a Run steps: the name of its step list, as Get active steps and the run log name it. A recording's or
+   * a step document's flow names its own (`draft`, the name typed on the form). A UiPath project's sequence is named
+   * after its step list too (`<name>-<n>`), never after its first activity.
+   */
+  private runName(n: { displayName: string; draft?: string }, draftName: string): string {
+    return n.draft !== undefined ? this.nodeName(n.displayName, `Run steps (${draftName})`) : this.unique(draftName);
+  }
   /** A node name from the project's display name, or the fallback when it has none or would look like an expression. */
   private nodeName(displayName: string, fallback: string): string {
     const d = line(displayName, MAX_NAME);
@@ -607,7 +615,7 @@ class Builder {
     }
     this.desktopDraftNames.push(draftName);
     const get = this.getActiveSteps(draftName, tails, x, y);
-    const run = this.nodeName(n.displayName, `Run steps (${draftName})`);
+    const run = this.runName(n, draftName);
     const runX = x + STEP;
     const secret = new Set(draft.secretVariables);
     const start = nonSecretStart(draft.startValues, draft.secretVariables);
@@ -658,7 +666,7 @@ class Builder {
         }
         this.draftNames.push(draftName);
         const get = this.getActiveSteps(draftName, tails, x, y);
-        const run = this.nodeName(n.displayName, `Run steps (${draftName})`);
+        const run = this.runName(n, draftName);
         const runX = x + STEP;
         const vars = stepVariables(draft.script);
         const creds = this.slots(BROWSER_SLOTS);

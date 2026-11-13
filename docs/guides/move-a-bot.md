@@ -93,7 +93,7 @@ Zip the project folder (the one with `project.json`), or pick one `.xaml` workfl
 **What is left out, and reported:** the browser's Get Text and Extract Data (write an `extract` step), Orchestrator
 assets and queues, Catch branches, wildcard and fuzzy selectors, image and computer-vision targets, Java apps, Citrix
 and Remote Desktop windows, and SAP GUI for Windows. A UiPath project gives one step list per sequence, named
-`<name>-1`, `<name>-2`.
+`<name>-1`, `<name>-2`. In the workflow it hands over, each RPA node has the name of its step list.
 
 ## From a website recording or Playwright code
 

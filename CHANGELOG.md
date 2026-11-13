@@ -91,6 +91,7 @@ All notable changes to `n8n-nodes-rpa`, the `rpa-browser` image and the Windows 
 - **A step's variable mark comes from what the step types or chooses**, never from its description, on the review page, in the approval emails and in Sign Steps' check of them. After a value was changed from `{{var.company_code}}` to a fixed `2000`, the page no longer says `variable company_code`. A desktop step's description that still names the variable shows beside the sentence as saying something else.
 - **The last page after a change or a re-sign says what happened to the bot**: `Signed again: <name> version N, unchanged.`, `Changed: <name> version N is now the version that runs, replacing version M.`, or after Reject `Nothing changed: <name> version M keeps running.` It no longer starts with `Imported: 16 steps.`, and no longer reads as if the version that keeps running was rejected.
 - **The run log's `message` for a failed run is at most 300 characters**, masked as the node masks it, beside the code and the guidance, so the table reads without a click per failure. A `playwright_runs` made before the column existed still takes the row without it, as for `guidance`.
+- **The RPA node of a workflow made from a UiPath project is named after its step list** (`<name>-1`, `<name>-2`), as **Get active steps (<name>-1)**, its notes and the run log name it, not after the project's first activity such as `Open Application 'ERP Demo - Sign in'`.
 
 ### Security
 
