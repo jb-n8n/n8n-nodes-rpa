@@ -196,12 +196,12 @@ $listening = @([Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalPropertie
 
 $services = @(@{
     # The runner writes its failures to its output (runner.out.log), and to logs\runner-<date>.log.
-    Name = 'Runner'; Kind = 'runner'; Credential = 'RPA Desktop Runner'; Port = [int]$install.runnerPort; Path = '/rpa/v1'; Log = Join-Path $logDir 'runner.out.log'
+    Name = 'Runner'; Kind = 'runner'; For = 'the setup command or the RPA Desktop Runner credential'; Port = [int]$install.runnerPort; Path = '/rpa/v1'; Log = Join-Path $logDir 'runner.out.log'
     Fingerprint = Get-RunnerFingerprint (Join-Path $logDir 'runner.out.log'); Token = Join-Path $dataDir 'token'
   })
 if ($install.browser) {
   $services += @{
-    Name = 'Browser'; Kind = 'browser'; Credential = 'RPA Browser'; Port = [int]$install.browserPort; Path = ''; Log = Join-Path $logDir 'browser.err.log'
+    Name = 'Browser'; Kind = 'browser'; For = 'the Connection Line of the RPA Browser credential'; Port = [int]$install.browserPort; Path = ''; Log = Join-Path $logDir 'browser.err.log'
     Fingerprint = Get-CertificateFingerprint (Join-Path $dataDir 'browser-cert.pem'); Token = Join-Path $dataDir 'browser-token'
   }
 }
@@ -233,12 +233,13 @@ foreach ($service in $services) {
     if ($listening -contains $service.Port) { Write-Output ('{0}: listening on port {1}' -f $service.Name, $service.Port) } else { Write-Output $notListening }
     continue
   }
-  # The line to paste, then the values for the separate fields. A service that has never started has no certificate yet.
+  # The line to paste (the runner's into the setup command, npx n8n-nodes-rpa setup, or into its credential), then the
+  # values for the separate fields. A service that has never started has no certificate yet.
   if ($noLine) { Write-Output ('{0} connection line: {1}' -f $service.Name, $noLine) }
   elseif ($service.Fingerprint) {
     $made = Get-ConnectionLine $service.Kind $lineHost $service.Port $service.Fingerprint $service.Token ([bool]$ShowTokens)
     if ($made.Line) {
-      Write-Output ('{0} connection line, for the Connection Line of the {1} credential:' -f $service.Name, $service.Credential)
+      Write-Output ('{0} connection line, for {1}:' -f $service.Name, $service.For)
       if ($ShowTokens) { $Host.UI.WriteLine($made.Line) } else { Write-Output $made.Line }
     } else { Write-Output ('{0} connection line: {1}' -f $service.Name, $made.Problem) }
   } else { Write-Output ('{0} connection line: not known yet (the program has not started)' -f $service.Name) }
