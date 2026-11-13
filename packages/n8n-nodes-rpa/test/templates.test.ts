@@ -2935,6 +2935,11 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const NOT_COMPARED = ' Which steps are writes is not compared: it is chosen again on this page.';
     expect(page([deskRow('Save')], [deskFile('Save')]).item).toEqual({ lists: [{ name: 'line-item-export', unchanged: true, compared: `line-item-export: unchanged from the approved version 3.${NOT_COMPARED}` }] });
     expect(page([deskRow('Save')], [deskFile('Save all')]).item).toEqual({ lists: [{ name: 'line-item-export', unchanged: false, compared: `line-item-export: changed from the approved version 3: step 2.${NOT_COMPARED}` }] });
+    // A file that carries a mark of its own, where the approved version has none: the same, and the line still says so.
+    const marked = { json: { ...list('line-item-export', 4).json, steps: { ...desk('Save', true), version: 4 } } };
+    const plainRow = { ...row('line-item-export', 3), steps: JSON.stringify({ ...desk('Save', false), version: 3 }) };
+    expect(page([plainRow], [marked]).item).toEqual({ lists: [{ name: 'line-item-export', unchanged: true, compared: `line-item-export: unchanged from the approved version 3.${NOT_COMPARED}` }] });
+    expect(page([plainRow], [deskFile('Save')]).item).toEqual({ lists: [{ name: 'line-item-export', unchanged: true, compared: 'line-item-export: unchanged from the approved version 3.' }] });
     // Only a step's own mark is left out: a field named write deeper in a step still counts.
     const deep = { json: { ...list('line-item-export', 4).json, steps: { ...desk('Save', false), version: 4, steps: [desk('Save', false).steps[0], { ...desk('Save', false).steps[1], click: { uia: { path: [{ name: 'Save' }] }, write: true } }] } } };
     expect(page([deskRow('Save')], [deep]).item).toMatchObject({ lists: [{ unchanged: false, compared: `line-item-export: changed from the approved version 3: step 2.${NOT_COMPARED}` }] });
