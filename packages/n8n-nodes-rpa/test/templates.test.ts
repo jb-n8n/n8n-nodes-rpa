@@ -613,7 +613,8 @@ describe('3-approve-steps.json', () => {
     const fromNode = { ...received, secretVariables: ['username'], steps: { ...received.steps, steps: misleading }, reviewSteps: reviewSteps(misleading, { desktop: true, secretVariables: ['username'] }) };
     const shownSteps = (json: object) => render(String(ask.message), { $: (name: string) => ({ item: { json: name === 'Settings' ? { approvalTimeoutHours: 72 } : json } }) })
       .split('The steps:\n')[1].split('\n\nClick Review and decide')[0];
-    expect(shownSteps(fromNode)).toBe('1. Click Post (described as: Read the total)\n'
+    // A description that says something else is marked ⚠ (the message is plain text).
+    expect(shownSteps(fromNode)).toBe('1. Click Post ⚠ (described differently as: Read the total)\n'
       + '2. Type &quot;&lt;b&gt;9999&lt;/b&gt;&quot; into a field without a name (described as: Read the total)\n'
       + '3. Type into User name (secret variable username)');
     // Without reviewSteps, or with a list that does not match the steps, the email words the steps itself, as before.
@@ -1509,11 +1510,11 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(fields[0].html).toBe('<p>Opens a.example&#39; &lt;script&gt;.<br>Signs in with the RPA Site Login.<br>Submits a form: POST a.example/send.<br>Returns a file to n8n: step 5.<br>'
       + 'secret fill: a step types the run variable {{var.exportPassword}}<br>7 rows &lt;img src=x onerror=alert(1)&gt;.</p>'
       + '<p><b>⚠ Left out by the import:</b><br>step 4, Pick &lt;b&gt;Status&lt;/b&gt;<br>step 9, Wait</p>'
-      + '<p><b>The steps</b></p><ol><li>Open a.example/list (described as: Open the list)</li><li>Sign in <em>· signs in with the RPA Site Login</em></li>'
-      + '<li>Type into the element matching &quot;#p&quot;: a secret (described as: Type the export password) <em>· secret variable exportPassword</em></li>'
-      + '<li>Choose an option set by a variable in the element matching &quot;#s&quot; (described as: Pick &lt;b&gt;Status&lt;/b&gt;) <em>· variable status</em></li>'
-      + '<li>Download with an element (described as: Download the report) <em>· returns a file</em></li>'
-      + '<li>Type into the element matching &quot;#n&quot;: &quot;hello &lt;b&gt;&quot; (described as: Type the note)</li></ol>' + POINTER);
+      + '<p><b>The steps</b></p><ol><li>Open a.example/list <strong>(described differently as: Open the list)</strong></li><li>Sign in <em>· signs in with the RPA Site Login</em></li>'
+      + '<li>Type into the element matching &quot;#p&quot;: a secret <strong>(described differently as: Type the export password)</strong> <em>· secret variable exportPassword</em></li>'
+      + '<li>Choose an option set by a variable in the element matching &quot;#s&quot; <strong>(described differently as: Pick &lt;b&gt;Status&lt;/b&gt;)</strong> <em>· variable status</em></li>'
+      + '<li>Download with an element <strong>(described differently as: Download the report)</strong> <em>· returns a file</em></li>'
+      + '<li>Type into the element matching &quot;#n&quot;: &quot;hello &lt;b&gt;&quot; <strong>(described differently as: Type the note)</strong></li></ol>' + POINTER);
     const detailed = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan({ ...ran, Settings: [[{ json: { ...settingsJson(), showDetails: true } }]] }) });
     expect(detailed[0].html).toBe(String(fields[0].html).replace(POINTER, '') + '<h4>Details of every step (how each one finds its control)</h4><p><em><b>Safety flags:</b> host: a.example&#39; &lt;script&gt;; …</em></p>'
       + '<p><em><b>Left out by the import (the source does these, the steps do not):</b><br>step 4, Pick &lt;b&gt;Status&lt;/b&gt;<br>step 9, Wait</em></p>'
@@ -1526,7 +1527,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(notRun[0].html).not.toContain('Screenshots');
     // A variable written with spaces gets its mark too (the page's own regex used to miss it).
     expect(reviewSteps([{ intent: 'Type the note', fill: { field: { label: 'Note' }, value: '{{ var.note }}' } }], { desktop: false, shownUrl }))
-      .toEqual([{ text: 'Type into Note: a variable (described as: Type the note)', marks: ['variable note'] }]);
+      .toEqual([{ text: 'Type into Note: a variable (described differently as: Type the note)', marks: ['variable note'] }]);
     expect(reviewSteps([{ intent: 'Pick', select: { field: { uia: { path: [{ controlType: 'ComboBox', name: 'Plant' }] } }, option: '{{ var.plant }}' } }], { desktop: true }))
       .toEqual([{ text: 'Choose an item in Plant', marks: ['variable plant'] }]);
     // A desktop read names its control by the name a person sees, never by its automation id, and says the output once.
@@ -1562,9 +1563,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       { intent: 'Look at the list', click: { uia: { path: [{ controlType: 'Pane' }] } } },
     ], { desktop: true }).map((r) => r.text)).toEqual([
       'Click Post',
-      'Click Post (described as: Read the total)',
-      'Double-click Post (described as: Open the row)',
-      'Click a control without a name (described as: Look at the list)',
+      'Click Post (described differently as: Read the total)',
+      'Double-click Post (described differently as: Open the row)',
+      'Click a control without a name (described differently as: Look at the list)',
     ]);
   });
 
@@ -1619,11 +1620,11 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       { intent: 'Close the dialog', submit: { host: 'b.example', path: '/pay', method: 'post', button: save } },
       { intent: 'Download the report', download: { trigger: { text: 'Export' }, via: { path: '/export' } } },
     ])).toEqual([
-      'Type into Amount: "9999" (described as: Read the total)',
-      'Click Pay now (described as: Click Cancel)',
-      'Open pay.example/transfer (described as: Open the help page)',
-      'Click Save to submit a form to POST b.example/pay (described as: Close the dialog)',
-      'Download with Export, through a form sent to POST the start site at /export (described as: Download the report)',
+      'Type into Amount: "9999" (described differently as: Read the total)',
+      'Click Pay now (described differently as: Click Cancel)',
+      'Open pay.example/transfer (described differently as: Open the help page)',
+      'Click Save to submit a form to POST b.example/pay (described differently as: Close the dialog)',
+      'Download with Export, through a form sent to POST the start site at /export (described differently as: Download the report)',
     ]);
     // A short value the description happens to contain still shows, from the step. Case, double quotes and spaces aside, a
     // description that says the action is not repeated.
@@ -1631,7 +1632,26 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       { intent: 'Type a into Note', fill: { field: { label: 'Note' }, value: 'a' } },
       { intent: '  type INTO   note: "a" ', fill: { field: { label: 'Note' }, value: 'a' } },
       { intent: 'Choose 1000 in Company Code', select: { field: { label: 'Company Code' }, value: '1000' } },
-    ])).toEqual(['Type into Note: "a" (described as: Type a into Note)', 'Type into Note: "a"', 'Choose "1000" in Company Code']);
+    ])).toEqual(['Type into Note: "a" (described differently as: Type a into Note)', 'Type into Note: "a"', 'Choose "1000" in Company Code']);
+    // Single and curly quotes and a full stop at the end aside too. Another verb, target or value still shows: no list
+    // of verbs that "mean the same" is guessed, so a description cannot pass for a step it does not describe.
+    expect(texts([
+      { intent: "Type into From: '2026-09-01'.", fill: { field: { label: 'From' }, value: '2026-09-01' } },
+      { intent: 'Click \u201cLine Item Report\u201d.', click: { role: 'button', name: 'Line Item Report' } },
+      { intent: 'click line item report', click: { role: 'button', name: 'Line Item Report' } },
+      { intent: 'Open Line Item Report', click: { role: 'button', name: 'Line Item Report' } },
+      { intent: 'Click Line Item Reports', click: { role: 'button', name: 'Line Item Report' } },
+      { intent: 'Type into From: "2026-09-02"', fill: { field: { label: 'From' }, value: '2026-09-01' } },
+      { intent: 'Type into To: "2026-09-01"', fill: { field: { label: 'From' }, value: '2026-09-01' } },
+      { intent: 'Click Line Item Report..', click: { role: 'button', name: 'Line Item Report' } },
+    ])).toEqual([
+      'Type into From: "2026-09-01"', 'Click Line Item Report', 'Click Line Item Report',
+      'Click Line Item Report (described differently as: Open Line Item Report)',
+      'Click Line Item Report (described differently as: Click Line Item Reports)',
+      'Type into From: "2026-09-01" (described differently as: Type into From: "2026-09-02")',
+      'Type into From: "2026-09-01" (described differently as: Type into To: "2026-09-01")',
+      'Click Line Item Report (described differently as: Click Line Item Report..)',
+    ]);
     // A secret fill shows "a secret", a variable "a variable": never a value, never the template.
     const secret = texts([
       { intent: 'Type the export password', fill: { field: { label: 'Export password' }, value: '{{var.exportPassword}}', secret: true } },
@@ -1639,9 +1659,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       { intent: 'Pick', select: { field: { label: 'Region' }, value: ['north', '{{var.region}}'] } },
     ]);
     expect(secret).toEqual([
-      'Type into Export password: a secret (described as: Type the export password)',
+      'Type into Export password: a secret (described differently as: Type the export password)',
       'Type into Note: a variable',
-      'Choose "north", an option set by a variable in Region (described as: Pick)',
+      'Choose "north", an option set by a variable in Region (described differently as: Pick)',
     ]);
     expect(secret.join('\n')).not.toContain('{{');
     // A CSS selector shows itself, cut; a long description is cleaned to one line and cut; a quote in a value stays a quote.
@@ -1650,7 +1670,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       { intent: `Click\nthe​ first cell ${'x'.repeat(200)}`, click: { css: long } },
       { intent: 'Type into Name', fill: { field: { label: 'Name' }, value: 'say "hi"\nbye' } },
     ])).toEqual([
-      `Click the element matching ${JSON.stringify(long.slice(0, 80))}… (described as: Click the first cell ${'x'.repeat(99)}…)`,
+      `Click the element matching ${JSON.stringify(long.slice(0, 80))}… (described differently as: Click the first cell ${'x'.repeat(99)}…)`,
       'Type into Name: "say \\"hi\\"\\nbye"',
     ]);
     // A plain http address keeps its "http://"; an https one is shown without its scheme. The importer's wording, which
@@ -1663,7 +1683,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     ])).toEqual([
       'Open http://localhost:8080/acme/login',
       'Open http://a.example',
-      'Open http://pay.example/transfer (described as: Open the bank)',
+      'Open http://pay.example/transfer (described differently as: Open the bank)',
       'Open pay.example/transfer',
     ]);
     // Steps that only read or wait keep their description as their sentence.
@@ -1725,11 +1745,11 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     ];
     const listed = reviewSteps(steps, { desktop: false, shownUrl });
     expect(listed[1]).toEqual({
-      text: 'Page through with Next, at most 3 pages, 3 steps on each (described as: Go through the pages)', marks: [],
+      text: 'Page through with Next, at most 3 pages, 3 steps on each (described differently as: Go through the pages)', marks: [],
       each: [
         { text: 'Read the rows', marks: [] },
-        { text: 'Type into Note: a variable (described as: Close the banner)', marks: ['variable note'] },
-        { text: 'Click Delete <all> (described as: Close the banner)', marks: [] },
+        { text: 'Type into Note: a variable (described differently as: Close the banner)', marks: ['variable note'] },
+        { text: 'Click Delete <all> (described differently as: Close the banner)', marks: [] },
       ],
     });
     expect(listed.map((r) => r.each === undefined)).toEqual([true, false, true]);
@@ -1737,13 +1757,15 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const item = { name: 'feed', version: 1, steps: { startUrl: 'https://a.example/', steps }, safetyFlags: [], safetyLine: 'none', evidenceLine: '3 rows', changeList: '', reviewSteps: listed };
     const ran = { Settings: [[{ json: settingsJson() }]], 'Import steps': [[{ json: { report: { steps: 3, items: [] }, drafts: [] } }], [{ json: item }]] } as Record<string, INodeExecutionData[][]>;
     const html = String(jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan(ran) })[0].html);
-    expect(html).toContain('<ol><li>Open a.example/list (described as: Open the list)</li>'
-      + '<li>Page through with Next, at most 3 pages, 3 steps on each (described as: Go through the pages)<ul>'
+    // A description that says something else is a warning: <strong>, which the page's style shows in red.
+    expect(html).toContain('<ol><li>Open a.example/list <strong>(described differently as: Open the list)</strong></li>'
+      + '<li>Page through with Next, at most 3 pages, 3 steps on each <strong>(described differently as: Go through the pages)</strong><ul>'
       + '<li>On each page: Read the rows</li>'
-      + '<li>On each page: Type into Note: a variable (described as: Close the banner) <em>· variable note</em></li>'
-      + '<li>On each page: Click Delete &lt;all&gt; (described as: Close the banner)</li></ul></li>'
+      + '<li>On each page: Type into Note: a variable <strong>(described differently as: Close the banner)</strong> <em>· variable note</em></li>'
+      + '<li>On each page: Click Delete &lt;all&gt; <strong>(described differently as: Close the banner)</strong></li></ul></li>'
       + '<li>Download with Export <em>· returns a file</em></li></ol>');
     expect(html).toContain('Returns a file to n8n: step 3.');
+    expect(String(review.parameters.options && (review.parameters.options as IDataObject).customCss)).toContain('div.html strong { color: #b00020; font-weight: 600; }');
   });
 
   it('a recording\'s marks name its secret variables from the import, never a value', async () => {

@@ -223,11 +223,12 @@ function desktopSentence(s: Json): string {
     const name = ownCondition(asJson(s.read).target)?.name;
     return typeof name === 'string' && name.trim() ? `Read ${name.trim()}` : 'Read a value from the app';
   }
-  // A click: the control comes from the step itself. The author's description stands beside it when it says something else.
+  // A click: the control comes from the step itself. The author's description stands beside it when it says something
+  // else, compared as a browser step's is (comparable).
   for (const [verb, word] of [['click', 'Click'], ['doubleClick', 'Double-click']] as const) {
     if (s[verb] === undefined) continue;
     const text = `${word} ${targetName(s[verb]) || 'a control without a name'}`;
-    return described && described.toLowerCase() !== text.toLowerCase() ? `${text} (described as: ${described})` : text;
+    return described && comparable(described) !== comparable(text) ? describedDifferently(text, described) : text;
   }
   return String(s.intent ?? '');
 }
@@ -246,7 +247,7 @@ function clean(v: unknown, max: number): string {
 
 /**
  * A name as the importer's descriptions show it (import/draft.ts `shown`): quoted when it has a bracket or a double quote,
- * so page text cannot fake the `(described as: …)` group.
+ * so page text cannot fake the `(described differently as: …)` group.
  */
 const shownName = (name: string): string => (/[()"]/.test(name) ? `"${name.replaceAll('"', "'")}"` : name);
 
@@ -342,15 +343,27 @@ function browserAction(s: Json, shownUrl: (url: string) => string): { core: stri
   return undefined;
 }
 
-/** Text as compared with the author's description: no case, no double quotes, single spaces. */
-const comparable = (t: string): string => t.replaceAll('"', '').replace(/\s+/g, ' ').trim().toLowerCase();
+/**
+ * Text as compared with the author's description: no case, no quotes (straight or curly, single or double), single
+ * spaces and no full stop at the end. Only differences that cannot change what a step does are ignored: another verb,
+ * target or value still differs, so a description that says "Click" where the step opens a link, or another value,
+ * still shows beside the sentence.
+ */
+export const comparable = (t: string): string =>
+  t.replace(/["'\u2018\u2019\u201c\u201d]/g, '').replace(/\s+/g, ' ').trim().replace(/\.$/, '').trimEnd().toLowerCase();
+/**
+ * How a description that says something else than the sentence built from the step is shown beside it. The review page
+ * and the approval emails render it as a warning (`described differently as:` starts it).
+ */
+export const DESCRIBED_DIFFERENTLY = 'described differently as:';
+const describedDifferently = (text: string, described: string): string => `${text} (${DESCRIBED_DIFFERENTLY} ${described})`;
 
 /**
  * A browser step's sentence. For every step that acts on the page or sends something, the action, the target and the
  * value come from the step itself, never from its intent: the page is what a person approves, and the intent is the
  * author's own description (a step document's or a UiPath project's author may be someone else). The description
- * stands beside the sentence, in brackets, when it says something else: neither the action alone nor all of it, compared
- * without case, double quotes or extra spaces. An import's descriptions (import/draft.ts describeEvent) say the action
+ * stands beside the sentence, in brackets that start `described differently as:`, when it says something else: neither
+ * the action alone nor all of it, compared without case, quotes, extra spaces or a full stop at the end (comparable). An import's descriptions (import/draft.ts describeEvent) say the action
  * in the same words, so a recording reads without brackets. A secret's and a variable's value is never shown.
  */
 function browserSentence(s: Json, shownUrl: (url: string) => string): string {
@@ -360,7 +373,7 @@ function browserSentence(s: Json, shownUrl: (url: string) => string): string {
   if (!action) return String(s.intent ?? '');
   const text = `${action.core}${action.more}`;
   const same = [action.core, text, action.alike ?? text].some((t) => comparable(t) === comparable(described));
-  return described && !same ? `${text} (described as: ${described})` : text;
+  return described && !same ? describedDifferently(text, described) : text;
 }
 
 /**

@@ -108,8 +108,9 @@ an **RPA Step Signing** credential that its own project owns, and never one of t
   forwards it can approve. Send it to one person. The AI repairs of **RPA: 2 Data feed** use this path.
 - **What each step says.** The review page builds each step's sentence from the step itself: what it does, where, and
   the value it types or chooses. A secret's or a variable's value is never shown. A step's description comes from
-  whoever wrote the steps, so it is shown beside the sentence, as `(described as: …)`, when it says something else.
-  Sign Steps refuses to sign when the step sentences shown for approval differ from the steps it is asked to sign.
+  whoever wrote the steps, so it is shown beside the sentence, in red, as `(described differently as: …)`, when it says
+  something else. Only case, spaces, quotes and a full stop at the end are ignored in that comparison: another verb,
+  target or value shows. The approval emails show the same sentences. Sign Steps refuses to sign when the step sentences shown for approval differ from the steps it is asked to sign.
 - **Desktop writes.** The review page asks "Which of these steps save, send or submit?". The ticked steps are signed as
   writes. A write mark only matters where the runner's policy lists the control or key (see [Desktop runs](#desktop-runs)).
 - **Changing or signing again on the form.** With **Bot file** left empty, the form's next page shows the steps of the

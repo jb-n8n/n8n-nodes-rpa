@@ -54,6 +54,7 @@ All notable changes to `n8n-nodes-rpa`, the `rpa-browser` image and the Windows 
 - `RpaPolicy.exe apply` takes the change file from where it is: it copies it into `C:\ProgramData\RPA Runner\policy-changes\` first. No need to copy it by hand.
 - The README and the guides are rewritten around three ways in. The reference moved to `docs/reference/`.
 - **RPA Recorder**: a value becomes a variable on the page after **Finish** only (**Make variable…** left the bar, and **Back** before saving returns to that page), the top line says `Almost done` on that page and `Saved` after saving, and the bar logs its stages and buttons to `%LOCALAPPDATA%\RPA Recorder\bar.log`.
+- **A description that says something else stands out.** On the review page a step's description shows beside the sentence built from the step, in red, as `(described differently as: …)` (was `(described as: …)`), and the desktop approval email marks it with ⚠. The comparison ignores case, spaces, quotes (single, double or curly) and a full stop at the end, and nothing else: another verb, target or value still shows. Step lists that waited for approval in **RPA: 3 Approve steps** across the upgrade carry the old wording, and Sign Steps refuses them: import them again.
 
 ### Removed
 

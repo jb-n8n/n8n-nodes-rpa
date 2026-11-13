@@ -1282,10 +1282,10 @@ describe('Import Steps: a step document', () => {
       const item = repaired[0].json;
       expect((item.reviewSteps as IDataObject[]).map((r) => r.text)).toEqual([
         'Sign in',
-        'Open /acme/reports (described as: Open the help page)',
-        'Type into Amount: "9999" (described as: Read the total)',
-        'Click Pay now (described as: Click Cancel)',
-        'Click Export CSV to submit a form to POST the start site at /acme/reports/export (described as: Close the dialog)',
+        'Open /acme/reports (described differently as: Open the help page)',
+        'Type into Amount: "9999" (described differently as: Read the total)',
+        'Click Pay now (described differently as: Click Cancel)',
+        'Click Export CSV to submit a form to POST the start site at /acme/reports/export (described differently as: Close the dialog)',
       ]);
       // What is signed does not change: the steps with their intents and the hash are those of the document's own
       // proposal, the digest covers the item without the shown-only list, and Sign Steps signs it with and without alike.
@@ -1308,7 +1308,7 @@ describe('Import Steps: a step document', () => {
       const { engine, repaired } = await notReplayed(doc);
       const item = repaired[0].json;
       const shown = item.reviewSteps as { text: string; marks: string[]; each?: { text: string; marks: string[] }[] }[];
-      expect(shown[2].each).toEqual([{ text: 'Click Row (described as: Open the row)', marks: [] }]);
+      expect(shown[2].each).toEqual([{ text: 'Click Row (described differently as: Open the row)', marks: [] }]);
       expect(await sign(engine, item)).toMatchObject({ status: 'active' });
       const forged = shown.map((r, i) => (i === 2 ? { ...r, each: [{ text: 'Open the row', marks: [] }] } : r));
       const out = await sign(engine, { ...item, reviewSteps: forged as unknown as IDataObject[] });
