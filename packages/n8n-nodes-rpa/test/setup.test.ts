@@ -21,6 +21,9 @@ const EXPIRING_KEY = [b64({ alg: 'HS256', typ: 'JWT' }), b64({ sub: 'u-owner', i
 const FINGERPRINT = 'AB'.repeat(32);
 const RUNNER_TOKEN = 'runner-token-ZYXWVUTSRQPONMLKJIHGFEDCBA-98765';
 const LINE = `rpa-runner://win-1.example.internal:8765/rpa/v1#token=${RUNNER_TOKEN}&fingerprint=${FINGERPRINT}`;
+// The line of the same machine printed again, with the address n8n can reach (rpa connection -Address): made up.
+const NEW_TOKEN = 'made-up-new-runner-token';
+const NEW_LINE = `rpa-runner://rpa.example.com:8765/rpa/v1#token=${NEW_TOKEN}&fingerprint=${'CD'.repeat(32)}`;
 const BROWSER_TOKEN = 'browser-token-abcdefghijklmnopqrstuvwxyz-0123456789';
 // The node's own test messages for an RPA Desktop Runner (the engine's runnerConnected and runnerUnreachable).
 const RUNNER_CONNECTED = 'Connected to the desktop runner (session not interactive)';
@@ -527,6 +530,76 @@ describe('npx n8n-nodes-rpa setup', () => {
     expect(fake.state.credentials.filter((c) => c.type === 'rpaDesktopRunnerApi')).toHaveLength(1);
   });
 
+  describe('a Connection Line for an RPA Desktop Runner the project has: asked before it is replaced', () => {
+    const HAND: Cred = { id: 'c-hand', name: 'RPA Desktop Runner account', type: 'rpaDesktopRunnerApi', data: { connectionLine: LINE } };
+    const MADE: Cred = { id: 'c-made', name: 'RPA Desktop Runner', type: 'rpaDesktopRunnerApi', data: { connectionLine: LINE } };
+    const ELSEWHERE: Cred = { id: 'c-else', name: 'RPA Desktop Runner account', type: 'rpaDesktopRunnerApi', data: { connectionLine: LINE }, projectId: 'P-other' };
+    const QUESTION = /Replace the Connection Line of "RPA Desktop Runner account" with the line for rpa\.example\.com:8765\? \(y\/N\)/;
+    const lineOf = (fake: Fake, id: string) => fake.state.credentials.find((c) => c.id === id)!.data.connectionLine;
+    const tests = (fake: Fake, id: string) => fake.state.requests.filter((r) => r.path === `/api/v1/credentials/${id}/test`).length;
+
+    it('--desktop-runner and a line, at a terminal: yes replaces the line, names only its address and port, and n8n tests it', async () => {
+      const fake = await n8n({ credentials: [HAND, ELSEWHERE] });
+      const r = await runAtTerminal(setup(fake.url, '--desktop-runner', 'RPA Desktop Runner account'), { ...ENV, RPA_CONNECTION_LINE: NEW_LINE }, [[QUESTION, 'y']]);
+      expect(r.code, r.out).toBe(0);
+      expect(lineOf(fake, 'c-hand')).toBe(NEW_LINE);
+      expect(lineOf(fake, 'c-else'), 'another project\'s is never touched').toBe(LINE);
+      expect(fake.state.credentials.filter((c) => c.type === 'rpaDesktopRunnerApi')).toHaveLength(2);
+      expect(r.out).toContain('replaced Connection Line of credential "RPA Desktop Runner account" (id c-hand): it now names rpa.example.com:8765');
+      expect(r.out).toContain(`tested   credential "RPA Desktop Runner account" (id c-hand): ${RUNNER_CONNECTED}`);
+      expect(r.out.indexOf('replaced Connection Line')).toBeLessThan(r.out.indexOf('testing  credential'));
+      expect(tests(fake, 'c-hand')).toBe(1);
+      expect(fake.state.workflows[0].nodes.find((n) => n.name === 'Import steps').credentials.rpaDesktopRunnerApi).toEqual({ id: 'c-hand', name: 'RPA Desktop Runner account' });
+      expect(fake.state.requests.filter((x) => x.path.startsWith('/api/v1/credentials/c-else'))).toEqual([]);
+      expectNoSecrets(r.out, [NEW_LINE, NEW_TOKEN, 'CD'.repeat(32)]);
+    });
+
+    it('at a terminal, no (or just Enter) keeps the old line, and n8n still tests the credential', async () => {
+      for (const answer of ['n', '']) {
+        const fake = await n8n({ credentials: [HAND] });
+        const r = await runAtTerminal(setup(fake.url, '--desktop-runner', 'RPA Desktop Runner account'), { ...ENV, RPA_CONNECTION_LINE: NEW_LINE }, [[QUESTION, answer]]);
+        expect(r.code, r.out).toBe(0);
+        expect(lineOf(fake, 'c-hand')).toBe(LINE);
+        expect(fake.state.requests.filter((x) => x.method === 'PATCH')).toEqual([]);
+        expect(r.out).toContain('         its Connection Line stays as it is.');
+        expect(tests(fake, 'c-hand')).toBe(1);
+        expectNoSecrets(r.out, [NEW_LINE, NEW_TOKEN]);
+      }
+    });
+
+    it('without a terminal it keeps the old line and says how to replace it', async () => {
+      const fake = await n8n({ credentials: [HAND] });
+      const r = await run(setup(fake.url, '--desktop-runner', 'RPA Desktop Runner account'), { ...ENV, RPA_CONNECTION_LINE: NEW_LINE });
+      expect(r.code, r.out).toBe(0);
+      expect(lineOf(fake, 'c-hand')).toBe(LINE);
+      expect(fake.state.requests.filter((x) => x.method === 'PATCH')).toEqual([]);
+      expect(r.out).not.toMatch(/Replace the Connection Line/);
+      expect(r.out).toContain('reused   credential "RPA Desktop Runner account" (id c-hand)');
+      expect(r.out).toContain("         its Connection Line stays as it is: this run replaces one only when you say so at a terminal. To use the line for rpa.example.com:8765, run this again in a terminal, or paste the line into the credential's Connection Line in n8n.");
+      expect(tests(fake, 'c-hand')).toBe(1);
+      expectNoSecrets(r.out, [NEW_LINE, NEW_TOKEN]);
+    });
+
+    it('without --desktop-runner the line is for the "RPA Desktop Runner" an earlier line made: the same question', async () => {
+      const fake = await n8n({ credentials: [MADE] });
+      const r = await runAtTerminal(setup(fake.url), { ...ENV, RPA_CONNECTION_LINE: NEW_LINE }, [[/Replace the Connection Line of "RPA Desktop Runner" with the line for rpa\.example\.com:8765\? \(y\/N\)/, 'yes']]);
+      expect(r.code, r.out).toBe(0);
+      expect(lineOf(fake, 'c-made')).toBe(NEW_LINE);
+      expect(fake.state.credentials.filter((c) => c.type === 'rpaDesktopRunnerApi')).toHaveLength(1);
+      expectNoSecrets(r.out, [NEW_LINE, NEW_TOKEN]);
+    });
+
+    it('--desktop-runner naming one only another project has stops before anything is made, and a line does not change that', async () => {
+      const fake = await n8n({ credentials: [ELSEWHERE] });
+      const r = await run(setup(fake.url, '--desktop-runner', 'RPA Desktop Runner account'), { ...ENV, RPA_CONNECTION_LINE: NEW_LINE });
+      expect(r.code).toBe(2);
+      expect(r.out).toContain('No RPA Desktop Runner named "RPA Desktop Runner account" in your project.');
+      expect(lineOf(fake, 'c-else')).toBe(LINE);
+      expect(fake.state.requests.filter((x) => x.method === 'PATCH')).toEqual([]);
+      expectNoSecrets(r.out, [NEW_LINE, NEW_TOKEN]);
+    });
+  });
+
   describe('no Connection Line: the RPA Desktop Runner the project has', () => {
     const HAND: Cred = { id: 'c-hand', name: 'RPA Desktop Runner account', type: 'rpaDesktopRunnerApi', data: { connectionLine: LINE } };
     const SECOND: Cred = { id: 'c-second', name: 'Night shift', type: 'rpaDesktopRunnerApi', data: { connectionLine: LINE } };
@@ -591,12 +664,8 @@ describe('npx n8n-nodes-rpa setup', () => {
       expect(wrong.state.credentials.map((c) => c.id)).toEqual(['c-hand', 'c-second', 'c-else']);
     });
 
-    it('--desktop-runner: with a Connection Line too, or a name that is not one, refused before anything is sent', async () => {
+    it('--desktop-runner: a name that is not one is refused before anything is sent', async () => {
       const fake = await n8n({ credentials: [HAND] });
-      const both = await run(setup(fake.url, '--desktop-runner', 'RPA Desktop Runner account'), { ...ENV, RPA_CONNECTION_LINE: LINE });
-      expect(both.code).toBe(2);
-      expect(both.out).toMatch(/Give a Connection Line \(RPA_CONNECTION_LINE\) or --desktop-runner, not both.*Nothing was sent to n8n\./);
-      expectNoSecrets(both.out);
       for (const name of ['', 'RPA Step Signing', 'two\nlines']) expect((await run(setup(fake.url, '--desktop-runner', name), ENV)).code, name).toBe(2);
       expect(fake.state.requests).toEqual([]);
       // At a terminal it does not ask for a line: the flag picks one.

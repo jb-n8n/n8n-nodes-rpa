@@ -77,7 +77,8 @@ const USAGE = [
   '  --site-login <name>    the RPA Site Login of the site your bots open, made in n8n before this runs: picks it by its name',
   '                         on Import steps and Sign steps. It is never made, read or changed here.',
   '  --desktop-runner <name>  the RPA Desktop Runner to pick on Import steps when your project has several. Without it and',
-  '                         without a Connection Line, the only one your project has is picked. It is never read or changed here.',
+  '                         without a Connection Line, the only one your project has is picked. It is never read. With a',
+  '                         Connection Line, it asks at a terminal whether to replace that credential\'s line.',
   '  --allow-private-network  turn on Allow Private Network on Import steps, for a site on this computer or your network.',
   '  --project-id <id>      the n8n project to work in (default: the API key owner\'s personal project). Only what that',
   '                         project owns is reused.',
@@ -87,7 +88,8 @@ const USAGE = [
   '',
   'Secrets never go in flags. The command asks for them, or reads them from the environment:',
   `  N8N_API_KEY            the n8n API key. ${WHERE_KEYS}`,
-  '  RPA_CONNECTION_LINE    the rpa-runner:// line of a Windows machine (optional): creates the RPA Desktop Runner credential.',
+  '  RPA_CONNECTION_LINE    the rpa-runner:// line of a Windows machine (optional): creates the RPA Desktop Runner credential,',
+  '                         or, for one your project has (that name, or --desktop-runner), asks whether to replace its line.',
   '  RPA_BROWSER_TOKEN      the browser service token, with --browser-url.',
 ].join('\n');
 
@@ -276,10 +278,7 @@ async function readInputs(options: Options, env: NodeJS.ProcessEnv): Promise<Inp
   }
 
   let line = (env.RPA_CONNECTION_LINE ?? '').trim() || undefined;
-  if (line && options.desktopRunner !== undefined) {
-    throw new Stop('Give a Connection Line (RPA_CONNECTION_LINE) or --desktop-runner, not both: the line makes an RPA Desktop Runner credential, the flag picks one you have. Nothing was sent to n8n.', 2);
-  }
-  // --desktop-runner picks one that exists: nothing to connect.
+  // --desktop-runner picks one that exists: nothing to connect, unless RPA_CONNECTION_LINE gives it a new line.
   if (!line && options.desktopRunner === undefined && interactive() && /^y(es)?$/i.test(await ask('Connect a Windows machine now? (y/N) '))) {
     say('On that machine, in an administrator PowerShell: & "C:\\Program Files\\RPA Runner\\rpa.cmd" connection -ShowTokens');
     line = (await askHidden('Paste the line that starts with rpa-runner:// (not shown): ')) || undefined;
@@ -519,6 +518,29 @@ async function credential(client: Client, found: { mine?: any; others: any[] }, 
   return { ref: { id: String(r.json.id), name: spec.name }, created: true };
 }
 
+/**
+ * A Connection Line for an RPA Desktop Runner this run's project has: its line is replaced only when the person says yes
+ * at a terminal, to a question that names the new line's address and port (never its token or fingerprint). Without a
+ * terminal the old line stays, and it says how to replace it. Either way n8n tests the credential afterwards.
+ */
+async function offerLine(client: Client, ref: Ref, line: string): Promise<Ref> {
+  const what = `credential "${clean(ref.name, ref.id)}" (id ${clean(ref.id)})`;
+  // The address and port only: parsed by the node's own parser, which already took this line.
+  const to = new URL(parseConnectionLine('runner', line).url).host;
+  say(`reused   ${what}`);
+  if (!interactive()) {
+    say(`         its Connection Line stays as it is: this run replaces one only when you say so at a terminal. To use the line for ${to}, run this again in a terminal, or paste the line into the credential's Connection Line in n8n.`);
+    return ref;
+  }
+  if (!/^y(es)?$/i.test(await ask(`Replace the Connection Line of "${clean(ref.name, ref.id)}" with the line for ${to}? (y/N) `))) {
+    say('         its Connection Line stays as it is.');
+    return ref;
+  }
+  await replaceData(client, ref, RUNNER.type, { connectionLine: line });
+  say(`replaced Connection Line of ${what}: it now names ${to}`);
+  return ref;
+}
+
 /** Replaces the data of a credential made earlier (n8n keeps its id, so every node that uses it keeps it). */
 async function replaceData(client: Client, ref: Ref, type: string, data: Record<string, unknown>) {
   const r = await client.api('PATCH', `/credentials/${encodeURIComponent(ref.id)}`, { name: ref.name, type, data });
@@ -698,10 +720,11 @@ async function run(inputs: Inputs): Promise<number> {
   // The credentials found in the project, by name (the browser's too without --browser-url: a reused workflow may use it).
   // The Site Login (--site-login) is found the same way, and only picked: it must be there.
   const SITE = options.siteLogin !== undefined ? { name: options.siteLogin, type: CREDENTIALS.siteLogin } : undefined;
-  // The RPA Desktop Runner: made from the Connection Line; else the one --desktop-runner names; else, when the project
-  // has exactly one, that one, whatever its name (n8n names one made by hand "RPA Desktop Runner account").
+  // The RPA Desktop Runner: the one --desktop-runner names; else made from the Connection Line; else, when the project
+  // has exactly one, that one, whatever its name (n8n names one made by hand "RPA Desktop Runner account"). A Connection
+  // Line for one the project has may replace its line (offerLine).
   const DESKTOP = options.desktopRunner !== undefined ? { name: options.desktopRunner, type: RUNNER.type } : undefined;
-  const specs = [...(basic ? [FORM] : []), SIGNING, ...(inputs.line ? [RUNNER] : DESKTOP ? [DESKTOP] : []), BROWSER, ...(SITE ? [SITE] : [])];
+  const specs = [...(basic ? [FORM] : []), SIGNING, ...(DESKTOP ? [DESKTOP] : inputs.line ? [RUNNER] : []), BROWSER, ...(SITE ? [SITE] : [])];
   // Its key in `found`: no credential name has a control character (--site-login and --desktop-runner refuse them).
   const ONLY_RUNNER = '\u0000the only RPA Desktop Runner';
   let runners: any[] = [];
@@ -820,7 +843,11 @@ async function run(inputs: Inputs): Promise<number> {
   let runnerRef: Ref | undefined;
   if (inputs.line) {
     const line = inputs.line;
-    runnerRef = (await credential(client, of(RUNNER), projectId, RUNNER, () => ({ connectionLine: line }), 'its Connection Line stays as it is (to change it, paste the new line in n8n)')).ref;
+    // The line is for the RPA Desktop Runner --desktop-runner names, else for the one a line made here before.
+    const had = of(DESKTOP ?? RUNNER).mine;
+    if (had) runnerRef = await offerLine(client, { id: String(had.id), name: String(had.name) }, line);
+    else if (DESKTOP) say(`not used credential "${clean(DESKTOP.name)}": this run does not use what it found in the shared project, so no RPA Desktop Runner is set and the line is not used. Pick one on "${NODE.importSteps}" in n8n.`);
+    else runnerRef = (await credential(client, of(RUNNER), projectId, RUNNER, () => ({ connectionLine: line }), '')).ref;
   } else {
     // Picked by id and name, as n8n listed them: its values are never read.
     const pick = DESKTOP ? of(DESKTOP).mine : found.get(ONLY_RUNNER)?.mine;

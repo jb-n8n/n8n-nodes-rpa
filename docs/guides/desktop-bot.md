@@ -65,8 +65,10 @@ while you paste. Close the PowerShell window on Windows afterwards: the line hol
 The command creates the **RPA Desktop Runner** credential with the line, an **RPA Step Signing** key, and the workflow
 **RPA: 5 Import a bot** with both on its node **Import steps**, and publishes it. **Signing** marks steps as approved:
 the bot runs only steps whose signature matches. You are the approver (`--approver` names another). Then n8n tests
-the connection: the line that starts `tested` says `Connected to the desktop runner`, or why it could not. A new line
-goes into the credential's **Connection Line** in n8n. The command ends with:
+the connection: the line that starts `tested` says `Connected to the desktop runner`, or why it could not. For a new
+line, such as one printed again with `-Address`, run the command again and paste it: it asks
+`Replace the Connection Line of "RPA Desktop Runner" with the line for …? (y/N)` before it changes anything. The
+command ends with:
 
 ```text
 The import form is ready.
