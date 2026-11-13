@@ -102,7 +102,8 @@ The **RPA Secret Variables** credential holds name and value pairs for passwords
 a chat model sees. Only signed steps type one: in the browser a `fill` with `secret: true`, on the desktop a `fill` of
 exactly `{{var.name}}`. Any other use of a value is refused. Each value must be at least 4 characters.
 
-**Where its values may be typed.** A signature binds the steps, not the secret variables that a workflow attaches.
+**Where its values may be typed.** The credential is not tied to the steps that were approved. A signature binds the
+steps, not the secret variables that a workflow attaches.
 So whoever can approve steps, and can select this credential on a Run Steps node, chooses where its values go. With
 approval on the import form, that is anyone who can open the form. The credential's optional field **May Be Typed
 Into** lets the owner of the secrets limit that. List one entry per line:
