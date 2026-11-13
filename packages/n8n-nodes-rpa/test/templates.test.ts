@@ -2842,6 +2842,13 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     ] };
     const two = valuesAnswered(lineItems(shared).ran, { value_2: '2026-09-30' });
     expect(JSON.parse(two.applied.steps).steps).toEqual([shared.steps[0], { intent: 'Type "2026-09-30" into To, then 2026-09-30 again', fill: { field: { label: 'To 2026-09-15' }, value: '2026-09-30' } }]);
+    // Only where the old value stands on its own: a short value is not replaced inside another number or word.
+    const short = { ...LINE_ITEMS, steps: [
+      { intent: 'Type 1 into Field 10 of form A1, then 1.', fill: { field: { label: 'Field 10' }, value: '1' } },
+      { intent: 'Choose "on" in Options, the second one', select: { field: { role: 'combobox', name: 'Options' }, value: 'on' } },
+    ] };
+    const three = valuesAnswered(lineItems(short).ran, { value_1: '5', value_2: 'off' });
+    expect(JSON.parse(three.applied.steps).steps.map((s: IDataObject) => s.intent)).toEqual(['Type 5 into Field 10 of form A1, then 5.', 'Choose "off" in Options, the second one']);
     // An address and a chosen option.
     const more = valuesAnswered(ran, { value_1: `${SITE.url}/acme/reports?year=2026`, value_5: 'Open' });
     expect(more.applied.changed).toEqual([1, 5]);
