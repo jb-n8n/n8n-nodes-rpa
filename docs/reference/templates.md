@@ -12,7 +12,8 @@ folder). Import one with **⋯ → Import → From File** in a new workflow. In 
 | `3-approve-steps.json` | `RPA: 3 Approve steps` | Approval by email: emails the evidence, waits for a person's answer, signs the steps |
 | `5-import-a-bot.json` | `RPA: 5 Import a bot` | A form: upload a bot, review and approve it on the next page, download the workflow that runs it ([Move a bot](../guides/move-a-bot.md)) |
 
-Templates 2, 3 and 5 create the two Data Tables when they are missing.
+Templates 2, 3 and 5, and the workflow the import form hands over, create the two Data Tables when they are missing,
+first, before anything reads or writes them.
 
 ## RPA: 5 Import a bot
 
@@ -41,8 +42,10 @@ Templates 2, 3 and 5 create the two Data Tables when they are missing.
   RPA Site Login it signs for, and after **Change or sign again** it checks the approved version's signature with its
   own signing key and Site Login, as a run checks it. **Checked?** sends that to the review page. The page's opening
   lines name the Site Login (desktop steps are signed for the app they start, without one). When the approved version
-  does not fit, a warning says so above the decision: after a new signing key that is expected, but if the bot's
-  workflow uses another Site Login, a version signed here will not run there. The page does not refuse.
+  does not fit, a warning at the top says so: it was signed with another signing key or for another Site Login than
+  this form's. If the bot's workflow uses another Site Login, a version approved here will not run there; after a new
+  signing key, approving here is right. Its first sentence stands again directly above the **Decision**. The page does
+  not refuse.
 - **Review and approve** shows each step list: what it opens, whether it signs in, forms it submits, files it returns,
   what the replay proved, the steps it left out, and the numbered steps. For desktop steps it asks "Which of these steps
   save, send or submit?". The **Decision** is **Approve and sign** or **Reject**. A page left unanswered for an hour
@@ -50,7 +53,10 @@ Templates 2, 3 and 5 create the two Data Tables when they are missing.
 - The last page says `Approved and signed: <name> v<version> is now the version that runs under that name.`, or
   `Rejected: <name> v<version>. Nothing was signed.` An import is version 1. A file uploaded under the name of an
   approved bot is its next version (**Running versions** and **What it replaces** read what runs under that name, and
-  the step lists named after it, `<name>-1`, `<name>-2`): the review page says `version 5, replacing version 4`, and
+  the step lists named after it, `<name>-1`, `<name>-2`): the review page says `version 5, replacing version 4`, the
+  part of each step list that has a running version says how it differs from that version (**Compared with the
+  running version**, the change path's comparison, for each list: `<name>: changed from the approved version 4: step
+  6.`, or `unchanged`, or that it could not be compared; a new list says nothing), and
   the last page `Approved and signed: <name> version 5 is now the version that runs, replacing version 4.` or
   `Rejected: <name> v5. Nothing was signed. Version 4 keeps running.` After a change or a re-sign it says
   `Signed again: <name> version N, unchanged.`, `Changed: <name> version N is now the version that runs, replacing
