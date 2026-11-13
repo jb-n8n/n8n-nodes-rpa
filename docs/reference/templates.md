@@ -24,9 +24,13 @@ Templates 2, 3 and 5 create the two Data Tables when they are missing.
   carry their own checks, so it is not asked: **Read the upload** reads the file's text (a file of at most 5 MB that is
   not a ZIP, XAML, code or a recording) and **Asks about a download?** looks for the step document's shape.
 - **Bot file** may be left empty to change an approved bot or sign it again. **Approved bots** reads the `active`
-  rows of `playwright_steps`, and **Change or sign again** shows the newest active steps of the name typed, in a box.
-  **Review** sends the box to **Import steps** as a step document, then to the same review page and **Sign steps**.
-  **Compared with the approved version** gives the review page its first line: unchanged, or which steps differ.
+  rows of `playwright_steps`, and **Change or sign again** shows the newest active steps of the name typed, to read
+  and copy, with one box that is empty to start with. **Compared with the approved version** takes the steps to
+  review: with the box left empty, the active row's steps as **The bot to change** read them from the table (they never
+  pass through the browser); with text in the box, that text. It also gives the review page its first line: unchanged,
+  or which steps differ. **Review** sends those steps to **Import steps** as a step document, then to the same review
+  page and **Sign steps**. Text that is not a step document ends on **Import failed**, which says the old version keeps
+  running.
   The steps get the next version: **Import steps → Options → Version** is the approved version plus one, read by
   **The bot to change** from the active row (never from the box), so the review page says `version 2, replacing version
   1`. Signing the same steps again also gives the next version: it is a new approval. The workflow that runs the bot

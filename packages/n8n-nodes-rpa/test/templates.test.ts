@@ -1091,7 +1091,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // An address that carries values for the form's fields ends the run before anything is read.
     expect(targets(t, 'Import a bot')).toEqual([['Plain address?']]);
     expect(targets(t, 'Plain address?')).toEqual([['Settings'], ['Address with values']]);
-    // No file on the first page: the change path (an approved bot by its name, its steps in a box). With a file: the import.
+    // No file on the first page: the change path (an approved bot by its name, its steps to read, an empty box). With a file: the import.
     expect(targets(t, 'Settings')).toEqual([['Change an approved bot?']]);
     expect(targets(t, 'Change an approved bot?')).toEqual([['Approved bots'], ['Read the upload']]);
     // Read the upload gives Asks about a download? the file's text (one Extract From File node; an error item passes on).
@@ -1100,9 +1100,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(targets(t, 'Approved bots')).toEqual([['The bot to change']]);
     expect(targets(t, 'The bot to change')).toEqual([['Approved bot found?']]);
     expect(targets(t, 'Approved bot found?')).toEqual([['Change or sign again'], ['No approved bot']]);
-    expect(targets(t, 'Change or sign again')).toEqual([['The steps as a file']]);
-    expect(targets(t, 'The steps as a file')).toEqual([['Compared with the approved version']]);
-    expect(targets(t, 'Compared with the approved version')).toEqual([['The upload']]);
+    expect(targets(t, 'Change or sign again')).toEqual([['Compared with the approved version']]);
+    expect(targets(t, 'Compared with the approved version')).toEqual([['The steps as a file']]);
+    expect(targets(t, 'The steps as a file')).toEqual([['The upload']]);
     // The download question only for a browser source, on a second page; Import steps always reads The upload.
     expect(targets(t, 'Asks about a download?')).toEqual([['The file it downloads'], ['The upload']]);
     expect(targets(t, 'The file it downloads')).toEqual([['The upload']]);
@@ -2083,7 +2083,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const [data] = await runImport(formItem('Chrome Recorder', CHROME), () => failure('drift_detected', 'No element found for Visible Text "Line Item Report"'));
     // AI Repair is off and no model is connected: the reason is the step's own, with no word about a model.
     expect(data[0].json.error).toBe('drift_detected: No element found for Visible Text "Line Item Report"');
-    const shown = render(page.completionMessage, { $json: data[0].json });
+    const shown = render(page.completionMessage, { $json: data[0].json, $: nodesRan({}) });
     expect(shown).toMatch(/^drift_detected: No element found for Visible Text "Line Item Report"\n/);
     expect(shown).toContain('\nDetails, including the import report when there is one, are in the error output of Import steps in this execution.');
   });
@@ -2101,11 +2101,16 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     ran['The bot to change'] = [[{ json: bot }]];
     return { $, bot, ran };
   }
-  /** The change page answered with `text`, through The steps as a file (n8n's Convert to Text File) and The upload. */
+  /**
+   * The change page answered with `text` in its box ('' for left empty), through Compared with the approved version (the
+   * steps to review), The steps as a file (n8n's Convert to Text File: the string as UTF-8, n8n 2.45 utils/binary.ts
+   * createBinaryFromJson) and The upload.
+   */
   function changedUpload(ran: Record<string, INodeExecutionData[][]>, text: string): INodeExecutionData {
     expect(byName(t, 'The steps as a file')).toMatchObject({ type: 'n8n-nodes-base.convertToFile', typeVersion: 1.1, parameters: { operation: 'toText', sourceProperty: 'steps', binaryPropertyName: 'bot' } });
-    const file = { json: {}, binary: { bot: { data: Buffer.from(text).toString('base64'), mimeType: 'text/plain', fileName: 'steps.json', bytes: Buffer.byteLength(text) } } };
-    const $ = nodesRan({ ...ran, 'Change or sign again': [[{ json: { steps: text } }]], 'The steps as a file': [[file]] });
+    const steps = String(compared(ran, text).steps);
+    const file = { json: {}, binary: { bot: { data: Buffer.from(steps, 'utf8').toString('base64'), mimeType: 'text/plain', fileName: 'steps.json', bytes: Buffer.byteLength(steps) } } };
+    const $ = nodesRan({ ...ran, 'Change or sign again': [[{ json: { changedSteps: text } }]], 'The steps as a file': [[file]] });
     const json: IDataObject = {};
     let binary: INodeExecutionData['binary'];
     for (const a of (byName(t, 'The upload').parameters.assignments as { assignments: { name: string; value: string; type: string }[] }).assignments) {
@@ -2117,16 +2122,20 @@ describe('5-import-a-bot.json (the first-day import)', () => {
   }
 
   const COMPARED = 'Compared with the approved version';
-  /** The line Compared with the approved version gives for the box submitted as `text`, from the row read in `ran`. */
-  function compare(ran: Record<string, INodeExecutionData[][]>, text: string): string {
+  /**
+   * What Compared with the approved version gives for the box submitted as `text` ('' for left empty; n8n gives null for
+   * a box it did not get), from the row read in `ran`: the steps to review, and the line for the review page.
+   */
+  function compared(ran: Record<string, INodeExecutionData[][]>, text: string | null): { steps: string; changed: boolean; unchanged: boolean; compared: string } {
     const node = byName(t, COMPARED);
     expect(node).toMatchObject({ type: 'n8n-nodes-base.set', typeVersion: 3.4, executeOnce: true, parameters: { mode: 'raw' } });
     const code = String(node.parameters.jsonOutput);
     // n8n cuts an expression at "}}": none inside.
     expect(code.replace(/^=\{\{/, '').replace(/\}\}$/, '')).not.toMatch(/\{\{|\}\}/);
-    const out = evaluate(code, { $: nodesRan({ ...ran, 'Change or sign again': [[{ json: { steps: text } }]] }) }) as { compared: string };
-    return out.compared;
+    return evaluate(code, { $: nodesRan({ ...ran, 'Change or sign again': [[{ json: { changedSteps: text } }]] }) }) as ReturnType<typeof compared>;
   }
+  /** The line Compared with the approved version gives the review page for the box submitted as `text`. */
+  const compare = (ran: Record<string, INodeExecutionData[][]>, text: string | null): string => compared(ran, text).compared;
 
   it('Compared with the approved version: unchanged, the changed, added and missing steps by number, the other signed fields, or no comparison', () => {
     const doc = {
@@ -2229,7 +2238,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(byName(t, 'The bot to change')).toMatchObject({ type: 'n8n-nodes-base.set', typeVersion: 3.4, executeOnce: true, parameters: { mode: 'raw' } });
   });
 
-  it('The bot to change: the newest active row of exactly that name, its steps laid out to read; none found names the approved bots', () => {
+  it('The bot to change: the newest active row of exactly that name, its steps as the table holds them; none found names the approved bots', () => {
     const doc = { surface: 'desktop', name: 'erp', version: 1, app: { exe: 'ErpDemo.exe' }, steps: [{ intent: 'Click Save', click: { name: 'Save' } }] };
     const rows: IDataObject[] = [
       { id: 1, name: 'erp', version: 1, steps: '{"old":true}', status: 'active' },
@@ -2238,7 +2247,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       { id: 5, name: 'erp', version: 9, steps: '', status: 'active' },
       { error: 'The Data Table playwright_steps does not exist' }, {},
     ];
-    const found = { name: 'erp', found: true, version: 3, steps: JSON.stringify(doc, null, 2), names: ['erp', 'other<b>'] };
+    const found = { name: 'erp', found: true, version: 3, steps: JSON.stringify(doc), names: ['erp', 'other<b>'] };
     expect(changePath('erp', rows).bot).toEqual(found);
     expect(changePath('  erp ', rows).bot).toEqual(found);
     // Exactly the name: another casing is another bot.
@@ -2260,27 +2269,86 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(render(none.completionMessage, { $: changePath('erp', []).$ }).split('\n')[0]).toBe('No bot has been approved yet.');
   });
 
-  it('Change or sign again shows the active steps in a box, says who can open the page and that an older key and an edit look alike', () => {
-    const doc = { startUrl: `${SITE.url}/a`, name: 'feed <b>', version: 1, steps: [{ intent: 'Type $& and $$', goto: '/b?x=$1' }] };
+  it('Change or sign again shows the active steps to read in a block of the page, one empty box, and five short sentences', () => {
+    const doc = { startUrl: `${SITE.url}/a`, name: 'feed <b>', version: 1, steps: [{ intent: 'Type $& and $$ <b>Tom & Jerry</b> café', goto: '/b?x=$1&y=<2>' }] };
     const page = byName(t, 'Change or sign again');
-    expect(page).toMatchObject({ type: COMPLETION, typeVersion: 2.5, parameters: { operation: 'page', defineForm: 'json', limitWaitTime: true, limitType: 'afterTimeInterval', resumeAmount: 1, resumeUnit: 'hours', options: { buttonLabel: 'Review', formDescription: 'Nothing changes until you approve the steps on the next page.' } } });
+    expect(page).toMatchObject({ type: COMPLETION, typeVersion: 2.5, parameters: { operation: 'page', defineForm: 'json', limitWaitTime: true, limitType: 'afterTimeInterval', resumeAmount: 1, resumeUnit: 'hours', options: { buttonLabel: 'Review', formDescription: 'Nothing changes until you approve on the next page.' } } });
     const rows = [{ id: 3, name: 'feed <b>', version: 1, steps: JSON.stringify(doc), status: 'active' }];
     // With n8n's sign-in, a later page needs a signed-in n8n user; with Basic Auth (or none) it needs only its address.
-    const ANYONE = 'Anyone who has the address of this page can open it and read these steps.';
-    for (const [auth, who] of [['n8nUserAuth', 'Any signed-in n8n user who has the address of this page can open it and read these steps.'], ['basicAuth', ANYONE], ['none', ANYONE]]) {
+    const ANYONE = 'Anyone who has the address of this page can read these steps, so do not share it.';
+    for (const [auth, who] of [['n8nUserAuth', 'Any signed-in n8n user who has the address of this page can read these steps, so do not share it.'], ['basicAuth', ANYONE], ['none', ANYONE]]) {
       const { $ } = changePath('feed <b>', rows, auth);
       // jsonFormFields also checks that no "$" reaches n8n's String.replace, so "$&" in a step stays as written.
       const fields = jsonFormFields(String(page.parameters.jsonOutput), { $ });
       expect(fields.map((f) => f.fieldType)).toEqual(['html', 'textarea']);
-      expect(fields[1]).toEqual({ fieldLabel: 'Steps (a step document, JSON)', fieldName: 'steps', fieldType: 'textarea', defaultValue: JSON.stringify(doc, null, 2), requiredField: true });
-      expect(JSON.parse(String(fields[1].defaultValue))).toEqual(doc);
+      // The box is empty and optional: the approved steps never go to the browser and come back through it. n8n escapes
+      // < and > in every field's text but html (n8n-workflow type-validation.ts tryToParseJsonToFormFields), so a
+      // default value would come back changed.
+      expect(fields[1]).toEqual({ fieldLabel: 'Changed steps (JSON). Leave empty to sign the steps again as they are.', fieldName: 'changedSteps', fieldType: 'textarea', requiredField: false });
       const html = String(fields[0].html);
-      expect(html).toContain('<p>The steps that run now as <b>feed &lt;b&gt;</b> (version 1 in the playwright_steps Data Table).');
-      expect(html).toContain('Rejected, or not answered within an hour, the version that runs now keeps running.');
-      expect(html).toContain('This form cannot tell steps signed with an older key from steps changed in the Data Table after they were approved: to the current key both look the same. So read every step on the next page: you approve the steps as that page shows them.');
-      expect(html).toContain(`<p><em>${who} Do not share it.</em></p>`);
+      // The steps in a <pre> (n8n's sanitizer keeps pre and code, Form utils.ts sanitizeHtml), escaped once: the page
+      // shows, and a person copies, the real text.
+      const pre = /<pre>([\s\S]*)<\/pre>/.exec(html)?.[1] ?? '';
+      expect(pre).toBe(escapeHtml(JSON.stringify(doc, null, 2)));
+      const unescaped = pre.replace(/&(amp|lt|gt|quot|#39);/g, (_, x: string) => ({ amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'" })[x] ?? '');
+      expect(JSON.parse(unescaped)).toEqual(doc);
+      // Five sentences: the description and four on the page, nothing else.
+      expect(html.replace(/<pre>[\s\S]*<\/pre>/, '<pre/>')).toBe('<p>These are the steps that run now as <b>feed &lt;b&gt;</b> (version 1).</p><pre/>'
+        + '<p>Leave the box empty to sign them again, or paste changed steps.</p>'
+        + '<p><em>This form cannot tell steps signed with an older key from steps changed in the table, so read every step on the next page.</em></p>'
+        + `<p><em>${who}</em></p>`);
       expect(render(String((page.parameters.options as IDataObject).formTitle), { $ })).toBe('Change or sign again: feed <b>');
     }
+    // The block scrolls at a sensible height and one click selects it all.
+    expect(String((page.parameters.options as IDataObject).customCss)).toMatch(/div\.html pre \{ max-height: 24em; overflow: auto;[^}]*user-select: all;/);
+    // A row whose steps are not JSON is shown as it is.
+    const broken = jsonFormFields(String(page.parameters.jsonOutput), { $: changePath('x', [{ id: 1, name: 'x', version: 2, steps: '{broken <', status: 'active' }]).$ });
+    expect(String(broken[0].html)).toContain('<pre>{broken &lt;</pre>');
+  });
+
+  it('an empty box signs the table\'s own steps byte for byte; a pasted text is the change; text that does not parse changes nothing', async () => {
+    const doc = {
+      surface: 'desktop', name: 'erp', version: 3, app: { exe: 'ErpDemo.exe' },
+      steps: [{ intent: 'Type <b>Tom & Jerry</b> $5 $HOME $& in Note', fill: { field: { uia: { path: [{ name: 'Note' }] } }, value: '<b>Tom & Jerry</b> café $5 $HOME $& \\ "q"' } }],
+    };
+    // As the table holds it (another spacing than JSON.stringify gives, on purpose).
+    const stored = JSON.stringify(doc, null, 1);
+    const { ran } = changePath('erp', [{ id: 4, name: 'erp', version: 3, steps: stored, status: 'active' }]);
+    // Left empty (or blank): the steps to review are the row's text exactly as read, the box's text never.
+    for (const empty of ['', '  \r\n ', null]) {
+      expect(compared(ran, empty)).toEqual({ steps: stored, changed: false, unchanged: true, compared: 'These are the steps of the approved version 3, unchanged.' });
+    }
+    const upload = changedUpload(ran, '');
+    expect(Buffer.from(String(upload.binary?.bot.data), 'base64').equals(Buffer.from(stored, 'utf8'))).toBe(true);
+    const never = () => {
+      throw new Error('desktop steps are never replayed');
+    };
+    const [data, repaired] = await runImport(upload, never, ran);
+    expect(data[0].json.error).toBeUndefined();
+    // Imported as the next version, every step as stored: <, >, &, $, a backslash, a quote and é included.
+    expect(repaired[0].json).toMatchObject({ name: 'erp', version: 4 });
+    expect(repaired[0].json.steps).toEqual({ ...doc, version: 4 });
+    // Pasted: the text is the new step document, compared with the row and named on the review page. A browser sends a
+    // line break in a box as CR LF (multipart form data); n8n hands on the rest as typed (Form utils.ts
+    // addFormResponseDataToReturnItem: a textarea is neither trimmed nor escaped).
+    const pasted = JSON.stringify({ ...doc, steps: [{ ...doc.steps[0], fill: { ...doc.steps[0].fill, value: '<i>2000</i> & $1' } }] }, null, 2).replace(/\n/g, '\r\n');
+    expect(compared(ran, pasted)).toEqual({ steps: pasted, changed: true, unchanged: false, compared: 'Changed from the approved version 3: step 1.' });
+    expect(compared(ran, JSON.stringify(doc))).toMatchObject({ changed: true, unchanged: true, compared: 'These are the steps of the approved version 3, unchanged.' });
+    const [changed, changedOut] = await runImport(changedUpload(ran, pasted), never, ran);
+    expect(changed[0].json.error).toBeUndefined();
+    expect((changedOut[0].json.steps as { steps: { fill: { value: string } }[] }).steps[0].fill.value).toBe('<i>2000</i> & $1');
+    // Text that does not parse: Import steps refuses it on its error output, and the page after it says so and that the
+    // approved version keeps running. Nothing reaches the review page or Sign steps.
+    expect(compare(ran, '{ "steps": [ <oops')).toBe('Could not compare with the approved version: read every step.');
+    // (n8n moves an item with an error to the error output: onError continueErrorOutput.)
+    const [failed, none] = await runImport(changedUpload(ran, '{ "steps": [ <oops'), never, ran);
+    expect(none).toEqual([]);
+    expect(String(failed[0].json.error)).toContain('the step document is not valid JSON');
+    expect(targets(t, 'Missing login page?')[1]).toEqual(['Import failed']);
+    const page = render(completion('Import failed').completionMessage, { $json: failed[0].json, $: nodesRan({ ...ran, 'Change or sign again': [[{ json: { changedSteps: '{ "steps": [ <oops' } }]] }) });
+    expect(page.split('\n').slice(1)).toEqual(['Nothing changed: erp version 3 keeps running.', 'Details, including the import report when there is one, are in the error output of Import steps in this execution.']);
+    // An ordinary import's failure page says nothing about a bot that keeps running.
+    expect(render(completion('Import failed').completionMessage, { $json: failed[0].json, $: nodesRan({}) }).split('\n')).toHaveLength(2);
   });
 
   it('sign again: the same steps are reviewed and become a new row under the current key that supersedes the old one; a change is signed as changed; a rejected change leaves the old version running', async () => {
@@ -2297,11 +2365,14 @@ describe('5-import-a-bot.json (the first-day import)', () => {
 
     const { bot, ran } = changePath(String(old.name), [oldRow, { id: 3, name: 'other', version: 1, steps: '{}', status: 'active' }]);
     expect(bot).toMatchObject({ found: true, version: 1 });
-    const box = String(jsonFormFields(String(byName(t, 'Change or sign again').parameters.jsonOutput), { $: changePath(String(old.name), [oldRow]).$ })[1].defaultValue);
+    // What a person copies from the page's block of steps: the text as the page shows it (one escape undone).
+    const shownHtml = String(jsonFormFields(String(byName(t, 'Change or sign again').parameters.jsonOutput), { $: changePath(String(old.name), [oldRow]).$ })[0].html);
+    const box = (/<pre>([\s\S]*)<\/pre>/.exec(shownHtml)?.[1] ?? '').replace(/&(amp|lt|gt|quot|#39);/g, (_, x: string) => ({ amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'" })[x] ?? '');
+    expect(JSON.parse(box)).toEqual(JSON.parse(String(old.steps)));
     const never = () => {
       throw new Error('desktop steps are never replayed');
     };
-    /** Submits the box as `text`: Import steps, the review page, then Sign steps under the new key with `answer`. */
+    /** Submits the box with `text` ('' for left empty): Import steps, the review page, then Sign steps under the new key with `answer`. */
     const review = async (text: string, answer: IDataObject) => {
       const upload = changedUpload(ran, text);
       expect(upload.json).toMatchObject({ name: old.name, source: 'Step document', expectedFileName: '', columns: '' });
@@ -2310,11 +2381,11 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       const [data, repaired] = await runImport(upload, never, ran);
       expect(data[0].json.error, JSON.stringify(data[0].json).slice(0, 600)).toBeUndefined();
       expect(repaired).toHaveLength(1);
-      const compared = compare(ran, text);
-      const after = { ...ran, 'Change or sign again': [[{ json: { steps: text } }]], [COMPARED]: [[{ json: { compared } }]], 'Import steps': [data, repaired] };
+      const line = compared(ran, text);
+      const after = { ...ran, 'Change or sign again': [[{ json: { changedSteps: text } }]], [COMPARED]: [[{ json: line }]], 'Import steps': [data, repaired] };
       // The review page of an import, with one line on top: how these steps relate to the approved version.
       const all = jsonFormFields(String(byName(t, REVIEW).parameters.jsonOutput), { $: nodesRan(after) });
-      expect(all[0]).toEqual({ fieldType: 'html', html: `<p><b>${escapeHtml(compared)}</b></p>` });
+      expect(all[0]).toEqual({ fieldType: 'html', html: `<p><b>${escapeHtml(line.compared)}</b></p>` });
       const fields = all.slice(1);
       expect(fields.map((f) => f.fieldName ?? f.fieldType)).toEqual(['html', 'writes_0', 'html', 'moreWrites_0', 'decision_0']);
       // Every step list is the same without the line: an ordinary import shows none.
@@ -2323,8 +2394,10 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       return { after, fields, ...signed };
     };
 
-    // Sign again: the box as it came.
-    const again = await review(box, { writes_0: ['Step 16: Click Save'], decision_0: 'Approve and sign' });
+    // Sign again: the box left empty. The steps are the active row's, as read from the table.
+    const again = await review('', { writes_0: ['Step 16: Click Save'], decision_0: 'Approve and sign' });
+    expect(compare(ran, '')).toBe('These are the steps of the approved version 1, unchanged.');
+    // Pasting the copied block back is the same steps: the review page says so too.
     expect(compare(ran, box)).toBe('These are the steps of the approved version 1, unchanged.');
     expect(again.fields[1].defaultValue).toBe('Step 16: Click Save');
     expect(again.errors).toEqual([]);

@@ -115,6 +115,7 @@ an **RPA Step Signing** credential that its own project owns, and never one of t
   writes. A write mark only matters where the runner's policy lists the control or key (see [Desktop runs](#desktop-runs)).
 - **Changing or signing again on the form.** With **Bot file** left empty, the form's next page shows the steps of the
   `active` row of the name typed, and a name it does not find ends on a page that lists every approved bot's name.
+  With its box left empty, the steps signed again are the row's own, read in n8n: they do not pass through the browser.
   What comes back from that page is a new import: the same review page, the same checks by Sign Steps, the approver on
   the allowlist, and a new row that supersedes the old one only when it is approved. Nothing is signed again without a
   person's approval. Those pages are later pages of the form, as the review page is:
@@ -180,8 +181,8 @@ To sign the step lists again with the new key:
    create the credential with a new key of 32 or more random characters, and select it on **Sign steps** in template
    5 (and template 3) and on every **Run steps** node.
 2. For each bot, open the **Import a bot** form, leave **Bot file** empty and type the bot's name. The next page
-   shows the steps of its `active` row in a box. Leave them as they are and click **Review**: they go to the import
-   as a **Step document**.
+   shows the steps of its `active` row. Leave the box empty and click **Review**: the row's steps go to the import as
+   a **Step document**.
 3. Read every step on the review page. Browser steps are replayed, desktop steps go to approval as written. Steps
    that were signed as writes come back as candidates: tick them again.
 4. Approve. The new row supersedes the old ones under that name, and the bot runs again.
