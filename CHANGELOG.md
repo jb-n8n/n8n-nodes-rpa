@@ -85,6 +85,7 @@ All notable changes to `n8n-nodes-rpa`, the `rpa-browser` image and the Windows 
 - The review page words each browser step from the step itself (its action, target and value) and shows the author's description beside it when it says something else.
 - The approval email for desktop steps words each step as the review page does, from the step itself. Sign Steps refuses when the step sentences shown for approval differ from the steps it signs.
 - **May Be Typed Into** on the RPA Secret Variables credential, optional: the apps (`ErpDemo.exe`) and site hosts (`erp.example.com`) its values may be typed into, one per line. Filled, a desktop run of an app not listed is refused before the app starts, and a browser step is refused before it types one of the values on a page or frame whose host is not listed (`policy_violation`). Empty, nothing changes.
+- **The RPA Site Login's Forms It May Submit and Requests That Only Read take no expression**, as its sites and pages do: they decide what approved steps may post. n8n then drops the `=` of an expression saved earlier in one of them when a run reads the credential, so the run stops on a configuration error that names the field, and nothing is allowed. Type the lists in again.
 
 ## 0.2.0 (2026-11-10)
 

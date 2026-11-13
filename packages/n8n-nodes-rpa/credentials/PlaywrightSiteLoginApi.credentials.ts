@@ -91,6 +91,8 @@ export class PlaywrightSiteLoginApi implements ICredentialType {
     {
       displayName: 'Forms It May Submit',
       name: 'allowedSubmits',
+      // Decides what approved steps may post: typed by the credential's owner, never read from an item.
+      noDataExpression: true,
       type: 'string',
       typeOptions: { rows: 2 },
       default: '',
@@ -100,6 +102,8 @@ export class PlaywrightSiteLoginApi implements ICredentialType {
     {
       displayName: 'Requests That Only Read',
       name: 'readPosts',
+      // Decides what approved steps may post: typed by the credential's owner, never read from an item.
+      noDataExpression: true,
       type: 'string',
       typeOptions: { rows: 2 },
       default: '',
