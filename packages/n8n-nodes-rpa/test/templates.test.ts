@@ -667,6 +667,10 @@ describe('3-approve-steps.json', () => {
     const started = fromNode.reviewSteps.map((r, i) => (i === 2 ? { ...r, marks: ['variable username, starts as jdoe'] } : r));
     expect(shownSteps({ ...fromNode, reviewSteps: started })).toContain('\n3. Type into User name (variable username)');
     expect(shownSteps({ ...fromNode, reviewSteps: started })).not.toContain('jdoe');
+    // A step found by its row says so, as on the review page (IW-6).
+    const byRow = [{ intent: 'Click Vendor Row 1', click: { uia: { path: [{ controlType: 'DataItem', name: 'Vendor Row 1' }] } } }, misleading[0]];
+    expect(shownSteps({ ...fromNode, steps: { ...received.steps, steps: byRow }, reviewSteps: reviewSteps(byRow, { desktop: true }) }))
+      .toBe('1. Click Vendor Row 1 (found by its row: at each run it acts on whatever is in that row)\n2. Click Post ⚠ (described differently as: Read the total)');
     expect(message).toContain('tick the steps that save, send or submit (none is ticked for you), then approve or reject.');
     expect(message).toContain('Ticked steps are allowed to save or send. Allow this app… in the recorder protects the ticked buttons it recorded that have an id of their own, not the standard buttons of Windows dialogs (such as Save in a Save As dialog, OK or Yes), so leave such a step ticked: an unticked step is stopped when it presses a protected button, or a key other than Tab, arrows, Home, End, PageUp, PageDown or Escape in a window that holds one. While the policy of the app protects no button, nothing is stopped.');
     // The full detail below: the item's own change list, evidence and flags.
@@ -1695,7 +1699,8 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       + [
         added('Wait for the window ERP Demo - Sign in'), 'Type &quot;clerk&quot; into User name', 'Type into Password <em>· secret variable password</em>', 'Press Enter in Password',
         added('Wait for the window ERP Demo - Line items'), 'Choose &quot;2000&quot; in Company code', 'Type &quot;2026-01-20&quot; into Date from', 'Type &quot;2026-11-30&quot; into Date to',
-        'Click Search', 'Click Vendor Row 1', 'Click File', added('Wait for the next window of erpdemo.exe'), 'Click Export...', added('Wait for the window Export line items'),
+        // The recorder's bar marks Vendor Row 1 (found by its row); the page says so in the same quiet style (IW-6).
+        'Click Search', 'Click Vendor Row 1 <em>· found by its row: at each run it acts on whatever is in that row</em>', 'Click File', added('Wait for the next window of erpdemo.exe'), 'Click Export...', added('Wait for the window Export line items'),
         'Save line-items.csv into the run&#39;s export folder', 'Click Save', added('Return the exported file line-items.csv <em>· returns a file</em>'),
       ].map((l) => `<li>${l}</li>`).join('') + `</ol>${POINTER}`);
     // The parenthesis names the returned file only when one of the added steps returns it.
@@ -2582,12 +2587,50 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       .toBe('feed: changed from the approved version 4: step 4: several fields.');
     expect(compare(ran, edit((d) => { for (const i of [2, 4, 6, 8, 10]) d.steps[i].goto = `/n${i}`; })))
       .toBe('feed: changed from the approved version 4: step 3: address "/p3" → "/n2"; step 5: address "/p5" → "/n4"; step 7: address "/p7" → "/n6"; and more: steps 9, 11.');
-    // Added at the end, and one taken out in the middle (every later step moves up).
-    expect(compare(ran, edit((d) => { d.steps.push({ intent: 'Open more', goto: '/more' }); }))).toBe('feed: changed from the approved version 4: step 26: added. 26 steps now, 25 in the approved version.');
+    // The two lists are lined up first (IW-7): a step taken out or put in moves no later step. Removed steps by their old
+    // number and description, added ones by their new number, changed ones old → new, a step moved as such.
+    expect(compare(ran, edit((d) => { d.steps.push({ intent: 'Open more', goto: '/more' }); }))).toBe('feed: changed from the approved version 4: added: step 26. 26 steps now, 25 in the approved version.');
     expect(compare(ran, edit((d) => { d.steps.splice(22, 1); })))
-      .toBe('feed: changed from the approved version 4: step 23: description "Open page 23" → "Open page 24", address "/p23" → "/p24"; step 24: description "Open page 24" → "Open page 25", address "/p24" → "/p25"; step 25: removed. 24 steps now, 25 in the approved version.');
+      .toBe('feed: changed from the approved version 4: removed: step 23 ("Open page 23"). 24 steps now, 25 in the approved version.');
     expect(compare(ran, edit((d) => { d.steps.splice(0, 1); })))
-      .toBe(`feed: changed from the approved version 4: step 1: description "Open page 1" → "Open page 2", address "/p1" → "/p2"; step 2: description "Open page 2" → "Open page 3", address "/p2" → "/p3"; step 3: description "Open page 3" → "Open page 4", address "/p3" → "/p4"; and more: steps ${Array.from({ length: 20 }, (_, i) => i + 4).join(', ')}, …. 24 steps now, 25 in the approved version.`);
+      .toBe('feed: changed from the approved version 4: removed: step 1 ("Open page 1"). 24 steps now, 25 in the approved version.');
+    expect(compare(ran, edit((d) => { d.steps.splice(16, 2); })))
+      .toBe('feed: changed from the approved version 4: removed: step 17 ("Open page 17"), step 18 ("Open page 18"). 23 steps now, 25 in the approved version.');
+    expect(compare(ran, edit((d) => { d.steps.splice(9, 0, { intent: 'Open more', goto: '/more' }, { intent: 'Open less', goto: '/less' }); })))
+      .toBe('feed: changed from the approved version 4: added: steps 10, 11. 27 steps now, 25 in the approved version.');
+    expect(compare(ran, edit((d) => { d.steps.splice(7, 0, ...d.steps.splice(2, 1)); })))
+      .toBe('feed: changed from the approved version 4: moved: step 3 is now step 8.');
+    // Changed and removed together: the changed step keeps its number, and a later one is named by both numbers.
+    expect(compare(ran, edit((d) => { d.steps[4].goto = '/x'; d.steps.splice(9, 1); d.steps[14].goto = '/y'; })))
+      .toBe('feed: changed from the approved version 4: removed: step 10 ("Open page 10"); step 5: address "/p5" → "/x"; step 16 (now step 15): address "/p16" → "/y". 24 steps now, 25 in the approved version.');
+    expect(compare(ran, edit((d) => { d.steps.splice(3, 1); d.steps.splice(10, 0, { intent: 'Open more', goto: '/more' }); d.steps[20].intent = 'z'; })))
+      .toBe('feed: changed from the approved version 4: removed: step 4 ("Open page 4"); added: step 11; step 21: description "Open page 21" → "z".');
+    // Four removed: three with their words, the rest by number.
+    expect(compare(ran, edit((d) => { d.steps.splice(5, 4); })))
+      .toBe('feed: changed from the approved version 4: removed: step 6 ("Open page 6"), step 7 ("Open page 7"), step 8 ("Open page 8"), and step 9. 21 steps now, 25 in the approved version.');
+    // A step without a description is named by its number alone; a removed step's description is shown as text, cut.
+    const bare = { ...doc, steps: [{ goto: '/a' }, { intent: `<b>${'w'.repeat(80)}</b>`, goto: '/b' }, { goto: '/c' }] };
+    const bareRan = changePath('feed', [{ id: 1, name: 'feed', version: 4, steps: JSON.stringify(bare), status: 'active' }]).ran;
+    expect(compare(bareRan, JSON.stringify({ ...bare, steps: [bare.steps[2]] })))
+      .toBe(`feed: changed from the approved version 4: removed: step 1, step 2 ("<b>${'w'.repeat(56)}…"). 1 steps now, 3 in the approved version.`);
+    // Over the cap (the part that differs is more than 250,000 pairs of steps): compared in place, as before, and said so.
+    const many = (prefix: string, count: number) => Array.from({ length: count }, (_, i) => ({ intent: `Open ${prefix} ${i + 1}`, goto: `/${prefix}${i + 1}` }));
+    const big = { ...doc, steps: many('p', 501) };
+    const bigRan = changePath('feed', [{ id: 1, name: 'feed', version: 4, steps: JSON.stringify(big), status: 'active' }]).ran;
+    const capped = compare(bigRan, JSON.stringify({ ...big, steps: many('q', 501) }));
+    expect(capped).toMatch(/^feed: changed from the approved version 4: step 1: description "Open p 1" → "Open q 1", address "\/p1" → "\/q1"; step 2: .*; and more: steps 4, 5, .*, 23, …; compared step by step in place, because there are too many steps to line up: after a step added or taken out, every later step reads as changed\.$/);
+    // The same long bot with one step taken out: the steps around it are the same, so only the middle is lined up.
+    expect(compare(bigRan, JSON.stringify({ ...big, steps: big.steps.filter((_, i) => i !== 250) })))
+      .toBe('feed: changed from the approved version 4: removed: step 251 ("Open p 251"). 500 steps now, 501 in the approved version.');
+    // A bot of 200 steps, every one changed, and one of 500 against 500: lined up, quickly.
+    const started = Date.now();
+    const twoHundred = { ...doc, steps: many('p', 200) };
+    const twoRan = changePath('feed', [{ id: 1, name: 'feed', version: 4, steps: JSON.stringify(twoHundred), status: 'active' }]).ran;
+    expect(compare(twoRan, JSON.stringify({ ...twoHundred, steps: many('q', 200) }))).toMatch(/^feed: changed from the approved version 4: step 1: .*; and more: steps 4, .*, 23, …\.$/);
+    const fiveHundred = { ...doc, steps: many('p', 500) };
+    const fiveRan = changePath('feed', [{ id: 1, name: 'feed', version: 4, steps: JSON.stringify(fiveHundred), status: 'active' }]).ran;
+    expect(compare(fiveRan, JSON.stringify({ ...fiveHundred, steps: many('q', 500) }))).not.toContain('in place');
+    expect(Date.now() - started).toBeLessThan(5000);
     // A value is shown on one line, cut at 60 characters; markup stays text (the page escapes the line, as everything
     // else); a secret variable is shown as written, by its name: no secret is in the steps.
     const long = `${'a'.repeat(70)}\nsecond line`;
