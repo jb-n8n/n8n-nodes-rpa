@@ -44,7 +44,7 @@ export const SITE_ADDRESS_GUIDANCE =
   'The browser could not reach the site at its address; the message says what it met. Check the address the steps open (and the start site), and that the site is up, then run again.';
 /** policy_violation because a field did not take a step's value (the engine's valueNotTaken: text in a date field). */
 export const VALUE_NOT_TAKEN_GUIDANCE =
-  "A step's value does not fit its field; the message says which step and field. Correct that value in the steps (on the import form: Change the steps), or record the step again, and approve the new version.";
+  "A step's value does not fit its field; the message says which step and field. Correct that value in the steps (on the import form: Change values), or record the step again, and approve the new version.";
 /** locked_out because a run changed the Site Login's password earlier in this execution (execute.ts SITE_LOGIN_PASSWORD_CHANGED). */
 export const PASSWORD_CHANGED_GUIDANCE =
   'A run changed this Site Login\'s password earlier in this execution. Store the new password where the Site Login reads it, then run again.';
