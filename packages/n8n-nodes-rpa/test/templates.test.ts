@@ -3,8 +3,8 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { deflateRawSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
-import { changeList, NOT_REPLAYED_EVIDENCE_LINE, reviewSteps } from '../nodes/Playwright/format.js';
-import { shownUrl, signScript, USE_CASE_WORDS } from 'n8n-rpa-engine';
+import { changeList, NOT_REPLAYED_EVIDENCE_LINE, reviewChanges, reviewSteps } from '../nodes/Playwright/format.js';
+import { describeStep, shownUrl, signScript, stepChanges, USE_CASE_WORDS } from 'n8n-rpa-engine';
 import { APPROVER } from './fixtures.js';
 import {
   NodeHelpers, Workflow, type IDataObject, type INodeExecutionData, type INodeParameters, type INodeProperties, type INodeTypes,
@@ -404,7 +404,7 @@ describe('3-approve-steps.json', () => {
     expect(byName(t, 'Repaired steps received')).toMatchObject({ type: 'n8n-nodes-base.executeWorkflowTrigger', parameters: { inputSource: 'passthrough' } });
     const email = byName(t, 'Email repaired steps').parameters;
     expect(email).toMatchObject({ operation: 'send', emailFormat: 'html', options: { fileAttachments: '={{ $json.attachmentNames }}' } });
-    for (const field of ['evidenceLine', 'changeList', 'safetyLine', 'hash']) expect(String(email.html)).toContain(`$json.${field}`);
+    for (const field of ['evidenceLine', 'changeList', 'safetyLine', 'hash']) expect(String(email.html)).toMatch(new RegExp(`(\\$json|\\bj)\\.${field}\\b`));
     expect(String(email.html)).toContain('color:#b00020');
   });
   it('trigger → Settings → (first) the tables and Mark pending, (then) Desktop steps? → one desktop email, or the review email and Ask for approval → Timed out? → Sign steps', () => {
@@ -915,6 +915,39 @@ describe('template 3 emails lead with what browser steps do (reviewSteps), as th
     const djson = { name: 'erp', version: 1, steps: { surface: 'desktop', app: { exe: 'App.exe' }, steps: dsteps }, reviewSteps: reviewSteps(dsteps, { desktop: true }) };
     const dshown = render(desktop, { $: (name: string) => ({ item: { json: name === 'Settings' ? { approvalTimeoutHours: 72 } : djson } }) });
     expect(dshown).toContain('\n1. Click "Post (described differently as: y) \u2039i\u203a" ⚠ (described differently as: Read it (described differently as: x) \u2039b\u203a)\n');
+  });
+
+  it('What changed: left out of both emails for an import (every entry Added, every step listed); for a repair, each entry from the step\'s sentence', () => {
+    // An import: the change list is every step again, as Added, led by the author's description. Not shown.
+    const imported = { ...item, changes: steps.map((s) => ({ was: null, now: String(s.intent) })) };
+    expect(render(html, { $json: imported })).not.toContain('What changed');
+    expect(ask(imported)).not.toContain('What changed');
+    expect(ask(imported)).toContain('\nSafety flags: host: a.example\n\nApprove: ');
+    // Without the step list (an item from Run Steps), or with one that does not fit, the change list stays as before.
+    const { reviewSteps: _r, ...older } = imported;
+    expect(render(html, { $json: older })).toContain('<b>What changed (as reported by the run):</b><br>Added: Type the first day');
+    expect(ask(older)).toContain('\nWhat changed (as reported by the run):\nAdded: Type the first day');
+    // A repair: each entry names its step by number, with the sentence built from the step and the description marked.
+    const base = { startUrl: 'https://a.example/', steps: [steps[0], { intent: 'Click Export', click: { role: 'button', name: 'Export' } }] };
+    const now = { startUrl: 'https://a.example/', steps: [steps[0], { intent: 'Read the total', click: { role: 'button', name: 'Delete' } }, { intent: 'Open the list', goto: 'https://a.example/list' }] };
+    const changes = stepChanges(parseScript(base), parseScript(now));
+    const repair = { ...item, baseVersion: 1, version: 2, steps: now, changes, changeList: changeList({ changes } as unknown as Proposal), reviewSteps: undefined,
+      reviewChanges: reviewChanges({ describeStep }, now.steps, changes, { shownUrl: (u: string) => u, startUrl: now.startUrl }) };
+    expect(repair.reviewChanges).toEqual([
+      { change: 'Changed', step: 2, text: 'Click Delete', describedAs: 'Read the total', was: 'Click Export (click role "button" name "Export")' },
+      { change: 'Added', step: 3, text: 'Open a.example/list', describedAs: 'Open the list', quiet: true },
+    ]);
+    expect(render(html, { $json: repair })).toContain('<b>What changed (as reported by the run):</b><br>'
+      + 'Changed: step 2, Click Delete <b style="color:#b00020">(described differently as: Read the total)</b> <i style="color:#7e8186">(was: Click Export (click role &quot;button&quot; name &quot;Export&quot;))</i><br>'
+      + 'Added: step 3, Open a.example/list <i style="color:#7e8186">(the author calls it: Open the list)</i></p>');
+    expect(ask(repair)).toContain('\nWhat changed (as reported by the run):\n'
+      + 'Changed: step 2, Click Delete ⚠ (described differently as: Read the total) (was: Click Export (click role "button" name "Export"))\n'
+      + 'Added: step 3, Open a.example/list (the author calls it: Open the list)\n\nApprove: ');
+    // A removed step keeps the run's words: there is no step to build a sentence from.
+    const removed = stepChanges(parseScript(now), parseScript(base));
+    const back = reviewChanges({ describeStep }, base.steps, removed, { shownUrl: (u: string) => u });
+    expect(back.find((c) => c.change === 'Removed')).toEqual({ change: 'Removed', was: 'Open the list (go to "https://a.example/list")' });
+    expect(ask({ ...repair, changes: removed, reviewChanges: back })).toContain('Removed: Open the list (go to "https://a.example/list")');
   });
 
   it('Sign Steps checks the sentences the emails showed: the item goes to Sign steps whole, reviewSteps included', () => {

@@ -950,3 +950,24 @@ describe('Sign Steps: Check Only (what the review page names before anything is 
     expect(json).not.toHaveProperty('signature');
   });
 });
+
+describe('Sign Steps: the change list the approval emails showed (reviewChanges)', () => {
+  const REFUSED = 'Sign Steps refused: the steps shown for approval are not the steps to sign: import the steps again';
+  it('a repair carries each entry built from its step; Sign Steps builds it again and refuses one that was changed', async () => {
+    const item = repairedItem(STEPS);
+    expect(item.reviewChanges).toEqual([{ change: 'Changed', step: 2, text: 'Read the items', was: 'Read the list (extract rows from css "main")' }]);
+    expect(only(await sign(item)).json.status).toBe('active');
+    const forged = (over: IDataObject) => ({ ...item, reviewChanges: [{ ...(item.reviewChanges as IDataObject[])[0], ...over }] });
+    for (const over of [{ step: 1 }, { text: 'Read the list' }, { change: 'Added' }, { describedAs: 'Open it', quiet: true }, { was: 'Read the rows' }]) {
+      expect(only(await sign(forged(over))).json.error, JSON.stringify(over)).toBe(REFUSED);
+    }
+    expect(only(await sign({ ...item, reviewChanges: [] })).json.error).toBe(REFUSED);
+    expect(only(await sign({ ...item, reviewChanges: 'x' })).json.error).toBe(REFUSED);
+    // An item made before the field (or one without it) is signed as before.
+    const { reviewChanges: _c, ...older } = item;
+    expect(only(await sign(older)).json.status).toBe('active');
+    // The signature does not cover it: the same record either way.
+    const [a, b] = [only(await sign(item)).json, only(await sign(older)).json];
+    for (const key of ['steps', 'hash', 'signature']) expect(a[key], key).toEqual(b[key]);
+  });
+});

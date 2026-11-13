@@ -512,3 +512,55 @@ export function reviewWrites(steps: readonly DesktopStep[], candidates: readonly
   const signsIn = signInKeySteps(steps, secretVariables);
   return candidates.map((n) => ({ step: n, intent: oneLine(steps[n - 1]?.intent ?? ''), ...(signsIn.includes(n) ? { signsIn: true as const } : {}) }));
 }
+
+/**
+ * One entry of the change list as the approval emails show it (shown only, never signed). For an entry that names a step
+ * the steps have, its number (from 1; a step inside a paginate has its paginate's number and `onEachPage`) and that
+ * step's sentence, description and mark, as reviewSteps builds them. An entry that names no step (a pop-up handler, or a
+ * step removed) keeps the run's own words in `text`. `was`: the run's words for the step as it was.
+ */
+export interface ReviewChange {
+  change: 'Added' | 'Changed' | 'Removed';
+  step?: number; onEachPage?: true; text?: string; describedAs?: string; quiet?: true; was?: string;
+}
+
+/** The suffix the engine's change list adds to a changed step that reads the same as before (engine ALSO_CHANGED). */
+const ALSO_CHANGED_SUFFIX = / \(also changed: [\w.]+(?:, [\w.]+)*\)$/;
+
+/**
+ * For the approval emails of browser steps: each change-list entry (`changes`, the engine's stepChanges) as a ReviewChange.
+ * An entry names a step when it is that step's engine description (describeStep, the also-changed suffix aside); the first
+ * such step is taken. A pure function of the steps and the change list, so Sign Steps builds the same list again.
+ */
+export function reviewChanges(
+  engine: Pick<Engine, 'describeStep'>, steps: readonly unknown[], changes: readonly { was: string | null; now: string | null }[],
+  o: { shownUrl: (url: string) => string; startUrl?: string },
+): ReviewChange[] {
+  const describe = (s: unknown): string | undefined => {
+    try {
+      return engine.describeStep(s as Step);
+    } catch {
+      return undefined;
+    }
+  };
+  const located: { step: number; raw: unknown; inner: boolean; said: string | undefined }[] = [];
+  steps.forEach((s, i) => {
+    located.push({ step: i + 1, raw: s, inner: false, said: describe(s) });
+    const each = asJson(asJson(s).paginate).each;
+    if (Array.isArray(each)) for (const b of each) located.push({ step: i + 1, raw: b, inner: true, said: describe(b) });
+  });
+  return changes.map((c) => {
+    const change = c.was !== null && c.now !== null ? 'Changed' : c.now !== null ? 'Added' : 'Removed';
+    const was = c.was !== null ? { was: oneLine(c.was) } : {};
+    if (c.now === null) return { change, ...was };
+    const now = c.now.replace(ALSO_CHANGED_SUFFIX, '');
+    const at = located.find((l) => l.said !== undefined && l.said === now);
+    if (!at) return { change, text: oneLine(c.now), ...was };
+    // The step's own sentence: a paginate's inner lines are entries of their own.
+    const [r] = reviewSteps([at.raw], { desktop: false, ...o });
+    return {
+      change, step: at.step, ...(at.inner ? { onEachPage: true as const } : {}), text: r.text,
+      ...(r.describedAs !== undefined ? { describedAs: r.describedAs } : {}), ...(r.quiet ? { quiet: true as const } : {}), ...was,
+    };
+  });
+}

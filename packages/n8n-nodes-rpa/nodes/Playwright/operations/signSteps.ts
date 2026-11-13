@@ -6,7 +6,7 @@ import type { Engine } from '../engine.js';
 import { configNodeError, errorJson } from '../errors.js';
 import {
   changeList, DESKTOP_EVIDENCE_LINES, evidenceLine, fullSafetyFlags, hasDownloadStep, importAddedSteps, isDesktopProposal, isFileDocument, leftOutList,
-  NOT_REPLAYED_EVIDENCE_LINE, reviewSteps, safetyLine, type ReviewStep,
+  NOT_REPLAYED_EVIDENCE_LINE, reviewChanges, reviewSteps, safetyLine, type ReviewStep,
 } from '../format.js';
 import { configErrorItem } from '../output.js';
 import { rejectedRecord, signedRecord, type StepsRecord } from '../rows.js';
@@ -175,6 +175,25 @@ function reviewStepsProblem(engine: Engine, p: ParsedProposal, json: IDataObject
     return REVIEW_STEPS_CHANGED;
   }
   return shown.length === built.length && shown.every((e, i) => sameReviewStep(e, built[i])) ? undefined : REVIEW_STEPS_CHANGED;
+}
+
+/**
+ * Why the change list the approval emails showed (`reviewChanges`, shown only and outside the digest) cannot stand for
+ * the item's change list, or undefined: it is built again from the item's steps and change list (format.ts
+ * reviewChanges) and must be the same. An item without it is signed as before.
+ */
+function reviewChangesProblem(engine: Engine, p: ParsedProposal, json: IDataObject): string | undefined {
+  if (json.reviewChanges === undefined) return undefined;
+  const doc = isObject(p.steps) ? p.steps : undefined;
+  if (!doc || !Array.isArray(doc.steps) || engine.isDesktopDocument(doc)) return REVIEW_STEPS_CHANGED;
+  let built: string;
+  try {
+    const changes = p.changes.map((c) => ({ was: typeof c.was === 'string' ? c.was : null, now: typeof c.now === 'string' ? c.now : null }));
+    built = engine.canonicalize(reviewChanges(engine, doc.steps, changes, { shownUrl: engine.shownUrl, startUrl: typeof doc.startUrl === 'string' ? doc.startUrl : undefined }));
+    return engine.canonicalize(json.reviewChanges) === built ? undefined : REVIEW_STEPS_CHANGED;
+  } catch {
+    return REVIEW_STEPS_CHANGED;
+  }
 }
 
 /** Hosts of the absolute http(s) gotos, paginate bodies included. */
@@ -437,7 +456,7 @@ async function signOne(ctx: NodeContext, engine: Engine, i: number, json: IDataO
   const leftOut = leftOutProblem(p);
   if (leftOut) return refuse([leftOut]);
   // Reported after the engine's own reasons (a step edited after review fails the digest check first), never instead.
-  const shownSteps = reviewStepsProblem(engine, p, json);
+  const shownSteps = reviewStepsProblem(engine, p, json) ?? reviewChangesProblem(engine, p, json);
   if (engine.isDesktopDocument(p.steps)) return signDesktop(engine, p, { key, approverId, writeStepsText, secrets: siteSecrets, at, refuse, record, shownSteps });
   if (writeStepsText) return refuse([WRITE_STEPS_BROWSER]);
 

@@ -4,7 +4,7 @@ import type { NodeContext } from './context.js';
 import type { Compiled, LaneSuccess } from './operations/quick/shared.js';
 import type { Engine } from './engine.js';
 import { CONFIG_GUIDANCE, errorJson, guidanceFor, type FailureDetails } from './errors.js';
-import { changeList, DESKTOP_EVIDENCE_LINE, evidenceLine, fullSafetyFlags, leftOutList, NOT_REPLAYED_EVIDENCE_LINE, safetyLine } from './format.js';
+import { changeList, DESKTOP_EVIDENCE_LINE, evidenceLine, fullSafetyFlags, leftOutList, NOT_REPLAYED_EVIDENCE_LINE, reviewChanges, safetyLine } from './format.js';
 
 /** A file-name-safe form of a name (lowercase, dashes), 'rpa' when nothing is left. */
 export const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'rpa';
@@ -132,6 +132,11 @@ export function repairedStepsJson(engine: Engine, proposal: Proposal, attachment
     changeList: changeList(p),
     safetyLine: safetyLine(p),
     ...leftOutFields(p),
+    // A repair (an entry that names what a step was): the change list as the approval emails show it, each entry from the
+    // step's sentence (format.ts reviewChanges). Shown only, outside the digest: Sign Steps builds it again.
+    ...(p.changes.some((c) => c.was !== null)
+      ? { reviewChanges: reviewChanges(engine, p.steps.steps, p.changes, { shownUrl: engine.shownUrl, startUrl: p.steps.startUrl }) as unknown as IDataObject[] }
+      : {}),
     attachmentNames,
   };
 }

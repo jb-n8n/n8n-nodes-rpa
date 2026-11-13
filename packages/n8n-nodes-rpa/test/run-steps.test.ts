@@ -819,8 +819,10 @@ describe('outputs', () => {
     });
     expect(repaired).toHaveLength(1);
     expect(Object.keys(repaired[0].json)).toEqual([
-      'name', 'baseVersion', 'version', 'steps', 'hash', 'digest', 'evidence', 'changes', 'safetyFlags', 'evidenceLine', 'changeList', 'safetyLine', 'attachmentNames',
+      'name', 'baseVersion', 'version', 'steps', 'hash', 'digest', 'evidence', 'changes', 'safetyFlags', 'evidenceLine', 'changeList', 'safetyLine', 'reviewChanges', 'attachmentNames',
     ]);
+    // A repair: the change list as the approval emails show it. An entry that names no step keeps the run's words.
+    expect(repaired[0].json.reviewChanges).toEqual([{ change: 'Changed', text: 'Read the product list', was: 'Read the items' }]);
     expect(repaired[0].json).toMatchObject({
       name: 'items', baseVersion: 3, version: 4, hash: 'd4'.repeat(32), digest: proposalDigest({ ...PROPOSAL, safetyFlags: ['host: example.com'] }), safetyFlags: ['host: example.com'], evidenceLine: 'Proven in a fresh browser: 3 of 3 rows',
       changeList: 'Changed: Read the items -> Read the product list', safetyLine: 'host: example.com', attachmentNames: 'before,after',

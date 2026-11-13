@@ -123,7 +123,9 @@ after `approvalTimeoutHours` (72), then:
   and refuses to sign when they differ.
   The emails HTML-escape every value. The safety flags are the full list: every host, form submission, download and pop-up handler the steps have.
   The change list compares the steps themselves, not their intents, so a step that clicks another element is listed
-  even when its intent reads the same.
+  even when its intent reads the same. For an import, where every entry is a step added, the emails leave it out: it
+  would repeat the steps. For a repair, each entry names its step by number, with the sentence built from the step and
+  the description marked as above. Sign Steps builds that list again and refuses to sign when it differs.
 - **Desktop steps**: one email, `Approve desktop steps v<version> for <name>?`, with the numbered steps and a
   **Review and decide** button, to a form with **Decision** and the candidate writes as tick boxes, none ticked to start.
 - Approve: **Sign steps** signs, the row becomes `active`, older `active` rows of the name become `superseded`, and
