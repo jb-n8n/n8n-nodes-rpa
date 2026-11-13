@@ -32,6 +32,88 @@ $script:KnownSteps = @(
   'point the firewall rules at the supervisor', 'point the firewall rule at the supervisor', 'add the Start menu shortcut',
   'start tasks')
 
+# ---- connection address: begin (the same text in scripts\Show-RpaConnection.ps1 and RpaInstall.Machine.ps1; a test
+# compares the two) ----
+# The address as it goes into a connection line: a host name or an IPv4 address as it is, an IPv6 address (with or
+# without its brackets) in brackets; nothing for anything else, so that no text of -Address can add to the line.
+function Get-ConnectionHost([string]$Text) {
+  if ($Text -match '^\d{1,3}(\.\d{1,3}){3}$') {
+    foreach ($part in $Text.Split('.')) { if ([int]$part -gt 255) { return $null } }
+    return $Text
+  }
+  if ($Text -match '^(?=.{1,253}$)[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$') { return $Text }
+  $bare = $Text
+  if ($bare -match '^\[(.*)\]$') { $bare = $Matches[1] }
+  $parsed = $null
+  if ($bare -match '^[0-9A-Fa-f:.]+$' -and $bare.Contains(':') -and [Net.IPAddress]::TryParse($bare, [ref]$parsed)) { return '[{0}]' -f $bare }
+  $null
+}
+
+# The parsed address of a text that is an IPv4 or IPv6 address and could be another machine's (not a loopback or the
+# unspecified address), or nothing. No range, no name, no zone.
+function Get-OtherMachineAddress([string]$Text) {
+  $parsed = $null
+  $v4 = $Text -match '^\d{1,3}(\.\d{1,3}){3}$'
+  $v6 = $Text -match '^[0-9A-Fa-f:.]+$' -and $Text.Contains(':')
+  if (-not ($v4 -or $v6) -or -not [Net.IPAddress]::TryParse($Text, [ref]$parsed)) { return $null }
+  if ([Net.IPAddress]::IsLoopback($parsed) -or $parsed.Equals([Net.IPAddress]::Any) -or $parsed.Equals([Net.IPAddress]::IPv6Any)) { return $null }
+  $parsed
+}
+
+# Without -Address: the address this machine has on its route to n8n, when install.json's allowFrom holds one IP
+# address (the n8n host), as @{ Host = <as it goes into a line>; Address; Towards = <that n8n address> }. Nothing for
+# several addresses, a range, a name, any or none, a loopback address, no route, an answer that cannot go into a line,
+# or a Find-NetRoute that is missing or fails: the lines then carry this machine's name. Find-NetRoute reads this
+# machine's routing table: nothing is sent to that address.
+function Get-RouteAddress($AllowFrom) {
+  $entries = @($AllowFrom | Where-Object { $null -ne $_ })
+  if ($entries.Count -ne 1) { return $null }
+  $target = [string]$entries[0]
+  if (-not (Get-OtherMachineAddress $target)) { return $null }
+  $local = $null
+  try {
+    foreach ($found in @(Find-NetRoute -RemoteIPAddress $target -ErrorAction Stop)) {
+      if ($found.IPAddress) { $local = [string]$found.IPAddress; break }
+    }
+  } catch { return $null }
+  if (-not $local -or -not (Get-OtherMachineAddress $local)) { return $null }
+  $lineHost = Get-ConnectionHost $local
+  if (-not $lineHost) { return $null }
+  @{ Host = $lineHost; Address = $local; Towards = $target }
+}
+
+# Whether an IP address is a private one: 10/8, 172.16/12, 192.168/16, or a unique-local (fc00::/7) or link-local
+# (fe80::/10) IPv6 address.
+function Test-PrivateAddress([string]$Text) {
+  $parsed = $null
+  if (-not [Net.IPAddress]::TryParse($Text, [ref]$parsed)) { return $false }
+  $bytes = $parsed.GetAddressBytes()
+  if ($parsed.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork) {
+    return $bytes[0] -eq 10 -or ($bytes[0] -eq 172 -and $bytes[1] -ge 16 -and $bytes[1] -le 31) -or ($bytes[0] -eq 192 -and $bytes[1] -eq 168)
+  }
+  ($bytes[0] -band 0xFE) -eq 0xFC -or ($bytes[0] -eq 0xFE -and ($bytes[1] -band 0xC0) -eq 0x80)
+}
+# ---- connection address: end ----
+
+# The question an interactive install asks behind a NAT: when the one address that may connect (-AllowFrom) is
+# outside this network and this machine's own address towards it is a private one, n8n cannot use a connection line
+# that carries that address. Says so, then asks for the name or address n8n can reach this machine at, until the
+# answer can go into a line (Get-ConnectionHost) or is empty. Returns the answer, or nothing for Enter, for a host
+# that cannot ask (Read-Host fails without a console) and when there is nothing to ask. -Read is Read-Host.
+function Read-RpaReachableAddress($AllowFrom, [scriptblock]$Read) {
+  $route = Get-RouteAddress $AllowFrom
+  if (-not $route -or -not (Test-PrivateAddress $route.Address) -or (Test-PrivateAddress $route.Towards)) { return }
+  Write-Host ("This machine's address towards n8n is {0}, a private one. n8n at {1} is outside this network and cannot use it." -f $route.Address, $route.Towards)
+  while ($true) {
+    try { $answer = [string](& $Read ('The name or address n8n can reach this machine at (Enter to keep {0})' -f $route.Address)) }
+    catch { return }
+    $answer = $answer.Trim()
+    if (-not $answer) { return }
+    if (Get-ConnectionHost $answer) { return $answer }
+    Write-Host ('{0} is not a host name, an IPv4 address or an IPv6 address.' -f $answer)
+  }
+}
+
 # Where things are. Program Files keeps its default permissions (users read and run, only administrators change), so
 # the bot user cannot replace what it runs.
 function Get-RpaLayout {
@@ -274,6 +356,7 @@ function Get-RpaMachineFacts {
     InstalledBrowser           = $false
     InstalledAllowFrom         = $null
     InstalledPublicNetwork     = $false
+    InstalledAddress           = $null
     InstalledAutoSignInForUser = $false
     InstalledAutoSignInUser    = $null
     InstalledUser              = $null
@@ -326,6 +409,7 @@ function Get-RpaMachineFacts {
     $facts.InstalledBrowser = $install.browser -eq $true
     if ($install.allowFrom) { $facts.InstalledAllowFrom = @($install.allowFrom) }
     $facts.InstalledPublicNetwork = $install.publicNetwork -eq $true
+    if ($install.address -is [string] -and $install.address) { $facts.InstalledAddress = $install.address }
     # The user the install was made for and the user automatic sign-in was turned on for by the installer, and
     # whether that is the user of this run.
     $facts.InstalledUser = [string]$install.user
@@ -1419,6 +1503,12 @@ function New-RpaInstallRecord {
     publicNetwork = $publicNetwork
     mode          = 'signedIn'
   }
+  # The name or address n8n reaches this machine at (rpa connection puts it into the lines): this run's, else the one
+  # an earlier run recorded. No field without one.
+  $address = $null
+  if ($Previous -and $Previous.address -is [string] -and $Previous.address) { $address = $Previous.address }
+  if ($Plan.Address) { $address = [string]$Plan.Address }
+  if ($address) { $record.address = $address }
   if ($Plan.Unattended) {
     $record.mode = 'unattended'
     $record.idleSeconds = [int]$Plan.IdleSeconds

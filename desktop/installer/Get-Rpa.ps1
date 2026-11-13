@@ -59,6 +59,7 @@ param(
   [string[]]$AllowFrom = @(),
   [switch]$AllowFromAnyAddress,
   [switch]$IncludePublicNetwork,
+  [string]$Address,
   [switch]$NoBrowser,
   [switch]$WithBrowser,
   [switch]$NoFirewall,
@@ -77,7 +78,7 @@ $Repository = 'jb-n8n/n8n-nodes-rpa'
 $PackageName = 'rpa-windows-x64'
 $BrowserPackageName = 'rpa-browser-windows-x64'
 # Install-Rpa.ps1's parameters, in its order: what is passed on, and how it is shown.
-$InstallParameters = @('User', 'UserPassword', 'RunnerPort', 'BrowserPort', 'AllowFrom', 'AllowFromAnyAddress', 'IncludePublicNetwork', 'NoBrowser', 'WithBrowser', 'NoFirewall', 'AutoSignIn', 'Unattended', 'IdleSeconds', 'Force')
+$InstallParameters = @('User', 'UserPassword', 'RunnerPort', 'BrowserPort', 'AllowFrom', 'AllowFromAnyAddress', 'IncludePublicNetwork', 'Address', 'NoBrowser', 'WithBrowser', 'NoFirewall', 'AutoSignIn', 'Unattended', 'IdleSeconds', 'Force')
 
 # A path the person typed, as a full path: a relative one is resolved against PowerShell's current location (not the
 # process's folder, which .NET uses and which is not where the person is), as the file system would read what was

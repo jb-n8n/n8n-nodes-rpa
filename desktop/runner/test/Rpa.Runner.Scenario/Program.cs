@@ -9,15 +9,20 @@ using Rpa.Runner.Scenario;
 // Drives the ERP Demo through a running RPA desktop runner, as n8n would, and checks every result.
 //   Rpa.Runner.Scenario --url wss://127.0.0.1:8765/rpa/v1 --fingerprint AB:CD:... --app C:\...\v1\ErpDemo.exe
 //                       --app-v2 C:\...\v2\ErpDemo.exe --out <dir>
+// With --write-gate protected|unprotected (and no --app-v2) it runs only the write gate's check: the v1 app's Post,
+// without and with write: true, under a policy that protects btnPost or one that lists no write control.
 // The token comes from RPA_RUNNER_TOKEN. Exit code 0 when every check passed.
 var opts = new Dictionary<string, string>();
 for (var i = 0; i + 1 < args.Length; i += 2) opts[args[i]] = args[i + 1];
 string Opt(string k) => opts.TryGetValue(k, out var v) ? v : throw new ArgumentException($"missing {k}");
 var token = Environment.GetEnvironmentVariable("RPA_RUNNER_TOKEN") ?? throw new ArgumentException("RPA_RUNNER_TOKEN is not set");
-var scenario = new Scenario(new Uri(Opt("--url")), token, Opt("--fingerprint"), Opt("--app"), Opt("--app-v2"), Opt("--out"));
+bool? writeGate = opts.TryGetValue("--write-gate", out var gate)
+    ? gate switch { "protected" => true, "unprotected" => false, _ => throw new ArgumentException("--write-gate is protected or unprotected") }
+    : null;
+var scenario = new Scenario(new Uri(Opt("--url")), token, Opt("--fingerprint"), Opt("--app"), writeGate is null ? Opt("--app-v2") : "", Opt("--out"), writeGate);
 return await scenario.RunAsync();
 
-internal sealed class Scenario(Uri url, string token, string fingerprint, string appPath, string appV2Path, string outDir)
+internal sealed class Scenario(Uri url, string token, string fingerprint, string appPath, string appV2Path, string outDir, bool? writeGate = null)
 {
     private const string LoginTitle = "ERP Demo - Sign in";
     private const string MainTitle = "ERP Demo - Line items";
@@ -51,11 +56,15 @@ internal sealed class Scenario(Uri url, string token, string fingerprint, string
         _rpc = await RpcClient.ConnectAsync(url, token, fingerprint);
         try
         {
-            await MainFlow();
-            await V2Smoke();
-            await V2Repair();
-            await LeaseExpiry();
-            await WrongToken();
+            if (writeGate is { } postProtected) await WriteGate(postProtected);
+            else
+            {
+                await MainFlow();
+                await V2Smoke();
+                await V2Repair();
+                await LeaseExpiry();
+                await WrongToken();
+            }
         }
         finally
         {
@@ -474,6 +483,66 @@ internal sealed class Scenario(Uri url, string token, string fingerprint, string
                 try { await Call("run.end", new { runId = _runId }); }
                 catch (Exception e) { Console.WriteLine($"    (run.end failed: {e.Message})"); }
             }
+        }
+    }
+
+    /// <summary>
+    /// The write gate as a bot of the app meets it: sign in, search, then Post the first row. With btnPost in the
+    /// policy (the policy tool applied a recording's change file that clicked Post), a click on Post without write: true
+    /// is refused with the policy's message and posts nothing, and the same click with write: true posts. With no write
+    /// control in the policy (an app allowed by an earlier version), the click without write: true posts, as before.
+    /// </summary>
+    private async Task WriteGate(bool postProtected)
+    {
+        _runId = "write-gate-" + Guid.NewGuid().ToString("N")[..8];
+        var begun = false;
+        var post = TW(MainTitle, new { automationId = "btnPost" });
+        var detail = TW(MainTitle, new { automationId = "txtDetail" });
+        try
+        {
+            if (!await Step("write gate: run.begin, launch ErpDemo, sign in, search company 1000", async () =>
+                {
+                    await BeginRun(_runId, 120000);
+                    begun = true;
+                    await Call("app.launch", new { runId = _runId, app = new { exe = appPath } });
+                    await SignIn("btnSearch");
+                    await Act(TW(MainTitle, new { automationId = "cmbCompany" }), "select", new { value = "1000" });
+                    await Act(TW(MainTitle, new { automationId = "btnSearch" }), "click");
+                    var count = await Read(TW(MainTitle, new { automationId = "lblResultCount" }));
+                    Expect(count == "12 line items", $"result count is \"12 line items\" (got \"{count}\")");
+                }))
+                return;
+            if (postProtected)
+            {
+                await Step("write gate: Post without write: true is refused with the policy's message, and nothing is posted", async () =>
+                {
+                    var e = await ExpectError(-32003, () => Act(post, "click"));
+                    Expect(e.RunnerMessage.EndsWith("the target is a declared write control and needs write: true", StringComparison.Ordinal),
+                        $"the refusal names the declared write control (got \"{e.RunnerMessage}\")");
+                    var shown = await Read(detail);
+                    Expect(!shown.EndsWith(" Posted", StringComparison.Ordinal), $"the first row is not posted (got \"{shown}\")");
+                });
+                await Step("write gate: Post with write: true posts the first row", async () =>
+                {
+                    await Act(post, "click", new { write = true });
+                    var shown = await Read(detail);
+                    Expect(shown.EndsWith(" Posted", StringComparison.Ordinal), $"the first row is posted (got \"{shown}\")");
+                });
+            }
+            else
+            {
+                await Step("write gate: with no write control in the policy, Post without write: true posts, as before", async () =>
+                {
+                    await Act(post, "click");
+                    var shown = await Read(detail);
+                    Expect(shown.EndsWith(" Posted", StringComparison.Ordinal), $"the first row is posted (got \"{shown}\")");
+                });
+            }
+        }
+        finally
+        {
+            if (_results.Any(r => !r.Ok) && begun) await CaptureFailure("write-gate");
+            if (begun) await Step("write gate: run.end", () => Call("run.end", new { runId = _runId }));
         }
     }
 

@@ -66,7 +66,8 @@ asks before it replaces a file. **Back** returns to the values page, to tick ano
 **Saved.** `Saved · <n> steps` and `Saved <file> in <folder>. Two things are left to do:`
 1. **Allow <app> on this machine**, with **Allow this app…**. The runner starts only the apps in its **policy**, the
    list of allowed apps on this machine. The button starts the policy tool with administrator rights: Windows asks for
-   them, and the tool shows what it will allow (the app's path and a fingerprint of the file) and asks. Type `y`. The
+   them, and the tool shows what it will allow (the app's path and a fingerprint of the file) and the buttons it will
+   protect, and asks. Type `y`. The
    bar then says the tool reported success. A recorder that is not part of an install shows the command for an
    administrator instead.
 2. **Import the recording in n8n**: `Upload it in n8n's Import a bot form.` Set the form up before you record
@@ -142,5 +143,7 @@ recording), in an administrator PowerShell:
 ```
 
 The tool copies the file into its own folder, shows what it allows, and asks. The change file allows the app at its
-path, pins the file's fingerprint, and lists the arguments you gave. It lists no write controls: to protect the app's
-Save and Post buttons, see the [Windows guide](../install/windows.md#8-allow-your-own-app).
+path, pins the file's fingerprint, and lists the arguments you gave. It also lists the buttons you clicked that look
+like they save, post or submit (the steps the review page ticks) to protect as write controls, and names the ones it
+left out, a dialog's standard buttons such as OK, which every dialog of the app shares; for keys and other buttons,
+see the [Windows guide](../install/windows.md#8-allow-your-own-app).

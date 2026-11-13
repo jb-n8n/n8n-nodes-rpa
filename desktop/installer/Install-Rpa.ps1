@@ -4,7 +4,8 @@
 #
 #   .\Install-Rpa.ps1 [-User <name>] [-UserPassword <SecureString>] [-RunnerPort 8765] [-BrowserPort 3000]
 #                     [-AllowFrom <address>[,<address>...] | -AllowFromAnyAddress [-IncludePublicNetwork] | -NoFirewall]
-#                     [-WithBrowser | -NoBrowser] [-AutoSignIn | -Unattended [-IdleSeconds 15]] [-Force]
+#                     [-Address <name or address>] [-WithBrowser | -NoBrowser] [-AutoSignIn | -Unattended [-IdleSeconds 15]]
+#                     [-Force]
 #
 # The programs run inside the signed-in session of one Windows user, the bot user, started by scheduled tasks at that
 # user's logon. Someone signs the bot user in (by hand, or Windows with -AutoSignIn), or, with -Unattended, the service
@@ -25,6 +26,11 @@
 #                  the machine's network is Public (most cloud machines and machines outside a domain) that lets
 #                  nothing in, and a first install is refused; then give -AllowFrom, or add -IncludePublicNetwork.
 #   -IncludePublicNetwork  With -AllowFromAnyAddress: the rules apply on Public networks too.
+#   -Address       The name or address n8n reaches this machine at, for the connection lines (rpa connection):
+#                  install.json keeps it, and an upgrade without -Address keeps it. Without it, when the one address
+#                  that may connect (-AllowFrom) is outside this network and this machine's own address towards it is a
+#                  private one (behind a NAT), the installer asks for it once before the first step, unless -Force or
+#                  -Unattended is given; Enter keeps the lines on the private address, and rpa connection says so.
 #   -NoFirewall    Leave Windows Firewall alone. One of -AllowFrom, -AllowFromAnyAddress and -NoFirewall is needed on
 #                  a first install; an upgrade without any of them keeps what the install was made with.
 #   -WithBrowser   Install the RPA browser beside the runner, or add it to an install without it. It needs the browser
@@ -98,6 +104,7 @@ param(
   [string[]]$AllowFrom = @(),
   [switch]$AllowFromAnyAddress,
   [switch]$IncludePublicNetwork,
+  [string]$Address,
   [switch]$NoBrowser,
   [switch]$WithBrowser,
   [switch]$NoFirewall,
@@ -276,7 +283,7 @@ Import-Module (Join-Path $package 'RpaInstall.psd1') -Force
 
 $parameters = @{
   User = $User; UserPassword = $UserPassword; RunnerPort = $RunnerPort; BrowserPort = $BrowserPort
-  AllowFrom = $AllowFrom; AllowFromAnyAddress = [bool]$AllowFromAnyAddress; IncludePublicNetwork = [bool]$IncludePublicNetwork
+  AllowFrom = $AllowFrom; AllowFromAnyAddress = [bool]$AllowFromAnyAddress; IncludePublicNetwork = [bool]$IncludePublicNetwork; Address = $Address;
   NoBrowser = [bool]$NoBrowser; WithBrowser = [bool]$WithBrowser; NoFirewall = [bool]$NoFirewall; AutoSignIn = [bool]$AutoSignIn; Unattended = [bool]$Unattended
   UnattendedGiven = $PSBoundParameters.ContainsKey('Unattended'); IdleSeconds = $IdleSeconds; IdleSecondsGiven = $PSBoundParameters.ContainsKey('IdleSeconds'); Force = [bool]$Force
 }
@@ -325,6 +332,13 @@ if ($plan.Questions.Count -gt 0 -or $askSignIn -or $askUnattended -or $askBrowse
     Write-Host 'Nothing was changed.'
     exit 3
   }
+}
+
+# Behind a NAT the lines would carry this machine's private address: the name or address n8n reaches it at, asked
+# once and kept in install.json (the plan's Address). Not with -Force or -Unattended: -Address carries it there.
+if ($plan.AskAddress) {
+  $answer = Read-RpaReachableAddress -AllowFrom $plan.AllowFrom -Read { param($Prompt) Read-Host $Prompt }
+  if ($answer) { $plan.Address = $answer }
 }
 
 # Whether the install has the browser, as the plan decided it from -WithBrowser, -NoBrowser and the install; the steps

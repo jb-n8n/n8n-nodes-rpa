@@ -360,8 +360,14 @@ public sealed class Session
         return new RecordingFile(name, exe, args, events, secrets) { Variables = variables };
     }
 
-    /// <summary>The change that allows the recorded application, by its path and SHA-256, for <c>RpaPolicy.exe apply</c>.
-    /// It declares no write controls and no gated keys: the approver declares writes.</summary>
+    /// <summary>
+    /// The change that allows the recorded application, by its path and SHA-256, for <c>RpaPolicy.exe apply</c>, with
+    /// the controls to protect: each control of the app that a step on the bar clicks, that has an automation id, and
+    /// that the engine's rule takes for a write (<see cref="WriteRules"/>), once, in the order of the steps. One whose id
+    /// is a standard dialog button's is left out and named as such. No gated keys. The change stays within the policy
+    /// tool's limits: a control whose id is longer than a value may be is not named, a name is cut to
+    /// <see cref="PolicyChange.MaxNameLength"/>, and controls past the limit on entries are not named (left-out ones first).
+    /// </summary>
     public PolicyChange ToPolicyChange(string exePath, string sha256)
     {
         if (sha256.Length != 64 || !sha256.All(char.IsAsciiHexDigit)) throw new ArgumentException("the hash must be a SHA-256 in 64 hex characters", nameof(sha256));
@@ -369,7 +375,21 @@ public sealed class Session
         var args = _app?.Args ?? [];
         if (_app is { } app && !string.Equals(app.Exe, exe, StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException($"the recording's application is {app.Exe}, not {exe}", nameof(exePath));
-        return new PolicyChange(exe, exePath, sha256, args);
+        var writes = new List<ProposedControl>();
+        var leftOut = new List<ProposedControl>();
+        foreach (var step in _steps.Where(WriteRules.LooksLikeWrite))
+        {
+            var target = step.Target!;
+            if (target.Path[^1].AutomationId is not { Length: > 0 and <= PolicyChange.MaxValueLength } id) continue;
+            if (target.Window.Exe is { } windowExe && !string.Equals(windowExe, exe, StringComparison.OrdinalIgnoreCase)) continue;
+            if (writes.Concat(leftOut).Any(c => c.AutomationId == id)) continue;
+            var name = target.Path[^1].Name ?? step.Label;
+            var control = new ProposedControl(exe, id, name.Length > PolicyChange.MaxNameLength ? name[..PolicyChange.MaxNameLength] : name);
+            (WriteRules.IsDialogButtonId(id) ? leftOut : writes).Add(control);
+        }
+        var room = PolicyChange.MaxEntries - 1 - (args.Count > 0 ? 1 : 0);
+        writes = writes.Take(room).ToList();
+        return new PolicyChange(exe, exePath, sha256, args) { WriteControls = writes, LeftOut = leftOut.Take(room - writes.Count).ToList() };
     }
 
     private static RecordedStep Step(StepKind kind, DateTimeOffset at, WindowFacts window, ElementFacts element, int matches)
