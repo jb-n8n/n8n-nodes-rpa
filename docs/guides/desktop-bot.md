@@ -68,8 +68,8 @@ The command creates the **RPA Desktop Runner** credential with the line, an **RP
 the bot runs only steps whose signature matches. You are the approver (`--approver` names another). Then n8n tests
 the connection: the line that starts `tested` says `Connected to the desktop runner`, or why it could not. For a new
 line, such as one printed again with `-Address`, run the command again and paste it: it asks
-`Replace the Connection Line of "RPA Desktop Runner" with the line for …? (y/N)` before it changes anything. The
-command ends with:
+`Replace the Connection Line of "RPA Desktop Runner" with the line for …? (y/N)` before it changes anything. Near
+the end the command prints:
 
 ```text
 The import form is ready.
@@ -77,12 +77,15 @@ The import form is ready.
   Sign-in:    the form opens with your n8n sign-in. Who approves is recorded as the n8n user who approved.
 ```
 
+Its last lines say whether the Windows machine is connected: `The import form is ready, and the Windows machine is
+connected.`, or `… but the Windows machine is not connected yet.` with the reason and what to do.
+
 If you made an RPA Desktop Runner credential in n8n already, answer `n` instead: the command picks it when your project
 has only that one, and names it. With several, add `--desktop-runner "<its name>"`. It never reads a credential's
 values. The signing key stays in n8n, which does not show it again. The `Signing key:` line says how to keep a copy:
 you need one only to move signed bots to another n8n, so otherwise skip it. Without a copy, a lost key means approving
-every bot again ([sign it again](move-a-bot.md#change-an-approved-bot-or-sign-it-again)). The
-command's last line is about the API key: revoke it when you are done (**Settings → n8n API**, **⋯**, **Revoke**).
+every bot again ([sign it again](move-a-bot.md#change-an-approved-bot-or-sign-it-again)). One
+line is about the API key: revoke it when you are done (**Settings → n8n API**, **⋯**, **Revoke**).
 Run the command again at any time: it reuses only what your own project holds, asks first in a shared project, and
 leaves a workflow there already as it is. `--form-login basic` serves approvers with no n8n account. To set the form
 up by hand, import `packages/n8n-nodes-rpa/templates/5-import-a-bot.json` ([Templates](../reference/templates.md#set-it-up-by-hand)).

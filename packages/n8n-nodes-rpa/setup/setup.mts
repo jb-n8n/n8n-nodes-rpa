@@ -505,19 +505,55 @@ const oneLine = (text: unknown, most = 300) => String(text ?? '').replace(/[\u00
  * connects to the Windows machine. One line with the node's message; the credential's values never leave n8n. The test
  * waits up to 60 s for a machine that does not answer, so the call may take 90 s.
  */
-async function testRunner(client: Client, ref: Ref) {
+async function testRunner(client: Client, ref: Ref): Promise<RunnerTest> {
   const what = `credential "${clean(ref.name, ref.id)}" (id ${clean(ref.id)})`;
   say(`testing  ${what}: n8n connects to the Windows machine (up to a minute)`);
   const r = await client.api('POST', `/credentials/${encodeURIComponent(ref.id)}/test`, undefined, { timeoutMs: 90_000 }).catch(() => undefined);
   const status = r?.status === 200 ? r.json?.status : undefined;
   // The node's own message, whole: the longest ends in the command to run on the Windows machine.
   const message = oneLine(r?.json?.message, 1200);
-  if (status === 'OK') say(`tested   ${what}: ${message || 'OK'}`);
-  else if (status === 'Error') say(`tested   ${what}, and it failed: ${message || 'n8n gave no reason'}`);
-  else {
-    const scope = r?.status === 403 ? ' For this command to test it, the API key needs the scope credential:read.' : '';
-    say(`not tested ${what} (${r ? client.reason(r) : 'no answer from n8n'}). To test it, open it in n8n, which tests it as it opens.${scope}`);
+  if (status === 'OK') {
+    say(`tested   ${what}: ${message || 'OK'}`);
+    return { result: 'connected', message: message || 'OK' };
   }
+  if (status === 'Error') {
+    say(`tested   ${what}, and it failed: ${message || 'n8n gave no reason'}`);
+    return { result: 'failed', message: message || 'n8n gave no reason' };
+  }
+  const why = r ? client.reason(r) : 'no answer from n8n';
+  const scope = r?.status === 403 ? ' For this command to test it, the API key needs the scope credential:read.' : '';
+  say(`not tested ${what} (${why}). To test it, open it in n8n, which tests it as it opens.${scope}`);
+  return { result: 'untested', message: `${why}.${scope}` };
+}
+
+/** What n8n's test of the RPA Desktop Runner gave, for the closing lines. */
+interface RunnerTest { result: 'connected' | 'failed' | 'untested'; message: string }
+
+/**
+ * The closing lines about the Windows machine: the form is ready either way (exit 0), and whether the machine is
+ * connected. A failed test's message is split into its reason (the first sentence) and what to do (the rest), when the
+ * rest says what to do; else what to do is to correct the line and run this again.
+ */
+function closingRunner(test: RunnerTest, ref: Ref): string[] {
+  const name = `"${clean(ref.name, ref.id)}"`;
+  if (test.result === 'connected') return [`The import form is ready, and the Windows machine is connected. n8n's test said: ${test.message}${/[.!?]$/.test(test.message) ? '' : '.'}`];
+  if (test.result === 'untested') {
+    return [
+      'The import form is ready. Whether the Windows machine is connected is not known: n8n did not test it.',
+      `  Reason:     ${test.message}`,
+      `  What to do: open the credential ${name} in n8n, which tests it as it opens.`,
+    ];
+  }
+  // The first sentence ends at a full stop or question mark followed by a space (an address has no space after its dots).
+  const cut = /^(.*?[.?])\s+(.*)$/.exec(test.message);
+  const reason = cut ? cut[1] : test.message;
+  const rest = cut ? cut[2].replace(/^Nothing was sent\.\s*/, '').trim() : '';
+  return [
+    'The import form is ready, but the Windows machine is not connected yet.',
+    `  Reason:     ${reason}`,
+    `  What to do: ${rest || `Correct the Connection Line of ${name}.`}`,
+    '              Then run this command again, with the new line if you printed one.',
+  ];
 }
 
 /** One line for something of the same name that this run leaves alone. */
@@ -960,7 +996,7 @@ async function run(inputs: Inputs): Promise<number> {
     if (!signsIn(probe)) warn(`Note: the form did not answer as expected at ${formUrl} (${probe ? `HTTP ${probe.status}` : 'no answer'}). In n8n, open "${shownName}", then the node "${NODE.form}", for its production URL.`);
   }
   // Last, as it may wait a minute for a machine that does not answer: the form is ready by then.
-  if (runnerRef) await testRunner(client, runnerRef);
+  const runnerTest = runnerRef ? await testRunner(client, runnerRef) : undefined;
 
   // The address to open: n8n's own when its environment gives it here, else the one this command reached n8n at.
   const shownUrl = formUrl && inputs.formBase ? new URL(`form/${webhookId}`, inputs.formBase).href : formUrl;
@@ -1001,6 +1037,12 @@ async function run(inputs: Inputs): Promise<number> {
   }
   say();
   say(keyAdvice(inputs.keyExpires));
+  // Last, where a reader looks: the form is ready, and whether the Windows machine is connected. The exit code stays 0:
+  // the form is set up either way.
+  if (runnerTest && runnerRef) {
+    say();
+    for (const line of closingRunner(runnerTest, runnerRef)) say(line);
+  }
   return 0;
 }
 

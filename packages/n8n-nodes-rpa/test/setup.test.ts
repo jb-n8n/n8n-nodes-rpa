@@ -641,12 +641,14 @@ describe('npx n8n-nodes-rpa setup', () => {
     it('exactly one, whatever its name: picked on Import steps by id and name, said, and tested by n8n', async () => {
       // Another user's runner is not this project's: it does not count, and it is never picked.
       const fake = await n8n({ credentials: [HAND, ELSEWHERE] });
-      const { code, out } = await run(setup(fake.url), ENV);
+      const { code, out, stdout } = await run(setup(fake.url), ENV);
       expect(code, out).toBe(0);
       expect(onImport(fake).rpaDesktopRunnerApi).toEqual({ id: 'c-hand', name: 'RPA Desktop Runner account' });
       expect(out).toContain('picked   credential "RPA Desktop Runner account" (id c-hand): the only RPA Desktop Runner in your project');
       expect(out).toContain(`tested   credential "RPA Desktop Runner account" (id c-hand): ${RUNNER_CONNECTED}`);
       expect(out).toContain('The workflow the form gives you already uses the RPA Desktop Runner "RPA Desktop Runner account" (id c-hand).');
+      // The last line says that it is connected.
+      expect(stdout.trimEnd().split('\n').at(-1)).toBe(`The import form is ready, and the Windows machine is connected. n8n's test said: ${RUNNER_CONNECTED}.`);
       expect(out).not.toContain('c-else');
       expect(fake.state.credentials.filter((c) => c.type === 'rpaDesktopRunnerApi')).toHaveLength(2);
       neverRead(fake);
@@ -708,16 +710,38 @@ describe('npx n8n-nodes-rpa setup', () => {
       const f = await run(setup(failing.url), ENV);
       expect(f.code, f.out).toBe(0);
       expect(f.out).toContain(`tested   credential "RPA Desktop Runner account" (id c-hand), and it failed: ${RUNNER_UNREACHABLE}`);
+      // The closing lines do not read as if all went well: the form is ready, the machine is not connected, why, and
+      // what to do (the message's own instruction), after the API key's line.
+      expect(f.stdout.trimEnd().split('\n').slice(-5)).toEqual([
+        '',
+        'The import form is ready, but the Windows machine is not connected yet.',
+        '  Reason:     Could not connect to the desktop runner at wss://win-1.example.internal:8765/rpa/v1 (no answer within 60 s).',
+        '  What to do: Is it running, and is the port open?',
+        '              Then run this command again, with the new line if you printed one.',
+      ]);
+      expect(f.stdout.indexOf('The API key you gave')).toBeLessThan(f.stdout.indexOf('not connected yet'));
       expectNoSecrets(f.out);
-      // The node's longest message ends in the command to run on the Windows machine: it is printed whole.
+      // The node's longest message ends in the command to run on the Windows machine: it is printed whole, and its
+      // instruction is what to do at the end.
       const long = runnerNoTcpAnswer('wss://10.0.0.5:8765/rpa/v1', 10, '10.0.0.5');
       expect(long.length).toBeGreaterThan(300);
       const l = await run(setup((await n8n({ credentials: [HAND], test: 'error', testMessage: long })).url), ENV);
+      expect(l.code, l.out).toBe(0);
       expect(l.out).toContain(`and it failed: ${long}`);
+      expect(l.stdout).toContain('\n  Reason:     Could not connect to the desktop runner at wss://10.0.0.5:8765/rpa/v1 (no answer within 10 s).\n');
+      expect(l.stdout).toContain(`\n  What to do: ${long.slice(long.indexOf('Check, in this order'))}\n`);
+      // A message with no instruction: what to do is to correct the line.
+      const odd = await run(setup((await n8n({ credentials: [HAND], test: 'error', testMessage: 'The desktop runner at wss://x.example.com:8765/rpa/v1 presented another certificate. Nothing was sent.' })).url), ENV);
+      expect(odd.stdout).toContain('\n  Reason:     The desktop runner at wss://x.example.com:8765/rpa/v1 presented another certificate.\n  What to do: Correct the Connection Line of "RPA Desktop Runner account".\n');
       const forbidden = await n8n({ credentials: [HAND], test: 'forbidden' });
       const r = await run(setup(forbidden.url), ENV);
       expect(r.code, r.out).toBe(0);
       expect(r.out).toContain('not tested credential "RPA Desktop Runner account" (id c-hand) (HTTP 403: Forbidden). To test it, open it in n8n, which tests it as it opens. For this command to test it, the API key needs the scope credential:read.');
+      expect(r.stdout.trimEnd().split('\n').slice(-3)).toEqual([
+        'The import form is ready. Whether the Windows machine is connected is not known: n8n did not test it.',
+        '  Reason:     HTTP 403: Forbidden. For this command to test it, the API key needs the scope credential:read.',
+        '  What to do: open the credential "RPA Desktop Runner account" in n8n, which tests it as it opens.',
+      ]);
       expect(onImport(forbidden).rpaDesktopRunnerApi).toEqual({ id: 'c-hand', name: 'RPA Desktop Runner account' });
     });
 
