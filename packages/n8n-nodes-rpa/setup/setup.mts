@@ -59,7 +59,7 @@ const INSTALL_DOC = `${DOCS}/reference/operator.md#install-the-node`;
 const LOST_KEY_DOC = `${DOCS}/reference/security.md#if-the-signing-key-is-lost-or-changed`;
 const WHERE_KEYS = 'Make an API key in n8n: Settings → n8n API → Create API key (as the owner or an admin), with Scopes All and the shortest expiry, and revoke it when the setup is done.';
 /** The stricter key: only the scopes this command uses, as n8n names them under Scopes → Custom. */
-const SCOPES = 'workflow:create, workflow:read, workflow:update, workflow:delete, workflow:list, workflow:activate, credential:create, credential:read, credential:update, credential:list, user:read';
+const SCOPES = 'workflow:create, workflow:read, workflow:update, workflow:delete, workflow:list, workflow:activate, credential:create, credential:read, credential:update, credential:delete, credential:list, user:read';
 const USAGE = [
   'Usage: npx n8n-nodes-rpa setup [--url <n8n address>] [--approver <email>] [options]',
   '',
@@ -572,7 +572,7 @@ const oneLine = (text: unknown, most = 300) => String(text ?? '').replace(/[\u00
  */
 async function testRunner(inputs: Inputs, ref: Ref, what = `credential "${clean(ref.name, ref.id)}" (id ${clean(ref.id)})`): Promise<RunnerTest> {
   const { client } = inputs;
-  const advice = ' To test it, open it in n8n, which tests it as it opens.';
+  const advice = ref.name === TRIAL ? '' : ' To test it, open it in n8n, which tests it as it opens.';
   if (inputs.cli) {
     const message = "n8n's command line cannot test a credential.";
     say(`not tested ${what}: ${message}${advice}`);
@@ -692,25 +692,77 @@ async function credential(client: Client, found: { mine?: any; others: any[] }, 
 /**
  * A Connection Line for an RPA Desktop Runner this run's project has: its line is replaced only when the person says yes
  * at a terminal, to a question that names the new line's address and port (never its token or fingerprint). Without a
- * terminal the old line stays, and it says how to replace it. Either way n8n tests the credential afterwards.
+ * terminal the old line stays, and it says how to replace it.
+ * A credential that works is never left broken by a replacement: n8n first tests the new line in a credential of its own
+ * (tryLine), and the old line is replaced only when that test passes. Where n8n cannot test it (n8n's command line; an
+ * API key without credential:read), the person is asked again, told that the old line will be gone, default no.
  */
-async function offerLine(inputs: Inputs, ref: Ref, line: string, _projectId: string | undefined): Promise<Ref> {
+async function offerLine(inputs: Inputs, ref: Ref, line: string, projectId: string | undefined): Promise<Ref> {
   const { client } = inputs;
   const what = `credential "${clean(ref.name, ref.id)}" (id ${clean(ref.id)})`;
+  const name = clean(ref.name, ref.id);
   // The address and port only: parsed by the node's own parser, which already took this line.
   const to = new URL(parseConnectionLine('runner', line).url).host;
+  const yes = (answer: string) => /^y(es)?$/i.test(answer);
   say(`reused   ${what}`);
   if (!interactive()) {
     say(`         its Connection Line stays as it is: this run replaces one only when you say so at a terminal. To use the line for ${to}, run this again in a terminal, or paste the line into the credential's Connection Line in n8n.`);
     return ref;
   }
-  if (!/^y(es)?$/i.test(await ask(`Replace the Connection Line of "${clean(ref.name, ref.id)}" with the line for ${to}?${inputs.cli ? " n8n's command line cannot test the new line first, and the old line will be gone." : ''} (y/N) `))) {
+  const keep = () => {
     say('         its Connection Line stays as it is.');
     return ref;
+  };
+  const replace = async (how: string) => {
+    await replaceData(client, ref, RUNNER.type, { connectionLine: line });
+    say(`replaced Connection Line of ${what}: it now names ${to}${how}`);
+    return ref;
+  };
+  if (inputs.cli) {
+    if (!yes(await ask(`Replace the Connection Line of "${name}" with the line for ${to}? n8n's command line cannot test the new line first, and the old line will be gone. (y/N) `))) return keep();
+    return replace(', untested');
   }
-  await replaceData(client, ref, RUNNER.type, { connectionLine: line });
-  say(`replaced Connection Line of ${what}: it now names ${to}`);
-  return ref;
+  if (!yes(await ask(`Replace the Connection Line of "${name}" with the line for ${to}? (y/N) `))) return keep();
+  const tried = await tryLine(inputs, line, to, projectId);
+  if (tried.result === 'connected') return replace(", which n8n's test reached first");
+  if (tried.result === 'failed') {
+    say(`not replaced: n8n's test of the line for ${to} failed: ${tried.message}`);
+    say(`         The Connection Line of ${what} stays as it is. Check the new line (print it again on the Windows machine, with -Address when n8n reaches it by another name), then run this again.`);
+    return ref;
+  }
+  say(`         n8n could not test the new line first (${tried.message}).`);
+  if (!yes(await ask(`Replace the line of "${name}" untested? The old line will be gone. (y/N) `))) return keep();
+  return replace(', untested');
+}
+
+/** The name of the short-lived credential a new Connection Line is tested in. */
+const TRIAL = 'RPA Desktop Runner (testing a new line)';
+/** A credential this run made only to test a line: removed in every case, also when the run is stopped. */
+let trial: { client: Client; id: string } | undefined;
+
+/** n8n's test of a Connection Line, in a credential of its own that is removed right after: the line's credential is not touched. */
+async function tryLine(inputs: Inputs, line: string, to: string, projectId: string | undefined): Promise<RunnerTest> {
+  const { client } = inputs;
+  const r = await client.api('POST', '/credentials', { name: TRIAL, type: RUNNER.type, data: { connectionLine: line }, ...(projectId ? { projectId } : {}) });
+  if ((r.status !== 200 && r.status !== 201) || !r.json?.id) return { result: 'untested', message: `n8n did not make a credential to test it in: ${client.reason(r)}` };
+  trial = { client, id: String(r.json.id) };
+  try {
+    return await testRunner(inputs, { id: String(r.json.id), name: TRIAL }, `the new line for ${to}`);
+  } finally {
+    await removeTrial();
+  }
+}
+
+/** Deletes the credential tryLine made. When n8n does not let it, its line is overwritten with one that holds no token, and the run says to delete it. */
+async function removeTrial() {
+  if (!trial) return;
+  const { client, id } = trial;
+  trial = undefined;
+  const removed = await client.api('DELETE', `/credentials/${encodeURIComponent(id)}`).catch(() => undefined);
+  if (removed && (removed.status === 200 || removed.status === 204)) return;
+  // A line that names no machine and holds no token: nothing secret stays behind.
+  const blank = await client.api('PATCH', `/credentials/${encodeURIComponent(id)}`, { name: TRIAL, type: RUNNER.type, data: { connectionLine: `rpa-runner://removed.invalid:1/rpa/v1#token=removed&fingerprint=${'0'.repeat(64)}` } }).catch(() => undefined);
+  warn(`The credential "${TRIAL}" (id ${clean(id)}) that tested the new line is still in n8n${blank?.status === 200 ? ', without the line' : ', with the new line in it'}: delete it there${removed ? ` (n8n did not let this run delete it: ${client.reason(removed)})` : ''}.`);
 }
 
 /** Replaces the data of a credential made earlier (n8n keeps its id, so every node that uses it keeps it). */
@@ -1516,7 +1568,7 @@ function onSignals() {
     process.once(signal, () => {
       removeSecretDirs();
       warn('Stopped.');
-      Promise.allSettled([removeHalfMade()]).finally(() => process.exit(code));
+      Promise.allSettled([removeTrial(), removeHalfMade()]).finally(() => process.exit(code));
     });
   }
 }
@@ -1535,9 +1587,11 @@ async function main(): Promise<number> {
   } catch (err) {
     if (err instanceof Stop) {
       warn(err.message);
+      await removeTrial();
       await removeHalfMade();
       return err.code;
     }
+    await removeTrial();
     await removeHalfMade();
     warn(`Setup failed: ${(err as Error)?.message ?? String(err)}`);
     return 1;

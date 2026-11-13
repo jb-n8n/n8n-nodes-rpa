@@ -50,6 +50,8 @@ interface Options {
   testMessage?: string;
   /** With test 'error': the test passes once the credential's Connection Line holds this text (a corrected line). */
   testOkWhen?: string;
+  /** DELETE /credentials/{id}: false answers 403 (a key without credential:delete). */
+  deleteCredentials?: boolean;
   /** Workflows the API key cannot see (not listed), whose forms still hold their paths. */
   hiddenForms?: Wf[];
 }
@@ -136,6 +138,13 @@ async function fakeN8n(o: Options = {}) {
         const fixed = o.testOkWhen !== undefined && String(tested.data?.connectionLine ?? '').includes(o.testOkWhen);
         if (o.test === 'error' && !fixed) return send(200, { status: 'Error', message: o.testMessage ?? RUNNER_UNREACHABLE });
         return send(200, { status: 'OK', message: RUNNER_CONNECTED });
+      }
+      if ((m = /^DELETE \/api\/v1\/credentials\/([\w-]+)$/.exec(route))) {
+        if (o.deleteCredentials === false) return send(403, { message: 'Forbidden' });
+        const c = state.credentials.find((x) => x.id === m![1]);
+        if (!c) return send(404, { message: 'Not Found' });
+        state.credentials = state.credentials.filter((x) => x !== c);
+        return send(200, { id: c.id, name: c.name, type: c.type });
       }
       if ((m = /^PATCH \/api\/v1\/credentials\/([\w-]+)$/.exec(route))) {
         if (o.patch === false) return send(405, { message: 'Method not allowed' });
@@ -1416,8 +1425,72 @@ describe('npx n8n-nodes-rpa setup', () => {
     for (const flag of ['--api-key', '--no-api-key', '--url', '--approver', '--form-login', '--allow-http', '--show-signing-key', '--replace-signing-key', '--new-form-password', '--browser-url', '--site-login', '--allow-private-network', 'N8N_API_KEY', 'RPA_CONNECTION_LINE']) expect(help.out).toContain(flag);
     // The API key: all scopes and the shortest expiry by default, revoked after; the stricter scope list on one line.
     expect(help.out).toContain('with Scopes All and the shortest expiry, and revoke it when the setup is done.');
-    expect(help.out).toContain('The stricter way, Scopes Custom with only: workflow:create, workflow:read, workflow:update, workflow:delete, workflow:list, workflow:activate, credential:create, credential:read, credential:update, credential:list, user:read\n');
+    expect(help.out).toContain('The stricter way, Scopes Custom with only: workflow:create, workflow:read, workflow:update, workflow:delete, workflow:list, workflow:activate, credential:create, credential:read, credential:update, credential:delete, credential:list, user:read\n');
     expect((await run([])).code).toBe(2);
+  });
+});
+
+const DESKTOP_HAND: Cred = { id: 'c-hand', name: 'RPA Desktop Runner account', type: 'rpaDesktopRunnerApi', data: { connectionLine: LINE } };
+const REPLACE_QUESTION = /Replace the Connection Line of "RPA Desktop Runner account" with the line for rpa\.example\.com:8765\? \(y\/N\)/;
+const lineIn = (fake: Fake, id: string) => fake.state.credentials.find((c) => c.id === id)!.data.connectionLine;
+const trials = (fake: Fake) => fake.state.credentials.filter((c) => c.name === 'RPA Desktop Runner (testing a new line)');
+
+describe('a new Connection Line is tested before it replaces one that works (IW-14)', () => {
+  const NAMED = ['--desktop-runner', 'RPA Desktop Runner account'];
+  const ENV_NEW = { ...ENV, RPA_CONNECTION_LINE: NEW_LINE };
+
+  it('the new line passes n8n\'s test in a credential of its own: then it replaces the old one, and that credential is gone', async () => {
+    const fake = await n8n({ credentials: [DESKTOP_HAND] });
+    const r = await runAtTerminal(setup(fake.url, ...NAMED), ENV_NEW, [[REPLACE_QUESTION, 'y']]);
+    expect(r.code, r.out).toBe(0);
+    expect(lineIn(fake, 'c-hand')).toBe(NEW_LINE);
+    expect(trials(fake)).toEqual([]);
+    // The trial credential was made, tested and deleted before the real one was changed.
+    const order = fake.state.requests.filter((q) => q.method !== 'GET').map((q) => `${q.method} ${q.path.replace(/c\d+/, 'TRIAL')}`);
+    const at = (x: string) => order.indexOf(x);
+    expect(at('POST /api/v1/credentials/TRIAL/test')).toBeLessThan(at('DELETE /api/v1/credentials/TRIAL'));
+    expect(at('DELETE /api/v1/credentials/TRIAL')).toBeLessThan(at('PATCH /api/v1/credentials/c-hand'));
+    expect(r.out).toContain("replaced Connection Line of credential \"RPA Desktop Runner account\" (id c-hand): it now names rpa.example.com:8765, which n8n's test reached first");
+    expectNoSecrets(r.out, [NEW_LINE, NEW_TOKEN, 'CD'.repeat(32)]);
+  });
+
+  it('the new line fails its test: the credential is unchanged, nothing temporary is left, and it says why and what to do', async () => {
+    // The old line (win-1) answers; the new one (rpa.example.com) does not.
+    const fake = await n8n({ credentials: [DESKTOP_HAND], test: 'error', testOkWhen: 'win-1' });
+    const r = await runAtTerminal(setup(fake.url, ...NAMED), ENV_NEW, [[REPLACE_QUESTION, 'y']]);
+    expect(r.code, r.out).toBe(0);
+    expect(lineIn(fake, 'c-hand')).toBe(LINE);
+    expect(fake.state.requests.filter((q) => q.method === 'PATCH')).toEqual([]);
+    expect(trials(fake)).toEqual([]);
+    expect(r.out).toContain(`not replaced: n8n's test of the line for rpa.example.com:8765 failed: ${RUNNER_UNREACHABLE}`);
+    expect(r.out).toContain('The Connection Line of credential "RPA Desktop Runner account" (id c-hand) stays as it is. Check the new line (print it again on the Windows machine, with -Address when n8n reaches it by another name), then run this again.');
+    // The credential that works is still tested, and connected.
+    expect(r.out.trimEnd().split('\n').at(-1)).toBe(`The import form is ready, and the Windows machine is connected. n8n's test said: ${RUNNER_CONNECTED}.`);
+    expectNoSecrets(r.out, [NEW_LINE, NEW_TOKEN]);
+  });
+
+  it('no test possible (a key without credential:read): asked again, said that the old line will be gone; no keeps it, yes replaces it', async () => {
+    const UNTESTED = /Replace the line of "RPA Desktop Runner account" untested\? The old line will be gone\. \(y\/N\)/;
+    for (const [answer, want] of [['n', LINE], ['y', NEW_LINE]] as const) {
+      const fake = await n8n({ credentials: [DESKTOP_HAND], test: 'forbidden' });
+      const r = await runAtTerminal(setup(fake.url, ...NAMED), ENV_NEW, [[REPLACE_QUESTION, 'y'], [UNTESTED, answer]]);
+      expect(r.code, r.out).toBe(0);
+      expect(r.out).toContain('n8n could not test the new line first (HTTP 403: Forbidden');
+      expect(lineIn(fake, 'c-hand')).toBe(want);
+      expect(trials(fake)).toEqual([]);
+      expectNoSecrets(r.out, [NEW_LINE, NEW_TOKEN]);
+    }
+  });
+
+  it('a key that may not delete: the test credential keeps no line, and the run says to delete it', async () => {
+    const fake = await n8n({ credentials: [DESKTOP_HAND], deleteCredentials: false });
+    const r = await runAtTerminal(setup(fake.url, ...NAMED), ENV_NEW, [[REPLACE_QUESTION, 'y']]);
+    expect(r.code, r.out).toBe(0);
+    const [left] = trials(fake);
+    expect(left.data.connectionLine).not.toContain(NEW_TOKEN);
+    expect(left.data.connectionLine).toMatch(/^rpa-runner:\/\/removed\.invalid:1\//);
+    expect(r.out).toMatch(/The credential "RPA Desktop Runner \(testing a new line\)" \(id c\d+\) that tested the new line is still in n8n, without the line: delete it there/);
+    expectNoSecrets(r.out, [NEW_LINE, NEW_TOKEN]);
   });
 });
 
