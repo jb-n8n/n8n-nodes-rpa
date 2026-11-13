@@ -134,6 +134,7 @@ by another name or address than the one in the line (a NAT, a tunnel), run the c
 2. The RPA node is named after your recording (here **ErpDemo recording**). Its **RPA Desktop Runner** and
    **RPA Step Signing** credentials are already picked: the setup command gave them to the import form, and the form
    passes them on. Check them. In another n8n, n8n takes the only credential of the same name, else pick it there.
+   Its **Runs On** is **A Windows desktop app**, so the node shows only the three slots a desktop bot uses.
 3. The password is a secret variable. Create an **RPA Secret Variables** credential on that node, with one variable:
    the name its note gives (such as `password`) and the value `demo1234`. To keep the password to this app, you can
    also put `ErpDemo.exe` in its **May Be Typed Into** field. **Options → Variables**
