@@ -1191,7 +1191,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
   function reviewFields(scope: Record<string, unknown>) {
     const all = jsonFormFields(String(review.parameters.jsonOutput), scope);
     expect(all[0].fieldType).toBe('html');
-    expect(String(all[0].html)).toMatch(/<p>(Signs for (the|no) RPA Site Login|Desktop steps are signed)/);
+    expect(String(all[0].html)).toMatch(/<p>(Signs for the Site Login named "|Signs for no RPA Site Login|Desktop steps are signed)/);
     return all.slice(1);
   }
   /** The review page's opening lines (its first field). */
@@ -2799,7 +2799,8 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     };
     const SHOP = { id: 'site-a', name: 'Shop <login>' };
     const UNCHANGED = '<p><b>These are the steps of the approved version 4, unchanged.</b></p>';
-    const NAMED = '<p>Signs for the RPA Site Login <b>Shop &lt;login&gt;</b>. The workflow that runs the bot must use this Site Login.</p>';
+    // The name in quotes: n8n's default credential name, "RPA Site Login account", does not read doubled.
+    const NAMED = '<p>Signs for the Site Login named "<b>Shop &lt;login&gt;</b>". The workflow that runs the bot must use this Site Login.</p>';
     // Signed with this key for this Site Login: the line names it, and nothing more is said.
     expect(await head(row(KEY, SHOP.id), KEY, SHOP)).toBe(UNCHANGED + NAMED);
     // Signed for another Site Login (the many-accounts one): the warning, above the decision, names this form's.
@@ -2824,7 +2825,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const desktop = { ...fresh, 'Import steps': [[{ json: {} }], [next('desktop')]] };
     expect(reviewHead({ $: nodesRan(desktop) })).toBe('<p>Desktop steps are signed for the app they start, without a Site Login.</p>');
     expect(reviewHead({ $: nodesRan({ ...desktop, 'Import steps': [[{ json: {} }], [next(), next('desktop')]] }) }))
-      .toBe('<p>Signs for the RPA Site Login <b>Shop &lt;login&gt;</b>. The workflow that runs the bot must use this Site Login. Desktop steps are signed for the app they start, without a Site Login.</p>');
+      .toBe('<p>Signs for the Site Login named "<b>Shop &lt;login&gt;</b>". The workflow that runs the bot must use this Site Login. Desktop steps are signed for the app they start, without a Site Login.</p>');
 
     // The page was not answered: Sign steps' last run is its check, which the last page never counts as signed or rejected.
     const last = render(completion('Imported').completionMessage, { $: nodesRan({ ...fresh, 'Import steps': [[{ json: { drafts: [], report: { steps: 1, items: [] } } }], [next()]], [REVIEW]: [[{ json: {} }]] }) });
