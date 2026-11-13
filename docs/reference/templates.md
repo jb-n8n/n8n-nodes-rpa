@@ -165,11 +165,17 @@ after `approvalTimeoutHours` (72), then:
 | `status` | string | `pending`, `active`, `superseded`, `rejected` or `expired` |
 | `expiresAt` | string | When a `pending` row stops blocking a new repair |
 
-`playwright_runs` gets one row per run of the data feed, and of every workflow the import form hands over.
+`playwright_runs` gets one row per run of the data feed, and of every workflow the import form hands over. A table
+made now has its columns in this order, the ones a person reads first.
 
 | Column | Type | Meaning |
 |---|---|---|
 | `name` | string | The step list's name |
+| `code` | string | Error code, empty on success |
+| `message` | string | What failed, as Run Steps' error item says it (masked as the node masks it), cut to 1,000 characters. Empty on success |
+| `guidance` | string | What to do about it: the same text as the node error's description. Empty on success |
+| `file` | string | The name of the file the run returned, empty when none |
+| `account` | string | The user name the RPA Site Login signed in with, empty without one. Never the password |
 | `lane` | string | `script` (signed steps) or `agent` (a repair or a first run) |
 | `version` | number | The version used, 0 (the data feed) or empty when none |
 | `hash` | string | Hash of those steps: the same as the `hash` of their row in `playwright_steps` |
@@ -177,12 +183,7 @@ after `approvalTimeoutHours` (72), then:
 | `rowCount` | number | Rows returned |
 | `durationMs` | number | Run time |
 | `llmTokens` | number | Model tokens used |
-| `code` | string | Error code, empty on success |
 | `executionId` | string | The n8n execution |
-| `message` | string | What failed, as Run Steps' error item says it (masked as the node masks it), cut to 1,000 characters. Empty on success |
-| `guidance` | string | What to do about it: the same text as the node error's description. Empty on success |
-| `file` | string | The name of the file the run returned, empty when none |
-| `account` | string | The user name the RPA Site Login signed in with, empty without one. Never the password |
 
 In the workflow the import form hands over, a value that was not counted is left empty: `confirmed` and `rowCount`
 when the steps read no rows (for example a run that returns a file), and `lane`, `durationMs` and `llmTokens` for a run
@@ -191,4 +192,6 @@ refused before it started (`locked_out`, `busy`).
 The workflow the import form hands over writes the columns the table has. A `playwright_runs` made by an earlier
 version keeps its columns, and a run never fails on it: the newer columns are left out of its rows. To have them, add
 them to the table in n8n (**Data tables** → `playwright_runs` → add a column, with the name and type above), or delete
-the table and its rows: the next run makes it again. The data feed writes only the first ten columns.
+the table and its rows: the next run makes it again. Rows are written by column name, so a table made in the earlier
+order (`name`, `lane`, `version`, …) gets its rows as before. The data feed writes only the ten columns every table
+has: `name`, `lane`, `version`, `hash`, `confirmed`, `rowCount`, `durationMs`, `llmTokens`, `code`, `executionId`.

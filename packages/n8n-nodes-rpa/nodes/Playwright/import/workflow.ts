@@ -264,10 +264,11 @@ const rowExpression = (fields: string): string =>
  * check only when the steps read rows, and the file's name when the run returned one.
  */
 export const LOG_RUN_ROW = rowExpression([
-  "name: $json.name ?? ''", 'lane: $json.lane ?? null', 'version: $json.version ?? null', "hash: $json.hash ?? ''",
+  "name: $json.name ?? ''", "code: ''", "message: ''", "guidance: ''",
+  "file: [].concat($json.files ?? []).map((f) => f?.fileName).filter((n) => n).join(', ')", "account: $json.account ?? ''",
+  'lane: $json.lane ?? null', 'version: $json.version ?? null', "hash: $json.hash ?? ''",
   'confirmed: Array.isArray($json.rows) ? $json.confirmed === true : null', 'rowCount: Array.isArray($json.rows) ? $json.rows.length : null',
-  'durationMs: $json.durationMs ?? null', 'llmTokens: $json.llmTokens ?? null', "code: ''", 'executionId: $execution.id',
-  "message: ''", "guidance: ''", "file: [].concat($json.files ?? []).map((f) => f?.fileName).filter((n) => n).join(', ')", "account: $json.account ?? ''",
+  'durationMs: $json.durationMs ?? null', 'llmTokens: $json.llmTokens ?? null', 'executionId: $execution.id',
 ].join(', '));
 /**
  * The run log keeps at most this many characters of a failure's message (the rest is in Run steps' error item). Long
@@ -281,11 +282,12 @@ export const LOGGED_MESSAGE_CHARS = 1000;
  * run refused before it started (locked_out, busy: no lane) has no lane, duration or tokens.
  */
 export const LOG_FAILED_ROW = rowExpression([
-  "name: $json.details?.name ?? ''", 'lane: $json.details?.lane ?? null', 'version: $json.details?.version ?? null', "hash: $json.details?.hash ?? ''",
-  'confirmed: null', 'rowCount: null', 'durationMs: $json.details?.lane ? ($json.details?.durationMs ?? null) : null',
-  'llmTokens: $json.details?.lane ? ($json.details?.llmTokens ?? null) : null',
-  "code: $json.details?.code || 'config_error'", 'executionId: $execution.id', `message: ((m) => (m.length > ${LOGGED_MESSAGE_CHARS} ? m.slice(0, ${LOGGED_MESSAGE_CHARS - 1}).join('') + '…' : m.join('')))(Array.from(String($json.message ?? '')))`, "guidance: $json.details?.guidance ?? ''",
+  "name: $json.details?.name ?? ''", "code: $json.details?.code || 'config_error'",
+  `message: ((m) => (m.length > ${LOGGED_MESSAGE_CHARS} ? m.slice(0, ${LOGGED_MESSAGE_CHARS - 1}).join('') + '…' : m.join('')))(Array.from(String($json.message ?? '')))`, "guidance: $json.details?.guidance ?? ''",
   "file: ''", "account: $json.details?.account ?? ''",
+  'lane: $json.details?.lane ?? null', 'version: $json.details?.version ?? null', "hash: $json.details?.hash ?? ''",
+  'confirmed: null', 'rowCount: null', 'durationMs: $json.details?.lane ? ($json.details?.durationMs ?? null) : null',
+  'llmTokens: $json.details?.lane ? ($json.details?.llmTokens ?? null) : null', 'executionId: $execution.id',
 ].join(', '));
 /**
  * Stop and Error's message, from the row Log failed run shaped (also when writing it failed): the code and the step

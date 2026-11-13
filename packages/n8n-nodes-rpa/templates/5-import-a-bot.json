@@ -785,6 +785,26 @@
               "type": "string"
             },
             {
+              "name": "code",
+              "type": "string"
+            },
+            {
+              "name": "message",
+              "type": "string"
+            },
+            {
+              "name": "guidance",
+              "type": "string"
+            },
+            {
+              "name": "file",
+              "type": "string"
+            },
+            {
+              "name": "account",
+              "type": "string"
+            },
+            {
               "name": "lane",
               "type": "string"
             },
@@ -813,27 +833,7 @@
               "type": "number"
             },
             {
-              "name": "code",
-              "type": "string"
-            },
-            {
               "name": "executionId",
-              "type": "string"
-            },
-            {
-              "name": "message",
-              "type": "string"
-            },
-            {
-              "name": "guidance",
-              "type": "string"
-            },
-            {
-              "name": "file",
-              "type": "string"
-            },
-            {
-              "name": "account",
               "type": "string"
             }
           ]
