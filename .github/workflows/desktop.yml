@@ -341,6 +341,14 @@ jobs:
           Assert ($code -eq 0 -and $said -contains 'Policy updated. The runner restarts within 10 seconds and uses the new policy.') "RpaPolicy.exe apply updates the policy (exit code $code)"
           Assert ($said -contains 'Protect "Post" ("btnPost") of "ErpDemo.exe" as a write control') 'its question lists Post (btnPost) to protect'
           Assert (@($said | Where-Object { $_ -like 'Not protected: "Save" ("1") of "ErpDemo.exe": 1 to 11 *' }).Count -eq 1) 'its question names the Save dialog''s button 1 as left out, and why'
+          # The policy allowed the app already, so bots of it may exist: the question says where they stop. What is
+          # protected comes first, what is left out last.
+          $rowOf = { param($like) for ($i = 0; $i -lt $said.Count; $i++) { if ($said[$i] -like $like) { return $i } }; -1 }
+          $protectRow = & $rowOf 'Protect "Post" ("btnPost") of "ErpDemo.exe" as a write control'
+          $botsRow = & $rowOf 'Bots of "ErpDemo.exe" approved earlier stop where they press one of these*'
+          $leftRow = & $rowOf 'Not protected: "Save" ("1") of "ErpDemo.exe": *'
+          Assert ($botsRow -gt $protectRow -and ((($said[$botsRow..($leftRow - 1)] | ForEach-Object { $_.Trim() }) -join ' ') -like '*Sign such a bot again on the import form with that step ticked.*')) 'its question says that bots of ErpDemo.exe approved earlier stop at Post, and how to sign them again'
+          Assert ($leftRow -gt $botsRow) 'the left-out Save comes after what is protected'
           $new = Get-Content -Raw -LiteralPath $policy | ConvertFrom-Json
           Assert ((@($new.writeControls | ForEach-Object { '{0}/{1}' -f $_.exe, $_.automationId }) -join ',') -eq 'ErpDemo.exe/btnPost') 'policy.json protects btnPost of ErpDemo.exe and no other control'
           Assert (@($new.gatedKeys).Count -eq 0 -and @($new.allowedApps).Count -eq 1) 'policy.json has no gated key and still the one app'

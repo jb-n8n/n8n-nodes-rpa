@@ -534,9 +534,8 @@ public class PolicyCommandTests
         Assert.Equal(0, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
         Assert.Equal(
             $"{Changing()}\n" +
-            R("Protect \"Post\" (\"btnPost\") of \"ErpDemo.exe\" as a write control", PolicyChange.ProtectMeaning,
-              "Not protected: \"Save\" (\"1\") of \"ErpDemo.exe\": 1 to 11 are the ids of Windows' standard dialog buttons, which every dialog of the app shares",
-              AllowErp) +
+            R("Protect \"Post\" (\"btnPost\") of \"ErpDemo.exe\" as a write control", PolicyChange.ProtectMeaning, AllowErp,
+              "Not protected: \"Save\" (\"1\") of \"ErpDemo.exe\": 1 to 11 are the ids of Windows' standard dialog buttons, which every dialog of the app shares") +
             "\nThis change: 1 app(s) allowed or updated, 0 helper process pattern(s), 1 write control(s), 0 gated key(s).\n" +
             $"{Prompt}{Updated}\n",
             tool.Output);
@@ -558,7 +557,15 @@ public class PolicyCommandTests
         Assert.Equal(0, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
         tool.Files.Text[ChangePath] = RecorderChange;
         Assert.Equal(0, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
-        Assert.StartsWith($"{Changing(apps: 1)}\n{R("Protect \"Post\" (\"btnPost\") of \"ErpDemo.exe\" as a write control")}\n", tool.Output);
+        // Bots of the app may exist: the question says, before the answer, where they now stop.
+        Assert.Equal(
+            $"{Changing(apps: 1)}\n" +
+            R("Protect \"Post\" (\"btnPost\") of \"ErpDemo.exe\" as a write control", PolicyChange.ProtectMeaning,
+              "Bots of \"ErpDemo.exe\" approved earlier stop where they press one of these buttons, or a key other than Tab, arrows, Home, End, PageUp, PageDown or Escape while a window that holds one is open, unless that step was ticked as a write. Sign such a bot again on the import form with that step ticked.",
+              "Not protected: \"Save\" (\"1\") of \"ErpDemo.exe\": 1 to 11 are the ids of Windows' standard dialog buttons, which every dialog of the app shares") +
+            "\nThis change: 0 app(s) allowed or updated, 0 helper process pattern(s), 1 write control(s), 0 gated key(s).\n" +
+            $"{Prompt}{Updated}\n",
+            tool.Output);
         Assert.DoesNotContain("No write control", tool.Output);
         Assert.Equal(["btnPost"], RunnerPolicy.Parse(tool.Files.Writes[^1].Json).WriteControls.Select(w => w.AutomationId));
     }

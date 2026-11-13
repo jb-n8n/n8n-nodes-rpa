@@ -582,7 +582,7 @@ public static class PolicyCommand
             ending.Clean = notes.Count == 0;
             return 0;
         }
-        // The notes come first: the lines that widen what may run stay last, next to the prompt.
+        // The notes come first: the lines that widen what may run stay below them, near the prompt.
         var rows = notes.Concat(PolicyChange.Printed(result.Summary)).ToList();
         if (rows.Prepend(Visible(first)).Sum(row => row.Length + 1) > MaxSummaryLength)
             return Fail(output, $"the summary of this change would be longer than {MaxSummaryLength} characters; split it into smaller changes");

@@ -62,6 +62,12 @@ public static class PolicyChange
     public const string ProtectMeaning = "A run must then mark a step as a write to press one of these, and to press any key but Tab, arrows, Home, End, " +
                                          "PageUp, PageDown or Escape while a window that holds one is open.";
 
+    /// <summary>Under the write controls a change adds to an app the policy already allowed, for that app: bots of it
+    /// approved before have no step marked as a write for these buttons.</summary>
+    private const string BotsBefore = "Bots of {0} approved earlier stop where they press one of these buttons, or a key other than Tab, arrows, Home, " +
+                                      "End, PageUp, PageDown or Escape while a window that holds one is open, unless that step was ticked as a write. " +
+                                      "Sign such a bot again on the import form with that step ticked.";
+
     private const string LeftOutReason = ": 1 to 11 are the ids of Windows' standard dialog buttons, which every dialog of the app shares";
     private const string LeftOutTaskReason = ": CommandButton_1 to CommandButton_11 are the ids of the standard buttons of Windows' task dialogs, " +
                                              "which every task dialog of the app shares";
@@ -140,7 +146,8 @@ public static class PolicyChange
             if (values.Any(value => value.StartsWith(' ') || value.EndsWith(' ') || value.Contains("  ", StringComparison.Ordinal))) lines.Add(SpacesWarning);
         }
 
-        // Lines that only tighten come first; the lines that widen what may run follow, nearest the prompt.
+        // Lines that only tighten come first; the lines that widen what may run follow. The controls left out, which
+        // change nothing, come last: a question does not open with what it leaves out.
         var writes = current.WriteControls.ToList();
         bool Protected(string exe, string id) => writes.Any(w => Same(w.Exe, exe) && w.AutomationId == id);
         var named = 0;
@@ -158,15 +165,12 @@ public static class PolicyChange
         }
         if (named > 0) lines.Add(ProtectMeaning);
         var addedWrites = writes.Count - current.WriteControls.Count;
-        var shownLeftOut = new List<NamedControl>();
-        foreach (var left in extras.LeftOut)
-        {
-            if (Protected(left.Exe, left.AutomationId) || shownLeftOut.Any(s => Same(s.Exe, left.Exe) && s.AutomationId == left.AutomationId)) continue;
-            shownLeftOut.Add(left);
-            var reason = left.AutomationId.StartsWith(TaskButton, StringComparison.Ordinal) ? LeftOutTaskReason : LeftOutReason;
-            if (left.Name is { } name) Add("Not protected: {0} ({1}) of {2}" + reason, name, left.AutomationId, left.Exe);
-            else Add("Not protected: {0} of {1}" + reason, left.AutomationId, left.Exe);
-        }
+        // An app the policy already allowed may have bots, approved without these buttons marked as writes.
+        var allowedBefore = writes.Skip(current.WriteControls.Count)
+            .Select(w => current.AllowedApps.FirstOrDefault(a => Same(a.Exe, w.Exe))?.Exe)
+            .OfType<string>()
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+        foreach (var exe in allowedBefore) Add(BotsBefore, exe);
 
         var keys = current.GatedKeys.ToList();
         foreach (var key in change.GatedKeys)
@@ -228,6 +232,16 @@ public static class PolicyChange
 
         var clipboardOn = change.ClipboardRead && !current.ClipboardRead;
         if (clipboardOn) lines.Add("Turn on clipboard read");
+
+        var shownLeftOut = new List<NamedControl>();
+        foreach (var left in extras.LeftOut)
+        {
+            if (Protected(left.Exe, left.AutomationId) || shownLeftOut.Any(s => Same(s.Exe, left.Exe) && s.AutomationId == left.AutomationId)) continue;
+            shownLeftOut.Add(left);
+            var reason = left.AutomationId.StartsWith(TaskButton, StringComparison.Ordinal) ? LeftOutTaskReason : LeftOutReason;
+            if (left.Name is { } name) Add("Not protected: {0} ({1}) of {2}" + reason, name, left.AutomationId, left.Exe);
+            else Add("Not protected: {0} of {1}" + reason, left.AutomationId, left.Exe);
+        }
 
         // A left-out control alone changes nothing, and gets no question.
         if (changedApps + addedHelpers + addedWrites + addedKeys == 0 && !clipboardOn) lines.Clear();
