@@ -5,7 +5,7 @@
     {
       "intent": "Sign in, with the authenticator code when the site asks for one",
       "signIn": {
-        "username": { "label": "Dealer user ID", "exact": true },
+        "username": { "label": "user ID" },
         "password": { "label": "Password", "exact": true },
         "submit": { "role": "button", "name": "Sign in", "exact": true },
         "totp": { "field": { "label": "Authentication code", "exact": true }, "submit": { "role": "button", "name": "Verify", "exact": true } }
