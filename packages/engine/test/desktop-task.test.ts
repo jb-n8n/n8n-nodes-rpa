@@ -408,6 +408,14 @@ describe('desktop task: refusals and runner errors', () => {
     }
   });
 
+  it('a choose step whose run variable is empty says so at once, before any wait, and sends nothing (IW-10)', async () => {
+    runner = await FakeRunner.start();
+    const step = { intent: 'Choose {{var.company_code}} in Company code', select: { field: uia('cmbStatus', 'ComboBox'), option: '{{var.company_code}}' } };
+    const f = failed(await run(doc([step]), { vars: { ...VARS, company_code: '' } }));
+    expect(f.message).toBe('Step 1 (Choose {{var.company_code}} in Company code): the run variable "company_code" is empty, so there is no item to choose: give it a value in Options → Variables of the RPA node');
+    expect(runner!.requests.filter((q) => q.method === 'act')).toEqual([]);
+  });
+
   it('secret variables: unsigned steps cannot type one (policy_violation), and nothing is typed', async () => {
     const d = doc(SIGN_IN);
     const f = failed(await run(d, { trust: { required: false }, secretVars: ['password'] }));

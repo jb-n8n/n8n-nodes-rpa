@@ -188,6 +188,9 @@ export function networkSentence(text: string): string {
   return `${say(url ? url.host : 'The site')} (browser: ${text.trim()})`;
 }
 
+/** A desktop choose step whose option is only run variables that are all empty: there is no item to look for. */
+export const emptyChoice = (names: readonly string[]): string =>
+  `the run variable ${names.map((n) => `"${n}"`).join(' and ')} is empty, so there is no item to choose: give it a value in Options → Variables of the RPA node`;
 /** The part of a fill's failure that says the field did not take the value: classify.ts reads it (policy_violation). */
 export const VALUE_NOT_TAKEN = ' did not take the value ';
 /** A fill whose value the field's type refuses (Playwright's "Malformed value", for example text in a date field). */
