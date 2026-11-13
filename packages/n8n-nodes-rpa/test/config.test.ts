@@ -218,6 +218,8 @@ describe('siteLoginConfig (RPA Site Login credential)', () => {
     expect(() => siteLoginConfig({ ...base, loginUrl: 'https://u:secret@example.com/' }))
       .toThrow('Login Page URL must not contain a username or password: use the Username and Password fields');
     expect(() => siteLoginConfig({ ...base, password: '' })).toThrow('Username and Password are required');
+    // Sign Steps: no sign-in, so a username and password that are expressions on other items may be empty.
+    expect(siteLoginConfig({ ...base, username: '', password: '' }, { loginOptional: true }).policy.startUrl).toBe(siteLoginConfig(base).policy.startUrl);
     expect(() => siteLoginConfig({ ...base, login: 'sso.example.com/login' })).toThrow('Password page host sso.example.com is not in Sites the Browser May Open');
     expect(() => siteLoginConfig({ ...base, login: 'example.com' })).toThrow('Password page "example.com" must look like example.com/path');
     expect(() => siteLoginConfig({ ...base, allowedSubmits: 'reports.example.com/x' }))

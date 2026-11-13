@@ -151,8 +151,10 @@ const SITE_LOGIN_LABELS = {
 /**
  * RPA Site Login credential (playwrightSiteLoginApi) → the engine's policy and secrets (SiteLogin). Security settings only
  * ever come from the credential; policyFor adds writeMode and allowPrivateNetwork.
+ * `loginOptional`: an empty Username or Password is no error (Sign Steps, which never signs in: a Site Login whose
+ * username and password are expressions on the account items is empty on an approval item).
  */
-export function siteLoginConfig(data: CredentialData): SiteLogin {
+export function siteLoginConfig(data: CredentialData, opts: { loginOptional?: boolean } = {}): SiteLogin {
   const l = SITE_LOGIN_LABELS;
   const start = parseUrl(text(data, 'loginUrl'));
   if (!start) throw new ConfigError(`${l.start} must be a full URL such as https://example.com/login`);
@@ -162,7 +164,7 @@ export function siteLoginConfig(data: CredentialData): SiteLogin {
   const startHost = normalizeHost(`${start.protocol}//${start.host}`);
   const username = text(data, 'username');
   const password = typeof data.password === 'string' ? data.password : '';
-  if (!username || !password) throw new ConfigError('Username and Password are required');
+  if ((!username || !password) && !opts.loginOptional) throw new ConfigError('Username and Password are required');
   const navHosts = [...new Set([startHost, ...parseHosts(text(data, 'navHosts'))])];
   const subresourceHosts = parseHosts(text(data, 'subresourceHosts'));
   const frameHosts = parseHosts(text(data, 'frameHosts'));
