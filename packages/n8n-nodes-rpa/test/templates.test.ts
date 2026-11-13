@@ -76,6 +76,11 @@ const rowNodes = (t: Template) => t.nodes.filter((n) => n.type === DATA_TABLE &&
 const sticky = (t: Template, name: string) => byName(t, name).parameters as { content: string; color: number };
 const columnsOf: Record<string, string[]> = { [STEPS_TABLE]: STEPS_TABLE_COLUMNS.map((c) => c.name), [RUN_TABLE]: RUN_TABLE_COLUMNS.map((c) => c.name) };
 
+/**
+ * What template 3's approval emails make of an address in text from the steps, so that mail programs do not make a
+ * link of it: a zero-width space (U+200B) inside "://" and after each ".".
+ */
+const unlinked = (address: string) => address.split('://').join(':\u200b//').split('.').join('.\u200b');
 /** Evaluates one n8n expression ("={{ … }}", or "{{ … }}" as a node evaluates one) as JavaScript with the given globals. */
 function evaluate(expression: string, scope: Record<string, unknown>): unknown {
   const code = expression.replace(/^=?\{\{/, '').replace(/\}\}$/, '');
@@ -519,7 +524,7 @@ describe('3-approve-steps.json', () => {
       operation: 'sendAndWait', approvalOptions: { values: { approvalType: 'double' } },
       options: { limitWaitTime: { values: { limitType: 'afterTimeInterval', resumeAmount: "={{ $('Settings').item.json.approvalTimeoutHours }}", resumeUnit: 'hours' } } },
     });
-    expect(String(ask.message)).toContain("Review digest: {{ String($('Repaired steps received').item.json.digest ?? '')");
+    expect(String(ask.message)).toContain("Review digest: {{ ((s, lines) => String(s ?? '')");
     const timedOut = byName(t, 'Timed out?').parameters as { conditions: { conditions: { leftValue: string; operator: unknown }[]; combinator: string } };
     expect(timedOut.conditions.combinator).toBe('and');
     expect(timedOut.conditions.conditions).toEqual([expect.objectContaining({ leftValue: '={{ $json.data === undefined }}', operator: { type: 'boolean', operation: 'true', singleValue: true } })]);
@@ -721,7 +726,9 @@ describe('template 3 approval email', () => {
         // A later n8n that escapes the message shows the same text: there is nothing to show as &lt; or &amp;.
         expect(seen(n8nEscaping(message)), name).toBe(message.trim());
         // The data is there, as text, with look-alikes for the three characters that make markup.
-        expect(message, name).toContain('‹a href="https://evil.example/"›Approve here‹/a›');
+        expect(message, name).toContain(`‹a href="${unlinked('https://evil.example/')}"›Approve here‹/a›`);
+        // No address in the data is one a mail program makes a link of.
+        expect(message, name).not.toMatch(/:\/\/|evil\.example/);
         expect(message, name).toContain('‹img src=x onerror=alert(1)›');
         expect(message, name).toContain('＆lt;script＆gt;');
         // A backslash and n in the data never makes a line of its own; the template's own line breaks stay.
@@ -734,7 +741,7 @@ describe('template 3 approval email', () => {
   it('the values the email shows are all there, each as text', () => {
     expect(out).toContain('Steps v4‹i› for feed‹b›x‹/b›');
     expect(out).toContain('Evidence (as reported by the run): 7 rows ‹img src=x onerror=alert(1)›');
-    expect(out).toContain("Safety flags: host: a.example' ‹script›");
+    expect(out).toContain(`Safety flags: host: ${unlinked('a.example')}' ‹script›`);
     expect(out).toContain('Hash: ab"c');
     expect(out).toContain("Review digest: d'e");
     expect(out).toContain('expires after 72 hours');
@@ -801,12 +808,12 @@ describe('template 3 review email', () => {
   };
   const out = render(html, { $json: hostile });
 
-  it('HTML-escapes every value from the run, so page or model text cannot restyle or hide parts of the email', () => {
+  it('shows every value from the run as text, with look-alikes for <, > and & as the approval email does, so page or model text cannot restyle or hide parts of the email', () => {
     expect(out).not.toMatch(/<img|<script|<div|<b>feed/);
-    expect(out).toContain('feed&lt;b&gt;');
-    expect(out).toContain('&lt;img src=x onerror=alert(1)&gt;');
-    expect(out).toContain('clicks &quot;Next&quot;<br>&lt;div style=&quot;display:none&quot;&gt;');
-    expect(out).toContain('host: a.example&#39; &lt;script&gt;');
+    expect(out).toContain('feed\u2039b\u203a');
+    expect(out).toContain('\u2039img src=x onerror=alert(1)\u203a');
+    expect(out).toContain('clicks "Next"<br>\u2039div style="display:none"\u203a');
+    expect(out).toContain(`host: ${unlinked('a.example')}' \u2039script\u203a`);
   });
 
   it('names the attached screenshots from attachmentNames: both, after only (a first run), or none', () => {
@@ -830,14 +837,14 @@ describe('template 3 review email', () => {
 
   it('never says that browser steps that were not replayed ran: the labels follow the evidence line', () => {
     const shown = render(html, { $json: { ...hostile, evidenceLine: NOT_REPLAYED_LINE } });
-    expect(shown).toContain(`<b>Evidence:</b> ${NOT_REPLAYED_LINE.replace(/'/g, '&#39;')}`);
+    expect(shown).toContain(`<b>Evidence:</b> ${NOT_REPLAYED_LINE}`);
     expect(shown).toContain('<b>What changed (as written; these steps were never run):</b><br>step 2 now clicks');
     expect(shown).not.toContain('as reported by the run');
   });
 
   it('shows the left-out steps in red under their own heading, after the safety flags and before the evidence; with none, nothing', () => {
     const shown = render(html, { $json: { ...hostile, leftOutList: 'step 4, Pick <b>Status</b>: only one option\nstep 9, Wait' } });
-    expect(shown).toContain(`<p style="color:#b00020"><b>${LEFT_OUT_HEADING}</b><br>step 4, Pick &lt;b&gt;Status&lt;/b&gt;: only one option<br>step 9, Wait</p>`);
+    expect(shown).toContain(`<p style="color:#b00020"><b>${LEFT_OUT_HEADING}</b><br>step 4, Pick \u2039b\u203aStatus\u2039/b\u203a: only one option<br>step 9, Wait</p>`);
     expect(shown.indexOf('Safety flags')).toBeLessThan(shown.indexOf(LEFT_OUT_HEADING));
     expect(shown.indexOf(LEFT_OUT_HEADING)).toBeLessThan(shown.indexOf('Evidence'));
     expect(out).not.toContain('Left out');
@@ -867,14 +874,14 @@ describe('template 3 emails lead with what browser steps do (reviewSteps), as th
 
   it('the review email: the sentences built from the steps, a description that names another action in red, a harmless one in grey, then the change list in the details', () => {
     const out = render(html, { $json: item });
-    expect(out).toContain('<ol><li>Type into From: &quot;2026-09-01&quot; <i style="color:#7e8186">(the author calls it: Type the first day of September 2026 into From)</i></li>'
-      + '<li>Click Export &lt;b&gt;</li>'
+    expect(out).toContain('<ol><li>Type into From: "2026-09-01" <i style="color:#7e8186">(the author calls it: Type the first day of September 2026 into From)</i></li>'
+      + '<li>Click Export \u2039b\u203a</li>'
       + '<li>Page through with Next, at most 3 pages, 1 step on each <i style="color:#7e8186">(the author calls it: Read every page)</i>'
       + '<ul><li>On each page: Click Delete <b style="color:#b00020">(described differently as: Read the total)</b></li></ul></li></ol>');
     // What the steps do comes before the evidence and the change list, which stay as they are.
     expect(out.indexOf('<b>The steps</b>')).toBeLessThan(out.indexOf('Evidence'));
     expect(out.indexOf('<b>The steps</b>')).toBeLessThan(out.indexOf('What changed'));
-    expect(out).toContain('<b>What changed (as reported by the run):</b><br>Added: Type the first day of September 2026 into From (fill label &quot;From&quot; exact with &quot;2026-09-01&quot;)');
+    expect(out).toContain('<b>What changed (as reported by the run):</b><br>Added: Type the first day of September 2026 into From (fill label "From" exact with "2026-09-01")');
     expect(out).not.toMatch(/<b>Export|<b>feed/);
   });
 
@@ -905,8 +912,8 @@ describe('template 3 emails lead with what browser steps do (reviewSteps), as th
     ];
     const json = { ...item, steps: { startUrl: 'https://a.example/', steps: odd }, reviewSteps: reviewSteps(odd, { desktop: false, shownUrl: (u: string) => u }) };
     const page = render(html, { $json: json });
-    expect(page).toContain('<li>Type into Amount: &quot;1&quot; <b style="color:#b00020">(described differently as: Open the list (described differently as: Click Pay now) &lt;b&gt;)</b></li>'
-      + '<li>Click &quot;Save (described differently as: Delete all) &lt;i&gt;&quot; <i style="color:#7e8186">(the author calls it: Click it)</i></li>');
+    expect(page).toContain('<li>Type into Amount: "1" <b style="color:#b00020">(described differently as: Open the list (described differently as: Click Pay now) \u2039b\u203a)</b></li>'
+      + '<li>Click "Save (described differently as: Delete all) \u2039i\u203a" <i style="color:#7e8186">(the author calls it: Click it)</i></li>');
     expect(ask(json)).toContain('1. Type into Amount: "1" ⚠ (described differently as: Open the list (described differently as: Click Pay now) \u2039b\u203a)\n'
       + '2. Click "Save (described differently as: Delete all) \u2039i\u203a" (the author calls it: Click it)\n');
     // Desktop steps: the one approval email, the same way.
@@ -922,7 +929,7 @@ describe('template 3 emails lead with what browser steps do (reviewSteps), as th
     const imported = { ...item, changes: steps.map((s) => ({ was: null, now: String(s.intent) })) };
     expect(render(html, { $json: imported })).not.toContain('What changed');
     expect(ask(imported)).not.toContain('What changed');
-    expect(ask(imported)).toContain('\nSafety flags: host: a.example\n\nApprove: ');
+    expect(ask(imported)).toContain(`\nSafety flags: host: ${unlinked('a.example')}\n\nApprove: `);
     // Without the step list (an item from Run Steps), or with one that does not fit, the change list stays as before.
     const { reviewSteps: _r, ...older } = imported;
     expect(render(html, { $json: older })).toContain('<b>What changed (as reported by the run):</b><br>Added: Type the first day');
@@ -938,16 +945,54 @@ describe('template 3 emails lead with what browser steps do (reviewSteps), as th
       { change: 'Added', step: 3, text: 'Open a.example/list', describedAs: 'Open the list', quiet: true },
     ]);
     expect(render(html, { $json: repair })).toContain('<b>What changed (as reported by the run):</b><br>'
-      + 'Changed: step 2, Click Delete <b style="color:#b00020">(described differently as: Read the total)</b> <i style="color:#7e8186">(was: Click Export (click role &quot;button&quot; name &quot;Export&quot;))</i><br>'
-      + 'Added: step 3, Open a.example/list <i style="color:#7e8186">(the author calls it: Open the list)</i></p>');
+      + 'Changed: step 2, Click Delete <b style="color:#b00020">(described differently as: Read the total)</b> <i style="color:#7e8186">(was: Click Export (click role "button" name "Export"))</i><br>'
+      + `Added: step 3, Open ${unlinked('a.example/list')} <i style="color:#7e8186">(the author calls it: Open the list)</i></p>`);
     expect(ask(repair)).toContain('\nWhat changed (as reported by the run):\n'
       + 'Changed: step 2, Click Delete ⚠ (described differently as: Read the total) (was: Click Export (click role "button" name "Export"))\n'
-      + 'Added: step 3, Open a.example/list (the author calls it: Open the list)\n\nApprove: ');
+      + `Added: step 3, Open ${unlinked('a.example/list')} (the author calls it: Open the list)\n\nApprove: `);
     // A removed step keeps the run's words: there is no step to build a sentence from.
     const removed = stepChanges(parseScript(now), parseScript(base));
     const back = reviewChanges({ describeStep }, base.steps, removed, { shownUrl: (u: string) => u });
     expect(back.find((c) => c.change === 'Removed')).toEqual({ change: 'Removed', was: 'Open the list (go to "https://a.example/list")' });
-    expect(ask({ ...repair, changes: removed, reviewChanges: back })).toContain('Removed: Open the list (go to "https://a.example/list")');
+    expect(ask({ ...repair, changes: removed, reviewChanges: back })).toContain(`Removed: Open the list (go to "${unlinked('https://a.example/list')}")`);
+  });
+
+  it('both approval emails show text from the steps through one function: look-alikes for <, > and &, and no address a mail program makes a link of', () => {
+    const desktopMessage = String(byName(t3, 'Ask for approval (desktop steps)').parameters.message);
+    const fns = (text: string) => [...text.matchAll(/\(\(s, lines\) => String\(s \?\? ''\)[\s\S]*?split\('\.'\)\.join\('\.\\u200b'\)\)\)/g)].map((m) => m[0]);
+    const all = [...fns(html), ...fns(message), ...fns(desktopMessage)];
+    expect(all.length).toBeGreaterThan(20);
+    expect(new Set(all).size).toBe(1);
+    // No other escaping is left in them: the review email showed &lt; where the approval email showed ‹.
+    for (const text of [html, message, desktopMessage]) {
+      expect(text).not.toContain("'&lt;'");
+      expect(text).not.toMatch(/\.replace\(\/\[&<>/);
+    }
+    // A description that holds a link, and addresses in a value and a goto.
+    const LINK = '<a href="http://evil.example/x">http://evil.example/x</a>';
+    const linked = [
+      { intent: LINK, click: { role: 'button', name: 'Pay' } },
+      { intent: 'Type the address', fill: { field: { label: 'Site' }, value: 'see www.evil.example/pay' } },
+      { intent: 'Open the shop', goto: 'https://shop.example/cart' },
+    ];
+    const json = { ...item, name: 'feed.example', steps: { startUrl: 'https://shop.example/', steps: linked }, reviewSteps: reviewSteps(linked, { desktop: false, shownUrl: (u: string) => u, startUrl: 'https://shop.example/' }),
+      changeList: `Added: ${LINK}`, evidenceLine: 'Proven at https://shop.example/cart', leftOutList: 'step 2, go to http://evil.example/y' };
+    const review = render(html, { $json: json });
+    const approval = ask(json);
+    // What a plain-text view of the HTML shows (tags removed): the same text.
+    const plain = review.replace(/<[^>]*>/g, ' ');
+    for (const [name, text] of [['review email', plain], ['approval email', approval]] as const) {
+      expect(text, name).not.toMatch(/:\/\/|evil\.example|shop\.example|www\.evil/);
+      expect(text, name).toContain(`\u2039a href="${unlinked('http://evil.example/x')}"\u203a${unlinked('http://evil.example/x')}\u2039/a\u203a`);
+      expect(text, name).toContain(unlinked('www.evil.example/pay'));
+      expect(text, name).toContain(`Open ${unlinked('shop.example/cart')}`);
+    }
+    expect(review).not.toMatch(/<a |href="http:\/\//);
+    // A file name stays as it is.
+    expect(ask({ ...item, evidenceLine: 'downloaded "report.csv" and ErpDemo.exe' })).toContain('downloaded "report.csv" and ErpDemo.exe');
+    // Only the emails: the review page and what is signed keep the address as it is.
+    expect(json.reviewSteps[2].text).toBe('Open shop.example/cart');
+    expect(String(byName(load('5-import-a-bot.json'), 'Review and approve').parameters.jsonOutput)).not.toContain('u200b');
   });
 
   it('Sign Steps checks the sentences the emails showed: the item goes to Sign steps whole, reviewSteps included', () => {

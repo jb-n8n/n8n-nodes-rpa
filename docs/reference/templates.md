@@ -121,7 +121,7 @@ after `approvalTimeoutHours` (72), then:
   before and after screenshots. Then an approval email with the same steps (⚠ before such a description), **Approve**
   and **Reject**. The steps show when the item carries them (an import's step lists do): Sign Steps builds them again
   and refuses to sign when they differ.
-  The emails HTML-escape every value. The safety flags are the full list: every host, form submission, download and pop-up handler the steps have.
+  The emails show every value as text, with look-alikes for `<`, `>` and `&`, and an invisible space in each address so that mail programs do not link it. The safety flags are the full list: every host, form submission, download and pop-up handler the steps have.
   The change list compares the steps themselves, not their intents, so a step that clicks another element is listed
   even when its intent reads the same. For an import, where every entry is a step added, the emails leave it out: it
   would repeat the steps. For a repair, each entry names its step by number, with the sentence built from the step and
