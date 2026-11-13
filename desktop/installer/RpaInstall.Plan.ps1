@@ -268,6 +268,12 @@ function Get-RpaInstallPlan {
   $back = $autoSignIn -and -not $unattended -and $upgrade -and [bool]$Facts.InstalledSupervisorSecret -and [bool]$Facts.InstalledForUser -and [bool]$Facts.UserExists
   # The password an earlier run with -Unattended stored for this same user stays, while install.json records it.
   $secretKept = $unattended -and $wasUnattended -and [bool]$Facts.InstalledForUser -and [bool]$Facts.UserExists -and [bool]$Facts.InstalledSupervisorSecret
+  # The data directory an install with -Unattended for this same bot user left behind (Uninstall-Rpa.ps1 without
+  # -RemoveData keeps it, with the supervisor's folder, and the bot user; it removes install.json and the stored
+  # password). Nobody knows the password the installer generated, so that user cannot be signed in unattended again,
+  # and an install without a mode would end signed in by hand.
+  $afterUnattended = -not $upgrade -and [bool]$Facts.UserExists -and $Facts.SupervisorDirState -and [bool]$Facts.SupervisorDirState.Exists -and
+    [bool](@($Facts.EarlierUsers) | Where-Object { $_ -and $_.Sid -eq [string]$Facts.UserSid })
   # A local user that does not exist is created, on a first install and on an upgrade (someone removed it since).
   $createUser = -not $Facts.UserExists -and -not $Facts.UserIsDomain
   # Automatic sign-in that an earlier run turned on for this same user stays as it is.
@@ -363,6 +369,9 @@ function Get-RpaInstallPlan {
         $refusals.Add(('The password given for {0} is not correct.' -f $user))
       }
     }
+    $afterUnattendedRefusal = ('{0} was the bot user of an install with -Unattended. Uninstall-Rpa.ps1 removed the password stored for it, and the password the installer generated is not known to anyone, so this install cannot sign {0} in unattended. Either set a new password for {0} and run this again with -Unattended -UserPassword <that password> (the runner then cannot read its certificate: remove it and put the new fingerprint into the n8n credential, docs/install/windows.md, section 10); or run Uninstall-Rpa.ps1 -RemoveData, remove {0} and install again, which makes new tokens and Connection Lines. To have a person sign {0} in instead, add -Unattended:$false.' -f $user)
+    # Without a mode, that install would end in another mode than the machine had: it stops and says why.
+    if ($afterUnattended -and (Test-RpaNoModeGiven $Parameters)) { $refusals.Add($afterUnattendedRefusal) }
     # With -Unattended a user the installer creates gets a random password, which is stored for the RPA Supervisor.
     if ($createUser -and -not $autoSignIn -and -not $unattended -and -not $hasPassword) {
       $refusals.Add(('Give -UserPassword for the new user {0}, or use -AutoSignIn to have a random password stored for automatic sign-in.' -f $user))
@@ -397,6 +406,7 @@ function Get-RpaInstallPlan {
       elseif ($convert -and -not $hasPassword -and $Facts.AutoSignInPassword -eq 'wrong') {
         $refusals.Add(('Windows does not accept the password stored for automatic sign-in of {0} any more, so -Unattended cannot keep it. Give the password of {0} with -UserPassword, or install for a new bot user with -User.' -f $user))
       }
+      elseif ($afterUnattended -and -not $hasPassword) { $refusals.Add($afterUnattendedRefusal) }
       elseif ($Facts.UserExists -and -not $hasPassword -and -not $secretKept -and -not $convert) {
         $refusals.Add(('-Unattended for the existing user {0} needs -UserPassword: the RPA Supervisor signs {0} in with it. A password the installer generated earlier is not known to anyone: set a new password for {0} and pass it, or remove {0} so the installer creates it again. A new password makes what the programs of {0} protected with the old one unreadable (the entries of an authenticator application, the certificate of the runner), so where such data exists a new bot user (-User) is the safer way. After a new password the runner cannot read its certificate: remove it and put the new fingerprint into the n8n credential (docs/install/windows.md, section 10).' -f $user))
       }

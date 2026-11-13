@@ -1054,7 +1054,8 @@ jobs:
           Assert ((Get-BotSessions).Count -eq 0) 'the supervisor signed rpa-ci-unattended out after the idle time'
           Assert ([bool](Get-Content "$data\supervisor\supervisor.log" | Select-String 'No connection for 15 s; signing rpa-ci-unattended out\.')) 'the log says why it signed out'
 
-      # The uninstall puts back what -Unattended changed: the service, the group membership, Remote Desktop as found.
+      # The uninstall puts back what -Unattended changed: the service, the group membership, Remote Desktop as found. Then
+      # an install without a mode for the same bot user is refused (the password stored for it is gone).
       - name: Uninstall the install with -Unattended
         timeout-minutes: 10
         shell: powershell
@@ -1074,6 +1075,16 @@ jobs:
           $deny = (Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections).fDenyTSConnections
           Assert ($deny -eq $before.deny) "Remote Desktop is as it was found (fDenyTSConnections $deny)"
           Assert (@(Get-NetFirewallRule -Name 'RPA-*' -ErrorAction SilentlyContinue).Count -eq 0) 'the firewall rule is gone'
+
+          # The uninstall kept the bot user and the data directory, and removed the stored password nobody knows. An
+          # install without a mode then stops before any step and names the ways out, also with -Force: it does not end
+          # signed in without a word.
+          $global:LASTEXITCODE = 0
+          $said = @(& 'C:\rpa-ci\package\rpa-windows-x64\Install-Rpa.ps1' -User rpa-ci-unattended -AllowFrom 127.0.0.1 -Force 6>&1 | ForEach-Object { "$_" })
+          $code = $LASTEXITCODE
+          $said | ForEach-Object { Write-Host "  | $_" }
+          Assert ($code -eq 1 -and @($said | Where-Object { $_ -like 'rpa-ci-unattended was the bot user of an install with -Unattended. *Uninstall-Rpa.ps1 -RemoveData*add -Unattended:$false.' }).Count -eq 1) "Install-Rpa.ps1 without a mode after that uninstall refuses and names the ways out (exit code $code)"
+          Assert (-not (Test-Path -LiteralPath "$install\install.json") -and @(Get-ScheduledTask -TaskPath '\RPA\' -ErrorAction SilentlyContinue).Count -eq 0) 'and it changed nothing: no install.json, no task'
 
       - name: Collect the installed programs' logs
         if: always()
