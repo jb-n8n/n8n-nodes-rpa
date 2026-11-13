@@ -539,7 +539,8 @@ describe('npx n8n-nodes-rpa setup', () => {
       const ref = { id: 'c-site', name: 'RPA Site Login account' };
       expect(node(wf, 'Import steps').credentials.playwrightSiteLoginApi).toEqual(ref);
       expect(node(wf, 'Sign steps').credentials.playwrightSiteLoginApi).toEqual(ref);
-      expect(node(wf, 'Import steps').parameters.options).toEqual({ allowPrivateNetwork: true });
+      // Typed in beside the template's own Version option, which it keeps.
+      expect(node(wf, 'Import steps').parameters.options).toEqual({ allowPrivateNetwork: true, version: "={{ $('The bot to change').isExecuted ? Number($('The bot to change').first().json.version) + 1 : 1 }}" });
       // Never one of another user or project, never made.
       expect(stdout).toContain('left alone credential "RPA Site Login account" (playwrightSiteLoginApi, id c-other): it belongs to another project or user, so it is not used');
       expect(fake.state.credentials.filter((c) => c.type === 'playwrightSiteLoginApi')).toHaveLength(2);
@@ -555,7 +556,7 @@ describe('npx n8n-nodes-rpa setup', () => {
       const pwf = plain.state.workflows[0];
       expect(node(pwf, 'Import steps').credentials).not.toHaveProperty('playwrightSiteLoginApi');
       expect(node(pwf, 'Sign steps').credentials).not.toHaveProperty('playwrightSiteLoginApi');
-      expect(node(pwf, 'Import steps').parameters.options).toEqual({});
+      expect(node(pwf, 'Import steps').parameters.options).not.toHaveProperty('allowPrivateNetwork');
       expect(p.stdout).not.toContain('Private network');
     });
 
