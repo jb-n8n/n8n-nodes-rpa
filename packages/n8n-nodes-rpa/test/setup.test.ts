@@ -967,6 +967,97 @@ describe('npx n8n-nodes-rpa setup', () => {
       expect(again.stdout).toContain('Private network: on.');
       expectSiteUntouched(fake, r.out + again.out);
     });
+    describe('--new-workflow --site-login: a form of that Site Login\'s own, beside the first one', () => {
+      const ACME = site('c-acme', 'Ünïted Acme Portal');
+      const acmeArgs = ['--new-workflow', '--site-login', 'Ünïted Acme Portal'];
+      const SITE_FORM = 'RPA: 5 Import a bot (Ünïted Acme Portal)';
+      const formOf = (wf: Wf) => node(wf, 'Import a bot');
+
+      it('its own name, title and /form/rpa-import-<slug>; the same signing key; the first form is not touched', async () => {
+        const fake = await n8n({ credentials: [MINE, ACME] });
+        const first = await run(setup(fake.url, '--site-login', 'RPA Site Login account'), ENV);
+        expect(first.code, first.out).toBe(0);
+        const [main] = fake.state.workflows;
+        const before = JSON.stringify(main);
+        const signing = credOf(fake, 'playwrightScriptSigningApi');
+        const key = signingKeyOf(fake);
+        const requestsBefore = fake.state.requests.length;
+
+        const r = await run(setup(fake.url, ...acmeArgs), ENV);
+        expect(r.code, r.out).toBe(0);
+        expect(fake.state.workflows).toHaveLength(2);
+        const second = fake.state.workflows[1];
+        expect(second).toMatchObject({ name: SITE_FORM, active: true });
+        expect(formOf(second).parameters.formTitle).toBe('Import a bot for Ünïted Acme Portal');
+        expect(formOf(second).parameters.options.path).toBe('rpa-import-united-acme-portal');
+        const acme = { id: 'c-acme', name: 'Ünïted Acme Portal' };
+        expect(node(second, 'Import steps').credentials.playwrightSiteLoginApi).toEqual(acme);
+        expect(node(second, 'Sign steps').credentials.playwrightSiteLoginApi).toEqual(acme);
+        // One signing credential, unchanged, on both forms: never a new key.
+        expect(fake.state.credentials.filter((c) => c.type === 'playwrightScriptSigningApi')).toHaveLength(1);
+        expect(signingKeyOf(fake)).toBe(key);
+        for (const wf of [main, second]) expect(node(wf, 'Sign steps').credentials.playwrightScriptSigningApi).toEqual({ id: signing.id, name: 'RPA Step Signing' });
+        expect(r.stdout).toMatch(/reused +credential "RPA Step Signing" \(id c\d+\): its key stays as it is/);
+        // The first form: not read for a change, not written, not published again.
+        expect(JSON.stringify(main)).toBe(before);
+        const after = fake.state.requests.slice(requestsBefore);
+        expect(after.filter((q) => q.method !== 'GET' && q.path.includes(main.id))).toEqual([]);
+        expect(after.filter((q) => q.method === 'PATCH')).toEqual([]);
+        expect(formOf(main).parameters.options.path).toBe('rpa-import');
+        expect(formOf(main).parameters.formTitle).toBe('Import a bot');
+        expect(r.stdout).toContain(`created  workflow "${SITE_FORM}" (id ${second.id}), approver ops@example.com`);
+        expect(r.stdout).toContain(`  Address:    ${fake.url}/form/rpa-import-united-acme-portal\n`);
+        expect(r.stdout).toContain('  Site Login: "Ünïted Acme Portal". Use this form for the bots that sign in with it. Your other import form is not changed.');
+        expectSiteUntouched(fake, r.out);
+        expectNoSecrets(r.out);
+
+        // Again: that form is reused as it is, nothing new.
+        const again = await run(setup(fake.url, ...acmeArgs), ENV);
+        expect(again.code, again.out).toBe(0);
+        expect(fake.state.workflows).toHaveLength(2);
+        expect(again.stdout).toMatch(/reused +workflow "RPA: 5 Import a bot \(Ünïted Acme Portal\)"/);
+        // The first form's run reuses the first form, not the Site Login's.
+        const main2 = await run(setup(fake.url, '--site-login', 'RPA Site Login account'), ENV);
+        expect(main2.stdout).toMatch(/reused +workflow "RPA: 5 Import a bot" \(id /);
+        expect(fake.state.workflows).toHaveLength(2);
+      });
+
+      it('a first run with both flags makes the key once, which the main form then reuses; a taken address keeps the id', async () => {
+        const fake = await n8n({ credentials: [MINE, ACME] });
+        expect((await run(setup(fake.url, ...acmeArgs), ENV)).code).toBe(0);
+        expect((await run(setup(fake.url), ENV)).code).toBe(0);
+        expect(fake.state.credentials.filter((c) => c.type === 'playwrightScriptSigningApi')).toHaveLength(1);
+        expect(fake.state.workflows.map((w) => [w.name, formOf(w).parameters.options.path])).toEqual([[SITE_FORM, 'rpa-import-united-acme-portal'], ['RPA: 5 Import a bot', 'rpa-import']]);
+        // Another Site Login whose name gives the same address: the address with an id, and why.
+        const twin = await n8n({ credentials: [MINE, ACME, site('c-twin', 'united acme portal')] });
+        expect((await run(setup(twin.url, ...acmeArgs), ENV)).code).toBe(0);
+        const t = await run(setup(twin.url, '--new-workflow', '--site-login', 'united acme portal'), ENV);
+        expect(t.code, t.out).toBe(0);
+        expect(formOf(twin.state.workflows[1]).parameters.options.path).toBeUndefined();
+        expect(t.stdout).toContain(`         its form keeps an address with an id, not /form/rpa-import-united-acme-portal: the workflow "${SITE_FORM}" (id ${twin.state.workflows[0].id}) has a form at /form/rpa-import-united-acme-portal.`);
+        // A name without a letter or a digit: the address with an id.
+        const odd = await n8n({ credentials: [site('c-odd', '★ ★')] });
+        const o = await run(setup(odd.url, '--new-workflow', '--site-login', '★ ★'), ENV);
+        expect(o.code, o.out).toBe(0);
+        expect(formOf(odd.state.workflows[0]).parameters.options.path).toBeUndefined();
+        expect(o.stdout).toContain("its form keeps an address with an id: the Site Login's name has no letters or digits for an address.");
+      });
+
+      it('in a shared project whose set it may not use, it stops: no second key, no form without its Site Login', async () => {
+        const TEAM_KEY: Cred = { id: 'c-tkey', name: 'RPA Step Signing', type: 'playwrightScriptSigningApi', data: { secretKey: 'made-up-team-key-0123456789abcdef' }, projectId: 'P-team' };
+        const TEAM_WORK: Wf = { id: 'w-team-other', name: 'Team work', active: false, versionId: 'v', nodes: [], connections: {}, settings: {}, projectId: 'P-team' };
+        const fake = await n8n({ credentials: [TEAM_KEY, site('c-tsite', 'Ünïted Acme Portal', 'P-team')], workflows: [TEAM_WORK] });
+        const r = await run(setup(fake.url, '--project-id', 'P-team', ...acmeArgs), ENV);
+        expect(r.code, r.out).toBe(1);
+        expect(r.out).toContain('A form for a Site Login signs with the RPA Step Signing key your other forms use, and this run does not use that credential (id c-tkey).');
+        expect(fake.state.credentials.map((c) => c.id)).toEqual(['c-tkey', 'c-tsite']);
+        expect(fake.state.workflows.map((w) => w.id)).toEqual(['w-team-other']);
+        const yes = await run(setup(fake.url, '--project-id', 'P-team', '--reuse-project-credentials', ...acmeArgs), ENV);
+        expect(yes.code, yes.out).toBe(0);
+        expect(node(fake.state.workflows[1], 'Sign steps').credentials.playwrightScriptSigningApi).toEqual({ id: 'c-tkey', name: 'RPA Step Signing' });
+        expect(fake.state.credentials.filter((c) => c.type === 'playwrightScriptSigningApi')).toHaveLength(1);
+      });
+    });
   });
 
   it('redacts every secret when n8n echoes a request: a credential body, a workflow on a failed publish', async () => {

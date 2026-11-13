@@ -108,7 +108,9 @@ an **RPA Step Signing** credential that its own project owns, and never one of t
     address in **Sign steps → Approver Allowlist**, not who approved.
 - **The form's address.** The setup command gives the form a readable address, `/form/rpa-import`, so that it can be
   typed on another machine. The address is not a secret: the form's sign-in decides who can open it, in both ways
-  above, and the pages after the first keep their own addresses, which n8n signs.
+  above, and the pages after the first keep their own addresses, which n8n signs. A form of a Site Login's own
+  (`--new-workflow --site-login`) gets `/form/rpa-import-<its name>` under the same rules, and signs with the same RPA
+  Step Signing key.
 - **Values in the form's address.** n8n fills the fields of every page of a form, the review page too, from the
   address the form was opened with. So the import form refuses an address that carries values, before anything is
   read or imported, and an approval never arrives with its answer chosen by whoever made the link.
