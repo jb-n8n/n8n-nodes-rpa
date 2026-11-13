@@ -131,20 +131,37 @@ form asks for nothing more. Without one, the last page says:
 ## Change an approved bot, or sign it again
 
 1. Open the **Import a bot** form. Leave **Bot file** empty and type the bot's name in **Name for the steps**.
-2. The next page shows the steps that run now under that name, to read or copy. Under **What to do**, choose **Sign
-   the approved steps again, unchanged**, for example after the signing key changed, and leave the box empty. To
-   change them, choose **Change the steps**, copy the steps into an editor, change what you need, and paste the whole
-   step document into the box.
-3. Click **Review**. The review page of an import follows: read every step, check the write ticks of desktop steps,
-   and choose **Approve and sign** or **Reject**.
+2. The next page shows the steps that run now under that name, to read or copy. Under **What to do**, choose
+   **Change values** and click **Review**.
+3. The values page has one field for each value the steps type, choose or open, in step order, with the approved
+   value in it, such as `4. Type into To: typed value` holding `2026-09-15`. Change the ones you need and click
+   **Review**.
+4. The review page of an import follows: read every step, check the write ticks of desktop steps, and choose
+   **Approve and sign** or **Reject**.
+
+Everything else, such as adding or removing a step or how a step finds its control, is changed as JSON: choose
+**Change the steps as JSON**, copy the steps into an editor, change what you need, and paste the whole step document
+into the box. To sign the steps again as they are, for example after the signing key changed, choose **Sign the
+approved steps again, unchanged** and leave the box empty.
+
+On the values page, only the values you change change. Where a step's own description quotes the old value, it gets
+the new one too; where it does not, it is left as it is, and the review page shows it in red when it states another
+value. A value is taken as text. A value with `{{` is refused, because steps read `{{` as the start of a variable, and
+nothing is imported. Change no value and click **Review**: the steps are signed again, and the review page says that
+no value was changed. The page has no field for a variable (`{{var.name}}`), for a value a field cannot hold as it is
+(with `<`, `>`, a line break, or a space at an end) or for several options: it shows them, and they are changed as
+JSON. For a bot with more than 40 values, or none, **Change values** is not offered.
 
 Signed again unchanged, the steps are the active row's steps as the workflow reads them from the Data Table: they do
 not pass through your browser, also when you pasted them back unchanged under sign again. A choice that does not fit the
-box (sign again with other steps in the box, or change with an empty box) brings the page back with what to correct at
-its top, your choice and the pasted steps kept; nothing is imported or signed until it fits. Pasted text is taken as you typed it. A line near the top of the review page, in bold, says
+box (sign again or change values with other steps in the box, or change as JSON with an empty box) brings the page
+back with what to correct at its top, your choice and the pasted steps kept; nothing is imported or signed until it
+fits. Pasted text is taken as you typed it. A line near the top of the review page, in bold, says
 whether the steps differ from the approved version, and which steps or settings do, with each changed value as old →
-new (`step 6: typed value "2026-09-15" → "2026-09-30"`). Text that is not a step document ends on a
-page that says so, and nothing changes.
+new (`step 4: description "Type into To: "2026-09-15"" → "Type into To: "2026-09-30"", typed value "2026-09-15" →
+"2026-09-30"`). Text that is not a step document ends on a page that says so, and nothing changes. On desktop steps,
+a step that changed starts its write tick from the rule, and the review page says so when that differs from its
+approved tick.
 
 Approved, the steps become the next version under that name (version 2 replaces version 1), signed with the current
 key, and the old row is superseded: the bot's workflow runs the new version as it is. The last page says
