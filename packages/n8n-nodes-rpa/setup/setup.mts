@@ -1000,8 +1000,8 @@ async function run(inputs: Inputs): Promise<number> {
     }
     workflow = workflow as Record<string, any>;
     say(`created  workflow "${workflowName}" (id ${clean(workflow.id)}), approver ${approver}`);
-    if (pathTaken) say(`         its form keeps an address with an id, not /form/${FORM_PATH}: ${pathTaken}.`);
     if (siteRef) say(`         with the Site Login "${clean(siteRef.name)}" (id ${clean(siteRef.id)}) on "${NODE.importSteps}" and "${NODE.signSteps}"`);
+    if (pathTaken) say(`         its form keeps an address with an id, not /form/${FORM_PATH}: ${pathTaken}.`);
     const same = named.filter((w) => w.name === workflowName);
     if (same.length) say(`         n8n now has more than one workflow named "${workflowName}": this run's is id ${clean(workflow.id)}.`);
   }
