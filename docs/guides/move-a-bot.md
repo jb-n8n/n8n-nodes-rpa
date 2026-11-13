@@ -12,7 +12,8 @@ to n8n.
 
 Template **RPA: 5 Import a bot** (`packages/n8n-nodes-rpa/templates/5-import-a-bot.json`) is a form in front of the
 node's **Import Steps** operation. Set it up once, with one command (Node.js 22 or later, and an n8n API key from
-**Settings → n8n API**):
+**Settings → n8n API**, with the **Custom** scopes that [the browser bot guide](browser-bot.md#3-set-up-the-import-form-with-one-command)
+lists):
 
 ```sh
 npx n8n-nodes-rpa setup --url http://localhost:5678
@@ -50,7 +51,8 @@ Then, for each bot:
    n8n user who submits this page is the approver: they must be on **Sign steps → Approver Allowlist**, or nothing is
    signed. The row records their n8n address.
 5. The last page says what was signed, and counts the values removed as secrets and the steps not translated. It
-   downloads the workflow that runs the bot. For a UiPath project, notes in that workflow show what was not
+   downloads the workflow that runs the bot. When nothing was signed (rejected, or the approver is not on the list), it
+   offers no workflow file. For a UiPath project, notes in that workflow show what was not
    translated, such as a credential lookup. A log message is dropped without a note. Import the workflow in n8n. Its
    RPA credentials are the ones the import used, already picked by name and id (never a value): check them, pick any
    other credential its notes name, and run it (the **Execute** button at the bottom of the canvas). Each run writes a
@@ -131,8 +133,9 @@ form asks for nothing more. Without one, the last page says:
    and choose **Approve and sign** or **Reject**.
 
 The review page's first line says whether the steps differ from the approved version, and which steps or settings
-do. Approved, the steps become a new row under that name, signed with the current key, and the old row is superseded.
-Rejected, or not answered within an hour, the old version keeps running. A name the form does not find ends on a
+do. Approved, the steps become the next version under that name (version 2 replaces version 1), signed with the current
+key, and the old row is superseded: the bot's workflow runs the new version as it is. Rejected, or not answered within
+an hour, the old version keeps running, and the last page offers no workflow file. A name the form does not find ends on a
 page that lists the approved bots. The box holds JSON: for a long step list, copy it into an editor, or upload the
 edited steps as a file with the source **Step document** and the same name.
 
