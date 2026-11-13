@@ -136,7 +136,41 @@ public sealed class ImportFormTests : IDisposable
         Assert.Equal("The setup command prints it. It looks like https://your-n8n/form/…", DialogText.AddressNote);
         Assert.Equal(("OK", "Cancel"), (DialogText.Ok, DialogText.Cancel));
         Assert.Equal("The import form's address", DialogText.AddressTitle);
-        Assert.Equal("The browser did not start: No program opens web addresses. Choose Show the file instead.", NextSteps.BrowserNotStarted("No program opens web addresses."));
+        Assert.Equal("The browser did not start: No program opens web addresses. Choose Show the file instead.", NextSteps.BrowserNotStarted("No program opens web addresses.", _ => true));
+    }
+
+    // The notice line is one line: the longest text that fits it, always ending with what to do instead.
+    [Theory]
+    [InlineData(999, "The browser did not start: Application not found. Choose Show the file instead.")]
+    [InlineData(79, "The browser did not start: Application not found. Choose Show the file instead.")]
+    [InlineData(78, "No browser started: Application not found. Choose Show the file instead.")]
+    [InlineData(71, "The browser did not start. Choose Show the file instead.")]
+    [InlineData(55, "No browser started. Choose Show the file instead.")]
+    [InlineData(48, "Choose Show the file instead.")]
+    [InlineData(5, "Choose Show the file instead.")]
+    public void When_no_browser_starts_the_notice_is_the_longest_that_fits_and_ends_with_Show_the_file(int room, string expected)
+    {
+        var notice = NextSteps.BrowserNotStarted(" Application not found. ", text => text.Length <= room);
+        Assert.Equal(expected, notice);
+        Assert.EndsWith("Choose Show the file instead.", notice);
+    }
+
+    [Fact]
+    public void Without_a_reason_the_notice_says_only_that_no_browser_started()
+    {
+        Assert.Equal("The browser did not start. Choose Show the file instead.", NextSteps.BrowserNotStarted("  ", _ => true));
+    }
+
+    // .NET's text names the form's address and the recorder's folder, and is long enough to push the advice off the bar.
+    [Fact]
+    public void The_reason_is_what_Windows_says_for_the_error_without_the_address_and_the_folder()
+    {
+        var e = new System.ComponentModel.Win32Exception(1155,
+            "An error occurred trying to start process 'http://localhost:46678/form/import' with working directory 'C:\\Program Files\\RPA Runner\\recorder'. Application not found.");
+        var reason = NextSteps.WindowsReason(e);
+        Assert.Equal(new System.ComponentModel.Win32Exception(1155).Message, reason);
+        Assert.DoesNotContain("localhost", reason);
+        Assert.DoesNotContain("RPA Runner", reason);
     }
 
     [Fact]

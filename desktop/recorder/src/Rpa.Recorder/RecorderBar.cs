@@ -488,6 +488,16 @@ internal sealed class RecorderBar : Form
 
     private void Say(string text, NoticeTone tone = NoticeTone.Check) => Say(DateTimeOffset.Now, text, tone);
 
+    /// <summary>Whether a new notice fits the notice line uncut, beside the Earlier notices link that line has once the
+    /// notice is said (there is one when a notice is shown now).</summary>
+    private bool FitsNoticeLine(string text)
+    {
+        var room = _notice.Parent!.ClientSize.Width;
+        if (_notices.Current is not null)
+            room -= TextRenderer.MeasureText($"{DialogText.NoticesTitle} ({_notices.All.Count})", _earlier.Font).Width + LogicalToDeviceUnits(BarLayout.Space);
+        return TextRenderer.MeasureText(text, _notice.Font).Width <= room;
+    }
+
     private void ClearNotices()
     {
         _notices.Clear();
@@ -868,7 +878,7 @@ internal sealed class RecorderBar : Form
         {
             _formOpened = null;
             ShowStage(_stage);
-            Say(NextSteps.BrowserNotStarted(e.Message));
+            Say(NextSteps.BrowserNotStarted(NextSteps.WindowsReason(e), FitsNoticeLine));
             return;
         }
         _formOpened = new FormOpened(copied, Path.GetFileName(recording), SaveNames.FolderShown(Path.GetDirectoryName(recording)!, _documents));
