@@ -182,9 +182,15 @@ type Json = Record<string, unknown>;
 const asJson = (v: unknown): Json => (typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Json) : {});
 /** A value that is one of the steps' `{{var.name}}` templates (spaces allowed, as the engine renders them). */
 const holdsVariable = (v: unknown): boolean => /\{\{\s*var\./.test(String(v ?? ''));
-/** Every `{{var.name}}` in a step, once, in order. */
-const stepVariables = (s: unknown): string[] =>
-  [...new Set([...(JSON.stringify(s ?? null) ?? '').matchAll(/\{\{\s*var\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g)].map((m) => m[1]))];
+/** Every `{{var.name}}` in a text, once, in order. */
+const variablesIn = (text: string): string[] =>
+  [...new Set([...text.matchAll(/\{\{\s*var\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g)].map((m) => m[1]))];
+/**
+ * Every `{{var.name}}` a step types, chooses or otherwise uses, once, in order: from the step's own fields, never from its
+ * intent. The intent is the author's description: after a value was changed to a fixed one, it may still name the
+ * variable the step no longer uses.
+ */
+const stepVariables = (s: unknown): string[] => variablesIn(JSON.stringify(Object.fromEntries(Object.entries(asJson(s)).filter(([k]) => k !== 'intent'))));
 
 /** The name of a desktop target's own (last) condition, or ''. */
 /** A target's own condition: the last one of its UI Automation path. */
@@ -220,6 +226,10 @@ function desktopSentence(s: Json): Sentence {
   // itself, as for a named control: this page is what a person approves, and the intent is only the author's own
   // description, so it is shown as that (describedAs), and never in place of the action or the value.
   const described = String(s.intent ?? '').replace(/\s+/g, ' ').trim();
+  // A description that names a variable the step does not use (its value was changed to a fixed one, the description
+  // left as it was) says something else than the step: shown beside the sentence.
+  const used = stepVariables(s);
+  const stale = variablesIn(described).some((v) => !used.includes(v)) ? described : undefined;
   if (!named && (fill || select || check)) {
     const text = fill ? `${holdsVariable(fill.value) ? 'Type' : `Type "${String(fill.value)}"`} into a field without a name`
       : select ? `${holdsVariable(select.option) ? 'Choose an item' : `Choose "${String(select.option)}"`} in a field without a name`
@@ -227,15 +237,15 @@ function desktopSentence(s: Json): Sentence {
     return sentence(text, described || undefined);
   }
   if (fill) {
-    return sentence(holdsVariable(fill.value) ? `Type into ${field}` : `Type "${String(fill.value)}" into ${field}`);
+    return sentence(holdsVariable(fill.value) ? `Type into ${field}` : `Type "${String(fill.value)}" into ${field}`, stale);
   }
-  if (select) return sentence(holdsVariable(select.option) ? `Choose an item in ${field}` : `Choose "${String(select.option)}" in ${field}`);
+  if (select) return sentence(holdsVariable(select.option) ? `Choose an item in ${field}` : `Choose "${String(select.option)}" in ${field}`, stale);
   if (key) {
     // The key goes to the control it names, or to the one in front (no target). The author's description is never the target.
     const text = `Press ${String(key.key)}${field ? ` in ${field}` : key.target ? ' in a control without a name' : ''}`;
     return sentence(text, !named && described && comparable(described) !== comparable(text) ? described : undefined);
   }
-  if (check) return sentence(`${check.checked === false ? 'Uncheck ' : 'Check '}${field}`);
+  if (check) return sentence(`${check.checked === false ? 'Uncheck ' : 'Check '}${field}`, stale);
   // A read: the name a person sees, never the control's automation id; the output name is the step's mark.
   if (s.read !== undefined) {
     const name = ownCondition(asJson(s.read).target)?.name;

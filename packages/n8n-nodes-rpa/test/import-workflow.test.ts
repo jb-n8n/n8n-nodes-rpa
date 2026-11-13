@@ -7,7 +7,7 @@ import { Workflow, type IConnections, type INode, type INodeProperties, type INo
 import { importSource, type Draft, type FlowNode, type ImportOptions, type UiPathFlow } from 'n8n-rpa-engine';
 import { bound } from '../../engine/test/timing.js';
 import { zip } from '../../engine/test/zip-fixtures.js';
-import { buildWorkflow, fromRow, jsName, LOG_FAILED_ROW, LOG_RUN_ROW, MAX_WORKFLOW_NODES, STOP_MESSAGE, workflowFile, type WorkflowJson, type WorkflowNode } from '../nodes/Playwright/import/workflow.js';
+import { buildWorkflow, fromRow, jsName, LOG_FAILED_ROW, LOGGED_MESSAGE_CHARS, LOG_RUN_ROW, MAX_WORKFLOW_NODES, STOP_MESSAGE, workflowFile, type WorkflowJson, type WorkflowNode } from '../nodes/Playwright/import/workflow.js';
 import { RPA_NODE_TYPE } from '../nodes/Playwright/node-type.js';
 import { Playwright } from '../nodes/Playwright/Playwright.node.js';
 import { RUN_TABLE, RUN_TABLE_COLUMNS, RUN_TABLE_FIRST_COLUMNS, STEPS_TABLE, STEPS_TABLE_COLUMNS } from '../nodes/Playwright/rows.js';
@@ -195,7 +195,7 @@ describe('buildWorkflow', () => {
       ['On a schedule', 'n8n-nodes-base.scheduleTrigger'],
       ['Create run log table', 'n8n-nodes-base.dataTable'],
       ['Get active steps (sap-report-1)', 'n8n-nodes-base.dataTable'],
-      ['Use Browser Chrome: SAP Logon', NODE_TYPE],
+      ['sap-report-1', NODE_TYPE],
       ['Upload line items to S3', 'n8n-nodes-base.awsS3'],
       ['If many line items', 'n8n-nodes-base.if'],
       ['Send SMTP Mail Message', 'n8n-nodes-base.emailSend'],
@@ -215,9 +215,9 @@ describe('buildWorkflow', () => {
     expect(byName(w, 'On a schedule')).toMatchObject({ disabled: true, parameters: { rule: { interval: [{ field: 'days', triggerAtHour: 6 }] } } });
     expect(byName(w, 'On a schedule').notes).toBe('Set the time, then turn this node on and publish the workflow. Until then the bot runs only when you click Execute.');
     expect(content(byName(w, 'About this import'))).toContain('- **Run the bot** runs it now. **On a schedule** is off: set the time, turn it on, publish.');
-    expect(targets(w, 'Get active steps (sap-report-1)')).toEqual([['Use Browser Chrome: SAP Logon']]);
+    expect(targets(w, 'Get active steps (sap-report-1)')).toEqual([['sap-report-1']]);
     // Data (0) feeds the next node and the run log; there is no repair branch; the error output feeds the failure log.
-    expect(targets(w, 'Use Browser Chrome: SAP Logon')).toEqual([['Upload line items to S3', 'Log run'], ['Log failed run']]);
+    expect(targets(w, 'sap-report-1')).toEqual([['Upload line items to S3', 'Log run'], ['Log failed run']]);
     expect(targets(w, 'Upload line items to S3')).toEqual([['If many line items']]);
     expect(targets(w, 'If many line items')).toEqual([['Send SMTP Mail Message'], ['Delay']]);
     expect(targets(w, 'Send SMTP Mail Message')).toEqual([['Notify the region']]);
@@ -236,7 +236,7 @@ describe('buildWorkflow', () => {
       returnAll: false, limit: 1, orderBy: true, orderByColumn: 'version', orderByDirection: 'DESC',
     });
     // Run steps: signed steps from that row, Name and Expected Version, AI Repair off (it runs as generated).
-    expect(byName(w, 'Use Browser Chrome: SAP Logon').parameters).toEqual({
+    expect(byName(w, 'sap-report-1').parameters).toEqual({
       operation: 'runSteps',
       runsOn: 'browser',
       // Read from Get active steps by its name, so a node put between the two (one item per account) changes nothing.
@@ -248,9 +248,9 @@ describe('buildWorkflow', () => {
       // The run variables the steps type, empty for the person to fill in (none is secret here).
       options: { name: 'sap-report-1', expectedVersion: "={{ $('Get active steps (sap-report-1)').first().json.version }}", variables: { values: [{ name: 'company', value: '' }, { name: 'from', value: '' }, { name: 'to', value: '' }] } },
     });
-    expect(byName(w, 'Use Browser Chrome: SAP Logon').notes).toMatch(/sap-report-1/);
+    expect(byName(w, 'sap-report-1').notes).toMatch(/sap-report-1/);
     // Allow Private Network is not set (this import had it off): the note says when a person may need it.
-    expect(byName(w, 'Use Browser Chrome: SAP Logon').notes).toContain('For a site on your own network, turn on Options → Allow Private Network here.');
+    expect(byName(w, 'sap-report-1').notes).toContain('For a site on your own network, turn on Options → Allow Private Network here.');
     expect(JSON.stringify(w)).not.toContain('allowPrivateNetwork');
 
     // S3: the literal bucket and key, the file Run steps downloaded (the draft's download is top-level step 7).
@@ -282,7 +282,7 @@ describe('buildWorkflow', () => {
     expect(loop.position[0]).toBeLessThan(byName(w, 'Notify the region').position[0]);
 
     // Left to right: each working node in the main line sits right of the one before it.
-    const line = ['Run the bot', 'Create run log table', 'Get active steps (sap-report-1)', 'Use Browser Chrome: SAP Logon', 'Upload line items to S3', 'If many line items', 'Notify the region', 'Read Range'];
+    const line = ['Run the bot', 'Create run log table', 'Get active steps (sap-report-1)', 'sap-report-1', 'Upload line items to S3', 'If many line items', 'Notify the region', 'Read Range'];
     const xs = line.map((n) => byName(w, n).position[0]);
     expect([...xs].sort((a, b) => a - b)).toEqual(xs);
     expect(new Set(xs).size).toBe(xs.length);
@@ -369,7 +369,7 @@ describe('buildWorkflow', () => {
       getKnownTypes: () => ({}),
     } as unknown as INodeTypes;
     const workflow = new Workflow({ nodes: structuredClone(w.nodes) as unknown as INode[], connections: w.connections as unknown as IConnections, nodeTypes, active: false });
-    const run = workflow.getNode('Use Browser Chrome: SAP Logon');
+    const run = workflow.getNode('sap-report-1');
     expect(run?.parameters).toMatchObject({
       operation: 'runSteps', runsOn: 'browser', requireSignedSteps: true, aiRepair: false,
       steps: fromRow('Get active steps (sap-report-1)', 'steps'), signature: fromRow('Get active steps (sap-report-1)', 'signature'), approvedBy: fromRow('Get active steps (sap-report-1)', 'approvedBy'),
@@ -380,7 +380,7 @@ describe('buildWorkflow', () => {
       for (const outs of Object.values(byType)) for (const out of outs ?? []) for (const c of out) expect(workflow.getNode(c.node)).not.toBeNull();
     }
     // No Model input and no repair branch: the workflow runs as generated.
-    expect(workflow.getParentNodes('Use Browser Chrome: SAP Logon', 'ai_languageModel')).toEqual([]);
+    expect(workflow.getParentNodes('sap-report-1', 'ai_languageModel')).toEqual([]);
     // Every working node is reachable from the trigger; no sticky is connected.
     const reached = new Set(workflow.getChildNodes('Run the bot'));
     for (const n of working(w).filter((x) => !['Run the bot', 'On a schedule'].includes(x.name))) expect(reached, n.name).toContain(n.name);
@@ -528,7 +528,7 @@ describe('buildWorkflow', () => {
     const codex = JSON.parse(readFileSync(new URL('../nodes/Playwright/Playwright.node.json', import.meta.url), 'utf8')) as { node: string };
     expect(codex.node).toBe(RPA_NODE_TYPE);
     const { json: w } = imported();
-    expect(w.nodes.filter((n) => n.type === RPA_NODE_TYPE).map((n) => n.name)).toEqual(['Use Browser Chrome: SAP Logon']);
+    expect(w.nodes.filter((n) => n.type === RPA_NODE_TYPE).map((n) => n.name)).toEqual(['sap-report-1']);
   });
 
   it("S3 reads Run steps' own file name, and only from the Run steps right before it", () => {
@@ -656,9 +656,9 @@ describe('buildWorkflow', () => {
       { kind: 'if', expression: 'x', then: [{ kind: 'browser', sequence: 2, displayName: 'Export' }], else: [], displayName: 'If x' },
     ]), [draft('m-1'), draft('m-2')], { name: 'm' });
     lint(w);
-    for (const run of ['Log in', 'Export']) {
+    for (const run of ['m-1', 'm-2']) {
       expect(byName(w, run).parameters).toMatchObject({ aiRepair: false });
-      expect(targets(w, run)).toEqual([run === 'Log in' ? ['Call', 'Log run'] : ['Log run'], ['Log failed run']]);
+      expect(targets(w, run)).toEqual([run === 'm-1' ? ['Call', 'Log run'] : ['Log run'], ['Log failed run']]);
       expect(String(byName(w, run).notes).split('\n').slice(1)).toEqual(REPAIR_NOTE.split('\n'));
     }
     // Nothing in the file asks for a credential or a workflow beyond what Set once names.
@@ -673,15 +673,15 @@ describe('buildWorkflow', () => {
     const set = buildWorkflow(flow, [draft('m-1'), draft('m-2')], { name: 'm', codeWorkflow: { id: 'wf-code-1', timeoutSeconds: 45 } });
     lint(set);
     // The option is n8n's workflow picker: written in the picker's own form, by ID.
-    for (const run of ['Log in', 'Export']) expect(runOptions(set, run)).toMatchObject({ codeWorkflowId: { __rl: true, mode: 'id', value: 'wf-code-1' }, codeTimeout: 45 });
+    for (const run of ['m-1', 'm-2']) expect(runOptions(set, run)).toMatchObject({ codeWorkflowId: { __rl: true, mode: 'id', value: 'wf-code-1' }, codeTimeout: 45 });
     const plainTimeout = buildWorkflow(flow, [draft('m-1'), draft('m-2')], { name: 'm', codeWorkflow: { id: 'wf-code-1', timeoutSeconds: 120 } });
-    expect(runOptions(plainTimeout, 'Log in')).toMatchObject({ codeWorkflowId: { __rl: true, mode: 'id', value: 'wf-code-1' } });
-    expect(runOptions(plainTimeout, 'Log in')).not.toHaveProperty('codeTimeout');
+    expect(runOptions(plainTimeout, 'm-1')).toMatchObject({ codeWorkflowId: { __rl: true, mode: 'id', value: 'wf-code-1' } });
+    expect(runOptions(plainTimeout, 'm-1')).not.toHaveProperty('codeTimeout');
     const none = buildWorkflow(flow, [draft('m-1'), draft('m-2')], { name: 'm' });
-    expect(runOptions(none, 'Log in')).not.toHaveProperty('codeWorkflowId');
+    expect(runOptions(none, 'm-1')).not.toHaveProperty('codeWorkflowId');
     // An ID that would read as an n8n expression is left out, never written as one.
     for (const id of ['={{ $json.id }}', 'a{{ b }}']) {
-      expect(runOptions(buildWorkflow(flow, [draft('m-1'), draft('m-2')], { name: 'm', codeWorkflow: { id, timeoutSeconds: 120 } }), 'Log in')).not.toHaveProperty('codeWorkflowId');
+      expect(runOptions(buildWorkflow(flow, [draft('m-1'), draft('m-2')], { name: 'm', codeWorkflow: { id, timeoutSeconds: 120 } }), 'm-1')).not.toHaveProperty('codeWorkflowId');
     }
   });
 
@@ -689,26 +689,26 @@ describe('buildWorkflow', () => {
     const runOptions = (w: WorkflowJson, run: string) => (byName(w, run).parameters as { options: Record<string, unknown> }).options;
     const flow = flowOf([{ kind: 'browser', sequence: 1, displayName: 'Log in' }]);
     const w = buildWorkflow(flow, [draft('o-1')], { name: 'o', run: { maxSeconds: 240, allowedHosts: ['cdn.example.com', 'static.example.com'] } });
-    expect(runOptions(w, 'Log in')).toMatchObject({ maxSeconds: 240, allowedHosts: 'cdn.example.com, static.example.com' });
+    expect(runOptions(w, 'o-1')).toMatchObject({ maxSeconds: 240, allowedHosts: 'cdn.example.com, static.example.com' });
     const plain = buildWorkflow(flow, [draft('o-1')], { name: 'o', run: { maxSeconds: 180, allowedHosts: [] } });
-    expect(runOptions(plain, 'Log in')).not.toHaveProperty('maxSeconds');
-    expect(runOptions(plain, 'Log in')).not.toHaveProperty('allowedHosts');
+    expect(runOptions(plain, 'o-1')).not.toHaveProperty('maxSeconds');
+    expect(runOptions(plain, 'o-1')).not.toHaveProperty('allowedHosts');
     // A host that n8n would read as an expression is not written.
-    expect(runOptions(buildWorkflow(flow, [draft('o-1')], { name: 'o', run: { allowedHosts: ['={{ 1 }}'] } }), 'Log in')).not.toHaveProperty('allowedHosts');
+    expect(runOptions(buildWorkflow(flow, [draft('o-1')], { name: 'o', run: { allowedHosts: ['={{ 1 }}'] } }), 'o-1')).not.toHaveProperty('allowedHosts');
   });
 
   it('Allow Private Network is on in the browser Run steps exactly when the import had it on, as a plain true, and the note says why', () => {
     const runOptions = (w: WorkflowJson, run: string) => (byName(w, run).parameters as { options: Record<string, unknown> }).options;
     const flow = flowOf([{ kind: 'browser', sequence: 1, displayName: 'Log in' }]);
     const on = buildWorkflow(flow, [draft('p-1')], { name: 'p', run: { allowPrivateNetwork: true } });
-    expect(runOptions(on, 'Log in').allowPrivateNetwork).toBe(true);
-    expect(byName(on, 'Log in').notes).toContain('Options → Allow Private Network is on because the import had it on: the steps may open addresses on your own network.');
-    expect(byName(on, 'Log in').notes).not.toContain('turn on Options → Allow Private Network');
+    expect(runOptions(on, 'p-1').allowPrivateNetwork).toBe(true);
+    expect(byName(on, 'p-1').notes).toContain('Options → Allow Private Network is on because the import had it on: the steps may open addresses on your own network.');
+    expect(byName(on, 'p-1').notes).not.toContain('turn on Options → Allow Private Network');
     // Off, not given, or anything but a plain true: never written, and the note says when to turn it on.
     for (const run of [{ allowPrivateNetwork: false }, {}, { allowPrivateNetwork: 'true' as unknown as boolean }, { allowPrivateNetwork: '={{ true }}' as unknown as boolean }]) {
       const off = buildWorkflow(flow, [draft('p-1')], { name: 'p', run });
       expect(JSON.stringify(off), JSON.stringify(run)).not.toContain('allowPrivateNetwork');
-      expect(byName(off, 'Log in').notes).toContain('For a site on your own network, turn on Options → Allow Private Network here.');
+      expect(byName(off, 'p-1').notes).toContain('For a site on your own network, turn on Options → Allow Private Network here.');
     }
     const none = buildWorkflow(flow, [draft('p-1')], { name: 'p' });
     expect(JSON.stringify(none)).not.toContain('allowPrivateNetwork');
@@ -806,21 +806,21 @@ describe('buildWorkflow', () => {
     };
     const flow = flowOf([{ kind: 'browser', sequence: 1, displayName: 'Log in' }, { kind: 'desktop', sequence: 2, displayName: 'Desk' }, { kind: 'credential', asset: 'Portal', displayName: 'Get' }]);
     const w = buildWorkflow(flow, [draft('m-1')], { name: 'm', desktopDrafts: [desktop], credentials: passed });
-    expect(byName(w, 'Log in').credentials).toEqual({ playwrightBrowserApi: passed.browser, playwrightSiteLoginApi: passed.siteLogin, playwrightScriptSigningApi: passed.signing });
-    expect(byName(w, 'Desk').credentials).toEqual({ rpaDesktopRunnerApi: passed.desktopRunner, playwrightScriptSigningApi: passed.signing });
+    expect(byName(w, 'm-1').credentials).toEqual({ playwrightBrowserApi: passed.browser, playwrightSiteLoginApi: passed.siteLogin, playwrightScriptSigningApi: passed.signing });
+    expect(byName(w, 'm-2').credentials).toEqual({ rpaDesktopRunnerApi: passed.desktopRunner, playwrightScriptSigningApi: passed.signing });
     // Each type is one the RPA node shows on Run Steps, so n8n puts it in that slot; INodeCredentialsDetails is { id, name }.
     const d = new Playwright().description;
     const runStepsTypes = (d.credentials ?? []).filter((c) => c.displayOptions?.show?.operation?.includes('runSteps') || c.displayOptions?.hide).map((c) => c.name);
-    for (const run of ['Log in', 'Desk']) for (const type of Object.keys(byName(w, run).credentials ?? {})) expect(runStepsTypes, type).toContain(type);
+    for (const run of ['m-1', 'm-2']) for (const type of Object.keys(byName(w, run).credentials ?? {})) expect(runStepsTypes, type).toContain(type);
     // Loaded by n8n-workflow as it is: the id is kept with the name. In another n8n, where id b1 does not exist, n8n's
     // editor (useNodeHelpers matchCredentials) takes the only credential of that type with the same name, else asks.
     const playwright = new Playwright();
     const nodeTypes = { getByName: (t: string) => (t === NODE_TYPE ? playwright : undefined), getByNameAndVersion: (t: string) => (t === NODE_TYPE ? playwright : undefined), getKnownTypes: () => ({}) } as unknown as INodeTypes;
     const loaded = new Workflow({ nodes: structuredClone(w.nodes) as unknown as INode[], connections: w.connections as unknown as IConnections, nodeTypes, active: false });
-    expect(loaded.getNode('Log in')?.credentials?.playwrightSiteLoginApi).toEqual({ id: 's1', name: 'Portal login' });
+    expect(loaded.getNode('m-1')?.credentials?.playwrightSiteLoginApi).toEqual({ id: 's1', name: 'Portal login' });
     // The notes and stickies say what was picked and what happens elsewhere.
-    expect(byName(w, 'Log in').notes).toContain('RPA Browser, RPA Site Login and RPA Step Signing are picked for you: check them.');
-    expect(byName(w, 'Desk').notes).toContain('RPA Desktop Runner and RPA Step Signing are picked for you: check them.');
+    expect(byName(w, 'm-1').notes).toContain('RPA Browser, RPA Site Login and RPA Step Signing are picked for you: check them.');
+    expect(byName(w, 'm-2').notes).toContain('RPA Desktop Runner and RPA Step Signing are picked for you: check them.');
     const set = content(byName(w, 'Set once'));
     // Every RPA credential picked: one line, and the UiPath credential lookup (a green note in the flow) to read.
     expect(set).toBe('### Set once\nNo secret is in this file. Pick these on the nodes:\n- UiPath credential lookups (green notes in the flow): desktop steps type the sign-in from their Run steps\' Variables (a password from **RPA Secret Variables**); browser steps use the RPA Site Login on their Run steps\n'
@@ -832,9 +832,9 @@ describe('buildWorkflow', () => {
     const odd = buildWorkflow(flowOf([{ kind: 'browser', sequence: 1, displayName: 'Log in' }]), [draft('m-1')], {
       name: 'm', credentials: { browser: { id: '', name: 'x' }, siteLogin: { id: 7 as unknown as string, name: 'y' }, signing: { id: 'k'.repeat(65), name: 'z' } },
     });
-    expect(byName(odd, 'Log in').credentials).toBeUndefined();
-    expect(byName(odd, 'Log in').notes).toContain('Pick RPA Browser, RPA Site Login and RPA Step Signing here.');
-    expect(content(byName(odd, 'Set once'))).toContain('No secret is in this file. Pick these on the nodes:\n- **RPA Browser**, **RPA Site Login** and **RPA Step Signing**: **Log in**');
+    expect(byName(odd, 'm-1').credentials).toBeUndefined();
+    expect(byName(odd, 'm-1').notes).toContain('Pick RPA Browser, RPA Site Login and RPA Step Signing here.');
+    expect(content(byName(odd, 'Set once'))).toContain('No secret is in this file. Pick these on the nodes:\n- **RPA Browser**, **RPA Site Login** and **RPA Step Signing**: **m-1**');
   });
 
   it('every run writes the run log, and a failed run still ends as failed: Create run log table → … → Run steps → Log run, error → Log failed run → Stop and Error', () => {
@@ -889,6 +889,13 @@ describe('buildWorkflow', () => {
     const failedRow = shape(LOG_FAILED_ROW, lockedOut, all);
     expect(Object.keys(failedRow)).toEqual(RUN_TABLE_COLUMNS.map((c) => c.name));
     expect(failedRow).toMatchObject({ code: 'locked_out', name: 'bot', executionId: '22', message: lockedOut.message, guidance: GUIDANCE.locked_out });
+    // A long message is cut to 300 characters (a character outside the BMP counts once), so the owner's view of the
+    // table stays readable; the whole message is on Run steps' error item.
+    const long = 'é'.repeat(250) + '😀'.repeat(100);
+    const cut = String(shape(LOG_FAILED_ROW, { ...lockedOut, message: long }, all).message);
+    expect(Array.from(cut)).toHaveLength(LOGGED_MESSAGE_CHARS);
+    expect(cut).toBe(`${'é'.repeat(250)}${'😀'.repeat(49)}…`);
+    expect(shape(LOG_FAILED_ROW, { ...lockedOut, message: 'x'.repeat(300) }, all).message).toBe('x'.repeat(300));
     // A table made by an earlier version: the row has only its ten columns, so n8n's insert never refuses it.
     expect(Object.keys(shape(LOG_FAILED_ROW, lockedOut, first))).toEqual(RUN_TABLE_FIRST_COLUMNS.map((c) => c.name));
     expect(Object.keys(shape(LOG_RUN_ROW, { name: 'bot', lane: 'script', version: 1, hash: 'h', durationMs: 900 }, first))).toEqual(RUN_TABLE_FIRST_COLUMNS.map((c) => c.name));
@@ -944,9 +951,9 @@ describe('buildWorkflow', () => {
       { kind: 'http', url: 'https://api.example.com/', displayName: 'Call' },
     ]), [draft('u-1')], { name: 'u', desktopDrafts: [desktop] });
     expect(w.nodes.filter((n) => LOG_NODES.includes(n.name)).map((n) => n.name)).toEqual(LOG_NODES);
-    expect(targets(w, 'Web part')).toEqual([['Get active steps (u-2)', 'Log run'], ['Log failed run']]);
-    expect(targets(w, 'Desk part')).toEqual([['Call', 'Log run'], ['Log failed run']]);
-    expect(byName(w, 'Desk part').onError).toBe('continueErrorOutput');
+    expect(targets(w, 'u-1')).toEqual([['Get active steps (u-2)', 'Log run'], ['Log failed run']]);
+    expect(targets(w, 'u-2')).toEqual([['Call', 'Log run'], ['Log failed run']]);
+    expect(byName(w, 'u-2').onError).toBe('continueErrorOutput');
     const lowest = Math.max(...w.nodes.filter((n) => !LOG_NODES.includes(n.name) && n.type !== STICKY).map((n) => n.position[1]));
     expect(byName(w, 'Log run').position[1]).toBeGreaterThan(lowest);
     // A flow without a Run steps keeps no run log.

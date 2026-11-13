@@ -105,9 +105,12 @@ an **RPA Step Signing** credential that its own project owns, and never one of t
   read or imported, and an approval never arrives with its answer chosen by whoever made the link.
 - **By email (an option).** Set `approval` to `by email` in template 5's **Settings**, and each step list goes to
   **RPA: 3 Approve steps**, which emails a named approver. The approval link is a bearer link: anyone who receives or
-  forwards it can approve. Send it to one person. The AI repairs of **RPA: 2 Data feed** use this path.
+  forwards it can approve. Send it to one person. The AI repairs of **RPA: 2 Data feed** use this path. In the
+  approval email, each `<`, `>` and `&` from the steps or the page is shown as `‹`, `›` and `＆`, so that no text from
+  them is read as a link or other markup by the email.
 - **What each step says.** The review page builds each step's sentence from the step itself: what it does, where, and
-  the value it types or chooses. A secret's or a variable's value is never shown. A step's description comes from
+  the value it types or chooses. A secret's or a variable's value is never shown. A variable is marked from what the step
+  types or chooses, never from its description. A step's description comes from
   whoever wrote the steps, so it is shown beside the sentence, in red, as `(described differently as: …)`, when it says
   something else. Only case, spaces, quotes and a full stop at the end are ignored in that comparison: another verb,
   target or value shows. The approval emails show the same sentences. Sign Steps refuses to sign when the step sentences shown for approval differ from the steps it is asked to sign.
@@ -115,6 +118,7 @@ an **RPA Step Signing** credential that its own project owns, and never one of t
   writes. A write mark only matters where the runner's policy lists the control or key (see [Desktop runs](#desktop-runs)).
 - **Changing or signing again on the form.** With **Bot file** left empty, the form's next page shows the steps of the
   `active` row of the name typed, and a name it does not find ends on a page that lists every approved bot's name.
+  With its box left empty, the steps signed again are the row's own, read in n8n: they do not pass through the browser.
   What comes back from that page is a new import: the same review page, the same checks by Sign Steps, the approver on
   the allowlist, and a new row that supersedes the old one only when it is approved. Nothing is signed again without a
   person's approval. Those pages are later pages of the form, as the review page is:
@@ -180,8 +184,8 @@ To sign the step lists again with the new key:
    create the credential with a new key of 32 or more random characters, and select it on **Sign steps** in template
    5 (and template 3) and on every **Run steps** node.
 2. For each bot, open the **Import a bot** form, leave **Bot file** empty and type the bot's name. The next page
-   shows the steps of its `active` row in a box. Leave them as they are and click **Review**: they go to the import
-   as a **Step document**.
+   shows the steps of its `active` row. Leave the box empty and click **Review**: the row's steps go to the import as
+   a **Step document**.
 3. Read every step on the review page. Browser steps are replayed, desktop steps go to approval as written. Steps
    that were signed as writes come back as candidates: tick them again.
 4. Approve. The new row supersedes the old ones under that name, and the bot runs again.

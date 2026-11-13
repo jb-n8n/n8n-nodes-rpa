@@ -24,9 +24,13 @@ Templates 2, 3 and 5 create the two Data Tables when they are missing.
   carry their own checks, so it is not asked: **Read the upload** reads the file's text (a file of at most 5 MB that is
   not a ZIP, XAML, code or a recording) and **Asks about a download?** looks for the step document's shape.
 - **Bot file** may be left empty to change an approved bot or sign it again. **Approved bots** reads the `active`
-  rows of `playwright_steps`, and **Change or sign again** shows the newest active steps of the name typed, in a box.
-  **Review** sends the box to **Import steps** as a step document, then to the same review page and **Sign steps**.
-  **Compared with the approved version** gives the review page its first line: unchanged, or which steps differ.
+  rows of `playwright_steps`, and **Change or sign again** shows the newest active steps of the name typed, to read
+  and copy, with one box that is empty to start with. **Compared with the approved version** takes the steps to
+  review: with the box left empty, the active row's steps as **The bot to change** read them from the table (they never
+  pass through the browser); with text in the box, that text. It also gives the review page its first line: unchanged,
+  or which steps differ. **Review** sends those steps to **Import steps** as a step document, then to the same review
+  page and **Sign steps**. Text that is not a step document ends on **Import failed**, which says the old version keeps
+  running.
   The steps get the next version: **Import steps → Options → Version** is the approved version plus one, read by
   **The bot to change** from the active row (never from the box), so the review page says `version 2, replacing version
   1`. Signing the same steps again also gives the next version: it is a new approval. The workflow that runs the bot
@@ -38,7 +42,9 @@ Templates 2, 3 and 5 create the two Data Tables when they are missing.
   save, send or submit?". The **Decision** is **Approve and sign** or **Reject**. A page left unanswered for an hour
   signs nothing.
 - The last page says `Approved and signed: <name> v<version> is now the version that runs under that name.`, or
-  `Rejected: <name> v<version>. Nothing was signed.` An import is version 1. When Sign steps signed a step list, it
+  `Rejected: <name> v<version>. Nothing was signed.` An import is version 1. After a change or a re-sign it says
+  `Signed again: <name> version N, unchanged.`, `Changed: <name> version N is now the version that runs, replacing
+  version M.`, or `Nothing changed: <name> version M keeps running.` When Sign steps signed a step list, it
   also downloads the workflow that runs the bot. When nothing was signed (rejected, or Sign steps refused), it neither
   gives the file nor says it does.
 - In another n8n, or once a credential the workflow file picks is deleted, n8n picks the only credential of the same
@@ -146,7 +152,7 @@ after `approvalTimeoutHours` (72), then:
 | `llmTokens` | number | Model tokens used |
 | `code` | string | Error code, empty on success |
 | `executionId` | string | The n8n execution |
-| `message` | string | What failed, as Run Steps' error item says it. Empty on success |
+| `message` | string | What failed, as Run Steps' error item says it (masked as the node masks it), cut to 300 characters. Empty on success |
 | `guidance` | string | What to do about it: the same text as the node error's description. Empty on success |
 | `file` | string | The name of the file the run returned, empty when none |
 | `account` | string | The user name the RPA Site Login signed in with, empty without one. Never the password |

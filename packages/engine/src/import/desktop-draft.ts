@@ -81,6 +81,8 @@ export function desktopLocator(target: UiaTarget): DesktopLocator {
   return kept.length ? { ...primary, fallbacks: kept } : primary;
 }
 
+/** A file name that has an extension of its own (line-items.csv, not line-items or .profile). */
+const HAS_EXTENSION = /[^.]\.[^.]+$/;
 /**
  * The exported file's name as an anchored pattern (expectFile.pattern). A name without an extension also matches with
  * one extension: a Save dialog adds its file type's extension itself (line-items is saved as line-items.csv). A name
@@ -88,7 +90,7 @@ export function desktopLocator(target: UiaTarget): DesktopLocator {
  */
 export const filePattern = (file: string): string => {
   const name = file.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
-  return /[^.]\.[^.]+$/.test(file) ? `^${name}$` : `^${name}(?:\\.[^.]+)?$`;
+  return HAS_EXTENSION.test(file) ? `^${name}$` : `^${name}(?:\\.[^.]+)?$`;
 };
 
 const sameExe = (a: string | undefined, b: string): boolean => {
@@ -130,7 +132,9 @@ export function buildDesktopDraft(seq: DesktopSequence, report: ImportReport, o:
   const flushFile = () => {
     if (!pendingFile) return;
     gate = undefined;
-    push({ intent: `Return the exported file ${shown(cleanLabel(pendingFile.file))}`, expectFile: { pattern: filePattern(pendingFile.file) } }, pendingFile.at);
+    // A name without an extension comes back with the one the app adds (filePattern): the sentence says so.
+    const bare = !HAS_EXTENSION.test(pendingFile.file);
+    push({ intent: `Return the exported file ${shown(cleanLabel(pendingFile.file))}${bare ? ' (with the extension the app adds)' : ''}`, expectFile: { pattern: filePattern(pendingFile.file) } }, pendingFile.at);
     add(pendingFile.at, 'converted', `Return ${cleanLabel(pendingFile.file)}`, 'the file the app saves into the run\'s export folder comes back to n8n as the step\'s file (expectFile), matched by its name');
     pendingFile = undefined;
   };

@@ -93,7 +93,7 @@ Zip the project folder (the one with `project.json`), or pick one `.xaml` workfl
 **What is left out, and reported:** the browser's Get Text and Extract Data (write an `extract` step), Orchestrator
 assets and queues, Catch branches, wildcard and fuzzy selectors, image and computer-vision targets, Java apps, Citrix
 and Remote Desktop windows, and SAP GUI for Windows. A UiPath project gives one step list per sequence, named
-`<name>-1`, `<name>-2`.
+`<name>-1`, `<name>-2`. In the workflow it hands over, each RPA node has the name of its step list.
 
 ## From a website recording or Playwright code
 
@@ -127,17 +127,23 @@ form asks for nothing more. Without one, the last page says:
 ## Change an approved bot, or sign it again
 
 1. Open the **Import a bot** form. Leave **Bot file** empty and type the bot's name in **Name for the steps**.
-2. The next page shows the steps that run now under that name, in a box. Change what you need, or leave them as they
-   are to sign them again, for example after the signing key changed.
+2. The next page shows the steps that run now under that name, to read or copy. Leave the box empty to sign them
+   again, for example after the signing key changed. To change them, copy the steps into an editor, change what you
+   need, and paste the whole step document into the box.
 3. Click **Review**. The review page of an import follows: read every step, check the write ticks of desktop steps,
    and choose **Approve and sign** or **Reject**.
 
-The review page's first line says whether the steps differ from the approved version, and which steps or settings
-do. Approved, the steps become the next version under that name (version 2 replaces version 1), signed with the current
-key, and the old row is superseded: the bot's workflow runs the new version as it is. Rejected, or not answered within
-an hour, the old version keeps running, and the last page offers no workflow file. A name the form does not find ends on a
-page that lists the approved bots. The box holds JSON: for a long step list, copy it into an editor, or upload the
-edited steps as a file with the source **Step document** and the same name.
+With the box left empty, the steps are the active row's steps as the workflow reads them from the Data Table: they do
+not pass through your browser. Pasted text is taken as you typed it. The review page's first line says whether the
+steps differ from the approved version, and which steps or settings do. Text that is not a step document ends on a
+page that says so, and nothing changes.
+
+Approved, the steps become the next version under that name (version 2 replaces version 1), signed with the current
+key, and the old row is superseded: the bot's workflow runs the new version as it is. The last page says
+`Signed again: <name> version 2, unchanged.`, or `Changed: <name> version 2 is now the version that runs, replacing
+version 1.` Rejected, or not answered within an hour, the old version keeps running, and the last page says `Nothing
+changed: <name> version 1 keeps running.` This path offers no workflow file. A name the form does not find ends on a page that lists the approved
+bots.
 
 ## From Power Automate Desktop
 
