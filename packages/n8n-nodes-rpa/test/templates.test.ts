@@ -2634,7 +2634,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(evaluate(answeredCond, { $: answered(null, null) })).toBe(false);
     // The change page again: what to correct in red at the top, the choice and the pasted steps kept.
     const again = (choice: string, box: string) => jsonFormFields(String(byName(t, 'Change or sign again').parameters.jsonOutput), {
-      $: (name: string) => (name === 'Import a bot' ? { params: form.parameters } : answered(choice, box)(name)),
+      // The page shown again: Page answered? has run, and its item is the answer before (the page never reads itself:
+      // n8n keeps a waiting form page's own run, so a self-reference would see it on its first showing too).
+      $: (name: string) => (name === 'Import a bot' ? { params: form.parameters } : nodesRan({ ...ran, 'Page answered?': [[{ json: { choice, changedSteps: box } }]] })(name)),
     });
     const first = again(SIGN_AGAIN, other);
     expect(String(first[0].html)).toMatch(/^<p><strong>You chose to sign the approved steps again, unchanged, and pasted steps that differ from them\. To use the pasted steps, choose Change the steps\. To sign them again unchanged, empty the box\. Your choice and the pasted steps are kept below\.<\/strong><\/p><p>These are the steps/);
