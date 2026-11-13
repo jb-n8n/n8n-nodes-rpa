@@ -6,20 +6,23 @@ and intent instead, for example `Step 3 (Click Save): no element matched ...`. T
 do. No message holds a URL query string, a token or a user name.
 
 **On the error output.** With **Settings → On Error → Continue (using error output)**, a failure goes to the node's
-error output as an item with three fields:
+error output as an item with three fields (n8n sends an item to the error output only when it has no other):
 
 - `error`: `"<code>: <message>"`
 - `message`: the message without the code
 - `details`: everything else: `code`, `message`, `name`, `version`, `lane`, `hash`, `stepIntent`, `durationMs`,
   `llmTokens` (chat model tokens the run used), `submitted` (`true` once a submit was sent), `log` (the steps that
-  finished) and `traceRef` (the binary field that holds the scrubbed trace)
+  finished), `traceRef` (the binary field that holds the scrubbed trace) and `guidance`: what to do, the same text as
+  the error's description in n8n, which n8n does not show for an item on the error output
 
-Read them as `{{ $json.details.code }}`. The error output is output 1 on every operation, and output 2 on Run Steps
-with AI Repair on and on Import Steps.
+Read them as `{{ $json.details.code }}` and `{{ $json.details.guidance }}`. The workflow the import form hands over
+shows the code, the message and the guidance in its **Stop and Error** message and writes them to its run log row.
+The error output is output 1 on every operation, and output 2 on Run Steps with AI Repair on and on Import Steps.
 
 A configuration error (a missing credential, a bad option, a setting that must be typed given as an expression) is
-not a run failure. On the error output it has `details` `{ configError: true, code: null, ... }`. A Sign Steps refusal
-reads `Sign Steps refused: <reasons>`.
+not a run failure. On the error output it has `details` `{ configError: true, code: null, ..., guidance }`, the
+guidance reading `Check the node parameters and the RPA credentials.` A Sign Steps refusal reads
+`Sign Steps refused: <reasons>`.
 
 ## Codes
 

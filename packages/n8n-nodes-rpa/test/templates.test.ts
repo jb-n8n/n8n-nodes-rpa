@@ -23,7 +23,7 @@ import { executeRunSteps } from '../nodes/Playwright/operations/runSteps.js';
 import { executeSignSteps } from '../nodes/Playwright/operations/signSteps.js';
 import { repairedStepsJson } from '../nodes/Playwright/output.js';
 import { Playwright } from '../nodes/Playwright/Playwright.node.js';
-import { RUN_TABLE, RUN_TABLE_COLUMNS, STEPS_TABLE, STEPS_TABLE_COLUMNS } from '../nodes/Playwright/rows.js';
+import { RUN_TABLE, RUN_TABLE_COLUMNS, RUN_TABLE_FIRST_COLUMNS, STEPS_TABLE, STEPS_TABLE_COLUMNS } from '../nodes/Playwright/rows.js';
 import { agentOk, fakeEngine, scriptOk, taskFail } from './fake-engine.js';
 import { nodeContext, siteLoginData } from './feed-fixtures.js';
 import { harness } from './harness.js';
@@ -324,7 +324,8 @@ describe('2-data-feed.json', () => {
   it('Log run and Log failed run write one run row each, from a real Data item and a real error item (duration and tokens included)', async () => {
     for (const name of ['Log run', 'Log failed run']) {
       expect(table(byName(t, name))).toMatchObject({ operation: 'insert', dataTableId: { value: RUN_TABLE }, columns: { mappingMode: 'defineBelow' } });
-      expect(Object.keys(table(byName(t, name)).columns?.value ?? {})).toEqual(RUN_TABLE_COLUMNS.map((c) => c.name));
+      // Only the first ten columns: a table made by an earlier version has them, so the data feed never fails on one.
+      expect(Object.keys(table(byName(t, name)).columns?.value ?? {})).toEqual(RUN_TABLE_FIRST_COLUMNS.map((c) => c.name));
     }
     const settings = { name: 'example-feed' };
     const row = (name: string, json: IDataObject, runItem: IDataObject = json) => Object.fromEntries(

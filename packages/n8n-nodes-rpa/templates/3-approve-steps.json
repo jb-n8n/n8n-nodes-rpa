@@ -115,7 +115,9 @@
             { "name": "durationMs", "type": "number" },
             { "name": "llmTokens", "type": "number" },
             { "name": "code", "type": "string" },
-            { "name": "executionId", "type": "string" }
+            { "name": "executionId", "type": "string" },
+            { "name": "message", "type": "string" },
+            { "name": "guidance", "type": "string" }
           ]
         },
         "options": { "createIfNotExists": true }

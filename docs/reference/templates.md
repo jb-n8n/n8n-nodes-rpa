@@ -135,3 +135,10 @@ after `approvalTimeoutHours` (72), then:
 | `llmTokens` | number | Model tokens used |
 | `code` | string | Error code, empty on success |
 | `executionId` | string | The n8n execution |
+| `message` | string | What failed, as Run Steps' error item says it. Empty on success |
+| `guidance` | string | What to do about it: the same text as the node error's description. Empty on success |
+
+The workflow the import form hands over writes the columns the table has. A `playwright_runs` made by an earlier
+version keeps its columns, and a run never fails on it: the newer columns are left out of its rows. To have them, add
+them to the table in n8n (**Data tables** → `playwright_runs` → add a column, with the name and type above), or delete
+the table and its rows: the next run makes it again. The data feed writes only the first ten columns.

@@ -123,6 +123,7 @@ const T = {
   wait: ['n8n-nodes-base.wait', 1.1],
   if: ['n8n-nodes-base.if', 2.2],
   stopAndError: ['n8n-nodes-base.stopAndError', 1],
+  set: ['n8n-nodes-base.set', 3.4],
 } as const satisfies Record<string, readonly [string, number]>;
 
 const COLOUR = { green: 4, gold: 2, grey: 7 } as const;
@@ -226,34 +227,51 @@ function pickText(picked: string[], missing: string[]): string {
     missing.length ? `Pick ${and(missing)} here.` : '',
   ].filter(Boolean).join(' ');
 }
-/** The run log's nodes: they are drawn once a workflow has a Run steps, and the cap keeps room for them. */
-const LOG = { create: 'Create run log table', run: 'Log run', failed: 'Log failed run', stop: 'Stop and Error' } as const;
+/**
+ * The run log's nodes: they are drawn once a workflow has a Run steps, and the cap keeps room for them. **Log run** and
+ * **Log failed run** shape the row, **Write run row** and **Write failed run row** write it.
+ */
+const LOG = {
+  create: 'Create run log table', run: 'Log run', write: 'Write run row', failed: 'Log failed run', writeFailed: 'Write failed run row', stop: 'Stop and Error',
+} as const;
 const LOG_NODES = Object.keys(LOG).length;
-/** The run log's columns as n8n's Data Table insert writes them: every value from the item it gets, never from a node by name. */
-const runRow = (values: Record<string, string>) => ({
-  mappingMode: 'defineBelow',
-  value: values,
+/** n8n's Data Table insert writing the item it gets, column by column (the item holds only the table's columns). */
+const autoRow = () => ({
+  mappingMode: 'autoMapInputData',
+  value: null,
   matchingColumns: [],
   schema: RUN_TABLE_COLUMNS.map((c) => ({ id: c.name, displayName: c.name, required: false, defaultMatch: false, display: true, type: c.type, canBeUsedToMatch: true })),
 });
-/** A successful run: Run steps' Data item. */
-const LOG_RUN_ROW = {
-  name: "={{ $json.name ?? '' }}", lane: "={{ $json.lane ?? '' }}", version: '={{ $json.version ?? 0 }}', hash: "={{ $json.hash ?? '' }}",
-  confirmed: '={{ $json.confirmed ?? false }}', rowCount: '={{ ($json.rows ?? []).length }}', durationMs: '={{ $json.durationMs ?? 0 }}',
-  llmTokens: '={{ $json.llmTokens ?? 0 }}', code: '', executionId: '={{ $execution.id }}',
-};
-/** A failed run: Run steps' error item, its facts under details (a configuration error has no code: config_error). */
-const LOG_FAILED_ROW = {
-  name: "={{ $json.details?.name ?? '' }}", lane: "={{ $json.details?.lane ?? '' }}", version: '={{ $json.details?.version ?? 0 }}',
-  hash: "={{ $json.details?.hash ?? '' }}", confirmed: '={{ false }}', rowCount: '={{ 0 }}', durationMs: '={{ $json.details?.durationMs ?? 0 }}',
-  llmTokens: '={{ $json.details?.llmTokens ?? 0 }}', code: "={{ $json.details?.code || 'config_error' }}", executionId: '={{ $execution.id }}',
-};
 /**
- * Stop and Error's message: the code and the step list's name from the logged row, or from the error item itself when the
- * log write failed (Log failed run passes its input on then), with the error's message when it is there.
+ * A run log row as one expression: the fields, then only those the table has. n8n's Data Table refuses a row with a
+ * column the table lacks, and a playwright_runs made by an earlier version lacks the newer columns: Create run log table
+ * gives the table it found or made, with its columns, and a column it does not list is left out. Every value comes from
+ * the item the node gets, the execution's id, and that one node of the generator's own.
+ */
+const rowExpression = (fields: string): string =>
+  `={{ ((row, have) => (have.length ? Object.fromEntries(Object.entries(row).filter(([k]) => have.includes(k))) : row))({ ${fields} }, [].concat($('${LOG.create}').first().json.columns ?? []).map((c) => c?.name)) }}`;
+/** A successful run: Run steps' Data item. */
+export const LOG_RUN_ROW = rowExpression([
+  "name: $json.name ?? ''", "lane: $json.lane ?? ''", 'version: $json.version ?? 0', "hash: $json.hash ?? ''", 'confirmed: $json.confirmed ?? false',
+  'rowCount: ($json.rows ?? []).length', 'durationMs: $json.durationMs ?? 0', 'llmTokens: $json.llmTokens ?? 0', "code: ''", 'executionId: $execution.id',
+  "message: ''", "guidance: ''",
+].join(', '));
+/**
+ * A failed run: Run steps' error item, its facts under details (a configuration error has no code: config_error), the
+ * message, and what to do (details.guidance, the node error's description).
+ */
+export const LOG_FAILED_ROW = rowExpression([
+  "name: $json.details?.name ?? ''", "lane: $json.details?.lane ?? ''", 'version: $json.details?.version ?? 0', "hash: $json.details?.hash ?? ''",
+  'confirmed: false', 'rowCount: 0', 'durationMs: $json.details?.durationMs ?? 0', 'llmTokens: $json.details?.llmTokens ?? 0',
+  "code: $json.details?.code || 'config_error'", 'executionId: $execution.id', "message: $json.message ?? ''", "guidance: $json.details?.guidance ?? ''",
+].join(', '));
+/**
+ * Stop and Error's message, from the row Log failed run shaped (also when writing it failed): the code, the step list's
+ * name, the message and what to do. A table made by an earlier version has no message or guidance column: then it
+ * points to Run steps.
  */
 export const STOP_MESSAGE =
-  "={{ 'The run failed: ' + ($json.code || $json.details?.code || 'config_error') + ' on ' + ($json.name || $json.details?.name || 'the steps') + ($json.message ? '. ' + $json.message : '. Run steps in this execution has the message.') }}";
+  `={{ ((r) => 'The run failed: ' + (r.code || 'config_error') + ' on ' + (r.name || 'the steps') + '.' + (r.message ? ' ' + r.message : '') + (r.guidance ? ' ' + r.guidance : '') + (r.message || r.guidance ? '' : ' Run steps in this execution has the message.'))($('${LOG.failed}').first().json) }}`;
 const RUNS_ONCE = 'Run steps runs once for all items here, not once per item, because Get active steps has Execute Once on.';
 /** The binary property Run steps gives the draft's last top-level download or expected file (file_<index>, see the engine's binaryName). */
 function downloadProperty(draft: Draft | DesktopDraft): string | undefined {
@@ -488,22 +506,28 @@ class Builder {
       failAt = [2 * STEP, bottom + 280];
     }
     const table = { __rl: true, mode: 'name', value: RUN_TABLE };
+    const right = (at: [number, number]): [number, number] => [at[0] + STEP, at[1]];
     // Not Execute Once: a Run steps that runs once per item (one per account) writes one row per run.
-    this.add(T.dataTable, LOG.run, logAt, { resource: 'row', operation: 'insert', dataTableId: table, columns: runRow(LOG_RUN_ROW), options: {} }, {
-      notes: `One row in ${RUN_TABLE} per successful run of a Run steps.`,
+    this.add(T.set, LOG.run, logAt, { mode: 'raw', jsonOutput: LOG_RUN_ROW, options: {} }, {
+      notes: `The row ${LOG.write} writes to ${RUN_TABLE} for each successful run of a Run steps.`,
     });
-    this.add(T.dataTable, LOG.failed, failAt, { resource: 'row', operation: 'insert', dataTableId: table, columns: runRow(LOG_FAILED_ROW), options: {} }, {
-      onError: 'continueRegularOutput',
-      notes: `One row in ${RUN_TABLE} per failed run, with its error code. If the row cannot be written, the run still stops as failed.`,
+    this.add(T.dataTable, LOG.write, right(logAt), { resource: 'row', operation: 'insert', dataTableId: table, columns: autoRow(), options: {} });
+    this.add(T.set, LOG.failed, failAt, { mode: 'raw', jsonOutput: LOG_FAILED_ROW, options: {} }, {
+      notes: `The row ${LOG.writeFailed} writes for each failed run: the error code, the message and what to do.`,
     });
-    this.add(T.stopAndError, LOG.stop, [failAt[0] + STEP, failAt[1]], { errorType: 'errorMessage', errorMessage: STOP_MESSAGE }, {
+    this.add(T.dataTable, LOG.writeFailed, right(failAt), { resource: 'row', operation: 'insert', dataTableId: table, columns: autoRow(), options: {} }, {
+      onError: 'continueRegularOutput', notes: 'If the row cannot be written, the run still stops as failed.',
+    });
+    this.add(T.stopAndError, LOG.stop, right(right(failAt)), { errorType: 'errorMessage', errorMessage: STOP_MESSAGE }, {
       notes: 'Ends a failed run as failed, so it shows in Executions and an Error Workflow set in the workflow settings runs.',
     });
     for (const run of this.allRuns) {
       this.connect([{ node: run, output: 0 }], LOG.run);
       this.connect([{ node: run, output: 1 }], LOG.failed);
     }
-    this.connect([{ node: LOG.failed, output: 0 }], LOG.stop);
+    this.connect([{ node: LOG.run, output: 0 }], LOG.write);
+    this.connect([{ node: LOG.failed, output: 0 }], LOG.writeFailed);
+    this.connect([{ node: LOG.writeFailed, output: 0 }], LOG.stop);
   }
 
   /** Removes a node that has one input and one output, connecting each of `from` straight to what it fed. */

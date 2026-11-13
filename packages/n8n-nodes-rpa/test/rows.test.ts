@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SignedStepsRow } from 'n8n-rpa-engine';
-import { rejectedRecord, RUN_TABLE, RUN_TABLE_COLUMNS, signedRecord, STEPS_TABLE, STEPS_TABLE_COLUMNS } from '../nodes/Playwright/rows.js';
+import { rejectedRecord, RUN_TABLE, RUN_TABLE_COLUMNS, RUN_TABLE_FIRST_COLUMNS, signedRecord, STEPS_TABLE, STEPS_TABLE_COLUMNS } from '../nodes/Playwright/rows.js';
 
 describe('Data Table rows', () => {
   it('names the two tables and their columns in documented order', () => {
@@ -11,7 +11,10 @@ describe('Data Table rows', () => {
     ]);
     expect(RUN_TABLE_COLUMNS.map((c) => `${c.name}:${c.type}`)).toEqual([
       'name:string', 'lane:string', 'version:number', 'hash:string', 'confirmed:boolean', 'rowCount:number', 'durationMs:number', 'llmTokens:number', 'code:string', 'executionId:string',
+      'message:string', 'guidance:string',
     ]);
+    // A table made by an earlier version has the first ten.
+    expect(RUN_TABLE_FIRST_COLUMNS.map((c) => c.name)).toEqual(['name', 'lane', 'version', 'hash', 'confirmed', 'rowCount', 'durationMs', 'llmTokens', 'code', 'executionId']);
   });
   it('a signed row becomes an active record with the steps as JSON text', () => {
     const row: SignedStepsRow = {

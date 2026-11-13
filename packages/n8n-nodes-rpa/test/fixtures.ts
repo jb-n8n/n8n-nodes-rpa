@@ -22,6 +22,8 @@ export const WORKFLOW_NODE_TYPES: Record<string, number> = {
   'n8n-nodes-base.stopAndError': 1,
   // Off until a person sets the time (ScheduleTrigger.node.ts at tag n8n@2.41.0 has versions 1 to 1.2 and later).
   'n8n-nodes-base.scheduleTrigger': 1.2,
+  // The run log's rows (Set at tag n8n@2.41.0 has version 3.4, as template 5's Settings).
+  'n8n-nodes-base.set': 3.4,
 };
 
 const SIGN_IN_STEPS: Step[] = [

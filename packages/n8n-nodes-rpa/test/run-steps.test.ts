@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { CODE_WORKFLOW_GUIDANCE, NO_TOTP_SECRET_GUIDANCE } from '../nodes/Playwright/errors.js';
+import { CODE_WORKFLOW_GUIDANCE, CONFIG_GUIDANCE, GUIDANCE, NO_TOTP_SECRET_GUIDANCE } from '../nodes/Playwright/errors.js';
 import { APPROVER } from './fixtures.js';
 import { NodeHelpers, NodeOperationError, type IDataObject, type INodeExecutionData } from 'n8n-workflow';
 import { isEmptySteps, MAX_BUDGET_MS, proposalDigest, scriptHash, type Proposal, type Script } from 'n8n-rpa-engine';
@@ -727,7 +727,7 @@ describe('AI repair', () => {
     const [data] = await executeRunSteps(ctx({ model: STUB_MODEL, continueOnFail: true, params: repairParams() }), engine);
     expect(data[0].json).toEqual({
       error: refused, message: refused,
-      details: { configError: true, code: null, name: 'items', version: null, hash: '', lane: null, log: [], submitted: true },
+      details: { configError: true, code: null, name: 'items', version: null, hash: '', lane: null, log: [], submitted: true, guidance: CONFIG_GUIDANCE },
     });
     const err = await executeRunSteps(ctx({ model: STUB_MODEL, params: repairParams() }), engine).catch((e: unknown) => e);
     expect((err as NodeOperationError).message).toBe(refused);
@@ -756,7 +756,7 @@ describe('AI repair', () => {
     const [data] = await executeRunSteps(ctx({ model: STUB_MODEL, continueOnFail: true, params: repairParams() }), engine);
     expect(data[0].json).toEqual({
       error: 'AI repair needs an ID Pattern and an extract step.', message: 'AI repair needs an ID Pattern and an extract step.',
-      details: { configError: true, code: null, name: 'items', version: null, hash: '', lane: null, log: [], submitted: false },
+      details: { configError: true, code: null, name: 'items', version: null, hash: '', lane: null, log: [], submitted: false, guidance: CONFIG_GUIDANCE },
     });
   });
 });
@@ -849,6 +849,7 @@ describe('outputs', () => {
       details: {
         code: 'incomplete', message: 'run cancelled', name: 'items', version: 3, hash: 'c3'.repeat(32), lane: 'script', stepIntent: 'Send the form',
         traceRef: 'trace', durationMs: 900, llmTokens: 0, log: [{ index: 0, intent: 'Open the form', status: 'ok', ms: 5 }], submitted: true,
+        guidance: GUIDANCE.incomplete,
       },
     });
     expect(data[0].error).toBeUndefined();

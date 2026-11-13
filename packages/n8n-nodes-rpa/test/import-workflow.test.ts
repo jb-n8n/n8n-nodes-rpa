@@ -7,10 +7,11 @@ import { Workflow, type IConnections, type INode, type INodeProperties, type INo
 import { importSource, type Draft, type FlowNode, type ImportOptions, type UiPathFlow } from 'n8n-rpa-engine';
 import { bound } from '../../engine/test/timing.js';
 import { zip } from '../../engine/test/zip-fixtures.js';
-import { buildWorkflow, fromRow, jsName, MAX_WORKFLOW_NODES, workflowFile, type WorkflowJson, type WorkflowNode } from '../nodes/Playwright/import/workflow.js';
+import { buildWorkflow, fromRow, jsName, LOG_FAILED_ROW, LOG_RUN_ROW, MAX_WORKFLOW_NODES, STOP_MESSAGE, workflowFile, type WorkflowJson, type WorkflowNode } from '../nodes/Playwright/import/workflow.js';
 import { RPA_NODE_TYPE } from '../nodes/Playwright/node-type.js';
 import { Playwright } from '../nodes/Playwright/Playwright.node.js';
-import { RUN_TABLE, RUN_TABLE_COLUMNS, STEPS_TABLE, STEPS_TABLE_COLUMNS } from '../nodes/Playwright/rows.js';
+import { RUN_TABLE, RUN_TABLE_COLUMNS, RUN_TABLE_FIRST_COLUMNS, STEPS_TABLE, STEPS_TABLE_COLUMNS } from '../nodes/Playwright/rows.js';
+import { CONFIG_GUIDANCE, GUIDANCE } from '../nodes/Playwright/errors.js';
 import { WORKFLOW_NODE_TYPES } from './fixtures.js';
 
 const PACKAGE = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { name: string };
@@ -26,16 +27,13 @@ const OWN_EXPRESSION = /^=\{\{ \$\('(?:[A-Za-z0-9 _.,:()-]|\\u[0-9a-f]{4})*'\)\.
 const rowRead = (get: string) => ({ steps: fromRow(get, 'steps'), signature: fromRow(get, 'signature'), approvedBy: fromRow(get, 'approvedBy'), expectedVersion: fromRow(get, 'version') });
 /** S3's Input Binary Field: the name Run steps gave its last file, with the imported draft's name as the fallback. */
 const FILE_EXPRESSION = /^=\{\{ \$json\.files\?\.at\(-1\)\?\.binaryProperty \?\? 'file_\d+' \}\}$/;
-/** The run log's expressions: each reads the item it gets ($json) and the execution's id, never a node by name. */
-const LOG_EXPRESSIONS = [
-  "={{ $json.name ?? '' }}", "={{ $json.lane ?? '' }}", '={{ $json.version ?? 0 }}', "={{ $json.hash ?? '' }}", '={{ $json.confirmed ?? false }}',
-  '={{ ($json.rows ?? []).length }}', '={{ $json.durationMs ?? 0 }}', '={{ $json.llmTokens ?? 0 }}', '={{ $execution.id }}',
-  "={{ $json.details?.name ?? '' }}", "={{ $json.details?.lane ?? '' }}", '={{ $json.details?.version ?? 0 }}', "={{ $json.details?.hash ?? '' }}",
-  '={{ false }}', '={{ 0 }}', '={{ $json.details?.durationMs ?? 0 }}', '={{ $json.details?.llmTokens ?? 0 }}', "={{ $json.details?.code || 'config_error' }}",
-  "={{ 'The run failed: ' + ($json.code || $json.details?.code || 'config_error') + ' on ' + ($json.name || $json.details?.name || 'the steps') + ($json.message ? '. ' + $json.message : '. Run steps in this execution has the message.') }}",
-];
+/**
+ * The run log's expressions: the two rows (each reads the item it gets, the execution's id and Create run log table's
+ * columns) and Stop and Error's message (the row Log failed run shaped).
+ */
+const LOG_EXPRESSIONS = [LOG_RUN_ROW, LOG_FAILED_ROW, STOP_MESSAGE];
 const own = (v: string) => OWN_EXPRESSION.test(v) || LOG_EXPRESSIONS.includes(v) || FILE_EXPRESSION.test(v);
-const LOG_NODES = ['Create run log table', 'Log run', 'Log failed run', 'Stop and Error'];
+const LOG_NODES = ['Create run log table', 'Log run', 'Write run row', 'Log failed run', 'Write failed run row', 'Stop and Error'];
 const REPAIR_NOTE = 'To let it repair itself when the site changes:\n1. Connect a chat model to its Model input (after step 2).\n2. Turn on AI Repair here and write the Goal in plain words. The outputs become Data, Repaired Steps and error.\n3. Connect its Repaired Steps output to an Execute Workflow node that calls RPA: 3 Approve steps, and its error output to Log failed run again.';
 
 // ---- the UiPath fixture project, imported through the engine ----
@@ -119,7 +117,8 @@ function lint(w: WorkflowJson): void {
     for (const c of Object.values(n.credentials)) expect(Object.keys(c).sort(), n.name).toEqual(['id', 'name']);
   }
   // The only node an expression names ($('…')) is the Get active steps that feeds a Run steps, its name escaped (jsName).
-  for (const n of w.nodes) for (const [, v] of strings(n.parameters)) if (v.startsWith('=') && /\$\(/.test(v)) expect(v).toMatch(OWN_EXPRESSION);
+  // The run log's own expressions name two nodes of the generator's: Create run log table and Log failed run.
+  for (const n of w.nodes) for (const [, v] of strings(n.parameters)) if (v.startsWith('=') && /\$\(/.test(v) && !LOG_EXPRESSIONS.includes(v)) expect(v).toMatch(OWN_EXPRESSION);
   for (const n of w.nodes.filter((x) => x.type === NODE_TYPE)) {
     const feeds = Object.entries(w.connections).filter(([, c]) => c.main?.some((out) => out.some((t) => t.node === n.name))).map(([from]) => from);
     expect(feeds, n.name).toHaveLength(1);
@@ -203,8 +202,10 @@ describe('buildWorkflow', () => {
       ['Delay', 'n8n-nodes-base.wait'],
       ['Notify the region', 'n8n-nodes-base.httpRequest'],
       ['Read Range', 'n8n-nodes-base.extractFromFile'],
-      ['Log run', 'n8n-nodes-base.dataTable'],
-      ['Log failed run', 'n8n-nodes-base.dataTable'],
+      ['Log run', 'n8n-nodes-base.set'],
+      ['Write run row', 'n8n-nodes-base.dataTable'],
+      ['Log failed run', 'n8n-nodes-base.set'],
+      ['Write failed run row', 'n8n-nodes-base.dataTable'],
       ['Stop and Error', 'n8n-nodes-base.stopAndError'],
     ]);
     expect(targets(w, 'Run the bot')).toEqual([['Create run log table']]);
@@ -774,16 +775,16 @@ describe('buildWorkflow', () => {
     const flow = flowOf(Array.from({ length: total }, (_, i): FlowNode => ({ kind: 'browser', sequence: i + 1, displayName: `Browser ${i + 1}` })));
     const w = buildWorkflow(flow, Array.from({ length: total }, (_, i) => draft(`cap-${i + 1}`)), { name: 'cap' });
     lint(w);
-    // The two triggers, the four run log nodes and 247 pairs of two nodes: a 248th would take the workflow past MAX_WORKFLOW_NODES.
+    // The two triggers, the six run log nodes and 246 pairs of two nodes: a 247th would take the workflow past MAX_WORKFLOW_NODES.
     const runs = w.nodes.filter((n) => n.type === NODE_TYPE);
-    expect(runs).toHaveLength(247);
-    expect(w.nodes.filter((n) => n.type === 'n8n-nodes-base.dataTable')).toHaveLength(247 + 3);
+    expect(runs).toHaveLength(246);
+    expect(w.nodes.filter((n) => n.type === 'n8n-nodes-base.dataTable')).toHaveLength(246 + 3);
     expect(working(w)).toHaveLength(MAX_WORKFLOW_NODES);
     expect(w.nodes.length).toBeLessThanOrEqual(MAX_WORKFLOW_NODES + 3);
-    expect(content(byName(w, '53 more activities'))).toContain('see the report');
+    expect(content(byName(w, '54 more activities'))).toContain('see the report');
     // After a pair that did not fit, nothing smaller is drawn out of order.
     const mixed = buildWorkflow(flowOf([
-      ...Array.from({ length: 493 }, (_, i): FlowNode => ({ kind: 'wait', seconds: 1, displayName: `W ${i}` })),
+      ...Array.from({ length: 491 }, (_, i): FlowNode => ({ kind: 'wait', seconds: 1, displayName: `W ${i}` })),
       { kind: 'browser', sequence: 1, displayName: 'Too big' },
       { kind: 'wait', seconds: 1, displayName: 'Small' },
     ]), [draft('mx-1')], { name: 'mx' });
@@ -835,44 +836,73 @@ describe('buildWorkflow', () => {
   it('every run writes the run log, and a failed run still ends as failed: Create run log table → … → Run steps → Log run, error → Log failed run → Stop and Error', () => {
     const w = buildWorkflow(flowOf([{ kind: 'browser', sequence: 1, displayName: 'bot', draft: 'bot' }]), [draft('bot')], { name: 'bot', source: 'chrome' });
     lint(w);
-    // Small: 6 nodes before the run log (two stickies, two triggers, Get active steps, Run steps), 10 with it.
+    // Small: 6 nodes before the run log (two stickies, two triggers, Get active steps, Run steps), 12 with it.
     expect(w.nodes.map((n) => n.name)).toEqual([
-      'About this import', 'Set once', 'Run the bot', 'On a schedule', 'Create run log table', 'Get active steps (bot)', 'bot', 'Log run', 'Log failed run', 'Stop and Error',
+      'About this import', 'Set once', 'Run the bot', 'On a schedule', 'Create run log table', 'Get active steps (bot)', 'bot',
+      'Log run', 'Write run row', 'Log failed run', 'Write failed run row', 'Stop and Error',
     ]);
     expect(targets(w, 'Run the bot')).toEqual([['Create run log table']]);
     expect(targets(w, 'On a schedule')).toEqual([['Create run log table']]);
     expect(targets(w, 'Create run log table')).toEqual([['Get active steps (bot)']]);
     expect(targets(w, 'bot')).toEqual([['Log run'], ['Log failed run']]);
-    expect(targets(w, 'Log failed run')).toEqual([['Stop and Error']]);
-    expect(targets(w, 'Log run')).toEqual([]);
+    expect(targets(w, 'Log run')).toEqual([['Write run row']]);
+    expect(targets(w, 'Log failed run')).toEqual([['Write failed run row']]);
+    expect(targets(w, 'Write failed run row')).toEqual([['Stop and Error']]);
+    expect(targets(w, 'Write run row')).toEqual([]);
     expect(targets(w, 'Stop and Error')).toEqual([]);
     // The table is made when missing, with the templates' columns.
     expect(byName(w, 'Create run log table').parameters).toEqual({
       resource: 'table', operation: 'create', tableName: 'playwright_runs', columns: { column: RUN_TABLE_COLUMNS.map((c) => ({ name: c.name, type: c.type })) }, options: { createIfNotExists: true },
     });
-    // Log run: a row per run (not Execute Once: a Run steps that runs once per account logs each run), every column.
+    // Log run shapes a row per run (not Execute Once: a Run steps that runs once per account logs each run); Write run
+    // row writes the item it gets, column by column.
     const log = byName(w, 'Log run');
     expect(log.executeOnce).toBeUndefined();
-    expect(log.parameters).toMatchObject({ resource: 'row', operation: 'insert', dataTableId: { __rl: true, mode: 'name', value: 'playwright_runs' } });
-    expect(Object.keys((log.parameters as { columns: { value: object } }).columns.value)).toEqual(RUN_TABLE_COLUMNS.map((c) => c.name));
-    // Log failed run passes the item on when its write fails, so Stop and Error still runs.
+    expect(log.parameters).toEqual({ mode: 'raw', jsonOutput: LOG_RUN_ROW, options: {} });
+    const write = byName(w, 'Write run row');
+    expect(write.parameters).toMatchObject({ resource: 'row', operation: 'insert', dataTableId: { __rl: true, mode: 'name', value: 'playwright_runs' }, columns: { mappingMode: 'autoMapInputData' } });
+    // Write failed run row passes the item on when its write fails, so Stop and Error still runs.
     const failed = byName(w, 'Log failed run');
-    expect(failed.onError).toBe('continueRegularOutput');
-    expect((failed.parameters as { columns: { value: Record<string, string> } }).columns.value).toMatchObject({ code: "={{ $json.details?.code || 'config_error' }}", executionId: '={{ $execution.id }}' });
+    expect(failed.parameters).toEqual({ mode: 'raw', jsonOutput: LOG_FAILED_ROW, options: {} });
+    expect(byName(w, 'Write failed run row').onError).toBe('continueRegularOutput');
     const stop = byName(w, 'Stop and Error');
     expect(stop.type).toBe('n8n-nodes-base.stopAndError');
-    expect(stop.parameters).toEqual({ errorType: 'errorMessage', errorMessage: LOG_EXPRESSIONS.at(-1) });
-    // The message names the code and the steps, from the logged row or, when the write failed, from the error item.
-    const message = new Function('$json', `return ${String(stop.parameters.errorMessage).slice(4, -3)};`) as (json: object) => string;
-    expect(message({ name: 'bot', code: 'drift_detected', version: 3 })).toBe('The run failed: drift_detected on bot. Run steps in this execution has the message.');
-    expect(message({ error: 'runner_unavailable: no answer', message: 'runner_unavailable: no answer', details: { code: 'runner_unavailable', name: 'bot' } }))
-      .toBe('The run failed: runner_unavailable on bot. runner_unavailable: no answer');
-    expect(message({ message: 'Steps is empty', details: { code: null, name: 'bot' } })).toBe('The run failed: config_error on bot. Steps is empty');
+    expect(stop.parameters).toEqual({ errorType: 'errorMessage', errorMessage: STOP_MESSAGE });
+
+    // The rows, evaluated as n8n does: every column for a table made now, only the table's columns for an older one.
+    const columns = (names: string[]) => ({ 'Create run log table': { name: 'playwright_runs', columns: names.map((name) => ({ name })) } });
+    const all = columns(RUN_TABLE_COLUMNS.map((c) => c.name));
+    const first = columns(RUN_TABLE_FIRST_COLUMNS.map((c) => c.name));
+    const shape = (expression: string, $json: object, nodes: Record<string, object>) =>
+      new Function('$json', '$execution', '$', `return (${expression.slice(4, -3)});`)($json, { id: '22' }, (name: string) => {
+        if (!(name in nodes)) throw new Error(`no node named ${name}`);
+        return { first: () => ({ json: nodes[name] }) };
+      }) as Record<string, unknown>;
+    const lockedOut = {
+      error: 'locked_out: A previous login for sandbox:8080 failed, so no login was tried.', message: 'A previous login for sandbox:8080 failed, so no login was tried.',
+      details: { code: 'locked_out', name: 'bot', version: 1, hash: 'h', lane: null, durationMs: 0, llmTokens: 0, guidance: GUIDANCE.locked_out },
+    };
+    const failedRow = shape(LOG_FAILED_ROW, lockedOut, all);
+    expect(Object.keys(failedRow)).toEqual(RUN_TABLE_COLUMNS.map((c) => c.name));
+    expect(failedRow).toMatchObject({ code: 'locked_out', name: 'bot', executionId: '22', message: lockedOut.message, guidance: GUIDANCE.locked_out });
+    // A table made by an earlier version: the row has only its ten columns, so n8n's insert never refuses it.
+    expect(Object.keys(shape(LOG_FAILED_ROW, lockedOut, first))).toEqual(RUN_TABLE_FIRST_COLUMNS.map((c) => c.name));
+    expect(Object.keys(shape(LOG_RUN_ROW, { name: 'bot', lane: 'script', version: 1, hash: 'h', durationMs: 900 }, first))).toEqual(RUN_TABLE_FIRST_COLUMNS.map((c) => c.name));
+    // Create run log table gives no columns (never seen in n8n): every column is written, as for a table made now.
+    expect(Object.keys(shape(LOG_RUN_ROW, { name: 'bot' }, { 'Create run log table': {} }))).toEqual(RUN_TABLE_COLUMNS.map((c) => c.name));
+
+    // Stop and Error: the code, the steps, the message and what to do, from the row Log failed run shaped.
+    const message = (row: object) => shape(STOP_MESSAGE, {}, { 'Log failed run': row }) as unknown as string;
+    expect(message(failedRow)).toBe(`The run failed: locked_out on bot. ${lockedOut.message} ${GUIDANCE.locked_out}`);
+    expect(message(shape(LOG_FAILED_ROW, lockedOut, first))).toBe('The run failed: locked_out on bot. Run steps in this execution has the message.');
+    expect(message(shape(LOG_FAILED_ROW, { error: 'Steps is empty', message: 'Steps is empty', details: { code: null, name: 'bot', guidance: CONFIG_GUIDANCE } }, all)))
+      .toBe(`The run failed: config_error on bot. Steps is empty ${CONFIG_GUIDANCE}`);
     // Layout: a lone Run steps has Log run right of it and the failure row below.
     const [rx, ry] = byName(w, 'bot').position;
     expect(log.position).toEqual([rx + 240, ry]);
+    expect(write.position).toEqual([rx + 480, ry]);
     expect(failed.position[1]).toBeGreaterThan(ry);
-    expect(stop.position[0]).toBeGreaterThan(failed.position[0]);
+    expect(stop.position[0]).toBeGreaterThan(byName(w, 'Write failed run row').position[0]);
     // One line says where a notification goes; no email or chat node is built.
     expect(content(byName(w, 'About this import'))).toContain('Every run writes one row to playwright_runs: **Log run**, or **Log failed run** with the error code. A failed run then ends at **Stop and Error**, so it shows as failed in Executions. To be told when one fails, choose an Error Workflow in this workflow\'s settings.');
     expect(w.nodes.filter((n) => n.type === 'n8n-nodes-base.emailSend')).toEqual([]);
