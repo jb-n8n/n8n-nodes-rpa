@@ -200,8 +200,8 @@ To sign the step lists again with the new key:
    create the credential with a new key of 32 or more random characters, and select it on **Sign steps** in template
    5 (and template 3) and on every **Run steps** node.
 2. For each bot, open the **Import a bot** form, leave **Bot file** empty and type the bot's name. The next page
-   shows the steps of its `active` row. Leave the box empty and click **Review**: the row's steps go to the import as
-   a **Step document**.
+   shows the steps of its `active` row. Choose **Sign the approved steps again, unchanged**, leave the box empty and
+   click **Review**: the row's steps go to the import as a **Step document**.
 3. Read every step on the review page. Browser steps are replayed, desktop steps go to approval as written. Steps
    that were signed as writes come back as candidates: tick them again.
 4. Approve. The new row supersedes the old ones under that name, and the bot runs again.

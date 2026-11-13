@@ -26,9 +26,12 @@ first, before anything reads or writes them.
   not a ZIP, XAML, code or a recording) and **Asks about a download?** looks for the step document's shape.
 - **Bot file** may be left empty to change an approved bot or sign it again. **Approved bots** reads the rows of
   `playwright_steps` (the `active` ones are the approved bots), and **Change or sign again** shows the newest active steps of the name typed, to read
-  and copy, with one box that is empty to start with. **Compared with the approved version** takes the steps to
-  review: with the box left empty, the active row's steps as **The bot to change** read them from the table (they never
-  pass through the browser); with text in the box, that text. It also gives the review page its first line: unchanged,
+  and copy, a required choice, **Sign the approved steps again, unchanged** or **Change the steps**, and one box that is
+  empty to start with. **Choice fits the box?** lets through only sign again with the box empty, or change with text in
+  it; any other answer ends on **Choice and box differ**, which says which of the two to correct, and nothing is
+  imported or signed. **Compared with the approved version** takes the steps to review: signed again, the active row's
+  steps as **The bot to change** read them from the table (they never pass through the browser); changed, the text in
+  the box. It also gives the review page its first line: unchanged,
   or which steps differ and how: for each changed step, at most three, its number and its changed values, old → new
   (`step 6: value "2026-09-15" → "2026-09-30"`), each on one line and cut at 60 characters, `several fields` for a
   step with more than three, then the other steps by number. **Review** sends those steps to **Import steps** as a step document, then to the same review

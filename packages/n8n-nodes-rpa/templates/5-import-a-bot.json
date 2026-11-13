@@ -3,7 +3,7 @@
   "nodes": [
     {
       "parameters": {
-        "content": "### Import a bot (grey: leave as is)\nTurns a bot you already have into signed steps. Open the form (**Execute workflow**, or the production URL once published) and upload one of:\n- a **Chrome Recorder** export: Chrome DevTools → Recorder → Export → JSON\n- **Playwright code** from `npx playwright codegen` (JavaScript or TypeScript)\n- a **UiPath** project as a .zip, or one .xaml workflow\n- a **step document** you wrote, as Run Steps takes it (JSON): this is how hand-written steps get approved and signed\n- an **RPA recording** saved by the RPA recorder on the Windows machine (.rpa-recording.json)\n\n**Import steps** builds a draft, runs it once and replays it in a fresh browser. Desktop steps (a UiPath project, a step document or an RPA recording) are not replayed, and neither are browser steps from a step document that submit a form, download through a form, type a secret or change a password. The next page of the form shows every step list with its safety flags, evidence and numbered steps, and each step list gets its own approval there: Approve or Reject. **Sign steps** signs what was approved, and the last page says what was signed; every import also downloads an n8n workflow that runs the steps (for a UiPath project, the rest of the bot). Run the steps with Run Steps as **RPA: 2 Data feed** does, with `name` in **Settings** set to the name the last page shows.\n\n**Change or sign again.** Leave Bot file empty and type the name of an approved bot. The next page shows the steps that run now under that name (its active row in `playwright_steps`), to read and copy. Leave the box empty to sign them again after the signing key changed, or paste changed steps. They go to **Import steps** as a step document and to the same review page. Before the review page, **Sign steps** checks the version that runs now with its own signing key and Site Login, and the page warns when it does not fit (expected after a new key; otherwise the bot's workflow uses another Site Login). Approved, they supersede the version that runs now. Rejected, the version that runs now keeps running.",
+        "content": "### Import a bot (grey: leave as is)\nTurns a bot you already have into signed steps. Open the form (**Execute workflow**, or the production URL once published) and upload one of:\n- a **Chrome Recorder** export: Chrome DevTools → Recorder → Export → JSON\n- **Playwright code** from `npx playwright codegen` (JavaScript or TypeScript)\n- a **UiPath** project as a .zip, or one .xaml workflow\n- a **step document** you wrote, as Run Steps takes it (JSON): this is how hand-written steps get approved and signed\n- an **RPA recording** saved by the RPA recorder on the Windows machine (.rpa-recording.json)\n\n**Import steps** builds a draft, runs it once and replays it in a fresh browser. Desktop steps (a UiPath project, a step document or an RPA recording) are not replayed, and neither are browser steps from a step document that submit a form, download through a form, type a secret or change a password. The next page of the form shows every step list with its safety flags, evidence and numbered steps, and each step list gets its own approval there: Approve or Reject. **Sign steps** signs what was approved, and the last page says what was signed; every import also downloads an n8n workflow that runs the steps (for a UiPath project, the rest of the bot). Run the steps with Run Steps as **RPA: 2 Data feed** does, with `name` in **Settings** set to the name the last page shows.\n\n**Change or sign again.** Leave Bot file empty and type the name of an approved bot. The next page shows the steps that run now under that name (its active row in `playwright_steps`), to read and copy. Choose **Sign the approved steps again, unchanged** (after the signing key changed), or **Change the steps** and paste the changed steps. They go to **Import steps** as a step document and to the same review page. Before the review page, **Sign steps** checks the version that runs now with its own signing key and Site Login, and the page warns when it does not fit (expected after a new key; otherwise the bot's workflow uses another Site Login). Approved, they supersede the version that runs now. Rejected, the version that runs now keeps running.",
         "height": 520,
         "width": 520,
         "color": 7
@@ -392,7 +392,7 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [
-        1980,
+        2200,
         0
       ],
       "notes": "What Import steps reads (one item): the uploaded file (binary bot) and the Name and Source from the first page, the download answers when they were asked. After Change or sign again: the steps from that page, as a step document. The same file again after Import again."
@@ -509,7 +509,7 @@
       "parameters": {
         "operation": "page",
         "defineForm": "json",
-        "jsonOutput": "={{ JSON.stringify(((b, e, signedIn) => [{ fieldType: 'html', html: '<p>These are the steps that run now as <b>' + e(b.name) + '</b> (version ' + e(b.version) + ').</p><pre>' + e(((s) => { try { return JSON.stringify(JSON.parse(s), null, 2); } catch (x) { return s; } })(String(b.steps ?? ''))) + '</pre><p>Leave the box empty to sign them again, or paste changed steps.</p><p><em>This form cannot tell steps signed with an older key from steps changed in the table, so read every step on the next page.</em></p><p><em>' + (signedIn ? 'Any signed-in n8n user who has the address of this page can read these steps, so do not share it.' : 'Anyone who has the address of this page can read these steps, so do not share it.') + '</em></p>' }, { fieldLabel: 'Changed steps (JSON). Leave empty to sign the steps again as they are.', fieldName: 'changedSteps', fieldType: 'textarea', requiredField: false }])($('The bot to change').first().json, (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]), $('Import a bot').params.authentication === 'n8nUserAuth')).split('$').join('\\\\u0024') }}",
+        "jsonOutput": "={{ JSON.stringify(((b, e, signedIn) => [{ fieldType: 'html', html: '<p>These are the steps that run now as <b>' + e(b.name) + '</b> (version ' + e(b.version) + ').</p><pre>' + e(((s) => { try { return JSON.stringify(JSON.parse(s), null, 2); } catch (x) { return s; } })(String(b.steps ?? ''))) + '</pre><p>Choose what to do below. To change the steps, paste the changed steps in the box.</p><p><em>This form cannot tell steps signed with an older key from steps changed in the table, so read every step on the next page.</em></p><p><em>' + (signedIn ? 'Any signed-in n8n user who has the address of this page can read these steps, so do not share it.' : 'Anyone who has the address of this page can read these steps, so do not share it.') + '</em></p>' }, { fieldLabel: 'What to do', fieldName: 'choice', fieldType: 'radio', fieldOptions: { values: [{ option: 'Sign the approved steps again, unchanged' }, { option: 'Change the steps' }] }, requiredField: true }, { fieldLabel: 'Changed steps (JSON). Only when you change the steps.', fieldName: 'changedSteps', fieldType: 'textarea', requiredField: false }])($('The bot to change').first().json, (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]), $('Import a bot').params.authentication === 'n8nUserAuth')).split('$').join('\\\\u0024') }}",
         "limitWaitTime": true,
         "limitType": "afterTimeInterval",
         "resumeAmount": 1,
@@ -529,7 +529,64 @@
         1540,
         160
       ],
-      "notes": "The approved steps to read and copy, in a block of the page (they are not sent back), and one optional box. Left empty, the steps signed again are the active row as The bot to change read it from the table. Filled, the pasted text is the changed step document. Either way a person approves them on Review and approve, as for any import. The run pauses here until the person submits, at most 1 hour."
+      "notes": "The approved steps to read and copy, in a block of the page (they are not sent back), a required choice and one box. Sign the approved steps again, unchanged, with the box empty: the steps signed again are the active row as The bot to change read it from the table. Change the steps, with text in the box: the pasted text is the changed step document. Any other combination ends on Choice and box differ. Either way a person approves them on Review and approve, as for any import. The run pauses here until the person submits, at most 1 hour."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005d2",
+              "leftValue": "={{ ((choice, typed) => (choice === 'Sign the approved steps again, unchanged' && typed.trim() === '') || (choice === 'Change the steps' && typed.trim() !== ''))(String($('Change or sign again').first().json.choice ?? ''), String($('Change or sign again').first().json.changedSteps ?? '')) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000548",
+      "name": "Choice fits the box?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1760,
+        160
+      ],
+      "notes": "Sign the approved steps again, unchanged, with the box empty; or Change the steps, with text in the box. Anything else imports and signs nothing."
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "respondWith": "text",
+        "completionTitle": "Choose again",
+        "completionMessage": "={{ ((choice, e) => (choice === 'Sign the approved steps again, unchanged' ? 'You chose to sign the approved steps again, unchanged, and pasted steps in the box. To use the pasted steps, choose Change the steps. To sign them again unchanged, leave the box empty.' : 'You chose to change the steps, but the box is empty. Paste the changed steps in the box, or choose Sign the approved steps again, unchanged.') + '\\nNothing was imported or signed: ' + e($('The bot to change').first().json.name) + ' version ' + e($('The bot to change').first().json.version) + ' keeps running. Open the form again, leave Bot file empty and type the bot\\'s name.')(String($('Change or sign again').first().json.choice ?? ''), (s) => String(s ?? '').replace(/[&<>\\\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\\\"': '&quot;', \"'\": '&#39;' })[c])) }}",
+        "limitWaitTime": true,
+        "limitType": "afterTimeInterval",
+        "resumeAmount": 1,
+        "resumeUnit": "hours",
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000549",
+      "name": "Choice and box differ",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        1980,
+        320
+      ],
+      "notes": "The choice and the box do not fit together: this page says which of the two to correct, and nothing is imported or signed. The run pauses here until the browser shows this page, at most 1 hour."
     },
     {
       "parameters": {
@@ -545,7 +602,7 @@
       "type": "n8n-nodes-base.convertToFile",
       "typeVersion": 1.1,
       "position": [
-        1980,
+        2200,
         160
       ],
       "notes": "The steps to review (from Compared with the approved version) as the file bot, which The upload hands to Import steps with the source Step document."
@@ -561,11 +618,11 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [
-        1760,
+        1980,
         160
       ],
       "executeOnce": true,
-      "notes": "Computed here in n8n, from this execution only. The steps to review: with the box left empty, the active row's steps exactly as The bot to change read them from the Data Table; with text in the box, that text. The step lists are compared step by step (spacing and key order do not count), and the other signed fields (start site, app, pop-up handlers). For each changed step, at most three, the line gives its number and its changed values, old → new, each on one line and cut at 60 characters (\"several fields\" for more than three). The review page shows the line at the top."
+      "notes": "Computed here in n8n, from this execution only. The steps to review: with Sign the approved steps again, unchanged (the box empty), the active row's steps exactly as The bot to change read them from the Data Table; with Change the steps, the text in the box. The step lists are compared step by step (spacing and key order do not count), and the other signed fields (start site, app, pop-up handlers). For each changed step, at most three, the line gives its number and its changed values, old → new, each on one line and cut at 60 characters (\"several fields\" for more than three). The review page shows the line at the top."
     },
     {
       "parameters": {
@@ -1782,7 +1839,7 @@
       "main": [
         [
           {
-            "node": "Compared with the approved version",
+            "node": "Choice fits the box?",
             "type": "main",
             "index": 0
           }
@@ -1896,6 +1953,24 @@
         [
           {
             "node": "The approved version",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Choice fits the box?": {
+      "main": [
+        [
+          {
+            "node": "Compared with the approved version",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Choice and box differ",
             "type": "main",
             "index": 0
           }
