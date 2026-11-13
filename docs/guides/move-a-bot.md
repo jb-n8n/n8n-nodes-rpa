@@ -32,7 +32,7 @@ the command picks that one of your project by its name, and never makes one or r
 computer or your own network, `--allow-private-network` turns on **Allow Private Network** on **Import steps**. Both
 apply when the command makes the workflow: one there already is left as it is, and the command says what to set on it
 in n8n. A bot that signs in with many accounts needs only one Site Login: see [One bot, many accounts](many-accounts.md). The
-[desktop bot guide](desktop-bot.md#4-import-and-approve) shows the output, and
+[desktop bot guide](desktop-bot.md#2-set-up-n8n-with-one-command) shows the output, and
 [Templates](../reference/templates.md#set-it-up-by-hand) the way by hand.
 
 <img src="../images/import-form.png" alt="The Import a bot form: a file, an optional source and a name for the steps" width="360">

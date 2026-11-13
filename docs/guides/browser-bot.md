@@ -92,7 +92,7 @@ Keep the address. If **RPA: 5 Import a bot** is there already from an earlier ru
 says what to set on it in n8n. The command's last line is about the API key: it can act as you in n8n within its
 scopes, so remove it now. In **Settings → n8n API**, open the key's **⋯** menu and choose **Revoke**. The signing key stays in
 n8n, and n8n does not show it again. The command's other options, and how to run it for an n8n outside this stack
-(`npx n8n-nodes-rpa setup`), are in step 4 of the [desktop bot guide](desktop-bot.md#4-import-and-approve).
+(`npx n8n-nodes-rpa setup`), are in step 2 of the [desktop bot guide](desktop-bot.md#2-set-up-n8n-with-one-command).
 
 ## 4. Import the sample bot and approve it
 

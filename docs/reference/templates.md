@@ -59,7 +59,7 @@ Templates 2, 3 and 5 create the two Data Tables when they are missing.
 
 ### Set it up by hand
 
-`npx n8n-nodes-rpa setup` does this in one command ([desktop bot guide](../guides/desktop-bot.md#4-import-and-approve)).
+`npx n8n-nodes-rpa setup` does this in one command ([desktop bot guide](../guides/desktop-bot.md#2-set-up-n8n-with-one-command)).
 By hand:
 
 1. Import `packages/n8n-nodes-rpa/templates/5-import-a-bot.json` and follow its green **Set once** note.
