@@ -1561,13 +1561,34 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(fields.map((f) => f.fieldType)).toEqual(['html', 'radio']);
     const POINTER = '<p><em>How each step finds its control is in this run\'s execution in n8n (the Import steps node\'s output), and in the approval email when approval is by email.</em></p>';
     expect(fields[0].html).toBe('<p>Opens a.example&#39; &lt;script&gt;.<br>Signs in with the RPA Site Login.<br>Submits a form: POST a.example/send.<br>Returns a file to n8n: step 5.<br>'
-      + 'secret fill: a step types the run variable {{var.exportPassword}}<br>7 rows &lt;img src=x onerror=alert(1)&gt;.</p>'
+      + 'Types a secret: the run variable {{var.exportPassword}}.<br>7 rows &lt;img src=x onerror=alert(1)&gt;.</p>'
       + '<p><b>⚠ Left out by the import:</b><br>step 4, Pick &lt;b&gt;Status&lt;/b&gt;<br>step 9, Wait</p>'
       + '<p><b>The steps</b></p><ol><li>Open a.example/list <strong>(described differently as: Open the list)</strong></li><li>Sign in <em>· signs in with the RPA Site Login</em></li>'
       + '<li>Type into the element matching &quot;#p&quot;: a secret <strong>(described differently as: Type the export password)</strong> <em>· secret variable exportPassword</em></li>'
       + '<li>Choose an option set by a variable in the element matching &quot;#s&quot; <strong>(described differently as: Pick &lt;b&gt;Status&lt;/b&gt;)</strong> <em>· variable status</em></li>'
       + '<li>Download with an element <strong>(described differently as: Download the report)</strong> <em>· returns a file</em></li>'
       + '<li>Type into the element matching &quot;#n&quot;: &quot;hello &lt;b&gt;&quot; <strong>(described differently as: Type the note)</strong></li></ol>' + POINTER);
+    // Every flag the opening lines do not already say in their own words is worded as a sentence, never shown raw.
+    const opening = (safetyFlags: string[]) => String(jsonFormFields(String(review.parameters.jsonOutput), {
+      $: nodesRan({ ...ran, 'Import steps': [ran['Import steps'][0], [{ json: { ...withLines, safetyFlags, leftOutList: undefined, evidenceLine: 'Proven in a fresh browser: 7 rows (the page states no total)' } }]] }),
+    })[0].html).split('</p>')[0].replace(/^<p>/, '').split('<br>');
+    expect(opening([
+      'count unverified: the page that was read states no total', 'extract-fields-dropped',
+      'interrupt: when the dialog "Cookies" shows, click the button "Accept"', 'secret fill: a step types the run variable {{var.pin}}',
+      'password change: a step sets a new password from the run variable {{var.newPassword}}',
+      'clipboard read: step 4 (Copy the total) returns the clipboard\'s text to n8n as "total" (the desktop runner allows it only when its policy sets clipboardRead, only while the run\'s window is in front, and only for text the run\'s app copied in the last step that acted on it, at most 10 seconds earlier)',
+      'a flag a later engine adds',
+    ])).toEqual([
+      'Signs in with the RPA Site Login.', 'Returns a file to n8n: step 5.',
+      'The page states no total, so the number of rows read is not checked against one.',
+      'Reads fewer fields than the version before: check that each row still has what you need.',
+      'Closes a pop-up: when the dialog &quot;Cookies&quot; shows, it clicks the button &quot;Accept&quot;.',
+      'Types a secret: the run variable {{var.pin}}.',
+      'Sets a new password from the run variable {{var.newPassword}} when the site asks for one.',
+      'Gives the clipboard&#39;s text to n8n: step 4 (Copy the total), as &quot;total&quot;. The desktop runner allows this only when its policy allows clipboard reads.',
+      'A flag a later engine adds.',
+      'Proven in a fresh browser: 7 rows (the page states no total).',
+    ]);
     const detailed = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan({ ...ran, Settings: [[{ json: { ...settingsJson(), showDetails: true } }]] }) });
     expect(detailed[0].html).toBe(String(fields[0].html).replace(POINTER, '') + '<h4>Details of every step (how each one finds its control)</h4><p><em><b>Safety flags:</b> host: a.example&#39; &lt;script&gt;; …</em></p>'
       + '<p><em><b>Left out by the import (the source does these, the steps do not):</b><br>step 4, Pick &lt;b&gt;Status&lt;/b&gt;<br>step 9, Wait</em></p>'
