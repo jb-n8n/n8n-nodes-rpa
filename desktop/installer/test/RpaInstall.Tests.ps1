@@ -412,6 +412,51 @@ Describe 'Get-RpaInstallPlan' {
     }
   }
 
+  Context 'the address n8n reaches this machine at' {
+    It 'takes -Address <Value> for the lines, and then asks nothing' -ForEach @(
+      @{ Value = 'rpa.corp.example' }, @{ Value = '203.0.113.7' }, @{ Value = 'fd00::7' }, @{ Value = '[fd00::7]' }, @{ Value = 'bot-1' }
+    ) {
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ UserPassword = New-TestPassword; Address = $Value }) -Facts (New-TestFacts)
+      $plan.Refusals.Count | Should -Be 0
+      $plan.Address | Should -BeExactly $Value
+      $plan.AskAddress | Should -BeFalse
+    }
+
+    It 'refuses -Address <Value>, which cannot go into a connection line' -ForEach @(
+      @{ Value = 'evil.example/#token=x' }, @{ Value = 'two words' }, @{ Value = 'under_score.example' }, @{ Value = '10.0.0.256' }, @{ Value = 'https://rpa.example' }
+    ) {
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ UserPassword = New-TestPassword; Address = $Value }) -Facts (New-TestFacts)
+      $plan.Refusals | Should -BeExactly @("-Address: $Value is not a host name, an IPv4 address or an IPv6 address.")
+      $plan.Steps.Count | Should -Be 0
+    }
+
+    It 'asks on an interactive install that has none, and not with -Force, -Unattended or -Address' {
+      $facts = New-TestFacts
+      (Get-RpaInstallPlan -Parameters (New-TestParameters @{ UserPassword = New-TestPassword }) -Facts $facts).AskAddress | Should -BeTrue
+      (Get-RpaInstallPlan -Parameters (New-TestParameters @{ UserPassword = New-TestPassword; Force = $true }) -Facts $facts).AskAddress | Should -BeFalse
+      (Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true; UnattendedGiven = $true }) -Facts $facts).AskAddress | Should -BeFalse
+      (Get-RpaInstallPlan -Parameters (New-TestParameters @{ UserPassword = New-TestPassword; Address = 'rpa.corp.example' }) -Facts $facts).AskAddress | Should -BeFalse
+      # Without a mode on Windows Server the install is unattended by default: the person is there to answer YES.
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts $facts
+      $plan.Unattended | Should -BeTrue
+      $plan.AskAddress | Should -BeTrue
+      # A refused plan asks nothing.
+      (Get-RpaInstallPlan -Parameters (New-TestParameters @{ UserPassword = New-TestPassword; RunnerPort = 3000 }) -Facts $facts).AskAddress | Should -BeFalse
+    }
+
+    It 'keeps on an upgrade the address the install records, asks nothing then, and takes a new -Address over it' {
+      $facts = New-InstalledFacts @{ InstalledAddress = 'rpa.corp.example' }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts $facts
+      $plan.Address | Should -BeExactly 'rpa.corp.example'
+      $plan.AskAddress | Should -BeFalse
+      (Get-RpaInstallPlan -Parameters (New-TestParameters @{ Address = '203.0.113.7' }) -Facts $facts).Address | Should -BeExactly '203.0.113.7'
+      # An install an earlier version made records none: the upgrade asks, once.
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-InstalledFacts)
+      $plan.Address | Should -BeNullOrEmpty
+      $plan.AskAddress | Should -BeTrue
+    }
+  }
+
   Context 'on which networks the firewall rules apply' {
     BeforeAll {
       $script:PublicRefusal = "This machine's network is Public, and -AllowFromAnyAddress does not open the ports on a Public network. Use -AllowFrom <n8n address>, or add -IncludePublicNetwork, or use -NoFirewall."
@@ -2960,11 +3005,80 @@ Describe 'install.json' {
     $record.runnerInnerPort | Should -Be 18765
   }
 
+  It 'records the address n8n reaches this machine at when there is one, keeps it on an upgrade, and has no field without one' {
+    $plan = @{ Steps = @('write install.json'); AllowFrom = @('203.0.113.5'); PublicNetwork = $true; Address = 'rpa.corp.example' }
+    $record = New-TestRecord $plan $null
+    $record.address | Should -BeExactly 'rpa.corp.example'
+    $previous = '{ "user": "rpa-runner", "autoSignIn": false, "allowFrom": ["203.0.113.5"], "publicNetwork": true, "address": "rpa.corp.example", "signInChanges": [] }' | ConvertFrom-Json
+    (New-TestRecord @{ Steps = @(); AllowFrom = @('203.0.113.5'); PublicNetwork = $true } $previous).address | Should -BeExactly 'rpa.corp.example'
+    (New-TestRecord @{ Steps = @(); AllowFrom = @('203.0.113.5'); PublicNetwork = $true; Address = '198.51.100.7' } $previous).address | Should -BeExactly '198.51.100.7'
+    (New-TestRecord @{ Steps = @(); AllowFrom = @('203.0.113.5'); PublicNetwork = $true } $null).Contains('address') | Should -BeFalse
+  }
+
   It 'never holds the password' {
     $password = New-MadeUpPassword
     $plan = @{ Steps = @('write install.json', "store the bot user's password for the supervisor"); AllowFrom = @('10.0.0.5'); PublicNetwork = $true; Unattended = $true; IdleSeconds = 15 }
     $record = New-TestRecord $plan $null @{ Unattended = $true; UserPassword = $password.Secure }
     ($record | ConvertTo-Json -Depth 5).Contains($password.Text) | Should -BeFalse
+  }
+}
+
+Describe 'Read-RpaReachableAddress' {
+  BeforeAll {
+    # What the installer asks behind a NAT: Find-NetRoute stands in for the machine's routing table, -Read for Read-Host.
+    function Invoke-Question($AllowFrom, [string]$Local, [object[]]$Typed) {
+      $global:RpaRouteLocal = $Local
+      $global:RpaAsked = @()
+      $global:RpaTyped = [Collections.Queue]::new(@($Typed))
+      function global:Find-NetRoute {
+        [CmdletBinding()] param([string]$RemoteIPAddress)
+        [pscustomobject]@{ DestinationPrefix = '0.0.0.0/0'; NextHop = '10.0.0.1' }
+        [pscustomobject]@{ IPAddress = $global:RpaRouteLocal }
+      }
+      try {
+        $said = @(InModuleScope RpaInstall -Parameters @{ AllowFrom = $AllowFrom } {
+            Read-RpaReachableAddress -AllowFrom $AllowFrom -Read {
+              param($Prompt)
+              $global:RpaAsked += $Prompt
+              $next = $global:RpaTyped.Dequeue()
+              if ($next -is [scriptblock]) { & $next } else { $next }
+            } 6>&1
+          } | ForEach-Object { "$_" })
+      } finally { Remove-Item -LiteralPath function:\Find-NetRoute }
+      $said
+    }
+    $script:Question = 'The name or address n8n can reach this machine at (Enter to keep 10.90.0.10)'
+    $script:Private = "This machine's address towards n8n is 10.90.0.10, a private one. n8n at 203.0.113.5 is outside this network and cannot use it."
+  }
+  AfterAll { Remove-Variable -Scope Global -Name RpaRouteLocal, RpaAsked, RpaTyped -ErrorAction SilentlyContinue }
+
+  It 'says why, asks once, and returns the name or address typed' {
+    $said = Invoke-Question @('203.0.113.5') '10.90.0.10' @(' rpa.corp.example ')
+    $said | Should -BeExactly @($script:Private, 'rpa.corp.example')
+    $global:RpaAsked | Should -BeExactly @($script:Question)
+  }
+
+  It 'keeps the private address (returns nothing) for Enter, and for a host that cannot ask' {
+    Invoke-Question @('203.0.113.5') '10.90.0.10' @('') | Should -BeExactly @($script:Private)
+    Invoke-Question @('203.0.113.5') '10.90.0.10' @({ throw 'no console' }) | Should -BeExactly @($script:Private)
+  }
+
+  It 'says what is wrong with an answer that cannot go into a line, and asks again' {
+    $said = Invoke-Question @('203.0.113.5') '10.90.0.10' @('evil.example/#token=x', '203.0.113.9')
+    $said | Should -BeExactly @($script:Private, 'evil.example/#token=x is not a host name, an IPv4 address or an IPv6 address.', '203.0.113.9')
+    $global:RpaAsked.Count | Should -Be 2
+  }
+
+  It 'asks nothing when <Why>' -ForEach @(
+    @{ Why = 'the address towards n8n is not private'; AllowFrom = @('203.0.113.5'); Local = '198.51.100.20' }
+    @{ Why = 'n8n is on the private network too'; AllowFrom = @('10.0.0.5'); Local = '10.90.0.10' }
+    @{ Why = 'several addresses may connect'; AllowFrom = @('203.0.113.5', '203.0.113.6'); Local = '10.90.0.10' }
+    @{ Why = 'a range may connect'; AllowFrom = @('203.0.113.0/24'); Local = '10.90.0.10' }
+    @{ Why = 'any address may connect'; AllowFrom = @('any'); Local = '10.90.0.10' }
+    @{ Why = 'there are no firewall rules'; AllowFrom = $null; Local = '10.90.0.10' }
+  ) {
+    Invoke-Question $AllowFrom $Local @('rpa.corp.example') | Should -BeNullOrEmpty
+    $global:RpaAsked.Count | Should -Be 0
   }
 }
 
@@ -3858,9 +3972,10 @@ Describe 'Show-RpaConnection.ps1' {
     BeforeAll {
       $script:Machine = [Net.Dns]::GetHostName()
       $script:ByName = "The line's address is this computer's name, {0}. If n8n cannot find it by that name, run this again with -Address <an address n8n can reach>." -f $script:Machine
-      function Invoke-WithRoute($AllowFrom, $Answer, [hashtable]$Arguments = @{}, [switch]$NoAllowFrom) {
+      function Invoke-WithRoute($AllowFrom, $Answer, [hashtable]$Arguments = @{}, [switch]$NoAllowFrom, $Recorded) {
         $install = $script:InstallJson | ConvertFrom-Json
         if (-not $NoAllowFrom) { $install | Add-Member -NotePropertyName allowFrom -NotePropertyValue $AllowFrom }
+        if ($null -ne $Recorded) { $install | Add-Member -NotePropertyName address -NotePropertyValue $Recorded }
         Set-Content -LiteralPath (Join-Path $script:MadeUpInstall 'install.json') -Value ($install | ConvertTo-Json) -Encoding UTF8
         $global:RpaRouteAnswer = $Answer
         $global:RpaRouteAsked = @()
@@ -4001,6 +4116,34 @@ Describe 'Show-RpaConnection.ps1' {
       $global:RpaRouteAsked.Count | Should -Be 0
       Get-LineHosts $output | Should -BeExactly @('rpa.corp.example', 'rpa.corp.example')
       ($output -join "`n") | Should -Not -Match "The line's address"
+    }
+
+    # The name or address the installer was given (-Address, or the answer to its question behind a NAT), kept in
+    # install.json: the lines carry it without -Address, and no route is looked up.
+    It 'carries the address install.json records, asks for no route, and says where it comes from' {
+      $output = Invoke-WithRoute @('203.0.113.5') (New-RouteAnswer '10.90.0.10') -Recorded 'rpa.corp.example'
+      $global:RpaRouteAsked.Count | Should -Be 0
+      Get-LineHosts $output | Should -BeExactly @('rpa.corp.example', 'rpa.corp.example')
+      $output | Should -Contain ('Runner URL: wss://rpa.corp.example:{0}/rpa/v1' -f $script:RunnerPort)
+      ($output -join "`n") | Should -Not -Match 'a private one'
+      $output[-1] | Should -BeExactly "The line's address is rpa.corp.example, the one the installer was given with -Address. To use another, run this again with -Address <that name or address>."
+      # The command for the lines with tokens finds it again: it needs no -Address.
+      ($output -join "`n") | Should -Not -Match 'connection -ShowTokens -Address'
+      Get-LineHosts (Invoke-WithRoute @('203.0.113.5') (New-RouteAnswer '10.90.0.10') -Recorded 'fd00::7') | Should -BeExactly @('[fd00::7]', '[fd00::7]')
+    }
+
+    It 'with -Address carries that address over the one install.json records' {
+      $output = Invoke-WithRoute @('203.0.113.5') (New-RouteAnswer '10.90.0.10') -Arguments @{ Address = '198.51.100.7' } -Recorded 'rpa.corp.example'
+      Get-LineHosts $output | Should -BeExactly @('198.51.100.7', '198.51.100.7')
+      ($output -join "`n") | Should -Not -Match "The line's address"
+    }
+
+    It 'leaves out a recorded address that cannot go into a line (<Recorded>), and chooses as before' -ForEach @(
+      @{ Recorded = 'evil.example/#token=x' }, @{ Recorded = '' }, @{ Recorded = 'two words' }
+    ) {
+      $output = Invoke-WithRoute @('10.0.0.5') (New-RouteAnswer '10.0.0.20') -Recorded $Recorded
+      $global:RpaRouteAsked | Should -BeExactly @('10.0.0.5')
+      Get-LineHosts $output | Should -BeExactly @('10.0.0.20', '10.0.0.20')
     }
 
     It 'with -Status asks for no route' {
@@ -4356,6 +4499,34 @@ Describe 'The installer scripts' {
     }
     $blocks[0].Length | Should -BeGreaterThan 2000
     $blocks[1] | Should -BeExactly $blocks[0]
+  }
+
+  # The installer's question behind a NAT and rpa connection judge an address and find the route with the same rules:
+  # Show-RpaConnection.ps1 runs from the install folder without the module, so each carries them.
+  It 'Show-RpaConnection.ps1 and the module carry the same address rules, word for word' {
+    $blocks = foreach ($path in (Join-Path (Join-Path $script:InstallerDir 'scripts') 'Show-RpaConnection.ps1'), (Join-Path $script:InstallerDir 'RpaInstall.Machine.ps1')) {
+      $source = (Get-Content -Raw -LiteralPath $path) -replace "`r`n", "`n"
+      $begin = $source.IndexOf('# ---- connection address: begin')
+      $end = $source.IndexOf('# ---- connection address: end')
+      $begin | Should -BeGreaterThan 0
+      $end | Should -BeGreaterThan $begin
+      $source.Substring($begin, $end - $begin)
+    }
+    $blocks[0] | Should -Match 'function Get-RouteAddress'
+    $blocks[1] | Should -BeExactly $blocks[0]
+  }
+
+  # Behind a NAT an interactive install asks once for the name or address n8n reaches this machine at, before any
+  # step; -Force and -Unattended ask nothing (the plan says whether to ask).
+  It 'Install-Rpa.ps1 asks for the address only when the plan says so, before the steps, and keeps the answer in the plan' {
+    $source = Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir 'Install-Rpa.ps1')
+    $ask = $source.IndexOf('if ($plan.AskAddress) {')
+    $ask | Should -BeGreaterThan $source.IndexOf("Read-Host 'Type YES to continue'")
+    $ask | Should -BeLessThan $source.IndexOf('Invoke-RpaInstallPlan -Plan $plan')
+    $source.IndexOf('$answer = Read-RpaReachableAddress -AllowFrom $plan.AllowFrom -Read { param($Prompt) Read-Host $Prompt }', $ask) | Should -BeGreaterThan $ask
+    $source.IndexOf('if ($answer) { $plan.Address = $answer }', $ask) | Should -BeGreaterThan $ask
+    @([regex]::Matches($source, 'Read-RpaReachableAddress')).Count | Should -Be 1
+    $source | Should -Match ([regex]::Escape('Address = $Address;'))
   }
 
   # Without it the exit code of a run that finished would be the one the last Windows tool left (robocopy's 1 means

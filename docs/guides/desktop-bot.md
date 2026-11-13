@@ -39,6 +39,7 @@ signed in. It prints `RPA is installed.` and a summary.
 
 In the same PowerShell, print the Connection Line with its token, and keep the window open for step 2:
 `& "C:\Program Files\RPA Runner\rpa.cmd" connection -ShowTokens`. The line starts `rpa-runner://`. Its address is the
+name or address you gave the installer (it asks for one when n8n is outside this machine's private network), else the
 one this machine has towards the n8n address you gave `-AllowFrom`, and the command says which. If n8n reaches the
 machine by another name or address (a NAT, a tunnel), run the command again with `-Address <that name or address>`.
 

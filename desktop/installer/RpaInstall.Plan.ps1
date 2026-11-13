@@ -212,8 +212,8 @@ function Get-RpaBrowserFilesRefusal([hashtable]$Facts, [bool]$Kept) {
 }
 
 # Decides what an install does. -Parameters holds Install-Rpa.ps1's parameters (User, UserPassword, RunnerPort,
-# BrowserPort, NoBrowser, WithBrowser, NoFirewall, AllowFrom, AllowFromAnyAddress, IncludePublicNetwork, AutoSignIn,
-# Unattended, UnattendedGiven, IdleSeconds, IdleSecondsGiven, Force); -Facts is what Get-RpaMachineFacts returns. With a
+# BrowserPort, NoBrowser, WithBrowser, NoFirewall, AllowFrom, AllowFromAnyAddress, IncludePublicNetwork, Address,
+# AutoSignIn, Unattended, UnattendedGiven, IdleSeconds, IdleSecondsGiven, Force); -Facts is what Get-RpaMachineFacts returns. With a
 # refusal there are no steps: the installer changes nothing. Questions are what the installer has confirmed with YES before the
 # first step (with -Force they are warnings). AllowFrom in the result is what the firewall rules let in: addresses and
 # ranges, or the one word any, or nothing without rules; PublicNetwork says whether the rules also apply on networks
@@ -224,7 +224,10 @@ function Get-RpaBrowserFilesRefusal([hashtable]$Facts, [bool]$Kept) {
 # -WithBrowser adds it, an upgrade without -WithBrowser or -NoBrowser keeps what the install has (as it keeps the
 # sign-in mode), and -NoBrowser leaves it out, or removes it from an install that has it. Install-Rpa.ps1 hands it on
 # to Invoke-RpaInstallPlan as NoBrowser. BrowserNotice is what adding the browser to an install, or removing it from
-# one, changes, in lines to show and confirm before the first step (a first install has no such lines).
+# one, changes, in lines to show and confirm before the first step (a first install has no such lines). Address is the
+# name or address n8n reaches this machine at, for the connection lines: -Address, or on an upgrade the one the install
+# records. AskAddress says whether Install-Rpa.ps1 may ask for one behind a NAT (Read-RpaReachableAddress): when there
+# is none, and neither -Force nor -Unattended was given.
 function Get-RpaInstallPlan {
   param(
     [Parameter(Mandatory = $true)][hashtable]$Parameters,
@@ -515,6 +518,17 @@ function Get-RpaInstallPlan {
     }
   }
 
+  # The name or address n8n reaches this machine at, for the connection lines (install.json keeps it): -Address, else
+  # what the install records. Without either, an install that may ask (not -Force, not -Unattended) asks behind a NAT
+  # (Read-RpaReachableAddress); with -Force or -Unattended rpa connection says what to do instead.
+  $address = $null
+  $givenAddress = ([string]$Parameters.Address).Trim()
+  if ($givenAddress) {
+    if (Get-ConnectionHost $givenAddress) { $address = $givenAddress }
+    else { $refusals.Add(('-Address: {0} is not a host name, an IPv4 address or an IPv6 address.' -f $givenAddress)) }
+  }
+  elseif ($upgrade -and $Facts.InstalledAddress) { $address = [string]$Facts.InstalledAddress }
+
   if ($refusals.Count -eq 0) {
     # An upgrade replaces the program files and keeps the user, the policy and both tokens (and the certificates,
     # which no step touches); what is missing of them is made again. A change of user removes both tokens before the
@@ -608,6 +622,7 @@ function Get-RpaInstallPlan {
     Refusals = $refusals.ToArray(); Warnings = $warnings.ToArray(); Questions = $questions.ToArray(); Steps = $steps.ToArray()
     AllowFrom = $allowFrom; PublicNetwork = $publicNetwork; Notice = $notice; Unattended = $unattended; IdleSeconds = $idleSeconds
     Browser = $browser; BrowserNotice = $browserNotice
+    Address = $address; AskAddress = (-not $address) -and $refusals.Count -eq 0 -and -not $Parameters.Force -and -not $Parameters.Unattended
   }
 }
 

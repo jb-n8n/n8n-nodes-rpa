@@ -955,12 +955,14 @@ jobs:
           Write-Host "before: fDenyTSConnections $deny; Remote Desktop firewall rules: $rdpRules"
 
           $global:LASTEXITCODE = 0
-          & 'C:\rpa-ci\package\rpa-windows-x64\Install-Rpa.ps1' -User rpa-ci-unattended -Unattended -AllowFrom 127.0.0.1 -Force
+          # -Address: the name n8n reaches this machine at (behind a NAT, for example); install.json keeps it.
+          & 'C:\rpa-ci\package\rpa-windows-x64\Install-Rpa.ps1' -User rpa-ci-unattended -Unattended -AllowFrom 127.0.0.1 -Address rpa-ci.example -Force
           Assert ($LASTEXITCODE -eq 0) "Install-Rpa.ps1 -Unattended exits 0 (it was $LASTEXITCODE)"
 
           $record = Get-Content -Raw -LiteralPath "$install\install.json" -Encoding UTF8 | ConvertFrom-Json
           Assert ($record.mode -eq 'unattended' -and $record.user -eq 'rpa-ci-unattended' -and $record.idleSeconds -eq 15 -and $record.runnerInnerPort -eq 18765 -and (@($record.listenAddresses) -join ',') -eq '0.0.0.0') 'install.json records the mode, the user, the idle time, the port behind the supervisor and where it listens'
           Assert ($record.browser -eq $false -and $null -eq $record.browserPort -and $null -eq $record.browserInnerPort) 'install.json records no browser and no browser port, so the supervisor passes on the runner port only'
+          Assert ($record.address -eq 'rpa-ci.example') 'install.json keeps the -Address name for rpa connection'
           $service = Get-CimInstance -ClassName Win32_Service -Filter "Name='RPA Supervisor'"
           Assert ($service.State -eq 'Running' -and $service.StartMode -eq 'Auto' -and $service.StartName -eq 'LocalSystem') 'the service RPA Supervisor runs as LocalSystem and starts with Windows'
           Assert ($service.PathName -eq ('"{0}\runner\RpaSupervisor.exe"' -f $install)) "the service runs the installed RpaSupervisor.exe, its path quoted ($($service.PathName))"
@@ -985,6 +987,7 @@ jobs:
           $shown | ForEach-Object { Write-Host "  | $_" }
           Assert ($shown -contains 'Mode: unattended. The RPA Supervisor signs rpa-ci-unattended in when n8n connects, and out 15 s after the last connection.' -and $shown -contains 'Supervisor: running') 'Show-RpaConnection.ps1 shows the mode and that the supervisor runs'
           Assert (($shown -join "`n") -notmatch '(?i)browser') 'Show-RpaConnection.ps1 says nothing about a browser'
+          Assert (@($shown | Where-Object { $_ -like 'rpa-runner://rpa-ci.example:8765/rpa/v1#*' }).Count -eq 1 -and $shown -contains "The line's address is rpa-ci.example, the one the installer was given with -Address. To use another, run this again with -Address <that name or address>.") 'rpa connection, run again without -Address, carries the name install.json keeps, and says where it comes from'
           Get-Content "$data\supervisor\supervisor.log" -ErrorAction SilentlyContinue | Select-Object -Last 20 | ForEach-Object { Write-Host "  log | $_" }
 
       # The sign-in through the supervisor: every session of the bot user is signed out, then the scenario connects to

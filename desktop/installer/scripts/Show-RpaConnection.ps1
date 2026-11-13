@@ -8,8 +8,9 @@
 #
 # A connection line is rpa-runner://<address>:<port>/rpa/v1#token=<token>&fingerprint=<64 hex> or
 # rpa-browser://<address>:<port>/#token=<token>&fingerprint=<64 hex>. Its address is the -Address given (the name or
-# address n8n really uses, through a NAT or a tunnel). Without -Address, where install.json records one IP address that
-# may connect (-AllowFrom, the n8n host), it is the address this machine has on its route to that one, else this
+# address n8n really uses, through a NAT or a tunnel). Without -Address it is the one install.json records (the
+# installer's -Address, or the answer to its question behind a NAT); else, where install.json records one IP address
+# that may connect (-AllowFrom, the n8n host), the address this machine has on its route to that one, else this
 # machine's name; one line says which, and how to choose another. An IPv6 address goes in brackets.
 # -Status shows whether each program listens, the mode, the bot user's sessions and, in unattended mode, the
 # supervisor's state: nothing that goes into a credential.
@@ -33,6 +34,8 @@ $ErrorActionPreference = 'Stop'
 $installDir = Split-Path -Parent $PSScriptRoot
 $hidden = '<hidden: run with -ShowTokens>'
 
+# ---- connection address: begin (the same text in scripts\Show-RpaConnection.ps1 and RpaInstall.Machine.ps1; a test
+# compares the two) ----
 # The address as it goes into a connection line: a host name or an IPv4 address as it is, an IPv6 address (with or
 # without its brackets) in brackets; nothing for anything else, so that no text of -Address can add to the line.
 function Get-ConnectionHost([string]$Text) {
@@ -92,6 +95,7 @@ function Test-PrivateAddress([string]$Text) {
   }
   ($bytes[0] -band 0xFE) -eq 0xFC -or ($bytes[0] -eq 0xFE -and ($bytes[1] -band 0xC0) -eq 0x80)
 }
+# ---- connection address: end ----
 
 # A connection line (Line), or why there is none (Problem). -Fingerprint is in the form the other lines show it
 # (upper-case pairs joined by colons) and goes into the line as 64 lower-case hexadecimal digits. With -WithToken the
@@ -142,11 +146,17 @@ if ($ShowTokens) {
   }
 }
 
-# The address in the lines: -Address, else the one on the route to n8n, else this machine's name. A name that cannot
-# go into a line (an underscore in it, for example) leaves the lines to -Address.
+# The address in the lines: -Address, else the one install.json records (the installer's -Address, or the answer to
+# its question behind a NAT), else the one on the route to n8n, else this machine's name. A name that cannot go into a
+# line (an underscore in it, for example) leaves the lines to -Address.
 $route = $null
 $noLine = $null
-if (-not $givenAddress -and -not $Status) {
+$recorded = $null
+if (-not $givenAddress -and -not $Status -and $install.address -is [string] -and (Get-ConnectionHost $install.address)) {
+  $recorded = $install.address
+  $lineHost = Get-ConnectionHost $recorded
+}
+elseif (-not $givenAddress -and -not $Status) {
   $route = Get-RouteAddress $install.allowFrom
   if ($route) { $lineHost = $route.Host }
   else {
@@ -245,7 +255,7 @@ foreach ($service in $services) {
   } else { Write-Output ('{0} connection line: not known yet (the program has not started)' -f $service.Name) }
   # With -Address, the URL for the separate fields names the same address as the line.
   $urlHosts = $addresses
-  if ($givenAddress) { $urlHosts = @($lineHost) }
+  if ($givenAddress -or $recorded) { $urlHosts = @($lineHost) }
   foreach ($address in $urlHosts) { Write-Output ('{0} URL: wss://{1}:{2}{3}' -f $service.Name, $address, $service.Port, $service.Path) }
   if ($service.Fingerprint) { Write-Output ('{0} fingerprint: {1}' -f $service.Name, $service.Fingerprint) }
   else { Write-Output ('{0} fingerprint: not known yet (the program has not started)' -f $service.Name) }
@@ -261,6 +271,7 @@ if (-not $Status -and -not $ShowTokens) {
 if ($route) {
   if (-not $outside) { Write-Output ("The line's address is {0}: the one this machine has towards {1}. If n8n reaches this machine by another name or address, run this again with -Address <that name or address>." -f $route.Address, $route.Towards) }
 }
+elseif ($recorded) { Write-Output ("The line's address is {0}, the one the installer was given with -Address. To use another, run this again with -Address <that name or address>." -f $recorded) }
 elseif (-not $Status -and -not $givenAddress -and -not $noLine) { Write-Output ("The line's address is this computer's name, {0}. If n8n cannot find it by that name, run this again with -Address <an address n8n can reach>." -f $lineHost) }
 
 if ($Status -and $install.mode -ne 'unattended') {
