@@ -31,6 +31,14 @@ export const NO_TOTP_SECRET_GUIDANCE =
 /** policy_violation because a sign-in met an address the Site Login does not list as a login page (the engine's signIn refusals). */
 export const LOGIN_PAGE_GUIDANCE =
   'The sign-in stopped at an address that is not listed as a login page. Add the address the message names to Pages Where the Password May Be Typed in the RPA Site Login, then run again.';
+/**
+ * policy_violation because a desktop step pressed a button or key the runner's policy protects without its mark as a
+ * write. The runner's refusals of that kind all say "needs write: true" (desktop/runner RunnerService.cs; the policy_refused
+ * code is shared by every policy refusal, so the words are the only signal; description.test.ts pins them to that file).
+ * `step`: the step's number when the message names it.
+ */
+export const writeMarkGuidance = (step?: string): string =>
+  `The Windows machine protects the button or key that ${step ? `step ${step}` : 'this step'} uses, and the step was not ticked as one that saves or sends when the bot was approved. If it should save or send: open the import form, leave Bot file empty, type the bot's name, choose Sign the approved steps again, unchanged, and tick ${step ? `step ${step}` : 'that step'} under "Which of these steps save, send or submit?". If it should not, change the step.`;
 /** site_down because the browser could not reach the site's address: a name not found, a refused connection, a certificate. */
 export const SITE_ADDRESS_GUIDANCE =
   'The browser could not reach the site at its address; the message says what it met. Check the address the steps open (and the start site), and that the site is up, then run again.';
@@ -58,6 +66,7 @@ export function guidanceFor(code: ErrorCode, message: string): string {
   if (code === 'auth_blocked' && message.includes('detected:mfa_totp:')) return NO_TOTP_SECRET_GUIDANCE;
   if (code === 'policy_violation' && message.includes('Pages Where the Password May Be Typed')) return LOGIN_PAGE_GUIDANCE;
   if (code === 'policy_violation' && message.includes(' did not take the value ')) return VALUE_NOT_TAKEN_GUIDANCE;
+  if (code === 'policy_violation' && message.includes('needs write: true')) return writeMarkGuidance(/\bStep (\d+)\b/.exec(message)?.[1]);
   if (code === 'site_down' && /net::ERR_(NAME_NOT_RESOLVED|CONNECTION_REFUSED|CERT_|SSL_)/.test(message)) return SITE_ADDRESS_GUIDANCE;
   if (code === 'locked_out' && message.includes('was changed earlier in this execution')) return PASSWORD_CHANGED_GUIDANCE;
   return GUIDANCE[code];

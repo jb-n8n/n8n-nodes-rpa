@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
 import { NO_MODEL } from '../nodes/Playwright/operations/common.js';
@@ -11,7 +11,7 @@ import { INPUTS_EXPRESSION, nodeInputs, nodeOutputs, OUTPUTS_EXPRESSION } from '
 import { OPERATIONS, properties, SUBTITLE, URL_HINT } from '../nodes/Playwright/description/index.js';
 import { ALL_OPERATIONS, ID_PATTERN_OPTION, QUICK_OPERATIONS } from '../nodes/Playwright/description/options.js';
 import { STEPS_PLACEHOLDER, UNSIGNED_NOTICE } from '../nodes/Playwright/description/runSteps.js';
-import { CODE_WORKFLOW_GUIDANCE, GUIDANCE, guidanceFor, LOGIN_PAGE_GUIDANCE, NO_TOTP_SECRET_GUIDANCE, PASSWORD_CHANGED_GUIDANCE, SITE_ADDRESS_GUIDANCE, VALUE_NOT_TAKEN_GUIDANCE } from '../nodes/Playwright/errors.js';
+import { CODE_WORKFLOW_GUIDANCE, GUIDANCE, guidanceFor, LOGIN_PAGE_GUIDANCE, NO_TOTP_SECRET_GUIDANCE, PASSWORD_CHANGED_GUIDANCE, SITE_ADDRESS_GUIDANCE, VALUE_NOT_TAKEN_GUIDANCE, writeMarkGuidance } from '../nodes/Playwright/errors.js';
 import { SITE_LOGIN_PASSWORD_CHANGED, siteLoginLockedOut } from '../nodes/Playwright/execute.js';
 import { COMPILERS, quickFieldNames, type QuickOp } from '../nodes/Playwright/operations/quick.js';
 import { executeRunSteps, STEPS_EMPTY_NEEDS_REPAIR } from '../nodes/Playwright/operations/runSteps.js';
@@ -398,6 +398,18 @@ describe('wording and guidance', () => {
     expect(guidanceFor('site_down', 'HTTP 503 at the start page')).toBe(GUIDANCE.site_down);
     expect(guidanceFor('policy_violation', `Step 2 (Type into From): ${valueNotTaken('"From"', '"x"', 'locator.fill: Error: Malformed value')}`)).toBe(VALUE_NOT_TAKEN_GUIDANCE);
     for (const g of [SITE_ADDRESS_GUIDANCE, VALUE_NOT_TAKEN_GUIDANCE]) expect(g).not.toMatch(/[<>]/);
+    // IW-4: a desktop step that pressed a protected button or key without its write mark. The runner's refusals of that
+    // kind (its source, the only place the words are made) all say "needs write: true"; the guidance names the step.
+    const runner = readFileSync(new URL('../../../desktop/runner/src/Rpa.Runner.Core/RunnerService.cs', import.meta.url), 'utf8');
+    const writeRefusals = [...runner.matchAll(/PolicyRefused\(\$?"([^"]*write: true[^"]*)"\)/g)].map((m) => m[1]);
+    expect(writeRefusals.length).toBeGreaterThanOrEqual(4);
+    for (const r of writeRefusals) expect(r).toContain('needs write: true');
+    const refused = 'Step 9 (Click Post): the target is a declared write control and needs write: true';
+    expect(runner).toContain('is a declared write control and needs write: true');
+    expect(guidanceFor('policy_violation', refused)).toBe(writeMarkGuidance('9'));
+    expect(writeMarkGuidance('9')).toContain('tick step 9 under "Which of these steps save, send or submit?"');
+    expect(guidanceFor('policy_violation', 'the key Enter could reach a declared write control of this run and needs write: true (only Tab, arrows, Home, End, PageUp, PageDown and Escape do not)')).toBe(writeMarkGuidance());
+    expect(writeMarkGuidance()).not.toMatch(/[<>]|undefined/);
     // errors.ts matches the engine's text by its words (the node never loads the engine to read a constant).
     expect(VALUE_NOT_TAKEN).toBe(' did not take the value ');
     expect(guidanceFor('locked_out', siteLoginLockedOut('example.com'))).toBe(GUIDANCE.locked_out);
