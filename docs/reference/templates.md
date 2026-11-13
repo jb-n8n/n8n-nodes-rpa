@@ -21,6 +21,12 @@ Templates 2, 3 and 5 create the two Data Tables when they are missing.
 - **Import a bot** asks for the **Bot file**, **Source (optional)** and **Name for the steps**. For every upload but an
   RPA recording it asks on a second page, **The file it downloads**, for a file name pattern and required columns.
   Leave both empty when the bot downloads nothing in a browser.
+- **Bot file** may be left empty to change an approved bot or sign it again. **Approved bots** reads the `active`
+  rows of `playwright_steps`, and **Change or sign again** shows the newest active steps of the name typed, in a box.
+  **Review** sends the box to **Import steps** as a step document, then to the same review page and **Sign steps**.
+  Approved, the new row supersedes the old one. Rejected, the old one keeps running. This path gives no workflow file:
+  the bot's workflow exists already. A name with no active row ends on **No approved bot**, which lists the approved
+  names.
 - **Review and approve** shows each step list: what it opens, whether it signs in, forms it submits, files it returns,
   what the replay proved, the steps it left out, and the numbered steps. For desktop steps it asks "Which of these steps
   save, send or submit?". The **Decision** is **Approve and sign** or **Reject**. A page left unanswered for an hour

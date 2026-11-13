@@ -110,10 +110,22 @@ Record the work with the RPA Recorder and upload the `.rpa-recording.json` file:
 ## From steps you wrote
 
 Write the steps as JSON ([Steps](../reference/steps.md)), save them as a `.json` file, and upload it with the source
-**Step document**. This is how hand-written or hand-fixed steps get approved and signed. To change an approved bot,
-copy the `steps` value of its `active` row in the `playwright_steps` Data Table, edit it, and import it under the same
-name. Steps that submit a form, download through a form, type a secret or change a password are not run by the import:
-they go to approval as written, marked so.
+**Step document**. This is how hand-written or hand-fixed steps get approved and signed. Steps that submit a form,
+download through a form, type a secret or change a password are not run by the import: they go to approval as
+written, marked so.
+
+## Change an approved bot, or sign it again
+
+1. Open the **Import a bot** form. Leave **Bot file** empty and type the bot's name in **Name for the steps**.
+2. The next page shows the steps that run now under that name, in a box. Change what you need, or leave them as they
+   are to sign them again, for example after the signing key changed.
+3. Click **Review**. The review page of an import follows: read every step, check the write ticks of desktop steps,
+   and choose **Approve and sign** or **Reject**.
+
+Approved, the steps become a new row under that name, signed with the current key, and the old row is superseded.
+Rejected, or not answered within an hour, the old version keeps running. A name the form does not find ends on a
+page that lists the approved bots. The box holds JSON: for a long step list, copy it into an editor, or upload the
+edited steps as a file with the source **Step document** and the same name.
 
 ## From Power Automate Desktop
 
