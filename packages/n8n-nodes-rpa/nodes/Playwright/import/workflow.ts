@@ -260,16 +260,19 @@ export const LOG_RUN_ROW = rowExpression([
   'durationMs: $json.durationMs ?? null', 'llmTokens: $json.llmTokens ?? null', "code: ''", 'executionId: $execution.id',
   "message: ''", "guidance: ''", "file: [].concat($json.files ?? []).map((f) => f?.fileName).filter((n) => n).join(', ')", "account: $json.account ?? ''",
 ].join(', '));
+/** The run log keeps at most this many characters of a failure's message (the rest is in Run steps' error item). */
+export const LOGGED_MESSAGE_CHARS = 300;
 /**
  * A failed run: Run steps' error item, its facts under details (a configuration error has no code: config_error), the
- * message, and what to do (details.guidance, the node error's description). Nothing was counted. A run refused before
- * it started (locked_out, busy: no lane) has no lane, duration or tokens.
+ * message as the node gives it (masked: the node error's own message without its code), cut to LOGGED_MESSAGE_CHARS
+ * characters with an ellipsis, and what to do (details.guidance, the node error's description). Nothing was counted. A
+ * run refused before it started (locked_out, busy: no lane) has no lane, duration or tokens.
  */
 export const LOG_FAILED_ROW = rowExpression([
   "name: $json.details?.name ?? ''", 'lane: $json.details?.lane ?? null', 'version: $json.details?.version ?? null', "hash: $json.details?.hash ?? ''",
   'confirmed: null', 'rowCount: null', 'durationMs: $json.details?.lane ? ($json.details?.durationMs ?? null) : null',
   'llmTokens: $json.details?.lane ? ($json.details?.llmTokens ?? null) : null',
-  "code: $json.details?.code || 'config_error'", 'executionId: $execution.id', "message: $json.message ?? ''", "guidance: $json.details?.guidance ?? ''",
+  "code: $json.details?.code || 'config_error'", 'executionId: $execution.id', `message: ((m) => (m.length > ${LOGGED_MESSAGE_CHARS} ? m.slice(0, ${LOGGED_MESSAGE_CHARS - 1}).join('') + '…' : m.join('')))(Array.from(String($json.message ?? '')))`, "guidance: $json.details?.guidance ?? ''",
   "file: ''", "account: $json.details?.account ?? ''",
 ].join(', '));
 /**

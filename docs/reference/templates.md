@@ -152,7 +152,7 @@ after `approvalTimeoutHours` (72), then:
 | `llmTokens` | number | Model tokens used |
 | `code` | string | Error code, empty on success |
 | `executionId` | string | The n8n execution |
-| `message` | string | What failed, as Run Steps' error item says it. Empty on success |
+| `message` | string | What failed, as Run Steps' error item says it (masked as the node masks it), cut to 300 characters. Empty on success |
 | `guidance` | string | What to do about it: the same text as the node error's description. Empty on success |
 | `file` | string | The name of the file the run returned, empty when none |
 | `account` | string | The user name the RPA Site Login signed in with, empty without one. Never the password |

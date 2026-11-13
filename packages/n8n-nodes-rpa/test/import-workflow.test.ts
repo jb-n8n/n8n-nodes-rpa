@@ -7,7 +7,7 @@ import { Workflow, type IConnections, type INode, type INodeProperties, type INo
 import { importSource, type Draft, type FlowNode, type ImportOptions, type UiPathFlow } from 'n8n-rpa-engine';
 import { bound } from '../../engine/test/timing.js';
 import { zip } from '../../engine/test/zip-fixtures.js';
-import { buildWorkflow, fromRow, jsName, LOG_FAILED_ROW, LOG_RUN_ROW, MAX_WORKFLOW_NODES, STOP_MESSAGE, workflowFile, type WorkflowJson, type WorkflowNode } from '../nodes/Playwright/import/workflow.js';
+import { buildWorkflow, fromRow, jsName, LOG_FAILED_ROW, LOGGED_MESSAGE_CHARS, LOG_RUN_ROW, MAX_WORKFLOW_NODES, STOP_MESSAGE, workflowFile, type WorkflowJson, type WorkflowNode } from '../nodes/Playwright/import/workflow.js';
 import { RPA_NODE_TYPE } from '../nodes/Playwright/node-type.js';
 import { Playwright } from '../nodes/Playwright/Playwright.node.js';
 import { RUN_TABLE, RUN_TABLE_COLUMNS, RUN_TABLE_FIRST_COLUMNS, STEPS_TABLE, STEPS_TABLE_COLUMNS } from '../nodes/Playwright/rows.js';
@@ -889,6 +889,13 @@ describe('buildWorkflow', () => {
     const failedRow = shape(LOG_FAILED_ROW, lockedOut, all);
     expect(Object.keys(failedRow)).toEqual(RUN_TABLE_COLUMNS.map((c) => c.name));
     expect(failedRow).toMatchObject({ code: 'locked_out', name: 'bot', executionId: '22', message: lockedOut.message, guidance: GUIDANCE.locked_out });
+    // A long message is cut to 300 characters (a character outside the BMP counts once), so the owner's view of the
+    // table stays readable; the whole message is on Run steps' error item.
+    const long = 'é'.repeat(250) + '😀'.repeat(100);
+    const cut = String(shape(LOG_FAILED_ROW, { ...lockedOut, message: long }, all).message);
+    expect(Array.from(cut)).toHaveLength(LOGGED_MESSAGE_CHARS);
+    expect(cut).toBe(`${'é'.repeat(250)}${'😀'.repeat(49)}…`);
+    expect(shape(LOG_FAILED_ROW, { ...lockedOut, message: 'x'.repeat(300) }, all).message).toBe('x'.repeat(300));
     // A table made by an earlier version: the row has only its ten columns, so n8n's insert never refuses it.
     expect(Object.keys(shape(LOG_FAILED_ROW, lockedOut, first))).toEqual(RUN_TABLE_FIRST_COLUMNS.map((c) => c.name));
     expect(Object.keys(shape(LOG_RUN_ROW, { name: 'bot', lane: 'script', version: 1, hash: 'h', durationMs: 900 }, first))).toEqual(RUN_TABLE_FIRST_COLUMNS.map((c) => c.name));
