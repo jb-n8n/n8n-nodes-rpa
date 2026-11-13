@@ -79,8 +79,9 @@ The import form is ready.
 
 If you made an RPA Desktop Runner credential in n8n already, answer `n` instead: the command picks it when your project
 has only that one, and names it. With several, add `--desktop-runner "<its name>"`. It never reads a credential's
-values. The signing key stays in n8n, which does not show it again: the command's note says how to keep a copy. A lost
-key means approving every bot again ([sign it again](move-a-bot.md#change-an-approved-bot-or-sign-it-again)). The
+values. The signing key stays in n8n, which does not show it again. The `Signing key:` line says how to keep a copy:
+you need one only to move signed bots to another n8n, so otherwise skip it. Without a copy, a lost key means approving
+every bot again ([sign it again](move-a-bot.md#change-an-approved-bot-or-sign-it-again)). The
 command's last line is about the API key: revoke it when you are done (**Settings → n8n API**, **⋯**, **Revoke**).
 Run the command again at any time: it reuses only what your own project holds, asks first in a shared project, and
 leaves a workflow there already as it is. `--form-login basic` serves approvers with no n8n account. To set the form
@@ -127,8 +128,8 @@ you use n8n from, and open the form there. [Record a bot](record-a-bot.md) expla
    <img src="../images/import-review-page.png" alt="The Review and approve page for the ERP Demo recording: the numbered steps, the tick boxes and the decision" width="360">
 
 3. The last page says `Approved and signed: erp-line-items v1 is now the version that runs under that name.` The
-   browser downloads `erp-line-items.workflow.json`, the workflow that runs the bot. The signed row records your n8n
-   address as **approvedBy**. Someone not on **Sign steps → Approver Allowlist** cannot approve: the last page says
+   browser downloads `erp-line-items.workflow.json`, the workflow that runs the bot. The signed row records the email
+   address of your n8n user as **approvedBy**. Someone not on **Sign steps → Approver Allowlist** cannot approve: the last page says
    `Sign Steps refused` and nothing is signed.
 
 ## 5. Run it

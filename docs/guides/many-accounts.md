@@ -47,10 +47,10 @@ The sample site of [Your first browser bot](browser-bot.md) has three accounts: 
 `lakeside-ops`, which always asks for a one-time code, and `harbor-ops`, which never does.
 
 1. Make the Site Login above, with the other fields as in step 2 of the browser bot guide, and give it to the form.
-2. On the form, upload `docs/samples/sandbox-rows.steps.json` with the name `sandbox-rows-accounts`. Leave **The file
-   it downloads** empty and choose **Approve and sign**. Import the workflow it hands over (**⋯ → Import → From File**).
-3. Hover over the line between **Get active steps (sandbox-rows-accounts)** and **sandbox-rows-accounts**, click **+**
-   and add a **Code** node. Name it **Get accounts** and replace its code with this (harbor-ops gets a wrong password):
+2. On the form, upload `docs/samples/sandbox-rows.steps.json` with the name `sandbox-rows-accounts`, and choose
+   **Approve and sign**. Import the workflow it hands over (**⋯ → Import → From File**).
+3. Hover over the line between **Get active steps (sandbox-rows-accounts)** and **sandbox-rows-accounts**, click **+**,
+   search for `Code` and choose **Code in JavaScript**. Name it **Get accounts** and replace its code with this (harbor-ops gets a wrong password):
 
    ```js
    return [

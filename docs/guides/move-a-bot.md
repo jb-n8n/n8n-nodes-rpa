@@ -20,7 +20,7 @@ npx n8n-nodes-rpa setup --url http://localhost:5678
 ```
 
 It creates the **RPA Step Signing** key and the workflow, and publishes it. The form opens with your n8n sign-in: it
-has no password of its own. Your n8n address goes on **Sign steps → Approver Allowlist** (the API key's owner, or
+has no password of its own. Your n8n user's email address goes on **Sign steps → Approver Allowlist** (the API key's owner, or
 `--approver`). It prints the form's address. For approvers with no n8n account, `--form-login basic` gives the form a
 user name and password instead, printed once. For browser bots, add
 `--browser-url <ws-url>` with the browser service's token in `RPA_BROWSER_TOKEN`: it creates **RPA Browser** and
@@ -41,7 +41,8 @@ Then, for each bot:
 
 1. Upload the file. **Source** works it out from the file name, or choose it. Give the steps a **Name**: they are
    saved and run under that name.
-2. The next page, **The file it downloads**, comes for every upload but an RPA recording. For a browser bot that
+2. The next page, **The file it downloads**, comes for every upload but an RPA recording or a step document (a step
+   document's download steps carry their own checks). For a browser bot that
    downloads a file, a UiPath one too, give the file name pattern and the required columns. The replay checks that the
    bot gets that file. Leave both empty when the bot downloads nothing in a browser.
 3. The import runs browser steps once and replays them in a fresh browser with every write blocked. Desktop steps are
@@ -49,7 +50,7 @@ Then, for each bot:
 4. **Review and approve** shows each step list: what it opens, whether it signs in, and the numbered steps. When the
    import left a step out, a **Left out by the import** block lists it. Choose **Approve and sign** or **Reject**. The
    n8n user who submits this page is the approver: they must be on **Sign steps → Approver Allowlist**, or nothing is
-   signed. The row records their n8n address.
+   signed. The row records their n8n user's email address.
 5. The last page says what was signed, and counts the values removed as secrets and the steps not translated. It
    downloads the workflow that runs the bot. When nothing was signed (rejected, or the approver is not on the list), it
    offers no workflow file. For a UiPath project, notes in that workflow show what was not

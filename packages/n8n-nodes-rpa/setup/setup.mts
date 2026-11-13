@@ -65,7 +65,7 @@ const USAGE = [
   `and the workflow "${WORKFLOW_NAME}", published. Run it again at any time: it reuses what is there.`,
   '',
   `  --url <address>        n8n's address (default ${DEFAULT_URL}). http:// only on this machine.`,
-  '  --approver <email>     the n8n address of the person who approves: it goes into the Approver Allowlist of Sign steps.',
+  '  --approver <email>     the n8n email address of the person who approves: it goes into the Approver Allowlist of Sign steps.',
   "                         Default: the API key owner's address, when n8n tells it; else it asks.",
   "  --form-login basic     give the form a user name and password (Basic Auth) instead of n8n's sign-in, for approvers",
   '                         without an n8n account. The approver is then the address on the allowlist.',
