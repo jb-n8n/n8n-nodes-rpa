@@ -168,7 +168,8 @@ scheduled run fails, choose an Error Workflow in the workflow's settings.
 ## Next
 
 - Your own app: install it for all users, record it the same way, and allow it with **Allow this app…**, which also
-  protects the Save and Post buttons you clicked. To protect other buttons or keys, an administrator lists them in the
+  protects the buttons you clicked that save, send or post and have an id of their own, such as Post. The standard
+  buttons of Windows dialogs (the Save of a Save As dialog, OK, Yes) are not protected. To protect other buttons or keys, an administrator lists them in the
   policy ([Windows guide](../install/windows.md#8-allow-your-own-app)).
 - Change a value per run: map **Options → Variables** from an earlier node, such as a spreadsheet row.
 - Who may hold the secret variables, and how approval works: [Security](../reference/security.md).
