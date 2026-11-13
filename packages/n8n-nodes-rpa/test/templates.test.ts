@@ -2485,6 +2485,13 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(changed.signed[0]).toMatchObject({ status: 'active', name: old.name });
     expect(String(changed.signed[0].steps)).toContain('"3000"');
     expect(trust(changed.signed[0].steps, changed.signed[0].signature, NEW_KEY)).toEqual({ ok: true, signed: true });
+    // W5: a change approved on the form is version 2 everywhere: the review page's title, Sign steps' record, the steps it
+    // signed, the row Save signed steps writes, and the last page.
+    expect(evaluate(String((byName(t, REVIEW).parameters.options as IDataObject).formTitle), { $: nodesRan(changed.after) })).toBe(`${String(old.name)}, version 2, replacing version 1`);
+    expect(changed.signed[0].version).toBe(2);
+    expect(JSON.parse(String(changed.signed[0].steps)).version).toBe(2);
+    const saved = table(byName(t, 'Save signed steps')).columns!.value;
+    expect(Object.fromEntries(Object.entries(saved).map(([k, v]) => [k, typeof v === 'string' && v.startsWith('=') ? evaluate(v, { $json: changed.signed[0] }) : v]))).toMatchObject({ name: old.name, version: 2, status: 'active' });
     expect(lastPage(changed).text).toBe(`Changed: ${String(old.name)} version 2 is now the version that runs, replacing version 1. Signed as writes: step 16 (Click Save).`);
 
     // A rejected change: a rejected row, no steps, no signature. Only Save signed steps leads to Supersede older versions,
