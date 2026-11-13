@@ -134,7 +134,8 @@ by another name or address than the one in the line (a NAT, a tunnel), run the c
 2. On the RPA node, named after your recording (here **ErpDemo recording**), pick the **RPA Desktop Runner**
    credential and the **RPA Step Signing** credential.
 3. The password is a secret variable. Create an **RPA Secret Variables** credential on that node, with one variable:
-   the name its note gives (such as `password`) and the value `demo1234`. **Options → Variables**
+   the name its note gives (such as `password`) and the value `demo1234`. To keep the password to this app, you can
+   also put `ErpDemo.exe` in its **May Be Typed Into** field. **Options → Variables**
    already holds the company code you ticked, starting with the value you recorded.
 4. Run the workflow (the **Execute** button at the bottom of the canvas). On the Windows machine nobody needs to be
    signed in: the service signs the bot user in, ERP Demo opens, works and closes, and the bot user is signed out

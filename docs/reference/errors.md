@@ -64,6 +64,8 @@ The messages you meet most, word for word:
 | Not http(s) | `policy_violation`: `URL must start with http:// or https:// (got "file:").` |
 | Private address | `policy_violation`: `Blocked: intranet.example resolves to a private network address. Turn on Options → Allow Private Network if this site is on your own network.` |
 | Site that is not allowed | `policy_violation`: `Blocked: the page tried to open cdn.other.com, which is not allowed. This run only visits example.com. Add it under Options → Also Allow These Sites if this is expected.` |
+| A secret on a host not listed | `policy_violation`: `<step>: A value from the RPA Secret Variables credential may not be typed on erp.example.com: the credential's May Be Typed Into does not list it.` |
+| A desktop app not listed for the secrets | `policy_violation`: `The RPA Secret Variables credential's May Be Typed Into does not list ErpDemo.exe, so this run may not start it. Add ErpDemo.exe there, or remove the credential from this node.` |
 | A blocked POST | `policy_violation`: `<step>: a blocked request was attempted during the run: POST <host/path>. If it only reads data, list it in the RPA Site Login under Requests That Only Read ...` |
 | Locator not found | `drift_detected`: `No element found for Visible Text "Sign In" on https://example.com/account after 30 s. Check the spelling or try Find by: Role and Name.` |
 | Not unique | `drift_detected`: `Visible Text "Submit" matches 3 elements. Use a more specific locator; it must match exactly one.` |

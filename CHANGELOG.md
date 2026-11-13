@@ -63,6 +63,7 @@ All notable changes to `n8n-nodes-rpa`, the `rpa-browser` image and the Windows 
 - A sign-in judges a login form by its own action, and a refusal names the address to list under **Pages Where the Password May Be Typed**.
 - `policy-changes\` is created for administrators only and refused when it is a link or someone else owns it.
 - The secret variables credential is not bound to the signed steps: share it only with people who may approve imports ([Security](docs/reference/security.md#secret-variables)).
+- **May Be Typed Into** on the RPA Secret Variables credential, optional: the apps (`ErpDemo.exe`) and site hosts (`erp.example.com`) its values may be typed into, one per line. Filled, a desktop run of an app not listed is refused before the app starts, and a browser step is refused before it types one of the values on a page or frame whose host is not listed (`policy_violation`). Empty, nothing changes.
 
 ## 0.2.0 (2026-11-10)
 

@@ -114,7 +114,8 @@ Runs a list of browser or desktop steps. [Steps](steps.md) lists every step.
 
 Credentials: **RPA Browser** for browser steps, **RPA Desktop Runner** for desktop steps, **RPA Site Login** (optional,
 with it every allowed site comes from the credential), **RPA Step Signing** (when Require Signed Steps is on or a
-Signature is set), **RPA Secret Variables** (optional, see [Security](security.md#secret-variables)), and
+Signature is set), **RPA Secret Variables** (optional: its Variables, and May Be Typed Into to limit the apps and
+sites its values go to, see [Security](security.md#secret-variables)), and
 **RPA Redis** (optional, needed in queue mode with a Site Login).
 
 The error output is output 1, or output 2 when AI Repair is on.

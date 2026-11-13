@@ -102,11 +102,31 @@ The **RPA Secret Variables** credential holds name and value pairs for passwords
 a chat model sees. Only signed steps type one: in the browser a `fill` with `secret: true`, on the desktop a `fill` of
 exactly `{{var.name}}`. Any other use of a value is refused. Each value must be at least 4 characters.
 
-**Who may hold it.** The credential is not tied to the steps that were approved. A signature binds the steps, not the
-secret variables that a workflow attaches. So whoever can approve an import, and can select this credential on a Run
-Steps node, can direct its values into any field of an app or site that steps of theirs may use, including a field
-that saves the value somewhere they can read. With approval on the import form, that is anyone who can open the form.
+**Where its values may be typed.** A signature binds the steps, not the secret variables that a workflow attaches.
+So whoever can approve steps, and can select this credential on a Run Steps node, chooses where its values go. With
+approval on the import form, that is anyone who can open the form. The credential's optional field **May Be Typed
+Into** lets the owner of the secrets limit that. List one entry per line:
+- an app's program file name for desktop steps, such as `ErpDemo.exe` (compared without case, by file name, as the
+  runner compares it),
+- a site's exact host for browser steps, such as `erp.example.com` (read as Also Allow These Sites reads a host: no
+  wildcards, no path, a port only when it is not the default one).
+
+With the field filled, a desktop run of an app that is not listed is refused before the app starts. A browser step
+that would type one of the credential's values is refused before it types, unless the page's host and the host of
+the frame that holds the field are both listed. The check looks at the value, not the variable's name, so the same
+value under another name is checked too. Both refusals are `policy_violation` and name the field and the app or
+host. A line that is neither an app nor a host stops the run before it starts. Empty, the field limits nothing, as
+before.
+
+What it does not do:
+- A listed app or site gets the values. A field there that saves a value where someone else can read it is still
+  reachable by approved steps.
+- It does not limit the RPA Site Login. Its password goes only to its own Pages Where the Password May Be Typed.
+- Whoever can edit this credential can change the list.
+
 We recommend:
+- Fill in May Be Typed Into with the apps and sites the secrets belong to. A site that signs in on another host than
+  it works on needs both hosts.
 - Share an RPA Secret Variables credential only with people you would trust with its values.
 - Keep the import form, and the workflows that run bots, with those people, or turn on approval by email so that a
   second person approves.
