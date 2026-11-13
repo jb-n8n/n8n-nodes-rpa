@@ -5,7 +5,7 @@ import { NodeHelpers, NodeOperationError, type IDataObject, type INodeExecutionD
 import { isEmptySteps, MAX_BUDGET_MS, proposalDigest, scriptHash, type Proposal, type Script } from 'n8n-rpa-engine';
 import { ConfigError, MAX_SECONDS } from '../nodes/Playwright/config.js';
 import { memoryGuardStore, type GuardStore } from '../nodes/Playwright/guard-store.js';
-import { BREAKER_KEY, resetGuardsForTests, siteLoginKey } from '../nodes/Playwright/guard.js';
+import { BREAKER_KEY, loginFingerprints, resetGuardsForTests, siteLoginKey } from '../nodes/Playwright/guard.js';
 import { executeRunSteps } from '../nodes/Playwright/operations/runSteps.js';
 import { parseStepsParam, readRunStepsParams } from '../nodes/Playwright/operations/runStepsParams.js';
 import { Playwright } from '../nodes/Playwright/Playwright.node.js';
@@ -75,7 +75,7 @@ describe('Run Steps: the guard store (Redis, queue mode)', () => {
     expect(engine.calls).toHaveLength(1);
   });
   it("without queue mode and without Redis, the memory store is used (a held lock still turns the run away)", async () => {
-    await memoryGuardStore().acquireLock(siteLoginKey('site-a'), 60_000);
+    await memoryGuardStore().acquireLock(siteLoginKey('site-a', USER), 60_000);
     const engine = fakeEngine(() => scriptOk());
     const [data] = await executeRunSteps(ctx({ continueOnFail: true }), engine, { executionsMode: 'regular' });
     expect(errorOf(data[0])).toBe('busy: another run using this Site Login is in progress');
@@ -380,12 +380,16 @@ describe('literal-only switches under an expression-valued Options collection', 
   });
 });
 
-describe('breaker and lock: only with a Site Login, keyed by its credential id', () => {
-  it('siteLoginKey is site-login:<id>', () => {
-    expect(siteLoginKey('abc')).toBe('site-login:abc');
+describe('breaker and lock: only with a Site Login, keyed by its credential id and username', () => {
+  it('siteLoginKey is site-login:<id>:<16 hex of the username>, the same whatever its case and surrounding spaces', () => {
+    expect(siteLoginKey('abc', 'Jo.Smith')).toMatch(/^site-login:abc:[0-9a-f]{16}$/);
+    expect(siteLoginKey('abc', ' jo.smith ')).toBe(siteLoginKey('abc', 'Jo.Smith'));
+    expect(siteLoginKey('abc', 'jo.smith')).not.toBe(siteLoginKey('abc', 'al.jones'));
+    expect(siteLoginKey('abc', 'jo.smith')).not.toBe(siteLoginKey('abd', 'jo.smith'));
+    expect(siteLoginKey('abc', 'jo.smith')).not.toContain('jo.smith');
   });
   it('a Site Login credential without an id is a configuration error and never keys "site-login:"', async () => {
-    await memoryGuardStore().acquireLock(siteLoginKey(''), 60_000); // were the empty key used, this run would answer busy
+    await memoryGuardStore().acquireLock(siteLoginKey('', USER), 60_000); // were the empty key used, this run would answer busy
     const engine = fakeEngine(() => taskFail('login_failed', 'the site rejected the sign-in'));
     const h = ctx({ continueOnFail: true, credentialIds: { ...IDS, playwrightSiteLoginApi: '' } });
     const [data] = await executeRunSteps(h, engine);
@@ -396,7 +400,7 @@ describe('breaker and lock: only with a Site Login, keyed by its credential id',
     expect(h.staticData[BREAKER_KEY]).toBeUndefined();
   });
   it('without a Site Login there is no lock and no breaker', async () => {
-    expect(await memoryGuardStore().acquireLock(siteLoginKey('site-a'), 60_000)).not.toBeNull();
+    expect(await memoryGuardStore().acquireLock(siteLoginKey('site-a', USER), 60_000)).not.toBeNull();
     const engine = fakeEngine(() => taskFail('login_failed', 'the site rejected the sign-in'));
     const h = ctx({ credentials: BROWSER_ONLY, params: unsigned(), continueOnFail: true });
     await executeRunSteps(h, engine);
@@ -405,7 +409,7 @@ describe('breaker and lock: only with a Site Login, keyed by its credential id',
     expect(h.staticData[BREAKER_KEY]).toBeUndefined();
   });
   it('a held lock on the Site Login turns the run away as busy, whatever the node name', async () => {
-    await memoryGuardStore().acquireLock(siteLoginKey('site-a'), 60_000);
+    await memoryGuardStore().acquireLock(siteLoginKey('site-a', USER), 60_000);
     const engine = fakeEngine(() => scriptOk());
     for (const nodeName of ['Run steps', 'Run steps (copy)']) {
       const [data] = await executeRunSteps(ctx({ nodeName, continueOnFail: true }), engine);
@@ -424,10 +428,73 @@ describe('breaker and lock: only with a Site Login, keyed by its credential id',
       'locked_out: A previous login for example.com failed, so no login was tried.',
     ]);
     expect(data.map((d) => d.pairedItem)).toEqual([[{ item: 0 }], [{ item: 1 }], [{ item: 2 }]]);
-    expect(Object.keys(h.staticData[BREAKER_KEY] as IDataObject)).toEqual(['site-login:site-a']);
+    expect(Object.keys(h.staticData[BREAKER_KEY] as IDataObject)).toEqual([siteLoginKey('site-a', USER)]);
     const [other] = await executeRunSteps(ctx({ nodeName: 'Another node', staticData: {}, continueOnFail: true }), engine);
     expect(errorOf(other[0])).toBe('locked_out: A previous login for example.com failed, so no login was tried.');
     expect(engine.calls).toHaveLength(1);
+  });
+});
+
+describe('one Site Login, many accounts: a username and password set by expressions, resolved per item', () => {
+  const ACCOUNTS = ['ann.north', 'bob.harbor', 'cy.lake'];
+  const WRONG = 'wrong-pass-1';
+  /** The Site Login as each item resolves it: item i signs in as ACCOUNTS[i % 3], item `wrong` with a wrong password. */
+  const perAccount = (wrong?: number) => (type: string, i: number) =>
+    type === 'playwrightSiteLoginApi' ? { ...SITE_LOGIN, username: ACCOUNTS[i % 3], password: i === wrong ? WRONG : `pass-${ACCOUNTS[i % 3]}` } : undefined;
+  const rejectWrong = () => fakeEngine((input) => (input.secrets?.password === WRONG ? taskFail('login_failed', 'the site rejected the sign-in') : scriptOk()));
+  const LOCKED = 'locked_out: A previous login for example.com failed, so no login was tried.';
+  const users = (engine: ReturnType<typeof fakeEngine>) => engine.calls.map((c) => c.secrets?.username);
+
+  it("each item signs in as its own account, and item 2's rejected login stops neither item 1 nor item 3, now or later", async () => {
+    const engine = rejectWrong();
+    const h = ctx({ items: many(3), itemCredentials: perAccount(1), continueOnFail: true });
+    const [data] = await executeRunSteps(h, engine);
+    expect(users(engine)).toEqual(ACCOUNTS);
+    expect(data.map(errorOf)).toEqual([undefined, 'login_failed: the site rejected the sign-in', undefined]);
+    expect(Object.keys(h.staticData[BREAKER_KEY] as IDataObject)).toEqual([siteLoginKey('site-a', 'bob.harbor')]);
+    // The next execution: item 2 is held back (the same wrong password), items 1 and 3 sign in.
+    const next = rejectWrong();
+    const [again] = await executeRunSteps(ctx({ items: many(3), itemCredentials: perAccount(1), staticData: h.staticData, continueOnFail: true }), next);
+    expect(again.map(errorOf)).toEqual([undefined, LOCKED, undefined]);
+    expect(users(next)).toEqual(['ann.north', 'cy.lake']);
+    // Item 2 with a corrected password gets its one try, and its breaker is cleared.
+    const fixed = rejectWrong();
+    const [ok] = await executeRunSteps(ctx({ items: many(3), itemCredentials: perAccount(), staticData: h.staticData, continueOnFail: true }), fixed);
+    expect(ok.map(errorOf)).toEqual([undefined, undefined, undefined]);
+    expect(h.staticData[BREAKER_KEY]).toEqual({});
+  });
+  it('a lock held for one account turns away only that account', async () => {
+    await memoryGuardStore().acquireLock(siteLoginKey('site-a', 'bob.harbor'), 60_000);
+    const engine = fakeEngine(() => scriptOk());
+    const [data] = await executeRunSteps(ctx({ items: many(3), itemCredentials: perAccount(), continueOnFail: true }), engine);
+    expect(data.map(errorOf)).toEqual([undefined, 'busy: another run using this Site Login is in progress', undefined]);
+    expect(users(engine)).toEqual(['ann.north', 'cy.lake']);
+  });
+  it("a password changed for one account stops only that account's later items in the execution", async () => {
+    const engine = fakeEngine((input) => scriptOk(input.secrets?.username === 'ann.north' ? { passwordChanged: true } : {}));
+    const [data] = await executeRunSteps(ctx({ items: many(4), itemCredentials: perAccount(), continueOnFail: true }), engine);
+    expect(data[0].json.passwordChanged).toBe(true);
+    expect(data.slice(1, 3).map(errorOf)).toEqual([undefined, undefined]);
+    expect(errorOf(data[3])).toMatch(/^locked_out: The password of this account was changed earlier in this execution/);
+    expect(users(engine)).toEqual(ACCOUNTS);
+  });
+  it('a breaker kept under the credential id alone (0.2.0) still stops every account, until a new reset key', async () => {
+    const staticData: IDataObject = { [BREAKER_KEY]: { 'site-login:site-a': { code: 'account_locked', at: '2026-10-01T00:00:00.000Z', resetKey: '', message: 'locked' } } };
+    const engine = fakeEngine(() => scriptOk());
+    const [data] = await executeRunSteps(ctx({ items: many(3), itemCredentials: perAccount(), staticData, continueOnFail: true }), engine);
+    expect(data.map(errorOf)).toEqual([LOCKED, LOCKED, LOCKED]);
+    expect(engine.calls).toHaveLength(0);
+    const [reset] = await executeRunSteps(ctx({ params: params({}, { breakerResetKey: '2026-11-12' }), items: many(3), itemCredentials: perAccount(), staticData, continueOnFail: true }), engine);
+    expect(reset.map(errorOf)).toEqual([undefined, undefined, undefined]);
+    expect(staticData[BREAKER_KEY]).toEqual({});
+  });
+  it('a login_failed breaker kept under the credential id alone gives a different login its one try, as before', async () => {
+    const login = await loginFingerprints({ username: 'ann.north', password: WRONG }).create();
+    const staticData: IDataObject = { [BREAKER_KEY]: { 'site-login:site-a': { code: 'login_failed', at: '2026-10-01T00:00:00.000Z', resetKey: '', message: 'rejected', login } } };
+    const engine = rejectWrong();
+    const [data] = await executeRunSteps(ctx({ items: many(3), itemCredentials: perAccount(), staticData, continueOnFail: true }), engine);
+    expect(data.map(errorOf)).toEqual([undefined, undefined, undefined]);
+    expect(staticData[BREAKER_KEY]).toEqual({});
   });
 });
 
@@ -627,7 +694,7 @@ describe('AI repair', () => {
     expect(engine.calls.map((c) => c.repair?.alreadyRan)).toEqual([false, false, false]);
   });
   it('repair preconditions are configuration errors before the lock and before any run', async () => {
-    await memoryGuardStore().acquireLock(siteLoginKey('site-a'), 60_000); // a held lock would answer busy: the precondition comes first
+    await memoryGuardStore().acquireLock(siteLoginKey('site-a', USER), 60_000); // a held lock would answer busy: the precondition comes first
     const engine = fakeEngine(() => agentOk());
     const submit = { ...STEPS, steps: [...STEPS.steps, { intent: 'Send the form', submit: { host: 'example.com', path: '/send', button: { css: 'button' } } }] };
     const cases: [Record<string, unknown>, Record<string, unknown>, string][] = [
@@ -966,7 +1033,7 @@ describe('a forced password change (signIn.changePassword)', () => {
     expect(details(other[0])).not.toHaveProperty('passwordChanged');
   });
   it('after a change, later items of the execution try no login with the old password and say passwordChanged, in both error modes', async () => {
-    const CHANGED = 'locked_out: The password of this Site Login was changed earlier in this execution, so no login was tried: store the new password where the Site Login reads it, then run again.';
+    const CHANGED = 'locked_out: The password of this account was changed earlier in this execution, so no login was tried: store the new password where the Site Login reads it, then run again.';
     const engine = fakeEngine((_input, call) => (call === 0 ? scriptOk({ passwordChanged: true }) : taskFail('login_failed', 'the site rejected the sign-in')));
     const h = ctx({ items: many(3), continueOnFail: true });
     const [data] = await executeRunSteps(h, engine);

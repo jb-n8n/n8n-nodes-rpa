@@ -15,6 +15,11 @@ export interface HarnessOptions {
   items?: INodeExecutionData[];
   /** Credential data by credential type. A type listed here is attached to the node (getNode().credentials). */
   credentials?: Record<string, ICredentialDataDecryptedObject>;
+  /**
+   * A credential whose fields are expressions: the data one item resolves it to, by type and item index. Undefined
+   * (or no entry) falls back to `credentials`, which must still list the type to attach it.
+   */
+  itemCredentials?: (type: string, itemIndex: number) => ICredentialDataDecryptedObject | undefined;
   /** Id of every attached credential without an entry in credentialIds. */
   credentialId?: string;
   /** Credential ids by credential type (only for types present in `credentials`). */
@@ -114,8 +119,8 @@ export function harness(o: HarnessOptions): Harness {
       const v = dig(typeof o.params === 'function' ? o.params(itemIndex) : o.params, parts);
       return v === undefined ? fallbackValue : v;
     },
-    async getCredentials(type: string): Promise<ICredentialDataDecryptedObject> {
-      const data = o.credentials?.[type];
+    async getCredentials(type: string, itemIndex?: number): Promise<ICredentialDataDecryptedObject> {
+      const data = (itemIndex !== undefined ? o.itemCredentials?.(type, itemIndex) : undefined) ?? o.credentials?.[type];
       if (!data) throw new Error(`Node "${node.name}" does not have any credentials of type "${type}" set`);
       return data;
     },

@@ -45,6 +45,20 @@ const PAGE_SIZE = 4;
 const SLOW_LOGIN_MS = 1500;
 /** A new password on the change-password page: at least this long (checked in the page) and with a digit (checked here). */
 const NEW_PASSWORD_MIN = 12;
+/**
+ * The dealer accounts, for a bot that signs in with one account after another. summit-ops is the account every other
+ * test signs in as: its password is PORTAL_PASSWORD (or the one the change-password page set), it asks for a code when
+ * the release's MFA does, and forcePasswordChange expires its password. The other two ignore those settings: each has
+ * its own password, lakeside-ops always asks for a code from its own authenticator secret, harbor-ops never does.
+ */
+export const ACCOUNTS = {
+  [USERNAME]: { name: 'Summit Motors', dealer: DEALER, allocated: 14 },
+  'lakeside-ops': {
+    name: 'Lakeside Auto', dealer: 'LA-4410', allocated: 9,
+    password: process.env.PORTAL_PASSWORD_LAKESIDE || 'lakeside-password', totpSecret: process.env.PORTAL_TOTP_SECRET_LAKESIDE || 'LAKESIDE2345ABCD',
+  },
+  'harbor-ops': { name: 'Harbor Cars', dealer: 'HB-2290', allocated: 22, password: process.env.PORTAL_PASSWORD_HARBOR || 'harbor-password' },
+};
 
 // ---- state ----
 export const CONTROLS = {
@@ -150,11 +164,11 @@ export const noticesPath = (st = state) =>
       : `/${BRAND}/compliance/programs/${slug(st.label)}`;
 
 // ---- sessions (in memory) ----
-const sessions = new Map(); // sid -> { stage: 'mfa-totp'|'mfa-sms'|'survey'|'ok', exp }
+const sessions = new Map(); // sid -> { stage: 'mfa-totp'|'mfa-sms'|'survey'|'ok', user, exp }
 const SESSION_MS = 30 * 60 * 1000;
-function newSession(stage, next) {
+function newSession(stage, next, user = USERNAME) {
   const sid = randomBytes(18).toString('hex');
-  sessions.set(sid, { stage, exp: Date.now() + SESSION_MS, ...(next ? { next } : {}) });
+  sessions.set(sid, { stage, user, exp: Date.now() + SESSION_MS, ...(next ? { next } : {}) });
   return sid;
 }
 // Where sign-in returns to: the page that sent the browser to the login (?next=), when it is a path on this site
@@ -173,9 +187,21 @@ function parseCookies(req) {
 }
 const sessionCookie = (sid) => `sid_${BRAND}=${sid}; Path=/; HttpOnly; SameSite=Lax`;
 const afterAuth = () => (state.interrupts.includes('survey') ? 'survey' : 'ok');
-/** After the password (and the code): the change-password page while the password has expired, else afterAuth. */
-const afterSignIn = () => (state.forcePasswordChange ? 'change-password' : afterAuth());
+/** After the password (and the code): the change-password page while summit-ops's password has expired, else afterAuth. */
+const afterSignIn = (user = USERNAME) => (user === USERNAME && state.forcePasswordChange ? 'change-password' : afterAuth());
 const currentPassword = () => state.password ?? PORTAL_PASSWORD;
+/** The account with this user name and password, or undefined. */
+function accountFor(username, password) {
+  const user = Object.hasOwn(ACCOUNTS, username) ? username : undefined;
+  if (!user) return undefined;
+  return safeEqual(password, user === USERNAME ? currentPassword() : ACCOUNTS[user].password) ? user : undefined;
+}
+/** The code stage an account's sign-in goes to: summit-ops follows the release's MFA, the others their own setting. */
+function mfaStage(user) {
+  if (user !== USERNAME) return ACCOUNTS[user].totpSecret ? 'mfa-totp' : null;
+  return state.mfa === 'totp' ? 'mfa-totp' : state.mfa === 'sms' ? 'mfa-sms' : null;
+}
+const totpSecretOf = (user) => (user === USERNAME ? TOTP_SECRET : ACCOUNTS[user].totpSecret);
 
 // ---- tiny response helpers ----
 function send(res, status, body, headers = {}) {
@@ -355,10 +381,11 @@ async function portalRoute(req, res, rest, url) {
     const f = await readBody(req);
     if (st.slowLogin) await new Promise((resolve) => setTimeout(resolve, SLOW_LOGIN_MS));
     if (st.locked) return redirect(res, `/${BRAND}/login?locked=1`);
-    if (!(safeEqual(f.username || '', USERNAME) && safeEqual(f.password || '', currentPassword()))) return redirect(res, `/${BRAND}/login?error=1`);
-    const stage = st.mfa === 'totp' ? 'mfa-totp' : st.mfa === 'sms' ? 'mfa-sms' : afterSignIn();
+    const user = accountFor(String(f.username || ''), String(f.password || ''));
+    if (!user) return redirect(res, `/${BRAND}/login?error=1`);
+    const stage = mfaStage(user) ?? afterSignIn(user);
     const returnTo = safeNext(f.next);
-    const sid = newSession(stage, returnTo);
+    const sid = newSession(stage, returnTo, user);
     const next = { ok: 'home', survey: 'survey', 'mfa-totp': 'mfa', 'mfa-sms': 'verify-phone', 'change-password': 'change-password' }[stage];
     return redirect(res, stage === 'ok' && returnTo ? returnTo : `/${BRAND}/${next}`, { 'Set-Cookie': sessionCookie(sid) });
   }
@@ -366,8 +393,8 @@ async function portalRoute(req, res, rest, url) {
     if (!s || s.stage !== 'mfa-totp') return redirect(res, `/${BRAND}/login`);
     if (req.method === 'POST') {
       const f = await readBody(req);
-      if (verifyTotp(TOTP_SECRET, f.code || '')) {
-        s.stage = afterSignIn();
+      if (verifyTotp(totpSecretOf(s.user), f.code || '')) {
+        s.stage = afterSignIn(s.user);
         return redirect(res, s.stage === 'ok' ? landing(s) : `/${BRAND}/${s.stage === 'survey' ? 'survey' : 'change-password'}`);
       }
       return redirect(res, `/${BRAND}/mfa?error=1`);
@@ -526,8 +553,9 @@ async function portalRoute(req, res, rest, url) {
       ? `<div id="whats-new"><div class="box"><h3>What's new in ${PORTAL_NAME}</h3><p>We've reorganised menus and refreshed the dashboard. Take a look around!</p>
          <button id="whats-new-dismiss" onclick="sessionStorage.setItem('wn','1');document.getElementById('whats-new').remove()">Got it</button></div></div>
          <script>if(sessionStorage.getItem('wn'))document.getElementById('whats-new').remove()</script>` : '';
-    return send(res, 200, page('Home', `${moved}<h2>Welcome, Summit Motors</h2><p>Dealer code ${DEALER}.</p>
-      <div class="card"><h3>Allocation</h3><p>14 units allocated for next month. 3 awaiting confirmation.</p></div>
+    const account = ACCOUNTS[s.user] ?? ACCOUNTS[USERNAME];
+    return send(res, 200, page('Home', `${moved}<h2>Welcome, ${account.name}</h2><p>Dealer code ${account.dealer}.</p>
+      <div class="card"><h3>Allocation</h3><p>${account.allocated} units allocated for next month. 3 awaiting confirmation.</p></div>
       <div class="card"><h3>Messages</h3><p>You have 2 unread messages from your regional office.</p></div>${whatsNew}`, { dataPage: 'home' }));
   }
 

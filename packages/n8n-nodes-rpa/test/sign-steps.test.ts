@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { APPROVER } from './fixtures.js';
-import { NodeOperationError, type IDataObject, type INodeExecutionData } from 'n8n-workflow';
+import { NodeOperationError, type ICredentialDataDecryptedObject, type IDataObject, type INodeExecutionData } from 'n8n-workflow';
 import { describeInterrupt, describeStep, proposalDigest, scriptHash, verifyScript, type Proposal, type Script } from 'n8n-rpa-engine';
 import { changeList, evidenceLine, fullSafetyFlags, safetyLine } from '../nodes/Playwright/format.js';
 import { CHANGE_LIST_MISMATCH, executeSignSteps, parseRepairedSteps, READ_POSTS_NOT_LISTED } from '../nodes/Playwright/operations/signSteps.js';
@@ -112,6 +112,16 @@ describe('Sign Steps: approve', () => {
     expect(verifyScript(raw, KEY, { approvedBy: APPROVER, siteLoginId: 'site-a', signature })).toBe(true);
     expect(verifyScript(raw, KEY, { approvedBy: APPROVER, siteLoginId: 'site-b', signature })).toBe(false);
     expect(verifyScript(raw, KEY, { approvedBy: APPROVER, signature })).toBe(false);
+  });
+  it('signs with a Site Login whose username and password are expressions on the account items (empty on the approval item)', async () => {
+    const { loginUrl } = SITE_LOGIN;
+    for (const siteLogin of [{ loginUrl, username: '', password: '' }, { loginUrl }] as ICredentialDataDecryptedObject[]) {
+      const rec = only(await sign(repairedItem(STEPS), {
+        credentials: { ...SIGNING, playwrightSiteLoginApi: siteLogin }, credentialIds: { playwrightSiteLoginApi: 'site-a' },
+      })).json;
+      expect(rec.status).toBe('active');
+      expect(verifyScript(JSON.parse(rec.steps as string) as unknown, KEY, { approvedBy: APPROVER, siteLoginId: 'site-a', signature: rec.signature as string })).toBe(true);
+    }
   });
   it('without a Site Login, steps that open another host named in their gotos are signed (derived policy)', async () => {
     const steps: Script = { ...STEPS, steps: [...STEPS.steps, { intent: 'Open the archive', goto: 'https://archive.example.org/old' }] };

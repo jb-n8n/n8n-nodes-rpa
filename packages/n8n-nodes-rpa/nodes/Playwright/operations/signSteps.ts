@@ -356,7 +356,9 @@ async function signOne(ctx: NodeContext, engine: Engine, i: number, json: IDataO
     // Desktop steps only: the steps the approver declares writes. An expression (the approval form's answer) is expected.
     writeStepsText = asString(ctx.getNodeParameter('writeSteps', i, '')).trim();
     key = signingKey(await ctx.getCredentials(CREDENTIALS.signing, i));
-    if (siteLoginId !== undefined) siteLogin = siteLoginConfig(await ctx.getCredentials(CREDENTIALS.siteLogin, i));
+    // Signing reads the sites and binds the credential id, it never signs in: a Site Login whose username and password
+    // are expressions on the account items resolves to empty values on this approval item, and that is no error.
+    if (siteLoginId !== undefined) siteLogin = siteLoginConfig(await ctx.getCredentials(CREDENTIALS.siteLogin, i), { loginOptional: true });
   } catch (error) {
     const message = errorMessage(error);
     return { kind: 'error', item: configErrorItem(message, null, paired), error: configNodeError(ctx.getNode(), message, i) };

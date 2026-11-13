@@ -5,11 +5,14 @@ import { SANDBOX, startPortal } from 'n8n-rpa-sandbox/testing.js';
 import { clickNamed, done, fakeModel, use } from '../../engine/test/fake-model.js';
 import { bound } from '../../engine/test/timing.js';
 import { loadEngine, type Engine } from '../nodes/Playwright/engine.js';
-import { resetGuardsForTests } from '../nodes/Playwright/guard.js';
+import { resetGuardsForTests, siteLoginKey } from '../nodes/Playwright/guard.js';
 import { executeRunSteps } from '../nodes/Playwright/operations/runSteps.js';
 import { executeSignSteps } from '../nodes/Playwright/operations/signSteps.js';
 import { credentialsV2, FEED_NAME, nodeContext, repairedItem, runStepsParams, signStepsParams, type Site } from './feed-fixtures.js';
 import { baselineScript, SECRETS } from './fixtures.js';
+
+/** The breaker key of the sandbox account on the fixtures' Site Login. */
+const BREAKER = siteLoginKey('site-login-1', SECRETS.username);
 
 let portal: Awaited<ReturnType<typeof startPortal>>;
 let engine: Engine;
@@ -90,7 +93,7 @@ describe('Run Steps and Sign Steps against the sandbox (real engine)', () => {
     const [bad] = await run(record, { staticData, password: 'wrong-pass-123' });
     // The steps also have a detect step with a login_failed check: signIn raises the one login_failed, and one breaker opens.
     expect(bad[0].json.details).toMatchObject({ code: 'login_failed', name: FEED_NAME, stepIntent: 'Sign in' });
-    expect(Object.keys(staticData.playwrightLoginBreakers as IDataObject)).toEqual(['site-login:site-login-1']);
+    expect(Object.keys(staticData.playwrightLoginBreakers as IDataObject)).toEqual([BREAKER]);
     expect(jsonOnly(bad)).not.toContain('wrong-pass-123');
     const logins = portal.state().logins;
     expect(logins).toBe(1);
@@ -120,7 +123,7 @@ describe('Run Steps and Sign Steps against the sandbox (real engine)', () => {
     expect(bad[0].json.details).toMatchObject({ code: 'login_failed', name: FEED_NAME, stepIntent: 'Sign in' });
     expect(jsonOnly(bad)).not.toContain('wrong-pass-123');
     expect(portal.state().logins).toBe(1);
-    expect(Object.keys(staticData.playwrightLoginBreakers as IDataObject)).toEqual(['site-login:site-login-1']);
+    expect(Object.keys(staticData.playwrightLoginBreakers as IDataObject)).toEqual([BREAKER]);
     const [locked] = await run(record, { staticData, password: 'wrong-pass-123' });
     expect(locked[0].json.error).toBe(`locked_out: A previous login for ${portal.host} failed, so no login was tried.`);
     expect(portal.state().logins).toBe(1);
@@ -158,7 +161,7 @@ describe('Run Steps and Sign Steps against the sandbox (real engine)', () => {
       const staticData: IDataObject = {};
       const [locked] = await run(record, { staticData });
       expect(locked[0].json.details).toMatchObject({ code: 'account_locked', stepIntent: 'Sign in' });
-      expect(staticData.playwrightLoginBreakers).toMatchObject({ 'site-login:site-login-1': { code: 'account_locked' } });
+      expect(staticData.playwrightLoginBreakers).toMatchObject({ [BREAKER]: { code: 'account_locked' } });
       expect(portal.state().logins).toBe(1);
     }
   });

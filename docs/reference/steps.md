@@ -200,7 +200,8 @@ that asks only for the new one), the run variable named in `value` into each `ne
   login breaker stays closed.
 - The change page must be listed under **Pages Where the Password May Be Typed**. Only signed steps may use
   `changePassword`. The value is masked like a secret fill.
-- After a change, later items and nodes with the same Site Login in that execution try no login and fail `locked_out`.
+- After a change, later items and nodes with the same Site Login and username in that execution try no login and fail
+  `locked_out`.
 - The node does not make up, store or save the new password. Your workflow supplies it, and stores it where the Site
   Login reads it once the output says `passwordChanged`. Keep the old value until a run has signed in with the new one.
 

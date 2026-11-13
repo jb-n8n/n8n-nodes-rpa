@@ -3,7 +3,7 @@ import type { ErrorCode, TaskInput, TaskResult } from 'n8n-rpa-engine';
 import type { SiteLogin } from './config.js';
 import type { NodeContext } from './context.js';
 import type { Engine } from './engine.js';
-import { loginCorrected, loginFingerprints, openBreaker, resetBreaker, siteLoginKey, tripBreaker, type BreakerCode, type BreakerRecord, type LoginFingerprints } from './guard.js';
+import { legacySiteLoginKey, loginCorrected, loginFingerprints, openBreaker, resetBreaker, siteLoginKey, tripBreaker, type BreakerCode, type BreakerRecord, type LoginFingerprints } from './guard.js';
 import type { GuardStore } from './guard-store.js';
 import { isObject } from './operations/common.js';
 
@@ -16,6 +16,11 @@ export const LOCK_GRACE_MS = 60_000;
  */
 export interface GuardSpec {
   key: string;
+  /**
+   * Where an older version kept this Site Login's breaker (legacySiteLoginKey). A breaker still open there stops this
+   * run too, and gets the same one try for a corrected login. Only read: trips, the lock and the execution's maps use `key`.
+   */
+  legacyKey?: string;
   resetKey: string;
   /** Where the breaker and the lock live. runOne closes it when the run ends. */
   store: GuardStore;
@@ -37,7 +42,7 @@ export const siteLoginLockedOut = (loginHost: string): string => `A previous log
  * still holds the old one, so no later item or node of the execution signs in with it.
  */
 export const SITE_LOGIN_PASSWORD_CHANGED =
-  'The password of this Site Login was changed earlier in this execution, so no login was tried: store the new password where the Site Login reads it, then run again.';
+  'The password of this account was changed earlier in this execution, so no login was tried: store the new password where the Site Login reads it, then run again.';
 /** Golden `busy` message for a Site Login. */
 export const SITE_LOGIN_BUSY = 'another run using this Site Login is in progress';
 /**
@@ -139,13 +144,18 @@ async function guardedCall<T>(ctx: NodeContext, opts: GuardedOptions<T>): Promis
   if (!guard) return { kind: 'ran', result: await opts.call(), tripped: false };
   if (changedInExecution(ctx)[guard.key]) return { kind: 'blocked', code: 'locked_out', message: SITE_LOGIN_PASSWORD_CHANGED, passwordChanged: true };
   const staticData = ctx.getWorkflowStaticData('global');
-  /** The breaker that turns this call away, or the one a corrected login gets past (`passed`), or neither. */
-  const breaker = async (): Promise<{ open: BreakerRecord } | { passed?: BreakerRecord }> => {
+  /** The breaker that turns this call away, or the ones a corrected login gets past (`passed`: this key's, the legacy key's). */
+  const breaker = async (): Promise<{ open: BreakerRecord } | { passed: { key: string; record: BreakerRecord }[] }> => {
     const tripped = trippedInExecution(ctx)[guard.key];
     if (tripped) return { open: tripped };
-    const record = await openBreaker(guard.store, staticData, guard.key, guard.resetKey);
-    if (!record) return {};
-    return await loginCorrected(record, guard.fingerprints) ? { passed: record } : { open: record };
+    const passed: { key: string; record: BreakerRecord }[] = [];
+    for (const key of guard.legacyKey ? [guard.key, guard.legacyKey] : [guard.key]) {
+      const record = await openBreaker(guard.store, staticData, key, guard.resetKey);
+      if (!record) continue;
+      if (!(await loginCorrected(record, guard.fingerprints))) return { open: record };
+      passed.push({ key, record });
+    }
+    return { passed };
   };
   const lockedOut = (b: BreakerRecord): GuardedResult<T> => ({ kind: 'blocked', code: 'locked_out', message: guard.lockedOutMessage(b) });
 
@@ -166,7 +176,7 @@ async function guardedCall<T>(ctx: NodeContext, opts: GuardedOptions<T>): Promis
     if (!login) {
       // The corrected login was not rejected: clear the breaker it got past. A failed clear only means the next run
       // compares the login again.
-      if (after.passed) await resetBreaker(guard.store, staticData, guard.key, after.passed).catch(() => undefined);
+      for (const p of after.passed) await resetBreaker(guard.store, staticData, p.key, p.record).catch(() => undefined);
       return { kind: 'ran', result, tripped: false };
     }
     // Without a fingerprint (none could be computed) the record opens only with a new reset key.
@@ -203,14 +213,15 @@ export function noteRepairRan(ctx: NodeContext): void {
 }
 
 /**
- * Breaker and lock for a Site Login: keyed by its credential id, golden messages naming only the login host, and the
- * login's fingerprints (a corrected username or password gets one try). The lock lasts `budgetMs` (the longest the
- * guarded run can take) plus LOCK_GRACE_MS.
+ * Breaker and lock for one account of a Site Login: keyed by its credential id and username (siteLoginKey), so that
+ * with an expression username one account's failure never stops another; golden messages naming only the login host,
+ * and the login's fingerprints (a corrected username or password gets one try). The lock lasts `budgetMs` (the
+ * longest the guarded run can take) plus LOCK_GRACE_MS.
  */
 export function siteLoginGuard(siteLogin: SiteLogin, id: string, resetKey: string, budgetMs: number): (store: GuardStore) => GuardSpec {
   const loginHost = new URL(siteLogin.policy.startUrl).host;
   return (store) => ({
-    key: siteLoginKey(id), resetKey, store, ttlMs: budgetMs + LOCK_GRACE_MS,
+    key: siteLoginKey(id, siteLogin.secrets.username), legacyKey: legacySiteLoginKey(id), resetKey, store, ttlMs: budgetMs + LOCK_GRACE_MS,
     lockedOutMessage: () => siteLoginLockedOut(loginHost), busyMessage: SITE_LOGIN_BUSY, fingerprints: loginFingerprints(siteLogin.secrets),
   });
 }

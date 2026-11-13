@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
 import type { IDataObject } from 'n8n-workflow';
 import { readRecord } from './breaker-record.js';
 import { resetMemoryGuardStoreForTests, sameRecord, type BreakerRecord, type GuardStore, type LoginFingerprint } from './guard-store.js';
@@ -8,8 +8,19 @@ export const BREAKER_KEY = 'playwrightLoginBreakers';
 
 export type { BreakerCode, BreakerRecord, Lock, LoginFingerprint } from './guard-store.js';
 
-/** Breaker and lock key of an RPA Site Login credential: the credential id only. */
-export function siteLoginKey(credentialId: string): string {
+/**
+ * Breaker and lock key of one account of an RPA Site Login credential: the credential id and a short SHA-256 of the
+ * username (trimmed, lower case). A Site Login whose username is an expression signs in as a different account per
+ * item, and each account gets its own breaker, lock and password-change block. The hash keeps the username out of
+ * static data and Redis keys, but anyone who reads them can still test a guessed username.
+ */
+export function siteLoginKey(credentialId: string, username: string): string {
+  const account = createHash('sha256').update(`${credentialId}\0${username.trim().toLowerCase()}`).digest('hex').slice(0, 16);
+  return `site-login:${credentialId}:${account}`;
+}
+
+/** The key of version 0.2.0 and earlier, the credential id only: a breaker still kept under it stops every account. */
+export function legacySiteLoginKey(credentialId: string): string {
   return `site-login:${credentialId}`;
 }
 

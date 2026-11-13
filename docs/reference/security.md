@@ -82,6 +82,8 @@ runs a step list only when its signature verifies and its version equals **Expec
 `playwright_steps` Data Table fails `script_untrusted` and nothing runs. Desktop signatures bind the app, not a Site
 Login.
 
+**One bot, many accounts.** A Site Login whose username and password are expressions signs in with each item's account under one signature, and the passwords then travel through the workflow's items, where whoever can open its executions can read them ([One bot, many accounts](../guides/many-accounts.md#what-it-means-for-secrets)).
+
 **Who holds the key.** Anyone who knows the signing key can sign steps. `npx n8n-nodes-rpa setup` therefore uses only
 an **RPA Step Signing** credential that its own project owns, and never one of the same name made by another user.
 

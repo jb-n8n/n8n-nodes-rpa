@@ -40,8 +40,8 @@ reads `Sign Steps refused: <reasons>`.
 | `password_change_failed` | A sign-in set a new password and the site did not confirm it. The login breaker stays closed. | Keep the pending password, and check the site's password rules ([Sign-in](steps.md#sign-in)). |
 | `runner_unavailable` | n8n could not use the desktop runner: not reachable, token or certificate refused, Windows session locked, or the app not installed where the policy says. | Check the RPA Desktop Runner credential, then run `rpa status` on the Windows machine ([Windows guide](../install/windows.md#11-when-something-fails)). |
 
-**The login breaker.** With a Site Login, one failed login stops every further login with it, so a wrong password does
-not lock the account. A changed username, password or TOTP Secret gets one try. In other cases, change **Options →
+**The login breaker.** With a Site Login, one failed login stops every further login with it and the same username, so
+a wrong password does not lock the account. Other accounts of the same Site Login keep running. A changed username, password or TOTP Secret gets one try. In other cases, change **Options →
 Login Breaker Reset Key**. A breaker that opened in version 0.2.0 or earlier needs a new reset key in every case. In
 queue mode with an RPA Redis credential the breaker is kept in Redis ([Operator guide](operator.md#login-breaker-and-run-lock)).
 
