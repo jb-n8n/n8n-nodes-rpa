@@ -328,6 +328,24 @@ async function readInputs(options: Options, env: NodeJS.ProcessEnv): Promise<Inp
     say(way.chosen ? `This run uses an n8n API key: ${way.why}.` : `This run uses an n8n API key, because ${way.why}. Where n8n runs, as n8n's user, it needs none.`);
   }
   const cliWay = 'command' in way ? way : undefined;
+  let cli: { client: Client; ownership: Ownership } | undefined;
+  if (cliWay) {
+    const commandLine = createCli({ command: cliWay.command, env, redact, clean });
+    // Who owns what, from n8n's own tables, before anything is asked or decided: the project this run works in, and
+    // which credentials and workflows that project owns (not merely has shared into it).
+    let ownership: Ownership;
+    try {
+      ownership = await commandLine.ownership();
+    } catch (err) {
+      throw new Stop(`${err instanceof CliError ? err.message : `n8n's command line could not say who owns what (${clean(redact((err as Error)?.message))})`}. Use an API key (--api-key). Nothing was changed.`);
+    }
+    const project = options.projectId !== undefined ? ownership.projects.get(options.projectId) : ownership.ownerProject;
+    if (!project) throw new Stop(`--project-id: n8n has no project with the id ${clean(options.projectId)}. Nothing was changed.`, 2);
+    say(options.projectId !== undefined
+      ? `  Your project: "${clean(project.name, project.id)}" (id ${clean(project.id)}), as --project-id says.`
+      : `  Your project: n8n's owner's personal project "${clean(project.name, project.id)}" (id ${clean(project.id)}), where n8n's command line puts what it imports.`);
+    cli = { client: cliClient(commandLine, ownership, redact, clean), ownership };
+  }
   if (n8n.plaintext && !options.allowHttp && !cliWay) {
     throw new Stop(`${options.url} is http:// to another machine: the API key would cross the network unencrypted. Use n8n's https:// address, or add --allow-http if this network is yours.`, 2);
   }
@@ -357,25 +375,11 @@ async function readInputs(options: Options, env: NodeJS.ProcessEnv): Promise<Inp
       throw new Stop(`${(err as Error).message} Nothing was sent to n8n.`, 2);
     }
   }
-  if (cliWay) {
-    const cli = createCli({ command: cliWay.command, env, redact, clean });
-    // Who owns what, from n8n's own tables, before anything is decided: the project this run works in, and which
-    // credentials and workflows that project owns (not merely has shared into it).
-    let ownership: Ownership;
-    try {
-      ownership = await cli.ownership();
-    } catch (err) {
-      throw new Stop(`${err instanceof CliError ? err.message : `n8n's command line could not say who owns what (${clean(redact((err as Error)?.message))})`}. Use an API key (--api-key). Nothing was changed.`);
-    }
-    const project = options.projectId !== undefined ? ownership.projects.get(options.projectId) : ownership.ownerProject;
-    if (!project) throw new Stop(`--project-id: n8n has no project with the id ${clean(options.projectId)}. Nothing was changed.`, 2);
-    say(options.projectId !== undefined
-      ? `  Your project: "${clean(project.name, project.id)}" (id ${clean(project.id)}), as --project-id says.`
-      : `  Your project: n8n's owner's personal project "${clean(project.name, project.id)}" (id ${clean(project.id)}), where n8n's command line puts what it imports.`);
+  if (cliWay && cli) {
     return {
-      options, origin: n8n.origin, plaintext: false, client: cliClient(cli, ownership, redact, clean), line, browser, userId: ownership.owner.id,
+      options, origin: n8n.origin, plaintext: false, client: cli.client, line, browser, userId: cli.ownership.owner.id,
       formBase: formBase(env, new URL(n8n.origin).hostname),
-      cli: { ownership, folder: n8nFolderOf(env, process.cwd()), postgres: cliWay.postgres },
+      cli: { ownership: cli.ownership, folder: n8nFolderOf(env, process.cwd()), postgres: cliWay.postgres },
     };
   }
   const claims = keyClaims(apiKey);
@@ -741,7 +745,7 @@ async function offerLine(inputs: Inputs, ref: Ref, line: string, projectId: stri
   const tried = await tryLine(inputs, line, to, projectId);
   if (tried.result === 'connected') return replace(", which n8n's test reached first");
   if (tried.result === 'failed') {
-    say(`not replaced: n8n's test of the line for ${to} failed: ${tried.message}`);
+    say(`not replaced: the line for ${to} did not pass n8n's test (above).`);
     say(`         The Connection Line of ${what} stays as it is. Check the new line (print it again on the Windows machine, with -Address when n8n reaches it by another name), then run this again.`);
     return ref;
   }
@@ -1449,6 +1453,7 @@ async function run(inputs: Inputs): Promise<number> {
   // The signing key is shown only when this run made it and the workflow it ends with uses it.
   const usesKey = String(workflow.nodes?.find((n: any) => n.name === NODE.signSteps)?.credentials?.[SIGNING.type]?.id) === signing.ref.id;
   const showKey = signingKey !== undefined && usesKey && (options.showSigningKey || options.replaceSigningKey);
+  let publishedNow = false;
   if (!workflow.active || updated) {
     const made = workflow;
     // A form path held by a workflow this API key cannot see: n8n refuses to publish. The form then keeps the address
@@ -1467,6 +1472,7 @@ async function run(inputs: Inputs): Promise<number> {
     await publish(client, String(made.id), made.versionId, clean(made.name, made.id), dropPath);
     workflow = workflow as Record<string, any>;
     say(`published workflow "${clean(workflow.name, workflow.id)}"`);
+    publishedNow = true;
   }
 
   // The form's address: its Form Path (rpa-import, set here) or its webhook id, which comes from n8n. Used only when it is
@@ -1477,9 +1483,9 @@ async function run(inputs: Inputs): Promise<number> {
   const shownName = clean(workflow.name, workflow.id);
   // n8n registers the form a moment after it publishes the workflow; through n8n's command line, the running n8n
   // notices the publish by itself, within about 5 to 20 seconds.
-  if (formUrl && inputs.cli) say("waiting  for the form to answer: the running n8n takes up to half a minute to notice a publish through its command line");
+  if (formUrl && inputs.cli && publishedNow) say("waiting  for the form to answer: the running n8n takes up to half a minute to notice a publish through its command line");
   const answered = formUrl ? await waitForForm(formUrl, basic, inputs.cli ? 40 : 10) : undefined;
-  if (formUrl && answered?.ready && inputs.cli) say(`answered the form, after ${answered.seconds} s`);
+  if (formUrl && answered?.ready && inputs.cli && publishedNow) say(`answered the form, after ${answered.seconds} s`);
   if (formUrl && !answered?.ready) warn(`Note: the form did not answer as expected at ${formUrl} (${answered?.status ?? 'no answer'}). ${inputs.cli ? 'Check that the n8n at this address is the one that runs here (--url), and its log. ' : ''}In n8n, open "${shownName}", then the node "${NODE.form}", for its production URL.`);
   const ready = formUrl === undefined || answered?.ready === true;
   const formSays = ready ? 'The import form is ready' : 'The import form is published, but it did not answer at its address yet';

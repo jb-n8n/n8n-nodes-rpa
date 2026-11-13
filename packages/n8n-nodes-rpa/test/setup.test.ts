@@ -1462,7 +1462,8 @@ describe('a new Connection Line is tested before it replaces one that works (IW-
     expect(lineIn(fake, 'c-hand')).toBe(LINE);
     expect(fake.state.requests.filter((q) => q.method === 'PATCH')).toEqual([]);
     expect(trials(fake)).toEqual([]);
-    expect(r.out).toContain(`not replaced: n8n's test of the line for rpa.example.com:8765 failed: ${RUNNER_UNREACHABLE}`);
+    expect(r.out).toContain(`tested   the new line for rpa.example.com:8765, and it failed: ${RUNNER_UNREACHABLE}`);
+    expect(r.out).toContain("not replaced: the line for rpa.example.com:8765 did not pass n8n's test (above).");
     expect(r.out).toContain('The Connection Line of credential "RPA Desktop Runner account" (id c-hand) stays as it is. Check the new line (print it again on the Windows machine, with -Address when n8n reaches it by another name), then run this again.');
     // The credential that works is still tested, and connected.
     expect(r.out.trimEnd().split('\n').at(-1)).toBe(`The import form is ready, and the Windows machine is connected. n8n's test said: ${RUNNER_CONNECTED}.`);
