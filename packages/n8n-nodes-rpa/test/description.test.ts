@@ -323,16 +323,25 @@ describe('dynamic inputs and outputs', () => {
 
 describe('credentials', () => {
   const shown = (operation: string) => (d.credentials ?? []).filter((c) => NodeHelpers.displayParameter({ operation }, c, null, d)).map((c) => c.name);
-  it('Browser on every operation except Sign Steps; Site Login on Run, Sign and Import Steps; Step Signing only on Run and Sign Steps; Redis on Run and Import Steps; Desktop Runner and Secret Variables only on Run Steps', () => {
+  it('Browser on every operation except Sign Steps; Site Login on Run, Sign and Import Steps; Step Signing on Run and Sign Steps, and on Import Steps only to pass on; Redis on Run and Import Steps; Desktop Runner on Run Steps, and on Import Steps only to pass on; Secret Variables only on Run Steps', () => {
     expect(shown('runSteps')).toEqual(['playwrightBrowserApi', 'playwrightSiteLoginApi', 'playwrightScriptSigningApi', 'playwrightRedisApi', 'rpaDesktopRunnerApi', 'rpaSecretVariablesApi']);
     expect(shown('signSteps')).toEqual(['playwrightSiteLoginApi', 'playwrightScriptSigningApi']);
-    expect(shown('importSteps')).toEqual(['playwrightBrowserApi', 'playwrightSiteLoginApi', 'playwrightRedisApi']); // no signing key: Sign Steps signs
+    // Step Signing and Desktop Runner only to pass on to the workflow file: Sign Steps signs, and the import never reads them.
+    expect(shown('importSteps')).toEqual(['playwrightBrowserApi', 'playwrightSiteLoginApi', 'playwrightRedisApi', 'playwrightScriptSigningApi', 'rpaDesktopRunnerApi']);
+    const passOn = (d.credentials ?? []).filter((c) => c.displayOptions?.show?.operation?.includes('importSteps') && !c.displayOptions.show.operation.includes('runSteps'));
+    expect(passOn.map((c) => c.displayName)).toEqual(['RPA Step Signing (only passed on to the workflow file)', 'RPA Desktop Runner (only passed on to the workflow file)']);
+    // n8n reads a credential through the first entry of its type: for Step Signing and Desktop Runner that entry is not
+    // shown on Import Steps, so a read there fails instead of handing the import a key it must not hold.
+    for (const type of ['playwrightScriptSigningApi', 'rpaDesktopRunnerApi']) {
+      const first = (d.credentials ?? []).find((c) => c.name === type)!;
+      expect(NodeHelpers.displayParameter({ operation: 'importSteps' }, first, null, d), type).toBe(false);
+    }
     expect(shown('screenshot')).toEqual(['playwrightBrowserApi']); // quick operations take no Site Login
   });
   it('no credential is marked required (runtime checks per operation: Run Steps needs RPA Browser or RPA Desktop Runner by the steps\' surface)', () => {
     expect((d.credentials ?? []).map((c) => [c.name, c.required])).toEqual([
       ['playwrightBrowserApi', false], ['playwrightSiteLoginApi', false], ['playwrightScriptSigningApi', false], ['playwrightRedisApi', false],
-      ['rpaDesktopRunnerApi', false], ['rpaSecretVariablesApi', false],
+      ['rpaDesktopRunnerApi', false], ['rpaSecretVariablesApi', false], ['playwrightScriptSigningApi', false], ['rpaDesktopRunnerApi', false],
     ]);
   });
 });

@@ -433,13 +433,19 @@ function templateNodes(approver: string): Record<string, any>[] {
   });
 }
 
-/** The nodes with this run's credentials set on the nodes that use them. */
-function wire(nodes: Record<string, any>[], refs: { form: Ref; signing: Ref; browser?: Ref }) {
+/**
+ * The nodes with this run's credentials set on the nodes that use them. Import steps also gets the signing key and the
+ * desktop runner in its two "only passed on to the workflow file" slots: it never reads them, it copies their id and
+ * name into the workflow file the form hands over, so that file needs nothing picked.
+ */
+function wire(nodes: Record<string, any>[], refs: { form: Ref; signing: Ref; browser?: Ref; runner?: Ref }) {
   return nodes.map((node) => {
     const n = { ...node };
     if (n.name === NODE.form) n.credentials = { httpBasicAuth: refs.form };
     if (n.name === NODE.signSteps) n.credentials = { [SIGNING.type]: refs.signing };
-    if (n.name === NODE.importSteps && refs.browser) n.credentials = { [BROWSER.type]: refs.browser };
+    if (n.name === NODE.importSteps) {
+      n.credentials = { ...(refs.browser ? { [BROWSER.type]: refs.browser } : {}), [SIGNING.type]: refs.signing, ...(refs.runner ? { [RUNNER.type]: refs.runner } : {}) };
+    }
     return n;
   });
 }
@@ -639,9 +645,10 @@ async function run(inputs: Inputs): Promise<number> {
     else signingKey = undefined;
   }
 
+  let runnerRef: Ref | undefined;
   if (inputs.line) {
     const line = inputs.line;
-    await credential(client, of(RUNNER), projectId, RUNNER, () => ({ connectionLine: line }), 'its Connection Line stays as it is (to change it, paste the new line in n8n)');
+    runnerRef = (await credential(client, of(RUNNER), projectId, RUNNER, () => ({ connectionLine: line }), 'its Connection Line stays as it is (to change it, paste the new line in n8n)')).ref;
   }
   let browserRef: Ref | undefined;
   if (inputs.browser) {
@@ -654,9 +661,11 @@ async function run(inputs: Inputs): Promise<number> {
   if (workflow) {
     say(`reused   workflow "${clean(workflow.name, workflow.id)}" (id ${clean(workflow.id)}): it matches the template${workflow.active ? '' : ', publishing it'}`);
     if (options.approver !== undefined) say(`         its Approver Allowlist was left as it is: change it on "${NODE.signSteps}" in n8n.`);
-    if (inputs.browser && !workflow.nodes.find((n: any) => n.name === NODE.importSteps)?.credentials?.[BROWSER.type]) say(`         its credentials were left as they are: pick "${BROWSER.name}" on "${NODE.importSteps}" in n8n.`);
+    const onImport = workflow.nodes.find((n: any) => n.name === NODE.importSteps)?.credentials ?? {};
+    const toPick = [inputs.browser && !onImport[BROWSER.type] ? BROWSER.name : '', !onImport[SIGNING.type] ? SIGNING.name : '', runnerRef && !onImport[RUNNER.type] ? RUNNER.name : ''].filter(Boolean);
+    if (toPick.length) say(`         its credentials were left as they are: pick ${toPick.map((c) => `"${c}"`).join(', ')} on "${NODE.importSteps}" in n8n, so the workflow file the form hands over carries them.`);
   } else {
-    const wired = wire(nodes as Record<string, any>[], { form: form.ref, signing: signing.ref, browser: browserRef });
+    const wired = wire(nodes as Record<string, any>[], { form: form.ref, signing: signing.ref, browser: browserRef, runner: runnerRef });
     if (made) {
       const r = await client.api('PUT', `/workflows/${encodeURIComponent(String(made.id))}`, { name: workflowName, nodes: wired, connections: made.connections, settings: made.settings ?? { executionOrder: 'v1' } });
       if (r.status !== 200 || !r.json?.id) throw new Stop(`Could not set the credentials on the workflow "${workflowName}" (id ${clean(made.id)}) (${client.reason(r)}). It is not published.`);
@@ -709,7 +718,10 @@ async function run(inputs: Inputs): Promise<number> {
   say('  1. Record a bot, or pick a bot file you have: an RPA recording, a UiPath project, a Chrome Recorder export, Playwright code or a step document.');
   say('  2. Open the form address in your browser and sign in with the user name and password above.');
   say('  3. Upload the file, give the steps a name, and submit. On the next page, review the steps and approve them.');
-  if (inputs.line) say('The Windows machine is connected: pick "RPA Desktop Runner" on the RPA node of the workflow the form gives you.');
+  if (runnerRef) {
+    const passed = String(workflow.nodes?.find((n: any) => n.name === NODE.importSteps)?.credentials?.[RUNNER.type]?.id) === runnerRef.id;
+    say(passed ? `The Windows machine is connected: the workflow the form gives you already uses "${RUNNER.name}".` : `The Windows machine is connected: pick "${RUNNER.name}" on the RPA node of the workflow the form gives you.`);
+  }
   return 0;
 }
 

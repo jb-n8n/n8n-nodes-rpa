@@ -27,7 +27,11 @@ describe('RPA node', () => {
     expect(d.usableAsTool).toBeUndefined();
   });
   it('names its credentials with literals equal to CREDENTIALS, each tested by a method the node implements', () => {
-    expect(d.credentials?.map((c) => c.name)).toEqual([CREDENTIALS.browser, CREDENTIALS.siteLogin, CREDENTIALS.signing, CREDENTIALS.redis, CREDENTIALS.desktopRunner, CREDENTIALS.secretVariables]);
+    expect(d.credentials?.map((c) => c.name)).toEqual([
+      CREDENTIALS.browser, CREDENTIALS.siteLogin, CREDENTIALS.signing, CREDENTIALS.redis, CREDENTIALS.desktopRunner, CREDENTIALS.secretVariables,
+      // Import Steps' two slots it only passes on to the workflow file: after the entries Run Steps reads through.
+      CREDENTIALS.signing, CREDENTIALS.desktopRunner,
+    ]);
     for (const c of d.credentials ?? []) expect(Object.keys(node.methods.credentialTest)).toContain(c.testedBy);
   });
   it('has no secret parameters', () => {
@@ -119,6 +123,9 @@ describe('RPA node', () => {
 // with several credential types shows the bare "Credential" label for some of them, so users cannot tell the slots apart.
 describe('RPA node credential labels', () => {
   it('names every credential slot with its credential type name (the "RPA" prefix)', () => {
-    expect(new Playwright().description.credentials?.map((c) => c.displayName)).toEqual(['RPA Browser', 'RPA Site Login', 'RPA Step Signing', 'RPA Redis', 'RPA Desktop Runner', 'RPA Secret Variables']);
+    expect(new Playwright().description.credentials?.map((c) => c.displayName)).toEqual([
+      'RPA Browser', 'RPA Site Login', 'RPA Step Signing', 'RPA Redis', 'RPA Desktop Runner', 'RPA Secret Variables',
+      'RPA Step Signing (only passed on to the workflow file)', 'RPA Desktop Runner (only passed on to the workflow file)',
+    ]);
   });
 });

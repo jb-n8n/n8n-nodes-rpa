@@ -131,8 +131,9 @@ by another name or address than the one in the line (a NAT, a tunnel), run the c
 ## 5. Run it
 
 1. In n8n, create a workflow, **⋯ → Import → From File**, and pick the downloaded `erp-line-items.workflow.json`.
-2. On the RPA node, named after your recording (here **ErpDemo recording**), pick the **RPA Desktop Runner**
-   credential and the **RPA Step Signing** credential.
+2. The RPA node is named after your recording (here **ErpDemo recording**). Its **RPA Desktop Runner** and
+   **RPA Step Signing** credentials are already picked: the setup command gave them to the import form, and the form
+   passes them on. Check them. In another n8n, n8n takes the only credential of the same name, else pick it there.
 3. The password is a secret variable. Create an **RPA Secret Variables** credential on that node, with one variable:
    the name its note gives (such as `password`) and the value `demo1234`. To keep the password to this app, you can
    also put `ErpDemo.exe` in its **May Be Typed Into** field. **Options → Variables**
@@ -144,7 +145,11 @@ by another name or address than the one in the line (a NAT, a tunnel), run the c
 The first run after a quiet time waits while Windows signs the bot user in, about 5 to 20 seconds. If it fails with
 `runner_unavailable`, run it again, then see the [Windows guide](../install/windows.md#11-when-something-fails).
 
-To run the bot on a schedule, open **On a schedule**, set the time, turn the node on, and **Publish** the workflow.
+Each run writes one row to the `playwright_runs` Data Table (**Log run**). A failed run writes its error code there
+(**Log failed run**) and then stops at **Stop and Error**, so it shows as failed under **Executions**.
+
+To run the bot on a schedule, open **On a schedule**, set the time, turn the node on, and **Publish** the workflow. To
+be told when a scheduled run fails, choose an Error Workflow in the workflow's settings.
 
 ## Next
 

@@ -4,13 +4,15 @@
 // Each browser sequence n becomes Get active steps (playwright_steps, name <name>-n) feeding Run steps with signed steps
 // required and AI Repair off, so the workflow runs as generated: no Chat model credential and no approval workflow to
 // pick first; the Run steps note says how to add self-repair. Each desktop sequence n becomes Get active steps feeding a Run steps on
-// the RPA Desktop Runner credential (named by type, no secret), with signed steps required, AI Repair off (desktop steps
+// the RPA Desktop Runner credential, with signed steps required, AI Repair off (desktop steps
 // have none yet) and the variables its steps type, empty for the user to fill in (secrets from a secret source). Everything else follows a fixed table of n8n 2.41 node types. Text from the project is
 // never evaluated: it goes into literal parameters only when n8n cannot read it as an expression, and otherwise into
-// notes and stickies as text. No credential is attached and no secret is written: credentials are named in stickies.
+// notes and stickies as text. The RPA credentials the import was given are attached by id and name (opts.credentials),
+// so the file needs nothing picked; without them the desktop runner is named by name only. No secret is ever written.
 import type { DesktopDraft, Draft, FlowNode, UiPathFlow } from 'n8n-rpa-engine';
+import { CREDENTIALS } from '../config.js';
 import { RPA_NODE_TYPE } from '../node-type.js';
-import { STEPS_TABLE } from '../rows.js';
+import { RUN_TABLE, RUN_TABLE_COLUMNS, STEPS_TABLE } from '../rows.js';
 
 export interface WorkflowNode {
   id: string;
@@ -24,9 +26,16 @@ export interface WorkflowNode {
   executeOnce?: boolean;
   /** Switched off: n8n skips it (the Schedule Trigger, until a person sets the time). */
   disabled?: boolean;
-  /** A credential named by type and display name only: no id, no secret. n8n selects it when one credential has the name. */
-  credentials?: Record<string, { id: null; name: string }>;
+  /** Run steps: its failures leave on an error output (to the run log); the log write: a failure passes the item on. */
+  onError?: 'continueErrorOutput' | 'continueRegularOutput';
+  /**
+   * Credentials by type, in n8n's own form: the id and display name of one the import was given, or the name alone (id
+   * null: n8n selects it when exactly one credential has that name). Never a secret.
+   */
+  credentials?: Record<string, CredentialRef | { id: null; name: string }>;
 }
+/** A credential by id and display name, as n8n writes it on a node: never a value of it. */
+export interface CredentialRef { id: string; name: string }
 export interface WorkflowConnection { node: string; type: 'main'; index: number }
 export interface WorkflowJson {
   name: string;
@@ -50,15 +59,22 @@ export interface BuildWorkflowOptions {
   run?: { maxSeconds?: number; allowedHosts?: string[]; allowPrivateNetwork?: boolean };
   /** Where the flow came from. Only the texts that name it differ. */
   source?: ImportedFrom;
+  /**
+   * The RPA credentials the import was given (Import Steps' own slots), by id and name: browser Run steps get the
+   * Browser, the Site Login and the Step Signing; desktop Run steps get the Desktop Runner and the Step Signing.
+   */
+  credentials?: PassedOn;
 }
+/** The credentials an import passes on to the workflow file. */
+export interface PassedOn { browser?: CredentialRef; siteLogin?: CredentialRef; signing?: CredentialRef; desktopRunner?: CredentialRef }
 export type ImportedFrom = 'uipath' | 'recording' | 'chrome' | 'playwright' | 'steps';
 /** How the generated texts name where the steps came from. */
 const FROM = {
-  uipath: { steps: 'imported from UiPath', importIt: 'import the project', workflow: 'imported from UiPath', origin: 'the UiPath project' },
-  recording: { steps: 'imported from the recording', importIt: 'import the recording', workflow: 'imported from a recording', origin: 'the recording' },
-  chrome: { steps: 'imported from the Chrome recording', importIt: 'import the recording', workflow: 'imported from a Chrome recording', origin: 'the Chrome recording' },
-  playwright: { steps: 'imported from the Playwright code', importIt: 'import the code', workflow: 'imported from Playwright code', origin: 'the Playwright code' },
-  steps: { steps: 'from the step document', importIt: 'import the step document', workflow: 'imported from a step document', origin: 'the step document' },
+  uipath: { steps: 'imported from UiPath', importIt: 'import the project', workflow: 'imported from UiPath', origin: 'the UiPath project', startValues: "the values the UiPath project gave them" },
+  recording: { steps: 'imported from the recording', importIt: 'import the recording', workflow: 'imported from a recording', origin: 'the recording', startValues: 'the values that were recorded' },
+  chrome: { steps: 'imported from the Chrome recording', importIt: 'import the recording', workflow: 'imported from a Chrome recording', origin: 'the Chrome recording', startValues: 'the values that were recorded' },
+  playwright: { steps: 'imported from the Playwright code', importIt: 'import the code', workflow: 'imported from Playwright code', origin: 'the Playwright code', startValues: 'the values the code gave them' },
+  steps: { steps: 'from the step document', importIt: 'import the step document', workflow: 'imported from a step document', origin: 'the step document', startValues: 'the values the step document gave them' },
 } as const;
 /** The default Max Seconds of Run Steps: a run option equal to it is not written. */
 const DEFAULT_MAX_SECONDS = 180;
@@ -70,8 +86,26 @@ export const PRIVATE_NETWORK_ON = 'Options → Allow Private Network is on becau
 /** Where the steps get approved by default. */
 const IMPORT_FORM = 'RPA: 5 Import a bot';
 
-/** The credential a desktop Run steps names, by type (CREDENTIALS.desktopRunner) and display name. */
-const DESKTOP_RUNNER_CREDENTIAL = { rpaDesktopRunnerApi: { id: null, name: 'RPA Desktop Runner' } };
+/** The display name of each RPA credential a Run steps uses, as the node shows it. */
+const LABEL = { browser: 'RPA Browser', siteLogin: 'RPA Site Login', signing: 'RPA Step Signing', desktopRunner: 'RPA Desktop Runner' } as const;
+type Slot = keyof typeof LABEL;
+/** The slots a browser Run steps uses, and a desktop one. */
+const BROWSER_SLOTS: Slot[] = ['browser', 'siteLogin', 'signing'];
+const DESKTOP_SLOTS: Slot[] = ['desktopRunner', 'signing'];
+/** Without the import's own, a desktop Run steps names the RPA Desktop Runner by name: n8n selects it when one has that name. */
+const DESKTOP_RUNNER_BY_NAME = { id: null, name: LABEL.desktopRunner } as const;
+/** "A", "A and B", "A, B and C". */
+const and = (items: string[]) => (items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`);
+/**
+ * Only a well-formed reference is passed on: an id and a name that are non-empty strings of a sane length. Anything else
+ * is left for the person to pick.
+ */
+function cleanRef(ref: CredentialRef | undefined): CredentialRef | undefined {
+  if (!ref || typeof ref.id !== 'string' || typeof ref.name !== 'string') return undefined;
+  const id = ref.id.trim();
+  const name = line(ref.name, 200);
+  return id && id.length <= 64 && name ? { id, name } : undefined;
+}
 
 /** Node types and the versions used, each checked against n8n's nodes-base (and nodes-langchain) at tag n8n@2.41.0. */
 const T = {
@@ -87,6 +121,7 @@ const T = {
   emailSend: ['n8n-nodes-base.emailSend', 2.1],
   wait: ['n8n-nodes-base.wait', 1.1],
   if: ['n8n-nodes-base.if', 2.2],
+  stopAndError: ['n8n-nodes-base.stopAndError', 1],
 } as const satisfies Record<string, readonly [string, number]>;
 
 const COLOUR = { green: 4, gold: 2, grey: 7 } as const;
@@ -163,6 +198,49 @@ function stepVariables(steps: unknown): { all: string[]; secret: string[] } {
   walk(steps);
   return { all, secret: all.filter((v) => secret.has(v)) };
 }
+/**
+ * The start values that may be shown: none for a variable that is secret under any casing (UiPath's VB names do not
+ * depend on case). Applied wherever a draft's start values are handed on: the Data item, the review page, this file.
+ */
+export function nonSecretStart(start: Readonly<Record<string, string>> | undefined, secretVariables: readonly string[]): Record<string, string> {
+  const secret = new Set(secretVariables.map((v) => v.toLowerCase()));
+  return Object.fromEntries(Object.entries(start ?? {}).filter(([name]) => !secret.has(name.toLowerCase())));
+}
+/** What a Run steps' note says about its credentials: the ones picked for you, then the ones to pick. */
+function pickText(picked: string[], missing: string[]): string {
+  return [
+    picked.length ? `${and(picked)} ${picked.length === 1 ? 'is' : 'are'} picked for you: check ${picked.length === 1 ? 'it' : 'them'}.` : '',
+    missing.length ? `Pick ${and(missing)} here.` : '',
+  ].filter(Boolean).join(' ');
+}
+/** The run log's nodes: they are drawn once a workflow has a Run steps, and the cap keeps room for them. */
+const LOG = { create: 'Create run log table', run: 'Log run', failed: 'Log failed run', stop: 'Stop and Error' } as const;
+const LOG_NODES = Object.keys(LOG).length;
+/** The run log's columns as n8n's Data Table insert writes them: every value from the item it gets, never from a node by name. */
+const runRow = (values: Record<string, string>) => ({
+  mappingMode: 'defineBelow',
+  value: values,
+  matchingColumns: [],
+  schema: RUN_TABLE_COLUMNS.map((c) => ({ id: c.name, displayName: c.name, required: false, defaultMatch: false, display: true, type: c.type, canBeUsedToMatch: true })),
+});
+/** A successful run: Run steps' Data item. */
+const LOG_RUN_ROW = {
+  name: "={{ $json.name ?? '' }}", lane: "={{ $json.lane ?? '' }}", version: '={{ $json.version ?? 0 }}', hash: "={{ $json.hash ?? '' }}",
+  confirmed: '={{ $json.confirmed ?? false }}', rowCount: '={{ ($json.rows ?? []).length }}', durationMs: '={{ $json.durationMs ?? 0 }}',
+  llmTokens: '={{ $json.llmTokens ?? 0 }}', code: '', executionId: '={{ $execution.id }}',
+};
+/** A failed run: Run steps' error item, its facts under details (a configuration error has no code: config_error). */
+const LOG_FAILED_ROW = {
+  name: "={{ $json.details?.name ?? '' }}", lane: "={{ $json.details?.lane ?? '' }}", version: '={{ $json.details?.version ?? 0 }}',
+  hash: "={{ $json.details?.hash ?? '' }}", confirmed: '={{ false }}', rowCount: '={{ 0 }}', durationMs: '={{ $json.details?.durationMs ?? 0 }}',
+  llmTokens: '={{ $json.details?.llmTokens ?? 0 }}', code: "={{ $json.details?.code || 'config_error' }}", executionId: '={{ $execution.id }}',
+};
+/**
+ * Stop and Error's message: the code and the step list's name from the logged row, or from the error item itself when the
+ * log write failed (Log failed run passes its input on then), with the error's message when it is there.
+ */
+export const STOP_MESSAGE =
+  "={{ 'The run failed: ' + ($json.code || $json.details?.code || 'config_error') + ' on ' + ($json.name || $json.details?.name || 'the steps') + ($json.message ? '. ' + $json.message : '. Run steps in this execution has the message.') }}";
 const RUNS_ONCE = 'Run steps runs once for all items here, not once per item, because Get active steps has Execute Once on.';
 /** The binary property Run steps gives the draft's last top-level download or expected file (file_<index>, see the engine's binaryName). */
 function downloadProperty(draft: Draft | DesktopDraft): string | undefined {
@@ -189,6 +267,8 @@ class Builder {
   readonly draftNames: string[] = [];
   readonly desktopRunNodes: string[] = [];
   readonly desktopDraftNames: string[] = [];
+  /** Every Run steps drawn, browser and desktop, in the order drawn: each one writes the run log. */
+  readonly allRuns: string[] = [];
   /** The colours of the stickies drawn so far: the legend names only these. */
   readonly colours = new Set<number>();
   credentials = 0;
@@ -200,6 +280,8 @@ class Builder {
    */
   private lastFile: string | undefined;
 
+  /** Nodes the cap keeps free for what is drawn after the flow (the run log). */
+  kept = 0;
   /** Activities not drawn because the workflow reached MAX_WORKFLOW_NODES. */
   skipped = 0;
   /** Set when the first activity does not fit: everything after it is counted too, so nothing is drawn out of order. */
@@ -212,7 +294,29 @@ class Builder {
     private readonly prefix: string, private readonly drafts: Map<string, Draft>, private readonly desktopDrafts: Map<string, DesktopDraft> = new Map(),
     private readonly codeWorkflow?: BuildWorkflowOptions['codeWorkflow'], readonly source: ImportedFrom = 'uipath',
     private readonly run: NonNullable<BuildWorkflowOptions['run']> = {},
+    private readonly passedOn: PassedOn = {},
   ) {}
+
+  /**
+   * What a Run steps carries for these slots: each credential the import passed on, by id and name, and the labels of
+   * those it picked and of those the person still picks (a desktop Run steps names the RPA Desktop Runner by name then).
+   */
+  slots(which: Slot[]): { credentials: NonNullable<WorkflowNode['credentials']>; picked: string[]; missing: string[] } {
+    const credentials: NonNullable<WorkflowNode['credentials']> = {};
+    const picked: string[] = [];
+    const missing: string[] = [];
+    for (const slot of which) {
+      const ref = cleanRef(this.passedOn[slot]);
+      if (ref) {
+        credentials[CREDENTIALS[slot]] = ref;
+        picked.push(LABEL[slot]);
+      } else {
+        if (slot === 'desktopRunner') credentials[CREDENTIALS[slot]] = { ...DESKTOP_RUNNER_BY_NAME };
+        missing.push(LABEL[slot]);
+      }
+    }
+    return { credentials, picked, missing };
+  }
   /** Run variables that come from the RPA Secret Variables credential, over every Run steps. */
   readonly secretVariables = new Set<string>();
 
@@ -268,7 +372,7 @@ class Builder {
     return d;
   }
   /** Whether a browser pair (a browser node with its draft) is in these lists, at any depth. */
-  private hasBrowser(lists: FlowNode[][]): boolean {
+  hasBrowser(lists: FlowNode[][]): boolean {
     return lists.some((list) => list.some((n) => {
       if (n.kind === 'browser') return this.drafts.has(draftOf(this.prefix, n));
       if (n.kind === 'desktop') return this.desktopDrafts.has(draftOf(this.prefix, n));
@@ -343,11 +447,62 @@ class Builder {
       `### Not translated (grey)\nNot translated: ${md(displayName || activity)} (${md(activity)}): ${md(note, 600)}`, COLOUR.grey);
   }
 
+  /**
+   * The run log after the flow: each Run steps' Data output also feeds **Log run** (Execute Once), and its error output
+   * feeds **Log failed run** → **Stop and Error**, so a failed run is logged and the execution still fails. One set for
+   * every Run steps. A lone Run steps at the end of the flow has them right of it; otherwise they sit below the flow.
+   */
+  runLog(): void {
+    if (!this.allRuns.length) return;
+    const at = (name: string) => this.nodes.find((n) => n.name === name)?.position ?? [0, 0];
+    const lone = this.allRuns.length === 1 && !(this.connections[this.allRuns[0]]?.main?.[0]?.length);
+    let logAt: [number, number];
+    let failAt: [number, number];
+    if (lone) {
+      const [rx, ry] = at(this.allRuns[0]);
+      logAt = [rx + STEP, ry];
+      // Clear of a desktop pair's gold variables note, which sits under its Run steps.
+      failAt = [rx + STEP + 40, ry + 220];
+    } else {
+      let bottom = 0;
+      for (const n of this.nodes) bottom = Math.max(bottom, n.position[1] + (n.type === T.sticky[0] ? Number((n.parameters as { height?: number }).height ?? 0) : 100));
+      logAt = [2 * STEP, bottom + 80];
+      failAt = [2 * STEP, bottom + 280];
+    }
+    const table = { __rl: true, mode: 'name', value: RUN_TABLE };
+    this.add(T.dataTable, LOG.run, logAt, { resource: 'row', operation: 'insert', dataTableId: table, columns: runRow(LOG_RUN_ROW), options: {} }, {
+      executeOnce: true, notes: `One row in ${RUN_TABLE} per successful run of a Run steps.`,
+    });
+    this.add(T.dataTable, LOG.failed, failAt, { resource: 'row', operation: 'insert', dataTableId: table, columns: runRow(LOG_FAILED_ROW), options: {} }, {
+      onError: 'continueRegularOutput',
+      notes: `One row in ${RUN_TABLE} per failed run, with its error code. If the row cannot be written, the run still stops as failed.`,
+    });
+    this.add(T.stopAndError, LOG.stop, [failAt[0] + STEP, failAt[1]], { errorType: 'errorMessage', errorMessage: STOP_MESSAGE }, {
+      notes: 'Ends a failed run as failed, so it shows in Executions and an Error Workflow set in the workflow settings runs.',
+    });
+    for (const run of this.allRuns) {
+      this.connect([{ node: run, output: 0 }], LOG.run);
+      this.connect([{ node: run, output: 1 }], LOG.failed);
+    }
+    this.connect([{ node: LOG.failed, output: 0 }], LOG.stop);
+  }
+
+  /** Removes a node that has one input and one output, connecting each of `from` straight to what it fed. */
+  unlink(name: string, from: string[]): void {
+    const next = this.connections[name]?.main?.[0] ?? [];
+    delete this.connections[name];
+    for (const f of from) {
+      const outputs = this.connections[f]?.main ?? [];
+      outputs[0] = [...(outputs[0] ?? []).filter((c) => c.node !== name), ...next];
+    }
+    this.nodes.splice(this.nodes.findIndex((n) => n.name === name), 1);
+  }
+
   /** Draws the list; once the workflow has MAX_WORKFLOW_NODES nodes, the rest is only counted (see `overflow`). */
   walk(list: FlowNode[], tails: Tail[], x: number, y: number): Walked {
     let at: Walked = { tails, x };
     for (const n of list) {
-      if (!this.full && this.nodes.length + this.cost(n) > MAX_WORKFLOW_NODES) this.full = true;
+      if (!this.full && this.nodes.length + this.cost(n) > MAX_WORKFLOW_NODES - this.kept) this.full = true;
       if (this.full) this.skipped += size(n);
       else at = this.one(n, at.tails, at.x, y);
     }
@@ -402,12 +557,13 @@ class Builder {
     const run = this.nodeName(n.displayName, `Run steps (${draftName})`);
     const runX = x + STEP;
     const secret = new Set(draft.secretVariables);
-    const start = draft.startValues ?? {};
+    const start = nonSecretStart(draft.startValues, draft.secretVariables);
     /** The start values the workflow writes: those n8n would not read as an expression. */
     const plain = (values: Record<string, string>) => Object.values(values).filter((v) => literal(v) !== undefined);
     const plainVars = draft.variables.filter((v) => !secret.has(v));
     // Only what applies: a list with no variables asks for none, and one whose variables are all secret has no Variables.
-    const fillIn = plain(start).length ? ' The Variables start with the values that were recorded: change them here.' : plainVars.length ? ' Fill in the Variables.' : '';
+    const fillIn = plain(start).length ? ` The Variables start with ${FROM[this.source].startValues}: change them here.` : plainVars.length ? ' Fill in the Variables.' : '';
+    const creds = this.slots(DESKTOP_SLOTS);
     this.add(T.rpa, run, [runX, y], {
       operation: 'runSteps',
       steps: "={{ $json.steps ?? '' }}",
@@ -417,11 +573,13 @@ class Builder {
       aiRepair: false,
       options: { name: draftName, expectedVersion: '={{ $json.version }}', ...this.runOptions(false), ...this.variablesOption(draft.variables, secret, start) },
     }, {
-      credentials: { ...DESKTOP_RUNNER_CREDENTIAL },
-      notes: `Runs the signed desktop steps ${draftName} (${plural(draft.script.steps.length, 'step')} ${FROM[this.source].steps} "${line(n.displayName, 120)}") on the desktop runner. Pick the RPA Desktop Runner and RPA Step Signing credentials.${fillIn}${secret.size ? ` ${[...secret].join(', ')}: put ${secret.size === 1 ? 'it' : 'them'} in an RPA Secret Variables credential (type rpaSecretVariablesApi, field Variables) and select it here.` : ''}`,
+      onError: 'continueErrorOutput',
+      credentials: creds.credentials,
+      notes: `Runs the signed desktop steps ${draftName} (${plural(draft.script.steps.length, 'step')} ${FROM[this.source].steps} "${line(n.displayName, 120)}") on the desktop runner. ${pickText(creds.picked, creds.missing)}${fillIn}${secret.size ? ` ${[...secret].join(', ')}: put ${secret.size === 1 ? 'it' : 'them'} in an RPA Secret Variables credential (type rpaSecretVariablesApi, field Variables) and select it here.` : ''}`,
     });
     this.connect([{ node: get, output: 0 }], run);
     this.desktopRunNodes.push(run);
+    this.allRuns.push(run);
     if (plainVars.length || secret.size) {
       const listedVars = plainVars.length
         ? `On **${md(run)}**, Options → Variables: ${plainVars.map((v) => (literal(start[v]) !== undefined ? `${code(v, 60)} (starts as ${code(start[v], 120)})` : code(v, 60))).join(', ')}.`
@@ -449,6 +607,7 @@ class Builder {
         const run = this.nodeName(n.displayName, `Run steps (${draftName})`);
         const runX = x + STEP;
         const vars = stepVariables(draft.script);
+        const creds = this.slots(BROWSER_SLOTS);
         // Runs as generated: no repair branch (a Chat model and an Approve steps would need a credential and a workflow
         // picked first). The note says how to add it.
         this.add(T.rpa, run, [runX, y], {
@@ -460,16 +619,19 @@ class Builder {
           aiRepair: false,
           options: { name: draftName, expectedVersion: '={{ $json.version }}', ...this.codeOptions(), ...this.runOptions(true), ...this.variablesOption(vars.all, new Set(vars.secret)) },
         }, {
+          onError: 'continueErrorOutput',
+          ...(Object.keys(creds.credentials).length ? { credentials: creds.credentials } : {}),
           notes: [
-            `Runs the signed steps ${draftName} (${plural(draft.script.steps.length, 'step')} ${FROM[this.source].steps} "${line(n.displayName, 120)}"). Pick RPA Browser, RPA Site Login and RPA Step Signing here. ${this.privateNetwork ? PRIVATE_NETWORK_ON : PRIVATE_NETWORK_OFF}${vars.secret.length ? ` ${vars.secret.join(', ')}: put ${vars.secret.length === 1 ? 'it' : 'them'} in an RPA Secret Variables credential (type rpaSecretVariablesApi, field Variables) and select it here.` : ''}`,
+            `Runs the signed steps ${draftName} (${plural(draft.script.steps.length, 'step')} ${FROM[this.source].steps} "${line(n.displayName, 120)}"). ${pickText(creds.picked, creds.missing)} ${this.privateNetwork ? PRIVATE_NETWORK_ON : PRIVATE_NETWORK_OFF}${vars.secret.length ? ` ${vars.secret.join(', ')}: put ${vars.secret.length === 1 ? 'it' : 'them'} in an RPA Secret Variables credential (type rpaSecretVariablesApi, field Variables) and select it here.` : ''}`,
             'To let it repair itself when the site changes:',
             '1. Connect a chat model to its Model input (after step 2).',
-            `2. Turn on AI Repair here and write the Goal in plain words.`,
-            `3. Connect its Repaired Steps output to an Execute Workflow node that calls ${APPROVE_WORKFLOW}.`,
+            `2. Turn on AI Repair here and write the Goal in plain words. The outputs become Data, Repaired Steps and error.`,
+            `3. Connect its Repaired Steps output to an Execute Workflow node that calls ${APPROVE_WORKFLOW}, and its error output to ${LOG.failed} again.`,
           ].join('\n'),
         });
         this.connect([{ node: get, output: 0 }], run);
         this.runNodes.push(run);
+        this.allRuns.push(run);
         this.lastFile = downloadProperty(draft);
         return { tails: [{ node: run, output: 0 }], x: x + 2 * STEP };
       }
@@ -596,16 +758,18 @@ class Builder {
           COLOUR.grey, [x - 60, y - 160 - BRANCH * d], end - x, 330 + 2 * BRANCH * d + (this.hasBrowser([n.body]) ? 270 : 0));
         return { tails: body.tails, x: end };
       }
-      case 'credential':
+      case 'credential': {
         this.credentials += 1;
         // Desktop steps refuse a Site Login: they type the sign-in from their Run steps' Variables.
+        const pickOne = cleanRef(this.passedOn.siteLogin) ? '' : ' Pick one there.';
         if (this.desktopDrafts.size > 0) {
-          const browser = this.drafts.size > 0 ? ' Browser steps: pick an RPA Site Login on their Run steps; the Site Login holds the login.' : '';
+          const browser = this.drafts.size > 0 ? ` Browser steps: the RPA Site Login on their Run steps holds the login.${pickOne}` : '';
           return this.inline(tails, x, y, `Credential: ${line(n.asset, 80) || 'UiPath'}`,
             `### UiPath credential (green)\nUiPath credential ${code(n.asset, 120)}: n8n never copies a UiPath credential. Desktop steps type the user name and password from their Run steps' **Variables** (see the gold notes); a secret one, such as the password, comes from an ${SECRET_VARIABLES} credential selected on that Run steps, never as text in this workflow.${browser}`, COLOUR.green);
         }
         return this.inline(tails, x, y, `Credential: ${line(n.asset, 80) || 'UiPath'}`,
-          `### UiPath credential (green)\nUiPath credential ${code(n.asset, 120)}: pick an RPA Site Login on the Run steps node(s). n8n never copies a UiPath credential; the Site Login holds the login.`, COLOUR.green);
+          `### UiPath credential (green)\nUiPath credential ${code(n.asset, 120)}: the RPA Site Login on the Run steps node(s) holds that login. n8n never copies a UiPath credential.${pickOne}`, COLOUR.green);
+      }
       case 'untranslated':
         return this.untranslatedSticky(tails, x, y, n.displayName, n.activity, n.note);
     }
@@ -624,7 +788,7 @@ function listed(names: string[]): string {
  */
 export function buildWorkflow(flow: UiPathFlow, drafts: Draft[], opts: BuildWorkflowOptions): WorkflowJson {
   if (opts.name.trim() === '' || opts.name.startsWith('=')) throw new Error('The Name must not be empty or start with "="');
-  const b = new Builder(opts.name, new Map(drafts.map((d) => [d.name, d])), new Map((opts.desktopDrafts ?? []).map((d) => [d.name, d])), opts.codeWorkflow, opts.source, opts.run);
+  const b = new Builder(opts.name, new Map(drafts.map((d) => [d.name, d])), new Map((opts.desktopDrafts ?? []).map((d) => [d.name, d])), opts.codeWorkflow, opts.source, opts.run, opts.credentials);
   const from = FROM[b.source];
   const uipath = b.source === 'uipath';
   b.add(T.manualTrigger, b.unique('Run the bot'), [0, 0], {});
@@ -633,7 +797,22 @@ export function buildWorkflow(flow: UiPathFlow, drafts: Draft[], opts: BuildWork
     disabled: true, notes: 'Set the time, then turn this node on and publish the workflow. Until then the bot runs only when you click Execute.',
   });
   b.reserve('About this import', 'Set once');
-  b.overflow(b.walk(flow.nodes, [{ node: 'Run the bot', output: 0 }, { node: 'On a schedule', output: 0 }], STEP, 0));
+  let start: Tail[] = [{ node: 'Run the bot', output: 0 }, { node: 'On a schedule', output: 0 }];
+  // A flow with a Run steps keeps a run log: the table is made when missing, first, as the templates do.
+  const logged = b.hasBrowser([flow.nodes]);
+  if (logged) {
+    b.reserve(...Object.values(LOG));
+    b.add(T.dataTable, LOG.create, [STEP, 0], {
+      resource: 'table', operation: 'create', tableName: RUN_TABLE, columns: { column: RUN_TABLE_COLUMNS.map((c) => ({ name: c.name, type: c.type })) }, options: { createIfNotExists: true },
+    }, { notes: `Creates the run log ${RUN_TABLE} when it is missing.` });
+    b.connect(start, LOG.create);
+    start = [{ node: LOG.create, output: 0 }];
+    b.kept = LOG_NODES - 1;
+  }
+  b.overflow(b.walk(flow.nodes, start, logged ? 2 * STEP : STEP, 0));
+  // No Run steps fitted under the cap: no run log, and the triggers start the flow directly.
+  if (logged && !b.allRuns.length) b.unlink(LOG.create, ['Run the bot', 'On a schedule']);
+  b.runLog();
 
   const project = line(flow.name, 120).replace(/^=+/, '').trim() || opts.name;
   const desktopPart = b.desktopDraftNames.length ? ` and ${plural(b.desktopDraftNames.length, 'desktop sequence')}` : '';
@@ -652,17 +831,27 @@ export function buildWorkflow(flow: UiPathFlow, drafts: Draft[], opts: BuildWork
     b.desktopDraftNames.length
       ? `${uipath ? 'Each desktop sequence is' : 'The desktop steps are'} **Get active steps** → **Run steps** on the **RPA Desktop Runner**: it runs only the newest signed, active version of its steps (${b.desktopDraftNames.slice(0, 3).map((d) => code(d)).join(', ')}${b.desktopDraftNames.length > 3 ? ', …' : ''}) from ${STEPS_TABLE}. Desktop steps are not replayed at import and have no AI repair yet: approve them on the review page of **${IMPORT_FORM}**, ticking the steps that save, send or submit.`
       : '',
+    b.allRuns.length
+      ? `Every run writes one row to ${RUN_TABLE}: **${LOG.run}**, or **${LOG.failed}** with the error code. A failed run then ends at **${LOG.stop}**, so it shows as failed in Executions. To be told when one fails, choose an Error Workflow in this workflow's settings.`
+      : '',
     '**On a schedule** is off: set the time, turn it on and publish the workflow. **Run the bot** runs it now.',
     [
       uipath && (b.untranslated || b.skipped) ? 'Grey notes: not translated, rebuild by hand.' : '', b.colours.has(COLOUR.gold) ? 'Gold: fill in.' : '', 'Green: set once.',
       uipath ? 'UiPath expressions are kept as text in notes; nothing from the project runs as an n8n expression.' : `Text from ${from.origin} is kept as text; nothing from it runs as an n8n expression.`,
     ].filter(Boolean).join(' '),
   ].filter(Boolean).join('\n\n');
+  // Each RPA credential in bold, marked when the import passed it on (by id and name: no secret is in this file).
+  const named = (slots: Slot[]) => { const s = b.slots(slots); return { text: and([...s.picked.map((l) => `**${l}** (picked for you)`), ...s.missing.map((l) => `**${l}**`)]), picked: s.picked.length }; };
+  const browserCreds = named(BROWSER_SLOTS);
+  const desktopCreds = named(DESKTOP_SLOTS);
+  const anyPicked = (b.runNodes.length > 0 && browserCreds.picked > 0) || (b.desktopRunNodes.length > 0 && desktopCreds.picked > 0);
   const setOnce = [
     '### Set once (green)',
-    'No credential is stored in this file. Pick them on the nodes:',
-    b.runNodes.length ? `- **RPA Browser**, **RPA Site Login** and **RPA Step Signing**: ${listed(b.runNodes)}` : '',
-    b.desktopRunNodes.length ? `- **RPA Desktop Runner** and **RPA Step Signing**: ${listed(b.desktopRunNodes)}` : '',
+    anyPicked
+      ? 'No secret is in this file. The RPA credentials the import used are picked for you: check them on the nodes, and pick the others there. In another n8n, or once a picked credential is deleted, n8n takes the only credential of the same name if there is one: otherwise pick it on the node again.'
+      : 'No secret is in this file. Pick the credentials on the nodes:',
+    b.runNodes.length ? `- ${browserCreds.text}: ${listed(b.runNodes)}` : '',
+    b.desktopRunNodes.length ? `- ${desktopCreds.text}: ${listed(b.desktopRunNodes)}` : '',
     b.secretVariables.size ? `- ${SECRET_VARIABLES}, holding ${[...b.secretVariables].slice(0, 10).map((v) => code(v, 60)).join(', ')}: on the Run steps that name them (their notes say which)` : '',
     b.credentials && !b.desktopRunNodes.length ? '- UiPath credential lookups (green notes in the flow): the RPA Site Login on Run steps holds that login' : '',
     b.credentials && b.desktopRunNodes.length ? `- UiPath credential lookups (green notes in the flow): desktop steps type the sign-in from their Run steps' Variables (a password from ${SECRET_VARIABLES}); browser steps use the RPA Site Login on their Run steps` : '',

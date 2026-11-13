@@ -18,6 +18,8 @@ export const WORKFLOW_NODE_TYPES: Record<string, number> = {
   'n8n-nodes-base.emailSend': 2.1,
   'n8n-nodes-base.wait': 1.1,
   'n8n-nodes-base.if': 2.2,
+  // Ends a failed run as failed after the run log (StopAndError.node.ts at tag n8n@2.41.0 is version 1).
+  'n8n-nodes-base.stopAndError': 1,
   // Off until a person sets the time (ScheduleTrigger.node.ts at tag n8n@2.41.0 has versions 1 to 1.2 and later).
   'n8n-nodes-base.scheduleTrigger': 1.2,
 };
