@@ -1,7 +1,7 @@
 // Adoption: an imported draft runs once in draft mode and, when it runs clean, is replayed in a fresh
 // browser and becomes a proposal with no base (version 1). A drift heals through the existing agent lane with the draft
 // as its base. Either way the only output is a Proposal for the approval workflow and Sign Steps: nothing is delivered.
-import { FILE_WITHHELD, IMPORT_NOT_ADOPTABLE, IMPORT_PROOF_FAILED, IMPORT_REFUSES_WRITES, ROWS_WITHHELD } from '../messages.js';
+import { FILE_WITHHELD, IMPORT_NOT_ADOPTABLE, IMPORT_PROOF_FAILED, IMPORT_REFUSES_WRITES, IMPORT_ROWS_NEED_ID, ROWS_WITHHELD } from '../messages.js';
 import { noWritePolicy } from '../policy/derive.js';
 import { flattenSteps, validateScript } from '../policy/validate.js';
 import { buildProposal, proposalDigest, stepChanges, type Proposal } from '../proposal/proposal.js';
@@ -29,9 +29,22 @@ const FILE_NEEDS =
 const NO_CAPTURES = 'Screenshot, PDF and read steps cannot be proved.';
 
 /**
+ * The ID Pattern the steps state for their rows: the idPattern of their extract and extractTable steps (inside paginate
+ * too), when every one of them has one. Different ones are joined as alternatives. Undefined when the steps read no rows
+ * or a step reads rows without one (its rows then have no ID to check).
+ */
+export function statedIdPattern(script: Script): string | undefined {
+  const patterns = flattenSteps(script.steps).flatMap((s) => ('extract' in s ? [s.extract.idPattern] : 'extractTable' in s ? [s.extractTable.idPattern] : []));
+  if (patterns.length === 0 || patterns.some((p) => !p)) return undefined;
+  const distinct = [...new Set(patterns as string[])];
+  return distinct.length === 1 ? distinct[0] : distinct.map((p) => `(?:${p})`).join('|');
+}
+
+/**
  * What prove can judge: rows (an ID Pattern, an extract or table step, no download) or one file (exactly one
  * top-level download, none inside paginate, whose check names the file or its columns, and no extract). Screenshot,
- * PDF and read steps are never adoptable. Returns the kind, or why not (IMPORT_NOT_ADOPTABLE first, then what is missing).
+ * PDF and read steps are never adoptable. Returns the kind, or why not (IMPORT_NOT_ADOPTABLE first, then what is
+ * missing; rows without an ID Pattern: IMPORT_ROWS_NEED_ID).
  */
 export function adoptableKind(script: Script, output: OutputSpec | undefined): { kind: 'rows' | 'file' } | { refused: string } {
   const all = flattenSteps(script.steps);
@@ -40,7 +53,7 @@ export function adoptableKind(script: Script, output: OutputSpec | undefined): {
   const why = (detail?: string) => ({ refused: detail ? `${IMPORT_NOT_ADOPTABLE} ${detail}` : IMPORT_NOT_ADOPTABLE });
   if (all.some((s) => CAPTURES.some((verb) => verb in s))) return why(NO_CAPTURES);
   if (downloads.length === 0 && extracts.length === 0) return why(output?.idPattern ? ROWS_NEED : undefined);
-  if (downloads.length === 0) return output?.idPattern ? { kind: 'rows' } : why(ROWS_NEED);
+  if (downloads.length === 0) return output?.idPattern ? { kind: 'rows' } : { refused: IMPORT_ROWS_NEED_ID };
   const top = script.steps.filter((s) => 'download' in s);
   const check = downloads[0].download.check;
   const namesFile = !!check && (check.name !== undefined || check.columns !== undefined);
@@ -74,7 +87,8 @@ function firstVersion(p: Proposal, input: AdoptInput, mask: (s: string) => strin
 }
 
 /**
- * Adopts an imported draft. In order, and refusing before any browser: writes (IMPORT_REFUSES_WRITES),
+ * Adopts an imported draft. Without an ID Pattern in `output`, the one the steps state is used (statedIdPattern).
+ * In order, and refusing before any browser: writes (IMPORT_REFUSES_WRITES),
  * the adoptable kind (IMPORT_NOT_ADOPTABLE with `adoptable: false`), the policy (validateScript). Then one run in
  * draft mode, with AI repair only when it is connected and its preconditions hold:
  * - a script-lane success is replayed by proveScript in a fresh browser with no model and the no-write policy, imported
@@ -98,7 +112,9 @@ export async function adoptDraft(input: AdoptInput): Promise<AdoptResult> {
     return fail('policy_violation', err instanceof Error ? err.message : 'the steps could not be read', { configError: true });
   }
   if (draftWrites(draft.steps).length > 0) return fail('policy_violation', IMPORT_REFUSES_WRITES, { configError: true });
-  const adoptable = adoptableKind(draft, input.output);
+  const stated = input.output?.idPattern ? undefined : statedIdPattern(draft);
+  const output: OutputSpec | undefined = stated ? { ...input.output, idPattern: stated } : input.output;
+  const adoptable = adoptableKind(draft, output);
   if ('refused' in adoptable) return { ...fail('policy_violation', adoptable.refused, { configError: true }), adoptable: false };
   const { kind } = adoptable;
   const policy = noWritePolicy(input.policy);
@@ -106,11 +122,11 @@ export async function adoptDraft(input: AdoptInput): Promise<AdoptResult> {
   if (!checked.ok) return fail('policy_violation', checked.violations.join('; '), { configError: true });
 
   // Repair heals a drift only when its preconditions hold; otherwise the draft runs without the model and a drift says why.
-  const refusedRepair = input.repair ? repairPrecondition(draft, input.output, { ...(draft.name ? { name: draft.name } : {}) }) : undefined;
+  const refusedRepair = input.repair ? repairPrecondition(draft, output, { ...(draft.name ? { name: draft.name } : {}) }) : undefined;
   // A file is never delivered without a passing proof; rows from an unproven repair are not delivered either.
   const repair = input.repair && !refusedRepair ? { ...input.repair, deliverUnconfirmed: false } : undefined;
   const { repair: _repair, ...withoutRepair } = rest;
-  const r = await runDraft({ ...withoutRepair, ...(repair ? { repair } : {}), script: draft });
+  const r = await runDraft({ ...withoutRepair, ...(output ? { output } : {}), ...(repair ? { repair } : {}), script: draft });
   const llmCalls = (r as { llmCalls?: number }).llmCalls ?? 0;
   if (!r.ok) {
     const failed = withoutPages(r);
@@ -133,7 +149,7 @@ export async function adoptDraft(input: AdoptInput): Promise<AdoptResult> {
   // sign-in has a code step. The proof asks the same code provider as the run.
   const mayHaveTypedCode = (!!input.secrets?.totpSecret || !!input.codeProvider) && script.steps.some((s) => 'signIn' in s && s.signIn.totp);
   const prove = await proveScript({
-    script, policy, secrets: input.secrets, ...codeSettings(input), ...(input.vars ? { vars: input.vars } : {}), output: input.output ?? {},
+    script, policy, secrets: input.secrets, ...codeSettings(input), ...(input.vars ? { vars: input.vars } : {}), output: output ?? {},
     endpoint: input.endpoint, masker, budgetMs: clampBudget(input.budgetMs), agentRows: [],
     ...(input.defaultStepTimeoutMs ? { defaultStepTimeoutMs: input.defaultStepTimeoutMs } : {}),
     ...(input.signal ? { signal: input.signal } : {}), ...(input.viewport ? { viewport: input.viewport } : {}),

@@ -13,7 +13,7 @@ const EXPORTS = [
   'DOWNLOAD_NEEDS_BROWSER_SERVER', 'DesktopUnavailableError', 'EXPORT_DIR_TOKEN', 'EXTRACT_FIELDS_DROPPED', 'ElementCannotActError',
   'ElementNotFoundError', 'ElementNotUniqueError', 'ExpectedFileMissingError', 'FIELDS_UNSUPPORTED', 'FILE_AGENT_TOOLS',
   'FILE_CHECK_FAILED_PREFIX', 'FingerprintMismatchError', 'IMPORT_EMPTY', 'IMPORT_NEEDS_SITE_LOGIN', 'IMPORT_NOT_ADOPTABLE',
-  'IMPORT_PROOF_FAILED', 'IMPORT_REFUSES_WRITES', 'IMPORT_UNSUPPORTED_TARGET', 'INVALID_PARAMS', 'InvalidPolicyError', 'MAC_DOMAIN',
+  'IMPORT_PROOF_FAILED', 'IMPORT_REFUSES_WRITES', 'IMPORT_ROWS_NEED_ID', 'IMPORT_UNSUPPORTED_TARGET', 'INVALID_PARAMS', 'InvalidPolicyError', 'MAC_DOMAIN',
   'MAX_AGENT_ACTIONS', 'MAX_AGENT_TOKENS', 'MAX_BUDGET_MS', 'MAX_CAPTURE_BYTES', 'MAX_EXPECTED_FILE_BYTES', 'MAX_LITERAL_LOAD',
   'MAX_LITERAL_PROPOSAL', 'MAX_RENDERED', 'MAX_ROWS', 'MAX_RUN_BINARY_BYTES', 'MAX_SCREENSHOT_HEIGHT', 'MAX_SELECT_TOTAL',
   'MAX_SELECT_VALUES', 'MAX_STEP_TIMEOUT_MS', 'MAX_TEXT_BYTES', 'MAX_TYPED', 'METHOD_NOT_FOUND', 'MIME', 'MIN_PROVE_MS', 'NO_REVIEW_DIGEST',
@@ -37,7 +37,7 @@ const EXPORTS = [
   'readPathTooBroad', 'readPostLabel', 'readPostsProblem', 'renderSnapshot', 'renderVars', 'repairKind', 'repairPrecondition',
   'requestFrame', 'resolveGoto', 'resolveUnique', 'responseText', 'reviewDesktopLocator', 'reviewLocator', 'runAgentLoop', 'runDesktopTask',
   'runSteps', 'runTask', 'runnerAddress', 'runnerConnected', 'runnerError', 'sanitizeFileName', 'screenshotMasks', 'scriptHash',
-  'scrubTrace', 'settle', 'shownFailure', 'shownUrl', 'signDesktopSteps', 'signScript', 'signSteps', 'snapshot', 'sniffMime', 'startHostOf',
+  'scrubTrace', 'settle', 'shownFailure', 'shownUrl', 'signDesktopSteps', 'signScript', 'signSteps', 'snapshot', 'sniffMime', 'startHostOf', 'statedIdPattern',
   'stepChanges', 'stopTrace', 'stripShownPrefix', 'substituteVars', 'toErrorCode', 'totp', 'unsignedWrites', 'validateScript', 'verbOf',
   'verifyRows', 'verifyScript', 'violationMessage', 'wantTrace',
 ];

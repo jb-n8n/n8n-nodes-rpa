@@ -6,7 +6,7 @@ on a form, and n8n runs them. The first bot needs no AI model and no email serve
 Docker with Compose, `openssl`, and a copy of this repository.
 
 The sample site is the **sandbox**: a small site in this repository that changes its layout when you ask it to. Steps
-1 to 6 are Part 1. [Part 2](#part-2-let-it-repair-itself) adds an AI chat model, so that a bot repairs itself when the
+1 to 5 are Part 1. [Part 2](#part-2-let-it-repair-itself) adds an AI chat model, so that a bot repairs itself when the
 site changes. To move a bot you already have instead, see [Move a bot](move-a-bot.md).
 
 ## 1. Start n8n and the browser
@@ -35,39 +35,7 @@ The stack runs:
 Open http://localhost:5678 and create the owner account. If the page does not show the setup form yet, n8n is still
 starting: reload after a minute. When n8n offers its own Assistant, choose **Set up later in Settings**.
 
-## 2. Set up the import form with one command
-
-The **import form** is an n8n form where you upload a bot, read its steps and approve them. One command sets it up.
-
-1. In n8n, make an API key, a key that lets a program act as you in n8n: **Settings → n8n API → Create API key**.
-   Give it a label, keep the expiry, choose **Save**, and copy the key with the copy button next to it.
-2. In the repository folder, run the setup command. It is already installed in the n8n container. The first part of
-   the line hands it the browser token from `.env`:
-
-   ```bash
-   RPA_BROWSER_TOKEN="$(sed -n 's/^BROWSER_TOKEN=//p' .env)" docker compose exec -e RPA_BROWSER_TOKEN n8n /opt/n8n-rpa/node_modules/.bin/n8n-nodes-rpa setup --browser-url ws://browser:3000/
-   ```
-
-3. Paste the API key when it asks `n8n API key (not shown):`. The terminal shows nothing while you paste. Answer `n`
-   when it asks `Connect a Windows machine now?`.
-
-The command creates two **credentials** (a credential is where n8n keeps an address or a key, with its secret): **RPA
-Browser**, the browser's address and token, and **RPA Step Signing**, a key that marks steps as approved. The bot runs
-only steps whose signature matches that key. The command also creates the workflow **RPA: 5 Import a bot** and
-publishes it, with you as its approver. Near the end it prints:
-
-```text
-The import form is ready.
-  Address:    http://localhost:5678/form/<id>
-  Sign-in:    the form opens with your n8n sign-in. Who approves is recorded as the n8n user who approved.
-```
-
-Keep the address. The command's last line is about the API key: it can do everything you can in n8n, so remove it
-now. In **Settings → n8n API**, open the key's **⋯** menu and choose **Revoke**. The signing key stays in n8n, and n8n
-does not show it again. The command's other options, and how to run it for an n8n outside this stack
-(`npx n8n-nodes-rpa setup`), are in step 4 of the [desktop bot guide](desktop-bot.md#4-import-and-approve).
-
-## 3. Add the sample site's login
+## 2. Add the sample site's login
 
 A **Site Login** is the credential for one site: its username, password and one-time code secret, and the pages the
 bot may open. The bot types the password only on the pages listed there. The steps do not contain it, and the bot
@@ -82,16 +50,46 @@ fields. The values are the sandbox's sample values, not real secrets.
 
 Click **Save**. n8n names it **RPA Site Login account**.
 
-## 4. Give the import form the Site Login
+## 3. Set up the import form with one command
 
-1. Open the workflow **RPA: 5 Import a bot**.
-2. Open the node **Import steps**. In **RPA Site Login**, pick **RPA Site Login account**. Under **Options**, choose
-   **Add Option → Allow Private Network** and turn it on: the sandbox is on your own network, and the bot opens
-   private addresses only with this on. Close the node.
-3. Open the node **Sign steps** and pick the same **RPA Site Login account**. Close the node.
-4. Click **Publish**, then **Publish** again in the window that opens.
+The **import form** is an n8n form where you upload a bot, read its steps and approve them. One command sets it up,
+with the Site Login of step 2.
 
-## 5. Import the sample bot and approve it
+1. In n8n, make an API key, a key that lets a program act as you in n8n: **Settings → n8n API → Create API key**.
+   Give it a label, keep the expiry, choose **Save**, and copy the key with the copy button next to it.
+2. In the repository folder, run the setup command. It is already installed in the n8n container. The first part of
+   the line hands it the browser token from `.env`:
+
+   ```bash
+   RPA_BROWSER_TOKEN="$(sed -n 's/^BROWSER_TOKEN=//p' .env)" docker compose exec -e RPA_BROWSER_TOKEN n8n /opt/n8n-rpa/node_modules/.bin/n8n-nodes-rpa setup --browser-url ws://browser:3000/ --site-login "RPA Site Login account" --allow-private-network
+   ```
+
+   `--site-login` picks the Site Login of step 2 by its name. `--allow-private-network` lets the import open the
+   sandbox, which is on your own network: the bot opens private addresses only with this on. Leave it out for a site on
+   the internet.
+3. Paste the API key when it asks `n8n API key (not shown):`. The terminal shows nothing while you paste. Answer `n`
+   when it asks `Connect a Windows machine now?`.
+
+The command creates two **credentials** (a credential is where n8n keeps an address or a key, with its secret): **RPA
+Browser**, the browser's address and token, and **RPA Step Signing**, a key that marks steps as approved. The bot runs
+only steps whose signature matches that key. The command also creates the workflow **RPA: 5 Import a bot**, with the
+Site Login on its nodes **Import steps** and **Sign steps** and **Allow Private Network** on, and publishes it, with
+you as its approver. It never reads the Site Login's values. Near the end it prints:
+
+```text
+The import form is ready.
+  Address:    http://localhost:5678/form/<id>
+  Sign-in:    the form opens with your n8n sign-in. Who approves is recorded as the n8n user who approved.
+  Private network: on. Imports may open sites on this computer or your own network, and the workflow the form hands over has it on too.
+```
+
+Keep the address. If **RPA: 5 Import a bot** is there already from an earlier run, the command leaves it as it is and
+says what to set on it in n8n. The command's last line is about the API key: it can do everything you can in n8n, so
+remove it now. In **Settings → n8n API**, open the key's **⋯** menu and choose **Revoke**. The signing key stays in
+n8n, and n8n does not show it again. The command's other options, and how to run it for an n8n outside this stack
+(`npx n8n-nodes-rpa setup`), are in step 4 of the [desktop bot guide](desktop-bot.md#4-import-and-approve).
+
+## 4. Import the sample bot and approve it
 
 The sample bot is the file `docs/samples/sandbox-line-items.steps.json` in this repository: a **step document**, the
 steps written as JSON. It signs in, opens the sandbox's SAP report screen, runs the line item report for company code
@@ -115,9 +113,9 @@ If the last page says `Nothing to approve`, it names the problem:
 |---|---|
 | `browser_unavailable: Could not connect to the browser server at ws://browser:3000/. ...` | Start the browser: `docker compose up -d browser`. |
 | `browser_unavailable: The browser server at ws://browser:3000/ refused the token. Check the Token in the RPA Browser credential.` | Copy the value after `BROWSER_TOKEN=` in `.env` into the RPA Browser credential's **Token**. |
-| `policy_violation: Blocked: sandbox:8080 resolves to a private network address. ...` | Turn on **Options → Allow Private Network** on **Import steps** (step 4). |
+| `policy_violation: Blocked: sandbox:8080 resolves to a private network address. ...` | Turn on **Options → Allow Private Network** on **Import steps** of **RPA: 5 Import a bot** and **Publish** it again, or run step 3 with `--allow-private-network` before the workflow exists. |
 
-## 6. Run it
+## 5. Run it
 
 1. In n8n, create a workflow, choose **⋯ → Import → From File**, and pick the downloaded
    `sandbox-line-items.workflow.json`.
@@ -134,9 +132,10 @@ To run the bot on a schedule, open **On a schedule**, set the time, turn the nod
 **Your own site.** Record it with Chrome's Recorder (DevTools → Recorder, then Export as JSON) and upload the export on
 the same form, with a Site Login for that site on **Import steps** and **Sign steps**. Turn **Allow Private Network**
 off for a public site. A bot that downloads a file needs the file's name or columns on **The file it downloads**. A
-bot that reads rows from a page needs an **ID Pattern (Regex)** on **Import steps**, the shape of the ID every row has
-([Steps](../reference/steps.md#id-pattern)). [Move a bot](move-a-bot.md) covers recordings, Playwright code, UiPath
-projects and step documents.
+bot that reads rows from a page is a step document whose `extract` or `extractTable` steps each have an `idPattern`,
+the shape of the ID every row has ([Steps](../reference/steps.md#id-pattern)). The import checks the rows with it, and
+the workflow it hands over does too. `docs/samples/sandbox-rows.steps.json` reads the sample site's notices this way.
+[Move a bot](move-a-bot.md) covers recordings, Playwright code, UiPath projects and step documents.
 
 **Where else the browser can run.** For your own n8n, install the node from **Settings → Community nodes → Install**
 (package `n8n-nodes-rpa`) and give the setup command the address of one of these with `--browser-url`:
@@ -164,14 +163,14 @@ the new way through the site, a fresh browser proves the repaired steps, and a p
 they run. This part builds a second bot from a goal written in plain words, the self-healing data feed, and then
 changes the sandbox. It uses what Part 1 made: the RPA Browser, the Site Login and the signing key.
 
-## 7. Add a chat model and an email server
+## 6. Add a chat model and an email server
 
 Create these credentials:
 - **Anthropic** (or another chat model n8n supports): your API key. The model writes the bot's first steps and
   repairs them when the site changes. It sees the pages, never the Site Login's password.
 - **SMTP**: Host `mailpit`, Port `1025`, SSL/TLS off, no user or password. Mailpit catches the approval emails.
 
-## 8. Import the two workflows
+## 7. Import the two workflows
 
 1. Import `packages/n8n-nodes-rpa/templates/3-approve-steps.json` (**RPA: 3 Approve steps**). Follow its green
    **Set once** note: the SMTP credential on the four email nodes, RPA Step Signing and RPA Site Login on **Sign steps**,
@@ -182,7 +181,7 @@ Create these credentials:
    credential on **Alert on failure**, and **RPA: 3 Approve steps** in **Approve steps**. In **Run steps**, open
    **Options** and turn on **Allow Private Network**.
 
-## 9. Build, approve and repair
+## 8. Build, approve and repair
 
 1. In the data feed, click **Execute workflow**. There are no steps yet, so the chat model explores the sandbox for a
    minute or two, signs in, finds the bulletins the **Goal** describes, and writes steps. A fresh browser then runs

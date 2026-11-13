@@ -274,6 +274,19 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
   const leftOut = leftOutOf(report);
   const withLeftOut = <P extends object>(proposal: P): P => (leftOut.length ? { ...proposal, leftOut: [...leftOut] } : proposal);
 
+  // The ID Pattern each step list is checked with: Import Steps' own, else the one its steps state (the idPattern of
+  // their extract and extractTable steps), so a step document that reads rows needs nothing more. The workflow file's
+  // Run steps carry the same one, typed.
+  const idPatterns = new Map<string, string>();
+  try {
+    for (const d of imported.drafts) {
+      const pattern = p.idPattern ?? engine.statedIdPattern(d.script);
+      if (pattern) idPatterns.set(d.name, regexOption(pattern, 'ID Pattern'));
+    }
+  } catch (error) {
+    return configError(mask(errorMessage(error)), p.name, { report });
+  }
+
   // Every import with steps comes with the workflow around them, for Import from file, whatever happens to its drafts: a
   // UiPath project's or a recording's flow, otherwise one pair per step list. It carries the run options the import used.
   let workflow: { binary: IBinaryKeyData; name: string } | undefined;
@@ -283,7 +296,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
       const file = workflowFile(flow, imported.drafts, {
         name: p.name, desktopDrafts, source, credentials: passedOn(node, (type) => hiddenByRunsOn(ctx, type)),
         ...(p.codeWorkflowId ? { codeWorkflow: { id: p.codeWorkflowId, timeoutSeconds: p.codeTimeoutMs / 1000 } } : {}),
-        run: { maxSeconds: p.common.maxSeconds, allowedHosts: p.common.allowedHosts, allowPrivateNetwork: p.common.allowPrivateNetwork },
+        run: { maxSeconds: p.common.maxSeconds, allowedHosts: p.common.allowedHosts, allowPrivateNetwork: p.common.allowPrivateNetwork, idPatterns },
       });
       workflow = { binary: { workflow: await ctx.helpers.prepareBinaryData(file.data, file.fileName, file.mimeType) }, name: file.name };
     } catch (error) {
@@ -308,7 +321,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
   }
   const outcomes: DraftOutcome[] = [
     ...asWritten.map((draft) => forApproval(engine, draft, siteLogin, containsSecret, mask, leftOut)),
-    ...(endpoint && toAdopt.length ? await adoptAll(ctx, engine, i, deps, { p, endpoint, siteLogin, siteLoginId, fixedPolicy, drafts: toAdopt, masker, textMasker }) : []),
+    ...(endpoint && toAdopt.length ? await adoptAll(ctx, engine, i, deps, { p, endpoint, siteLogin, siteLoginId, fixedPolicy, drafts: toAdopt, idPatterns, masker, textMasker }) : []),
   ];
   const failed = outcomes.filter((o): o is Extract<DraftOutcome, { kind: 'failed' }> => o.kind === 'failed');
   // Desktop drafts are never replayed: each one that carries no Site Login value goes to approval as imported.
@@ -511,7 +524,11 @@ function policyOf(p: ImportParams, siteLogin: SiteLogin | undefined, url: string
  */
 async function adoptAll(
   ctx: NodeContext, engine: Engine, i: number, deps: ImportStepsDeps,
-  c: { p: ImportParams; endpoint: BrowserEndpoint; siteLogin?: SiteLogin; siteLoginId?: string; fixedPolicy?: PortalPolicy; drafts: Draft[]; masker: Masker; textMasker: Masker },
+  c: {
+    p: ImportParams; endpoint: BrowserEndpoint; siteLogin?: SiteLogin; siteLoginId?: string; fixedPolicy?: PortalPolicy; drafts: Draft[];
+    /** Each draft's ID Pattern, by its name: Import Steps' own, else the one its steps state. */
+    idPatterns: ReadonlyMap<string, string>; masker: Masker; textMasker: Masker;
+  },
 ): Promise<DraftOutcome[]> {
   const { p, endpoint, siteLogin, siteLoginId } = c;
   const node = ctx.getNode();
@@ -549,7 +566,8 @@ async function adoptAll(
       outcomes.push({ draft, kind: 'failed', code: 'policy_violation', reason: errorMessage(error) });
       continue;
     }
-    const output: OutputSpec | undefined = p.idPattern ? { idPattern: p.idPattern } : undefined;
+    const idPattern = c.idPatterns.get(draft.name);
+    const output: OutputSpec | undefined = idPattern ? { idPattern } : undefined;
     const repair: AdoptInput['repair'] = p.aiRepair && modelConnected
       ? {
           model: lazyChatModel(() => ctx.getInputConnectionData(NodeConnectionTypes.AiLanguageModel, i)),

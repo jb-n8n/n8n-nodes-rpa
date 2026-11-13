@@ -225,6 +225,8 @@ export const IMPORT_NEEDS_SITE_LOGIN = 'The recording signs in: attach an RPA Si
 export const IMPORT_REFUSES_WRITES = 'Imported steps that submit a form or post to download cannot be adopted: repair and import never write.';
 export const IMPORT_NOT_ADOPTABLE =
   'These steps read no rows and download no file, so there is nothing to prove: the draft is returned for review but cannot be signed.';
+export const IMPORT_ROWS_NEED_ID =
+  'These steps read rows, but a step that reads them has no idPattern, so the replay cannot check the rows: the draft is returned for review but cannot be signed. Give each extract and extractTable step an idPattern, the shape of the ID every row has, such as INV-\\d{4}.';
 export const IMPORT_UNSUPPORTED_TARGET = 'Only JavaScript or TypeScript Playwright code can be imported; record with --target javascript.';
 export const IMPORT_EMPTY = 'Nothing in this file could be turned into steps.';
 export const IMPORT_PROOF_FAILED = 'The imported steps ran, but replaying them in a fresh browser did not pass the proof, so there is nothing to sign';

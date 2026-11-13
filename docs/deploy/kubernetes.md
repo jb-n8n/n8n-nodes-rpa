@@ -162,8 +162,8 @@ To set the credential up by hand instead: **+ → New credential → RPA Browser
    | `... had no free browser session for 60 s ...` | Every session was busy for the engine's whole 60 s wait: add capacity (section 8). |
    | A navigation timeout or a DNS error on the page | The browser's egress: `allowed_egress_cidrs`, `egress_except_cidrs`, or DNS (NodeLocal DNSCache, section 9). The attach examples don't expose `egress_except_cidrs`; add it to the example's `module` block. |
 
-2. **Hello world.** Open **RPA: Hello world**, pick the credentials and run it. It takes a screenshot and extracts a table, as in step 6 of the [browser bot guide](../guides/browser-bot.md#6-run-it). Its second node, **Extract the sandbox table**, reads `http://sandbox:8080`, the repository's compose sandbox, which your cluster doesn't have: point it at a table on a page of your own, or remove it.
-3. **First automation.** Follow the [browser bot guide](../guides/browser-bot.md#2-set-up-the-import-form-with-one-command) from step 2, with this browser's address in `--browser-url` and your own site in place of the sandbox: a Chrome Recorder export of it on the import form, or the self-healing data feed of Part 2. The sticky notes on each workflow list the credentials to pick.
+2. **Hello world.** Open **RPA: Hello world**, pick the credentials and run it. It takes a screenshot and extracts a table, as in step 5 of the [browser bot guide](../guides/browser-bot.md#5-run-it). Its second node, **Extract the sandbox table**, reads `http://sandbox:8080`, the repository's compose sandbox, which your cluster doesn't have: point it at a table on a page of your own, or remove it.
+3. **First automation.** Follow the [browser bot guide](../guides/browser-bot.md#2-add-the-sample-sites-login) from step 2, with a Site Login for your own site, this browser's address in `--browser-url`, and your own site in place of the sandbox: a Chrome Recorder export of it on the import form, or the self-healing data feed of Part 2. The sticky notes on each workflow list the credentials to pick.
 
 ## 8. Sizing
 
