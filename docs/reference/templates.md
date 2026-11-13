@@ -54,7 +54,10 @@ first, before anything reads or writes them.
   or with another signing key, or its row was changed after it was approved. The page cannot tell which, so it says to
   read every step before approving: approving signs the steps shown with this form's key, which is the way back after
   a new signing key; if the bot's workflow uses another Site Login, a version approved here will not run there. Its
-  first sentence stands again directly above the **Decision**. The page does not refuse.
+  first sentence stands again directly above the **Decision**. The page does not refuse. The comparison line then
+  never calls that version approved and never says unchanged: `<name>: these are the steps of the stored version 4,
+  whose signature does not fit this form (the warning says what that can mean).`, or `changed from the stored
+  version 4, whose signature does not fit this form: …`, on the change path and for an upload alike.
 - **Review and approve** shows each step list: what it opens, whether it signs in, forms it submits, files it returns,
   what the replay proved, the steps it left out, and the numbered steps. For desktop steps it asks "Which of these steps
   save, send or submit?". The **Decision** is **Approve and sign** or **Reject**. A page left unanswered for an hour

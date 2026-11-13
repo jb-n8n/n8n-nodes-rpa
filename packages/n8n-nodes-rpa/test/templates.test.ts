@@ -2802,9 +2802,15 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       // a desktop signature binds, and the warning. Desktop steps bind no Site Login, so it names the key, and, as for
       // browser steps, a row changed after approval: the page cannot tell the two apart and says to read every step.
       const all = jsonFormFields(String(byName(t, REVIEW).parameters.jsonOutput), { $: nodesRan(after) });
+      // The comparison is with the stored row, whose signature does not fit: the line never calls it approved or unchanged.
+      const name = String(old.name);
+      const told = line.unchanged
+        ? `${name}: these are the steps of the stored version 1, whose signature does not fit this form (the warning says what that can mean).`
+        : line.compared.replace('the approved version 1:', 'the stored version 1, whose signature does not fit this form:');
+      expect(told).not.toMatch(/approved version|unchanged/);
       expect(all[0]).toEqual({
         fieldType: 'html',
-        html: `<p><b>${escapeHtml(line.compared)}</b></p><p>Desktop steps are signed for the app they start, without a Site Login.</p>`
+        html: `<p><b>${escapeHtml(told)}</b></p><p>Desktop steps are signed for the app they start, without a Site Login.</p>`
           + "<p><strong>⚠ Version 1 does not fit this form: it was signed with another signing key, or its row was changed after it was approved. This page cannot tell which. Read every step before you approve: approving signs the steps shown here with this form's key, which is the way back after a new signing key.</strong></p>",
       });
       const fields = all.slice(1);
@@ -2865,6 +2871,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(box).toContain('"2000"');
     const changed = await review(box.replace('"2000"', '"3000"'), { writes_0: ['Step 16: Click Save'], decision_0: 'Approve and sign' });
     expect(compare(ran, box.replace('"2000"', '"3000"'))).toBe(`${String(old.name)}: changed from the approved version 1: step 6: option "2000" → "3000".`);
+    // On the review page, where version 1 does not fit the new key: changed from the stored version, not the approved one.
+    expect(String(jsonFormFields(String(byName(t, REVIEW).parameters.jsonOutput), { $: nodesRan(changed.after) })[0].html))
+      .toContain(`<p><b>${String(old.name)}: changed from the stored version 1, whose signature does not fit this form: step 6: option &quot;2000&quot; → &quot;3000&quot;.</b></p>`);
     expect(String(changed.fields[0].html)).toContain('<li>Choose &quot;3000&quot; in Company code</li>');
     expect(changed.signed[0]).toMatchObject({ status: 'active', name: old.name });
     expect(String(changed.signed[0].steps)).toContain('"3000"');
@@ -2926,20 +2935,36 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const FIT = '⚠ Version 4 does not fit this form: it was signed for another Site Login than "Shop &lt;login&gt;", or with another signing key, or its row was changed after it was approved.';
     const READ = "This page cannot tell which. Read every step before you approve: approving signs the steps shown here with this form's key, which is the way back after a new signing key.";
     const WARNING = `<p><strong>${FIT} ${READ} If the bot's workflow uses another Site Login, a version approved here will not run there: put that Site Login on Import steps and Sign steps first.</strong></p>`;
-    expect(await head(row(KEY, 'site-b'), KEY, SHOP)).toBe(UNCHANGED + NAMED + WARNING);
+    // The comparison is with the stored row, whose signature does not fit: it is not called approved, nor unchanged (IB-3).
+    const STORED = '<p><b>feed: these are the steps of the stored version 4, whose signature does not fit this form (the warning says what that can mean).</b></p>';
+    expect(await head(row(KEY, 'site-b'), KEY, SHOP)).toBe(STORED + NAMED + WARNING);
     expect((await fieldsOf(row(KEY, 'site-b'), KEY, SHOP)).map((f) => f.fieldName ?? f.fieldType)).toEqual(['html', 'html', 'decision_0']);
     expect((await fieldsOf(row(KEY, 'site-b'), KEY, SHOP))[1].html).toBe(`<p><strong>${FIT} The warning at the top says what to do.</strong></p>`);
     // It fits: no line above the Decision either.
     expect((await fieldsOf(row(KEY, SHOP.id), KEY, SHOP)).map((f) => f.fieldName ?? f.fieldType)).toEqual(['html', 'decision_0']);
     // Signed with another key: the same warning (the row alone cannot tell the two apart), and it does not refuse.
-    expect(await head(row('o'.repeat(32), SHOP.id), KEY, SHOP)).toBe(UNCHANGED + NAMED + WARNING);
+    expect(await head(row('o'.repeat(32), SHOP.id), KEY, SHOP)).toBe(STORED + NAMED + WARNING);
+    // The row edited in the Data Table after it was approved (a value changed, the signature kept): the same.
+    const edited = { ...row(KEY, SHOP.id), steps: JSON.stringify({ ...doc, steps: [{ intent: 'Open the list', goto: `${SITE.url}/other` }] }) };
+    expect(await head(edited, KEY, SHOP)).toBe(STORED + NAMED + WARNING);
     // No Site Login on Sign steps: the line says so, and a version signed for one does not fit.
     const NONE = '<p>Signs for no RPA Site Login. The workflow that runs the bot must have none.</p>';
     expect(await head(row(KEY), KEY)).toBe(UNCHANGED + NONE);
-    expect(await head(row(KEY, SHOP.id), KEY)).toBe(UNCHANGED + NONE + `<p><strong>⚠ Version 4 does not fit this form: it was signed for a Site Login, which this form does not have, or with another signing key, or its row was changed after it was approved. ${READ} If the bot's workflow uses a Site Login, a version approved here will not run there: put that Site Login on Import steps and Sign steps first.</strong></p>`);
+    expect(await head(row(KEY, SHOP.id), KEY)).toBe(STORED + NONE + `<p><strong>⚠ Version 4 does not fit this form: it was signed for a Site Login, which this form does not have, or with another signing key, or its row was changed after it was approved. ${READ} If the bot's workflow uses a Site Login, a version approved here will not run there: put that Site Login on Import steps and Sign steps first.</strong></p>`);
     // No key, signature or Site Login data is shown.
     const shown = await head(row(KEY, 'site-b'), KEY, SHOP);
     for (const secret of [KEY, String(row(KEY, 'site-b').signature), 'site-a', 'site-b']) expect(shown).not.toContain(secret);
+    // The upload path: a file uploaded under the name of a running bot. Its step list's line follows the same rule.
+    const uploaded = async (r: IDataObject) => {
+      const base: Record<string, INodeExecutionData[][]> = { Settings: [[{ json: { name: 'feed', ...settingsJson() } }]], 'Running versions': [[{ json: r }]] };
+      base['What it replaces'] = [[{ json: evaluate(String(byName(t, 'What it replaces').parameters.jsonOutput), { $: nodesRan(base) }) as IDataObject }]];
+      const fields = reviewFields({ $: nodesRan(await checkBeforeReview({ ...base, 'Import steps': [[{ json: {} }], [next()]] }, KEY, SHOP)) });
+      return /<p><b>(.*?)<\/b><\/p>/.exec(String(fields[0].html))?.[1];
+    };
+    expect(await uploaded(row(KEY, SHOP.id))).toBe('feed: unchanged from the approved version 4.');
+    // The file holds the steps as approved; the edited row differs from them, and the line says so without "approved".
+    expect(await uploaded(edited)).toBe('feed: changed from the stored version 4, whose signature does not fit this form: step 1: goto &quot;https://erp.example.com/other&quot; → &quot;https://erp.example.com/list&quot;.');
+    expect(await uploaded(row('o'.repeat(32), SHOP.id))).toBe('feed: these are the steps of the stored version 4, whose signature does not fit this form (the warning says what that can mean).');
 
     // A new bot: no approved version to check, only the line. Sign steps' check gets an empty item.
     const fresh = await checkBeforeReview({ Settings: [[{ json: { name: 'feed', ...settingsJson() } }]], 'Import steps': [[{ json: {} }], [next()]] }, KEY, SHOP);

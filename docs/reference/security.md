@@ -145,7 +145,9 @@ an **RPA Step Signing** credential that its own project owns, and never one of t
   Sign Steps refuses steps that hold a Site Login secret, and a secret variable appears in steps only by its name.
   Steps still show the sites, apps and fields they use and the other values they type. The page says who can open it.
   The review page's first line, worked out in n8n from the row it read, says whether, where and how the steps submitted
-  differ from the approved version, so a slip in the box shows before anyone approves.
+  differ from the approved version, so a slip in the box shows before anyone approves. It compares with the row as
+  stored: when that row's signature does not fit the form, the line speaks of the stored version, never of the
+  approved one, and never says unchanged.
 - **An old key or an edit.** A row signed with an older key and a row changed in the Data Table after it was approved
   look the same to the current key: neither verifies, and the old key is gone. The row's `hash` column is not keyed,
   so whoever changed the steps could also change it. The form therefore cannot refuse an edited row. It says so on
