@@ -11,6 +11,21 @@ public sealed class ImportFormTests : IDisposable
         if (Directory.Exists(_folder)) Directory.Delete(_folder, recursive: true);
     }
 
+    [Fact]
+    public void The_recorder_never_reads_the_clipboard()
+    {
+        // Any web page or app can put text on the clipboard: an address taken from it could lead the person to a
+        // look-alike form that collects the n8n sign-in. The bar only puts the recording's path there (SetDataObject).
+        var reads = new System.Text.RegularExpressions.Regex(@"Clipboard\s*\.\s*(Get|Contains)|GetClipboardData|OpenClipboard|GetDataObject|GetDataPresent|IsClipboardFormatAvailable");
+        var sources = Directory.GetFiles(Fakes.RepoPath("desktop", "recorder", "src"), "*.cs", SearchOption.AllDirectories)
+            .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                        && !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .ToList();
+        Assert.Contains(sources, f => Path.GetFileName(f) == "RecorderBar.cs");
+        Assert.All(sources, f => Assert.False(reads.IsMatch(File.ReadAllText(f)), $"{f} reads the clipboard"));
+        Assert.Contains("Clipboard.SetDataObject(path", File.ReadAllText(sources.First(f => Path.GetFileName(f) == "RecorderBar.cs")));
+    }
+
     [Theory]
     [InlineData("https://n8n.example.com/form/import-a-bot", "https://n8n.example.com/form/import-a-bot")]
     [InlineData("  HTTPS://N8N.Example.com:8443/form/x?y=1#z \r\n", "https://n8n.example.com:8443/form/x?y=1#z")]
