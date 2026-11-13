@@ -242,7 +242,10 @@ foreach ($service in $services) {
       if ($ShowTokens) { $Host.UI.WriteLine($made.Line) } else { Write-Output $made.Line }
     } else { Write-Output ('{0} connection line: {1}' -f $service.Name, $made.Problem) }
   } else { Write-Output ('{0} connection line: not known yet (the program has not started)' -f $service.Name) }
-  foreach ($address in $addresses) { Write-Output ('{0} URL: wss://{1}:{2}{3}' -f $service.Name, $address, $service.Port, $service.Path) }
+  # With -Address, the URL for the separate fields names the same address as the line.
+  $urlHosts = $addresses
+  if ($givenAddress) { $urlHosts = @($lineHost) }
+  foreach ($address in $urlHosts) { Write-Output ('{0} URL: wss://{1}:{2}{3}' -f $service.Name, $address, $service.Port, $service.Path) }
   if ($service.Fingerprint) { Write-Output ('{0} fingerprint: {1}' -f $service.Name, $service.Fingerprint) }
   else { Write-Output ('{0} fingerprint: not known yet (the program has not started)' -f $service.Name) }
   if ($listening -notcontains $service.Port) { Write-Output $notListening }

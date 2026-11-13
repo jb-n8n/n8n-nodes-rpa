@@ -3731,6 +3731,14 @@ Describe 'Show-RpaConnection.ps1' {
       ($output -join "`n") | Should -Not -Match "-Address <|The line's address"
     }
 
+    It 'with -Address names that address in the URL for the separate fields too, and no other' {
+      $output = @(& $script:ShowScript -Address 'fd00::20')
+      @($output | Where-Object { $_ -like 'Runner URL:*' }) | Should -BeExactly @(('Runner URL: wss://[fd00::20]:{0}/rpa/v1' -f $script:RunnerPort))
+      @($output | Where-Object { $_ -like 'Browser URL:*' }) | Should -BeExactly @(('Browser URL: wss://[fd00::20]:{0}' -f $script:BrowserPort))
+      $output = @(& $script:ShowScript -Address 'rpa.corp.example')
+      @($output | Where-Object { $_ -like 'Runner URL:*' }) | Should -BeExactly @(('Runner URL: wss://rpa.corp.example:{0}/rpa/v1' -f $script:RunnerPort))
+    }
+
     It 'without the browser says one token and one line' {
       $file = Join-Path $script:MadeUpInstall 'install.json'
       Set-Content -LiteralPath $file -Value ($script:InstallJson -replace '"browser":\s*true', '"browser": false') -Encoding UTF8
