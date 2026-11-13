@@ -938,10 +938,17 @@ describe('buildWorkflow', () => {
 
     // Stop and Error: the code, the steps, the message and what to do, from the row Log failed run shaped.
     const message = (row: object) => shape(STOP_MESSAGE, {}, { 'Log failed run': row }) as unknown as string;
-    expect(message(failedRow)).toBe(`The run failed: locked_out on bot. ${lockedOut.message} ${GUIDANCE.locked_out}`);
+    expect(message(failedRow)).toBe(`The run failed: locked_out on bot. ${lockedOut.message} What to do: ${GUIDANCE.locked_out}`);
     expect(message(shape(LOG_FAILED_ROW, lockedOut, first))).toBe('The run failed: locked_out on bot. Run steps in this execution has the message.');
+    // The message is a sentence of its own: its first letter upper case and a full stop at its end, then what to do.
     expect(message(shape(LOG_FAILED_ROW, { error: 'Steps is empty', message: 'Steps is empty', details: { code: null, name: 'bot', guidance: CONFIG_GUIDANCE } }, all)))
-      .toBe(`The run failed: config_error on bot. Steps is empty ${CONFIG_GUIDANCE}`);
+      .toBe(`The run failed: config_error on bot. Steps is empty. What to do: ${CONFIG_GUIDANCE}`);
+    const notAllowed = 'the desktop runner is not allowed to start ErpDemo.exe. On the Windows machine, allow it';
+    expect(message({ code: 'policy_violation', name: 'erp-line-items', message: notAllowed, guidance: GUIDANCE.policy_violation }))
+      .toBe(`The run failed: policy_violation on erp-line-items. The desktop runner is not allowed to start ErpDemo.exe. On the Windows machine, allow it. What to do: ${GUIDANCE.policy_violation}`);
+    // A message cut at 300 characters ends in an ellipsis, and one that ends a sentence gets no second full stop.
+    expect(message({ code: 'drift_detected', name: 'bot', message: 'Open the list: no match…', guidance: '' })).toBe('The run failed: drift_detected on bot. Open the list: no match…');
+    expect(message({ code: 'drift_detected', name: 'bot', message: 'Is it running?', guidance: 'Check.' })).toBe('The run failed: drift_detected on bot. Is it running? What to do: Check.');
     // Layout: a lone Run steps has Log run right of it and the failure row below.
     const [rx, ry] = byName(w, 'bot').position;
     expect(log.position).toEqual([rx + 240, ry]);

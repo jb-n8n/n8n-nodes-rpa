@@ -278,12 +278,13 @@ export const LOG_FAILED_ROW = rowExpression([
   "file: ''", "account: $json.details?.account ?? ''",
 ].join(', '));
 /**
- * Stop and Error's message, from the row Log failed run shaped (also when writing it failed): the code, the step list's
- * name, the message and what to do. A table made by an earlier version has no message or guidance column: then it
- * points to Run steps.
+ * Stop and Error's message, from the row Log failed run shaped (also when writing it failed): the code and the step
+ * list's name, the message as a sentence of its own (its first letter upper case, a full stop at its end), then
+ * "What to do:" and the guidance. A table made by an earlier version has no message or guidance column: then it points
+ * to Run steps.
  */
 export const STOP_MESSAGE =
-  `={{ ((r) => 'The run failed: ' + (r.code || 'config_error') + ' on ' + (r.name || 'the steps') + '.' + (r.message ? ' ' + r.message : '') + (r.guidance ? ' ' + r.guidance : '') + (r.message || r.guidance ? '' : ' Run steps in this execution has the message.'))($('${LOG.failed}').first().json) }}`;
+  `={{ ((r) => 'The run failed: ' + (r.code || 'config_error') + ' on ' + (r.name || 'the steps') + '.' + (r.message ? ' ' + String(r.message).charAt(0).toUpperCase() + String(r.message).slice(1) + (/[.!?…]$/.test(String(r.message)) ? '' : '.') : '') + (r.guidance ? ' What to do: ' + r.guidance : '') + (r.message || r.guidance ? '' : ' Run steps in this execution has the message.'))($('${LOG.failed}').first().json) }}`;
 const RUNS_ONCE = 'Run steps runs once for all items here, not once per item, because Get active steps has Execute Once on.';
 /** The binary property Run steps gives the draft's last top-level download or expected file (file_<index>, see the engine's binaryName). */
 function downloadProperty(draft: Draft | DesktopDraft): string | undefined {

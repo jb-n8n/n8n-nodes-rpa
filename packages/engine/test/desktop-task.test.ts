@@ -434,7 +434,7 @@ describe('desktop task: refusals and runner errors', () => {
   it('an app outside the runner policy is refused at launch', async () => {
     const r = failed(await run(doc(SIGN_IN, { app: { exe: 'C:\\Windows\\notepad.exe' } })));
     expect({ code: r.code, message: r.message }).toEqual({ code: 'policy_violation', message: runnerAppNotAllowed('notepad.exe') });
-    expect(r.message).toContain('policy apply <the recording\'s .policy-change.json file>');
+    expect(r.message).toContain('policy apply followed by the path of the recording\'s .policy-change.json file');
     expect(runner!.run).toBeUndefined();
   });
 

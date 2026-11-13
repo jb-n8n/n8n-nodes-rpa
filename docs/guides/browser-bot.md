@@ -57,11 +57,12 @@ The **import form** is an n8n form where you upload a bot, read its steps and ap
 with the Site Login of step 2.
 
 1. In n8n, make an API key, a key that lets a program act as you in n8n: **Settings → n8n API → Create API key**.
-   Give it a label and keep the expiry. Under **Scopes**, choose **Custom** and tick only the scopes the command uses:
-   `workflow:create`, `workflow:read`, `workflow:update`, `workflow:delete`, `workflow:list` and `workflow:activate`
-   (group **Workflow and executions**), `credential:create`, `credential:update` and `credential:list` (group
-   **Credentials and variables**), and `user:read` (group **Members**: the command reads your address there for the
-   approver list). A key with these is enough. Choose **Save**, and copy the key with the copy button next to it.
+   Give it a label, leave **Scopes** on **All**, and set **Expiration** to **7 days**, the shortest in its list. The
+   command uses the key once, and you revoke it right after (below). Choose **Save**, and copy the key with the copy
+   button next to it.
+
+   The stricter way: under **Scopes**, choose **Custom** and tick only the scopes the command uses:
+   `workflow:create`, `workflow:read`, `workflow:update`, `workflow:delete`, `workflow:list`, `workflow:activate`, `credential:create`, `credential:read`, `credential:update`, `credential:list`, `user:read`.
 2. In the repository folder, run the setup command. It is already installed in the n8n container. The first part of
    the line hands it the browser token from `.env`:
 
@@ -90,8 +91,9 @@ The import form is ready.
 
 Keep the address. If **RPA: 5 Import a bot** is there already from an earlier run, the command leaves it as it is and
 says what to set on it in n8n. The command's last line is about the API key: it can act as you in n8n within its
-scopes, so remove it now. In **Settings → n8n API**, open the key's **⋯** menu and choose **Revoke**. The signing key stays in
-n8n, and n8n does not show it again. The command's other options, and how to run it for an n8n outside this stack
+scopes, so revoke it now. In **Settings → n8n API**, open the key's **⋯** menu and choose **Revoke**. The signing key stays in
+n8n, and n8n does not show it again. The `Signing key:` line says how to keep a copy: you need one only to move signed
+bots to another n8n, so otherwise skip it. The command's other options, and how to run it for an n8n outside this stack
 (`npx n8n-nodes-rpa setup`), are in step 2 of the [desktop bot guide](desktop-bot.md#2-set-up-n8n-with-one-command).
 
 ## 4. Import the sample bot and approve it
@@ -104,14 +106,12 @@ steps written as JSON. It signs in, opens the sandbox's SAP report screen, runs 
    may run with your n8n login: choose **Allow access**.
 2. In **Bot file**, choose `docs/samples/sandbox-line-items.steps.json`. Leave **Source (optional)** as it is. In
    **Name for the steps**, type `sandbox-line-items`. Click **Submit**.
-3. The next page, **The file it downloads**, asks which file the bot downloads. The sample's last step already says
-   it, so leave both boxes empty and click **Import**.
-4. The import runs the steps once and then again in a fresh browser, to prove them. This takes about half a minute.
+3. The import runs the steps once and then again in a fresh browser, to prove them. This takes about half a minute.
    The next page lists the steps, says where the bot signs in, and shows the proof: `downloaded
    "LINEITEMS_1000_2026-09-01_2026-09-30.csv"`. The page builds each step's sentence from the step itself. Words in
    brackets are the file's own description of a step where it says something else: read those twice. The sample shows
    none. Under **Decision**, choose **Approve and sign**, then **Submit**.
-5. The last page says `Approved and signed: sandbox-line-items v1 is now the version that runs under that name.` Your
+4. The last page says `Approved and signed: sandbox-line-items v1 is now the version that runs under that name.` Your
    browser downloads `sandbox-line-items.workflow.json`, the workflow that runs the bot.
 
 If the last page says `Nothing to approve`, it names the problem:
@@ -139,7 +139,7 @@ do. **Stop and Error** and the run log's row show it too.
 To run the bot on a schedule, open **On a schedule**, set the time, turn the node on, and **Publish** the workflow.
 
 **A bot that reads rows.** `docs/samples/sandbox-rows.steps.json` signs in and reads the sample site's notices. Import
-it as in step 4, with the name `sandbox-rows`, and leave **The file it downloads** empty. Run its workflow as in step 5.
+it as in step 4, with the name `sandbox-rows`. Run its workflow as in step 5.
 The RPA node returns one item with a `rows` list: one entry per notice, with its `id`, `Bulletin`, `Date`, `Type`,
 `Models` and `Summary` (the title and text). For one item per row, add n8n's **Split Out** node after it, with
 **Fields To Split Out** `rows`. A bot that reads rows is a step document whose `extract` or `extractTable` steps each have an
@@ -148,8 +148,8 @@ with it, and the workflow it hands over does too.
 
 **Your own site.** Record it with Chrome's Recorder (DevTools → Recorder, then Export as JSON) and upload the export on
 the same form, with a Site Login for that site on **Import steps** and **Sign steps**. Turn **Allow Private Network**
-off for a public site. A bot that downloads a file needs the file's name or columns on **The file it downloads**. A
-recording made on the sample site in your own browser holds `localhost:8080`: change it to `sandbox:8080` in the file
+off for a public site. A recording that downloads a file needs the file's name or columns on the page **The file it
+downloads**, which the form shows for every upload but a step document or an RPA recording. A recording made on the sample site in your own browser holds `localhost:8080`: change it to `sandbox:8080` in the file
 before you upload it, because the bot's browser runs inside the stack, where the sample site is named `sandbox`.
 [Move a bot](move-a-bot.md) covers recordings, Playwright code, UiPath projects and step documents.
 

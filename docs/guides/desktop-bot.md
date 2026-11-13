@@ -45,9 +45,10 @@ machine by another name or address (a NAT, a tunnel), run the command again with
 ## 2. Set up n8n with one command
 
 One command makes the **import form**, where you upload a bot, read its steps and approve them, and connects the
-Windows machine. In n8n, make an API key: **Settings → n8n API → Create API key**, with an expiry. Under **Scopes**,
-choose **Custom** and tick `workflow:create`, `workflow:read`, `workflow:update`, `workflow:delete`, `workflow:list`,
-`workflow:activate`, `credential:create`, `credential:read`, `credential:update`, `credential:list` and `user:read`.
+Windows machine. In n8n, make an API key: **Settings → n8n API → Create API key**. Leave **Scopes** on **All**, and
+set **Expiration** to **7 days**, the shortest in its list. The command uses the key once, and you revoke it right after
+(below). The stricter way: under **Scopes**, choose **Custom** and tick only the scopes the command uses:
+`workflow:create`, `workflow:read`, `workflow:update`, `workflow:delete`, `workflow:list`, `workflow:activate`, `credential:create`, `credential:read`, `credential:update`, `credential:list`, `user:read`.
 
 With the compose stack, run the command inside the n8n container, in the repository folder. Nothing to install:
 
@@ -65,8 +66,10 @@ while you paste. Close the PowerShell window on Windows afterwards: the line hol
 The command creates the **RPA Desktop Runner** credential with the line, an **RPA Step Signing** key, and the workflow
 **RPA: 5 Import a bot** with both on its node **Import steps**, and publishes it. **Signing** marks steps as approved:
 the bot runs only steps whose signature matches. You are the approver (`--approver` names another). Then n8n tests
-the connection: the line that starts `tested` says `Connected to the desktop runner`, or why it could not. A new line
-goes into the credential's **Connection Line** in n8n. The command ends with:
+the connection: the line that starts `tested` says `Connected to the desktop runner`, or why it could not. For a new
+line, such as one printed again with `-Address`, run the command again and paste it: it asks
+`Replace the Connection Line of "RPA Desktop Runner" with the line for …? (y/N)` before it changes anything. The
+command ends with:
 
 ```text
 The import form is ready.
@@ -76,8 +79,9 @@ The import form is ready.
 
 If you made an RPA Desktop Runner credential in n8n already, answer `n` instead: the command picks it when your project
 has only that one, and names it. With several, add `--desktop-runner "<its name>"`. It never reads a credential's
-values. The signing key stays in n8n, which does not show it again: the command's note says how to keep a copy. A lost
-key means approving every bot again ([sign it again](move-a-bot.md#change-an-approved-bot-or-sign-it-again)). The
+values. The signing key stays in n8n, which does not show it again. The `Signing key:` line says how to keep a copy:
+you need one only to move signed bots to another n8n, so otherwise skip it. Without a copy, a lost key means approving
+every bot again ([sign it again](move-a-bot.md#change-an-approved-bot-or-sign-it-again)). The
 command's last line is about the API key: revoke it when you are done (**Settings → n8n API**, **⋯**, **Revoke**).
 Run the command again at any time: it reuses only what your own project holds, asks first in a shared project, and
 leaves a workflow there already as it is. `--form-login basic` serves approvers with no n8n account. To set the form
@@ -124,8 +128,8 @@ you use n8n from, and open the form there. [Record a bot](record-a-bot.md) expla
    <img src="../images/import-review-page.png" alt="The Review and approve page for the ERP Demo recording: the numbered steps, the tick boxes and the decision" width="360">
 
 3. The last page says `Approved and signed: erp-line-items v1 is now the version that runs under that name.` The
-   browser downloads `erp-line-items.workflow.json`, the workflow that runs the bot. The signed row records your n8n
-   address as **approvedBy**. Someone not on **Sign steps → Approver Allowlist** cannot approve: the last page says
+   browser downloads `erp-line-items.workflow.json`, the workflow that runs the bot. The signed row records the email
+   address of your n8n user as **approvedBy**. Someone not on **Sign steps → Approver Allowlist** cannot approve: the last page says
    `Sign Steps refused` and nothing is signed.
 
 ## 5. Run it
@@ -134,7 +138,8 @@ you use n8n from, and open the form there. [Record a bot](record-a-bot.md) expla
    **Downloads** folder of the computer you approved on.
 2. The RPA node is named after your recording (here **ErpDemo recording**). Its **RPA Desktop Runner** and **RPA Step
    Signing** credentials are already picked: the setup command put them on the import form, and the form passes them
-   on. Its **Runs On** is **A Windows desktop app**, so the node shows only the three slots a desktop bot uses.
+   on. Its **Runs On** is **A Windows desktop app**, so the node shows only the three slots a desktop bot uses, and no
+   **Start URL**.
 3. The third slot is yours: the password. On that node, create an **RPA Secret Variables** credential with one
    variable, the name the node's note gives (such as `password`) and the value `demo1234`. As the gold note says, put
    `ErpDemo.exe` in its **May Be Typed Into** to keep the password to this app. **Options → Variables** already holds

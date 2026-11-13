@@ -258,7 +258,7 @@ export const runnerNoTcpAnswer = (where: string, seconds: number, privateHost?: 
   `Could not connect to the desktop runner at ${where} (no answer within ${seconds} s). Check, in this order: `
   + '1. The address in the Connection Line is one n8n can reach. '
   + (privateHost
-    ? `${privateHost} is a private address: if n8n is outside the Windows machine's network, print the line there with rpa connection -Address <the name or address n8n can reach> and paste it again. `
+    ? `${privateHost} is a private address: if n8n is outside the Windows machine's network, print the line there in an administrator PowerShell with & "C:\\Program Files\\RPA Runner\\rpa.cmd" connection -ShowTokens -Address followed by the name or address n8n can reach, and paste it again. `
     : '')
   + '2. The port is open to n8n\'s address (Install-Rpa.ps1 -AllowFrom, and any firewall on the way). '
   + '3. The Windows machine is on and the runner runs there (rpa status).';
@@ -274,7 +274,7 @@ export const runnerAppMissing = (exe: string) =>
   `the desktop runner could not start ${exe}: it is not installed at the path the runner's policy names (allowedApps[].path). Install it there or correct the policy`;
 /** app.launch refused because the app is not in the runner's allowedApps (the runner's own text, exactly, is what task.ts recognises). */
 export const runnerAppNotAllowed = (exe: string) =>
-  `the desktop runner is not allowed to start ${exe}. On the Windows machine, allow it: in the RPA Recorder choose "Allow this app…" after saving a recording of it, or as an administrator run: & "C:\\Program Files\\RPA Runner\\rpa.cmd" policy apply <the recording's .policy-change.json file>`;
+  `the desktop runner is not allowed to start ${exe}. On the Windows machine, allow it: in the RPA Recorder choose "Allow this app…" after saving a recording of it, or as an administrator run: & "C:\\Program Files\\RPA Runner\\rpa.cmd" policy apply followed by the path of the recording's .policy-change.json file`;
 export const desktopNotInteractive = (locked: boolean) =>
   locked ? 'the desktop runner\'s Windows session is locked: unlock it or sign the runner user in again' : 'the desktop runner is not in an interactive Windows session';
 /** A desktop step the runner refused: the step (numbered from 1, as the review page numbers it), then the runner's own words. */

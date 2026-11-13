@@ -3,7 +3,7 @@ import type { ErrorCode } from 'n8n-rpa-engine';
 
 /** What a person should do about each code. Shown as the error description in n8n. */
 export const GUIDANCE: Record<ErrorCode, string> = {
-  login_failed: 'The site rejected the username or password. Correct them in the RPA Site Login credential: the next run tries once more. If they were right, type a new value (any text, such as today\'s date) in Options → Login Breaker Reset Key.',
+  login_failed: 'The site rejected the username or password. Correct them in the RPA Site Login credential, or, when its Username and Password are expressions, in the data they read: the next run tries once more. If they were right, type a new value (any text, such as today\'s date) in Options → Login Breaker Reset Key.',
   account_locked: 'The site says the account is locked. Unlock it with the site owner, then change Options → Login Breaker Reset Key.',
   auth_blocked: 'The site asked for a second factor that this run could not answer; the first line says which. A push message or a hardware key needs a person to sign in.',
   site_down: 'The site did not answer, returned a server error, or the first page did not finish loading in time. Try again later.',
@@ -12,8 +12,8 @@ export const GUIDANCE: Record<ErrorCode, string> = {
   not_found: 'The page or the data was not found.',
   incomplete: 'Not every row the page states was read, a capture failed, a limit was hit, the run timed out, or it was cancelled.',
   script_untrusted: 'Nothing ran: the steps are not signed, or their signature does not fit this node (another Step Signing key, Site Login, name, version or start site). Approve the steps again, or set the node up as it was when they were signed.',
-  policy_violation: 'The run tried something its rules do not allow and stopped; the first line says what. If that was meant, allow it where the first line says. A desktop step that saves or sends must be marked as a write when its steps are approved.',
-  locked_out: 'No login was tried, because an earlier login with this Site Login failed. Correct the username or password in the RPA Site Login credential and run again: a changed login gets one try. If the login was right, or the account is unlocked now, type a new value (any text) in Options → Login Breaker Reset Key.',
+  policy_violation: 'The run tried something its rules do not allow and stopped; the first line says what was refused. If that was meant, change the rule that refused it where it is kept: in the RPA Site Login, the RPA Secret Variables credential, this node\'s Options, or the desktop runner\'s policy on the Windows machine. For a desktop step that saves or sends, the rule is its mark as a write, set when its steps are approved.',
+  locked_out: 'No login was tried, because an earlier login with this Site Login failed. Correct the username or password in the RPA Site Login credential, or, when its Username and Password are expressions, in the data they read, and run again: a changed login gets one try. If the login was right, or the account is unlocked now, type a new value (any text) in Options → Login Breaker Reset Key.',
   busy: 'Another run using this Site Login or desktop runner is in progress. This run was skipped.',
   password_change_failed: 'The site did not confirm the new password: its change-password page came back, or still showed when the wait for its answer ran out (then the new password may or may not be in force). The login breaker stays closed. Keep the pending password, and check the site\'s password rules and the run variable that holds it.',
   runner_unavailable: 'n8n could not use the desktop runner; the first line says why. Check the RPA Desktop Runner credential, then run rpa status on the runner machine.',
@@ -54,6 +54,13 @@ export function guidanceFor(code: ErrorCode, message: string): string {
   if (code === 'locked_out' && message.includes('was changed earlier in this execution')) return PASSWORD_CHANGED_GUIDANCE;
   return GUIDANCE[code];
 }
+
+/**
+ * A failure's message as the node shows it. The engine marks a sign-in or detect outcome `detected:<outcome>: ` (or a
+ * bare `detected:<outcome>`) so that classify.ts can tell the code; the reader learns nothing from the mark, so it is
+ * left out, and a bare one keeps the outcome's name. guidanceFor and failedOnCode read the engine's own message.
+ */
+export const shownMessage = (message: string): string => message.replace(/detected:([A-Za-z0-9_]+)(?:: |$)/g, (whole, outcome: string) => (whole.endsWith(': ') ? '' : outcome));
 
 /**
  * The json of an item for n8n's error output. n8n replaces the json of any item that carries `item.error` with

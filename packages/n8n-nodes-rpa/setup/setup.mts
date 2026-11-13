@@ -34,7 +34,7 @@ import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { CREDENTIALS, parseConnectionLine } from '../nodes/Playwright/config.js';
 import {
-  browserCredentialData, clean, type Client, createClient, createRedactor, MIN_BROWSER_TOKEN_LENGTH, parseBrowserUrl, parseN8nUrl,
+  browserCredentialData, clean, type Client, createClient, createRedactor, isLoopback, MIN_BROWSER_TOKEN_LENGTH, parseBrowserUrl, parseN8nUrl,
 } from './n8n-api.mjs';
 
 const DEFAULT_URL = 'http://localhost:5678';
@@ -55,7 +55,9 @@ const NODE = { form: 'Import a bot', importSteps: 'Import steps', signSteps: 'Si
 const DOCS = 'https://github.com/jb-n8n/n8n-nodes-rpa/blob/main/docs';
 const INSTALL_DOC = `${DOCS}/reference/operator.md#install-the-node`;
 const LOST_KEY_DOC = `${DOCS}/reference/security.md#if-the-signing-key-is-lost-or-changed`;
-const WHERE_KEYS = 'Make an API key in n8n: Settings → n8n API → Create API key (as the owner or an admin).';
+const WHERE_KEYS = 'Make an API key in n8n: Settings → n8n API → Create API key (as the owner or an admin), with Scopes All and the shortest expiry, and revoke it when the setup is done.';
+/** The stricter key: only the scopes this command uses, as n8n names them under Scopes → Custom. */
+const SCOPES = 'workflow:create, workflow:read, workflow:update, workflow:delete, workflow:list, workflow:activate, credential:create, credential:read, credential:update, credential:list, user:read';
 const USAGE = [
   'Usage: npx n8n-nodes-rpa setup [--url <n8n address>] [--approver <email>] [options]',
   '',
@@ -63,7 +65,7 @@ const USAGE = [
   `and the workflow "${WORKFLOW_NAME}", published. Run it again at any time: it reuses what is there.`,
   '',
   `  --url <address>        n8n's address (default ${DEFAULT_URL}). http:// only on this machine.`,
-  '  --approver <email>     the n8n address of the person who approves: it goes into the Approver Allowlist of Sign steps.',
+  '  --approver <email>     the n8n email address of the person who approves: it goes into the Approver Allowlist of Sign steps.',
   "                         Default: the API key owner's address, when n8n tells it; else it asks.",
   "  --form-login basic     give the form a user name and password (Basic Auth) instead of n8n's sign-in, for approvers",
   '                         without an n8n account. The approver is then the address on the allowlist.',
@@ -77,7 +79,8 @@ const USAGE = [
   '  --site-login <name>    the RPA Site Login of the site your bots open, made in n8n before this runs: picks it by its name',
   '                         on Import steps and Sign steps. It is never made, read or changed here.',
   '  --desktop-runner <name>  the RPA Desktop Runner to pick on Import steps when your project has several. Without it and',
-  '                         without a Connection Line, the only one your project has is picked. It is never read or changed here.',
+  '                         without a Connection Line, the only one your project has is picked. It is never read. With a',
+  '                         Connection Line, it asks at a terminal whether to replace that credential\'s line.',
   '  --allow-private-network  turn on Allow Private Network on Import steps, for a site on this computer or your network.',
   '  --project-id <id>      the n8n project to work in (default: the API key owner\'s personal project). Only what that',
   '                         project owns is reused.',
@@ -87,7 +90,9 @@ const USAGE = [
   '',
   'Secrets never go in flags. The command asks for them, or reads them from the environment:',
   `  N8N_API_KEY            the n8n API key. ${WHERE_KEYS}`,
-  '  RPA_CONNECTION_LINE    the rpa-runner:// line of a Windows machine (optional): creates the RPA Desktop Runner credential.',
+  `                         The stricter way, Scopes Custom with only: ${SCOPES}`,
+  '  RPA_CONNECTION_LINE    the rpa-runner:// line of a Windows machine (optional): creates the RPA Desktop Runner credential,',
+  '                         or, for one your project has (that name, or --desktop-runner), asks whether to replace its line.',
   '  RPA_BROWSER_TOKEN      the browser service token, with --browser-url.',
 ].join('\n');
 
@@ -242,6 +247,8 @@ interface Inputs {
   keyExpires?: number | null;
   line?: string;
   browser?: { href: string; token: string };
+  /** n8n's own address for its forms, when n8n's environment gives it here (formBase); undefined otherwise. */
+  formBase?: string;
 }
 
 /** Everything typed or set before anything is sent: the address, the API key, the Connection Line, the browser. */
@@ -276,10 +283,7 @@ async function readInputs(options: Options, env: NodeJS.ProcessEnv): Promise<Inp
   }
 
   let line = (env.RPA_CONNECTION_LINE ?? '').trim() || undefined;
-  if (line && options.desktopRunner !== undefined) {
-    throw new Stop('Give a Connection Line (RPA_CONNECTION_LINE) or --desktop-runner, not both: the line makes an RPA Desktop Runner credential, the flag picks one you have. Nothing was sent to n8n.', 2);
-  }
-  // --desktop-runner picks one that exists: nothing to connect.
+  // --desktop-runner picks one that exists: nothing to connect, unless RPA_CONNECTION_LINE gives it a new line.
   if (!line && options.desktopRunner === undefined && interactive() && /^y(es)?$/i.test(await ask('Connect a Windows machine now? (y/N) '))) {
     say('On that machine, in an administrator PowerShell: & "C:\\Program Files\\RPA Runner\\rpa.cmd" connection -ShowTokens');
     line = (await askHidden('Paste the line that starts with rpa-runner:// (not shown): ')) || undefined;
@@ -295,7 +299,28 @@ async function readInputs(options: Options, env: NodeJS.ProcessEnv): Promise<Inp
     }
   }
   const claims = keyClaims(apiKey);
-  return { options, origin: n8n.origin, plaintext: n8n.plaintext, client: createClient({ base: n8n.base, apiKey, redact }), ...claims, line, browser };
+  return {
+    options, origin: n8n.origin, plaintext: n8n.plaintext, client: createClient({ base: n8n.base, apiKey, redact }), ...claims, line, browser,
+    formBase: formBase(env, new URL(n8n.origin).hostname),
+  };
+}
+
+/**
+ * n8n's own address for its forms, when this command runs where n8n does (it talks to n8n on this machine, as inside
+ * n8n's container): WEBHOOK_URL, n8n's address for webhooks and forms, else N8N_EDITOR_BASE_URL. n8n's public API does
+ * not tell it. Only an http(s) address without a user, a password, a query or a fragment, ending in "/"; undefined
+ * otherwise. Nothing is asked of that address: the form is checked at the address this command reaches n8n at.
+ */
+function formBase(env: NodeJS.ProcessEnv, reachedHost: string): string | undefined {
+  if (!isLoopback(reachedHost)) return undefined;
+  for (const value of [env.WEBHOOK_URL, env.N8N_EDITOR_BASE_URL]) {
+    const text = (value ?? '').trim();
+    if (!text) continue;
+    const url = URL.canParse(text) ? new URL(text) : undefined;
+    if (!url || (url.protocol !== 'http:' && url.protocol !== 'https:') || url.username || url.password || url.search || url.hash) continue;
+    return url.href.endsWith('/') ? url.href : `${url.href}/`;
+  }
+  return undefined;
 }
 
 /**
@@ -519,6 +544,29 @@ async function credential(client: Client, found: { mine?: any; others: any[] }, 
   return { ref: { id: String(r.json.id), name: spec.name }, created: true };
 }
 
+/**
+ * A Connection Line for an RPA Desktop Runner this run's project has: its line is replaced only when the person says yes
+ * at a terminal, to a question that names the new line's address and port (never its token or fingerprint). Without a
+ * terminal the old line stays, and it says how to replace it. Either way n8n tests the credential afterwards.
+ */
+async function offerLine(client: Client, ref: Ref, line: string): Promise<Ref> {
+  const what = `credential "${clean(ref.name, ref.id)}" (id ${clean(ref.id)})`;
+  // The address and port only: parsed by the node's own parser, which already took this line.
+  const to = new URL(parseConnectionLine('runner', line).url).host;
+  say(`reused   ${what}`);
+  if (!interactive()) {
+    say(`         its Connection Line stays as it is: this run replaces one only when you say so at a terminal. To use the line for ${to}, run this again in a terminal, or paste the line into the credential's Connection Line in n8n.`);
+    return ref;
+  }
+  if (!/^y(es)?$/i.test(await ask(`Replace the Connection Line of "${clean(ref.name, ref.id)}" with the line for ${to}? (y/N) `))) {
+    say('         its Connection Line stays as it is.');
+    return ref;
+  }
+  await replaceData(client, ref, RUNNER.type, { connectionLine: line });
+  say(`replaced Connection Line of ${what}: it now names ${to}`);
+  return ref;
+}
+
 /** Replaces the data of a credential made earlier (n8n keeps its id, so every node that uses it keeps it). */
 async function replaceData(client: Client, ref: Ref, type: string, data: Record<string, unknown>) {
   const r = await client.api('PATCH', `/credentials/${encodeURIComponent(ref.id)}`, { name: ref.name, type, data });
@@ -698,10 +746,11 @@ async function run(inputs: Inputs): Promise<number> {
   // The credentials found in the project, by name (the browser's too without --browser-url: a reused workflow may use it).
   // The Site Login (--site-login) is found the same way, and only picked: it must be there.
   const SITE = options.siteLogin !== undefined ? { name: options.siteLogin, type: CREDENTIALS.siteLogin } : undefined;
-  // The RPA Desktop Runner: made from the Connection Line; else the one --desktop-runner names; else, when the project
-  // has exactly one, that one, whatever its name (n8n names one made by hand "RPA Desktop Runner account").
+  // The RPA Desktop Runner: the one --desktop-runner names; else made from the Connection Line; else, when the project
+  // has exactly one, that one, whatever its name (n8n names one made by hand "RPA Desktop Runner account"). A Connection
+  // Line for one the project has may replace its line (offerLine).
   const DESKTOP = options.desktopRunner !== undefined ? { name: options.desktopRunner, type: RUNNER.type } : undefined;
-  const specs = [...(basic ? [FORM] : []), SIGNING, ...(inputs.line ? [RUNNER] : DESKTOP ? [DESKTOP] : []), BROWSER, ...(SITE ? [SITE] : [])];
+  const specs = [...(basic ? [FORM] : []), SIGNING, ...(DESKTOP ? [DESKTOP] : inputs.line ? [RUNNER] : []), BROWSER, ...(SITE ? [SITE] : [])];
   // Its key in `found`: no credential name has a control character (--site-login and --desktop-runner refuse them).
   const ONLY_RUNNER = '\u0000the only RPA Desktop Runner';
   let runners: any[] = [];
@@ -820,7 +869,11 @@ async function run(inputs: Inputs): Promise<number> {
   let runnerRef: Ref | undefined;
   if (inputs.line) {
     const line = inputs.line;
-    runnerRef = (await credential(client, of(RUNNER), projectId, RUNNER, () => ({ connectionLine: line }), 'its Connection Line stays as it is (to change it, paste the new line in n8n)')).ref;
+    // The line is for the RPA Desktop Runner --desktop-runner names, else for the one a line made here before.
+    const had = of(DESKTOP ?? RUNNER).mine;
+    if (had) runnerRef = await offerLine(client, { id: String(had.id), name: String(had.name) }, line);
+    else if (DESKTOP) say(`not used credential "${clean(DESKTOP.name)}": this run does not use what it found in the shared project, so no RPA Desktop Runner is set and the line is not used. Pick one on "${NODE.importSteps}" in n8n.`);
+    else runnerRef = (await credential(client, of(RUNNER), projectId, RUNNER, () => ({ connectionLine: line }), '')).ref;
   } else {
     // Picked by id and name, as n8n listed them: its values are never read.
     const pick = DESKTOP ? of(DESKTOP).mine : found.get(ONLY_RUNNER)?.mine;
@@ -908,9 +961,12 @@ async function run(inputs: Inputs): Promise<number> {
   // Last, as it may wait a minute for a machine that does not answer: the form is ready by then.
   if (runnerRef) await testRunner(client, runnerRef);
 
+  // The address to open: n8n's own when its environment gives it here, else the one this command reached n8n at.
+  const shownUrl = formUrl && inputs.formBase ? new URL(`form/${webhookId}`, inputs.formBase).href : formUrl;
   say();
   say('The import form is ready.');
-  say(`  Address:    ${formUrl ?? `open "${shownName}" in n8n, then the node "${NODE.form}", for its production URL`}`);
+  say(`  Address:    ${shownUrl ?? `open "${shownName}" in n8n, then the node "${NODE.form}", for its production URL`}`);
+  if (formUrl && !inputs.formBase) say('              Replace the host and port with the ones you open n8n with, if they differ.');
   if (basic) {
     say(`  User name:  ${FORM.user}`);
     if (formPassword) reveal('  Password:   ', formPassword, '   (shown once: keep it in your password manager)');

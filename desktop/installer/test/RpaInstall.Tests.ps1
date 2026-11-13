@@ -3779,7 +3779,7 @@ Describe 'Show-RpaConnection.ps1' {
       $runner = 'rpa-runner://{0}:{1}/rpa/v1#token={2}&fingerprint={3}' -f $script:Machine, $script:RunnerPort, $script:Hidden, $script:RunnerFingerprint.Replace(':', '').ToLowerInvariant()
       $browser = 'rpa-browser://{0}:{1}/#token={2}&fingerprint={3}' -f $script:Machine, $script:BrowserPort, $script:Hidden, $script:BrowserFingerprint.Replace(':', '').ToLowerInvariant()
       $output = $script:Output
-      $at = [array]::IndexOf($output, 'Runner connection line, for the Connection Line of the RPA Desktop Runner credential:')
+      $at = [array]::IndexOf($output, 'Runner connection line, for the setup command or the RPA Desktop Runner credential:')
       $at | Should -Be 0
       $output[$at + 1] | Should -BeExactly $runner
       $at = [array]::IndexOf($output, 'Browser connection line, for the Connection Line of the RPA Browser credential:')
@@ -3914,9 +3914,10 @@ Describe 'Show-RpaConnection.ps1' {
       @{ Local = 'fe80::20'; Towards = '2001:db8::5'; LineHost = '[fe80::20]' }
     ) {
       $output = Invoke-WithRoute @($Towards) (New-RouteAnswer $Local)
-      $warning = "This machine's address towards n8n is $Local, a private one. n8n at $Towards is outside this network and cannot use it. The line needs the name or address n8n can reach: rpa connection -Address <that name or address>"
+      # The whole command, with the install's own path: rpa is not a command on the machine, and only -ShowTokens prints a line with its token.
+      $warning = "This machine's address towards n8n is $Local, a private one. n8n at $Towards is outside this network and cannot use it. The line needs the name or address n8n can reach. In an administrator PowerShell, run: & `"$(Join-Path $script:MadeUpInstall 'rpa.cmd')`" connection -ShowTokens -Address followed by that name or address."
       $output[0] | Should -BeExactly $warning
-      $output[1] | Should -BeExactly 'Runner connection line, for the Connection Line of the RPA Desktop Runner credential:'
+      $output[1] | Should -BeExactly 'Runner connection line, for the setup command or the RPA Desktop Runner credential:'
       @($output | Where-Object { $_ -eq $warning }).Count | Should -Be 1
       Get-LineHosts $output | Should -BeExactly @($LineHost, $LineHost)
       ($output -join "`n") | Should -Not -Match "The line's address"
@@ -3930,7 +3931,7 @@ Describe 'Show-RpaConnection.ps1' {
       @{ Why = 'both unique-local IPv6'; Local = 'fd00::20'; Towards = 'fd00::5' }
     ) {
       $output = Invoke-WithRoute @($Towards) (New-RouteAnswer $Local)
-      $output[0] | Should -BeExactly 'Runner connection line, for the Connection Line of the RPA Desktop Runner credential:'
+      $output[0] | Should -BeExactly 'Runner connection line, for the setup command or the RPA Desktop Runner credential:'
       ($output -join "`n") | Should -Not -Match 'a private one'
       $output[-1] | Should -BeExactly ("The line's address is {0}: the one this machine has towards {1}. If n8n reaches this machine by another name or address, run this again with -Address <that name or address>." -f $Local, $Towards)
     }

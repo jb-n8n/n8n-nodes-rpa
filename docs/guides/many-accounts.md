@@ -47,10 +47,10 @@ The sample site of [Your first browser bot](browser-bot.md) has three accounts: 
 `lakeside-ops`, which always asks for a one-time code, and `harbor-ops`, which never does.
 
 1. Make the Site Login above, with the other fields as in step 2 of the browser bot guide, and give it to the form.
-2. On the form, upload `docs/samples/sandbox-rows.steps.json` with the name `sandbox-rows-accounts`. Leave **The file
-   it downloads** empty and choose **Approve and sign**. Import the workflow it hands over (**⋯ → Import → From File**).
-3. Hover over the line between **Get active steps (sandbox-rows-accounts)** and **sandbox-rows-accounts**, click **+**
-   and add a **Code** node. Name it **Get accounts** and replace its code with this (harbor-ops gets a wrong password):
+2. On the form, upload `docs/samples/sandbox-rows.steps.json` with the name `sandbox-rows-accounts`, and choose
+   **Approve and sign**. Import the workflow it hands over (**⋯ → Import → From File**).
+3. Hover over the line between **Get active steps (sandbox-rows-accounts)** and **sandbox-rows-accounts**, click **+**,
+   search for `Code` and choose **Code in JavaScript**. Name it **Get accounts** and replace its code with this (harbor-ops gets a wrong password):
 
    ```js
    return [
@@ -71,8 +71,7 @@ The sample site of [Your first browser bot](browser-bot.md) has three accounts: 
 The login breaker and the run lock are kept per account: the Site Login and the user name, without case or spaces.
 
 - A wrong password fails that item `login_failed` and opens that account's breaker. The other items run as usual.
-- Later runs skip that account with `locked_out`. Correct its password in your data, where it lives here (the
-  `guidance` says the Site Login), and the next run tries once. If the password was right, or the account is unlocked
+- Later runs skip that account with `locked_out`. Correct its password in your data, and the next run tries once. If the password was right, or the account is unlocked
   now (`account_locked`), type a new **Options → Login Breaker Reset Key**: it reopens every account of this Site Login.
 - Two runs of the same account at the same time: the second fails `busy`. Different accounts may run at the same time.
 - A breaker from version 0.2.0 or earlier stops every account until you type a new reset key

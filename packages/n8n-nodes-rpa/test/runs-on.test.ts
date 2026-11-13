@@ -71,7 +71,7 @@ describe('Runs On: the field', () => {
     expect(RUNS_ON_PROPERTY).toEqual({
       displayName: 'Runs On', name: 'runsOn', type: 'options', noDataExpression: true, default: 'browserAndDesktop',
       options: [{ name: 'Browser and desktop apps', value: 'browserAndDesktop' }, { name: 'A browser', value: 'browser' }, { name: 'A Windows desktop app', value: 'desktop' }],
-      description: 'This only chooses which credentials the node asks for, and the steps themselves decide where they run',
+      description: 'This only chooses which credentials and fields the node asks for, and the steps themselves decide where they run',
       hint: 'Choosing A browser or A Windows desktop app removes a credential whose slot it hides',
       displayOptions: { show: { operation: ['runSteps', 'importSteps'] } },
     });
@@ -162,6 +162,47 @@ describe('a node saved before Runs On loses nothing', () => {
       await executeQuickOp(ctx, fakeEngine(() => okResult()), op);
       expect(read, op).toEqual([CREDENTIALS.browser]);
     }
+  });
+});
+
+describe('Runs On: the fields', () => {
+  const startUrl = d.properties.find((p) => p.name === 'startUrl' && p.displayOptions?.show?.operation?.includes('runSteps'))!;
+  const shown = (parameters: INodeParameters) => NodeHelpers.displayParameter(runParameters(savedNode(parameters)), startUrl, savedNode(parameters), d);
+
+  it('A Windows desktop app hides Start URL on Run Steps; the default and A browser show it, as before', () => {
+    expect(shown({ operation: 'runSteps' })).toBe(true);
+    expect(shown({ operation: 'runSteps', runsOn: 'browserAndDesktop' })).toBe(true);
+    expect(shown({ operation: 'runSteps', runsOn: 'browser' })).toBe(true);
+    expect(shown({ operation: 'runSteps', runsOn: 'desktop' })).toBe(false);
+    // n8n drops the hidden value: a run sees none.
+    expect(runParameters(savedNode({ operation: 'runSteps', runsOn: 'desktop', startUrl: 'https://example.com/account' }))).not.toHaveProperty('startUrl');
+    expect(runParameters(savedNode({ operation: 'runSteps', startUrl: 'https://example.com/account' })).startUrl).toBe('https://example.com/account');
+    // Runs On only hides: no field of the node is shown by it.
+    for (const p of d.properties) expect(Object.keys(p.displayOptions?.show ?? {}), p.name).not.toContain('runsOn');
+  });
+
+  it('a desktop run never reads Start URL, so a node that loses its value runs as it did', async () => {
+    const steps = { surface: 'desktop', name: 'erp', version: 1, app: { exe: 'App.exe' }, steps: [{ intent: 'Click OK', click: { uia: { path: [{ name: 'OK' }] } } }] };
+    const inputs: unknown[] = [];
+    const engine = {
+      ...fakeEngine(() => { throw new Error('no browser run here'); }),
+      runDesktopTask: async (input: unknown) => {
+        inputs.push(input);
+        return { ok: false as const, code: 'drift_detected' as const, message: 'Step 1 (Click OK): no element matched', violations: [], log: [], blockedRequests: [], durationMs: 5, lane: 'script' as const };
+      },
+    };
+    const credentials = { [CREDENTIALS.desktopRunner]: { url: 'wss://runner.example.com:8765/rpa/v1', token: 'made-up-token', fingerprint: 'AB'.repeat(32) } };
+    const run = async (startUrl?: string) => {
+      const params = { operation: 'runSteps', runsOn: 'desktop', steps: JSON.stringify(steps), requireSignedSteps: false, ...(startUrl !== undefined ? { startUrl } : {}) };
+      const [data] = await DISPATCH.runSteps(harness({ params, credentials, continueOnFail: true }), engine as never);
+      return data[0].json;
+    };
+    const without = await run();
+    const withUrl = await run('https://example.com/account');
+    expect(inputs).toHaveLength(2);
+    expect(inputs[1]).toEqual(inputs[0]);
+    expect(withUrl).toEqual(without);
+    expect(JSON.stringify(inputs)).not.toContain('example.com/account');
   });
 });
 

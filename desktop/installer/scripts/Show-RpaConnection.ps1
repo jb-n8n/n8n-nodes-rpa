@@ -196,12 +196,12 @@ $listening = @([Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalPropertie
 
 $services = @(@{
     # The runner writes its failures to its output (runner.out.log), and to logs\runner-<date>.log.
-    Name = 'Runner'; Kind = 'runner'; Credential = 'RPA Desktop Runner'; Port = [int]$install.runnerPort; Path = '/rpa/v1'; Log = Join-Path $logDir 'runner.out.log'
+    Name = 'Runner'; Kind = 'runner'; For = 'the setup command or the RPA Desktop Runner credential'; Port = [int]$install.runnerPort; Path = '/rpa/v1'; Log = Join-Path $logDir 'runner.out.log'
     Fingerprint = Get-RunnerFingerprint (Join-Path $logDir 'runner.out.log'); Token = Join-Path $dataDir 'token'
   })
 if ($install.browser) {
   $services += @{
-    Name = 'Browser'; Kind = 'browser'; Credential = 'RPA Browser'; Port = [int]$install.browserPort; Path = ''; Log = Join-Path $logDir 'browser.err.log'
+    Name = 'Browser'; Kind = 'browser'; For = 'the Connection Line of the RPA Browser credential'; Port = [int]$install.browserPort; Path = ''; Log = Join-Path $logDir 'browser.err.log'
     Fingerprint = Get-CertificateFingerprint (Join-Path $dataDir 'browser-cert.pem'); Token = Join-Path $dataDir 'browser-token'
   }
 }
@@ -226,19 +226,20 @@ if (-not $Status -and $addresses.Count -eq 0) { Write-Output 'This machine has n
 # A private address on the route to an n8n that is not on a private network (a cloud machine behind a NAT, for example):
 # n8n cannot use the line as it is. Said before the lines, which still carry that address.
 $outside = $route -and (Test-PrivateAddress $route.Address) -and -not (Test-PrivateAddress $route.Towards)
-if ($outside) { Write-Output ("This machine's address towards n8n is {0}, a private one. n8n at {1} is outside this network and cannot use it. The line needs the name or address n8n can reach: rpa connection -Address <that name or address>" -f $route.Address, $route.Towards) }
+if ($outside) { Write-Output ("This machine's address towards n8n is {0}, a private one. n8n at {1} is outside this network and cannot use it. The line needs the name or address n8n can reach. In an administrator PowerShell, run: & ""{2}"" connection -ShowTokens -Address followed by that name or address." -f $route.Address, $route.Towards, (Join-Path $installDir 'rpa.cmd')) }
 foreach ($service in $services) {
   $notListening = ('{0}: not listening yet. It starts within a minute of the bot user''s sign-in: run this again. If it stays like this, read {1}' -f $service.Name, $service.Log)
   if ($Status) {
     if ($listening -contains $service.Port) { Write-Output ('{0}: listening on port {1}' -f $service.Name, $service.Port) } else { Write-Output $notListening }
     continue
   }
-  # The line to paste, then the values for the separate fields. A service that has never started has no certificate yet.
+  # The line to paste (the runner's into the setup command, npx n8n-nodes-rpa setup, or into its credential), then the
+  # values for the separate fields. A service that has never started has no certificate yet.
   if ($noLine) { Write-Output ('{0} connection line: {1}' -f $service.Name, $noLine) }
   elseif ($service.Fingerprint) {
     $made = Get-ConnectionLine $service.Kind $lineHost $service.Port $service.Fingerprint $service.Token ([bool]$ShowTokens)
     if ($made.Line) {
-      Write-Output ('{0} connection line, for the Connection Line of the {1} credential:' -f $service.Name, $service.Credential)
+      Write-Output ('{0} connection line, for {1}:' -f $service.Name, $service.For)
       if ($ShowTokens) { $Host.UI.WriteLine($made.Line) } else { Write-Output $made.Line }
     } else { Write-Output ('{0} connection line: {1}' -f $service.Name, $made.Problem) }
   } else { Write-Output ('{0} connection line: not known yet (the program has not started)' -f $service.Name) }

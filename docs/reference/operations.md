@@ -106,7 +106,7 @@ Runs a list of browser or desktop steps. [Steps](steps.md) lists every step.
 |---|---|
 | **Runs On** | Which credentials the node asks for: **Browser and desktop apps** (the default, every slot), **A browser** or **A Windows desktop app**. It does not decide where the steps run. The steps do. See [Runs On](#runs-on). |
 | **Steps (JSON)** | A step document or a bare array of steps. Usually mapped from a Data Table row: `{{ $json.steps }}`. Empty means a first run, which needs AI Repair. |
-| **Start URL** | Browser steps only. Required without a Site Login, and it sets the allowed site. With a Site Login it must be on the credential's sites. |
+| **Start URL** | Browser steps only. Required without a Site Login, and it sets the allowed site. With a Site Login it must be on the credential's sites. Hidden when Runs On is **A Windows desktop app**. |
 | **Require Signed Steps** | On by default. **Signature** and **Approved By** must be present and verify, or the run fails `script_untrusted` before anything opens. Turn it off only for steps you typed here. |
 | **Signature**, **Approved By** | From the signed row, mapped from the same item as the steps. |
 | **AI Repair** | Off by default. On adds **Goal**, a **Model** input and a second output, **Repaired Steps** ([AI Repair](steps.md#ai-repair)). |
@@ -123,7 +123,8 @@ The error output is output 1, or output 2 when AI Repair is on.
 
 ### Runs On
 
-Run Steps and Import Steps have **Runs On**. It only chooses which credential slots the node shows. The steps
+Run Steps and Import Steps have **Runs On**. It only chooses which credential slots the node shows, and on Run Steps
+**A Windows desktop app** also hides **Start URL**, which a desktop run never reads. The steps
 themselves decide where they run: desktop steps run on the desktop runner and browser steps in a browser, whatever it
 says. Type it. An expression shows every slot.
 
