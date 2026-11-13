@@ -107,7 +107,8 @@ an **RPA Step Signing** credential that its own project owns, and never one of t
   **RPA: 3 Approve steps**, which emails a named approver. The approval link is a bearer link: anyone who receives or
   forwards it can approve. Send it to one person. The AI repairs of **RPA: 2 Data feed** use this path.
 - **What each step says.** The review page builds each step's sentence from the step itself: what it does, where, and
-  the value it types or chooses. A secret's or a variable's value is never shown. A step's description comes from
+  the value it types or chooses. A secret's or a variable's value is never shown. A variable is marked from what the step
+  types or chooses, never from its description. A step's description comes from
   whoever wrote the steps, so it is shown beside the sentence, in red, as `(described differently as: …)`, when it says
   something else. Only case, spaces, quotes and a full stop at the end are ignored in that comparison: another verb,
   target or value shows. The approval emails show the same sentences. Sign Steps refuses to sign when the step sentences shown for approval differ from the steps it is asked to sign.

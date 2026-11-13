@@ -1938,6 +1938,42 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(fields[0].html).toContain('<li>Type into Password <em>· secret variable password</em></li>');
   });
 
+  it('a step\'s variable mark comes from what it types or chooses, never from its description: on the page, in the email and in Sign steps\' rebuilt copy', async () => {
+    const choose = (option: string) => ({ intent: 'Choose {{var.company_code}} in Company code', select: { field: { uia: { path: [{ name: 'Company code' }] } }, option } });
+    const doc = { surface: 'desktop', name: 'erp', version: 1, app: { exe: 'ErpDemo.exe' }, steps: [choose('{{var.company_code}}')] };
+    // Approved with the variable: the description says what the step does.
+    expect(reviewSteps(doc.steps, { desktop: true })).toEqual([{ text: 'Choose an item in Company code', marks: ['variable company_code'] }]);
+    // The value changed to a fixed 2000 on the change page, the description left as it was: no variable mark, and the
+    // description shows beside the sentence as saying something else.
+    const fixed = { ...doc, steps: [choose('2000')] };
+    expect(reviewSteps(fixed.steps, { desktop: true })).toEqual([{ text: 'Choose "2000" in Company code', describedAs: 'Choose {{var.company_code}} in Company code', marks: [] }]);
+    // A browser step alike.
+    expect(reviewSteps([{ intent: 'Type {{var.code}} into Code', fill: { field: { label: 'Code' }, value: '2000' } }], { desktop: false, shownUrl: (u: string) => u })[0].marks).toEqual([]);
+    const { ran } = changePath('erp', [{ id: 1, name: 'erp', version: 1, steps: JSON.stringify(doc), status: 'active' }]);
+    const [data, repaired] = await runImport(changedUpload(ran, JSON.stringify(fixed)), () => {
+      throw new Error('desktop steps are never replayed');
+    }, ran);
+    expect(data[0].json.error).toBeUndefined();
+    expect(repaired[0].json.reviewSteps).toEqual([{ text: 'Choose "2000" in Company code', describedAs: 'Choose {{var.company_code}} in Company code', marks: [] }]);
+    const after = { ...ran, 'Change or sign again': [[{ json: { changedSteps: JSON.stringify(fixed) } }]], [COMPARED]: [[{ json: compared(ran, JSON.stringify(fixed)) }]], 'Import steps': [data, repaired] };
+    const page = String(jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan(after) })[1].html);
+    expect(page).toContain('<li>Choose &quot;2000&quot; in Company code <strong>(described differently as: Choose {{var.company_code}} in Company code)</strong></li>');
+    expect(page).not.toContain('variable company_code');
+    // Sign steps rebuilds the same sentence and marks, and signs.
+    const signed = await signAfterReview(after, { decision_0: 'Approve and sign' });
+    expect(signed.errors).toEqual([]);
+    expect(signed.signed[0]).toMatchObject({ status: 'active', version: 2 });
+    // Template 3's desktop email: from reviewSteps, and from the steps alone for an item without them.
+    const t3 = load('3-approve-steps.json');
+    const email = (json: IDataObject) => render(String(byName(t3, 'Ask for approval (desktop steps)').parameters.message), { $: (name: string) => ({ item: { json: name === 'Settings' ? { approvalTimeoutHours: 72 } : json } }) });
+    const item = { ...repaired[0].json };
+    for (const json of [item, { ...item, reviewSteps: undefined }]) {
+      const text = email(json);
+      expect(text).toMatch(/\n1\. Choose \S+2000\S+ in Company code/);
+      expect(text).not.toContain('variable company_code');
+    }
+  });
+
   it('an import with an untranslated step puts it into leftOut and both emails show it', async () => {
     // The draft proved as version 1 by the real proposal builder (no browser).
     const proved = (input: AdoptInput): AdoptResult => {
