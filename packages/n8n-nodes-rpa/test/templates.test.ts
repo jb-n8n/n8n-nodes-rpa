@@ -431,6 +431,14 @@ const NOT_REPLAYED_LINE = NOT_REPLAYED_EVIDENCE_LINE;
 describe('3-approve-steps.json', () => {
   const t = load('3-approve-steps.json');
   const conditions = (name: string) => table(byName(t, name)).filters?.conditions ?? [];
+  it('says "version N" in its note, subjects and texts, never "vN", and an import is not always version 1 (IB-8)', () => {
+    const t = load('3-approve-steps.json');
+    const text = JSON.stringify(t);
+    expect(text).not.toMatch(/[Ss]teps v\{\{/);
+    expect(text).not.toContain('An import is always version 1');
+    expect(sticky(t, t.nodes.find((n) => n.type === STICKY && String(n.parameters.content).includes('Supersede older versions'))!.name).content).toContain('An import gets the next version of its name.');
+  });
+
   it('receives the Repaired steps item with its screenshots and emails evidence, changes and red safety flags with attachments', () => {
     expect(byName(t, 'Repaired steps received')).toMatchObject({ type: 'n8n-nodes-base.executeWorkflowTrigger', parameters: { inputSource: 'passthrough' } });
     const email = byName(t, 'Email repaired steps').parameters;
@@ -531,18 +539,18 @@ describe('3-approve-steps.json', () => {
     const scope = (json: IDataObject, received: IDataObject = reviewed) => ({
       $: (name: string) => { expect(['Sign steps', 'Repaired steps received']).toContain(name); return { item: { json: name === 'Sign steps' ? json : received } }; },
     });
-    expect(render(p.subject, scope(signed))).toBe('Signed: steps v1 for erp are active');
+    expect(render(p.subject, scope(signed))).toBe('Signed: steps version 1 for erp are active');
     // A step marked as a write changes the hash: one sentence says so.
     expect(render(p.text, scope(signed))).toBe(
-      `Steps v1 for erp are signed and active, approved by ${APPROVER} at 2026-10-29T12:00:00.000Z.\nSigned as writes: step 16 (Click Save). The hash changed because step 16 was marked as a write.\n\nReference: hash h1, review digest d0.`,
+      `Steps version 1 for erp are signed and active, approved by ${APPROVER} at 2026-10-29T12:00:00.000Z.\nSigned as writes: step 16 (Click Save). The hash changed because step 16 was marked as a write.\n\nReference: hash h1, review digest d0.`,
     );
     const two = { ...signed, writeSteps: [{ step: 4, intent: 'Press Enter' }, { step: 16, intent: 'Click Save' }], writeLine: 'Signed as writes: step 4 (Press Enter), step 16 (Click Save)' };
     expect(render(p.text, scope(two)).split('\n')[1]).toBe('Signed as writes: step 4 (Press Enter), step 16 (Click Save). The hash changed because steps 4 and 16 were marked as writes.');
     const none = { ...signed, hash: 'h0', writeSteps: [], writeLine: 'Signed as writes: none' };
-    expect(render(p.text, scope(none))).toBe(`Steps v1 for erp are signed and active, approved by ${APPROVER} at 2026-10-29T12:00:00.000Z.\nSigned as writes: none.\n\nReference: hash h0, review digest d0.`);
+    expect(render(p.text, scope(none))).toBe(`Steps version 1 for erp are signed and active, approved by ${APPROVER} at 2026-10-29T12:00:00.000Z.\nSigned as writes: none.\n\nReference: hash h0, review digest d0.`);
     // Browser steps: no write line.
     const { writeLine: _w, writeSteps: _s, ...browser } = { ...signed, hash: 'h0' };
-    expect(render(p.text, scope(browser))).toBe(`Steps v1 for erp are signed and active, approved by ${APPROVER} at 2026-10-29T12:00:00.000Z.\n\nReference: hash h0, review digest d0.`);
+    expect(render(p.text, scope(browser))).toBe(`Steps version 1 for erp are signed and active, approved by ${APPROVER} at 2026-10-29T12:00:00.000Z.\n\nReference: hash h0, review digest d0.`);
   });
   it('Ask for approval waits at most approvalTimeoutHours; Timed out? is true when send-and-wait resumed without an answer', () => {
     const ask = byName(t, 'Ask for approval').parameters;
@@ -615,7 +623,7 @@ describe('3-approve-steps.json', () => {
       options: { limitWaitTime: (byName(t, 'Ask for approval').parameters.options as { limitWaitTime: unknown }).limitWaitTime },
     });
     expect(ask).not.toHaveProperty('formFields');
-    expect(String(ask.subject)).toMatch(/^=Approve desktop steps v\{\{/);
+    expect(String(ask.subject)).toMatch(/^=Approve desktop steps version \{\{/);
     // I2: the numbered change list is in the message and the candidates on the form; I3: what ticking does, plainly.
     const received = {
       version: 1, name: 'erp-1', hash: 'h', digest: 'd', evidenceLine: 'Not replayed', safetyLine: 'desktop app: "ErpDemo.exe"',
@@ -630,7 +638,7 @@ describe('3-approve-steps.json', () => {
     const $ = (name: string) => ({ item: { json: name === 'Settings' ? { approvalTimeoutHours: 72 } : received } });
     const message = render(String(ask.message), { $ });
     // The short view first: what it does besides reading, then one short sentence per step with its marks.
-    expect(message.split('\n\nClick Review and decide')[0]).toBe('Desktop steps v1 for erp-1, for your approval.\nOpens ErpDemo.exe on the desktop runner.\nReturns a file to n8n: step 6.\n'
+    expect(message.split('\n\nClick Review and decide')[0]).toBe('Desktop steps version 1 for erp-1, for your approval.\nOpens ErpDemo.exe on the desktop runner.\nReturns a file to n8n: step 6.\n'
       + 'Not tried by the import: read every step before you approve.\n\nThe steps:\n1. Wait for the window\n2. Click Save \u2039b\u203a\n3. Type into User name (variable username)\n4. Type "2026-11-30" into Date to\n5. Read the count (gives its text to n8n as out_count)\n6. Return the file (returns a file)');
     // A secret variable is marked as one, as on the review page (the item names them; never a value).
     const secret = render(String(ask.message), { $: (name: string) => ({ item: { json: name === 'Settings' ? { approvalTimeoutHours: 72 } : { ...received, secretVariables: ['username'] } } }) });
@@ -665,7 +673,7 @@ describe('3-approve-steps.json', () => {
     expect(message).toContain('Details of every step (how each one finds its control):\nEvidence: Not replayed\nSafety flags: desktop app: "ErpDemo.exe"\nStep 1: Wait for the window\nStep 2: Click Save \u2039b\u203a\n');
     expect(message).not.toContain('Write steps');
     const description = render(String((ask.options as IDataObject).responseFormDescription), { $ });
-    expect(description).toBe('Steps v1 for erp-1. Tick the steps that save, send or submit, from the numbered list in the email; none is ticked for you. Ticked steps are allowed to save or send. Allow this app… in the recorder protects the ticked buttons it recorded, so leave such a step ticked: an unticked step is stopped when it presses a protected button, or a key other than Tab, arrows, Home, End, PageUp, PageDown or Escape in a window that holds one. While the policy of the app protects no button, nothing is stopped.');
+    expect(description).toBe('Steps version 1 for erp-1. Tick the steps that save, send or submit, from the numbered list in the email; none is ticked for you. Ticked steps are allowed to save or send. Allow this app… in the recorder protects the ticked buttons it recorded, so leave such a step ticked: an unticked step is stopped when it presses a protected button, or a key other than Tab, arrows, Home, End, PageUp, PageDown or Escape in a window that holds one. While the policy of the app protects no button, nothing is stopped.');
     const fields = jsonFormFields(String(ask.jsonOutput), { $ });
     expect(fields).toEqual([
       { fieldLabel: 'Decision', fieldType: 'dropdown', fieldOptions: { values: [{ option: 'Approve and sign' }, { option: 'Reject' }] }, requiredField: true },
@@ -765,7 +773,7 @@ describe('template 3 approval email', () => {
   });
 
   it('the values the email shows are all there, each as text', () => {
-    expect(out).toContain('Steps v4‹i› for feed‹b›x‹/b›');
+    expect(out).toContain('Steps version 4‹i› for feed‹b›x‹/b›');
     expect(out).toContain('Evidence (as reported by the run): 7 rows ‹img src=x onerror=alert(1)›');
     expect(out).toContain(`Safety flags: host: ${unlinked('a.example')}' ‹script›`);
     expect(out).toContain('Hash: ab"c');
@@ -818,7 +826,7 @@ describe('template 3 approval email', () => {
 
   it('numbers the two emails of a request, so the order survives an inbox that lists the newest first', () => {
     const t = load('3-approve-steps.json');
-    expect(String(byName(t, 'Email repaired steps').parameters.subject)).toMatch(/^=1 of 2, review: steps v\{\{ \$json\.version \}\} for /);
+    expect(String(byName(t, 'Email repaired steps').parameters.subject)).toMatch(/^=1 of 2, review: steps version \{\{ \$json\.version \}\} for /);
     expect(String(byName(t, 'Ask for approval').parameters.subject)).toMatch(/^=2 of 2, approve steps v/);
     // Desktop steps get one email.
     expect(String(byName(t, 'Ask for approval (desktop steps)').parameters.subject)).toMatch(/^=Approve desktop steps v/);
