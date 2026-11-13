@@ -1085,6 +1085,8 @@ jobs:
           $said | ForEach-Object { Write-Host "  | $_" }
           Assert ($code -eq 1 -and @($said | Where-Object { $_ -like 'rpa-ci-unattended was the bot user of an install with -Unattended. *Uninstall-Rpa.ps1 -RemoveData*add -Unattended:$false.' }).Count -eq 1) "Install-Rpa.ps1 without a mode after that uninstall refuses and names the ways out (exit code $code)"
           Assert (-not (Test-Path -LiteralPath "$install\install.json") -and @(Get-ScheduledTask -TaskPath '\RPA\' -ErrorAction SilentlyContinue).Count -eq 0) 'and it changed nothing: no install.json, no task'
+          # The refusal's exit code 1 was expected and checked above: it is not this step's own.
+          $global:LASTEXITCODE = 0
 
       - name: Collect the installed programs' logs
         if: always()
