@@ -3,7 +3,7 @@ import type { DesktopProposal, DownloadedFile, ErrorCode, Proposal, RequestRecor
 import type { NodeContext } from './context.js';
 import type { Compiled, LaneSuccess } from './operations/quick/shared.js';
 import type { Engine } from './engine.js';
-import { CONFIG_GUIDANCE, errorJson, guidanceFor, type FailureDetails } from './errors.js';
+import { CONFIG_GUIDANCE, errorJson, guidanceFor, shownMessage, type FailureDetails } from './errors.js';
 import { changeList, DESKTOP_EVIDENCE_LINE, evidenceLine, fullSafetyFlags, leftOutList, NOT_REPLAYED_EVIDENCE_LINE, safetyLine } from './format.js';
 
 /** A file-name-safe form of a name (lowercase, dashes), 'rpa' when nothing is left. */
@@ -177,16 +177,20 @@ function leftOutFields(p: { leftOut?: string[] }): IDataObject {
   return p.leftOut?.length ? { leftOut: [...p.leftOut], leftOutList: leftOutList(p) } : {};
 }
 
-/** Error item for a failed or blocked run: `{ error: "<code>: <message>", message, details }` plus screenshot and trace binaries. */
+/**
+ * Error item for a failed or blocked run: `{ error: "<code>: <message>", message, details }` plus screenshot and trace
+ * binaries. The message is the one a person reads (shownMessage); the guidance is chosen by the engine's own.
+ */
 export async function failureItem(
   ctx: NodeContext, f: RunFailure | { code: ErrorCode; message: string; passwordChanged?: true },
   details: { name: string | null; version: number | null; hash: string }, paired: IPairedItemData[],
 ): Promise<INodeExecutionData> {
   const full = 'ok' in f ? f : undefined;
   const binary = full ? await failureBinary(ctx, full, details.name ?? '') : undefined;
+  const message = shownMessage(f.message);
   const d: FailureDetails = {
     code: f.code,
-    message: f.message,
+    message,
     name: details.name,
     version: full?.version ?? details.version,
     hash: full?.hash ?? details.hash,
@@ -200,7 +204,7 @@ export async function failureItem(
     ...(f.passwordChanged ? { passwordChanged: true as const } : {}),
     guidance: guidanceFor(f.code, f.message),
   };
-  return { json: errorJson(`${f.code}: ${f.message}`, f.message, d), pairedItem: paired, ...(binary ? { binary } : {}) };
+  return { json: errorJson(`${f.code}: ${message}`, message, d), pairedItem: paired, ...(binary ? { binary } : {}) };
 }
 
 /** Error item for a configuration problem: the message as is, `configError: true`, no code. */

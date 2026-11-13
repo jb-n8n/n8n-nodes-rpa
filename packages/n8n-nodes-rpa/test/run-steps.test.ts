@@ -879,20 +879,29 @@ describe('outputs', () => {
     );
   });
   it('an auth_blocked failure gets the description of its cause: the code workflow, no TOTP Secret, or neither', async () => {
-    const cases: [string, string][] = [
+    // [the engine's message, the message the node shows (without the engine's detected: mark), the description]
+    const cases: [string, string, string][] = [
       ['Sign in: detected:mfa_code: the one-time code workflow failed: it is not published: open the workflow set in Options → One-Time Code Workflow and click Publish (Workflow is not active and cannot be executed.)',
+        'Sign in: the one-time code workflow failed: it is not published: open the workflow set in Options → One-Time Code Workflow and click Publish (Workflow is not active and cannot be executed.)',
         `auth_blocked: ${CODE_WORKFLOW_GUIDANCE}`],
-      ['Sign in: detected:mfa_code: the one-time code workflow did not return a code within 120 s', `auth_blocked: ${CODE_WORKFLOW_GUIDANCE}`],
-      ['Sign in: detected:mfa_totp: the site asked for a one-time code and the Site Login has no TOTP Secret', `auth_blocked: ${NO_TOTP_SECRET_GUIDANCE}`],
-      ['Sign in: detected:mfa_sms', 'auth_blocked: The site asked for a second factor that this run could not answer; the first line says which. A push message or a hardware key needs a person to sign in.'],
+      ['Sign in: detected:mfa_code: the one-time code workflow did not return a code within 120 s', 'Sign in: the one-time code workflow did not return a code within 120 s', `auth_blocked: ${CODE_WORKFLOW_GUIDANCE}`],
+      ['Sign in: detected:mfa_totp: the site asked for a one-time code and the Site Login has no TOTP Secret',
+        'Sign in: the site asked for a one-time code and the Site Login has no TOTP Secret', `auth_blocked: ${NO_TOTP_SECRET_GUIDANCE}`],
+      ['Sign in: detected:mfa_sms', 'Sign in: mfa_sms', 'auth_blocked: The site asked for a second factor that this run could not answer; the first line says which. A push message or a hardware key needs a person to sign in.'],
       // A detect step that found the code page is not the missing seed: the steps have no code step.
-      ['Check sign-in: detected:mfa_totp', 'auth_blocked: The site asked for a second factor that this run could not answer; the first line says which. A push message or a hardware key needs a person to sign in.'],
+      ['Check sign-in: detected:mfa_totp', 'Check sign-in: mfa_totp', 'auth_blocked: The site asked for a second factor that this run could not answer; the first line says which. A push message or a hardware key needs a person to sign in.'],
     ];
-    for (const [message, description] of cases) {
+    for (const [message, shown, description] of cases) {
       const err = await executeRunSteps(ctx(), fakeEngine(() => taskFail('auth_blocked', message))).catch((e: unknown) => e);
-      expect((err as NodeOperationError).message, message).toBe(`auth_blocked: ${message}`);
+      expect((err as NodeOperationError).message, message).toBe(`auth_blocked: ${shown}`);
       expect((err as NodeOperationError).description, message).toBe(description);
     }
+  });
+  it('the error item shows the message without the engine\'s detected: mark, in every place it is read', async () => {
+    const engine = fakeEngine(() => taskFail('login_failed', 'Sign in: detected:login_failed: the site sent the sign-in page back'));
+    const [data] = await executeRunSteps(ctx({ continueOnFail: true }), engine);
+    const shown = 'Sign in: the site sent the sign-in page back';
+    expect(data[0].json).toMatchObject({ error: `login_failed: ${shown}`, message: shown, details: { code: 'login_failed', message: shown, guidance: GUIDANCE.login_failed } });
   });
   it('every output item is paired with its input item', async () => {
     const engine = fakeEngine((_input, call) => (call === 0 ? scriptOk() : taskFail('not_found', 'the page or the data was not found')));
@@ -1091,7 +1100,8 @@ describe('a forced password change (signIn.changePassword)', () => {
     const h = ctx({ items: many(3), continueOnFail: true });
     const [data] = await executeRunSteps(h, engine);
     expect(engine.calls).toHaveLength(3);
-    expect(data.map(errorOf)).toEqual(Array(3).fill(`password_change_failed: ${CHANGE_FAILED}`));
+    // Shown without the engine's detected: mark.
+    expect(data.map(errorOf)).toEqual(Array(3).fill('password_change_failed: Sign in: password_change_failed'));
     expect(h.staticData[BREAKER_KEY]).toBeUndefined();
     const err = await executeRunSteps(ctx(), engine).catch((e: unknown) => e);
     expect((err as NodeOperationError).description).toBe(

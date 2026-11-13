@@ -56,6 +56,13 @@ export function guidanceFor(code: ErrorCode, message: string): string {
 }
 
 /**
+ * A failure's message as the node shows it. The engine marks a sign-in or detect outcome `detected:<outcome>: ` (or a
+ * bare `detected:<outcome>`) so that classify.ts can tell the code; the reader learns nothing from the mark, so it is
+ * left out, and a bare one keeps the outcome's name. guidanceFor and failedOnCode read the engine's own message.
+ */
+export const shownMessage = (message: string): string => message.replace(/detected:([A-Za-z0-9_]+)(?:: |$)/g, (whole, outcome: string) => (whole.endsWith(': ') ? '' : outcome));
+
+/**
  * The json of an item for n8n's error output. n8n replaces the json of any item that carries `item.error` with
  * `{ error: message }` (normalizeNodeErrors), so error items never set `item.error`. handleNodeErrorOutput instead
  * routes an item whose truthy `json.error` sits beside nothing but `message` and `details`, so every structured
