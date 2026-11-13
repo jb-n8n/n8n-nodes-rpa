@@ -520,6 +520,13 @@ describe('npx n8n-nodes-rpa setup', () => {
     expect(r.stdout).not.toContain(`${inside.url}/form/`);
     expect(r.stdout).not.toContain('Replace the host and port');
     expect(probes(inside)).toBeGreaterThan(0);
+    // Two addresses, each said once with what it is for: the one the command talks to, and the one to open.
+    expect(r.stdout.split('\n')[0]).toBe(`Setting up n8n for RPA. This command talks to n8n at ${inside.url}; in your browser, n8n is at https://n8n.example.com/.`);
+    expect(r.stdout.split(inside.url)).toHaveLength(2);
+    // The same address twice is one address.
+    const same = await n8n();
+    const s = await run(setup(same.url), { ...ENV, WEBHOOK_URL: `${same.url}/` });
+    expect(s.stdout.split('\n')[0]).toBe(`Setting up ${same.url} for RPA`);
     // N8N_EDITOR_BASE_URL when WEBHOOK_URL is not set; an n8n under a path keeps it.
     const editor = await n8n();
     const e = await run(setup(editor.url), { ...ENV, N8N_EDITOR_BASE_URL: 'https://example.com/n8n' });

@@ -722,7 +722,10 @@ async function run(inputs: Inputs): Promise<number> {
   if (inputs.plaintext) {
     warn('WARNING: --allow-http: the API key crosses the network unencrypted.');
   }
-  say(`Setting up ${origin} for RPA`);
+  // One address for n8n, or two said once with what each is for: the one this command talks to (inside n8n's container,
+  // n8n's own port) and the one to open in the browser (n8n's own address, formBase), which the form's address uses.
+  const browserBase = inputs.formBase && inputs.formBase !== `${origin}/` ? inputs.formBase : undefined;
+  say(browserBase ? `Setting up n8n for RPA. This command talks to n8n at ${origin}; in your browser, n8n is at ${browserBase}.` : `Setting up ${origin} for RPA`);
   await checkN8n(inputs, [
     { type: SIGNING.type, fields: ['secretKey'] },
     ...(inputs.line ? [{ type: RUNNER.type, fields: ['connectionLine'] }] : []),
