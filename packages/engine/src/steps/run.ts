@@ -11,7 +11,7 @@ import { renderVars } from '../secrets/render.js';
 import type { SecretTypingLimit } from '../secrets/secret-targets.js';
 import { PolicyError } from './errors.js';
 import { shownMessage } from './urls.js';
-import { BLOCKED_STOP, networkSentence } from '../messages.js';
+import { BLOCKED_STOP, networkSentence, signedStepMessage } from '../messages.js';
 import { surfaceOf } from '../surface/browser.js';
 import type { Surface } from '../surface/surface.js';
 
@@ -208,7 +208,8 @@ export async function runSteps(
     } catch (err) {
       lastError = err;
       await endHook(false);
-      const message = messageOf(err, ctx.masker);
+      // Signed steps: no Find-by advice, their owner cannot edit the step (signedStepMessage).
+      const message = ctx.signed ? signedStepMessage(messageOf(err, ctx.masker)) : messageOf(err, ctx.masker);
       // A run limit (`limit: …`) always ends the run as incomplete: `optional` never swallows it.
       if (step.optional && !message.startsWith('limit: ')) {
         log('skipped', Date.now() - t0, { note: message });

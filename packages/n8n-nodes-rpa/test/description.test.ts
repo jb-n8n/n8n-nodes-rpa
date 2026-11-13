@@ -368,7 +368,7 @@ describe('wording and guidance', () => {
       auth_blocked: 'The site asked for a second factor that this run could not answer; the message says which. A push message or a hardware key needs a person to sign in.',
       site_down: 'The site did not answer, returned a server error, or the first page did not finish loading in time. Try again later.',
       browser_unavailable: 'The browser server could not be reached or was rejected. Check the RPA Browser credential (README: Where the browser runs).',
-      drift_detected: 'A step did not find what it expected; the message says which step and what it found. Correct that step, or record it again, and approve the new version. Browser steps can also repair themselves with AI Repair.',
+      drift_detected: 'A step did not find what it expected; the message says which step and what it looked for. Correct that step, or record it again, and approve the new version. Browser steps can also repair themselves with AI Repair.',
       not_found: 'The page or the data was not found.',
       incomplete: 'Not every row the page states was read, a capture failed, a limit was hit, the run timed out, or it was cancelled.',
       script_untrusted: 'Nothing ran: the steps are not signed, or their signature does not fit this node (another Step Signing key, Site Login, name, version or start site). Approve the steps again, or set the node up as it was when they were signed.',

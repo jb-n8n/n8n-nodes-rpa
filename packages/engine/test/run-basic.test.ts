@@ -116,6 +116,19 @@ describe('runSteps basics', () => {
       expect(shownFailure(r.failure.intent, r.failure.message, r.failure.index)).toMatch(/^Step 2 \(Type into From: "2026-09-01"\): the field "From" did not take the value "first of September"/);
     } finally { await session.close(); }
   });
+  it('a control a signed bot no longer finds: no Find-by advice, the two ways on (IB-7)', async () => {
+    const ctx = await ctxFor();
+    try {
+      const step: Step = { intent: 'Click Line Item Report', timeoutMs: 300, click: { role: 'button', name: 'Line Item Report' } };
+      const signed = await runSteps({ ...ctx, signed: true }, [step]);
+      expect(signed.ok).toBe(false);
+      if (signed.ok) return;
+      expect(signed.failure.message).toMatch(/^No element found for Role and Name button "Line Item Report" on .* after 1 s\. The page no longer has that control\. To go on, change the bot on the import form, or let self-repair fix it if it is set up \(AI Repair on the RPA node\)\.$/);
+      expect(signed.failure.message).not.toContain('Find by');
+      const unsigned = await runSteps(ctx, [step]);
+      expect(unsigned.ok ? '' : unsigned.failure.message).toContain('Check the spelling or try Find by: Visible Text.');
+    } finally { await session.close(); }
+  });
   it('the fill verb refuses a password field with a fatal sign-in violation, before typing', async () => {
     const ctx = await ctxFor();
     try {

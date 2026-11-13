@@ -147,6 +147,15 @@ const locatorSuggestion = (desc: string): string =>
   desc.startsWith('Visible Text ') || desc.startsWith('Form Label ')
     ? 'Check the spelling or try Find by: Role and Name.'
     : 'Check the spelling or try Find by: Visible Text.';
+/**
+ * For signed steps, in place of locatorSuggestion: their owner cannot change a locator on the node ("Find by" is a field
+ * of a node whose steps are typed in), so the message names the two ways on.
+ */
+export const SIGNED_CONTROL_GONE =
+  'The page no longer has that control. To go on, change the bot on the import form, or let self-repair fix it if it is set up (AI Repair on the RPA node).';
+/** A step failure of signed steps: the Find-by advice of locatorNotFound replaced by SIGNED_CONTROL_GONE; anything else unchanged. */
+export const signedStepMessage = (message: string): string =>
+  message.replace(/Check the spelling or try Find by: (?:Visible Text|Role and Name)\./, SIGNED_CONTROL_GONE);
 export const locatorNotFound = (desc: string, url: string, seconds: number): string =>
   `No element found for ${desc} on ${url} after ${seconds} s. ${locatorSuggestion(desc)}`;
 export const locatorNotUnique = (desc: string, count: number): string =>
