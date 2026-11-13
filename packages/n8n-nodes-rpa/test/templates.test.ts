@@ -1805,7 +1805,8 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       'Sets a new password from the run variable {{var.newPassword}} when the site asks for one.',
       'Gives the clipboard&#39;s text to n8n: step 4 (Copy the total), as &quot;total&quot;. The desktop runner allows this only when its policy allows clipboard reads.',
       'A flag a later engine adds.',
-      'Proven in a fresh browser: 7 rows (the page states no total).',
+      // Said once: the line above says the page states no total.
+      'Proven in a fresh browser: 7 rows.',
     ]);
     const detailed = reviewFields({ $: nodesRan({ ...ran, Settings: [[{ json: { ...settingsJson(), showDetails: true } }]] }) });
     expect(detailed[0].html).toBe(String(fields[0].html).replace(POINTER, '') + '<h4>Details of every step (how each one finds its control)</h4><p><em><b>Safety flags:</b> host: a.example&#39; &lt;script&gt;; …</em></p>'
@@ -2252,8 +2253,8 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       'Approved and signed: erp&lt;1&gt; v1 is now the version that runs under that name. Signed as writes: step 16 (Click Save).',
       'Approved and signed: feed v1 is now the version that runs under that name.',
       'Rejected: other v1. Nothing was signed.',
-      'Not signed: bad v1. Sign Steps refused: the steps do not match the hash that was reviewed',
-      'Not signed. Sign Steps needs an RPA Step Signing credential',
+      'Not signed: bad v1. Sign Steps refused: the steps do not match the hash that was reviewed.',
+      'Not signed. Sign Steps needs an RPA Step Signing credential.',
     ]);
     expect(reviewed([], [], [draft({ surface: 'desktop', forApproval: true })])).toEqual(['Nothing was signed: the review page was not answered in time.']);
     // Both pages say the same about the step lists.
@@ -2740,7 +2741,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // Sign steps refused (an approver not on the list), or the review page not answered: the old version keeps running too.
     const refused = await review('', { writes_0: [], decision_0: 'Approve and sign' }, signedIn('member@example.com'));
     expect(lastPage(refused).text.split('\n')).toEqual([
-      `Not signed: ${String(old.name)} v2. Sign Steps refused: The n8n user who submitted the approval form is not on the Approver Allowlist`,
+      `Not signed: ${String(old.name)} v2. Sign Steps refused: The n8n user who submitted the approval form is not on the Approver Allowlist. Ask a person on the Approver Allowlist to approve it on this form.`,
       `Nothing changed: ${String(old.name)} version 1 keeps running.`,
     ]);
     expect(lastPage({ after: rejected.after, signed: [], errors: [] }, { name: 'steps table' }).text.split('\n')).toEqual([
@@ -2851,11 +2852,26 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(last([{ status: 'active', name: 'line-item-export', version: 5 }])[0]).toBe('Approved and signed: line-item-export version 5 is now the version that runs, replacing version 4.');
     expect(last([{ status: 'rejected', name: 'line-item-export', version: 5 }])[0]).toBe('Rejected: line-item-export v5. Nothing was signed. Version 4 keeps running.');
     expect(last([], [{ error: 'Sign Steps refused: a reason', details: { name: 'line-item-export', version: 5 } }]).slice(0, 2))
-      .toEqual(['Not signed: line-item-export v5. Sign Steps refused: a reason', 'Nothing changed: line-item-export version 4 keeps running.']);
+      .toEqual(['Not signed: line-item-export v5. Sign Steps refused: a reason.', 'Nothing changed: line-item-export version 4 keeps running.']);
     // Approved, Supersede older versions turns version 4 superseded (an upload is a first version: every older active row).
     const supersede = table(byName(t, 'Supersede older versions')).filters!.conditions;
     const lte = supersede.find((c) => c.condition === 'lte')!;
     expect(evaluate(String(lte.keyValue), { $: () => ({ item: { json: { baseVersion: null, version: 5 } } }) })).toBe(2147483647);
+  });
+
+  it('a member who may not approve: the last page ends its sentence, says whom to ask, and points to no execution', () => {
+    const POINTER = 'The full report, and the reason for any step list that could not be proved, is on the Data output of Import steps in this execution.';
+    const page = (error: string) => render(completion('Imported').completionMessage, { $: nodesRan({
+      Settings: [[{ json: settingsJson() }]], 'Import steps': [[{ json: { report: { steps: 2, items: [] }, drafts: [{ name: 'feed', forApproval: true }] } }], []],
+      [REVIEW]: [[{ json: { decision_0: 'Approve and sign' } }]], 'Sign steps': [[], [{ json: { error, details: { name: 'feed', version: 1 } } }]],
+    }) }).split('\n');
+    const member = page('Sign Steps refused: The n8n user who submitted the approval form is not on the Approver Allowlist');
+    expect(member).toEqual(['Imported: 2 steps.', 'Not signed: feed v1. Sign Steps refused: The n8n user who submitted the approval form is not on the Approver Allowlist. Ask a person on the Approver Allowlist to approve it on this form.']);
+    expect(page('Sign Steps refused: Approved By is not on the Approver Allowlist').join('\n')).not.toContain(POINTER);
+    // Any other refusal: the owner reads the execution, so the page still says where the full report is.
+    expect(page('Sign Steps refused: the steps do not match the hash that was reviewed')).toEqual(['Imported: 2 steps.', 'Not signed: feed v1. Sign Steps refused: the steps do not match the hash that was reviewed.', POINTER]);
+    // A reason that ends its own sentence gets no second full stop.
+    expect(page('Sign Steps refused: the steps changed.')[1]).toBe('Not signed: feed v1. Sign Steps refused: the steps changed.');
   });
 
   it('has the stickies: About (grey), Set once (green, a checklist), Approval by email (grey, the option), Why approval (grey)', () => {

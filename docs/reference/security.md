@@ -95,7 +95,10 @@ an **RPA Step Signing** credential that its own project owns, and never one of t
     asks for an n8n sign-in too, but any signed-in n8n user who has a page's address can open and submit it. So the
     approver is the n8n user who submits **Review and approve**, as n8n reports it. Sign Steps signs only when that
     user is on **Sign steps → Approver Allowlist**, and the row records their n8n address. Nobody signed in, or a user
-    not on the list, signs nothing. Removing a person from n8n, or from the list, ends their access.
+    not on the list, signs nothing. Removing a person from n8n, or from the list, ends their access. An n8n user who
+    may not run the workflow gets n8n's own page, "Authorization unavailable. You do not have sufficient permissions to
+    authorize this request.", and nothing is imported. To let them import, the owner shares the workflow with them
+    (**Share** on the workflow) or moves it to a project they belong to.
   - **Basic Auth (`--form-login basic`, for approvers with no n8n account).** Anyone who has the form's user name and
     password can open the form. The pages after the first are not behind the password: anyone who has a page's
     address can open and submit it, and n8n puts that address in the browser's address bar. The row records the
