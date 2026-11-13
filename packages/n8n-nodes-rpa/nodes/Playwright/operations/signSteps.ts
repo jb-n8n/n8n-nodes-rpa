@@ -6,7 +6,7 @@ import type { Engine } from '../engine.js';
 import { configNodeError, errorJson } from '../errors.js';
 import {
   changeList, DESKTOP_EVIDENCE_LINES, evidenceLine, fullSafetyFlags, hasDownloadStep, importAddedSteps, isDesktopProposal, isFileDocument, leftOutList,
-  NOT_REPLAYED_EVIDENCE_LINE, reviewChanges, reviewSteps, safetyLine, type ReviewStep,
+  NOT_REPLAYED_EVIDENCE_LINE, POSITION_MARKS, reviewChanges, reviewSteps, safetyLine, type ReviewStep,
 } from '../format.js';
 import { configErrorItem } from '../output.js';
 import { rejectedRecord, signedRecord, type StepsRecord } from '../rows.js';
@@ -145,7 +145,11 @@ function sameReviewStep(shown: unknown, built: ReviewStep): boolean {
   // emails showed every description as a warning, which says more, never less, than the rebuilt one.
   if (shown.quiet !== undefined && !(shown.quiet === true && built.quiet === true)) return false;
   const marks = shown.marks.map((m) => (typeof m === 'string' ? m.replace(STARTS_AS, '$1') : m));
-  if (marks.length !== built.marks.length || marks.some((m, i) => m !== built.marks[i])) return false;
+  // The position mark (a step that finds its control by its row or place) is the last mark. An item made before it
+  // existed shows none: it signs as before, as an item without reviewSteps does. A mark that is shown must be the one
+  // the step gets.
+  const same = (want: readonly string[]) => marks.length === want.length && marks.every((m, i) => m === want[i]);
+  if (!same(built.marks) && !same(built.marks.filter((m) => !POSITION_MARKS.includes(m)))) return false;
   // Only a step the import may add (a wait for a window, a returned file) may be shown as added.
   if (shown.added !== undefined && !(shown.added === true && built.added === true)) return false;
   if (shown.each === undefined && built.each === undefined) return true;

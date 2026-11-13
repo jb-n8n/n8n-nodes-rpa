@@ -498,6 +498,71 @@ function browserSentence(s: Json, shownUrl: (url: string) => string): Sentence {
 }
 
 /**
+ * The mark of a step that finds its control by the row it is in (a desktop name such as "Vendor Row 1", as the
+ * recorder's bar marks it), and of one that finds it by its place among others (a desktop condition's index, a browser
+ * CSS selector such as `tr:nth-child(1) button`). Either way, a later run acts on whatever is in that place then.
+ */
+export const BY_ROW = 'found by its row: at each run it acts on whatever is in that row';
+export const BY_POSITION = 'found by its position: at each run it acts on whatever is in that place';
+/** The two marks above: an item made before they existed shows neither, and still signs (signSteps sameReviewStep). */
+export const POSITION_MARKS: readonly string[] = [BY_ROW, BY_POSITION];
+
+/** A name that carries a row position, as the recorder judges it (Rpa.Recorder.Core LocatorRules.IsPositional). */
+const ROW_POSITION = /\bRow [0-9]+\b/;
+
+/**
+ * How a desktop target finds its control when it does so by position: by a condition's index (any of its path), or,
+ * as the recorder marks it, by an own condition without an automation id whose name carries a row ("Vendor Row 1").
+ * Only the primary target: it is the one the step names and uses first.
+ */
+function desktopPosition(t: unknown): string | undefined {
+  const path = asJson(asJson(t).uia).path;
+  if (!Array.isArray(path) || path.length === 0) return undefined;
+  if (path.some((c) => asJson(c).index !== undefined)) return BY_POSITION;
+  const own = asJson(path[path.length - 1]);
+  return own.automationId === undefined && typeof own.name === 'string' && ROW_POSITION.test(own.name) ? BY_ROW : undefined;
+}
+
+/**
+ * A CSS selector (or the XPath Playwright also takes there) that picks an element by its place among others: an
+ * nth-child or nth-of-type, a first or last child, an nth match, or an XPath index.
+ */
+const POSITIONAL_CSS = /:nth-(?:last-)?(?:child|of-type)\s*\(|:nth-match\s*\(|:(?:first|last)-(?:child|of-type)\b|>>\s*nth\s*=|^\s*(?:xpath=|\/|\.\.?\/|\()[\s\S]*\[\s*(?:\d+|last\(\)[^\]]*|position\(\)[^\]]*)\s*\]/i;
+
+/** Whether a browser locator (its primary, the elements it is searched within, and its frame) finds by position. */
+function browserPositional(l: unknown): boolean {
+  const loc = asJson(l);
+  if (typeof loc.css === 'string' && POSITIONAL_CSS.test(loc.css)) return true;
+  if (typeof loc.frame === 'string' && POSITIONAL_CSS.test(loc.frame)) return true;
+  return loc.within !== undefined && browserPositional(loc.within);
+}
+
+/** The locators a browser step acts on: the control it clicks, types into, chooses in, presses in, hovers or sends with. */
+function browserTargets(s: Json): unknown[] {
+  const f = (k: string, inner: string) => (s[k] === undefined ? [] : [asJson(s[k])[inner]]);
+  return [
+    ...(s.click === undefined ? [] : [s.click]), ...(s.hover === undefined ? [] : [s.hover]),
+    ...f('fill', 'field'), ...f('select', 'field'), ...f('check', 'field'), ...f('clickAll', 'target'), ...f('press', 'target'),
+    ...f('popup', 'trigger'), ...f('submit', 'button'), ...f('download', 'trigger'), ...f('paginate', 'next'),
+  ].filter((l) => l !== undefined);
+}
+
+/** The locators a desktop step acts on or reads from, as the recorder marks them. */
+function desktopTargets(s: Json): unknown[] {
+  const f = (k: string, inner: string) => (s[k] === undefined ? [] : [asJson(s[k])[inner]]);
+  return [
+    ...(s.click === undefined ? [] : [s.click]), ...(s.doubleClick === undefined ? [] : [s.doubleClick]),
+    ...f('fill', 'field'), ...f('select', 'field'), ...f('check', 'field'), ...f('key', 'target'), ...f('read', 'target'),
+  ].filter((l) => l !== undefined);
+}
+
+/** The step's position mark (BY_ROW or BY_POSITION), from the step itself, or undefined. */
+function positionMark(s: Json, desktop: boolean): string | undefined {
+  if (desktop) return desktopTargets(s).map(desktopPosition).find((m) => m !== undefined);
+  return browserTargets(s).some(browserPositional) ? BY_POSITION : undefined;
+}
+
+/**
  * For the review page only (shown, never signed or reviewed): each step's short sentence and marks. A desktop step names
  * a variable secret when the import says so (`secretVariables`); a browser step, when it is a secret fill or a password
  * change. `startValues`: a recording's start values; `added`: the step numbers (from 1) the import added. `shownUrl`: the
@@ -524,6 +589,8 @@ export function reviewSteps(
       ...(s.expectFile || s.download ? ['returns a file'] : []),
       ...(s.read && asJson(s.read).as ? [`gives its text to n8n as ${String(asJson(s.read).as)}`] : []),
       ...(s.signIn ? ['signs in with the RPA Site Login'] : []),
+      // Last, so that an item made before this mark existed differs only by its absence (signSteps sameReviewStep).
+      ...((m) => (m ? [m] : []))(positionMark(asJson(own), o.desktop)),
     ];
     const said = o.desktop ? desktopSentence(s) : browserSentence(s, o.shownUrl);
     return {
