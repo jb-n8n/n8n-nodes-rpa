@@ -450,6 +450,19 @@ describe('buildWorkflow', () => {
     // The import name must be usable as a literal: one that n8n would read as an expression is refused.
     expect(() => buildWorkflow(flowOf([]), [], { name: '={{ 1 }}' })).toThrow(/Name/);
     expect(() => buildWorkflow(flowOf([]), [], { name: '  ' })).toThrow(/Name/);
+    // A step list's own name and its variables' names are written into parameters as they are: the same rule, checked here too.
+    const hostileName = '={{ $env.SECRET }}';
+    expect(() => buildWorkflow(flowOf([{ kind: 'browser', sequence: 1, displayName: 'B', draft: hostileName }]), [draft(hostileName)], { name: 'ok' })).toThrow(/Name of a step list/);
+    const desk = (name: string, variables: string[]) => ({
+      name, writeCandidates: [], variables, secretVariables: [],
+      script: { surface: 'desktop' as const, name, version: 1, app: { exe: 'App.exe' }, steps: [{ intent: 'Click', click: { uia: { path: [{ name: 'x' }] } } }] },
+    });
+    const deskFlow = (name: string) => ({ name: 'ok', nodes: [{ kind: 'desktop' as const, sequence: 1, displayName: 'Desk', draft: name }] });
+    expect(() => buildWorkflow(deskFlow(hostileName), [], { name: 'ok', desktopDrafts: [desk(hostileName, [])], source: 'recording' })).toThrow(/Name of a step list/);
+    expect(() => buildWorkflow(deskFlow('ok'), [], { name: 'ok', desktopDrafts: [desk('ok', ['={{ $env.SECRET }}'])], source: 'recording' })).toThrow(/variable's name/);
+    expect(() => buildWorkflow(deskFlow('ok'), [], { name: 'ok', desktopDrafts: [desk('ok', ['a b'])], source: 'recording' })).toThrow(/variable's name/);
+    const fine = buildWorkflow(deskFlow('ok'), [], { name: 'ok', desktopDrafts: [desk('ok', ['invoice_no'])], source: 'recording' });
+    expect((byName(fine, 'Desk').parameters as { options: { variables: { values: Array<{ name: string }> } } }).options.variables.values).toEqual([{ name: 'invoice_no', value: '' }]);
   });
 
   it('Run steps reads the signed row from its Get active steps by name: a node put between them changes nothing, and a name cannot break out', () => {

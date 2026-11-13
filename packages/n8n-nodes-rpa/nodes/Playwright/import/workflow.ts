@@ -173,6 +173,8 @@ export const fromRow = (get: string, field: 'steps' | 'signature' | 'approvedBy'
   field === 'steps' ? `={{ $(${jsName(get)}).first().json.steps ?? '' }}` : `={{ $(${jsName(get)}).first().json.${field} }}`;
 /** A literal parameter value, unless it could be or become an expression (a leading "=", or "{{" anywhere): then none. */
 const literal = (v: string | undefined): string | undefined => (v !== undefined && v !== '' && !v.startsWith('=') && !v.includes('{{') ? v : undefined);
+/** A variable's name as the steps can state it ({{var.name}}). */
+const PLAIN_NAME = /^[A-Za-z0-9_]+$/;
 const basename = (path: string) => path.split(/[\\/]/).pop() ?? '';
 /** Says why a literal from the project is not in the parameter, for the node's notes. */
 function missing(what: string, v: string | undefined): string {
@@ -385,6 +387,10 @@ class Builder {
   }
   /** Options → Variables for the steps' run variables: not secret ones, each with its start value or empty; secret ones are left out. */
   private variablesOption(all: string[], secret: Set<string>, start: Record<string, string> = {}): Record<string, unknown> {
+    // Names come from {{var.name}} in the steps, so they are letters, digits and "_". Checked again here, because a name
+    // is written into the node as it is: one that n8n could read as an expression stops the import.
+    const odd = all.find((v) => !PLAIN_NAME.test(v));
+    if (odd !== undefined) throw new Error(`A variable's name must be letters, digits and "_" only: ${JSON.stringify(odd.slice(0, 60))}`);
     const values = all.filter((v) => !secret.has(v)).map((name) => ({ name, value: literal(start[name]) ?? '' }));
     for (const v of secret) this.secretVariables.add(v);
     return values.length ? { variables: { values } } : {};
@@ -865,6 +871,10 @@ function listed(names: string[]): string {
  */
 export function buildWorkflow(flow: UiPathFlow, drafts: Draft[], opts: BuildWorkflowOptions): WorkflowJson {
   if (opts.name.trim() === '' || opts.name.startsWith('=')) throw new Error('The Name must not be empty or start with "="');
+  // A step list's own name is written into parameters as it is (the table filter, Run steps' Name), so the same rule holds for it.
+  for (const d of [...drafts, ...(opts.desktopDrafts ?? [])]) {
+    if (d.name.trim() === '' || d.name.startsWith('=')) throw new Error(`The Name of a step list must not be empty or start with "=": ${JSON.stringify(d.name.slice(0, 60))}`);
+  }
   const b = new Builder(opts.name, new Map(drafts.map((d) => [d.name, d])), new Map((opts.desktopDrafts ?? []).map((d) => [d.name, d])), opts.codeWorkflow, opts.source, opts.run, opts.credentials);
   const from = FROM[b.source];
   const uipath = b.source === 'uipath';
