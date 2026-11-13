@@ -96,6 +96,7 @@ All notable changes to `n8n-nodes-rpa`, the `rpa-browser` image and the Windows 
 
 ### Security
 
+- **Template 3's approval emails show step and page text as text.** n8n's send-and-wait email turns `&amp;`, `&lt;`, `&gt;`, `&quot;` and `&#39;` back into characters before it puts the message into the email's HTML, so a name, a step's sentence or description, a typed value, the safety flags, the evidence, the change list or the left-out list that held markup could show in the approver's email as a link or an image. Both approval messages (browser and desktop) now show `<`, `>` and `&` in that text as `‹`, `›` and `＆`, a line break inside a value as a space, and a backslash before `n` as `＼`. This stays right if n8n later escapes the message itself. The template's own line breaks are unchanged. Version 0.1.0's **Ask for approval** is affected too (its name, evidence and safety lines): import template 3 again. The import form's **Import failed** page shows the reason as text too.
 - **RPA: 5 Import a bot** refuses an address that carries values (anything after `?`) before anything is read or imported: n8n fills the fields of every page of a form from that address, the review page's decision and write ticks too.
 - A secret variable or a secret fill's value is masked in screenshots, and a screenshot or PDF of a page that shows one is refused.
 - A sign-in judges a login form by its own action, and a refusal names the address to list under **Pages Where the Password May Be Typed**.

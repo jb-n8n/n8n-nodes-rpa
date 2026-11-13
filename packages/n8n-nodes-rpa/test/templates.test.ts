@@ -600,7 +600,7 @@ describe('3-approve-steps.json', () => {
     const message = render(String(ask.message), { $ });
     // The short view first: what it does besides reading, then one short sentence per step with its marks.
     expect(message.split('\n\nClick Review and decide')[0]).toBe('Desktop steps v1 for erp-1, for your approval.\nOpens ErpDemo.exe on the desktop runner.\nReturns a file to n8n: step 6.\n'
-      + 'Not tried by the import: read every step before you approve.\n\nThe steps:\n1. Wait for the window\n2. Click Save &lt;b&gt;\n3. Type into User name (variable username)\n4. Type &quot;2026-11-30&quot; into Date to\n5. Read the count (gives its text to n8n as out_count)\n6. Return the file (returns a file)');
+      + 'Not tried by the import: read every step before you approve.\n\nThe steps:\n1. Wait for the window\n2. Click Save \u2039b\u203a\n3. Type into User name (variable username)\n4. Type "2026-11-30" into Date to\n5. Read the count (gives its text to n8n as out_count)\n6. Return the file (returns a file)');
     // A secret variable is marked as one, as on the review page (the item names them; never a value).
     const secret = render(String(ask.message), { $: (name: string) => ({ item: { json: name === 'Settings' ? { approvalTimeoutHours: 72 } : { ...received, secretVariables: ['username'] } } }) });
     expect(secret).toContain('\n3. Type into User name (secret variable username)\n');
@@ -618,11 +618,11 @@ describe('3-approve-steps.json', () => {
       .split('The steps:\n')[1].split('\n\nClick Review and decide')[0];
     // A description that says something else is marked ⚠ (the message is plain text).
     expect(shownSteps(fromNode)).toBe('1. Click Post ⚠ (described differently as: Read the total)\n'
-      + '2. Type &quot;&lt;b&gt;9999&lt;/b&gt;&quot; into a field without a name ⚠ (described differently as: Read the total)\n'
+      + '2. Type "\u2039b\u203a9999\u2039/b\u203a" into a field without a name ⚠ (described differently as: Read the total)\n'
       + '3. Type into User name (secret variable username)');
     // Without reviewSteps, or with a list that does not match the steps, the email words the steps itself, as before.
     const { reviewSteps: _r, ...older } = fromNode;
-    expect(shownSteps(older)).toBe('1. Read the total\n2. Type &quot;&lt;b&gt;9999&lt;/b&gt;&quot; into Read the total\n3. Type into User name (secret variable username)');
+    expect(shownSteps(older)).toBe('1. Read the total\n2. Type "\u2039b\u203a9999\u2039/b\u203a" into Read the total\n3. Type into User name (secret variable username)');
     expect(shownSteps({ ...fromNode, reviewSteps: fromNode.reviewSteps.slice(1) })).toBe(shownSteps(older));
     // A start value is not on the item, so Sign Steps cannot check it: the email leaves it out of the marks.
     const started = fromNode.reviewSteps.map((r, i) => (i === 2 ? { ...r, marks: ['variable username, starts as jdoe'] } : r));
@@ -631,7 +631,7 @@ describe('3-approve-steps.json', () => {
     expect(message).toContain('tick the steps that save, send or submit (none is ticked for you), then approve or reject.');
     expect(message).toContain('Ticked steps are allowed to save or send. An unticked step is stopped only when it tries to use a control or key that your administrator has protected on the bot machine.');
     // The full detail below: the item's own change list, evidence and flags.
-    expect(message).toContain('Details of every step (how each one finds its control):\nEvidence: Not replayed\nSafety flags: desktop app: &quot;ErpDemo.exe&quot;\nStep 1: Wait for the window\nStep 2: Click Save &lt;b&gt;\n');
+    expect(message).toContain('Details of every step (how each one finds its control):\nEvidence: Not replayed\nSafety flags: desktop app: "ErpDemo.exe"\nStep 1: Wait for the window\nStep 2: Click Save \u2039b\u203a\n');
     expect(message).not.toContain('Write steps');
     const description = render(String((ask.options as IDataObject).responseFormDescription), { $ });
     expect(description).toBe('Steps v1 for erp-1. Tick the steps that save, send or submit, from the numbered list in the email; none is ticked for you. Ticked steps are allowed to save or send. An unticked step is stopped only when it tries to use a control or key that your administrator has protected on the bot machine.');
@@ -689,19 +689,60 @@ describe('template 3 approval email', () => {
   const $ = (name: string) => ({ item: { json: name === 'Settings' ? { approvalTimeoutHours: 72 } : item } });
   const out = render(message, { $ });
 
-  it('HTML-escapes every value from the run in the send-and-wait message, as the review email does', () => {
-    expect(out).not.toMatch(/<img|<script|<b>|<i>/);
-    expect(out).toContain('Steps v4&lt;i&gt; for feed&lt;b&gt;x&lt;/b&gt;');
-    expect(out).toContain('Evidence (as reported by the run): 7 rows &lt;img src=x onerror=alert(1)&gt;');
-    expect(out).toContain('Safety flags: host: a.example&#39; &lt;script&gt;');
-    expect(out).toContain('Hash: ab&quot;c');
-    expect(out).toContain('Review digest: d&#39;e');
+  /**
+   * What n8n 2.45 makes of a send-and-wait message (nodes-base utils/sendAndWait/utils.ts getSendAndWaitConfig, lines
+   * 520-522): its escapeHtml (utils/utilities.ts 387) turns &amp; &lt; &gt; &#39; &quot; BACK into characters, then \n
+   * (a backslash and n) and <br> become line breaks, and email-templates.ts puts the result into
+   * <p style="white-space: pre-line;">${message}</p> as it is. A later n8n might escape the message instead.
+   */
+  const n8nNow = (m: string) => m.trim().replace(/&amp;|&lt;|&gt;|&#39;|&quot;/g, (x) => ({ '&amp;': '&', '&lt;': '<', '&gt;': '>', '&#39;': "'", '&quot;': '"' })[x] ?? x)
+    .replace(/\\n/g, '\n').replace(/<br>/g, '\n');
+  const n8nEscaping = (m: string) => m.trim().replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] ?? c);
+  /** HTML text as a reader sees it: entities shown as their characters. */
+  const seen = (html: string) => html.replace(/&amp;|&lt;|&gt;|&#39;|&quot;/g, (x) => ({ '&amp;': '&', '&lt;': '<', '&gt;': '>', '&#39;': "'", '&quot;': '"' })[x] ?? x);
+
+  it('every piece of data in both approval messages arrives as text, whatever n8n does to the message', () => {
+    const MARKUP = ['<a href="https://evil.example/">Approve here</a>', '<img src=x onerror=alert(1)>', '&lt;script&gt;alert(1)&lt;/script&gt;', 'Tom &amp; Jerry &#60;b&#62;', 'one\\ntwo<br>three'];
+    const evil = (k: number) => `${MARKUP[k % MARKUP.length]} ${k}`;
+    const stepsData = { surface: 'desktop', app: { exe: evil(0) }, steps: [{ intent: evil(1), click: { uia: { path: [{ name: evil(2) }] } } }, { intent: 'x', fill: { field: { uia: { path: [{ name: 'Note' }] } }, value: evil(3) } }] };
+    const data = {
+      version: evil(4), name: evil(0), hash: evil(1), digest: evil(2), evidenceLine: evil(3), safetyLine: evil(4),
+      leftOutList: `${evil(0)}\n${evil(1)}`, changeList: `${evil(2)}\n${evil(3)}\n${evil(4)}`,
+      steps: stepsData, reviewSteps: [{ text: evil(0), describedAs: evil(1), marks: [evil(2)] }, { text: evil(3), marks: [evil(4)] }],
+    };
+    const t3 = load('3-approve-steps.json');
+    for (const name of ['Ask for approval', 'Ask for approval (desktop steps)']) {
+      const ask = (json: object) => render(String(byName(t3, name).parameters.message), { $: (n: string) => ({ item: { json: n === 'Settings' ? { approvalTimeoutHours: 72 } : json } }) });
+      for (const json of [data, { ...data, reviewSteps: undefined }, { ...data, steps: { ...stepsData, steps: [] }, reviewSteps: [] }]) {
+        const message = ask(json);
+        // Today: n8n un-escapes, then puts the text into HTML. Nothing in it is a tag, an entity or a <br>.
+        const now = n8nNow(message);
+        expect(now, name).not.toMatch(/[<&]/);
+        // A later n8n that escapes the message shows the same text: there is nothing to show as &lt; or &amp;.
+        expect(seen(n8nEscaping(message)), name).toBe(message.trim());
+        // The data is there, as text, with look-alikes for the three characters that make markup.
+        expect(message, name).toContain('‹a href="https://evil.example/"›Approve here‹/a›');
+        expect(message, name).toContain('‹img src=x onerror=alert(1)›');
+        expect(message, name).toContain('＆lt;script＆gt;');
+        // A backslash and n in the data never makes a line of its own; the template's own line breaks stay.
+        expect(now.split('\n').filter((l) => /^three \d$|^two/.test(l)), name).toEqual([]);
+        expect(now, name).toContain('\nHash: ');
+      }
+    }
+  });
+
+  it('the values the email shows are all there, each as text', () => {
+    expect(out).toContain('Steps v4‹i› for feed‹b›x‹/b›');
+    expect(out).toContain('Evidence (as reported by the run): 7 rows ‹img src=x onerror=alert(1)›');
+    expect(out).toContain("Safety flags: host: a.example' ‹script›");
+    expect(out).toContain('Hash: ab"c');
+    expect(out).toContain("Review digest: d'e");
     expect(out).toContain('expires after 72 hours');
   });
 
   it('says what Approve and Reject cause, and prints the change list, so the email stands on its own', () => {
     const withChanges = render(message, { $: (name: string) => ({ item: { json: name === 'Settings' ? { approvalTimeoutHours: 72 } : { ...item, changeList: 'step 2 now clicks "Next"\n<div>' } } }) });
-    expect(withChanges).toContain('What changed (as reported by the run):\nstep 2 now clicks &quot;Next&quot;\n&lt;div&gt;');
+    expect(withChanges).toContain('What changed (as reported by the run):\nstep 2 now clicks "Next"\n\u2039div\u203a');
     expect(out).toContain('Approve: these exact steps are signed and n8n runs them with the stored login, without asking again, until the site changes.');
     expect(out).toContain('Reject: nothing is signed; the version in use, if any, stays in use.');
     expect(out).not.toContain('previous email');
@@ -712,7 +753,7 @@ describe('template 3 approval email', () => {
   it('never says that browser steps that were not replayed ran: the labels follow the evidence line', () => {
     const notReplayed = { ...item, evidenceLine: NOT_REPLAYED_LINE, changeList: 'Added: Send the form (submit POST /send)' };
     const shown = render(message, { $: (name: string) => ({ item: { json: name === 'Settings' ? { approvalTimeoutHours: 72 } : notReplayed } }) });
-    expect(shown).toContain(`Evidence: ${NOT_REPLAYED_LINE.replace(/'/g, '&#39;')}`);
+    expect(shown).toContain(`Evidence: ${NOT_REPLAYED_LINE}`);
     expect(shown).toContain('What changed (as written; these steps were never run):\nAdded: Send the form');
     expect(shown).not.toContain('as reported by the run');
     expect(shown).not.toContain('Proven');
@@ -721,12 +762,12 @@ describe('template 3 approval email', () => {
   it('shows the left-out steps under their own heading before the evidence, escaped; with none, no heading', () => {
     const withLeftOut = { ...item, leftOutList: 'step 4, Pick <b>Status</b>: only one option is imported\nstep 9, Wait: a fixed wait is not imported' };
     const shown = render(message, { $: (name: string) => ({ item: { json: name === 'Settings' ? { approvalTimeoutHours: 72 } : withLeftOut } }) });
-    expect(shown).toContain(`${LEFT_OUT_HEADING}\nstep 4, Pick &lt;b&gt;Status&lt;/b&gt;: only one option is imported\nstep 9, Wait: a fixed wait is not imported\n`);
+    expect(shown).toContain(`${LEFT_OUT_HEADING}\nstep 4, Pick \u2039b\u203aStatus\u2039/b\u203a: only one option is imported\nstep 9, Wait: a fixed wait is not imported\n`);
     expect(shown.indexOf(LEFT_OUT_HEADING)).toBeLessThan(shown.indexOf('Evidence'));
     expect(out).not.toContain('Left out');
     const desktop = String(byName(load('3-approve-steps.json'), 'Ask for approval (desktop steps)').parameters.message);
     const desktopShown = render(desktop, { $: (name: string) => ({ item: { json: name === 'Settings' ? { approvalTimeoutHours: 72 } : withLeftOut } }) });
-    expect(desktopShown).toContain(`${LEFT_OUT_HEADING}\nstep 4, Pick &lt;b&gt;Status&lt;/b&gt;`);
+    expect(desktopShown).toContain(`${LEFT_OUT_HEADING}\nstep 4, Pick \u2039b\u203aStatus\u2039/b\u203a: only one option is imported\nstep 9, Wait`);
     expect(desktopShown.indexOf(LEFT_OUT_HEADING)).toBeLessThan(desktopShown.indexOf('Evidence'));
     expect(render(desktop, { $: (name: string) => ({ item: { json: name === 'Settings' ? { approvalTimeoutHours: 72 } : item } }) })).not.toContain('Left out');
   });
@@ -840,8 +881,8 @@ describe('template 3 emails lead with what browser steps do (reviewSteps), as th
   it('the approval email: the same sentences, ⚠ before a description that says something else', () => {
     const out = ask(item);
     expect(out).toContain('\nThe steps (what each one does, built from the step):\n'
-      + '1. Type into From: &quot;2026-09-01&quot; ⚠ (described differently as: Type the first day of September 2026 into From)\n'
-      + '2. Click Export &lt;b&gt;\n'
+      + '1. Type into From: "2026-09-01" ⚠ (described differently as: Type the first day of September 2026 into From)\n'
+      + '2. Click Export \u2039b\u203a\n'
       + '3. Page through with Next, at most 3 pages, 1 step on each ⚠ (described differently as: Read every page)\n'
       + '   On each page: Click Delete ⚠ (described differently as: Close the banner)\nEvidence');
     expect(out.indexOf('The steps')).toBeLessThan(out.indexOf('What changed'));
@@ -866,14 +907,14 @@ describe('template 3 emails lead with what browser steps do (reviewSteps), as th
     const page = render(html, { $json: json });
     expect(page).toContain('<li>Type into Amount: &quot;1&quot; <b style="color:#b00020">(described differently as: Open the list (described differently as: Click Pay now) &lt;b&gt;)</b></li>'
       + '<li>Click &quot;Save (described differently as: Delete all) &lt;i&gt;&quot; <b style="color:#b00020">(described differently as: Click it)</b></li>');
-    expect(ask(json)).toContain('1. Type into Amount: &quot;1&quot; ⚠ (described differently as: Open the list (described differently as: Click Pay now) &lt;b&gt;)\n'
-      + '2. Click &quot;Save (described differently as: Delete all) &lt;i&gt;&quot; ⚠ (described differently as: Click it)\n');
+    expect(ask(json)).toContain('1. Type into Amount: "1" ⚠ (described differently as: Open the list (described differently as: Click Pay now) \u2039b\u203a)\n'
+      + '2. Click "Save (described differently as: Delete all) \u2039i\u203a" ⚠ (described differently as: Click it)\n');
     // Desktop steps: the one approval email, the same way.
     const desktop = String(byName(t3, 'Ask for approval (desktop steps)').parameters.message);
     const dsteps = [{ intent: `Read it${MARK}x) <b>`, click: { uia: { path: [{ controlType: 'Button', name: `Post${MARK}y) <i>` }] } } }];
     const djson = { name: 'erp', version: 1, steps: { surface: 'desktop', app: { exe: 'App.exe' }, steps: dsteps }, reviewSteps: reviewSteps(dsteps, { desktop: true }) };
     const dshown = render(desktop, { $: (name: string) => ({ item: { json: name === 'Settings' ? { approvalTimeoutHours: 72 } : djson } }) });
-    expect(dshown).toContain('\n1. Click &quot;Post (described differently as: y) &lt;i&gt;&quot; ⚠ (described differently as: Read it (described differently as: x) &lt;b&gt;)\n');
+    expect(dshown).toContain('\n1. Click "Post (described differently as: y) \u2039i\u203a" ⚠ (described differently as: Read it (described differently as: x) \u2039b\u203a)\n');
   });
 
   it('Sign Steps checks the sentences the emails showed: the item goes to Sign steps whole, reviewSteps included', () => {
@@ -2123,7 +2164,10 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // AI Repair is off and no model is connected: the reason is the step's own, with no word about a model.
     expect(data[0].json.error).toBe('drift_detected: No element found for Visible Text "Line Item Report"');
     const shown = render(page.completionMessage, { $json: data[0].json, $: nodesRan({}) });
-    expect(shown).toMatch(/^drift_detected: No element found for Visible Text "Line Item Report"\n/);
+    // As text: the completion page renders HTML (n8n sanitises it, and keeps a link), so the reason is escaped.
+    expect(shown).toMatch(/^drift_detected: No element found for Visible Text &quot;Line Item Report&quot;\n/);
+    expect(render(page.completionMessage, { $json: { error: 'config_error: <a href="https://evil.example/">x</a>' }, $: nodesRan({}) }).split('\n')[0])
+      .toBe('config_error: &lt;a href=&quot;https://evil.example/&quot;&gt;x&lt;/a&gt;');
     expect(shown).toContain('\nDetails, including the import report when there is one, are in the error output of Import steps in this execution.');
   });
 

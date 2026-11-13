@@ -105,7 +105,9 @@ an **RPA Step Signing** credential that its own project owns, and never one of t
   read or imported, and an approval never arrives with its answer chosen by whoever made the link.
 - **By email (an option).** Set `approval` to `by email` in template 5's **Settings**, and each step list goes to
   **RPA: 3 Approve steps**, which emails a named approver. The approval link is a bearer link: anyone who receives or
-  forwards it can approve. Send it to one person. The AI repairs of **RPA: 2 Data feed** use this path.
+  forwards it can approve. Send it to one person. The AI repairs of **RPA: 2 Data feed** use this path. In the
+  approval email, each `<`, `>` and `&` from the steps or the page is shown as `‹`, `›` and `＆`, so that no text from
+  them is read as a link or other markup by the email.
 - **What each step says.** The review page builds each step's sentence from the step itself: what it does, where, and
   the value it types or chooses. A secret's or a variable's value is never shown. A variable is marked from what the step
   types or chooses, never from its description. A step's description comes from
