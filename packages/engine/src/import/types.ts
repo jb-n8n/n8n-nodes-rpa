@@ -65,8 +65,14 @@ export interface ImportOptions {
   hasSiteLogin: boolean;
   /** Import Steps → Options → One-Time Code Workflow is set: a recorded code becomes the sign-in's totp with source 'workflow'. */
   codeFromWorkflow?: boolean;
+  /**
+   * The version every draft gets (a whole number of 1 or more; 1 when absent): the import form gives the approved
+   * version plus one when it changes a bot, so a change is a new version under the same name. Still a first version
+   * for review (no base): the approver reviews every step.
+   */
+  version?: number;
 }
-/** Version 1, unsigned, accepted by parseScript. */
+/** Version 1 (or ImportOptions.version), unsigned, accepted by parseScript. */
 export interface Draft { name: string; script: Script }
 /**
  * A desktop draft (a UiPath desktop sequence, a desktop step document or a desktop recording): version 1, unsigned,

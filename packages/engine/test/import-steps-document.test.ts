@@ -130,6 +130,27 @@ describe('a step document as an import source: the import run', () => {
 });
 
 describe('a step document as an import source: reading it', () => {
+  it('takes the version the import gives (a change of an approved bot): the steps are that version, never the document\'s own', () => {
+    const steps = [{ intent: 'Open the report', goto: '/acme/reports' }];
+    const at3 = importSource('steps', json({ name: 'line-item-export', version: 7, startUrl: 'https://erp.example.com/', steps }), { ...opts, version: 3 });
+    expect(at3.drafts).toEqual([{ name: 'line-item-export', script: { name: 'line-item-export', version: 3, startUrl: 'https://erp.example.com/', steps } }]);
+    expect(at3.report.items).toEqual([
+      { at: '', kind: 'converted', what: 'Name and version', reason: 'the steps are named "line-item-export", version 3: imported steps are a first version under the import\'s Name' },
+    ]);
+    // A document that already says that version and name: nothing to report.
+    expect(importSource('steps', json({ name: 'line-item-export', version: 3, startUrl: 'https://erp.example.com/', steps }), { ...opts, version: 3 }).report.items).toEqual([]);
+    // Desktop documents too, and the default stays 1.
+    const desk = { surface: 'desktop', app: { exe: 'ErpDemo.exe' }, steps: [{ intent: 'Click Save', click: uia('btnSave', 'Button') }] };
+    expect(importSource('steps', json(desk), { ...opts, version: 2 }).desktopDrafts?.[0].script.version).toBe(2);
+    expect(importSource('steps', json(desk), opts).desktopDrafts?.[0].script.version).toBe(1);
+    // Not a whole number of 1 or more: nothing is imported.
+    for (const version of [0, -1, 1.5, Number.NaN]) {
+      const bad = importSource('steps', json(steps), { ...opts, version });
+      expect(bad.drafts, String(version)).toEqual([]);
+      expect(bad.report.items, String(version)).toEqual([{ at: '', kind: 'error', what: 'Import', reason: 'the version must be a whole number of 1 or more' }]);
+    }
+  });
+
   it('is read as data: a bare array of steps, the import\'s Name and version 1, and the Start URL when the document has none', () => {
     const steps = [{ intent: 'Open the report', goto: '/acme/reports' }];
     const r = importSource('steps', Buffer.from(json(steps)), { ...opts, startUrl: 'https://erp.example.com/acme/login' });

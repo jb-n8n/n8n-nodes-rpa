@@ -82,12 +82,20 @@ export interface FailureDetails extends IDataObject {
   submitted: boolean;
   /** Present (true) when the sign-in set a new password before the run failed: the workflow must store it. */
   passwordChanged?: true;
+  /**
+   * What a person should do (guidanceFor): the node error's description without its code. On the item too, because a
+   * workflow that sends failures to the error output (as the generated ones do) never shows that description. Fixed
+   * text chosen by the code and the masked message: it holds nothing from the run.
+   */
+  guidance: string;
+  /** Run Steps with a Site Login: the user name it signs in with (never the password or a code). */
+  account?: string;
 }
 
 /** A failed run as a NodeOperationError: message `<code>: <message>`, its guidance (guidanceFor) as description. */
 export function stepsRunError(node: INode, d: FailureDetails, itemIndex: number): NodeOperationError {
   const message = `${d.code}: ${d.message}`;
-  const error = new NodeOperationError(node, message, { description: `${d.code}: ${guidanceFor(d.code, d.message)}`, itemIndex });
+  const error = new NodeOperationError(node, message, { description: `${d.code}: ${d.guidance}`, itemIndex });
   error.message = message;
   Object.assign(error.context, {
     code: d.code, name: d.name, version: d.version, hash: d.hash, lane: d.lane, stepIntent: d.stepIntent, traceRef: d.traceRef, submitted: d.submitted,
@@ -96,9 +104,12 @@ export function stepsRunError(node: INode, d: FailureDetails, itemIndex: number)
   return error;
 }
 
+/** What to do about a configuration problem: the description of configNodeError, and `guidance` on its error item. */
+export const CONFIG_GUIDANCE = 'Check the node parameters and the RPA credentials.';
+
 /** A configuration problem (parameters or credentials) as a NodeOperationError whose message is the problem itself. */
 export function configNodeError(node: INode, message: string, itemIndex: number): NodeOperationError {
-  const error = new NodeOperationError(node, message, { itemIndex, description: 'Check the node parameters and the RPA credentials.' });
+  const error = new NodeOperationError(node, message, { itemIndex, description: CONFIG_GUIDANCE });
   error.message = message;
   Object.assign(error.context, { configError: true, code: null });
   return error;

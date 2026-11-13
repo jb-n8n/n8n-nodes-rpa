@@ -12,7 +12,7 @@ import { PlaywrightScriptSigningApi } from '../credentials/PlaywrightScriptSigni
 import { PlaywrightSiteLoginApi } from '../credentials/PlaywrightSiteLoginApi.credentials.js';
 import { RpaDesktopRunnerApi } from '../credentials/RpaDesktopRunnerApi.credentials.js';
 import { RpaSecretVariablesApi } from '../credentials/RpaSecretVariablesApi.credentials.js';
-import { CREDENTIALS, desktopRunnerConfig } from '../nodes/Playwright/config.js';
+import { CREDENTIALS, desktopRunnerConfig, siteLoginConfig } from '../nodes/Playwright/config.js';
 import { browserTestResult, CREDENTIAL_TEST_WAIT_MS, scriptSigningResult, secretVariablesTestResult, siteLoginTestResult } from '../nodes/Playwright/credential-tests.js';
 
 // The Local Browser test needs playwright-core to find no Chromium. vi.hoisted runs before the imports above, so
@@ -212,6 +212,25 @@ describe('v2 credential types', () => {
     for (const text of ['letters, digits and _ . ( ) = ~ -', '%3D', 'ZSRV;v=0002', 'without any check of what they send', 'On SAP the same endpoints also save data',
       'an SAP user that can only display', 'not *', 'Forms It May Submit']) expect(reads?.description, text).toContain(text);
     expect(reads?.description).not.toMatch(/any text|Playwright/);
+  });
+  it('RPA Site Login: the fields that decide where steps may go and what they may post take no expression', () => {
+    const props = new PlaywrightSiteLoginApi().properties;
+    const fixed = ['loginUrl', 'navHosts', 'subresourceHosts', 'frameHosts', 'login', 'allowedSubmits', 'readPosts'];
+    for (const name of fixed) expect(props.find((p) => p.name === name)?.noDataExpression, name).toBe(true);
+    // The account's values may come from items (one Site Login, many accounts).
+    for (const name of ['username', 'password', 'totpSecret']) expect(props.find((p) => p.name === name)?.noDataExpression, name).toBeUndefined();
+    // A credential saved before, with an expression in one of these fields: n8n keeps the "=" on save, and on a run
+    // (getNodeParameters with defaults, as CredentialsHelper.applyDefaultsAndOverwrites calls it) drops the "=" of a
+    // noDataExpression field before expressions are resolved. The text is never evaluated: the run stops on a
+    // configuration error that names the field, and nothing is allowed.
+    const base = { loginUrl: 'https://example.com/login', username: 'u', password: 'p' };
+    for (const [field, label] of [['allowedSubmits', 'Form'], ['readPosts', 'Read-only request']]) {
+      const saved = NodeHelpers.getNodeParameters(props, { ...base, [field]: '={{ $json.forms }}' }, false, false, null, null) ?? {};
+      expect(saved[field]).toBe('={{ $json.forms }}');
+      const read = NodeHelpers.getNodeParameters(props, saved, true, false, null, null) ?? {};
+      expect(read[field]).toBe('{{ $json.forms }}');
+      expect(() => siteLoginConfig(read as never), field).toThrow(new RegExp(`^${label} `));
+    }
   });
   it('RPA Step Signing: Signing Key with a hint that needs no terminal', () => {
     const key = new PlaywrightScriptSigningApi().properties.find((p) => p.name === 'secretKey');

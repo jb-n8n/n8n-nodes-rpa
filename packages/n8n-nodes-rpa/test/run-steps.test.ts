@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { CODE_WORKFLOW_GUIDANCE, NO_TOTP_SECRET_GUIDANCE } from '../nodes/Playwright/errors.js';
+import { CODE_WORKFLOW_GUIDANCE, CONFIG_GUIDANCE, GUIDANCE, NO_TOTP_SECRET_GUIDANCE } from '../nodes/Playwright/errors.js';
 import { APPROVER } from './fixtures.js';
 import { NodeHelpers, NodeOperationError, type IDataObject, type INodeExecutionData } from 'n8n-workflow';
 import { isEmptySteps, MAX_BUDGET_MS, proposalDigest, scriptHash, type Proposal, type Script } from 'n8n-rpa-engine';
@@ -463,6 +463,15 @@ describe('one Site Login, many accounts: a username and password set by expressi
     expect(ok.map(errorOf)).toEqual([undefined, undefined, undefined]);
     expect(h.staticData[BREAKER_KEY]).toEqual({});
   });
+  it('each item says which account it was: the user name on the Data item and on the error item, never the password', async () => {
+    const [data] = await executeRunSteps(ctx({ items: many(3), itemCredentials: perAccount(1), continueOnFail: true }), rejectWrong());
+    expect(data.map((d) => (d.json.details as IDataObject | undefined)?.account ?? d.json.account)).toEqual(ACCOUNTS);
+    const text = JSON.stringify(data.map((d) => d.json));
+    for (const p of [WRONG, ...ACCOUNTS.map((a) => `pass-${a}`)]) expect(text).not.toContain(p);
+    // Without a Site Login there is no account.
+    const [plain] = await executeRunSteps(ctx({ credentials: BROWSER_ONLY, params: unsigned() }), fakeEngine(() => scriptOk()));
+    expect(plain[0].json).not.toHaveProperty('account');
+  });
   it('a lock held for one account turns away only that account', async () => {
     await memoryGuardStore().acquireLock(siteLoginKey('site-a', 'bob.harbor'), 60_000);
     const engine = fakeEngine(() => scriptOk());
@@ -727,7 +736,7 @@ describe('AI repair', () => {
     const [data] = await executeRunSteps(ctx({ model: STUB_MODEL, continueOnFail: true, params: repairParams() }), engine);
     expect(data[0].json).toEqual({
       error: refused, message: refused,
-      details: { configError: true, code: null, name: 'items', version: null, hash: '', lane: null, log: [], submitted: true },
+      details: { configError: true, code: null, name: 'items', version: null, hash: '', lane: null, log: [], submitted: true, guidance: CONFIG_GUIDANCE },
     });
     const err = await executeRunSteps(ctx({ model: STUB_MODEL, params: repairParams() }), engine).catch((e: unknown) => e);
     expect((err as NodeOperationError).message).toBe(refused);
@@ -756,7 +765,7 @@ describe('AI repair', () => {
     const [data] = await executeRunSteps(ctx({ model: STUB_MODEL, continueOnFail: true, params: repairParams() }), engine);
     expect(data[0].json).toEqual({
       error: 'AI repair needs an ID Pattern and an extract step.', message: 'AI repair needs an ID Pattern and an extract step.',
-      details: { configError: true, code: null, name: 'items', version: null, hash: '', lane: null, log: [], submitted: false },
+      details: { configError: true, code: null, name: 'items', version: null, hash: '', lane: null, log: [], submitted: false, guidance: CONFIG_GUIDANCE },
     });
   });
 });
@@ -790,7 +799,7 @@ describe('outputs', () => {
       url: 'https://example.com/list', title: 'Items', status: 200, name: 'items', version: 3, hash: 'c3'.repeat(32), lane: 'script',
       confirmed: true, llmCalls: 0, durationMs: 1200, llmTokens: 0, log, rows: [{ id: 'SKU-1001', title: 'Widget' }],
       files: [{ fileName: 'report.csv', mimeType: 'text/csv', bytes: 4, binaryProperty: 'file_3' }],
-      blockedRequests: [{ method: 'POST', host: 'collect.example.net', path: '/b' }], submitted: true,
+      blockedRequests: [{ method: 'POST', host: 'collect.example.net', path: '/b' }], submitted: true, account: USER,
     });
     expect(Object.keys(data[0].binary ?? {}).sort()).toEqual(['file_3', 'screenshot_2', 'trace']);
     expect(data[0].binary?.screenshot_2).toMatchObject({ fileName: 'screenshot_2.png', mimeType: 'image/png' });
@@ -799,7 +808,7 @@ describe('outputs', () => {
   });
   it('without an extract step there is no rows key, and empty lists are left out', async () => {
     const [data] = await executeRunSteps(ctx(), fakeEngine(() => scriptOk({ rows: [], verified: false })));
-    expect(Object.keys(data[0].json)).toEqual(['url', 'title', 'status', 'name', 'version', 'hash', 'lane', 'confirmed', 'llmCalls', 'durationMs', 'llmTokens', 'log']);
+    expect(Object.keys(data[0].json)).toEqual(['url', 'title', 'status', 'name', 'version', 'hash', 'lane', 'confirmed', 'llmCalls', 'durationMs', 'llmTokens', 'log', 'account']);
     expect(data[0].binary).toBeUndefined();
   });
   it('agent lane: rows go to Data, and the Repaired steps item goes to the second output', async () => {
@@ -849,6 +858,7 @@ describe('outputs', () => {
       details: {
         code: 'incomplete', message: 'run cancelled', name: 'items', version: 3, hash: 'c3'.repeat(32), lane: 'script', stepIntent: 'Send the form',
         traceRef: 'trace', durationMs: 900, llmTokens: 0, log: [{ index: 0, intent: 'Open the form', status: 'ok', ms: 5 }], submitted: true,
+        guidance: GUIDANCE.incomplete, account: USER,
       },
     });
     expect(data[0].error).toBeUndefined();
@@ -955,7 +965,16 @@ describe('no message carries a token, a query string or a username', () => {
     }), engine);
     const login = fakeEngine(() => taskFail('login_failed', 'the site rejected the sign-in'));
     const [siteOut] = await executeRunSteps(ctx({ items: many(2), continueOnFail: true }), login);
-    const text = JSON.stringify([unsignedOut, siteOut]);
+    // The user name is on the items as `account` (which account a run was), and nowhere else: no message carries it.
+    const accounts: unknown[] = [];
+    const withoutAccount = (d: INodeExecutionData) => {
+      const { account, ...json } = d.json;
+      const details = json.details as IDataObject | undefined;
+      accounts.push(account ?? details?.account);
+      return details ? { ...json, details: { ...details, account: undefined } } : json;
+    };
+    const text = JSON.stringify([...unsignedOut, ...siteOut].map(withoutAccount));
+    expect(accounts).toEqual([undefined, undefined, undefined, undefined, USER, USER]);
     for (const leak of [TOKEN, 'abc123', USER, PASS, KEY, '?token=']) expect(text).not.toContain(leak);
     expect(unsignedOut.map(errorOf)).toEqual([
       undefined,

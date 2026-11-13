@@ -137,6 +137,10 @@ const STARTS_AS = /^(variable [A-Za-z_][A-Za-z0-9_]*), starts as [\s\S]*$/;
 /** True when an entry of the item's `reviewSteps` says what the rebuilt entry says (see reviewStepsProblem). */
 function sameReviewStep(shown: unknown, built: ReviewStep): boolean {
   if (!isObject(shown) || shown.text !== built.text || !Array.isArray(shown.marks)) return false;
+  // The author's description beside the sentence: there exactly when the rebuilt step has one, and the same text. An
+  // item made before the description had its own field carries it inside `text`, which then differs: it is refused,
+  // so nothing is signed that a person saw worded another way.
+  if (shown.describedAs !== built.describedAs) return false;
   const marks = shown.marks.map((m) => (typeof m === 'string' ? m.replace(STARTS_AS, '$1') : m));
   if (marks.length !== built.marks.length || marks.some((m, i) => m !== built.marks[i])) return false;
   // Only a step the import may add (a wait for a window, a returned file) may be shown as added.

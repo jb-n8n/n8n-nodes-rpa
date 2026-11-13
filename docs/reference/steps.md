@@ -273,9 +273,11 @@ the **Repaired Steps** output. Nothing repaired runs until Sign Steps signs it.
 
 ## Output
 
-Data: `{ url, title, status, name, version, hash, lane, confirmed, llmCalls, durationMs, llmTokens, log, rows?, files?, blockedRequests?, submitted?, passwordChanged? }`,
+Data: `{ url, title, status, name, version, hash, lane, confirmed, llmCalls, durationMs, llmTokens, log, rows?, files?, blockedRequests?, submitted?, passwordChanged?, account? }`,
 plus binaries named `<verb>_<step index>` (for example `screenshot_3`, `file_5`). Desktop runs add `values` (what
-`read` steps returned). `lane` is `script` for signed steps and `agent` for a repair. `confirmed` is `true` only when
+`read` steps returned). `account` is the user name the RPA Site Login signed in with, when one is used: with many
+accounts, it says which account the item is (never the password or a code). `lane` is `script` for signed steps and
+`agent` for a repair. `confirmed` is `true` only when
 **Stated Total Pattern** matched the row count. Take a file in the next node through `files[0].binaryProperty`, not a
 fixed name, because the index changes when a step is added. A run never reports success when a required step failed
 or was skipped.

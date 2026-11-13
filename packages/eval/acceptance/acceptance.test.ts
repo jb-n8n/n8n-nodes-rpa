@@ -363,7 +363,14 @@ const sortedIds = (item: INodeExecutionData) => ((item.json.rows as { id: string
 function scan(items: INodeExecutionData[], extra: unknown[] = [], secrets: Secrets = LEAK_SECRETS): string[] {
   const found = new Set<string>();
   for (const item of items) {
-    for (const label of valueLeaks(item.json, secrets)) found.add(label);
+    // Run Steps names the account a run signed in with (`account`, `details.account`): the user name, on purpose, and
+    // only there. Every other field, the password and the TOTP secret everywhere, must hold none.
+    const { account, ...json } = item.json;
+    const details = json.details && typeof json.details === 'object' ? { ...(json.details as Record<string, unknown>) } : undefined;
+    if (details) delete details.account;
+    if (account !== undefined && account !== secrets.username) found.add('account is not the Site Login user name');
+    for (const label of valueLeaks(details ? { ...json, details } : json, secrets)) found.add(label);
+    if (account !== undefined) for (const label of valueLeaks({ account }, { ...secrets, username: '' })) found.add(label);
     for (const [prop, bin] of Object.entries(item.binary ?? {})) {
       const bytes = Buffer.from(bin.data, 'base64');
       if (bin.mimeType === 'application/zip') for (const label of traceLeaks(bytes, secrets)) found.add(`${label} in trace ${prop}`);

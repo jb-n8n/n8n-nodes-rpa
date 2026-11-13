@@ -203,6 +203,16 @@ describe('draft mode', () => {
     expect(JSON.stringify(a)).not.toContain('N26-0001');
   });
 
+  it('a draft the import gave another version (a change) is proposed at that version, still with no base', async () => {
+    lane.next = laneSuccess();
+    const a = await adoptDraft(adoptInput({ ...fileDraft(), version: 2 }));
+    if (!a.ok) throw new Error(JSON.stringify(a));
+    expect(a.proposal).toMatchObject({ version: 2, baseVersion: null });
+    expect(a.proposal.steps.version).toBe(2);
+    expect(a.proposal.hash).toBe(scriptHash(a.proposal.steps));
+    expect(a.digest).toBe(proposalDigest(a.proposal));
+  });
+
   it('empty or unparseable drafts are refused before the browser', async () => {
     expect(await runDraft(taskInput([]))).toMatchObject({ ok: false, code: 'policy_violation', message: IMPORT_EMPTY, configError: true });
     expect(await runDraft(taskInput({ steps: [{ intent: 'x', bogus: 1 }] }))).toMatchObject({ ok: false, code: 'policy_violation', configError: true });

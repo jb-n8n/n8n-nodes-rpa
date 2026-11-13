@@ -72,7 +72,10 @@ describe('Run Steps and Sign Steps against the sandbox (real engine)', () => {
     expect(repaired[0].json.digest).toMatch(/^[0-9a-f]{64}$/);
     expect(String(repaired[0].json.changeList)).toContain('Changed: Open Recalls & Stop-Sales (click role "link" name "Recalls & Stop-Sales") -> Open Field Actions (click role "link" name "Field Actions" exact');
     expect(repaired[0].binary?.before?.mimeType).toBe('image/png');
-    for (const secret of [SECRETS.password, SECRETS.username]) expect(jsonOnly([...data, ...repaired])).not.toContain(secret);
+    // The user name is on the Data item as `account` (which account the run was), and nowhere else; the password nowhere.
+    expect(data[0].json.account).toBe(SECRETS.username);
+    expect(jsonOnly([...data, ...repaired])).not.toContain(SECRETS.password);
+    expect(jsonOnly([...data.map((d) => ({ ...d, json: { ...d.json, account: undefined } })), ...repaired])).not.toContain(SECRETS.username);
 
     // Edited after review, even with the hash recomputed: the digest covers the steps.
     const edited = JSON.parse(JSON.stringify(repaired[0].json.steps)) as Script;

@@ -19,22 +19,30 @@ Templates 2, 3 and 5 create the two Data Tables when they are missing.
 - **Settings**: `approval` is `on this form` (the default) or `by email`. `showDetails` (false) puts each step list's
   safety flags, evidence and change list on the review page.
 - **Import a bot** asks for the **Bot file**, **Source (optional)** and **Name for the steps**. For every upload but an
-  RPA recording it asks on a second page, **The file it downloads**, for a file name pattern and required columns.
-  Leave both empty when the bot downloads nothing in a browser.
+  RPA recording and a step document it asks on a second page, **The file it downloads**, for a file name pattern and
+  required columns. Leave both empty when the bot downloads nothing in a browser. A step document's download steps
+  carry their own checks, so it is not asked: **Read the upload** reads the file's text (a file of at most 5 MB that is
+  not a ZIP, XAML, code or a recording) and **Asks about a download?** looks for the step document's shape.
 - **Bot file** may be left empty to change an approved bot or sign it again. **Approved bots** reads the `active`
   rows of `playwright_steps`, and **Change or sign again** shows the newest active steps of the name typed, in a box.
   **Review** sends the box to **Import steps** as a step document, then to the same review page and **Sign steps**.
   **Compared with the approved version** gives the review page its first line: unchanged, or which steps differ.
-  Approved, the new row supersedes the old one. Rejected, the old one keeps running. This path gives no workflow file:
+  The steps get the next version: **Import steps → Options → Version** is the approved version plus one, read by
+  **The bot to change** from the active row (never from the box), so the review page says `version 2, replacing version
+  1`. Signing the same steps again also gives the next version: it is a new approval. The workflow that runs the bot
+  reads Expected Version from the active row, so it keeps running. Approved, the new row supersedes the old one. Rejected, the old one keeps running. This path gives no workflow file:
   the bot's workflow exists already. A name with no active row ends on **No approved bot**, which lists the approved
   names.
 - **Review and approve** shows each step list: what it opens, whether it signs in, forms it submits, files it returns,
   what the replay proved, the steps it left out, and the numbered steps. For desktop steps it asks "Which of these steps
   save, send or submit?". The **Decision** is **Approve and sign** or **Reject**. A page left unanswered for an hour
   signs nothing.
-- The last page says `Approved and signed: <name> v1 is now the version that runs under that name.`, or
-  `Rejected: <name> v1. Nothing was signed.` When a step list was approved, it also downloads the workflow that runs
-  the bot.
+- The last page says `Approved and signed: <name> v<version> is now the version that runs under that name.`, or
+  `Rejected: <name> v<version>. Nothing was signed.` An import is version 1. When Sign steps signed a step list, it
+  also downloads the workflow that runs the bot. When nothing was signed (rejected, or Sign steps refused), it neither
+  gives the file nor says it does.
+- In another n8n, or once a credential the workflow file picks is deleted, n8n picks the only credential of the same
+  name if there is one: otherwise pick it on the node again.
 - **Add the login page** shows when the sign-in stopped at an address the Site Login does not list. Add it under
   **Pages Where the Password May Be Typed**, then choose **Import again**.
 - **Import a bot** opens with n8n's sign-in (**Authentication**: n8n User Auth, with **Require Workflow Execute
@@ -92,8 +100,11 @@ with no model call.
 
 Called by the data feed, or by template 5 with `approval` set to `by email`. It writes a `pending` row that expires
 after `approvalTimeoutHours` (72), then:
-- **Browser steps**: a review email with the safety flags first, in red, then the steps the import left out, the
-  evidence, the change list and the before and after screenshots. Then an approval email with **Approve** and **Reject**.
+- **Browser steps**: a review email with the safety flags first, in red, then the steps the import left out, the steps
+  as the review page words them (a description that says something else in red), the evidence, the change list and the
+  before and after screenshots. Then an approval email with the same steps (⚠ before such a description), **Approve**
+  and **Reject**. The steps show when the item carries them (an import's step lists do): Sign Steps builds them again
+  and refuses to sign when they differ.
   The emails HTML-escape every value. The safety flags are the full list: every host, form submission, download and pop-up handler the steps have.
   The change list compares the steps themselves, not their intents, so a step that clicks another element is listed
   even when its intent reads the same.
@@ -127,11 +138,24 @@ after `approvalTimeoutHours` (72), then:
 |---|---|---|
 | `name` | string | The step list's name |
 | `lane` | string | `script` (signed steps) or `agent` (a repair or a first run) |
-| `version` | number | The version used, 0 when none |
-| `hash` | string | Hash of those steps |
+| `version` | number | The version used, 0 (the data feed) or empty when none |
+| `hash` | string | Hash of those steps: the same as the `hash` of their row in `playwright_steps` |
 | `confirmed` | boolean | The row count matched the total the page states |
 | `rowCount` | number | Rows returned |
 | `durationMs` | number | Run time |
 | `llmTokens` | number | Model tokens used |
 | `code` | string | Error code, empty on success |
 | `executionId` | string | The n8n execution |
+| `message` | string | What failed, as Run Steps' error item says it. Empty on success |
+| `guidance` | string | What to do about it: the same text as the node error's description. Empty on success |
+| `file` | string | The name of the file the run returned, empty when none |
+| `account` | string | The user name the RPA Site Login signed in with, empty without one. Never the password |
+
+In the workflow the import form hands over, a value that was not counted is left empty: `confirmed` and `rowCount`
+when the steps read no rows (for example a run that returns a file), and `lane`, `durationMs` and `llmTokens` for a run
+refused before it started (`locked_out`, `busy`).
+
+The workflow the import form hands over writes the columns the table has. A `playwright_runs` made by an earlier
+version keeps its columns, and a run never fails on it: the newer columns are left out of its rows. To have them, add
+them to the table in n8n (**Data tables** → `playwright_runs` → add a column, with the name and type above), or delete
+the table and its rows: the next run makes it again. The data feed writes only the first ten columns.

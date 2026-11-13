@@ -7,30 +7,33 @@ import { Workflow, type IConnections, type INode, type INodeProperties, type INo
 import { importSource, type Draft, type FlowNode, type ImportOptions, type UiPathFlow } from 'n8n-rpa-engine';
 import { bound } from '../../engine/test/timing.js';
 import { zip } from '../../engine/test/zip-fixtures.js';
-import { buildWorkflow, MAX_WORKFLOW_NODES, workflowFile, type WorkflowJson, type WorkflowNode } from '../nodes/Playwright/import/workflow.js';
+import { buildWorkflow, fromRow, jsName, LOG_FAILED_ROW, LOG_RUN_ROW, MAX_WORKFLOW_NODES, STOP_MESSAGE, workflowFile, type WorkflowJson, type WorkflowNode } from '../nodes/Playwright/import/workflow.js';
 import { RPA_NODE_TYPE } from '../nodes/Playwright/node-type.js';
 import { Playwright } from '../nodes/Playwright/Playwright.node.js';
-import { RUN_TABLE, RUN_TABLE_COLUMNS, STEPS_TABLE, STEPS_TABLE_COLUMNS } from '../nodes/Playwright/rows.js';
+import { RUN_TABLE, RUN_TABLE_COLUMNS, RUN_TABLE_FIRST_COLUMNS, STEPS_TABLE, STEPS_TABLE_COLUMNS } from '../nodes/Playwright/rows.js';
+import { CONFIG_GUIDANCE, GUIDANCE } from '../nodes/Playwright/errors.js';
 import { WORKFLOW_NODE_TYPES } from './fixtures.js';
 
 const PACKAGE = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { name: string };
 const NODE_TYPE = `${PACKAGE.name}.playwright`;
 const STICKY = 'n8n-nodes-base.stickyNote';
 const COLOUR = { green: 4, gold: 2, grey: 7 } as const;
-/** The only n8n expressions a generated workflow holds: the signed row read by Run steps. UiPath text never becomes one. */
-const OWN_EXPRESSIONS = ["={{ $json.steps ?? '' }}", '={{ $json.signature }}', '={{ $json.approvedBy }}', '={{ $json.version }}'];
+/**
+ * The only n8n expressions a generated workflow holds: the signed row Run steps reads from its own Get active steps, by
+ * that node's name (escaped by jsName). UiPath text never becomes one.
+ */
+const OWN_EXPRESSION = /^=\{\{ \$\('(?:[A-Za-z0-9 _.,:()-]|\\u[0-9a-f]{4})*'\)\.first\(\)\.json\.(?:steps \?\? ''|signature|approvedBy|version) \}\}$/;
+/** Run steps' four values, read from the Get active steps named `get`. */
+const rowRead = (get: string) => ({ steps: fromRow(get, 'steps'), signature: fromRow(get, 'signature'), approvedBy: fromRow(get, 'approvedBy'), expectedVersion: fromRow(get, 'version') });
 /** S3's Input Binary Field: the name Run steps gave its last file, with the imported draft's name as the fallback. */
 const FILE_EXPRESSION = /^=\{\{ \$json\.files\?\.at\(-1\)\?\.binaryProperty \?\? 'file_\d+' \}\}$/;
-/** The run log's expressions: each reads the item it gets ($json) and the execution's id, never a node by name. */
-const LOG_EXPRESSIONS = [
-  "={{ $json.name ?? '' }}", "={{ $json.lane ?? '' }}", '={{ $json.version ?? 0 }}', "={{ $json.hash ?? '' }}", '={{ $json.confirmed ?? false }}',
-  '={{ ($json.rows ?? []).length }}', '={{ $json.durationMs ?? 0 }}', '={{ $json.llmTokens ?? 0 }}', '={{ $execution.id }}',
-  "={{ $json.details?.name ?? '' }}", "={{ $json.details?.lane ?? '' }}", '={{ $json.details?.version ?? 0 }}', "={{ $json.details?.hash ?? '' }}",
-  '={{ false }}', '={{ 0 }}', '={{ $json.details?.durationMs ?? 0 }}', '={{ $json.details?.llmTokens ?? 0 }}', "={{ $json.details?.code || 'config_error' }}",
-  "={{ 'The run failed: ' + ($json.code || $json.details?.code || 'config_error') + ' on ' + ($json.name || $json.details?.name || 'the steps') + ($json.message ? '. ' + $json.message : '. Run steps in this execution has the message.') }}",
-];
-const own = (v: string) => OWN_EXPRESSIONS.includes(v) || LOG_EXPRESSIONS.includes(v) || FILE_EXPRESSION.test(v);
-const LOG_NODES = ['Create run log table', 'Log run', 'Log failed run', 'Stop and Error'];
+/**
+ * The run log's expressions: the two rows (each reads the item it gets, the execution's id and Create run log table's
+ * columns) and Stop and Error's message (the row Log failed run shaped).
+ */
+const LOG_EXPRESSIONS = [LOG_RUN_ROW, LOG_FAILED_ROW, STOP_MESSAGE];
+const own = (v: string) => OWN_EXPRESSION.test(v) || LOG_EXPRESSIONS.includes(v) || FILE_EXPRESSION.test(v);
+const LOG_NODES = ['Create run log table', 'Log run', 'Write run row', 'Log failed run', 'Write failed run row', 'Stop and Error'];
 const REPAIR_NOTE = 'To let it repair itself when the site changes:\n1. Connect a chat model to its Model input (after step 2).\n2. Turn on AI Repair here and write the Goal in plain words. The outputs become Data, Repaired Steps and error.\n3. Connect its Repaired Steps output to an Execute Workflow node that calls RPA: 3 Approve steps, and its error output to Log failed run again.';
 
 // ---- the UiPath fixture project, imported through the engine ----
@@ -113,8 +116,16 @@ function lint(w: WorkflowJson): void {
     expect(n.type, n.name).toBe(NODE_TYPE);
     for (const c of Object.values(n.credentials)) expect(Object.keys(c).sort(), n.name).toEqual(['id', 'name']);
   }
-  // No expression names a node ($('…')): Run steps reads its own input item, so project text never meets a node reference.
-  for (const n of w.nodes) for (const [, v] of strings(n.parameters)) if (v.startsWith('=')) expect(v).not.toMatch(/\$\(/);
+  // The only node an expression names ($('…')) is the Get active steps that feeds a Run steps, its name escaped (jsName).
+  // The run log's own expressions name two nodes of the generator's: Create run log table and Log failed run.
+  for (const n of w.nodes) for (const [, v] of strings(n.parameters)) if (v.startsWith('=') && /\$\(/.test(v) && !LOG_EXPRESSIONS.includes(v)) expect(v).toMatch(OWN_EXPRESSION);
+  for (const n of w.nodes.filter((x) => x.type === NODE_TYPE)) {
+    const feeds = Object.entries(w.connections).filter(([, c]) => c.main?.some((out) => out.some((t) => t.node === n.name))).map(([from]) => from);
+    expect(feeds, n.name).toHaveLength(1);
+    expect(byName(w, feeds[0]).name, n.name).toMatch(/^Get active steps \(/);
+    const p = n.parameters as { steps: string; signature: string; approvedBy: string; options: { expectedVersion: string } };
+    expect({ steps: p.steps, signature: p.signature, approvedBy: p.approvedBy, expectedVersion: p.options.expectedVersion }, n.name).toEqual(rowRead(feeds[0]));
+  }
   // Naming: only stored identifiers say Playwright.
   expect(text.replaceAll(NODE_TYPE, '').replaceAll(STEPS_TABLE, '').replaceAll(RUN_TABLE, '').match(/playwright/gi) ?? []).toEqual([]);
   // RPA nodes: only parameters the node defines, and always the operation.
@@ -171,7 +182,7 @@ describe('buildWorkflow', () => {
     expect(w.nodes.slice(0, 2).map((n) => n.name)).toEqual(['About this import', 'Set once']);
     expect((w.nodes[0].parameters as { color: number }).color).toBe(COLOUR.grey);
     expect((w.nodes[1].parameters as { color: number }).color).toBe(COLOUR.green);
-    expect(content(w.nodes[0])).toContain('Imported from the UiPath project `SAP Line Item Report`');
+    expect(content(w.nodes[0])).toContain('- Runs the approved steps `sap-report-1`, imported from the UiPath project `SAP Line Item Report`.');
     expect(content(w.nodes[1])).toMatch(/RPA Browser/);
     expect(content(w.nodes[1])).toMatch(/RPA Site Login/);
     expect(content(w.nodes[1])).toMatch(/RPA Step Signing/);
@@ -191,8 +202,10 @@ describe('buildWorkflow', () => {
       ['Delay', 'n8n-nodes-base.wait'],
       ['Notify the region', 'n8n-nodes-base.httpRequest'],
       ['Read Range', 'n8n-nodes-base.extractFromFile'],
-      ['Log run', 'n8n-nodes-base.dataTable'],
-      ['Log failed run', 'n8n-nodes-base.dataTable'],
+      ['Log run', 'n8n-nodes-base.set'],
+      ['Write run row', 'n8n-nodes-base.dataTable'],
+      ['Log failed run', 'n8n-nodes-base.set'],
+      ['Write failed run row', 'n8n-nodes-base.dataTable'],
       ['Stop and Error', 'n8n-nodes-base.stopAndError'],
     ]);
     expect(targets(w, 'Run the bot')).toEqual([['Create run log table']]);
@@ -201,7 +214,7 @@ describe('buildWorkflow', () => {
     expect(targets(w, 'On a schedule')).toEqual([['Create run log table']]);
     expect(byName(w, 'On a schedule')).toMatchObject({ disabled: true, parameters: { rule: { interval: [{ field: 'days', triggerAtHour: 6 }] } } });
     expect(byName(w, 'On a schedule').notes).toBe('Set the time, then turn this node on and publish the workflow. Until then the bot runs only when you click Execute.');
-    expect(content(byName(w, 'About this import'))).toContain('**On a schedule** is off: set the time, turn it on and publish the workflow.');
+    expect(content(byName(w, 'About this import'))).toContain('- **Run the bot** runs it now. **On a schedule** is off: set the time, turn it on, publish.');
     expect(targets(w, 'Get active steps (sap-report-1)')).toEqual([['Use Browser Chrome: SAP Logon']]);
     // Data (0) feeds the next node and the run log; there is no repair branch; the error output feeds the failure log.
     expect(targets(w, 'Use Browser Chrome: SAP Logon')).toEqual([['Upload line items to S3', 'Log run'], ['Log failed run']]);
@@ -226,13 +239,14 @@ describe('buildWorkflow', () => {
     expect(byName(w, 'Use Browser Chrome: SAP Logon').parameters).toEqual({
       operation: 'runSteps',
       runsOn: 'browser',
-      steps: "={{ $json.steps ?? '' }}",
+      // Read from Get active steps by its name, so a node put between the two (one item per account) changes nothing.
+      steps: "={{ $('Get active steps (sap-report-1)').first().json.steps ?? '' }}",
       requireSignedSteps: true,
-      signature: '={{ $json.signature }}',
-      approvedBy: '={{ $json.approvedBy }}',
+      signature: "={{ $('Get active steps (sap-report-1)').first().json.signature }}",
+      approvedBy: "={{ $('Get active steps (sap-report-1)').first().json.approvedBy }}",
       aiRepair: false,
       // The run variables the steps type, empty for the person to fill in (none is secret here).
-      options: { name: 'sap-report-1', expectedVersion: '={{ $json.version }}', variables: { values: [{ name: 'company', value: '' }, { name: 'from', value: '' }, { name: 'to', value: '' }] } },
+      options: { name: 'sap-report-1', expectedVersion: "={{ $('Get active steps (sap-report-1)').first().json.version }}", variables: { values: [{ name: 'company', value: '' }, { name: 'from', value: '' }, { name: 'to', value: '' }] } },
     });
     expect(byName(w, 'Use Browser Chrome: SAP Logon').notes).toMatch(/sap-report-1/);
     // Allow Private Network is not set (this import had it off): the note says when a person may need it.
@@ -357,8 +371,9 @@ describe('buildWorkflow', () => {
     const workflow = new Workflow({ nodes: structuredClone(w.nodes) as unknown as INode[], connections: w.connections as unknown as IConnections, nodeTypes, active: false });
     const run = workflow.getNode('Use Browser Chrome: SAP Logon');
     expect(run?.parameters).toMatchObject({
-      operation: 'runSteps', runsOn: 'browser', steps: "={{ $json.steps ?? '' }}", requireSignedSteps: true, signature: '={{ $json.signature }}', approvedBy: '={{ $json.approvedBy }}', aiRepair: false,
-      options: { name: 'sap-report-1', expectedVersion: '={{ $json.version }}' },
+      operation: 'runSteps', runsOn: 'browser', requireSignedSteps: true, aiRepair: false,
+      steps: fromRow('Get active steps (sap-report-1)', 'steps'), signature: fromRow('Get active steps (sap-report-1)', 'signature'), approvedBy: fromRow('Get active steps (sap-report-1)', 'approvedBy'),
+      options: { name: 'sap-report-1', expectedVersion: fromRow('Get active steps (sap-report-1)', 'version') },
     });
     for (const [from, byType] of Object.entries(w.connections)) {
       expect(workflow.getNode(from)).not.toBeNull();
@@ -435,6 +450,46 @@ describe('buildWorkflow', () => {
     // The import name must be usable as a literal: one that n8n would read as an expression is refused.
     expect(() => buildWorkflow(flowOf([]), [], { name: '={{ 1 }}' })).toThrow(/Name/);
     expect(() => buildWorkflow(flowOf([]), [], { name: '  ' })).toThrow(/Name/);
+  });
+
+  it('Run steps reads the signed row from its Get active steps by name: a node put between them changes nothing, and a name cannot break out', () => {
+    /** Evaluates one of Run steps' values as n8n does, with `$` giving each node's first item and `$json` the node's own input. */
+    const read = (expression: string, nodes: Record<string, object>, input: object): unknown =>
+      new Function('$', '$json', `return (${expression.slice(4, -3)});`)((name: string) => {
+        if (!(name in nodes)) throw new Error(`no node named ${name}`);
+        return { first: () => ({ json: nodes[name] }) };
+      }, input);
+    const row = { name: 'bot', version: 3, steps: '{"steps":[]}', signature: 'sig', approvedBy: 'owner@example.com' };
+    for (const source of ['steps', 'chrome', 'recording', 'uipath'] as const) {
+      const w = buildWorkflow(flowOf([{ kind: 'browser', sequence: 1, displayName: 'bot', draft: 'bot' }]), [draft('bot')], { name: 'bot', source });
+      const p = byName(w, 'bot').parameters as { steps: string; signature: string; approvedBy: string; options: { expectedVersion: string } };
+      // Each account's item (the many-accounts shape) is Run steps' input: the four values still come from the row.
+      for (const account of [{ username: 'summit-ops', password: 'x' }, { username: 'lakeside-ops', password: 'y' }]) {
+        const nodes = { 'Get active steps (bot)': row };
+        expect([p.steps, p.signature, p.approvedBy, p.options.expectedVersion].map((e) => read(e, nodes, account)), source).toEqual([row.steps, 'sig', 'owner@example.com', 3]);
+      }
+      // Before a version is approved, Get active steps gives one empty item: Steps is empty, as before.
+      expect(read(p.steps, { 'Get active steps (bot)': {} }, {})).toBe('');
+    }
+    // A name with quotes, a backslash, "$", "{{" and "}}" stays one string: the expression names exactly that node.
+    const odd = `it's a \\ $bot }} {{ $env.X }} 'x'`;
+    const w = buildWorkflow(flowOf([{ kind: 'browser', sequence: 1, displayName: 'Run', draft: odd }]), [draft(odd)], { name: 'odd', source: 'steps' });
+    lint(w);
+    const get = `Get active steps (${odd})`;
+    expect(byName(w, get).type).toBe('n8n-nodes-base.dataTable');
+    const p = byName(w, 'Run').parameters as { signature: string };
+    expect(p.signature).not.toContain('}} {{');
+    expect(p.signature).not.toContain("'x'");
+    expect(read(p.signature, { [get]: row }, {})).toBe('sig');
+    expect(jsName('Get active steps (sap-report-1)')).toBe("'Get active steps (sap-report-1)'");
+    // A desktop Run steps reads the same way.
+    const desktop = {
+      name: 'd', writeCandidates: [], variables: [], secretVariables: [],
+      script: { surface: 'desktop' as const, name: 'd', version: 1, app: { exe: 'App.exe' }, steps: [{ intent: 'Click', click: { uia: { path: [{ name: 'x' }] } } }] },
+    };
+    const d = buildWorkflow({ name: 'd', nodes: [{ kind: 'desktop', sequence: 1, displayName: 'Desk', draft: 'd' }] }, [], { name: 'd', desktopDrafts: [desktop], source: 'recording' });
+    const dp = byName(d, 'Desk').parameters as { signature: string; options: { expectedVersion: string } };
+    expect(read(dp.options.expectedVersion, { 'Get active steps (d)': row }, { username: 'a' })).toBe(3);
   });
 
   it('a browser node without its draft, an empty flow, long and duplicate names', () => {
@@ -573,7 +628,7 @@ describe('buildWorkflow', () => {
     const more = byName(w, `${rest} more activities`);
     expect(more.parameters).toMatchObject({ color: COLOUR.grey });
     expect(content(more)).toContain(`${rest} more activities: see the report.`);
-    expect(content(byName(w, 'About this import'))).toContain(`${rest} more not drawn (see the report)`);
+    expect(content(byName(w, 'About this import'))).toContain(`and ${rest} more not drawn (see the report): rebuild that by hand.`);
     expect(w.description).toContain(`${rest} more not drawn`);
   });
 
@@ -610,7 +665,7 @@ describe('buildWorkflow', () => {
     const set = content(byName(w, 'Set once'));
     expect(set).toContain('- **RPA Browser**, **RPA Site Login** and **RPA Step Signing**');
     expect(set).not.toMatch(/Chat model|choose \*\*RPA: 3/);
-    expect(content(byName(w, 'About this import'))).toContain('AI Repair is off: each Run steps\' note says how to let it repair itself when the site changes');
+    expect(content(byName(w, 'About this import'))).toContain('- For self-repair when the site changes, see the browser guide, Part 2.');
   });
   it('an import that took its code from a workflow gives each Run steps the same One-Time Code Workflow, and Code Timeout when it was not the default', () => {
     const flow = flowOf([{ kind: 'browser', sequence: 1, displayName: 'Log in' }, { kind: 'browser', sequence: 2, displayName: 'Export' }]);
@@ -688,19 +743,20 @@ describe('buildWorkflow', () => {
     const build = (d: ReturnType<typeof desktop>) => buildWorkflow({ name: 'd', nodes: [{ kind: 'desktop', sequence: 1, displayName: 'Desk', draft: 'd' }] }, [], { name: 'd', desktopDrafts: [d], source: 'recording' });
     const none = build(desktop([], []));
     expect(none.nodes.some((n) => n.name.startsWith('Fill in the variables'))).toBe(false);
-    expect(byName(none, 'Desk').notes).toBe('Runs the signed desktop steps d (1 step imported from the recording "Desk") on the desktop runner. Pick RPA Desktop Runner and RPA Step Signing here.');
+    expect(byName(none, 'Desk').notes).toBe('Runs the signed desktop steps d on the desktop runner. Pick RPA Desktop Runner and RPA Step Signing here.');
     const about = content(byName(none, 'About this import'));
-    expect(about).toContain('Green: set once. Text from the recording is kept as text');
-    expect(about).not.toContain('Gold');
+    // Two colours (the two notes): no legend. A desktop bot has no repair line.
+    expect(about).not.toMatch(/Gold|Green:|repair/);
     const secretOnly = build(desktop(['password'], ['password']));
     expect(byName(secretOnly, 'Desk').notes).not.toContain('Fill in the Variables');
     expect(content(byName(secretOnly, 'Fill in the variables (d)'))).toBe(
       '### Fill in the variables (gold)\nSecret: `password`: in an **RPA Secret Variables** credential selected on **Desk**, never typed here. To keep these values to this app, put `App.exe` in that credential\'s May Be Typed Into. Desktop steps run only once approved: import the recording with **RPA: 5 Import a bot** and approve `d` on its review page.',
     );
-    expect(content(byName(secretOnly, 'About this import'))).toContain('Gold: fill in. Green: set once.');
+    // A gold note: three colours, so the legend.
+    expect(content(byName(secretOnly, 'About this import'))).toContain('- Gold: fill in. Green: set once. Grey: leave as is.');
     // A UiPath project with nothing left untranslated has no grey notes to explain.
     const uipath = buildWorkflow(flowOf([{ kind: 'browser', sequence: 1, displayName: 'Log in' }]), [draft('m-1')], { name: 'm' });
-    expect(content(byName(uipath, 'About this import'))).toContain('Green: set once. UiPath expressions are kept as text in notes');
+    expect(content(byName(uipath, 'About this import'))).toContain('- 0 other activities became n8n nodes. Each one says what to check.');
     expect(content(byName(uipath, 'About this import'))).not.toContain('Grey notes');
   });
 
@@ -720,16 +776,16 @@ describe('buildWorkflow', () => {
     const flow = flowOf(Array.from({ length: total }, (_, i): FlowNode => ({ kind: 'browser', sequence: i + 1, displayName: `Browser ${i + 1}` })));
     const w = buildWorkflow(flow, Array.from({ length: total }, (_, i) => draft(`cap-${i + 1}`)), { name: 'cap' });
     lint(w);
-    // The two triggers, the four run log nodes and 247 pairs of two nodes: a 248th would take the workflow past MAX_WORKFLOW_NODES.
+    // The two triggers, the six run log nodes and 246 pairs of two nodes: a 247th would take the workflow past MAX_WORKFLOW_NODES.
     const runs = w.nodes.filter((n) => n.type === NODE_TYPE);
-    expect(runs).toHaveLength(247);
-    expect(w.nodes.filter((n) => n.type === 'n8n-nodes-base.dataTable')).toHaveLength(247 + 3);
+    expect(runs).toHaveLength(246);
+    expect(w.nodes.filter((n) => n.type === 'n8n-nodes-base.dataTable')).toHaveLength(246 + 3);
     expect(working(w)).toHaveLength(MAX_WORKFLOW_NODES);
     expect(w.nodes.length).toBeLessThanOrEqual(MAX_WORKFLOW_NODES + 3);
-    expect(content(byName(w, '53 more activities'))).toContain('see the report');
+    expect(content(byName(w, '54 more activities'))).toContain('see the report');
     // After a pair that did not fit, nothing smaller is drawn out of order.
     const mixed = buildWorkflow(flowOf([
-      ...Array.from({ length: 493 }, (_, i): FlowNode => ({ kind: 'wait', seconds: 1, displayName: `W ${i}` })),
+      ...Array.from({ length: 491 }, (_, i): FlowNode => ({ kind: 'wait', seconds: 1, displayName: `W ${i}` })),
       { kind: 'browser', sequence: 1, displayName: 'Too big' },
       { kind: 'wait', seconds: 1, displayName: 'Small' },
     ]), [draft('mx-1')], { name: 'mx' });
@@ -766,8 +822,11 @@ describe('buildWorkflow', () => {
     expect(byName(w, 'Log in').notes).toContain('RPA Browser, RPA Site Login and RPA Step Signing are picked for you: check them.');
     expect(byName(w, 'Desk').notes).toContain('RPA Desktop Runner and RPA Step Signing are picked for you: check them.');
     const set = content(byName(w, 'Set once'));
-    expect(set).toContain('No secret is in this file. The RPA credentials the import used are picked for you: check them on the nodes, and pick the others there. In another n8n, or once a picked credential is deleted, n8n takes the only credential of the same name if there is one: otherwise pick it on the node again.');
-    expect(set).toContain('- **RPA Browser** (picked for you), **RPA Site Login** (picked for you) and **RPA Step Signing** (picked for you): **Log in**');
+    // Every RPA credential picked: one line, and the UiPath credential lookup (a green note in the flow) to read.
+    expect(set).toBe('### Set once\nNo secret is in this file. Pick these on the nodes:\n- UiPath credential lookups (green notes in the flow): desktop steps type the sign-in from their Run steps\' Variables (a password from **RPA Secret Variables**); browser steps use the RPA Site Login on their Run steps\n'
+      + '- Already set on the RPA nodes: **RPA Browser**, **RPA Site Login**, **RPA Step Signing** and **RPA Desktop Runner**');
+    // Another n8n, or a deleted credential: said in docs/reference/templates.md, not on the canvas.
+    expect(set).not.toContain('another n8n');
     expect(content(byName(w, 'Credential: Portal'))).not.toContain('Pick one there');
     // Only well-formed references are passed on: anything else is left for the person to pick.
     const odd = buildWorkflow(flowOf([{ kind: 'browser', sequence: 1, displayName: 'Log in' }]), [draft('m-1')], {
@@ -775,52 +834,102 @@ describe('buildWorkflow', () => {
     });
     expect(byName(odd, 'Log in').credentials).toBeUndefined();
     expect(byName(odd, 'Log in').notes).toContain('Pick RPA Browser, RPA Site Login and RPA Step Signing here.');
-    expect(content(byName(odd, 'Set once'))).toContain('No secret is in this file. Pick the credentials on the nodes:');
+    expect(content(byName(odd, 'Set once'))).toContain('No secret is in this file. Pick these on the nodes:\n- **RPA Browser**, **RPA Site Login** and **RPA Step Signing**: **Log in**');
   });
 
   it('every run writes the run log, and a failed run still ends as failed: Create run log table → … → Run steps → Log run, error → Log failed run → Stop and Error', () => {
     const w = buildWorkflow(flowOf([{ kind: 'browser', sequence: 1, displayName: 'bot', draft: 'bot' }]), [draft('bot')], { name: 'bot', source: 'chrome' });
     lint(w);
-    // Small: 6 nodes before the run log (two stickies, two triggers, Get active steps, Run steps), 10 with it.
+    // Small: 6 nodes before the run log (two stickies, two triggers, Get active steps, Run steps), 12 with it.
     expect(w.nodes.map((n) => n.name)).toEqual([
-      'About this import', 'Set once', 'Run the bot', 'On a schedule', 'Create run log table', 'Get active steps (bot)', 'bot', 'Log run', 'Log failed run', 'Stop and Error',
+      'About this import', 'Set once', 'Run the bot', 'On a schedule', 'Create run log table', 'Get active steps (bot)', 'bot',
+      'Log run', 'Write run row', 'Log failed run', 'Write failed run row', 'Stop and Error',
     ]);
     expect(targets(w, 'Run the bot')).toEqual([['Create run log table']]);
     expect(targets(w, 'On a schedule')).toEqual([['Create run log table']]);
     expect(targets(w, 'Create run log table')).toEqual([['Get active steps (bot)']]);
     expect(targets(w, 'bot')).toEqual([['Log run'], ['Log failed run']]);
-    expect(targets(w, 'Log failed run')).toEqual([['Stop and Error']]);
-    expect(targets(w, 'Log run')).toEqual([]);
+    expect(targets(w, 'Log run')).toEqual([['Write run row']]);
+    expect(targets(w, 'Log failed run')).toEqual([['Write failed run row']]);
+    expect(targets(w, 'Write failed run row')).toEqual([['Stop and Error']]);
+    expect(targets(w, 'Write run row')).toEqual([]);
     expect(targets(w, 'Stop and Error')).toEqual([]);
     // The table is made when missing, with the templates' columns.
     expect(byName(w, 'Create run log table').parameters).toEqual({
       resource: 'table', operation: 'create', tableName: 'playwright_runs', columns: { column: RUN_TABLE_COLUMNS.map((c) => ({ name: c.name, type: c.type })) }, options: { createIfNotExists: true },
     });
-    // Log run: once per run, every column of the run log.
+    // Log run shapes a row per run (not Execute Once: a Run steps that runs once per account logs each run); Write run
+    // row writes the item it gets, column by column.
     const log = byName(w, 'Log run');
-    expect(log.executeOnce).toBe(true);
-    expect(log.parameters).toMatchObject({ resource: 'row', operation: 'insert', dataTableId: { __rl: true, mode: 'name', value: 'playwright_runs' } });
-    expect(Object.keys((log.parameters as { columns: { value: object } }).columns.value)).toEqual(RUN_TABLE_COLUMNS.map((c) => c.name));
-    // Log failed run passes the item on when its write fails, so Stop and Error still runs.
+    expect(log.executeOnce).toBeUndefined();
+    expect(log.parameters).toEqual({ mode: 'raw', jsonOutput: LOG_RUN_ROW, options: {} });
+    const write = byName(w, 'Write run row');
+    expect(write.parameters).toMatchObject({ resource: 'row', operation: 'insert', dataTableId: { __rl: true, mode: 'name', value: 'playwright_runs' }, columns: { mappingMode: 'autoMapInputData' } });
+    // Write failed run row passes the item on when its write fails, so Stop and Error still runs.
     const failed = byName(w, 'Log failed run');
-    expect(failed.onError).toBe('continueRegularOutput');
-    expect((failed.parameters as { columns: { value: Record<string, string> } }).columns.value).toMatchObject({ code: "={{ $json.details?.code || 'config_error' }}", executionId: '={{ $execution.id }}' });
+    expect(failed.parameters).toEqual({ mode: 'raw', jsonOutput: LOG_FAILED_ROW, options: {} });
+    expect(byName(w, 'Write failed run row').onError).toBe('continueRegularOutput');
     const stop = byName(w, 'Stop and Error');
     expect(stop.type).toBe('n8n-nodes-base.stopAndError');
-    expect(stop.parameters).toEqual({ errorType: 'errorMessage', errorMessage: LOG_EXPRESSIONS.at(-1) });
-    // The message names the code and the steps, from the logged row or, when the write failed, from the error item.
-    const message = new Function('$json', `return ${String(stop.parameters.errorMessage).slice(4, -3)};`) as (json: object) => string;
-    expect(message({ name: 'bot', code: 'drift_detected', version: 3 })).toBe('The run failed: drift_detected on bot. Run steps in this execution has the message.');
-    expect(message({ error: 'runner_unavailable: no answer', message: 'runner_unavailable: no answer', details: { code: 'runner_unavailable', name: 'bot' } }))
-      .toBe('The run failed: runner_unavailable on bot. runner_unavailable: no answer');
-    expect(message({ message: 'Steps is empty', details: { code: null, name: 'bot' } })).toBe('The run failed: config_error on bot. Steps is empty');
+    expect(stop.parameters).toEqual({ errorType: 'errorMessage', errorMessage: STOP_MESSAGE });
+
+    // The rows, evaluated as n8n does: every column for a table made now, only the table's columns for an older one.
+    const columns = (names: string[]) => ({ 'Create run log table': { name: 'playwright_runs', columns: names.map((name) => ({ name })) } });
+    const all = columns(RUN_TABLE_COLUMNS.map((c) => c.name));
+    const first = columns(RUN_TABLE_FIRST_COLUMNS.map((c) => c.name));
+    const shape = (expression: string, $json: object, nodes: Record<string, object>) =>
+      new Function('$json', '$execution', '$', `return (${expression.slice(4, -3)});`)($json, { id: '22' }, (name: string) => {
+        if (!(name in nodes)) throw new Error(`no node named ${name}`);
+        return { first: () => ({ json: nodes[name] }) };
+      }) as Record<string, unknown>;
+    const lockedOut = {
+      error: 'locked_out: A previous login for sandbox:8080 failed, so no login was tried.', message: 'A previous login for sandbox:8080 failed, so no login was tried.',
+      details: { code: 'locked_out', name: 'bot', version: 1, hash: 'h', lane: null, durationMs: 0, llmTokens: 0, guidance: GUIDANCE.locked_out },
+    };
+    const failedRow = shape(LOG_FAILED_ROW, lockedOut, all);
+    expect(Object.keys(failedRow)).toEqual(RUN_TABLE_COLUMNS.map((c) => c.name));
+    expect(failedRow).toMatchObject({ code: 'locked_out', name: 'bot', executionId: '22', message: lockedOut.message, guidance: GUIDANCE.locked_out });
+    // A table made by an earlier version: the row has only its ten columns, so n8n's insert never refuses it.
+    expect(Object.keys(shape(LOG_FAILED_ROW, lockedOut, first))).toEqual(RUN_TABLE_FIRST_COLUMNS.map((c) => c.name));
+    expect(Object.keys(shape(LOG_RUN_ROW, { name: 'bot', lane: 'script', version: 1, hash: 'h', durationMs: 900 }, first))).toEqual(RUN_TABLE_FIRST_COLUMNS.map((c) => c.name));
+    // Create run log table gives no columns (never seen in n8n): every column is written, as for a table made now.
+    expect(Object.keys(shape(LOG_RUN_ROW, { name: 'bot' }, { 'Create run log table': {} }))).toEqual(RUN_TABLE_COLUMNS.map((c) => c.name));
+
+    // A refusal before the run (locked_out: no lane) leaves lane, duration and tokens empty, and nothing was counted.
+    expect(failedRow).toMatchObject({ lane: null, durationMs: null, llmTokens: null, confirmed: null, rowCount: null, version: 1, file: '', account: '' });
+    // A failed run that ran keeps its lane and duration.
+    expect(shape(LOG_FAILED_ROW, { ...lockedOut, details: { ...lockedOut.details, code: 'drift_detected', lane: 'script', durationMs: 1200 } }, all))
+      .toMatchObject({ lane: 'script', durationMs: 1200, llmTokens: 0 });
+    // A successful download: the file's name, and no row count or check (the steps read no rows).
+    const download = {
+      name: 'bot', lane: 'script', version: 2, hash: 'h2', confirmed: false, durationMs: 986, llmTokens: 0,
+      files: [{ fileName: 'LINEITEMS_1000_2026-09-01_2026-09-30.csv', mimeType: 'text/csv', bytes: 357, binaryProperty: 'file_7' }],
+    };
+    expect(shape(LOG_RUN_ROW, download, all)).toEqual({
+      name: 'bot', lane: 'script', version: 2, hash: 'h2', confirmed: null, rowCount: null, durationMs: 986, llmTokens: 0, code: '', executionId: '22',
+      message: '', guidance: '', file: 'LINEITEMS_1000_2026-09-01_2026-09-30.csv', account: '',
+    });
+    // With many accounts each row names its account (Run Steps' account, the Site Login's user name).
+    expect(shape(LOG_RUN_ROW, { ...download, account: 'summit-ops' }, all)).toMatchObject({ account: 'summit-ops' });
+    expect(shape(LOG_FAILED_ROW, { ...lockedOut, details: { ...lockedOut.details, account: 'harbor-ops' } }, all)).toMatchObject({ account: 'harbor-ops' });
+    // Rows: their count and whether it matched the stated total; no file.
+    expect(shape(LOG_RUN_ROW, { ...download, files: undefined, rows: [{ id: 'N1' }, { id: 'N2' }], confirmed: false }, all)).toMatchObject({ confirmed: false, rowCount: 2, file: '' });
+    expect(shape(LOG_RUN_ROW, { ...download, files: undefined, rows: [], confirmed: true }, all)).toMatchObject({ confirmed: true, rowCount: 0 });
+
+    // Stop and Error: the code, the steps, the message and what to do, from the row Log failed run shaped.
+    const message = (row: object) => shape(STOP_MESSAGE, {}, { 'Log failed run': row }) as unknown as string;
+    expect(message(failedRow)).toBe(`The run failed: locked_out on bot. ${lockedOut.message} ${GUIDANCE.locked_out}`);
+    expect(message(shape(LOG_FAILED_ROW, lockedOut, first))).toBe('The run failed: locked_out on bot. Run steps in this execution has the message.');
+    expect(message(shape(LOG_FAILED_ROW, { error: 'Steps is empty', message: 'Steps is empty', details: { code: null, name: 'bot', guidance: CONFIG_GUIDANCE } }, all)))
+      .toBe(`The run failed: config_error on bot. Steps is empty ${CONFIG_GUIDANCE}`);
     // Layout: a lone Run steps has Log run right of it and the failure row below.
     const [rx, ry] = byName(w, 'bot').position;
     expect(log.position).toEqual([rx + 240, ry]);
+    expect(write.position).toEqual([rx + 480, ry]);
     expect(failed.position[1]).toBeGreaterThan(ry);
-    expect(stop.position[0]).toBeGreaterThan(failed.position[0]);
+    expect(stop.position[0]).toBeGreaterThan(byName(w, 'Write failed run row').position[0]);
     // One line says where a notification goes; no email or chat node is built.
-    expect(content(byName(w, 'About this import'))).toContain('Every run writes one row to playwright_runs: **Log run**, or **Log failed run** with the error code. A failed run then ends at **Stop and Error**, so it shows as failed in Executions. To be told when one fails, choose an Error Workflow in this workflow\'s settings.');
+    expect(content(byName(w, 'About this import'))).toContain('- Each run writes a row to playwright_runs. Failed runs show as failed in Executions.\n- To hear of a failed run, set an Error Workflow in the workflow settings.');
     expect(w.nodes.filter((n) => n.type === 'n8n-nodes-base.emailSend')).toEqual([]);
   });
 
@@ -845,6 +954,49 @@ describe('buildWorkflow', () => {
     lint(none);
     expect(targets(none, 'Run the bot')).toEqual([['Call']]);
     expect(content(byName(none, 'About this import'))).not.toContain('playwright_runs');
+  });
+
+  it('"About this import" stays short for every kind of generated workflow, and both notes are tall enough for their text', () => {
+    const desktopDraft = (name: string, secretVariables: string[] = []) => ({
+      name, writeCandidates: [], variables: secretVariables, secretVariables,
+      script: { surface: 'desktop' as const, name, version: 1, app: { exe: 'ErpDemo.exe' }, steps: [{ intent: 'Click Save', click: { uia: { path: [{ name: 'Save' }] } } }] },
+    });
+    const PASSED = { browser: { id: 'b1', name: 'RPA Browser' }, siteLogin: { id: 's1', name: 'RPA Site Login account' }, signing: { id: 'k1', name: 'RPA Step Signing' }, desktopRunner: { id: 'r1', name: 'RPA Desktop Runner' } };
+    const kinds: [string, WorkflowJson, number][] = [
+      ['a recording', buildWorkflow({ name: 'ERP Demo line items', nodes: [{ kind: 'desktop', sequence: 1, displayName: 'ERP', draft: 'erp' }] }, [], { name: 'erp', desktopDrafts: [desktopDraft('erp', ['password'])], source: 'recording', credentials: PASSED }), 6],
+      ['a desktop step document', buildWorkflow({ name: 'erp', nodes: [{ kind: 'desktop', sequence: 1, displayName: 'erp', draft: 'erp' }] }, [], { name: 'erp', desktopDrafts: [desktopDraft('erp')], source: 'steps' }), 6],
+      ['a Chrome export', buildWorkflow(flowOf([{ kind: 'browser', sequence: 1, displayName: 'bot', draft: 'bot' }], 'Line items'), [draft('bot')], { name: 'bot', source: 'chrome', credentials: PASSED }), 6],
+      ['a browser step document', buildWorkflow(flowOf([{ kind: 'browser', sequence: 1, displayName: 'sandbox-line-items', draft: 'sandbox-line-items' }], 'sandbox-line-items'), [draft('sandbox-line-items')], { name: 'sandbox-line-items', source: 'steps', credentials: PASSED }), 6],
+      // A UiPath project with both kinds, something not translated and a gold note: one line more for what was left out
+      // and one for the colours.
+      ['a UiPath project with both kinds', buildWorkflow(flowOf([
+        { kind: 'browser', sequence: 1, displayName: 'Web' }, { kind: 'desktop', sequence: 2, displayName: 'Desk' },
+        { kind: 'untranslated', activity: 'NSAPLogon', displayName: 'SAP Logon', note: 'rebuild it' },
+        { kind: 'if', expression: 'x > 1', then: [], else: [], displayName: 'If' },
+      ], 'SAP Line Item Report'), [draft('u-1')], { name: 'u', desktopDrafts: [desktopDraft('u-2')] }), 8],
+    ];
+    for (const [kind, w, most] of kinds) {
+      const about = content(byName(w, 'About this import'));
+      const lines = about.split('\n').slice(1);
+      expect(lines.length, `${kind}:\n${about}`).toBeLessThanOrEqual(most);
+      expect(lines.map((l) => l.replace(/^- /, '')).join(' ').split(/\s+/).filter(Boolean).length, `${kind}: words`).toBeLessThanOrEqual(most === 6 ? 90 : 120);
+      for (const l of lines) expect(l, kind).toMatch(/^- /);
+      // Plain words: no em dash, no semicolon joining sentences, and nothing about wiring.
+      expect(about, kind).not.toMatch(/\u2014|; |Stop and Error|Get active steps|→/);
+      // Each note is tall enough for its text, about 7 px a character at its width and 22 px a line.
+      for (const name of ['About this import', 'Set once']) {
+        const n = byName(w, name).parameters as { content: string; width: number; height: number };
+        const perLine = Math.floor((n.width - 40) / 7);
+        // As shown: the markdown's ** and ` are not drawn.
+        const textLines = n.content.split('\n').reduce((sum, l) => sum + Math.max(1, Math.ceil(l.replace(/[*`\\]/g, '').length / perLine)), 0);
+        expect(n.height, `${kind}: ${name}`).toBeGreaterThanOrEqual(40 + textLines * 22);
+      }
+    }
+    // Every RPA credential arrived picked: one line, and the secret variables line only where there are some.
+    const set = (i: number) => content(byName(kinds[i][1], 'Set once'));
+    expect(set(3)).toBe('### Set once\nNothing to pick: **RPA Browser**, **RPA Site Login** and **RPA Step Signing** are set on the RPA node.');
+    expect(set(0)).toBe('### Set once\nNothing to pick: **RPA Desktop Runner** and **RPA Step Signing** are set on the RPA node.\n'
+      + '- **RPA Secret Variables**, holding `password`: pick it on the Run steps that name them, and list where its values may be typed (the app or the site) in its May Be Typed Into.');
   });
 
   it('a start value is never shown for a variable that is secret under another casing', () => {

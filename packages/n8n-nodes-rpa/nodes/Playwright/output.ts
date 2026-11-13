@@ -3,7 +3,7 @@ import type { DesktopProposal, DownloadedFile, ErrorCode, Proposal, RequestRecor
 import type { NodeContext } from './context.js';
 import type { Compiled, LaneSuccess } from './operations/quick/shared.js';
 import type { Engine } from './engine.js';
-import { errorJson, type FailureDetails } from './errors.js';
+import { CONFIG_GUIDANCE, errorJson, guidanceFor, type FailureDetails } from './errors.js';
 import { changeList, DESKTOP_EVIDENCE_LINE, evidenceLine, fullSafetyFlags, leftOutList, NOT_REPLAYED_EVIDENCE_LINE, safetyLine } from './format.js';
 
 /** A file-name-safe form of a name (lowercase, dashes), 'rpa' when nothing is left. */
@@ -198,6 +198,7 @@ export async function failureItem(
     log: full ? (plain(full.log) as unknown as IDataObject[]) : [],
     submitted: full?.submitted === true,
     ...(f.passwordChanged ? { passwordChanged: true as const } : {}),
+    guidance: guidanceFor(f.code, f.message),
   };
   return { json: errorJson(`${f.code}: ${f.message}`, f.message, d), pairedItem: paired, ...(binary ? { binary } : {}) };
 }
@@ -205,7 +206,7 @@ export async function failureItem(
 /** Error item for a configuration problem: the message as is, `configError: true`, no code. */
 export function configErrorItem(message: string, name: string | null, paired: IPairedItemData[]): INodeExecutionData {
   return {
-    json: errorJson(message, message, { configError: true, code: null, name, version: null, hash: '', lane: null, log: [], submitted: false }),
+    json: errorJson(message, message, { configError: true, code: null, name, version: null, hash: '', lane: null, log: [], submitted: false, guidance: CONFIG_GUIDANCE }),
     pairedItem: paired,
   };
 }

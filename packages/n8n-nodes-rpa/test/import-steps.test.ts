@@ -29,6 +29,9 @@ import { credentialsV2, nodeContext, signStepsParams, siteLoginData } from './fe
 import { SECRETS } from './fixtures.js';
 import type { Harness } from './harness.js';
 
+/** A review entry as the page shows it: the sentence, then the author's description under the page's own label. */
+const line = (r: { text: string; describedAs?: string }) => (r.describedAs === undefined ? r.text : `${r.text} (described differently as: ${r.describedAs})`);
+
 afterEach(() => resetGuardsForTests());
 
 // Golden strings are written out here on purpose (tests assert them verbatim, not through the constants).
@@ -230,7 +233,7 @@ describe('Import Steps: the description', () => {
       'File Type', 'File Name Pattern (Regex)', 'Minimum Size (Bytes)', 'Required Columns', 'Minimum Rows',
     ]);
     expect(optionsFor('importSteps').map((o) => o.name)).toEqual([
-      'timeout', 'maxSeconds', 'viewport', 'allowedHosts', 'allowPrivateNetwork', 'variables', 'codeWorkflowId', 'codeTimeout', 'breakerResetKey', 'saveTrace', 'maxItems',
+      'timeout', 'maxSeconds', 'viewport', 'allowedHosts', 'allowPrivateNetwork', 'variables', 'codeWorkflowId', 'codeTimeout', 'version', 'breakerResetKey', 'saveTrace', 'maxItems',
     ]);
     // Credentials: the browser, the Site Login and its Redis guard store; then the signing key and the desktop runner,
     // which the import only passes on to the workflow file (Sign Steps signs, and the import never reads them).
@@ -1280,12 +1283,12 @@ describe('Import Steps: a step document', () => {
       ] };
       const { engine, repaired } = await notReplayed(doc);
       const item = repaired[0].json;
-      expect((item.reviewSteps as IDataObject[]).map((r) => r.text)).toEqual([
+      expect((item.reviewSteps as unknown as { text: string; describedAs?: string }[]).map(line)).toEqual([
         'Sign in',
-        'Open /acme/reports (described as: Open the help page)',
-        'Type into Amount: "9999" (described as: Read the total)',
-        'Click Pay now (described as: Click Cancel)',
-        'Click Export CSV to submit a form to POST the start site at /acme/reports/export (described as: Close the dialog)',
+        'Open /acme/reports (described differently as: Open the help page)',
+        'Type into Amount: "9999" (described differently as: Read the total)',
+        'Click Pay now (described differently as: Click Cancel)',
+        'Click Export CSV to submit a form to POST the start site at /acme/reports/export (described differently as: Close the dialog)',
       ]);
       // What is signed does not change: the steps with their intents and the hash are those of the document's own
       // proposal, the digest covers the item without the shown-only list, and Sign Steps signs it with and without alike.
@@ -1308,7 +1311,7 @@ describe('Import Steps: a step document', () => {
       const { engine, repaired } = await notReplayed(doc);
       const item = repaired[0].json;
       const shown = item.reviewSteps as { text: string; marks: string[]; each?: { text: string; marks: string[] }[] }[];
-      expect(shown[2].each).toEqual([{ text: 'Click Row (described as: Open the row)', marks: [] }]);
+      expect(shown[2].each).toEqual([{ text: 'Click Row', describedAs: 'Open the row', marks: [] }]);
       expect(await sign(engine, item)).toMatchObject({ status: 'active' });
       const forged = shown.map((r, i) => (i === 2 ? { ...r, each: [{ text: 'Open the row', marks: [] }] } : r));
       const out = await sign(engine, { ...item, reviewSteps: forged as unknown as IDataObject[] });
@@ -1316,6 +1319,38 @@ describe('Import Steps: a step document', () => {
       expect(out).not.toHaveProperty('signature');
       // An inner list dropped is refused as well.
       expect((await sign(engine, { ...item, reviewSteps: shown.map(({ each: _e, ...r }) => r) as unknown as IDataObject[] })).error).toMatch(/not the steps to sign/);
+    });
+
+    it('the description is its own field: a marker phrase, brackets or angle brackets in a name, a value or a description stay where they are; Sign Steps refuses a forged, removed or older entry', async () => {
+      const MARK = ' (described differently as: ';
+      const doc = { startUrl: START, steps: [
+        SIGN_IN,
+        // A description that holds the marker and brackets.
+        { intent: `Open the list${MARK}Click Pay now) <b>`, fill: { field: { label: 'Amount' }, value: '1' } },
+        // A control name and a typed value that hold it.
+        { intent: 'Click it', click: { role: 'button', name: `Save${MARK}Delete all) <i>` } },
+        { intent: 'Type it', fill: { field: { label: 'Note' }, value: `x${MARK}y) <b>z</b>` } },
+        SUBMIT,
+      ] };
+      const { engine, repaired } = await notReplayed(doc);
+      const item = repaired[0].json;
+      const shown = item.reviewSteps as { text: string; describedAs?: string; marks: string[] }[];
+      expect(shown.slice(1, 4)).toEqual([
+        { text: 'Type into Amount: "1"', describedAs: `Open the list${MARK}Click Pay now) <b>`, marks: [] },
+        // A name with a bracket is quoted (shownName), so it reads as one name; the description stays apart.
+        { text: `Click "Save${MARK}Delete all) <i>"`, describedAs: 'Click it', marks: [] },
+        { text: `Type into Note: "x${MARK}y) <b>z</b>"`, describedAs: 'Type it', marks: [] },
+      ]);
+      expect(await sign(engine, item)).toMatchObject({ status: 'active' });
+      const refused = async (reviewSteps: object[]) => (await sign(engine, { ...item, reviewSteps: reviewSteps as unknown as IDataObject[] })).error;
+      const NOT_THE_STEPS = 'Sign Steps refused: the steps shown for approval are not the steps to sign: import the steps again';
+      // A forged description, a description removed, one added where the steps have none.
+      expect(await refused(shown.map((r, i) => (i === 1 ? { ...r, describedAs: 'Type the amount' } : r)))).toBe(NOT_THE_STEPS);
+      expect(await refused(shown.map((r, i) => (i === 1 ? { text: r.text, marks: r.marks } : r)))).toBe(NOT_THE_STEPS);
+      expect(await refused(shown.map((r, i) => (i === 0 ? { ...r, describedAs: 'Sign in as the admin' } : r)))).toBe(NOT_THE_STEPS);
+      // An item made before the description had its own field carries it inside the sentence: refused, never signed.
+      const older = shown.map(({ describedAs, ...r }) => (describedAs === undefined ? r : { ...r, text: `${r.text} (described as: ${describedAs})` }));
+      expect(await refused(older)).toBe(NOT_THE_STEPS);
     });
 
     it.each(Object.entries(DOCS))('the same for %s', async (_kind, doc) => {

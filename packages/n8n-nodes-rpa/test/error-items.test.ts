@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { GenericValue, IDataObject, INodeExecutionData, IPairedItemData } from 'n8n-workflow';
 import type { TaskFailure } from 'n8n-rpa-engine';
+import { CONFIG_GUIDANCE, GUIDANCE } from '../nodes/Playwright/errors.js';
 import { resetGuardsForTests } from '../nodes/Playwright/guard.js';
 import { executeRunSteps } from '../nodes/Playwright/operations/runSteps.js';
 import { executeSignSteps, NOT_REPAIRED_STEPS } from '../nodes/Playwright/operations/signSteps.js';
@@ -105,6 +106,8 @@ describe('v2 error items keep their structured fields through n8n', () => {
     expect(errors[0].json.message).toBe(DRIFT_MESSAGE);
     const details = errors[0].json.details as IDataObject;
     expect(details).toMatchObject({ code: 'drift_detected', name: FEED_NAME, version: 1, hash: HASH, lane: 'script' });
+    // What to do, as the node error's description says it (n8n never shows that description for an error output item).
+    expect(details.guidance).toBe(GUIDANCE.drift_detected);
     expect(Array.isArray(details.log)).toBe(true);
     expect(details.portal).toBeUndefined();
     expect(errors[0].binary?.trace?.mimeType).toBe('application/zip');
@@ -124,7 +127,7 @@ describe('v2 error items keep their structured fields through n8n', () => {
     expect(data).toEqual([]);
     expect(errors).toHaveLength(1);
     expect(String(errors[0].json.error)).toMatch(/^ID Pattern.* is not a valid regular expression: /);
-    expect(errors[0].json.details).toMatchObject({ configError: true, name: FEED_NAME });
+    expect(errors[0].json.details).toMatchObject({ configError: true, name: FEED_NAME, guidance: CONFIG_GUIDANCE });
   });
   it("Sign Steps' refusal reaches the error output (index 1) with code null, reasons, name and version", async () => {
     const input: INodeExecutionData[] = [{ json: { name: FEED_NAME, version: 2, steps: {} } }];

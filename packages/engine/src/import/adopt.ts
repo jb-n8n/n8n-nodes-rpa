@@ -72,16 +72,17 @@ function withoutPages(r: Extract<TaskResult, { ok: false }>): TaskFailure {
 
 /**
  * A healed draft as the first version: the draft was never signed, so the approver reviews the whole
- * document, not the repair's difference from the draft. Version 1 with no base, the change list against nothing, and
+ * document, not the repair's difference from the draft. The draft's version (1, or the import's) with no base, the change list against nothing, and
  * the safety flags of a first approval (every download, host and handler is new) together with the repair's own. The
  * hash is recomputed and the caller recomputes the digest; the proof, its evidence, screenshots and trace stay (the
  * proved steps are the same apart from the version).
  */
 function firstVersion(p: Proposal, input: AdoptInput, mask: (s: string) => string): Proposal {
-  const steps: Script = { ...p.steps, version: 1 };
+  const version = input.draft.version ?? 1;
+  const steps: Script = { ...p.steps, version };
   const fresh = validateScript(steps, { policy: input.policy, secrets: input.secrets, mode: 'proposal' }).safetyFlags.map(mask);
   return {
-    ...p, baseVersion: null, version: 1, steps, hash: scriptHash(steps), changes: stepChanges(undefined, steps, mask),
+    ...p, baseVersion: null, version, steps, hash: scriptHash(steps), changes: stepChanges(undefined, steps, mask),
     safetyFlags: [...new Set([...fresh, ...p.safetyFlags])],
   };
 }
@@ -143,7 +144,8 @@ export async function adoptDraft(input: AdoptInput): Promise<AdoptResult> {
   }
 
   if (input.signal?.aborted) return fail('incomplete', CANCELLED);
-  const script: Script = { ...draft, version: 1 };
+  // The draft's own version: 1, or the one the import gave (ImportOptions.version).
+  const script: Script = { ...draft, version: draft.version ?? 1 };
   // The run may have typed a sign-in code just now (from the TOTP secret or the code provider): the proof's full replay
   // never types the same code again (a site may refuse a code used twice), so it waits for the next 30 s window when the
   // sign-in has a code step. The proof asks the same code provider as the run.
