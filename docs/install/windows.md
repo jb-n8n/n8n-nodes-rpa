@@ -148,7 +148,7 @@ that both machines join. The product does not run one. Any tunnel or private net
 - **It stays up.** Runs fail `runner_unavailable` while it is down.
 
 On a private network (a WireGuard network, a VPN, two cloud networks joined), install with
-`-AllowFrom <n8n's address on it>` and print the line with `-Address <this machine's address on it>`.
+`-AllowFrom <n8n's address on it>`. The line then carries this machine's address on it, which `-Address` can change.
 
 The connection inside stays encrypted (TLS) from n8n to the runner: n8n checks the runner's certificate fingerprint
 before it sends the token, and refuses any other certificate. Whoever runs the tunnel or the network sees that the two machines talk,
@@ -267,6 +267,9 @@ nothing: run it in an administrator's desktop session.
 Run `rpa connection -ShowTokens` (section 5). It prints a line for the credential's **Connection Line** field:
 
 - `rpa-runner://<address>:8765/rpa/v1#token=<token>&fingerprint=<64 hex digits>`
+
+Its address is the one this machine has towards n8n when `-AllowFrom` named one address, else the computer's name. The
+command says which. If n8n reaches this machine by another name or address, add `-Address <that name or address>`.
 
 In n8n, create an **RPA Desktop Runner** credential and paste the line. Save it: the window says
 `Connection tested successfully`.
