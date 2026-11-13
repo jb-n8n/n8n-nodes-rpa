@@ -769,13 +769,13 @@ describe('buildWorkflow', () => {
     const secretOnly = build(desktop(['password'], ['password']));
     expect(byName(secretOnly, 'Desk').notes).not.toContain('Fill in the Variables');
     expect(content(byName(secretOnly, 'Fill in the variables (d)'))).toBe(
-      '### Fill in the variables (gold)\nDesktop steps run only once approved: import the recording with **RPA: 5 Import a bot** and approve `d` on its review page.\nSecret: make an **RPA Secret Variables** credential, select it on **Desk**, and copy these into it. Type the value there, never here.\n```\nCredential: RPA Secret Variables\nName: password\nMay Be Typed Into: App.exe\n```',
+      '### Fill in the variables (gold)\nDesktop steps run only once approved: import the recording with **RPA: 5 Import a bot** and approve `d` on its review page.\nSecret: make an **RPA Secret Variables** credential, or add these to the one you have for this app; select it on **Desk**, and copy these into it. Type the value there, never here.\n```\nCredential: RPA Secret Variables\nName: password\nMay Be Typed Into: App.exe\n```',
     );
     // Handed over after approval (the import form approves before it hands the file over): the note does not ask to
     // import and approve the steps; Import Steps alone approves nothing, so by default it does.
     const approved = buildWorkflow({ name: 'd', nodes: [{ kind: 'desktop', sequence: 1, displayName: 'Desk', draft: 'd' }] }, [], { name: 'd', desktopDrafts: [desktop(['password'], ['password'])], source: 'recording', approvedBeforeHandOver: true });
     expect(content(byName(approved, 'Fill in the variables (d)'))).toBe(
-      '### Fill in the variables (gold)\nSecret: make an **RPA Secret Variables** credential, select it on **Desk**, and copy these into it. Type the value there, never here.\n```\nCredential: RPA Secret Variables\nName: password\nMay Be Typed Into: App.exe\n```',
+      '### Fill in the variables (gold)\nSecret: make an **RPA Secret Variables** credential, or add these to the one you have for this app; select it on **Desk**, and copy these into it. Type the value there, never here.\n```\nCredential: RPA Secret Variables\nName: password\nMay Be Typed Into: App.exe\n```',
     );
     // Made by a Site Login's own form (IB-4): the notes name that form and its address, not the default form.
     const formOpts = { name: 'RPA: 5 Import a bot (Sample *accounts*)', address: 'http://localhost:5720/form/rpa-import-sample-accounts' };
@@ -1061,7 +1061,7 @@ describe('buildWorkflow', () => {
     const set = (i: number) => content(byName(kinds[i][1], 'Set once'));
     expect(set(3)).toBe('### Set once\nNothing to pick: **RPA Browser**, **RPA Site Login** and **RPA Step Signing** are set on the RPA node.');
     expect(set(0)).toBe('### Set once\nNothing to pick: **RPA Desktop Runner** and **RPA Step Signing** are set on the RPA node.\n'
-      + '- **RPA Secret Variables**: make one, pick it on the Run steps that name its variables, and copy these into it. Type each value there, never in this workflow.\n'
+      + '- **RPA Secret Variables**: make one, or add these to the one you have for this app or site; pick it on the Run steps that name its variables, and copy these into it. Type each value there, never in this workflow.\n'
       + '```\nCredential: RPA Secret Variables\nName: password\nMay Be Typed Into: ErpDemo.exe\n```');
   });
 

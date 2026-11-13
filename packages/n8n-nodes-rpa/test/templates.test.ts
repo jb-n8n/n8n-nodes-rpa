@@ -1761,7 +1761,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const after = (signed: IDataObject[], more: Record<string, INodeExecutionData[][]> = {}) => ({
       ...ran, [REVIEW]: [[{ json: { decision_0: 'Approve and sign' } }]], 'Sign steps': [signed.map((json) => ({ json })), []], ...more,
     });
-    const BLOCK = `\n\n${name} types a secret. In n8n, make an RPA Secret Variables credential (+ → New credential), select it on the bot's RPA node, and copy these into it:`
+    const BLOCK = `\n\n${name} types a secret. In n8n, make an RPA Secret Variables credential (+ → New credential), or add these to the one you have for this app or site; select it on the bot's RPA node, and copy these into it:`
       + '\nCredential: <code>RPA Secret Variables</code>\nName: <code>password</code>\nMay Be Typed Into: <code>ErpDemo.exe</code>\nType the value there only: this form never asks for it.';
     for (const page of ['Imported, with the workflow file', 'Imported']) {
       const p = completion(page);

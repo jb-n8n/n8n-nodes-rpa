@@ -720,7 +720,7 @@ class Builder {
       const typedInto = secretTypedInto(draft.script, true);
       if (secret.size && typedInto) this.secretTargets.add(typedInto);
       // What to copy into the credential: its name, each variable's name and May Be Typed Into. The value is typed there only.
-      const secretVars = secret.size ? `Secret: make an ${SECRET_VARIABLES} credential, select it on **${md(run)}**, and copy these into it. Type the value there, never here.\n${secretBlock([...secret], typedInto ? [typedInto] : [])}` : '';
+      const secretVars = secret.size ? `Secret: make an ${SECRET_VARIABLES} credential, or add these to the one you have for this app; select it on **${md(run)}**, and copy these into it. Type the value there, never here.\n${secretBlock([...secret], typedInto ? [typedInto] : [])}` : '';
       const content = `### Fill in the variables (gold)\n${[[listedVars, this.approvedBeforeHandOver ? '' : `Desktop steps run only once approved: ${FROM[this.source].importIt} with ${this.importForm} and approve ${code(draftName)} on its review page.`].filter(Boolean).join(' '), secretVars].filter(Boolean).join('\n')}`;
       this.sticky(`Fill in the variables (${draftName})`, content, COLOUR.gold, [runX - 80, y + 160], 320, Math.max(260, noteSize(content, 320).height));
     }
@@ -1007,7 +1007,7 @@ export function buildWorkflow(flow: UiPathFlow, drafts: Draft[], opts: BuildWork
   const picked = [...new Set([...browserCreds.picked, ...desktopCreds.picked])];
   // What to copy into the one credential the secret variables come from: its name, each variable's name, May Be Typed Into.
   const secretLine = b.secretVariables.size
-    ? `- ${SECRET_VARIABLES}: make one, pick it on the Run steps that name its variables, and copy these into it. Type each value there, never in this workflow.\n${secretBlock([...b.secretVariables].slice(0, 10), [...b.secretTargets].slice(0, 10))}`
+    ? `- ${SECRET_VARIABLES}: make one, or add these to the one you have for this app or site; pick it on the Run steps that name its variables, and copy these into it. Type each value there, never in this workflow.\n${secretBlock([...b.secretVariables].slice(0, 10), [...b.secretTargets].slice(0, 10))}`
     : '';
   const toPick = [
     browserCreds.missing.length ? `- ${and(browserCreds.missing.map((l) => `**${l}**`))}: ${listed(b.runNodes)}` : '',
