@@ -64,7 +64,10 @@ first, before anything reads or writes them.
   version 4, whose signature does not fit this form: …`, on the change path and for an upload alike.
 - **Review and approve** shows each step list: what it opens, whether it signs in, forms it submits, files it returns,
   what the replay proved, the steps it left out, and the numbered steps. For desktop steps it asks "Which of these steps
-  save, send or submit?". The **Decision** is **Approve and sign** or **Reject**. A page left unanswered for an hour
+  save, send or submit?". A new bot's ticks start from the rule (every candidate but a key pressed in a secret
+  field); a bot changed, signed again or uploaded again under its name starts from its approved version's own marks,
+  ticked boxes and typed numbers alike, and a step that differs from the approved one falls back to the rule. The
+  **Decision** is **Approve and sign** or **Reject**. A page left unanswered for an hour
   signs nothing. Once it is answered, **Versions now** reads the steps table again and **Still the next version?**
   checks that no row of a name on the page has that version or a higher one: another review page of the same bot,
   open at the same time, may have been answered first. Then nothing is signed or rejected, and **Approved meanwhile**
