@@ -156,6 +156,40 @@ function Get-RpaUnattendedNotice([string]$User, [int]$RunnerPort, [int]$BrowserP
   $lines
 }
 
+# What adding the browser to an install, or removing it, changes, in words, for the installer to show before it changes
+# anything: the browser's port and firewall rule, its files, task, token and certificate, and who can act as the bot
+# user through it. -AllowFrom is what the firewall rules let in (nothing without rules). No secret goes in.
+function Get-RpaBrowserChangeNotice([bool]$Add, [string]$User, [int]$BrowserPort, $AllowFrom, [bool]$Unattended, [string]$DataDir, [string[]]$Steps) {
+  if ($Add) {
+    $rule = 'No firewall rule is added for it (-NoFirewall).'
+    if ($AllowFrom) {
+      $from = 'any address'
+      if (@($AllowFrom) -notcontains 'any') { $from = @($AllowFrom) -join ', ' }
+      $rule = 'The firewall rule RPA-Browser-In lets {0} in to it.' -f $from
+    }
+    $listens = 'It listens on port {0}.' -f $BrowserPort
+    if ($Unattended) { $listens = 'The RPA Supervisor listens on port {0} too, and passes connections to the browser at 127.0.0.1 port {1}.' -f $BrowserPort, ($BrowserPort + $script:InnerPortOffset) }
+    return @(
+      '-WithBrowser adds the RPA browser to this install:'
+      '  - The browser (Node.js, Playwright and a Chromium browser) is installed, and the scheduled task \RPA\RPA Browser'
+      ('    starts it when {0} signs in.' -f $User)
+      ('  - {0} {1}' -f $listens, $rule)
+      ('  - A browser token and a certificate are made in {0}.' -f $DataDir)
+      ('  - Whoever holds the browser token and can reach port {0} acts as {1} through the browser. It can read the' -f $BrowserPort, $User)
+      ("    files {0} can read, the runner's token among them." -f $User)
+    )
+  }
+  $what = 'Its scheduled task \RPA\RPA Browser and its files are removed.'
+  if ($Steps -contains 'remove the browser firewall rule') { $what = 'Its scheduled task \RPA\RPA Browser, its firewall rule RPA-Browser-In and its files are removed.' }
+  $lines = @(
+    '-NoBrowser removes the RPA browser from this install:'
+    ('  - {0}' -f $what)
+    ('  - Its token and certificate are removed from {0}. The RPA Browser credential in n8n then stops working.' -f $DataDir)
+  )
+  if ($Unattended) { $lines += '  - The RPA Supervisor no longer listens on port {0}.' -f $BrowserPort }
+  $lines
+}
+
 # Whether Install-Rpa.ps1 was given no sign-in mode: none of -Unattended (also not -Unattended:$false), -AutoSignIn
 # and -UserPassword. A first install for a new local bot user on Windows Server is then an unattended install.
 function Test-RpaNoModeGiven([hashtable]$Parameters) {
@@ -189,7 +223,8 @@ function Get-RpaBrowserFilesRefusal([hashtable]$Facts, [bool]$Kept) {
 # them from the record unless -Unattended or -IdleSeconds is given. Browser says whether the install has the browser:
 # -WithBrowser adds it, an upgrade without -WithBrowser or -NoBrowser keeps what the install has (as it keeps the
 # sign-in mode), and -NoBrowser leaves it out, or removes it from an install that has it. Install-Rpa.ps1 hands it on
-# to Invoke-RpaInstallPlan as NoBrowser.
+# to Invoke-RpaInstallPlan as NoBrowser. BrowserNotice is what adding the browser to an install, or removing it from
+# one, changes, in lines to show and confirm before the first step (a first install has no such lines).
 function Get-RpaInstallPlan {
   param(
     [Parameter(Mandatory = $true)][hashtable]$Parameters,
@@ -561,10 +596,18 @@ function Get-RpaInstallPlan {
     $notice += '    back, after automatic sign-in is set up.'
     $notice += '  - Windows signs {0} in at the next start of this machine (Restart-Computer).' -f $user
   }
+  # The browser added to an install, or removed from one. The port it is shown on is the one the install records when
+  # it goes.
+  $browserNotice = @()
+  if ($upgrade -and $steps.Count -gt 0 -and $browser -ne $installedBrowser) {
+    $shownPort = $browserPort
+    if (-not $browser -and $Facts.InstalledBrowserPort) { $shownPort = [int]$Facts.InstalledBrowserPort }
+    $browserNotice = @(Get-RpaBrowserChangeNotice $browser $user $shownPort $allowFrom $unattended ([string]$Facts.DataDir) $steps.ToArray())
+  }
   @{
     Refusals = $refusals.ToArray(); Warnings = $warnings.ToArray(); Questions = $questions.ToArray(); Steps = $steps.ToArray()
     AllowFrom = $allowFrom; PublicNetwork = $publicNetwork; Notice = $notice; Unattended = $unattended; IdleSeconds = $idleSeconds
-    Browser = $browser
+    Browser = $browser; BrowserNotice = $browserNotice
   }
 }
 

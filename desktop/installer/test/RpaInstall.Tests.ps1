@@ -1149,6 +1149,73 @@ Describe 'Get-RpaInstallPlan' {
       [array]::IndexOf($plan.Steps, 'remove the browser token and certificate') | Should -BeLessThan ([array]::IndexOf($plan.Steps, 'write install.json'))
     }
 
+    # Adding the browser opens a second port and installs a browser that can read what the bot user can read, and
+    # removing it stops the RPA Browser credential: either is listed, and Install-Rpa.ps1 asks for YES unless -Force.
+    It '-WithBrowser on an upgrade of an install without the browser lists what it adds' {
+      $files = @{ 'policy.json' = New-PathState 'ours'; 'token' = New-PathState 'ours'; 'browser-token' = New-PathState 'missing' }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-InstalledFacts @{ InstalledBrowser = $false; DataFiles = $files })
+      $plan.Refusals.Count | Should -Be 0
+      $plan.BrowserNotice | Should -BeExactly @(
+        '-WithBrowser adds the RPA browser to this install:'
+        '  - The browser (Node.js, Playwright and a Chromium browser) is installed, and the scheduled task \RPA\RPA Browser'
+        '    starts it when rpa-runner signs in.'
+        '  - It listens on port 3000. The firewall rule RPA-Browser-In lets 10.0.0.5 in to it.'
+        "  - A browser token and a certificate are made in $($script:DataDir)."
+        '  - Whoever holds the browser token and can reach port 3000 acts as rpa-runner through the browser. It can read the'
+        "    files rpa-runner can read, the runner's token among them."
+      )
+    }
+
+    It '-WithBrowser on an upgrade names <Why>' -ForEach @(
+      @{ Why = 'any address'; Parameters = @{ AllowFrom = @(); AllowFromAnyAddress = $true }; Unattended = $false; Line = '  - It listens on port 3000. The firewall rule RPA-Browser-In lets any address in to it.' }
+      @{ Why = 'no firewall rule'; Parameters = @{ AllowFrom = @(); NoFirewall = $true }; Unattended = $false; Line = '  - It listens on port 3000. No firewall rule is added for it (-NoFirewall).' }
+      @{ Why = 'the RPA Supervisor in unattended mode'; Parameters = @{}; Unattended = $true
+        Line = '  - The RPA Supervisor listens on port 3000 too, and passes connections to the browser at 127.0.0.1 port 13000. The firewall rule RPA-Browser-In lets 10.0.0.5 in to it.' }
+    ) {
+      $files = @{ 'policy.json' = New-PathState 'ours'; 'token' = New-PathState 'ours'; 'browser-token' = New-PathState 'missing' }
+      $change = @{ InstalledBrowser = $false; DataFiles = $files }
+      $facts = if ($Unattended) { New-UnattendedFacts $change } else { New-InstalledFacts $change }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters $Parameters) -Facts $facts
+      $plan.Refusals | Should -BeNullOrEmpty
+      $plan.BrowserNotice | Should -Contain $Line
+    }
+
+    It '-NoBrowser on an upgrade of an install with the browser lists what it removes' {
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ NoBrowser = $true; WithBrowser = $false }) -Facts (New-InstalledFacts)
+      $plan.BrowserNotice | Should -BeExactly @(
+        '-NoBrowser removes the RPA browser from this install:'
+        '  - Its scheduled task \RPA\RPA Browser, its firewall rule RPA-Browser-In and its files are removed.'
+        "  - Its token and certificate are removed from $($script:DataDir). The RPA Browser credential in n8n then stops working."
+      )
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ NoBrowser = $true; WithBrowser = $false }) -Facts (New-UnattendedFacts)
+      $plan.BrowserNotice | Should -Contain '  - The RPA Supervisor no longer listens on port 3000.'
+    }
+
+    It 'lists nothing about the browser when <Why>' -ForEach @(
+      @{ Why = 'a first install has it (-WithBrowser)'; Parameters = @{ UserPassword = 'password' }; Facts = 'first' }
+      @{ Why = 'a first install has none'; Parameters = @{ UserPassword = 'password'; WithBrowser = $false }; Facts = 'first' }
+      @{ Why = 'an upgrade keeps it'; Parameters = @{ WithBrowser = $false }; Facts = 'with' }
+      @{ Why = 'an upgrade keeps it, and -WithBrowser is given again'; Parameters = @{}; Facts = 'with' }
+      @{ Why = 'an upgrade stays without it'; Parameters = @{ WithBrowser = $false }; Facts = 'without' }
+      @{ Why = 'an upgrade stays without it, and -NoBrowser is given'; Parameters = @{ WithBrowser = $false; NoBrowser = $true }; Facts = 'without' }
+    ) {
+      $change = @{}
+      foreach ($key in $Parameters.Keys) { $change[$key] = $Parameters[$key] }
+      if ($change.UserPassword) { $change.UserPassword = New-TestPassword }
+      $files = @{ 'policy.json' = New-PathState 'ours'; 'token' = New-PathState 'ours'; 'browser-token' = New-PathState 'missing' }
+      $facts = switch ($Facts) { 'first' { New-TestFacts } 'with' { New-InstalledFacts } 'without' { New-InstalledFacts @{ InstalledBrowser = $false; DataFiles = $files } } }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters $change) -Facts $facts
+      $plan.Refusals | Should -BeNullOrEmpty
+      @($plan.BrowserNotice).Count | Should -Be 0
+    }
+
+    It 'Install-Rpa.ps1 shows the list, also with -Force, and asks for YES unless -Force' {
+      $source = (Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir 'Install-Rpa.ps1')) -replace "`r`n", "`n"
+      $source | Should -Match ([regex]::Escape('$askBrowser = @($plan.BrowserNotice).Count -gt 0 -and -not $Force'))
+      $source | Should -Match ([regex]::Escape('foreach ($line in @($plan.BrowserNotice)) { Write-Host $line }'))
+      $source | Should -Match ([regex]::Escape("if (`$plan.Questions.Count -gt 0 -or `$askSignIn -or `$askUnattended -or `$askBrowser) {`n  `$answer = ''"))
+    }
+
     It 'with -Unattended and without the browser names only the runner port' {
       $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true; WithBrowser = $false }) -Facts (New-TestFacts @{ PortsInUse = @{ 13000 = 'node' } })
       $plan.Refusals.Count | Should -Be 0

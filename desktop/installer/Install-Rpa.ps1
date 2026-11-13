@@ -38,7 +38,8 @@
 #                  without the browser and run the browser on another machine.
 #   -NoBrowser     No browser, which is the default for a first install. On an install that has the browser it removes
 #                  it: its task, firewall rule, token, certificate and files. An upgrade given neither switch keeps the
-#                  browser when the install has it.
+#                  browser when the install has it. Adding the browser to an install, or removing it, lists what it
+#                  changes and asks for YES first, unless -Force is given.
 #   -AutoSignIn    Have Windows sign the bot user in by itself at every start and keep the desktop unlocked. The
 #                  password is stored on this machine, and several settings change for the whole machine; the installer
 #                  lists them and asks for YES first, unless -Force is given. Uninstall-Rpa.ps1 puts them back.
@@ -60,8 +61,8 @@
 #                  back. Given none of -Unattended, -AutoSignIn and -UserPassword, a first install for a new bot user
 #                  on Windows Server is an unattended install, and its list says so first; on Windows 10 and 11 it is
 #                  refused.
-#   -Force         Do not ask (about -AutoSignIn, -Unattended, or another -User than the one of the install), and
-#                  upgrade even while the runner is running (a run in progress fails).
+#   -Force         Do not ask (about -AutoSignIn, -Unattended, the browser added or removed, or another -User than the
+#                  one of the install), and upgrade even while the runner is running (a run in progress fails).
 #
 # Unpack the package on a local drive where only you or administrators can change it, for example under your own
 # profile or under C:\Program Files: when it starts, the installer finds the real location of the package and reads
@@ -288,9 +289,11 @@ if ($plan.Refusals.Count -gt 0) {
 }
 
 # What the installer has confirmed before it changes anything: another -User than the one the install was made for,
-# and what -AutoSignIn or -Unattended means. One answer covers all.
+# what -AutoSignIn or -Unattended means, and the browser added to an install or removed from it. One answer covers all.
+# A plain upgrade (the same user, mode and browser) asks nothing.
 $askSignIn = ($plan.Steps -contains 'turn on automatic sign-in') -and -not $Force
 $askUnattended = @($plan.Notice).Count -gt 0 -and -not $Force
+$askBrowser = @($plan.BrowserNotice).Count -gt 0 -and -not $Force
 if ($plan.Questions.Count -gt 0 -or $askSignIn -or $askUnattended) {
   foreach ($question in $plan.Questions) { Write-Host $question }
   if ($plan.Questions.Count -gt 0) {
@@ -312,9 +315,10 @@ if ($askSignIn) {
   Write-Host '  Uninstall-Rpa.ps1 puts these settings back to what they were. It cannot bring back a password that was'
   Write-Host '  stored for automatic sign-in before.'
 }
-# With -Force it is said all the same, before the first step.
+# With -Force they are said all the same, before the first step.
 foreach ($line in @($plan.Notice)) { Write-Host $line }
-if ($plan.Questions.Count -gt 0 -or $askSignIn -or $askUnattended) {
+foreach ($line in @($plan.BrowserNotice)) { Write-Host $line }
+if ($plan.Questions.Count -gt 0 -or $askSignIn -or $askUnattended -or $askBrowser) {
   $answer = ''
   try { $answer = Read-Host 'Type YES to continue' } catch { $answer = '' }
   if ($answer -cne 'YES') {
