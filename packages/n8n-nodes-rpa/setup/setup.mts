@@ -34,7 +34,7 @@ import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { CREDENTIALS, parseConnectionLine } from '../nodes/Playwright/config.js';
 import {
-  browserCredentialData, clean, type Client, createClient, createRedactor, MIN_BROWSER_TOKEN_LENGTH, parseBrowserUrl, parseN8nUrl,
+  browserCredentialData, clean, type Client, createClient, createRedactor, isLoopback, MIN_BROWSER_TOKEN_LENGTH, parseBrowserUrl, parseN8nUrl,
 } from './n8n-api.mjs';
 
 const DEFAULT_URL = 'http://localhost:5678';
@@ -244,6 +244,8 @@ interface Inputs {
   keyExpires?: number | null;
   line?: string;
   browser?: { href: string; token: string };
+  /** n8n's own address for its forms, when n8n's environment gives it here (formBase); undefined otherwise. */
+  formBase?: string;
 }
 
 /** Everything typed or set before anything is sent: the address, the API key, the Connection Line, the browser. */
@@ -294,7 +296,28 @@ async function readInputs(options: Options, env: NodeJS.ProcessEnv): Promise<Inp
     }
   }
   const claims = keyClaims(apiKey);
-  return { options, origin: n8n.origin, plaintext: n8n.plaintext, client: createClient({ base: n8n.base, apiKey, redact }), ...claims, line, browser };
+  return {
+    options, origin: n8n.origin, plaintext: n8n.plaintext, client: createClient({ base: n8n.base, apiKey, redact }), ...claims, line, browser,
+    formBase: formBase(env, new URL(n8n.origin).hostname),
+  };
+}
+
+/**
+ * n8n's own address for its forms, when this command runs where n8n does (it talks to n8n on this machine, as inside
+ * n8n's container): WEBHOOK_URL, n8n's address for webhooks and forms, else N8N_EDITOR_BASE_URL. n8n's public API does
+ * not tell it. Only an http(s) address without a user, a password, a query or a fragment, ending in "/"; undefined
+ * otherwise. Nothing is asked of that address: the form is checked at the address this command reaches n8n at.
+ */
+function formBase(env: NodeJS.ProcessEnv, reachedHost: string): string | undefined {
+  if (!isLoopback(reachedHost)) return undefined;
+  for (const value of [env.WEBHOOK_URL, env.N8N_EDITOR_BASE_URL]) {
+    const text = (value ?? '').trim();
+    if (!text) continue;
+    const url = URL.canParse(text) ? new URL(text) : undefined;
+    if (!url || (url.protocol !== 'http:' && url.protocol !== 'https:') || url.username || url.password || url.search || url.hash) continue;
+    return url.href.endsWith('/') ? url.href : `${url.href}/`;
+  }
+  return undefined;
 }
 
 /**
@@ -935,9 +958,12 @@ async function run(inputs: Inputs): Promise<number> {
   // Last, as it may wait a minute for a machine that does not answer: the form is ready by then.
   if (runnerRef) await testRunner(client, runnerRef);
 
+  // The address to open: n8n's own when its environment gives it here, else the one this command reached n8n at.
+  const shownUrl = formUrl && inputs.formBase ? new URL(`form/${webhookId}`, inputs.formBase).href : formUrl;
   say();
   say('The import form is ready.');
-  say(`  Address:    ${formUrl ?? `open "${shownName}" in n8n, then the node "${NODE.form}", for its production URL`}`);
+  say(`  Address:    ${shownUrl ?? `open "${shownName}" in n8n, then the node "${NODE.form}", for its production URL`}`);
+  if (formUrl && !inputs.formBase) say('              Replace the host and port with the ones you open n8n with, if they differ.');
   if (basic) {
     say(`  User name:  ${FORM.user}`);
     if (formPassword) reveal('  Password:   ', formPassword, '   (shown once: keep it in your password manager)');

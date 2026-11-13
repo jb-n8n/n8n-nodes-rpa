@@ -506,6 +506,31 @@ describe('npx n8n-nodes-rpa setup', () => {
     expect(fake.state.requests).toEqual([]);
   });
 
+  it("the form's address: n8n's own from its environment where the command runs with n8n, else as reached, with one line more", async () => {
+    const formOf = (fake: Fake) => fake.state.workflows.at(-1)!.nodes.find((n) => n.name === 'Import a bot').webhookId as string;
+    const probes = (fake: Fake) => fake.state.requests.filter((r) => r.path.startsWith('/form/')).length;
+    // Inside n8n's container: WEBHOOK_URL is n8n's address for its forms. The form is still checked where n8n was reached.
+    const inside = await n8n();
+    const r = await run(setup(inside.url), { ...ENV, WEBHOOK_URL: 'https://n8n.example.com/', N8N_EDITOR_BASE_URL: 'https://editor.example.com/' });
+    expect(r.code, r.out).toBe(0);
+    expect(r.stdout).toContain(`  Address:    https://n8n.example.com/form/${formOf(inside)}\n`);
+    expect(r.stdout).not.toContain(`${inside.url}/form/`);
+    expect(r.stdout).not.toContain('Replace the host and port');
+    expect(probes(inside)).toBeGreaterThan(0);
+    // N8N_EDITOR_BASE_URL when WEBHOOK_URL is not set; an n8n under a path keeps it.
+    const editor = await n8n();
+    const e = await run(setup(editor.url), { ...ENV, N8N_EDITOR_BASE_URL: 'https://example.com/n8n' });
+    expect(e.stdout).toContain(`  Address:    https://example.com/n8n/form/${formOf(editor)}\n`);
+    // Nothing usable from the environment: the address as reached, and one line to say what to change.
+    for (const env of [{}, { WEBHOOK_URL: 'https://user:made-up@n8n.example.com/' }, { WEBHOOK_URL: 'ftp://n8n.example.com/' }, { WEBHOOK_URL: 'not an address' }]) {
+      const fake = await n8n();
+      const o = await run(setup(fake.url), { ...ENV, ...env });
+      expect(o.code, o.out).toBe(0);
+      expect(o.stdout).toContain(`  Address:    ${fake.url}/form/${formOf(fake)}\n              Replace the host and port with the ones you open n8n with, if they differ.\n`);
+      expect(o.stdout).not.toContain('n8n.example.com');
+    }
+  });
+
   it('a Connection Line that parses: the RPA Desktop Runner credential holds it, and the output never shows it', async () => {
     const fake = await n8n();
     const { code, out } = await run(setup(fake.url), { ...ENV, RPA_CONNECTION_LINE: LINE });
