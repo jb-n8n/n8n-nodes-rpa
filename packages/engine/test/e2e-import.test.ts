@@ -5,7 +5,7 @@ import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { startPortal, SANDBOX } from 'n8n-rpa-sandbox/testing.js';
 import type { ChatModel } from '../src/agent/model.js';
-import { adoptDraft, type AdoptInput, type AdoptResult } from '../src/import/adopt.js';
+import { adoptDraft, statedIdPattern, type AdoptInput, type AdoptResult } from '../src/import/adopt.js';
 import { importSource } from '../src/import/index.js';
 import { runScriptLane } from '../src/lane/script-lane.js';
 import { runTask } from '../src/lane/task.js';
@@ -263,6 +263,32 @@ describe('adopting imported steps against the sandbox portal', () => {
     expect(r.proposal).toMatchObject({ name: 'sandbox-line-items', baseVersion: null, version: 1 });
     expect(r.proposal.evidence.file).toMatchObject({ fileName: septemberFile, rows: SANDBOX.erp.rowsInSeptember1000 });
     leakFree(r);
+  }, 120_000);
+
+  // docs/samples/sandbox-rows.steps.json, a bot that reads rows: its extract step says its own ID Pattern, so it imports
+  // and adopts with nothing more (no ID Pattern given), under the same Site Login, and the signed steps read the same rows.
+  it('the rows sample adopts with the ID Pattern its steps state, signs and reads the same rows', async () => {
+    const sample = read('docs/samples/sandbox-rows.steps.json');
+    const imported = importSource('steps', sample.split('http://sandbox:8080').join(portal.url), { name: 'sandbox-rows', hasSiteLogin: true, secrets: SECRETS });
+    expect(imported.report.items.filter((i) => i.kind === 'error')).toEqual([]);
+    const draft = imported.drafts[0].script;
+    expect(needsApprovalAsWritten(draft.steps)).toBe(false);
+    expect(statedIdPattern(draft)).toBe('N26-\\d{4}');
+    const policy: PortalPolicy = { ...policyFor(portal), allowedSubmits: [], readPosts: [{ host: portal.host, path: '/sap*/bc/gui/sap/its/webgui' }] };
+    const r = await adopt(draft, { policy, vars: {} });
+    if (!r.ok) throw new Error(json(r).slice(0, 1500));
+    expect(r).toMatchObject({ lane: 'script', llmCalls: 0 });
+    expect(r.proposal.evidence.count).toBeGreaterThan(0);
+    expect(r.proposal.evidence.file).toBeUndefined();
+    leakFree(r);
+    const signed = signSteps({ proposal: r.proposal, key: TEST_KEY, approverId: APPROVER, policy, secrets: SECRETS, reviewedDigest: r.digest });
+    if (!signed.ok) throw new Error(signed.reasons.join('; '));
+    const lane = await runScriptLane({
+      script: signed.row.steps, trust: { required: true, signature: signed.row.signature, approvedBy: APPROVER, key: TEST_KEY },
+      policy, secrets: SECRETS, endpoint: LOCAL, defaultStepTimeoutMs: 3000, output: { idPattern: 'N26-\\d{4}' },
+    });
+    if (!lane.ok) throw new Error(json(lane).slice(0, 1500));
+    expect(lane.rows).toHaveLength(r.proposal.evidence.count);
   }, 120_000);
 
   it('adoption never writes: a declared form post is refused before the browser, a click that posts is blocked', async () => {

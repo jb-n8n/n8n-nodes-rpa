@@ -114,6 +114,11 @@ Write the steps as JSON ([Steps](../reference/steps.md)), save them as a `.json`
 download through a form, type a secret or change a password are not run by the import: they go to approval as
 written, marked so.
 
+Steps that read rows need an `idPattern` on each `extract` and `extractTable` step ([ID Pattern](../reference/steps.md#id-pattern)).
+The import checks the rows it reads with it, and the workflow file's **Run steps** gets the same **ID Pattern**. The
+form asks for nothing more. Without one, the last page says:
+`These steps read rows, but a step that reads them has no idPattern, so the replay cannot check the rows: the draft is returned for review but cannot be signed. Give each extract and extractTable step an idPattern, the shape of the ID every row has, such as INV-\d{4}.`
+
 ## Change an approved bot, or sign it again
 
 1. Open the **Import a bot** form. Leave **Bot file** empty and type the bot's name in **Name for the steps**.

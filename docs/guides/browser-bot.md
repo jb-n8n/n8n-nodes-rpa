@@ -134,9 +134,10 @@ To run the bot on a schedule, open **On a schedule**, set the time, turn the nod
 **Your own site.** Record it with Chrome's Recorder (DevTools → Recorder, then Export as JSON) and upload the export on
 the same form, with a Site Login for that site on **Import steps** and **Sign steps**. Turn **Allow Private Network**
 off for a public site. A bot that downloads a file needs the file's name or columns on **The file it downloads**. A
-bot that reads rows from a page needs an **ID Pattern (Regex)** on **Import steps**, the shape of the ID every row has
-([Steps](../reference/steps.md#id-pattern)). [Move a bot](move-a-bot.md) covers recordings, Playwright code, UiPath
-projects and step documents.
+bot that reads rows from a page is a step document whose `extract` or `extractTable` steps each have an `idPattern`,
+the shape of the ID every row has ([Steps](../reference/steps.md#id-pattern)). The import checks the rows with it, and
+the workflow it hands over does too. `docs/samples/sandbox-rows.steps.json` reads the sample site's notices this way.
+[Move a bot](move-a-bot.md) covers recordings, Playwright code, UiPath projects and step documents.
 
 **Where else the browser can run.** For your own n8n, install the node from **Settings → Community nodes → Install**
 (package `n8n-nodes-rpa`) and give the setup command the address of one of these with `--browser-url`:

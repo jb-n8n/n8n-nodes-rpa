@@ -10,7 +10,7 @@ import {
   NodeHelpers, Workflow, type IDataObject, type INodeExecutionData, type INodeParameters, type INodeProperties, type INodeTypes,
 } from 'n8n-workflow';
 import {
-  buildProposal, checkDesktopTrust, createMasker, IMPORT_NOT_ADOPTABLE, importSource as realImportSource, notReplayedProposal, parseScript, proposalDigest, scriptHash, validateScript,
+  adoptDraft as realAdoptDraft, buildProposal, checkDesktopTrust, createMasker, IMPORT_NOT_ADOPTABLE, IMPORT_ROWS_NEED_ID, importSource as realImportSource, notReplayedProposal, parseScript, proposalDigest, scriptHash, validateScript,
   type AdoptInput, type AdoptResult,
   type Proposal, type Script, type TaskResult,
 } from 'n8n-rpa-engine';
@@ -1273,6 +1273,42 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(JSON.stringify(before[0].json.report)).toContain('without an Expected File this download stays a click');
   });
 
+  it('a step document that reads rows: imported with the ID Pattern its steps state, shown and signed, and its workflow file runs with it; without one the refusal names the field', async () => {
+    const sample = readFileSync(new URL('../../../docs/samples/sandbox-rows.steps.json', import.meta.url), 'utf8').split('http://sandbox:8080').join(SITE.url);
+    // The download page is asked as for any other upload, and left empty: nothing on it is about rows.
+    const { asked, upload } = throughTheDownloadPage(formItem('Step document', Buffer.from(sample)), { expectedFileName: null, columns: null });
+    expect(asked).toBe(true);
+    const seen: AdoptInput[] = [];
+    const [data, repaired] = await runImport(upload, provedWithoutBrowser(seen));
+    expect(data[0].json.error, JSON.stringify(data[0].json).slice(0, 800)).toBeUndefined();
+    expect(seen[0].output).toEqual({ idPattern: 'N26-\\d{4}' });
+    expect(data[0].json.drafts).toEqual([expect.objectContaining({ adopted: true })]);
+    // The workflow file's Run steps checks the rows with the same ID Pattern, typed.
+    const file = JSON.parse(Buffer.from(String(data[0].binary?.workflow?.data), 'base64').toString('utf8')) as { nodes: { parameters: IDataObject }[] };
+    const runs = file.nodes.filter((n) => n.parameters.operation === 'runSteps');
+    expect(runs).toHaveLength(1);
+    expect((runs[0].parameters.options as IDataObject).idPattern).toBe('N26-\\d{4}');
+    // The review page shows the steps and the proof's rows, and Sign steps signs them as version 1.
+    const ran = { Settings: [[{ json: settingsJson() }]], 'Import steps': [data, repaired] } as Record<string, INodeExecutionData[][]>;
+    const shown = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan(ran) });
+    expect(shown.map((f) => f.fieldType)).toEqual(['html', 'radio']);
+    expect(String(shown[0].html)).toContain('On each page: Read the notices on this page');
+    expect(String(shown[0].html)).toContain('Proven in a fresh browser:');
+    const approved = await signAfterReview(ran, { decision_0: 'Approve and sign' }, {}, true);
+    expect(approved.errors).toEqual([]);
+    expect(approved.signed).toEqual([expect.objectContaining({ status: 'active', name: 'line-item-export', version: 1 })]);
+
+    // The same bot whose extract step states no ID Pattern: refused before any browser, and the page says what to add.
+    const bare = JSON.parse(sample) as { steps: { paginate?: { each: { extract: IDataObject }[] } }[] };
+    const read = bare.steps.at(-1)!.paginate!.each[0].extract;
+    delete read.idPattern;
+    read.item = { css: 'li' };
+    const [refused] = await runImport(formItem('Step document', Buffer.from(JSON.stringify(bare))), (input) => realAdoptDraft(input) as never);
+    expect(refused[0].json.drafts).toEqual([expect.objectContaining({ adopted: false, code: 'policy_violation', reason: IMPORT_ROWS_NEED_ID })]);
+    const page = render(completion('Imported, with the workflow file').completionMessage, { $: nodesRan({ Settings: [[{ json: settingsJson() }]], 'Import steps': [refused, []] }) });
+    expect(page.split('\n')[1]).toBe(`0 of 1 step list passed the replay. line-item-export: ${escapeHtml(IMPORT_ROWS_NEED_ID)}`);
+  });
+
   it('a UiPath desktop project with both download fields left empty imports exactly as it did without the page', async () => {
     const project = uipathZip('uipath-erp-desktop', 'ERP Demo Line Items');
     const never = () => {
@@ -1755,7 +1791,8 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(items.filter((i) => i.kind === 'untranslated')).toHaveLength(1);
     expect(items.filter((i) => i.kind === 'secret')).toHaveLength(3);
     expect(message).toContain('Imported: 9 steps; 1 not translated, 3 removed as secrets.');
-    expect(message).toContain('removed as secrets.\n0 of 1 step list passed the replay.\n');
+    // A step list that could not be proved says why, on the page.
+    expect(message).toContain(`removed as secrets.\n0 of 1 step list passed the replay. line-item-export: ${IMPORT_NOT_ADOPTABLE}\n`);
     // Only what applies: no zero counts, and a workflow that is not from a UiPath project is the bot's own.
     const first = (report: Record<string, unknown>) => page(shown.completionMessage, { 'Import steps': [[{ json: { report, drafts: [] } }], []] }).split('\n')[0];
     expect(first({ steps: 17, items: [] })).toBe('Imported: 17 steps.');

@@ -181,7 +181,8 @@ schedule until a person approves it. Template **RPA: 5 Import a bot** puts a for
 - **Name** (required): the steps' name. A UiPath project gives one step list per sequence, named `<name>-1`,
   `<name>-2`. Every other source gives one list under the Name itself. A Name starting with `=` is refused.
 - **Start URL**, **AI Repair**, **Goal**, **ID Pattern (Regex)** and **Expected File (First Version)** apply to browser
-  steps. The Expected File's checks go onto the click that exports.
+  steps. The Expected File's checks go onto the click that exports. Without an ID Pattern, a step document that reads
+  rows is checked with the `idPattern` its steps state ([ID Pattern](steps.md#id-pattern)).
 - **Options**: **Variables**, **One-Time Code Workflow** and **Code Timeout (Seconds)** (120), as in Run Steps, and
   the quick operations' options.
 
@@ -252,6 +253,7 @@ Import messages, word for word:
 - `The recording signs in: attach an RPA Site Login so the import can sign in without the typed password.`
 - `Imported steps that submit a form or post to download cannot be adopted: repair and import never write.`
 - `These steps read no rows and download no file, so there is nothing to prove: the draft is returned for review but cannot be signed.`
+- `These steps read rows, but a step that reads them has no idPattern, so the replay cannot check the rows: the draft is returned for review but cannot be signed. Give each extract and extractTable step an idPattern, the shape of the ID every row has, such as INV-\d{4}.`
 - `Only JavaScript or TypeScript Playwright code can be imported; record with --target javascript.`
 - `Nothing in this file could be turned into steps.`
 - `The imported steps ran, but replaying them in a fresh browser did not pass the proof, so there is nothing to sign`, followed by the reason.

@@ -53,10 +53,11 @@ export interface BuildWorkflowOptions {
   /** The import's One-Time Code Workflow: each browser Run steps takes its code from it too. */
   codeWorkflow?: { id: string; timeoutSeconds: number };
   /**
-   * The import's run options that the steps were proven with: Max Seconds (when not the default), Also Allow These Sites
-   * and Allow Private Network (only when the import had it on, a literal true: Import Steps refuses an expression there).
+   * The import's run options that the steps were proven with: Max Seconds (when not the default), Also Allow These Sites,
+   * Allow Private Network (only when the import had it on, a literal true: Import Steps refuses an expression there) and
+   * each browser step list's ID Pattern, by its name (typed, when n8n cannot read it as an expression).
    */
-  run?: { maxSeconds?: number; allowedHosts?: string[]; allowPrivateNetwork?: boolean };
+  run?: { maxSeconds?: number; allowedHosts?: string[]; allowPrivateNetwork?: boolean; idPatterns?: ReadonlyMap<string, string> };
   /** Where the flow came from. Only the texts that name it differ. */
   source?: ImportedFrom;
   /**
@@ -332,6 +333,11 @@ class Builder {
       ...(browser && hosts.length ? { allowedHosts: hosts.join(', ') } : {}),
       ...(browser && this.privateNetwork ? { allowPrivateNetwork: true } : {}),
     };
+  }
+  /** Options → ID Pattern: the one the step list was proven with, typed; none when n8n would read it as an expression. */
+  private idPatternOption(draftName: string): { idPattern?: string } {
+    const idPattern = literal(this.run.idPatterns?.get(draftName));
+    return idPattern ? { idPattern } : {};
   }
   /** True only when the import ran with Allow Private Network on. */
   private get privateNetwork(): boolean {
@@ -619,7 +625,10 @@ class Builder {
           signature: '={{ $json.signature }}',
           approvedBy: '={{ $json.approvedBy }}',
           aiRepair: false,
-          options: { name: draftName, expectedVersion: '={{ $json.version }}', ...this.codeOptions(), ...this.runOptions(true), ...this.variablesOption(vars.all, new Set(vars.secret)) },
+          options: {
+            name: draftName, expectedVersion: '={{ $json.version }}', ...this.codeOptions(), ...this.runOptions(true), ...this.idPatternOption(draftName),
+            ...this.variablesOption(vars.all, new Set(vars.secret)),
+          },
         }, {
           onError: 'continueErrorOutput',
           ...(Object.keys(creds.credentials).length ? { credentials: creds.credentials } : {}),

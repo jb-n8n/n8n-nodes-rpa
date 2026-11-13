@@ -114,6 +114,11 @@ into regex101.com and describe its shape: digits `\d`, letters `[A-Z]`, repeats 
 | `10482` (any number) | `\d+` |
 | anything non-empty | `.+` |
 
+In a step document, an `extract` or `extractTable` step's own `idPattern` decides which rows it keeps. Import Steps
+without an **ID Pattern (Regex)** checks the rows with the one the steps state, when every step that reads rows has one
+(different ones count as alternatives). The workflow the import hands over has the same **ID Pattern** on its **Run
+steps**.
+
 An invalid pattern is a configuration error: `ID Pattern is not a valid regular expression: <parser message>. Example: INV-\d{4}.`
 Pattern options are capped at 500 characters. The count check is a separate option, **Stated Total Pattern (Regex)**.
 

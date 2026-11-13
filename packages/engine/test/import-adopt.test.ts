@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ScriptLaneInput, ScriptRun } from '../src/lane/script-lane.js';
 import type { ProveInput, ProveResult } from '../src/prove/prove.js';
-import { adoptDraft, type AdoptInput } from '../src/import/adopt.js';
+import { adoptDraft, statedIdPattern, type AdoptInput } from '../src/import/adopt.js';
 import { runDraft } from '../src/lane/draft.js';
 import { runTask, type TaskInput, type TaskResult } from '../src/lane/task.js';
 import { checkTrust } from '../src/lane/trust.js';
@@ -9,7 +9,7 @@ import { buildProposal, proposalDigest } from '../src/proposal/proposal.js';
 import { createMasker } from '../src/secrets/mask.js';
 import { scriptHash } from '../src/sign.js';
 import { CANCELLED } from '../src/lane/script-lane.js';
-import { IMPORT_EMPTY, IMPORT_NOT_ADOPTABLE, ROWS_WITHHELD, IMPORT_PROOF_FAILED, IMPORT_REFUSES_WRITES, REPAIR_NEEDS_ID_AND_EXTRACT, UNSIGNED_REQUIRED, UNSIGNED_WRITES } from '../src/messages.js';
+import { IMPORT_EMPTY, IMPORT_NOT_ADOPTABLE, IMPORT_ROWS_NEED_ID, ROWS_WITHHELD, IMPORT_PROOF_FAILED, IMPORT_REFUSES_WRITES, REPAIR_NEEDS_ID_AND_EXTRACT, UNSIGNED_REQUIRED, UNSIGNED_WRITES } from '../src/messages.js';
 import type { CodeProvider, PortalPolicy, Script, Step } from '../src/types.js';
 import { fakeModel } from './fake-model.js';
 import { ERP_CHECK, LOCAL, policyFor, SECRETS, TEST_KEY } from './helpers.js';
@@ -235,7 +235,6 @@ describe('draft mode', () => {
 describe('what can be adopted', () => {
   const cases: [string, Script, AdoptInput['output']?][] = [
     ['no rows and no file', draftOf([{ intent: 'Open Reports', click: { role: 'link', name: 'Reports' } }])],
-    ['rows without an ID Pattern', draftOf([EXTRACT])],
     ['an ID Pattern but no extract step', draftOf([{ intent: 'Open Reports', click: { role: 'link', name: 'Reports' } }]), { idPattern: 'N26-\\d{4}' }],
     ['a download without a check', draftOf([{ intent: 'Export', download: { trigger: { role: 'button', name: 'Export' } } }])],
     ['a check that names neither the file nor its columns', draftOf([{ intent: 'Export', download: { trigger: { role: 'button', name: 'Export' }, check: { minRows: 1 } } }])],
@@ -264,6 +263,36 @@ describe('what can be adopted', () => {
     expect(prove.seen[0].output).toEqual({ idPattern: 'N26-\\d{4}' });
     // There are no agent rows to compare with: the evidence carries no ID list.
     expect(r.proposal.evidence).toEqual({ count: 1, total: 1, diff: { missing: [], extra: [] } });
+  });
+
+  it('steps that state their own ID Pattern are adopted with it: nothing else is asked; an ID Pattern given wins', async () => {
+    const table: Step = { intent: 'Read the grid', extractTable: { table: { role: 'grid' }, idPattern: '19\\d{8}' } };
+    const paged: Step = { intent: 'Pages', paginate: { next: { text: 'Next' }, until: 'absent', max: 2, each: [EXTRACT] } } as Step;
+    expect(statedIdPattern(draftOf([EXTRACT]))).toBe('N26-\\d{4}');
+    expect(statedIdPattern(draftOf([paged, EXTRACT]))).toBe('N26-\\d{4}');
+    expect(statedIdPattern(draftOf([paged, table]))).toBe('(?:N26-\\d{4})|(?:19\\d{8})');
+    expect(statedIdPattern(draftOf([EXTRACT, { intent: 'Read more', extract: { scope: { css: 'main' }, item: { css: 'li' } } }]))).toBeUndefined();
+    expect(statedIdPattern(draftOf([DOWNLOAD]))).toBeUndefined();
+    const cases: [AdoptInput['output'], string][] = [[undefined, 'N26-\\d{4}'], [{ requiredFields: ['id'] }, 'N26-\\d{4}'], [{ idPattern: 'N26-\\d+' }, 'N26-\\d+']];
+    for (const [output, want] of cases) {
+      lane.next = laneSuccess();
+      prove.next = { ok: true, rows: [{ id: 'N26-0001' }], total: 1, reasons: [], diff: { missing: [], extra: [] }, policyViolation: false, readPosts: [] };
+      const r = await adoptDraft(adoptInput(draftOf([paged]), output ? { output } : {}));
+      if (!r.ok) throw new Error(JSON.stringify(r));
+      expect(prove.seen.at(-1)!.output).toEqual({ ...output, idPattern: want });
+      expect(lane.seen.at(-1)!.output).toEqual({ ...output, idPattern: want });
+    }
+  });
+
+  it('rows without an ID Pattern are refused before the browser, and the refusal names the field', async () => {
+    const plain: Step = { intent: 'Read the list', extract: { scope: { css: 'main' }, item: { css: 'li' } } };
+    for (const draft of [draftOf([plain]), draftOf([EXTRACT, plain])]) {
+      const r = await adoptDraft(adoptInput(draft));
+      expect(r).toMatchObject({ ok: false, code: 'policy_violation', adoptable: false, configError: true, message: IMPORT_ROWS_NEED_ID });
+    }
+    expect(IMPORT_ROWS_NEED_ID).toContain('Give each extract and extractTable step an idPattern');
+    expect(lane.seen).toEqual([]);
+    expect(sessions).toEqual([]);
   });
 });
 

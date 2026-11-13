@@ -1175,6 +1175,29 @@ describe('Import Steps: a step document', () => {
     expect(items.filter((i) => i.kind === 'untranslated')).toEqual([]);
   });
 
+  it("a step document's own ID Pattern is the row check when Import Steps has none, and the workflow file's Run steps carries it typed", async () => {
+    const extract = (idPattern?: string) => ({ intent: 'Read the items', extract: { scope: { css: 'main' }, ...(idPattern ? { idPattern } : { item: { css: 'li' } }) } });
+    const doc = (steps: IDataObject[]) => ({ startUrl: `${SITE.url}/acme/login`, steps: [{ intent: 'Open the report', goto: '/acme/reports' }, ...steps] });
+    const runOptions = (item: INodeExecutionData) => (JSON.parse(binaryText(item, 'workflow').toString('utf8')) as WorkflowJson).nodes
+      .filter((n) => (n.parameters as { operation?: string }).operation === 'runSteps').map((n) => (n.parameters as { options: IDataObject }).options);
+    const cases: [IDataObject[], string, string | undefined, string | undefined][] = [
+      [[extract('SKU-\\d{4}')], '', 'SKU-\\d{4}', 'SKU-\\d{4}'],
+      [[extract('SKU-\\d{4}'), { intent: 'Read the grid', extractTable: { table: { css: 'table' }, idPattern: 'ORD-\\d+' } }], '', '(?:SKU-\\d{4})|(?:ORD-\\d+)', '(?:SKU-\\d{4})|(?:ORD-\\d+)'],
+      // Import Steps' own wins.
+      [[extract('SKU-\\d{4}')], 'SKU-\\d+', 'SKU-\\d+', 'SKU-\\d+'],
+      // A step that reads rows without one: nothing is made up (the engine refuses it).
+      [[extract('SKU-\\d{4}'), extract()], '', undefined, undefined],
+      // A pattern n8n would read as an expression is never written into the file.
+      [[extract('={{ 1 }}')], '', '={{ 1 }}', undefined],
+    ];
+    for (const [steps, typed, checked, inFile] of cases) {
+      const engine = importEngine((input) => proved(input));
+      const [data] = await run(engine, { params: docParams(doc(steps), { idPattern: typed, expectedFile: {} }), items: textItem });
+      expect(engine.adoptions[0].output, JSON.stringify(steps)).toEqual(checked ? { idPattern: checked } : undefined);
+      expect(runOptions(data[0])[0].idPattern, JSON.stringify(steps)).toBe(inFile);
+    }
+  });
+
   it('a browser step document still needs the RPA Browser credential', async () => {
     const engine = importEngine((input) => proved(input));
     const doc = { startUrl: `${SITE.url}/acme/login`, steps: [{ intent: 'Open the report', goto: '/acme/reports' }] };
