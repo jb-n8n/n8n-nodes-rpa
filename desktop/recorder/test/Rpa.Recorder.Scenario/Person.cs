@@ -23,8 +23,9 @@ internal sealed class Person(int appProcessId, int seed) : IDisposable
 
     /// <summary>Sign in, pick company 2000, type and paste the dates, search, click a result cell, export the line items
     /// into <paramref name="exportFile"/>, or, when it is null, under the name the Save dialog offers. v2: Find instead
-    /// of Search, Reports > Export line items..., a confirmation.</summary>
-    public void ErpFlow(string password, bool v2, string? exportFile, bool post = false)
+    /// of Search, Reports > Export line items..., a confirmation. <paramref name="overwrite"/>: the file is there already,
+    /// so Windows asks whether to replace it, and the person answers Yes.</summary>
+    public void ErpFlow(string password, bool v2, string? exportFile, bool post = false, bool overwrite = false)
     {
         var login = Window(t => t == "ERP Demo - Sign in", 30000);
         Click(First(login, Find.ByAutomationId("txtUser")));
@@ -72,11 +73,18 @@ internal sealed class Person(int appProcessId, int seed) : IDisposable
             return;
         }
         Directory.CreateDirectory(Path.GetDirectoryName(exportFile)!);
-        if (File.Exists(exportFile)) File.Delete(exportFile);
+        const string Earlier = "an earlier export\n";
+        if (overwrite) File.WriteAllText(exportFile, Earlier);
+        else if (File.Exists(exportFile)) File.Delete(exportFile);
         Click(First(dialog, Find.ByControlType(ControlType.Edit).And(Find.ByAutomationId("1001"))));
         Press(0x41, ctrl: true);
         Type(exportFile);
         Click(First(dialog, Find.ByControlType(ControlType.Button).And(Find.ByAutomationId("1"))));
+        if (overwrite)
+        {
+            Click(First(Window(t => t == "Confirm Save As", 10000), Find.ByControlType(ControlType.Button).And(Find.ByName("Yes"))));
+            Until(() => File.ReadAllText(exportFile) != Earlier, 10000, "the file to be replaced");
+        }
         Until(() => File.Exists(exportFile), 10000, "the exported file");
         Thread.Sleep(1000);
     }

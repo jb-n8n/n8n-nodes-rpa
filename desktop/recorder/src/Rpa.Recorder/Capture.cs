@@ -512,12 +512,15 @@ internal sealed class Capture : IDisposable
 
     private void Add(Observation observation, bool late, ElementFacts element)
     {
+        bool overwrite;
         lock (_gate)
         {
             _session.Add(observation);
             if (late) _late.Add(observation.At);
+            overwrite = _session.TakeOverwriteNotice();
         }
         if (late) Notify(NoticeKind.Late, Notices.Late(LocatorRules.Label(element)), always: true);
+        if (overwrite) Notify(NoticeKind.OverwriteLeftOut, Notices.OverwriteLeftOut, always: true);
         // Typing changes no step until the field is left.
         if (observation is not KeyDown { Typing: true }) Changed?.Invoke();
     }

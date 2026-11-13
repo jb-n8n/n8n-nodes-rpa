@@ -21,6 +21,13 @@ public class FileDialogTests
         El("ComboBox", "1148", "File name:", "ComboBox"), OpenDialog);
     private static readonly ElementFacts OpenButton = El("Button", "1", "Open", "Button", false, false, OpenDialog);
 
+    // The question Windows asks when the file is there already: a task dialog, its Yes CommandButton_6, its No CommandButton_7.
+    private static readonly WindowFacts ConfirmSaveAs = new("app.exe", "Confirm Save As", "#32770");
+    private static readonly ElementFacts Confirm = El("Window", "", "Confirm Save As", "#32770");
+    private static readonly ElementFacts Yes = El("Button", "CommandButton_6", "Yes", "CCPushButton", false, false, El("Pane", "", "", "DirectUIHWND"), Confirm);
+    private static readonly ElementFacts No = El("Button", "CommandButton_7", "No", "CCPushButton", false, false, El("Pane", "", "", "DirectUIHWND"), Confirm);
+    private static readonly ElementFacts Post = El("Button", "btnPost", "Post");
+
     private static FileDialogAccepted Accepted(int second, string? value, ElementFacts? box = null, WindowFacts? window = null) =>
         new(At(second), window ?? SaveAs, box ?? NameBox, value);
 
@@ -139,6 +146,61 @@ public class FileDialogTests
         var s = Record(Accepted(1, "report.csv", flagged), Click(1, SaveButton, window: SaveAs));
         Assert.Equal(["Click Save"], s.Steps.Select(x => StepText.Action(x)));
         Assert.DoesNotContain("report.csv", s.ToFile("Test").ToJson());
+    }
+
+    [Fact]
+    public void Yes_to_replacing_the_file_after_a_Save_into_the_export_folder_is_left_out_and_said()
+    {
+        // The person saved over a file that was there; a run saves into a new folder of its own, where Windows never asks.
+        var s = Record(Click(1, Export), Accepted(2, "report.csv"), Click(2, SaveButton, window: SaveAs), Click(3, Yes, window: ConfirmSaveAs), Click(5, Post));
+        Assert.Equal(["Click Export...", "Save report.csv into the run's export folder", "Click Save", "Click Post"], s.Steps.Select(x => StepText.Action(x)));
+        Assert.DoesNotContain("Confirm Save As", s.ToFile("Test").ToJson());
+        Assert.True(s.TakeOverwriteNotice());
+        Assert.False(s.TakeOverwriteNotice());
+        Assert.Equal("Yes to replacing the file is not a step: a run saves into a new folder of its own, where the file is not there yet.", Notices.OverwriteLeftOut);
+
+        // A typed name, and keys that move to Yes; Yes by Enter or by Space; the classic message box's Yes (6).
+        var typed = Record(Click(1, NameBox, window: SaveAs), Typed(2, NameBox, SaveAs), Left(3, NameBox, "report.csv", window: SaveAs), Accepted(3, null),
+            Click(3, SaveButton, window: SaveAs), Key(4, No, "Shift+Tab", ConfirmSaveAs), Key(4, Yes, "Left", ConfirmSaveAs), Click(4, Yes, window: ConfirmSaveAs));
+        Assert.Equal(["Save report.csv into the run's export folder", "Click Save"], typed.Steps.Select(x => StepText.Action(x)));
+        Assert.True(typed.TakeOverwriteNotice());
+        foreach (var answer in new Observation[]
+                 {
+                     Key(4, Yes, "Enter", ConfirmSaveAs), new Activated(At(4), ConfirmSaveAs, Yes),
+                     Click(4, El("Button", "6", "Yes", "Button", false, false, Confirm), window: ConfirmSaveAs),
+                 })
+        {
+            var by = Record(Accepted(1, "report.csv"), Key(1, NameBox, "Enter", SaveAs), answer);
+            Assert.Equal(["Save report.csv into the run's export folder", "Press Enter in File name:"], by.Steps.Select(x => StepText.Action(x)));
+            Assert.True(by.TakeOverwriteNotice());
+        }
+    }
+
+    [Fact]
+    public void Yes_to_replacing_the_file_stays_where_a_run_is_asked_too_or_where_it_is_not_that_answer()
+    {
+        // The same name saved earlier in the recording: a run saved it into its folder too, so Windows asks then.
+        var again = Record(Accepted(1, "report.csv"), Click(1, SaveButton, window: SaveAs), Click(3, Post),
+            Accepted(5, "REPORT.csv"), Click(5, SaveButton, window: SaveAs), Click(6, Yes, window: ConfirmSaveAs));
+        Assert.Equal("Click Yes", StepText.Action(again.Steps[^1]));
+        Assert.False(again.TakeOverwriteNotice());
+
+        // No, a Save that keeps the app's folder (a run is asked as the person was), a step in between, and a Yes with
+        // no Save before it: each is recorded as before.
+        Observation[][] kept =
+        [
+            [Accepted(1, "report.csv"), Click(1, SaveButton, window: SaveAs), Click(2, No, window: ConfirmSaveAs)],
+            [Accepted(1, @"C:\out\report.csv"), Click(1, SaveButton, window: SaveAs), Click(2, Yes, window: ConfirmSaveAs)],
+            [Accepted(1, "report.csv"), Click(1, SaveButton, window: SaveAs), Click(2, Post), Click(3, Yes, window: ConfirmSaveAs)],
+            [Click(1, Export), Click(2, Yes, window: ConfirmSaveAs)],
+        ];
+        foreach (var observations in kept)
+        {
+            var s = Record(observations);
+            Assert.Equal(StepKind.Click, s.Steps[^1].Kind);
+            Assert.Equal(ConfirmSaveAs.Title, s.Steps[^1].Target!.Window.Title);
+            Assert.False(s.TakeOverwriteNotice());
+        }
     }
 
     [Fact]

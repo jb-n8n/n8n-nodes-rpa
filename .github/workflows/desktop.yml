@@ -276,7 +276,9 @@ jobs:
 
       # The recorder records the reference flow that a stand-in for a person performs with synthetic input (the same
       # ERP Demo build, then with --ui v2), and the scenario checks the recording against the engine's golden file. A third
-      # pass keeps the name the Save dialog offers, and checks that the recording still saves it into the export folder.
+      # pass keeps the name the Save dialog offers, and checks that the recording still saves it into the export folder. A
+      # fourth clicks Post and saves over a file that is there: Yes to "Confirm Save As" must be no step of the recording
+      # (a run saves into a new folder, where Windows does not ask), and the recorder says so.
       # continue-on-error: low-level hooks and synthetic input together have not been seen on a hosted runner yet, and a
       # failure here must not keep the package from being uploaded. Its result shows on the step; the check is made on
       # a real Windows Server in any case.
@@ -304,6 +306,14 @@ jobs:
           $change = "$env:OUT\recorder-scenario\v1-post\saved\ERP Demo line items.policy-change.json"
           New-Item -ItemType Directory -Force "$env:OUT\logs" | Out-Null
           Assert (Test-Path -LiteralPath $change) "the recorder scenario's Post pass saved its policy change file"
+          # The Post pass saved over a file that was there and answered Yes to "Confirm Save As". A run saves into a new
+          # folder, where Windows does not ask: the answer is no step, and the recorder said so once.
+          $events = @((Get-Content -Raw -LiteralPath "$env:OUT\recorder-scenario\v1-post\saved\ERP Demo line items.rpa-recording.json" | ConvertFrom-Json).events)
+          $notices = @(Get-Content -LiteralPath "$env:OUT\recorder-scenario\v1-post\recorder-stderr.txt" | Where-Object { $_ -like 'notice OverwriteLeftOut *' })
+          $last = $events[-1]
+          Assert ($notices.Count -eq 1) 'the recorder said once that Yes to replacing the file is not a step'
+          Assert (-not @($events | Where-Object { $_.window.title -eq 'Confirm Save As' -or $_.target.window.title -eq 'Confirm Save As' -or $_.label -eq 'Yes' })) 'the recording has no step of Confirm Save As'
+          Assert ($last.kind -eq 'click' -and $last.target.path[-1].automationId -eq '1' -and $events[-2].exportFile -eq 'line-items.csv') 'the recording ends with the Save into the run''s export folder'
           # allowUserWritable: the workspace belongs to this job's (admin) user, as in the protocol scenario.
           @{ allowedApps = @(@{ exe = 'ErpDemo.exe'; path = $v1; allowUserWritable = $true }); maxFileBytes = 20971520 } |
             ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 $policy

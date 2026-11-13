@@ -44,6 +44,15 @@ public sealed class Session
     private enum SaveNotice { None, Due, Given }
     private SaveNotice _saveNotice;
 
+    /// <summary>
+    /// The Save dialog last accepted with a name that went into the run's export folder, while no earlier step of the
+    /// recording saved that name there, until the first step outside that dialog. Windows asks whether to replace the
+    /// file then only because the file was there while recording: a run saves into a new folder of its own, where it
+    /// is not, so Yes to that question is no step (<see cref="FileDialogs.AnswersReplace"/>).
+    /// </summary>
+    private WindowFacts? _savedInto;
+    private bool _overwriteNotice;
+
     /// <summary>What the bar shows; a step's index is its position.</summary>
     public IReadOnlyList<RecordedStep> Steps => _steps.ToArray();
 
@@ -74,6 +83,7 @@ public sealed class Session
 
     public void Add(Observation o)
     {
+        if (_savedInto is { } dialog && LeavesOut(o, dialog)) return;
         switch (o)
         {
             case AppStarted started: Started(started); break;
@@ -84,6 +94,35 @@ public sealed class Session
             case FileDialogAccepted accepted: Accepted(accepted); break;
             default: throw new ArgumentException($"unknown observation {o.GetType().Name}", nameof(o));
         }
+    }
+
+    /// <summary>
+    /// Whether <paramref name="o"/>, after a Save into the export folder of <paramref name="dialog"/>, belongs to the
+    /// question whether to replace the file and is left out: Yes, and the keys that move to it (Tab, arrows) in that
+    /// question's window. Any other step outside the Save dialog ends the wait for the question.
+    /// </summary>
+    private bool LeavesOut(Observation o, WindowFacts dialog)
+    {
+        var window = o switch { MouseDown m => m.Window, Activated a => a.Window, KeyDown { Typing: false } k => k.Window, _ => null };
+        if (window is null || window == dialog) return false;
+        if (FileDialogs.AnswersReplace(o, dialog))
+        {
+            _savedInto = null;
+            _overwriteNotice = true;
+            return true;
+        }
+        if (o is KeyDown { Chord: "Tab" or "Shift+Tab" or "Left" or "Right" or "Up" or "Down" } && FileDialogs.IsQuestion(window, dialog)) return true;
+        _savedInto = null;
+        return false;
+    }
+
+    /// <summary>True once each time Yes to replacing the file was left out: the bar then shows
+    /// <see cref="Notices.OverwriteLeftOut"/>.</summary>
+    public bool TakeOverwriteNotice()
+    {
+        var due = _overwriteNotice;
+        _overwriteNotice = false;
+        return due;
     }
 
     /// <summary>The most arguments, and the longest, a desktop step set takes (the engine's step parser).</summary>
@@ -214,15 +253,29 @@ public sealed class Session
     /// </summary>
     private void Accepted(FileDialogAccepted o)
     {
+        _savedInto = null;
         if (!FileDialogs.IsFileNameBox(o.Window, o.Field)) return;
-        if (_typedNameBoxes.Remove(o.Field.RuntimeId)) return;
+        if (_typedNameBoxes.Remove(o.Field.RuntimeId))
+        {
+            if (_steps.LastOrDefault(s => s.Kind == StepKind.Fill && s.ElementId == o.Field.RuntimeId) is { ExportFile: not null } typed) SavedInto(o.Window, typed);
+            return;
+        }
         var name = SecretRules.IsSecret(o.Field) ? null : o.Value;
         if (name is null || !FileDialogs.IsFileName(name) || name.Contains("{{"))
         {
             if (_saveNotice == SaveNotice.None) _saveNotice = SaveNotice.Due;
             return;
         }
-        _steps.Add(Step(StepKind.Fill, o.At, o.Window, o.Field, 1) with { Value = ExportValue(name), ExportFile = name });
+        var export = Step(StepKind.Fill, o.At, o.Window, o.Field, 1) with { Value = ExportValue(name), ExportFile = name };
+        _steps.Add(export);
+        SavedInto(o.Window, export);
+    }
+
+    /// <summary>A Save dialog accepted with <paramref name="export"/>'s name: a question whether to replace the file is
+    /// left out next, unless an earlier step saved that name into the export folder (a run then holds the file too).</summary>
+    private void SavedInto(WindowFacts dialog, RecordedStep export)
+    {
+        if (!_steps.Any(s => !ReferenceEquals(s, export) && s.ExportFile is { } earlier && FileDialogs.SameFile(earlier, export.ExportFile!))) _savedInto = dialog;
     }
 
     /// <summary>True once in a recording, after a Save dialog was accepted without an export step: the bar then shows
