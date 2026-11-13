@@ -10,7 +10,7 @@ import {
   NodeHelpers, Workflow, type IDataObject, type INodeExecutionData, type INodeParameters, type INodeProperties, type INodeTypes,
 } from 'n8n-workflow';
 import {
-  buildProposal, createMasker, IMPORT_NOT_ADOPTABLE, importSource as realImportSource, notReplayedProposal, parseScript, proposalDigest, scriptHash, validateScript,
+  buildProposal, checkDesktopTrust, createMasker, IMPORT_NOT_ADOPTABLE, importSource as realImportSource, notReplayedProposal, parseScript, proposalDigest, scriptHash, validateScript,
   type AdoptInput, type AdoptResult,
   type Proposal, type Script, type TaskResult,
 } from 'n8n-rpa-engine';
@@ -988,7 +988,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
    * the approver by default; null for none, as with Basic Auth), then Step lists, Step lists to sign (one item per list,
    * Split Out) and Sign steps with its parameters resolved per item, as n8n resolves them.
    */
-  async function signAfterReview(ran: Record<string, INodeExecutionData[][]>, answer: IDataObject, over: IDataObject = {}, withSiteLogin = false, user: IDataObject | null = signedIn(APPROVER), formAuthentication?: string) {
+  async function signAfterReview(ran: Record<string, INodeExecutionData[][]>, answer: IDataObject, over: IDataObject = {}, withSiteLogin = false, user: IDataObject | null = signedIn(APPROVER), formAuthentication?: string, key = 'k'.repeat(32)) {
     const after = { ...ran, [REVIEW]: [[{ json: { ...answer, submittedAt: '2026-11-11T10:00:00.000Z', formMode: 'production', ...(user ? { user } : {}) } }]] };
     // The form's Authentication as the user set it (the template's own when not given).
     const ran_ = nodesRan(after);
@@ -998,7 +998,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const sign = { ...byName(t, 'Sign steps').parameters, ...over };
     const params = (i: number) => Object.fromEntries(Object.entries(sign).map(([k, v]) => [k, typeof v === 'string' && v.startsWith('=') ? evaluate(v, { $, $itemIndex: i }) : v]));
     const ctx = harness({
-      params, rawParameters: sign, items: lists.map((json) => ({ json })), credentials: { playwrightScriptSigningApi: { secretKey: 'k'.repeat(32) }, ...(withSiteLogin ? { playwrightSiteLoginApi: siteLoginData(SITE) } : {}) }, continueOnFail: true,
+      params, rawParameters: sign, items: lists.map((json) => ({ json })), credentials: { playwrightScriptSigningApi: { secretKey: key }, ...(withSiteLogin ? { playwrightSiteLoginApi: siteLoginData(SITE) } : {}) }, continueOnFail: true,
       evaluateExpression: (expression, i) => evaluate(expression, { $, $itemIndex: i }),
     });
     const out = await executeSignSteps(ctx, importEngine(() => NOT_ADOPTABLE), () => new Date('2026-11-11T10:00:01.000Z'));
@@ -1010,8 +1010,15 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(form).toMatchObject({ type: 'n8n-nodes-base.formTrigger', typeVersion: 2.6 });
     expect(imp).toMatchObject({ type: NODE_TYPE, typeVersion: 1, onError: 'continueErrorOutput' });
     expect(targets(t, 'Import a bot')).toEqual([['Settings']]);
+    // No file on the first page: the change path (an approved bot by its name, its steps in a box). With a file: the import.
+    expect(targets(t, 'Settings')).toEqual([['Change an approved bot?']]);
+    expect(targets(t, 'Change an approved bot?')).toEqual([['Approved bots'], ['Asks about a download?']]);
+    expect(targets(t, 'Approved bots')).toEqual([['The bot to change']]);
+    expect(targets(t, 'The bot to change')).toEqual([['Approved bot found?']]);
+    expect(targets(t, 'Approved bot found?')).toEqual([['Change or sign again'], ['No approved bot']]);
+    expect(targets(t, 'Change or sign again')).toEqual([['The steps as a file']]);
+    expect(targets(t, 'The steps as a file')).toEqual([['The upload']]);
     // The download question only for a browser source, on a second page; Import steps always reads The upload.
-    expect(targets(t, 'Settings')).toEqual([['Asks about a download?']]);
     expect(targets(t, 'Asks about a download?')).toEqual([['The file it downloads'], ['The upload']]);
     expect(targets(t, 'The file it downloads')).toEqual([['The upload']]);
     expect(targets(t, 'The upload')).toEqual([['Import steps']]);
@@ -1055,11 +1062,12 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(byName(t, 'Approval by email?').position[1]).toBeLessThan(Math.min(...['Approve on this form?', 'Import failed'].map((n) => byName(t, n).position[1])));
     const working = t.nodes.filter((n) => n.type !== STICKY).map((n) => n.name).sort();
     expect(working).toEqual([
-      'Add the login page', 'Approval by email?', 'Approve on this form?', 'Approve steps', 'Asks about a download?', 'Create run log table', 'Create steps table', 'Import a bot',
-      'Import failed', 'Import steps', 'Imported', 'Imported, with the workflow file', 'Missing login page?', 'Record rejection', REVIEW, 'Save signed steps', 'Settings', 'Sign steps',
-      'Signed?', 'Step lists', 'Step lists to sign', 'Supersede older versions', 'The file it downloads', 'The upload', 'Workflow file?',
+      'Add the login page', 'Approval by email?', 'Approve on this form?', 'Approve steps', 'Approved bot found?', 'Approved bots', 'Asks about a download?', 'Change an approved bot?',
+      'Change or sign again', 'Create run log table', 'Create steps table', 'Import a bot', 'Import failed', 'Import steps', 'Imported', 'Imported, with the workflow file', 'Missing login page?',
+      'No approved bot', 'Record rejection', REVIEW, 'Save signed steps', 'Settings', 'Sign steps', 'Signed?', 'Step lists', 'Step lists to sign', 'Supersede older versions',
+      'The bot to change', 'The file it downloads', 'The steps as a file', 'The upload', 'Workflow file?',
     ]);
-    expect(t.nodes.filter((n) => n.type === COMPLETION).map((n) => n.typeVersion)).toEqual([2.5, 2.5, 2.5, 2.5, 2.5, 2.5]);
+    expect(t.nodes.filter((n) => n.type === COMPLETION).map((n) => n.typeVersion)).toEqual([2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5]);
     // A form page pauses the run until the browser loads it; a closed tab must not leave the execution waiting for ever.
     for (const n of t.nodes.filter((x) => x.type === COMPLETION)) {
       expect(n.parameters, n.name).toMatchObject({ limitWaitTime: true, limitType: 'afterTimeInterval', resumeAmount: 1, resumeUnit: 'hours' });
@@ -1132,7 +1140,8 @@ describe('5-import-a-bot.json (the first-day import)', () => {
   });
 
   it('the form asks for the bot file, an optional source (worked out from the file to start with) and a name; the download, on a second page, for every upload but a recording', () => {
-    expect(fields.map((f) => [f.fieldName, f.fieldType, f.requiredField === true])).toEqual([['bot', 'file', true], ['source', 'dropdown', false], ['name', 'text', true]]);
+    // The file is not required: left empty, the name picks an approved bot to change or sign again. No new field.
+    expect(fields.map((f) => [f.fieldName, f.fieldType, f.requiredField === true])).toEqual([['bot', 'file', false], ['source', 'dropdown', false], ['name', 'text', true]]);
     expect(fields[1].fieldLabel).toBe('Source (optional)');
     const page = byName(t, 'The file it downloads');
     expect(page).toMatchObject({ type: COMPLETION, typeVersion: 2.5, parameters: { operation: 'page', options: { formTitle: 'The file it downloads', buttonLabel: 'Import' } } });
@@ -1159,7 +1168,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(values.map((a) => [a.name, a.type])).toEqual([['name', 'string'], ['source', 'string'], ['expectedFileName', 'string'], ['columns', 'string'], ['bot', 'binary']]);
     const scope = (asked: boolean) => ({ $: (name: string) => (name === 'Settings'
       ? { first: () => ({ json: { name: 'n', source: null }, binary: { bot: { fileName: 'export.json' } } }) }
-      : { isExecuted: asked, last: () => ({ json: { expectedFileName: '^X_', columns: null } }) }) });
+      : { isExecuted: name === 'The file it downloads' && asked, last: () => ({ json: { expectedFileName: '^X_', columns: null } }) }) });
     expect(values.map((a) => evaluate(a.value, scope(true)))).toEqual(['n', '', '^X_', '', { fileName: 'export.json' }]);
     expect(values.map((a) => evaluate(a.value, scope(false)))).toEqual(['n', '', '', '', { fileName: 'export.json' }]);
     // One file per import: the form refuses a second, so the upload is always binary `bot` (n8n adds `_0`, `_1` only for 2+ files).
@@ -1201,7 +1210,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const asks = (byName(t, 'Asks about a download?').parameters as { conditions: { conditions: { leftValue: string }[] } }).conditions.conditions[0].leftValue;
     const asked = evaluate(asks, { $json: settings.json }) === true;
     const pageRan = asked && answer !== null;
-    const scope = { $: (name: string) => (name === 'Settings' ? { first: () => settings } : { isExecuted: pageRan, last: () => ({ json: answer ?? {} }) }) };
+    const scope = { $: (name: string) => (name === 'Settings' ? { first: () => settings } : { isExecuted: name === 'The file it downloads' && pageRan, last: () => ({ json: answer ?? {} }) }) };
     const values = (byName(t, 'The upload').parameters.assignments as { assignments: { name: string; value: string; type: string }[] }).assignments;
     const json: IDataObject = {};
     let binary: INodeExecutionData['binary'];
@@ -1845,6 +1854,183 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(shown).toContain('\nDetails, including the import report when there is one, are in the error output of Import steps in this execution.');
   });
 
+  /**
+   * The change path as n8n's expressions see it: the first page submitted with no file and `name`, Approved bots giving
+   * `rows`, then The bot to change. `authentication` is the form's sign-in as the user set it.
+   */
+  function changePath(name: string, rows: IDataObject[], authentication = 'n8nUserAuth') {
+    const ran: Record<string, INodeExecutionData[][]> = {
+      Settings: [[{ json: { bot: null, source: null, name, ...settingsJson() } }]], 'Approved bots': [rows.map((json) => ({ json }))],
+    };
+    const $ = (n: string) => (n === 'Import a bot' ? { ...nodesRan(ran)(n), params: { ...form.parameters, authentication } } : nodesRan(ran)(n));
+    const bot = evaluate(String(byName(t, 'The bot to change').parameters.jsonOutput), { $ }) as IDataObject;
+    ran['The bot to change'] = [[{ json: bot }]];
+    return { $, bot, ran };
+  }
+  /** The change page answered with `text`, through The steps as a file (n8n's Convert to Text File) and The upload. */
+  function changedUpload(ran: Record<string, INodeExecutionData[][]>, text: string): INodeExecutionData {
+    expect(byName(t, 'The steps as a file')).toMatchObject({ type: 'n8n-nodes-base.convertToFile', typeVersion: 1.1, parameters: { operation: 'toText', sourceProperty: 'steps', binaryPropertyName: 'bot' } });
+    const file = { json: {}, binary: { bot: { data: Buffer.from(text).toString('base64'), mimeType: 'text/plain', fileName: 'steps.json', bytes: Buffer.byteLength(text) } } };
+    const $ = nodesRan({ ...ran, 'Change or sign again': [[{ json: { steps: text } }]], 'The steps as a file': [[file]] });
+    const json: IDataObject = {};
+    let binary: INodeExecutionData['binary'];
+    for (const a of (byName(t, 'The upload').parameters.assignments as { assignments: { name: string; value: string; type: string }[] }).assignments) {
+      const v = evaluate(a.value, { $ });
+      if (a.type === 'binary') binary = { [a.name]: v as NonNullable<INodeExecutionData['binary']>[string] };
+      else json[a.name] = v as string;
+    }
+    return { json, ...(binary ? { binary } : {}) };
+  }
+
+  it('the first page with no file leads to an approved bot by its name; with a file, the import goes on as before', () => {
+    const cond = (byName(t, 'Change an approved bot?').parameters as { conditions: { conditions: { leftValue: string; operator: unknown }[] } }).conditions.conditions;
+    expect(cond).toEqual([expect.objectContaining({ operator: { type: 'boolean', operation: 'true', singleValue: true } })]);
+    const change = (item: IDataObject) => evaluate(cond[0].leftValue, { $: () => ({ first: () => item }) });
+    expect(change({ json: { name: 'erp' } })).toBe(true);
+    expect(change({ json: { name: 'erp' }, binary: {} })).toBe(true);
+    expect(change({ json: { name: 'erp' }, binary: { bot: { fileName: 'export.json' } } })).toBe(false);
+    // A first-time import meets no new field and no new page: with its file it takes the import path, unchanged.
+    expect(change(formItem('Chrome Recorder', CHROME) as unknown as IDataObject)).toBe(false);
+    expect(byName(t, 'Change an approved bot?').position[1]).toBe(byName(t, 'Asks about a download?').position[1]);
+    // Only the active rows, every one this workflow may read; no table yet (an error item) or no row (an empty item) finds nothing.
+    const get = byName(t, 'Approved bots');
+    expect(get).toMatchObject({ type: DATA_TABLE, typeVersion: 1.1, alwaysOutputData: true, onError: 'continueRegularOutput' });
+    expect(table(get)).toEqual({ resource: 'row', operation: 'get', dataTableId: { __rl: true, mode: 'name', value: STEPS_TABLE }, matchType: 'allConditions', filters: { conditions: [{ keyName: 'status', condition: 'eq', keyValue: 'active' }] }, returnAll: true });
+    expect(byName(t, 'The bot to change')).toMatchObject({ type: 'n8n-nodes-base.set', typeVersion: 3.4, executeOnce: true, parameters: { mode: 'raw' } });
+  });
+
+  it('The bot to change: the newest active row of exactly that name, its steps laid out to read; none found names the approved bots', () => {
+    const doc = { surface: 'desktop', name: 'erp', version: 1, app: { exe: 'ErpDemo.exe' }, steps: [{ intent: 'Click Save', click: { name: 'Save' } }] };
+    const rows: IDataObject[] = [
+      { id: 1, name: 'erp', version: 1, steps: '{"old":true}', status: 'active' },
+      { id: 2, name: 'erp', version: 3, steps: JSON.stringify(doc), status: 'active' },
+      { id: 4, name: 'other<b>', version: 1, steps: '{}', status: 'active' },
+      { id: 5, name: 'erp', version: 9, steps: '', status: 'active' },
+      { error: 'The Data Table playwright_steps does not exist' }, {},
+    ];
+    const found = { name: 'erp', found: true, version: 3, steps: JSON.stringify(doc, null, 2), names: ['erp', 'other<b>'] };
+    expect(changePath('erp', rows).bot).toEqual(found);
+    expect(changePath('  erp ', rows).bot).toEqual(found);
+    // Exactly the name: another casing is another bot.
+    expect(changePath('ERP', rows).bot).toEqual({ name: 'ERP', found: false, version: null, steps: '', names: ['erp', 'other<b>'] });
+    // A row whose steps are not JSON is shown as it is: Import steps then says what is wrong with it.
+    expect(changePath('erp', [{ id: 1, name: 'erp', version: 1, steps: '{broken', status: 'active' }]).bot).toMatchObject({ found: true, steps: '{broken' });
+    // No table yet, or no row.
+    expect(changePath('erp', [{ error: 'no table' }]).bot).toEqual({ name: 'erp', found: false, version: null, steps: '', names: [] });
+    expect(changePath('erp', [{}]).bot).toMatchObject({ found: false, names: [] });
+    const foundCond = (byName(t, 'Approved bot found?').parameters as { conditions: { conditions: { leftValue: string }[] } }).conditions.conditions[0].leftValue;
+    expect([found, { found: false }, {}].map(($json) => evaluate(foundCond, { $json }))).toEqual([true, false, false]);
+
+    // None of that name: a last page names the approved bots, escaped, and how to import instead; none at all says so.
+    const none = completion('No approved bot');
+    expect(none).toMatchObject({ operation: 'completion', respondWith: 'text', completionTitle: 'No approved bot of that name' });
+    expect(byName(t, 'No approved bot').parameters).toMatchObject({ limitWaitTime: true, resumeAmount: 1, resumeUnit: 'hours' });
+    expect(render(none.completionMessage, { $: changePath('ERP', rows).$ })).toBe('No approved bot is named ERP. The approved bots: erp, other&lt;b&gt;.\n'
+      + 'To import a bot, open the form again and upload its file. To change an approved bot or sign it again, open the form again, leave Bot file empty and type its name.');
+    expect(render(none.completionMessage, { $: changePath('erp', []).$ }).split('\n')[0]).toBe('No bot has been approved yet.');
+  });
+
+  it('Change or sign again shows the active steps in a box, says who can open the page and that an older key and an edit look alike', () => {
+    const doc = { startUrl: `${SITE.url}/a`, name: 'feed <b>', version: 1, steps: [{ intent: 'Type $& and $$', goto: '/b?x=$1' }] };
+    const page = byName(t, 'Change or sign again');
+    expect(page).toMatchObject({ type: COMPLETION, typeVersion: 2.5, parameters: { operation: 'page', defineForm: 'json', limitWaitTime: true, limitType: 'afterTimeInterval', resumeAmount: 1, resumeUnit: 'hours', options: { buttonLabel: 'Review', formDescription: 'Nothing changes until you approve the steps on the next page.' } } });
+    const rows = [{ id: 3, name: 'feed <b>', version: 1, steps: JSON.stringify(doc), status: 'active' }];
+    // With n8n's sign-in, a later page needs a signed-in n8n user; with Basic Auth (or none) it needs only its address.
+    const ANYONE = 'Anyone who has the address of this page can open it and read these steps.';
+    for (const [auth, who] of [['n8nUserAuth', 'Any signed-in n8n user who has the address of this page can open it and read these steps.'], ['basicAuth', ANYONE], ['none', ANYONE]]) {
+      const { $ } = changePath('feed <b>', rows, auth);
+      // jsonFormFields also checks that no "$" reaches n8n's String.replace, so "$&" in a step stays as written.
+      const fields = jsonFormFields(String(page.parameters.jsonOutput), { $ });
+      expect(fields.map((f) => f.fieldType)).toEqual(['html', 'textarea']);
+      expect(fields[1]).toEqual({ fieldLabel: 'Steps (a step document, JSON)', fieldName: 'steps', fieldType: 'textarea', defaultValue: JSON.stringify(doc, null, 2), requiredField: true });
+      expect(JSON.parse(String(fields[1].defaultValue))).toEqual(doc);
+      const html = String(fields[0].html);
+      expect(html).toContain('<p>The steps that run now as <b>feed &lt;b&gt;</b> (version 1 in the playwright_steps Data Table).');
+      expect(html).toContain('Rejected, or not answered within an hour, the version that runs now keeps running.');
+      expect(html).toContain('This form cannot tell steps signed with an older key from steps changed in the Data Table after they were approved: to the current key both look the same. So read every step on the next page: you approve the steps as that page shows them.');
+      expect(html).toContain(`<p><em>${who} Do not share it.</em></p>`);
+      expect(render(String((page.parameters.options as IDataObject).formTitle), { $ })).toBe('Change or sign again: feed <b>');
+    }
+  });
+
+  it('sign again: the same steps are reviewed and become a new row under the current key that supersedes the old one; a change is signed as changed; a rejected change leaves the old version running', async () => {
+    const OLD_KEY = 'o'.repeat(32);
+    const NEW_KEY = 'n'.repeat(32);
+    // The bot as it was approved and saved, under the old key.
+    const { ran: first } = await importedRecording();
+    const old = (await signAfterReview(first, { writes_0: ['Step 16: Click Save'], decision_0: 'Approve and sign' }, {}, false, signedIn(APPROVER), undefined, OLD_KEY)).signed[0];
+    const oldRow: IDataObject = { id: 7, name: old.name, version: old.version, steps: old.steps, hash: old.hash, signature: old.signature, approvedBy: old.approvedBy, approvedAt: old.approvedAt, status: 'active' };
+    const trust = (steps: unknown, signature: unknown, key: string) => checkDesktopTrust(JSON.parse(String(steps)), { required: true, signature: String(signature), approvedBy: APPROVER, key });
+    expect(trust(oldRow.steps, oldRow.signature, OLD_KEY)).toEqual({ ok: true, signed: true });
+    // The key changed: the row no longer runs. To the new key it looks exactly like a row changed in the table.
+    expect(trust(oldRow.steps, oldRow.signature, NEW_KEY)).toMatchObject({ ok: false });
+
+    const { bot, ran } = changePath(String(old.name), [oldRow, { id: 3, name: 'other', version: 1, steps: '{}', status: 'active' }]);
+    expect(bot).toMatchObject({ found: true, version: 1 });
+    const box = String(jsonFormFields(String(byName(t, 'Change or sign again').parameters.jsonOutput), { $: changePath(String(old.name), [oldRow]).$ })[1].defaultValue);
+    const never = () => {
+      throw new Error('desktop steps are never replayed');
+    };
+    /** Submits the box as `text`: Import steps, the review page, then Sign steps under the new key with `answer`. */
+    const review = async (text: string, answer: IDataObject) => {
+      const upload = changedUpload(ran, text);
+      expect(upload.json).toMatchObject({ name: old.name, source: 'Step document', expectedFileName: '', columns: '' });
+      expect(resolved(upload)).toMatchObject({ source: 'steps', inputFrom: 'binary', binaryPropertyName: 'bot', stepsName: old.name });
+      const [data, repaired] = await runImport(upload, never);
+      expect(data[0].json.error, JSON.stringify(data[0].json).slice(0, 600)).toBeUndefined();
+      expect(repaired).toHaveLength(1);
+      const after = { ...ran, 'Change or sign again': [[{ json: { steps: text } }]], 'Import steps': [data, repaired] };
+      // The same review page as an import: every step, the write question and the decision.
+      const fields = jsonFormFields(String(byName(t, REVIEW).parameters.jsonOutput), { $: nodesRan(after) });
+      expect(fields.map((f) => f.fieldName ?? f.fieldType)).toEqual(['html', 'writes_0', 'html', 'moreWrites_0', 'decision_0']);
+      const signed = await signAfterReview(after, answer, {}, false, signedIn(APPROVER), undefined, NEW_KEY);
+      return { after, fields, ...signed };
+    };
+
+    // Sign again: the box as it came.
+    const again = await review(box, { writes_0: ['Step 16: Click Save'], decision_0: 'Approve and sign' });
+    expect(again.fields[1].defaultValue).toBe('Step 16: Click Save');
+    expect(again.errors).toEqual([]);
+    const fresh = again.signed[0];
+    expect(fresh).toMatchObject({ status: 'active', name: old.name, version: 1, approvedBy: APPROVER, writeLine: 'Signed as writes: step 16 (Click Save)' });
+    expect(JSON.parse(String(fresh.steps))).toEqual(JSON.parse(String(old.steps)));
+    expect(fresh.signature).not.toBe(old.signature);
+    expect(trust(fresh.steps, fresh.signature, NEW_KEY)).toEqual({ ok: true, signed: true });
+    // Saved as a new row, Supersede older versions turns the old row (and only it) superseded.
+    const newRow = { ...fresh, id: 8 };
+    const supersede = table(byName(t, 'Supersede older versions')).filters!.conditions;
+    const lists = again.lists;
+    const matches = (row: IDataObject) => supersede.every((c) => {
+      const want = typeof c.keyValue === 'string' && c.keyValue.startsWith('=') ? evaluate(c.keyValue, { $json: newRow, $: () => ({ item: { json: lists[0] } }) }) : c.keyValue;
+      const have = row[c.keyName];
+      return c.condition === 'eq' ? have === want : c.condition === 'neq' ? have !== want : Number(have) <= Number(want);
+    });
+    expect(matches(oldRow)).toBe(true);
+    expect(matches(newRow)).toBe(false);
+    expect(matches({ ...oldRow, id: 3, name: 'other' })).toBe(false);
+    // The last page gives no workflow file: the bot's workflow exists already.
+    const fileCond = (byName(t, 'Workflow file?').parameters as { conditions: { conditions: { leftValue: string }[] } }).conditions.conditions[0].leftValue;
+    const withReview = { ...again.after, [REVIEW]: [[{ json: { decision_0: 'Approve and sign' } }]] };
+    expect(evaluate(fileCond, { $: nodesRan(withReview) })).toBe(false);
+    const importOnly = Object.fromEntries(Object.entries(withReview).filter(([k]) => k !== 'Change or sign again'));
+    expect(evaluate(fileCond, { $: nodesRan(importOnly) })).toBe(true);
+
+    // A change: the company code typed in step 6. The review page shows the new value; the signed steps hold it.
+    expect(box).toContain('"2000"');
+    const changed = await review(box.replace('"2000"', '"3000"'), { writes_0: ['Step 16: Click Save'], decision_0: 'Approve and sign' });
+    expect(String(changed.fields[0].html)).toContain('<li>Choose &quot;3000&quot; in Company code</li>');
+    expect(changed.signed[0]).toMatchObject({ status: 'active', name: old.name });
+    expect(String(changed.signed[0].steps)).toContain('"3000"');
+    expect(trust(changed.signed[0].steps, changed.signed[0].signature, NEW_KEY)).toEqual({ ok: true, signed: true });
+
+    // A rejected change: a rejected row, no steps, no signature. Only Save signed steps leads to Supersede older versions,
+    // so the old row stays active and keeps running (under the key it was signed with).
+    const rejected = await review(box.replace('"2000"', '"3000"'), { writes_0: [], decision_0: 'Reject' });
+    expect(rejected.signed).toEqual([expect.objectContaining({ status: 'rejected', steps: '', signature: '' })]);
+    expect(targets(t, 'Signed?')).toEqual([['Save signed steps'], ['Record rejection']]);
+    expect(targets(t, 'Record rejection')).toEqual([]);
+  });
+
   it('has the stickies: About (grey), Set once (green, a checklist), Approval by email (grey, the option), Why approval (grey)', () => {
     expect(sticky(t, 'About this workflow').color).toBe(COLOUR.grey);
     expect(sticky(t, 'Set once').color).toBe(COLOUR.green);
@@ -1852,7 +2038,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(sticky(t, 'Why approval').color).toBe(COLOUR.grey);
     // Three sentences. What is replayed, what is not and how step lists are named are on the review page and in move-a-bot.md.
     const form = (byName(t, 'Import a bot').parameters as { formDescription?: string }).formDescription ?? '';
-    expect(form).toBe('Upload a bot: an RPA recording, a UiPath project (ZIP or XAML), a Chrome Recorder export (JSON), Playwright code, or steps you wrote (JSON). You review every step on the next page. Nothing runs until you approve it.');
+    expect(form).toBe('Upload a bot: an RPA recording, a UiPath project (ZIP or XAML), a Chrome Recorder export (JSON), Playwright code, or steps you wrote (JSON). You review every step on the next page. Nothing runs until you approve it. To change an approved bot, or sign it again after the signing key changed, leave Bot file empty and type its name.');
     const about = sticky(t, 'About this workflow').content;
     for (const s of ['Chrome Recorder', 'Playwright code', 'UiPath', 'RPA: 2 Data feed', 'each step list gets its own approval',
       '**step document**', 'this is how hand-written steps get approved and signed']) expect(about, s).toContain(s);
