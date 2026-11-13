@@ -100,8 +100,11 @@ describe('Import Steps with a UiPath desktop project', () => {
       operation: 'runSteps', steps: "={{ $json.steps ?? '' }}", requireSignedSteps: true, signature: '={{ $json.signature }}', approvedBy: '={{ $json.approvedBy }}', aiRepair: false,
       options: {
         name: 'erp-1', expectedVersion: '={{ $json.version }}',
-        // The secret one (password) is not here: it comes from the RPA Secret Variables credential the note names.
-        variables: { values: ['username', 'in_CompanyCode', 'in_DateFrom', 'in_DateTo'].map((name) => ({ name, value: '' })) },
+        // The secret one (password) is not here: it comes from the RPA Secret Variables credential the note names. The
+        // others start with what the project passes in (Main's variable defaults); username has none.
+        variables: { values: [
+          { name: 'username', value: '' }, { name: 'in_CompanyCode', value: '1000' }, { name: 'in_DateFrom', value: '2026-01-01' }, { name: 'in_DateTo', value: '2026-12-31' },
+        ] },
       },
     });
     expect(run.credentials).toEqual({ rpaDesktopRunnerApi: { id: null, name: 'RPA Desktop Runner' } });
@@ -111,7 +114,7 @@ describe('Import Steps with a UiPath desktop project', () => {
     const get = wf.nodes.find((n) => n.name === 'Get active steps (erp-1)')!;
     expect(get.parameters).toMatchObject({ dataTableId: { value: 'playwright_steps' }, filters: { conditions: [{ keyName: 'name', keyValue: 'erp-1' }, { keyName: 'status', keyValue: 'active' }] } });
     const gold = wf.nodes.find((n) => n.name === 'Fill in the variables (erp-1)')!;
-    expect(String(gold.parameters.content)).toBe('### Fill in the variables (gold)\nOn **Open Application \'ERP Demo - Sign in\'**, Options → Variables: `username`, `in_CompanyCode`, `in_DateFrom`, `in_DateTo`. Secret: `password`: in an **RPA Secret Variables** credential selected on **Open Application \'ERP Demo - Sign in\'**, never typed here. Desktop steps run only once approved: import the project with **RPA: 5 Import a bot** and approve `erp-1` on its review page.');
+    expect(String(gold.parameters.content)).toBe('### Fill in the variables (gold)\nOn **Open Application \'ERP Demo - Sign in\'**, Options → Variables: `username`, `in_CompanyCode` (starts as `1000`), `in_DateFrom` (starts as `2026-01-01`), `in_DateTo` (starts as `2026-12-31`). Secret: `password`: in an **RPA Secret Variables** credential selected on **Open Application \'ERP Demo - Sign in\'**, never typed here. Desktop steps run only once approved: import the project with **RPA: 5 Import a bot** and approve `erp-1` on its review page.');
     expect(run.notes).toContain('password: put it in an RPA Secret Variables credential (type rpaSecretVariablesApi, field Variables) and select it here.');
     const credentialSticky = wf.nodes.find((n) => n.name.startsWith('Credential:'))!;
     expect(String(credentialSticky.parameters.content)).toContain("Desktop steps type the user name and password from their Run steps' **Variables**");

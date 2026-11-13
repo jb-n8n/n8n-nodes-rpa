@@ -81,6 +81,12 @@ interface Ctx {
   app?: { window?: WindowSel; exe?: string; name: string };
   aws: boolean;
   excelPath?: string;
+  /**
+   * What this workflow file's arguments and variables start as, by lower-case name: a literal, or null when it is set
+   * another way (an expression, or two different values). Read from the file's own argument defaults and variable
+   * defaults, and from what the invoke passes in.
+   */
+  values?: Map<string, string | null>;
 }
 
 /** A target the Object Repository holds: its selector and element type. */
@@ -291,7 +297,9 @@ function walkUiPath(data: Buffer | Uint8Array | string, opts: ImportOptions, rep
  * `<name>-<n>`), the flow, and the report. Never throws.
  */
 export function importUiPath(data: Buffer | Uint8Array | string, opts: ImportOptions, report: ImportReport): ImportResult {
-  const { sequences, desktop, typedSecrets: desktopSecrets, flow } = walkUiPath(data, opts, report);
+  const { sequences, desktop, typedSecrets: desktopSecrets, flow, startValues, secretNames, secretDefaults } = walkUiPath(data, opts, report);
+  /** Every value the import removed as a secret (typed into a password field, or a secret's default), whatever its length. */
+  const removed = new Set<string>([...desktopSecrets, ...(secretDefaults ?? [])].flatMap((v) => [v, v.trim()]));
   const drafts: Draft[] = [];
   const typedSecrets: string[] = desktopSecrets.filter((v) => v.trim().length >= MIN_SECRET_LENGTH);
   const missing = new Set<number>();
@@ -314,7 +322,13 @@ export function importUiPath(data: Buffer | Uint8Array | string, opts: ImportOpt
     const before = report.items.length;
     const stripped = stripSecrets(all, opts, report);
     const secretAt = new Set(report.items.slice(before).filter((i) => i.kind === 'secret').map((i) => i.at));
-    for (const e of all) if ((e.kind === 'fill' || e.kind === 'select') && secretAt.has(e.at)) for (const v of [e.value].flat()) if (v.trim().length >= MIN_SECRET_LENGTH) typedSecrets.push(v);
+    for (const e of all) {
+      if ((e.kind !== 'fill' && e.kind !== 'select') || !secretAt.has(e.at)) continue;
+      for (const v of [e.value].flat()) {
+        if (v.trim()) { removed.add(v); removed.add(v.trim()); }
+        if (v.trim().length >= MIN_SECRET_LENGTH) typedSecrets.push(v);
+      }
+    }
     const parts: ImportEvent[][] = [[]];
     for (const e of stripped) {
       if (e.kind === 'goto' && e.url === BOUNDARY) parts.push([]);
@@ -384,9 +398,30 @@ export function importUiPath(data: Buffer | Uint8Array | string, opts: ImportOpt
   // Defence in depth: nothing the flow or the report carries names a Site Login secret or a value typed into a credential field.
   const sl = opts.hasSiteLogin ? opts.secrets : undefined;
   const slValues = [sl?.username, sl?.password, sl?.totpSecret].filter((s): s is string => typeof s === 'string' && s.length > 0);
-  const masker = createMasker([...slValues.filter((s) => s.length >= MIN_SECRET_LENGTH), ...typedSecrets]);
+  // A secret's default is masked too: it never reaches the flow or the report.
+  const masker = createMasker([...slValues.filter((s) => s.length >= MIN_SECRET_LENGTH), ...typedSecrets, ...(secretDefaults ?? []).filter((v) => v.trim().length >= MIN_SECRET_LENGTH)]);
   const short = slValues.filter((s) => s.length < MIN_SECRET_LENGTH).map((s) => s.trim().toLowerCase());
   const secretMask = (t: string) => (short.includes(t.trim().toLowerCase()) ? '[secret]' : masker.mask(t));
+  // The project's argument and variable defaults become the desktop drafts' start values, under a recording's rules: never
+  // for a secret variable, a name that reads like a secret, or a value of the Site Login or of a password field.
+  // Names are compared without regard to case (UiPath's VB names do not depend on it), and secrets are those known when
+  // the walk ended.
+  const secretLower = new Set(secretNames ?? []);
+  for (const d of desktopDrafts) {
+    const start: Record<string, string> = {};
+    const secret = new Set([...secretLower, ...d.secretVariables.map((v) => v.toLowerCase())]);
+    for (const v of d.variables) {
+      const value = startValues?.get(v);
+      // A value longer than a form field would hold is no start value: the person fills it in.
+      if (typeof value !== 'string' || value.length > MAX_START_VALUE || secret.has(v.toLowerCase())) continue;
+      if (SECRET_LIKE_NAME.test(v)) {
+        report.items.push({ at: '', kind: 'secret', what: v, reason: `${v} reads like a secret, so its value in the project is not a start value: supply it in Run steps from a secret source` });
+      } else if (removed.has(value) || removed.has(value.trim()) || short.includes(value.trim().toLowerCase()) || masker.containsSecret(value)) {
+        report.items.push({ at: '', kind: 'secret', what: v, reason: `${v}'s value in the project is a value of the RPA Site Login or one the import removed as a secret, so it is not a start value: supply it in Run steps from a secret source` });
+      } else start[v] = value;
+    }
+    if (Object.keys(start).length) d.startValues = start;
+  }
   // A credential asset's name appears only as its slot (the credential node's `asset`), never in a name or the report.
   const assets = new Set<string>();
   const collect = (nodes: FlowNode[]) => nodes.forEach((n) => {
@@ -667,7 +702,70 @@ function uiNames(items: Item[]): string[] {
  */
 export interface UiPathSequence { name: string; number: number; events: ImportEvent[]; card?: number; continued?: boolean }
 /** What the walk returns: browser sequences, desktop sequences, literal secrets typed in desktop steps (never imported), and the flow. */
-export interface WalkResult { sequences: UiPathSequence[]; desktop: DesktopSequence[]; typedSecrets: string[]; flow: UiPathFlow }
+export interface WalkResult {
+  sequences: UiPathSequence[]; desktop: DesktopSequence[]; typedSecrets: string[]; flow: UiPathFlow;
+  /** Desktop run variables and the literal value the project starts them with (null: not one literal). */
+  startValues?: Map<string, string | null>;
+  /** Every name found secret by the end of the walk, lower case (VB names do not depend on case). */
+  secretNames?: string[];
+  /** The literal defaults of those secret names, in any file: values the import treats as removed secrets. */
+  secretDefaults?: string[];
+}
+
+/**
+ * A run variable whose name reads like a secret never gets a start value: it stays for the person to supply, from a
+ * secret source for a secret.
+ */
+/** The longest project value that becomes a start value. */
+const MAX_START_VALUE = 1000;
+export const SECRET_LIKE_NAME = /pass|pwd|secret|token|(^|_)(pin|otp|totp)/i;
+
+/**
+ * The literal values a workflow file starts its arguments and variables with, by lower-case name (null: not one literal):
+ * each `x:Members` In or InOut argument's default (the root's `<prefix>:<Class>.<name>` attribute or property element),
+ * unless `bound` (what an invoke passes) has the name, and each `<Variable Default="…">` that is not a SecureString.
+ */
+function fileValues(root: XmlNode, csharp: boolean, bound?: Map<string, string | null>): Map<string, string | null> {
+  const values = new Map<string, string | null>();
+  const set = (name: string, v: string | null) => {
+    const key = name.toLowerCase();
+    if (values.has(key) && values.get(key) !== v) values.set(key, null);
+    else values.set(key, v);
+  };
+  const cls = (root.attrs['x:Class'] ?? '').split('.').pop() ?? '';
+  const members = root.children.find((c) => c.name === 'x:Members');
+  for (const prop of members?.children ?? []) {
+    const name = prop.attrs.Name;
+    if (prop.name !== 'x:Property' || !name || !IDENT.test(name) || !/^(In|InOut)Argument\(/.test(prop.attrs.Type ?? '')) continue;
+    if (bound?.has(name.toLowerCase())) {
+      set(name, bound.get(name.toLowerCase()) ?? null);
+      continue;
+    }
+    let v: Val;
+    if (cls) {
+      const key = Object.keys(root.attrs).find((k) => prefixOf(k) !== '' && local(k) === `${cls}.${name}`);
+      if (key !== undefined) v = attrValue(root.attrs[key], csharp);
+      else {
+        const el = root.children.find((c) => prefixOf(c.name) !== '' && local(c.name) === `${cls}.${name}`);
+        if (el) v = elementValue(el, csharp);
+      }
+    }
+    if (v && 'literal' in v) set(name, v.literal);
+    else if (v) set(name, null);
+  }
+  // Variables anywhere in the file (scopes are not told apart: a name declared twice with different defaults has none).
+  const stack = [...root.children];
+  while (stack.length) {
+    const el = stack.pop()!;
+    if (local(el.name) === 'Variable' && el.attrs.Name && IDENT.test(el.attrs.Name) && !/SecureString/i.test(el.attrs['x:TypeArguments'] ?? '')) {
+      const v = attrValue(el.attrs.Default, csharp);
+      if (v && 'literal' in v) set(el.attrs.Name, v.literal);
+      else if (v) set(el.attrs.Name, null);
+    }
+    append(stack, el.children);
+  }
+  return values;
+}
 
 class Walker {
   private visited = 0;
@@ -689,6 +787,10 @@ class Walker {
   private readonly desktopTypedSecrets: string[] = [];
   /** Each credential lookup's report item and its outputs (lower case), reworded at the end when desktop steps type them. */
   private readonly credentialItems: { item: ImportItem; outputs: string[] }[] = [];
+  /** The desktop run variables steps type or choose, and their literal start values (null: none that is one literal). */
+  private readonly startValues = new Map<string, string | null>();
+  /** Every literal argument or variable default seen, by lower-case name: those of secret names are secrets too. */
+  private readonly seenValues: [string, string][] = [];
   private readonly xmlns: Map<string, string>[] = [];
   /** The variables TOTP activities write their code to, lower case. */
   private readonly totpOutputs = new Set<string>();
@@ -720,7 +822,13 @@ class Walker {
         item.reason = 'a UiPath credential is never imported: desktop steps type its user name and password from run variables (see the secret items); browser steps use an RPA Site Login on the Run steps node';
       }
     }
-    return { sequences: this.sequences, desktop: this.desktopSequences, typedSecrets: this.desktopTypedSecrets, flow: { name, nodes } };
+    // Secrets are decided here, at the end of the walk: a name may turn secret after its default was first noted.
+    const secretNames = new Set([...this.secretVars, ...this.totpOutputs, ...this.secretVarNames].map((n) => n.toLowerCase()));
+    const secretDefaults = this.seenValues.filter(([n]) => secretNames.has(n)).map(([, v]) => v);
+    return {
+      sequences: this.sequences, desktop: this.desktopSequences, typedSecrets: this.desktopTypedSecrets, flow: { name, nodes },
+      startValues: this.startValues, secretNames: [...secretNames], secretDefaults,
+    };
   }
 
   /** A workflow file, parsed once within the project's element budget; null (and an error item) when it cannot be read. */
@@ -777,11 +885,14 @@ class Walker {
   }
 
   /** The root Activity's activities (members, settings and namespaces are not activities). */
-  private workflow(key: string, parsed: Parsed, ctx0: Ctx): Item[] {
+  private workflow(key: string, parsed: Parsed, ctx0: Ctx, bound?: Map<string, string | null>): Item[] {
     this.charge(key, parsed);
     const root = parsed.root;
     const editor = root.attrs['sap2010:ExpressionActivityEditor.ExpressionActivityEditor'];
-    const ctx: Ctx = { ...ctx0, names: parsed.names, csharp: editor === 'C#' ? true : editor === 'VB' ? false : ctx0.csharp };
+    const csharp = editor === 'C#' ? true : editor === 'VB' ? false : ctx0.csharp;
+    const values = fileValues(root, csharp, bound);
+    for (const [n, v] of values) if (typeof v === 'string') this.seenValues.push([n, v]);
+    const ctx: Ctx = { ...ctx0, names: parsed.names, csharp, values };
     const kids = content(root).filter((c) => prefixOf(c.name) !== 'x' && prefixOf(c.name) !== 'mc');
     const ns = new Map<string, string>();
     for (const [k, v] of Object.entries(root.attrs)) if (k === 'xmlns' || k.startsWith('xmlns:')) ns.set(k === 'xmlns' ? '' : k.slice(6), v);
@@ -1363,6 +1474,7 @@ class Walker {
       if (v && 'literal' in v && v.literal !== '') return [item({ at, kind: 'select', target, label, option: v.literal })];
       const varName = v && 'expr' in v ? this.desktopVar(v.expr) : undefined;
       if (varName) {
+        this.noteStart(varName, (v as { expr: string }).expr, ctx);
         this.add(at, 'converted', label || displayName, `the item is the UiPath variable ${varName}: the step chooses {{var.${varName}}}; set ${varName} in Run steps → Variables`);
         return [item({ at, kind: 'select', target, label, option: `{{var.${varName}}}` })];
       }
@@ -1415,6 +1527,7 @@ class Walker {
       const varName = this.desktopVar(val.expr);
       if (varName && (this.secretVars.has(val.expr.toLowerCase()) || passwordField || PASSWORD_NAME.test(varName))) return secret(varName, `the password (${val.expr.slice(0, 80)})`);
       if (varName) {
+        this.noteStart(varName, val.expr, ctx);
         this.add(at, 'converted', label || displayName, `the typed text is the UiPath variable ${varName}: the step types {{var.${varName}}}; set ${varName} in Run steps → Variables`);
         return [item({ at, kind: 'fill', target, label, value: `{{var.${varName}}}` })];
       }
@@ -1461,7 +1574,31 @@ class Walker {
     }
     const parsed = this.parse(key);
     if (!parsed) return this.untranslated(el, ctx, `${target.path} cannot be read: see the report`);
-    return this.workflow(key, parsed, { ...ctx, file: target.path, stack: [...ctx.stack, key], chain: [...ctx.chain, target.path] });
+    return this.workflow(key, parsed, { ...ctx, file: target.path, stack: [...ctx.stack, key], chain: [...ctx.chain, target.path] }, this.bindings(el, ctx));
+  }
+
+  /**
+   * What an invoke passes to the invoked workflow's In and InOut arguments, by lower-case name: a literal, the start value
+   * of a variable or argument of the invoking file it names, or null (an expression, which is not evaluated).
+   */
+  private bindings(el: XmlNode, ctx: Ctx): Map<string, string | null> {
+    const out = new Map<string, string | null>();
+    const prop = el.children.find((c) => isProperty(c) && propertyName(c) === 'Arguments');
+    for (const arg of prop?.children ?? []) {
+      const name = arg.attrs['x:Key'];
+      if (!name || !/^(In|InOut)Argument$/.test(local(arg.name))) continue;
+      const v = elementValue(arg, ctx.csharp);
+      out.set(name.toLowerCase(), !v ? null : 'literal' in v ? v.literal : IDENT.test(v.expr) ? ctx.values?.get(v.expr.toLowerCase()) ?? null : null);
+    }
+    return out;
+  }
+
+  /** Notes the start value a run variable has where a step types or chooses it (`expr`, the UiPath name it was). */
+  private noteStart(varName: string, expr: string, ctx: Ctx): void {
+    const v = ctx.values?.get(expr.toLowerCase());
+    if (v === undefined) return;
+    const had = this.startValues.get(varName);
+    this.startValues.set(varName, had === undefined || had === v ? v : null);
   }
 
   // -------------------------------------------------------------------------------------------------------------------

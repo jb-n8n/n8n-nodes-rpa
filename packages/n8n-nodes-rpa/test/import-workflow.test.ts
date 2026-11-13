@@ -845,4 +845,15 @@ describe('buildWorkflow', () => {
     expect(targets(none, 'Run the bot')).toEqual([['Call']]);
     expect(content(byName(none, 'About this import'))).not.toContain('playwright_runs');
   });
+
+  it('a start value is never shown for a variable that is secret under another casing', () => {
+    const desktop = {
+      name: 'c', writeCandidates: [], variables: ['Password', 'password', 'company'], secretVariables: ['password'],
+      startValues: { Password: 'Hunter-2026', company: '1000' },
+      script: { surface: 'desktop' as const, name: 'c', version: 1, app: { exe: 'App.exe' }, steps: [{ intent: 'Type', fill: { field: { uia: { path: [{ name: 'x' }] } }, value: '{{var.company}}' } }] },
+    };
+    const w = buildWorkflow({ name: 'c', nodes: [{ kind: 'desktop', sequence: 1, displayName: 'Desk', draft: 'c' }] }, [], { name: 'c', desktopDrafts: [desktop], source: 'uipath' });
+    expect(JSON.stringify(w)).not.toContain('Hunter-2026');
+    expect((byName(w, 'Desk').parameters as { options: { variables: unknown } }).options.variables).toEqual({ values: [{ name: 'Password', value: '' }, { name: 'company', value: '1000' }] });
+  });
 });

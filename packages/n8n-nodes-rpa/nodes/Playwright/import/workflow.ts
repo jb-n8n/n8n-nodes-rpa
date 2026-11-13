@@ -198,6 +198,14 @@ function stepVariables(steps: unknown): { all: string[]; secret: string[] } {
   walk(steps);
   return { all, secret: all.filter((v) => secret.has(v)) };
 }
+/**
+ * The start values that may be shown: none for a variable that is secret under any casing (UiPath's VB names do not
+ * depend on case). Applied wherever a draft's start values are handed on: the Data item, the review page, this file.
+ */
+export function nonSecretStart(start: Readonly<Record<string, string>> | undefined, secretVariables: readonly string[]): Record<string, string> {
+  const secret = new Set(secretVariables.map((v) => v.toLowerCase()));
+  return Object.fromEntries(Object.entries(start ?? {}).filter(([name]) => !secret.has(name.toLowerCase())));
+}
 /** What a Run steps' note says about its credentials: the ones picked for you, then the ones to pick. */
 function pickText(picked: string[], missing: string[]): string {
   return [
@@ -549,7 +557,7 @@ class Builder {
     const run = this.nodeName(n.displayName, `Run steps (${draftName})`);
     const runX = x + STEP;
     const secret = new Set(draft.secretVariables);
-    const start = draft.startValues ?? {};
+    const start = nonSecretStart(draft.startValues, draft.secretVariables);
     /** The start values the workflow writes: those n8n would not read as an expression. */
     const plain = (values: Record<string, string>) => Object.values(values).filter((v) => literal(v) !== undefined);
     const plainVars = draft.variables.filter((v) => !secret.has(v));

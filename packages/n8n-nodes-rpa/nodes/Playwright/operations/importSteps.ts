@@ -11,7 +11,7 @@ import {
   DESKTOP_DOCUMENT_EVIDENCE_LINE, DESKTOP_EVIDENCE_LINE, DESKTOP_RECORDING_EVIDENCE_LINE, importAddedSteps, reviewSteps, reviewWrites,
 } from '../format.js';
 import { isQueueMode, openGuardStore, QUEUE_NEEDS_REDIS, type GuardStoreDeps } from '../guard-store.js';
-import { workflowFile, type CredentialRef, type PassedOn } from '../import/workflow.js';
+import { nonSecretStart, workflowFile, type CredentialRef, type PassedOn } from '../import/workflow.js';
 import { lazyChatModel } from '../model.js';
 import { configErrorItem, desktopRepairedStepsJson, plain, repairedStepsItem, repairedStepsJson, slug } from '../output.js';
 import { codeSettingsFor, codeWorkflowOptions } from './codeWorkflow.js';
@@ -314,6 +314,9 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
   // Desktop drafts are never replayed: each one that carries no Site Login value goes to approval as imported.
   const desktopOut = desktopDrafts.map((d) => {
     const withheld = containsSecret(d.script);
+    // Never a start value for a secret, under any casing.
+    const startValues = nonSecretStart(d.startValues, d.secretVariables);
+    const hasStart = Object.keys(startValues).length > 0;
     let review: IDataObject | undefined;
     let problem: string | undefined;
     if (!withheld) {
@@ -323,7 +326,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
           ...desktopRepairedStepsJson(engine, withLeftOut(engine.desktopProposal(d.script)), line, d.secretVariables),
           // Shown on the review page only; neither the digest nor the signature covers them.
           reviewSteps: reviewSteps(d.script.steps, {
-            desktop: true, secretVariables: d.secretVariables, ...(d.startValues ? { startValues: d.startValues } : {}),
+            desktop: true, secretVariables: d.secretVariables, ...(hasStart ? { startValues } : {}),
             ...(source === 'recording' ? { added: importAddedSteps(d.script.steps) } : {}),
           }) as unknown as IDataObject[],
           writeCandidates: reviewWrites(d.script.steps, engine.desktopWriteCandidates(d.script), d.secretVariables) as unknown as IDataObject[],
@@ -342,7 +345,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
       variables: [...d.variables],
       secretVariables: [...d.secretVariables],
       // A recording's start values (never a secret's), for the review page and the generated workflow.
-      ...(d.startValues && Object.keys(d.startValues).length ? { startValues: { ...d.startValues } } : {}),
+      ...(hasStart ? { startValues } : {}),
       reason: withheld ? STEPS_WITHHELD : problem ?? DESKTOP_FOR_APPROVAL,
     };
     return { entry, review };

@@ -184,6 +184,13 @@ decide. A variable a desktop step types into a password, PIN or secret field is 
 the generated workflow leaves it to **RPA Secret Variables**, and the review page asks about a key pressed in that
 field unticked. Once approved, an import becomes the version that runs under its name, also when a higher version was active.
 
+**UiPath variables.** A variable that desktop steps type or choose starts with the value the project gives it, in the
+generated workflow and on the review page: the argument's default, or what the invoking workflow passes in (a plain
+value, or a variable's default). Never for a variable that is secret anywhere in the project, whatever the letter
+case, a name that reads like a password, PIN, secret or token, a value of the RPA Site Login, or a value the import
+removed as a secret elsewhere: the report says so, without the value. A value set by an
+expression is left empty. Start values are not part of the signed steps.
+
 **Recordings.** A file the RPA recorder saved (`.rpa-recording.json`, format `rpa-recording/1`, at most 5 MiB and
 400 events, 200 steps) becomes one desktop step list under the Name. A variable the person made keeps its recorded
 value as its start value in the generated workflow, except a secret. The import refuses a recording with a key the

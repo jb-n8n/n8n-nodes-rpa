@@ -83,7 +83,7 @@ function workflowOf(item: INodeExecutionData): WorkflowJson {
 const runNodes = (wf: WorkflowJson) => wf.nodes.filter((n) => n.type === 'n8n-nodes-rpa.playwright');
 const optionsOf = (n: WorkflowJson['nodes'][number]) => (n.parameters as { options: IDataObject }).options;
 
-function uipathZip(dir: string, folder: string): Buffer {
+function uipathZip(dir: string, folder: string, changes: Record<string, (text: string) => string> = {}): Buffer {
   const root = fileURLToPath(new URL(`${dir}/`, FIXTURES));
   const entries: { name: string; raw: Buffer; usize: number }[] = [];
   const walk = (d: string) => {
@@ -91,8 +91,9 @@ function uipathZip(dir: string, folder: string): Buffer {
       const path = join(d, name);
       if (statSync(path).isDirectory()) walk(path);
       else {
-        const data = readFileSync(path);
-        entries.push({ name: `${folder}/${relative(root, path).split('\\').join('/')}`, raw: deflateRawSync(data), usize: data.length });
+        const rel = relative(root, path).split('\\').join('/');
+        const data = changes[rel] ? Buffer.from(changes[rel](readFileSync(path, 'utf8'))) : readFileSync(path);
+        entries.push({ name: `${folder}/${rel}`, raw: deflateRawSync(data), usize: data.length });
       }
     }
   };
@@ -174,6 +175,43 @@ describe('every source ends in a workflow that runs', () => {
     expect(item.json.report).toMatchObject({ source: 'uipath' });
     const wf = workflowOf(item);
     expect(runNodes(wf).map((n) => optionsOf(n).name)).toEqual(['bot-1']);
+  });
+
+  it('a UiPath desktop project: its variables start with the values the project gives them; the secret one has none', async () => {
+    const { item } = await importFile(uipathZip('uipath-erp-desktop', 'ERP Demo Line Items'), 'project.zip');
+    expect(item.json.error).toBeUndefined();
+    expect((item.json.drafts as IDataObject[])[0]).toMatchObject({
+      name: 'bot-1', startValues: { in_CompanyCode: '1000', in_DateFrom: '2026-01-01', in_DateTo: '2026-12-31' }, secretVariables: ['password'],
+    });
+    const wf = workflowOf(item);
+    const [run] = runNodes(wf);
+    expect(optionsOf(run).variables).toEqual({ values: [
+      { name: 'username', value: '' }, { name: 'in_CompanyCode', value: '1000' }, { name: 'in_DateFrom', value: '2026-01-01' }, { name: 'in_DateTo', value: '2026-12-31' },
+    ] });
+    expect(run.notes).toContain('The Variables start with the values the UiPath project gave them: change them here.');
+    expect(String(wf.nodes.find((n) => n.name === 'Fill in the variables (bot-1)')?.parameters.content)).toContain('`in_CompanyCode` (starts as `1000`)');
+  });
+
+  it('a secret\'s default is in no output: found secret after it was noted, under another casing, or equal to a removed secret', async () => {
+    const cases: Record<string, (t: string) => string> = {
+      // Typed as Sesame into a plain field first, and only later as sesame into the password field.
+      'open-sesame-77': (t) => t.replace('<ui:GetRobotCredential ', '<ui:Comment ')
+        .replace('<Variable x:TypeArguments="ss:SecureString" Name="password" />', '<Variable x:TypeArguments="x:String" Default="open-sesame-77" Name="Sesame" />')
+        .replace('Text="[username]"', 'Text="[Sesame]"').replace('SecureText="[password]"', 'SecureText="[sesame]"'),
+      // The company code's default equals a value typed into the password field elsewhere.
+      Zx9: (t) => t.replace('Default="1000" Name="companyCode"', 'Default="Zx9" Name="companyCode"')
+        .replace("DisplayName=\"Type Into 'User name'\"", "DisplayName=\"Type Into 'Password'\"").replace('Text="[username]"', 'Text="Zx9"'),
+    };
+    for (const [value, change] of Object.entries(cases)) {
+      const { item, repaired } = await importFile(uipathZip('uipath-erp-desktop', 'ERP Demo Line Items', { 'Main.xaml': change }), 'project.zip');
+      expect(item.json.error, value).toBeUndefined();
+      const file = Buffer.from(String(item.binary?.workflow?.data ?? ''), 'base64').toString('utf8');
+      expect(file, value).not.toContain(value);
+      expect(JSON.stringify(item.json), value).not.toContain(value);
+      expect(JSON.stringify(repaired.map((r) => r.json)), value).not.toContain(value);
+      // An ordinary argument still starts with its value.
+      expect(optionsOf(runNodes(workflowOf(item))[0]).variables, value).toMatchObject({ values: expect.arrayContaining([{ name: 'in_DateFrom', value: '2026-01-01' }]) });
+    }
   });
 
   it('a file Import Steps cannot place: a configuration error that says what to do, and nothing is imported', async () => {
