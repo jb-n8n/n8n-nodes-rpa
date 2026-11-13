@@ -78,6 +78,9 @@ const USAGE = [
   '                         RPA_BROWSER_TOKEN, and sets it on Import steps.',
   '  --site-login <name>    the RPA Site Login of the site your bots open, made in n8n before this runs: picks it by its name',
   '                         on Import steps and Sign steps. It is never made, read or changed here.',
+  '                         With --new-workflow: a form of its own for that Site Login, beside the first one, which is not',
+  '                         touched. Its name and title name the Site Login, its address is /form/rpa-import-<its name>, and',
+  '                         it signs with the same RPA Step Signing key.',
   '  --desktop-runner <name>  the RPA Desktop Runner to pick on Import steps when your project has several. Without it and',
   '                         without a Connection Line, the only one your project has is picked. It is never read. With a',
   '                         Connection Line, it asks at a terminal whether to replace that credential\'s line.',
@@ -87,6 +90,7 @@ const USAGE = [
   '  --reuse-project-credentials  in a shared project, use the credentials and the workflow of these names found there',
   '                         without asking (anyone in the project could have made them).',
   `  --new-workflow         leave a "${WORKFLOW_NAME}" that differs from the template alone and make a fresh one, with the date in its name.`,
+  '                         With --site-login: a second form for that Site Login (see --site-login).',
   '',
   'Secrets never go in flags. The command asks for them, or reads them from the environment:',
   `  N8N_API_KEY            the n8n API key. ${WHERE_KEYS}`,
@@ -526,6 +530,43 @@ async function testRunner(client: Client, ref: Ref): Promise<RunnerTest> {
   return { result: 'untested', message: `${why}.${scope}` };
 }
 
+/** "no answer within N s": nothing on n8n's way reached the Windows machine (the engine's runnerNoTcpAnswer, runnerUnreachable). */
+const NO_ANSWER = /\(no answer within \d+ s\)/;
+
+/**
+ * After a test that got no answer, at a terminal: once, a corrected Connection Line (not shown), or Enter to finish. A
+ * line replaces the credential's line as offerLine does, said by its address and port only; n8n then tests it again.
+ * A line that does not parse, or that n8n does not take, changes nothing. Returns whether the line was replaced.
+ */
+async function correctLine(client: Client, ref: Ref): Promise<boolean> {
+  const what = `credential "${clean(ref.name, ref.id)}" (id ${clean(ref.id)})`;
+  say('n8n got no answer from the Windows machine. If you printed its line again, for example with -Address, paste it now.');
+  const line = await askHidden(`Corrected Connection Line for "${clean(ref.name, ref.id)}" (not shown), or Enter to finish: `);
+  redactor.add(line);
+  if (!line) return false;
+  let to: string | undefined;
+  let problem: string | undefined;
+  try {
+    // The node's own parser: its messages never repeat any part of the line.
+    const parsed = parseConnectionLine('runner', line);
+    redactor.add(parsed.token);
+    to = new URL(parsed.url).host;
+  } catch (err) {
+    problem = (err as Error).message;
+  }
+  if (to === undefined) {
+    say(`         not used: ${problem ?? 'the line does not parse.'} The Connection Line of ${what} stays as it is.`);
+    return false;
+  }
+  const r = await client.api('PATCH', `/credentials/${encodeURIComponent(ref.id)}`, { name: ref.name, type: RUNNER.type, data: { connectionLine: line } });
+  if (r.status !== 200) {
+    say(`         not used: n8n did not take it (${client.reason(r)}). The Connection Line of ${what} stays as it is.`);
+    return false;
+  }
+  say(`replaced Connection Line of ${what}: it now names ${to}`);
+  return true;
+}
+
 /** What n8n's test of the RPA Desktop Runner gave, for the closing lines. */
 interface RunnerTest { result: 'connected' | 'failed' | 'untested'; message: string }
 
@@ -634,15 +675,31 @@ const formPathOf = (node: any): string => String(node?.parameters?.options?.path
  * as publishing it would take the address) with a form trigger at that path. One whose nodes n8n does not list counts as
  * using it, since this run cannot tell.
  */
-function formPathTaken(workflows: any[]): string | undefined {
+function formPathTaken(workflows: any[], path: string): string | undefined {
   for (const w of workflows) {
     if (!Array.isArray(w?.nodes)) return `n8n does not list the nodes of the workflow "${clean(w?.name, w?.id)}" (id ${clean(w?.id)})`;
-    if (w.nodes.some((n: any) => /\.formTrigger$/.test(String(n?.type)) && formPathOf(n).toLowerCase() === FORM_PATH)) {
-      return `the workflow "${clean(w.name, w.id)}" (id ${clean(w.id)}) has a form at /form/${FORM_PATH}`;
+    if (w.nodes.some((n: any) => /\.formTrigger$/.test(String(n?.type)) && formPathOf(n).toLowerCase() === path)) {
+      return `the workflow "${clean(w.name, w.id)}" (id ${clean(w.id)}) has a form at /form/${path}`;
     }
   }
   return undefined;
 }
+
+/**
+ * A Site Login's own form (--new-workflow --site-login): the workflow "RPA: 5 Import a bot (<Site Login>)", its form
+ * titled for that Site Login, at /form/rpa-import-<slug>. n8n's workflow names are at most 128 characters: the Site
+ * Login's name is cut so that the dated name still fits.
+ */
+const siteFormName = (siteLogin: string) => `${WORKFLOW_NAME} (${siteLogin.length > 80 ? `${siteLogin.slice(0, 79)}…` : siteLogin})`;
+const siteFormTitle = (siteLogin: string) => `Import a bot for ${siteLogin}`;
+/** The Site Login's name as the last part of an address: lowercase letters and digits joined by "-", at most 40; '' when none. */
+function siteSlug(siteLogin: string): string {
+  const words = siteLogin.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().match(/[a-z0-9]+/g) ?? [];
+  return words.join('-').slice(0, 40).replace(/-+$/, '');
+}
+/** A workflow name as an exact pattern, with the date --new-workflow may add. */
+const DATED = String.raw`(?: \(\d{4}-\d{2}-\d{2}(?: \d{2}-\d{2})?\))?$`;
+const namesFor = (base: string) => new RegExp(`^${base.replace(/[\\^$.*+?()[\]{}|/-]/g, (c) => `\\${c}`)}${DATED}`);
 
 /** The form trigger's Authentication for each --form-login. */
 const FORM_AUTH = { n8n: 'n8nUserAuth', basic: 'basicAuth' } as const;
@@ -653,9 +710,9 @@ const formAuthentication = (workflow: any): unknown => workflow?.nodes?.find((n:
  * The template's nodes, with the approver on the allowlist and an address for each form page; no credentials. With
  * --form-login basic the form asks for Basic Auth (Sign steps then takes Approved By: its Approver follows the form).
  * With --allow-private-network, Import steps has Options → Allow Private Network on. With formPath, the form answers at
- * /form/<formPath> instead of its webhook id.
+ * /form/<formPath> instead of its webhook id. With formTitle (a Site Login's own form), the form shows that title.
  */
-function templateNodes(approver: string, formLogin: Options['formLogin'], allowPrivateNetwork: boolean, formPath?: string): Record<string, any>[] {
+function templateNodes(approver: string, formLogin: Options['formLogin'], allowPrivateNetwork: boolean, formPath?: string, formTitle?: string): Record<string, any>[] {
   return loadTemplate().nodes.map((node: Record<string, any>) => {
     const n: Record<string, any> = { ...node, parameters: { ...node.parameters } };
     delete n.credentials;
@@ -669,6 +726,7 @@ function templateNodes(approver: string, formLogin: Options['formLogin'], allowP
       n.parameters.authentication = FORM_AUTH.basic;
     }
     if (n.name === NODE.form && formPath) n.parameters.options = { ...n.parameters.options, path: formPath };
+    if (n.name === NODE.form && formTitle) n.parameters.formTitle = formTitle;
     return n;
   });
 }
@@ -747,6 +805,12 @@ async function run(inputs: Inputs): Promise<number> {
   const { client, options, origin } = inputs;
   const basic = options.formLogin === 'basic';
   shared.basic = basic;
+  // --new-workflow --site-login: a form of the Site Login's own, beside the first one, which this run never touches. It
+  // has its own name, title and address, and signs with the same RPA Step Signing credential (never a new key).
+  const siteForm = options.newWorkflow && options.siteLogin !== undefined;
+  const baseName = siteForm ? siteFormName(options.siteLogin as string) : WORKFLOW_NAME;
+  const slug = siteForm ? siteSlug(options.siteLogin as string) : '';
+  const wantPath = !siteForm ? FORM_PATH : slug ? `${FORM_PATH}-${slug}` : undefined;
   if (inputs.plaintext) {
     warn('WARNING: --allow-http: the API key crosses the network unencrypted.');
   }
@@ -778,7 +842,8 @@ async function run(inputs: Inputs): Promise<number> {
   if (projectId) setProject(await projectOf(client, workflows.items, projectId), projectId, inputs.userId);
 
   // The workflow: one of this project's, of the template's name (or the dated name), that matches the template.
-  const named = workflows.items.filter((w) => WORKFLOW_NAMES.test(String(w?.name ?? '')));
+  const names = siteForm ? namesFor(baseName) : WORKFLOW_NAMES;
+  const named = workflows.items.filter((w) => names.test(String(w?.name ?? '')));
   const ours = home ? named.filter((w) => ownerProject(w, 'workflow') === home) : [];
   // Reported once the project is known (it may be learned from the workflow this run makes).
   const reportOthers = () => { for (const w of named.filter((x) => !ours.includes(x))) leftAlone('workflow', w, '', home); };
@@ -883,16 +948,16 @@ async function run(inputs: Inputs): Promise<number> {
   let nodes: Record<string, any>[] | undefined;
   // Why a workflow made here keeps the address with an id, when /form/rpa-import is not free.
   let pathTaken: string | undefined;
-  let workflowName = WORKFLOW_NAME;
+  let workflowName = baseName;
   if (!workflow) {
-    if (differs || named.some((w) => w.name === WORKFLOW_NAME)) {
+    if (differs || named.some((w) => w.name === baseName)) {
       // --new-workflow, a set left alone, or another project's of that name: a dated name, so nobody confuses the two.
       const date = new Date().toISOString().slice(0, 10);
       const taken = new Set(workflows.items.map((w) => w?.name));
-      workflowName = taken.has(`${WORKFLOW_NAME} (${date})`) ? `${WORKFLOW_NAME} (${date} ${new Date().toISOString().slice(11, 16).replace(':', '-')})` : `${WORKFLOW_NAME} (${date})`;
+      workflowName = taken.has(`${baseName} (${date})`) ? `${baseName} (${date} ${new Date().toISOString().slice(11, 16).replace(':', '-')})` : `${baseName} (${date})`;
     }
-    pathTaken = formPathTaken(workflows.items);
-    nodes = templateNodes(approver as string, options.formLogin, options.allowPrivateNetwork, pathTaken ? undefined : FORM_PATH);
+    pathTaken = wantPath ? formPathTaken(workflows.items, wantPath) : "the Site Login's name has no letters or digits for an address";
+    nodes = templateNodes(approver as string, options.formLogin, options.allowPrivateNetwork, pathTaken ? undefined : wantPath, siteForm ? siteFormTitle(options.siteLogin as string) : undefined);
     if (!home) {
       made = await createWorkflow(client, workflowName, nodes, projectId);
       halfMade = { client, id: String(made.id) };
@@ -916,6 +981,14 @@ async function run(inputs: Inputs): Promise<number> {
   redactor.add(formPassword);
   redactor.add(signingKey);
   const of = (spec: { name: string }) => found.get(spec.name) ?? { others: [] };
+  if (siteForm) {
+    // A second form signs with the key the first one uses: this run never makes another key beside one the project has.
+    const keyThere = list.items.find((c) => c?.name === SIGNING.name && c?.type === SIGNING.type && (!home || ownerProject(c, 'credential') === home));
+    if (!of(SIGNING).mine && keyThere) {
+      throw new Stop(`A form for a Site Login signs with the RPA Step Signing key your other forms use, and this run does not use that credential (id ${clean(keyThere.id)}). In a shared project, answer y when asked, or add --reuse-project-credentials. No key or form was made.`);
+    }
+    if (SITE && !of(SITE).mine) throw new Stop(`A form for the Site Login "${clean(SITE.name)}" needs that credential, and this run does not use what it found in the shared project. Answer y when asked, or add --reuse-project-credentials. Nothing was made.`);
+  }
 
   // The form's login: only with --form-login basic. With n8n's sign-in there is nothing to make.
   let formRef: Ref | undefined;
@@ -1001,7 +1074,7 @@ async function run(inputs: Inputs): Promise<number> {
     workflow = workflow as Record<string, any>;
     say(`created  workflow "${workflowName}" (id ${clean(workflow.id)}), approver ${approver}`);
     if (siteRef) say(`         with the Site Login "${clean(siteRef.name)}" (id ${clean(siteRef.id)}) on "${NODE.importSteps}" and "${NODE.signSteps}"`);
-    if (pathTaken) say(`         its form keeps an address with an id, not /form/${FORM_PATH}: ${pathTaken}.`);
+    if (pathTaken) say(`         its form keeps an address with an id${wantPath ? `, not /form/${wantPath}` : ''}: ${pathTaken}.`);
     const same = named.filter((w) => w.name === workflowName);
     if (same.length) say(`         n8n now has more than one workflow named "${workflowName}": this run's is id ${clean(workflow.id)}.`);
   }
@@ -1012,14 +1085,14 @@ async function run(inputs: Inputs): Promise<number> {
     const made = workflow;
     // A form path held by a workflow this API key cannot see: n8n refuses to publish. The form then keeps the address
     // with its webhook id, and the run says why.
-    const dropPath = !reused && formPathOf(made.nodes.find((n: any) => n.name === NODE.form)) === FORM_PATH
+    const dropPath = !reused && wantPath !== undefined && formPathOf(made.nodes.find((n: any) => n.name === NODE.form)) === wantPath
       ? async (r: Awaited<ReturnType<Client['api']>>) => {
         if (!/already taken|conflict with one of the webhooks/i.test(client.reason(r))) return undefined;
         const without = made.nodes.map((n: any) => (n.name === NODE.form ? { ...n, parameters: { ...n.parameters, options: Object.fromEntries(Object.entries(n.parameters?.options ?? {}).filter(([k]) => k !== 'path')) } } : n));
         const put = await client.api('PUT', `/workflows/${encodeURIComponent(String(made.id))}`, { name: made.name, nodes: without, connections: made.connections, settings: made.settings ?? { executionOrder: 'v1' } });
         if (put.status !== 200 || !put.json?.id) return undefined;
         workflow = put.json;
-        say(`         its form keeps an address with an id, not /form/${FORM_PATH}: n8n says that address is taken (${client.reason(r)}).`);
+        say(`         its form keeps an address with an id, not /form/${wantPath}: n8n says that address is taken (${client.reason(r)}).`);
         return { versionId: put.json.versionId };
       }
       : undefined;
@@ -1049,7 +1122,11 @@ async function run(inputs: Inputs): Promise<number> {
     if (!signsIn(probe)) warn(`Note: the form did not answer as expected at ${formUrl} (${probe ? `HTTP ${probe.status}` : 'no answer'}). In n8n, open "${shownName}", then the node "${NODE.form}", for its production URL.`);
   }
   // Last, as it may wait a minute for a machine that does not answer: the form is ready by then.
-  const runnerTest = runnerRef ? await testRunner(client, runnerRef) : undefined;
+  let runnerTest = runnerRef ? await testRunner(client, runnerRef) : undefined;
+  // No answer, at a terminal: one chance to paste a corrected line now, instead of running the whole command again.
+  if (runnerRef && runnerTest?.result === 'failed' && NO_ANSWER.test(runnerTest.message) && interactive() && (await correctLine(client, runnerRef))) {
+    runnerTest = await testRunner(client, runnerRef);
+  }
 
   // The address to open: n8n's own when its environment gives it here, else the one this command reached n8n at.
   const shownUrl = formUrl && inputs.formBase ? new URL(`form/${webhookId}`, inputs.formBase).href : formUrl;
@@ -1057,6 +1134,7 @@ async function run(inputs: Inputs): Promise<number> {
   say('The import form is ready.');
   say(`  Address:    ${shownUrl ?? `open "${shownName}" in n8n, then the node "${NODE.form}", for its production URL`}`);
   if (formUrl && !inputs.formBase) say('              Replace the host and port with the ones you open n8n with, if they differ.');
+  if (siteForm && siteRef) say(`  Site Login: "${clean(siteRef.name)}". Use this form for the bots that sign in with it. Your other import form is not changed.`);
   if (basic) {
     say(`  User name:  ${FORM.user}`);
     if (formPassword) reveal('  Password:   ', formPassword, '   (shown once: keep it in your password manager)');

@@ -37,20 +37,28 @@ signed in as. An empty TOTP Secret means that account gets no code.
 
 ## Approving the steps
 
-One approval covers every account: a signature binds the Site Login's credential ID, not the values it holds. In **RPA:
-5 Import a bot**, pick this Site Login on **Import steps** and **Sign steps**, then **Publish** (before the first setup,
-name it with the setup command's `--site-login`). The workflow the form hands over then has it on its RPA node.
+One approval covers every account: a signature binds the Site Login's credential ID, not the values it holds. Give this
+Site Login an import form of its own, beside the one you have, with one command (here for a Site Login named
+**Sample accounts**, in the compose stack; the API key as in step 3 of the [browser bot guide](browser-bot.md)):
 
-The form then signs every bot for this Site Login: a bot signed for another one must be changed or signed again with
-its own Site Login on **Import steps** and **Sign steps**. The review page names the Site Login in use.
+```bash
+docker compose exec n8n /opt/n8n-rpa/node_modules/.bin/n8n-nodes-rpa setup --new-workflow --site-login "Sample accounts" --allow-private-network
+```
+
+It makes and publishes **RPA: 5 Import a bot (Sample accounts)**, with this Site Login on **Import steps** and **Sign
+steps**, and prints its address: `/form/rpa-import-sample-accounts`. It signs with the same **RPA Step Signing** key
+and leaves your first form as it is. Leave out `--allow-private-network` for a site on the internet. Use this form for
+the bots of this Site Login: the workflow it hands over has the Site Login on its RPA node. A bot is changed or signed
+again on the form it was approved on.
 
 ## Try it on the sample site
 
 The sample site of [Your first browser bot](browser-bot.md) has three accounts: `summit-ops`, the one of that guide,
 `lakeside-ops`, which always asks for a one-time code, and `harbor-ops`, which never does.
 
-1. Make the Site Login above, with the other fields as in step 2 of the browser bot guide, and give it to the form.
-2. On the form, upload `docs/samples/sandbox-rows.steps.json` with the name `sandbox-rows-accounts`, and choose
+1. Make the Site Login above, with the other fields as in step 2 of the browser bot guide, and name it
+   **Sample accounts**. Give it its own form with the command above.
+2. On that form, upload `docs/samples/sandbox-rows.steps.json` with the name `sandbox-rows-accounts`, and choose
    **Approve and sign**. Import the workflow it hands over (**⋯ → Import → From File**).
 3. Hover over the line between **Get active steps (sandbox-rows-accounts)** and **sandbox-rows-accounts**, click **+**,
    search for `Code` and choose **Code in JavaScript**. Name it **Get accounts** and replace its code with this (harbor-ops gets a wrong password):

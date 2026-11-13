@@ -660,12 +660,12 @@ describe('3-approve-steps.json', () => {
     expect(shownSteps({ ...fromNode, reviewSteps: started })).toContain('\n3. Type into User name (variable username)');
     expect(shownSteps({ ...fromNode, reviewSteps: started })).not.toContain('jdoe');
     expect(message).toContain('tick the steps that save, send or submit (none is ticked for you), then approve or reject.');
-    expect(message).toContain('Ticked steps are allowed to save or send. An unticked step is stopped only when it tries to use a control or key that your administrator has protected on the bot machine.');
+    expect(message).toContain('Ticked steps are allowed to save or send. Allow this app… in the recorder protects the ticked buttons it recorded, so leave such a step ticked: an unticked step is stopped when it presses a protected button, or a key other than Tab, arrows, Home, End, PageUp, PageDown or Escape in a window that holds one. While the policy of the app protects no button, nothing is stopped.');
     // The full detail below: the item's own change list, evidence and flags.
     expect(message).toContain('Details of every step (how each one finds its control):\nEvidence: Not replayed\nSafety flags: desktop app: "ErpDemo.exe"\nStep 1: Wait for the window\nStep 2: Click Save \u2039b\u203a\n');
     expect(message).not.toContain('Write steps');
     const description = render(String((ask.options as IDataObject).responseFormDescription), { $ });
-    expect(description).toBe('Steps v1 for erp-1. Tick the steps that save, send or submit, from the numbered list in the email; none is ticked for you. Ticked steps are allowed to save or send. An unticked step is stopped only when it tries to use a control or key that your administrator has protected on the bot machine.');
+    expect(description).toBe('Steps v1 for erp-1. Tick the steps that save, send or submit, from the numbered list in the email; none is ticked for you. Ticked steps are allowed to save or send. Allow this app… in the recorder protects the ticked buttons it recorded, so leave such a step ticked: an unticked step is stopped when it presses a protected button, or a key other than Tab, arrows, Home, End, PageUp, PageDown or Escape in a window that holds one. While the policy of the app protects no button, nothing is stopped.');
     const fields = jsonFormFields(String(ask.jsonOutput), { $ });
     expect(fields).toEqual([
       { fieldLabel: 'Decision', fieldType: 'dropdown', fieldOptions: { values: [{ option: 'Approve and sign' }, { option: 'Reject' }] }, requiredField: true },
@@ -1263,7 +1263,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(targets(t, 'Approved bots')).toEqual([['The bot to change']]);
     expect(targets(t, 'The bot to change')).toEqual([['Approved bot found?']]);
     expect(targets(t, 'Approved bot found?')).toEqual([['Change or sign again'], ['No approved bot']]);
-    expect(targets(t, 'Change or sign again')).toEqual([['Compared with the approved version']]);
+    expect(targets(t, 'Change or sign again')).toEqual([['Choice fits the box?']]);
+    expect(targets(t, 'Choice fits the box?')).toEqual([['Compared with the approved version'], ['Choice and box differ']]);
+    expect(targets(t, 'Choice and box differ')).toEqual([]);
     expect(targets(t, 'Compared with the approved version')).toEqual([['The steps as a file']]);
     expect(targets(t, 'The steps as a file')).toEqual([['The upload']]);
     // The download question only for a browser source, on a second page; Import steps always reads The upload.
@@ -1318,11 +1320,11 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const working = t.nodes.filter((n) => n.type !== STICKY).map((n) => n.name).sort();
     expect(working).toEqual([
       'Add the login page', 'Address with values', 'Approval by email?', 'Approve on this form?', 'Approve steps', 'Approved bot found?', 'Approved bots', 'Asks about a download?', 'Change an approved bot?',
-      'Change or sign again', 'Checked?', 'Compared with the approved version', 'Compared with the running version', 'Create run log table', 'Create steps table', 'Import a bot', 'Import failed', 'Import steps', 'Imported', 'Imported, with the workflow file', 'Missing login page?',
+      'Change or sign again', 'Checked?', 'Choice and box differ', 'Choice fits the box?', 'Compared with the approved version', 'Compared with the running version', 'Create run log table', 'Create steps table', 'Import a bot', 'Import failed', 'Import steps', 'Imported', 'Imported, with the workflow file', 'Missing login page?',
       'No approved bot', 'Plain address?', 'Read the upload', 'Record rejection', REVIEW, 'Running versions', 'Save signed steps', 'Settings', 'Sign steps', 'Signed?', 'Step lists', 'Step lists to sign', 'Supersede older versions',
       'The approved version', 'The bot to change', 'The file it downloads', 'The steps as a file', 'The upload', 'What it replaces', 'Workflow file?',
     ]);
-    expect(t.nodes.filter((n) => n.type === COMPLETION).map((n) => n.typeVersion)).toEqual([2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5]);
+    expect(t.nodes.filter((n) => n.type === COMPLETION).map((n) => n.typeVersion)).toEqual(Array(10).fill(2.5));
     // A form page pauses the run until the browser loads it; a closed tab must not leave the execution waiting for ever.
     for (const n of t.nodes.filter((x) => x.type === COMPLETION)) {
       expect(n.parameters, n.name).toMatchObject({ limitWaitTime: true, limitType: 'afterTimeInterval', resumeAmount: 1, resumeUnit: 'hours' });
@@ -1691,7 +1693,10 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(fields[0].html).not.toContain('candidate');
     expect(fields[3]).toMatchObject({ fieldLabel: 'Any other step that saves, sends or submits (its number, optional)', placeholder: '7, 9' });
     expect(fields[3]).not.toHaveProperty('requiredField');
-    expect(fields[2].html).toBe('<p><em>Ticked steps are allowed to save or send. An unticked step is stopped only when it tries to use a control or key that your administrator has protected on the bot machine.</em></p>');
+    expect(fields[2].html).toBe('<p><em>Ticked steps are allowed to save or send. Allow this app… in the recorder protects the ticked buttons it recorded, so leave such a step ticked: an unticked step is stopped when it presses a protected button, or a key other than Tab, arrows, Home, End, PageUp, PageDown or Escape in a window that holds one. While the policy of the app protects no button, nothing is stopped.</em></p>');
+    // No candidate to tick: the box for numbers, and the same rule in its own words.
+    const noTicks = reviewFields({ $: nodesRan({ ...ran, 'Import steps': [[{ json: data[0].json }], [{ json: { ...item, writeCandidates: [] } }]] }) });
+    expect(noTicks.find((x) => String(x.html ?? '').startsWith('<p><em>'))?.html).toBe('<p><em>The steps you list here are allowed to save or send. Any other step is stopped when it uses a button or key your administrator protected on the bot machine. While none is protected, nothing is stopped.</em></p>');
     expect(fields[4]).toEqual({ fieldLabel: 'Decision', fieldName: 'decision_0', fieldType: 'radio', fieldOptions: { values: [{ option: 'Approve and sign' }, { option: 'Reject' }] }, requiredField: true });
     // The page ends at the decision. Settings → showDetails puts the full detail (the item's own texts, escaped, small and
     // grey) back, above the question, in place of the pointer.
@@ -1729,6 +1734,36 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(ask).toContain('Evidence: Not replayed: desktop steps imported from a recording are reviewed as written');
     expect(sticky(t3, 'About this workflow').content).toContain('Desktop steps (imported from UiPath or a recording, or from a step document; not replayed)');
     expect(sticky(t, 'About this workflow').content).toContain('an **RPA recording** saved by the RPA recorder on the Windows machine');
+  });
+
+  it('approved, a bot that types a secret gets on the last page what to copy into its RPA Secret Variables credential, never the value', async () => {
+    // The ERP Demo recording types {{var.password}} into ErpDemo.exe.
+    const { ran } = await importedRecording();
+    const approved = await signAfterReview(ran, { writes_0: ['Step 16: Click Save'], decision_0: 'Approve and sign' });
+    const name = String(approved.signed[0].name);
+    const after = (signed: IDataObject[], more: Record<string, INodeExecutionData[][]> = {}) => ({
+      ...ran, [REVIEW]: [[{ json: { decision_0: 'Approve and sign' } }]], 'Sign steps': [signed.map((json) => ({ json })), []], ...more,
+    });
+    const BLOCK = `\n\n${name} types a secret. In n8n, make an RPA Secret Variables credential (+ → New credential), select it on the bot's RPA node, and copy these into it:`
+      + '\nCredential: <code>RPA Secret Variables</code>\nName: <code>password</code>\nMay Be Typed Into: <code>ErpDemo.exe</code>\nType the value there only: this form never asks for it.';
+    for (const page of ['Imported, with the workflow file', 'Imported']) {
+      const p = completion(page);
+      const shown = render(p.completionMessage, { $: nodesRan(after(approved.signed)) });
+      expect(shown.endsWith(BLOCK), page).toBe(true);
+      // One click selects a value to copy.
+      expect((p as { options?: { customCss?: string } }).options?.customCss).toBe('code { user-select: all; -webkit-user-select: all; }');
+      // Rejected, or on the change page (the credential is there already): no block.
+      expect(render(p.completionMessage, { $: nodesRan(after([{ ...approved.signed[0], status: 'rejected' }])) })).not.toContain('types a secret');
+      expect(render(p.completionMessage, { $: nodesRan(after(approved.signed, { 'Change or sign again': [[{ json: { changedSteps: '' } }]], 'The bot to change': [[{ json: { name, version: 1 } }]] })) })).not.toContain('types a secret');
+    }
+    // Names and an app or host only: escaped like every other text on the page.
+    const odd = render(completion('Imported').completionMessage, { $: nodesRan({
+      Settings: [[{ json: settingsJson() }]], 'Import steps': [[{ json: { report: { steps: 2, items: [] }, drafts: [{ name: 'a<b', forApproval: true, secretVariables: ['pin'], mayBeTypedInto: 'erp.example.com' }, { name: 'plain', adopted: true }] } }], []],
+      [REVIEW]: [[{ json: { decision_0: 'Approve and sign' } }]], 'Sign steps': [[{ json: { status: 'active', name: 'a<b', version: 1 } }, { json: { status: 'active', name: 'plain', version: 1 } }], []],
+    }) });
+    expect(odd).toContain('\n\na&lt;b types a secret.');
+    expect(odd).toContain('\nName: <code>pin</code>\nMay Be Typed Into: <code>erp.example.com</code>\n');
+    expect(odd.match(/types a secret/g)).toHaveLength(1);
   });
 
   it('a Sign steps refusal signs nothing and the last page names the reason; an approver not on the allowlist is refused', async () => {
@@ -2360,6 +2395,8 @@ describe('5-import-a-bot.json (the first-day import)', () => {
    * The change path as n8n's expressions see it: the first page submitted with no file and `name`, Approved bots giving
    * `rows`, then The bot to change. `authentication` is the form's sign-in as the user set it.
    */
+  const SIGN_AGAIN = 'Sign the approved steps again, unchanged';
+  const CHANGE = 'Change the steps';
   function changePath(name: string, rows: IDataObject[], authentication = 'n8nUserAuth', formQueryParameters?: IDataObject) {
     const ran: Record<string, INodeExecutionData[][]> = {
       Settings: [[{ json: { bot: null, source: null, name, ...settingsJson(), ...(formQueryParameters ? { formQueryParameters } : {}) } }]], 'Approved bots': [rows.map((json) => ({ json }))],
@@ -2490,6 +2527,39 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(compare(changePath('gone', []).ran, box)).toBe('gone: could not be compared with the approved version: read every step.');
   });
 
+  it('the choice and the box must fit: sign again with an empty box, change with text; otherwise a page says which to correct and nothing is imported or signed', () => {
+    const doc = { startUrl: `${SITE.url}/a`, name: 'feed', version: 4, steps: [{ intent: 'Open the report', goto: '/report' }] };
+    const { ran } = changePath('feed <b>', [{ id: 1, name: 'feed <b>', version: 4, steps: JSON.stringify(doc), status: 'active' }]);
+    const answered = (choice: string | null, changedSteps: string | null) => nodesRan({ ...ran, 'Change or sign again': [[{ json: { choice, changedSteps } }]] });
+    const cond = (byName(t, 'Choice fits the box?').parameters as { conditions: { conditions: { leftValue: string; operator: unknown }[] } }).conditions.conditions;
+    expect(byName(t, 'Choice fits the box?')).toMatchObject({ type: 'n8n-nodes-base.if', typeVersion: 2.2 });
+    expect(cond).toEqual([expect.objectContaining({ operator: { type: 'boolean', operation: 'true', singleValue: true } })]);
+    const fits = (choice: string | null, box: string | null) => evaluate(cond[0].leftValue, { $: answered(choice, box) });
+    const pasted = JSON.stringify(doc);
+    expect(fits(SIGN_AGAIN, '')).toBe(true);
+    expect(fits(SIGN_AGAIN, ' \r\n ')).toBe(true);
+    expect(fits(SIGN_AGAIN, null)).toBe(true);
+    expect(fits(CHANGE, pasted)).toBe(true);
+    // The two wrong combinations, and no choice (a page left unanswered gives its input item on).
+    expect(fits(SIGN_AGAIN, pasted)).toBe(false);
+    expect(fits(CHANGE, '')).toBe(false);
+    expect(fits(CHANGE, '  ')).toBe(false);
+    expect(fits(null, '')).toBe(false);
+    expect(fits(null, pasted)).toBe(false);
+    // The page that says which of the two to correct: nothing after it, so nothing is imported or signed.
+    const page = completion('Choice and box differ');
+    expect(page).toMatchObject({ operation: 'completion', respondWith: 'text', completionTitle: 'Choose again' });
+    const say = (choice: string, box: string) => String(evaluate(page.completionMessage, { $: answered(choice, box) }));
+    expect(say(SIGN_AGAIN, pasted)).toBe(`You chose to sign the approved steps again, unchanged, and pasted steps in the box. To use the pasted steps, choose ${CHANGE}. To sign them again unchanged, leave the box empty.\nNothing was imported or signed: feed &lt;b&gt; version 4 keeps running. Open the form again, leave Bot file empty and type the bot's name.`);
+    expect(say(CHANGE, '')).toBe(`You chose to change the steps, but the box is empty. Paste the changed steps in the box, or choose ${SIGN_AGAIN}.\nNothing was imported or signed: feed &lt;b&gt; version 4 keeps running. Open the form again, leave Bot file empty and type the bot's name.`);
+    // The steps shown, the comparison and the review page are as before: Compared with the approved version reads the box only.
+    expect(compared(ran, '')).toMatchObject({ unchanged: true });
+    // An address that fills the choice is refused on the first page, as any field's value is.
+    const plain = (query: unknown) => evaluate((byName(t, 'Plain address?').parameters as { conditions: { conditions: { leftValue: string }[] } }).conditions.conditions[0].leftValue, { $json: { formQueryParameters: query } });
+    expect(plain({ choice: SIGN_AGAIN })).toBe(false);
+    expect(plain({ choice: CHANGE, changedSteps: pasted })).toBe(false);
+  });
+
   it('an address that carries values for the form\'s fields is refused before anything is read, imported, shown or signed; a plain address goes through', () => {
     // n8n 2.45 keeps the first page's query as the trigger's formQueryParameters, only when it has a key (Form
     // utils.ts 574-579), and fills the fields of every later page from it (utils.ts 634-648 and 337): the review page's
@@ -2607,7 +2677,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(on('by email').approvedBeforeHandOver).toBe(false);
   });
 
-  it('Change or sign again shows the active steps to read in a block of the page, one empty box, and five short sentences', () => {
+  it('Change or sign again shows the active steps to read in a block of the page, a required choice, one empty box, and five short sentences', () => {
     const doc = { startUrl: `${SITE.url}/a`, name: 'feed <b>', version: 1, steps: [{ intent: 'Type $& and $$ <b>Tom & Jerry</b> café', goto: '/b?x=$1&y=<2>' }] };
     const page = byName(t, 'Change or sign again');
     expect(page).toMatchObject({ type: COMPLETION, typeVersion: 2.5, parameters: { operation: 'page', defineForm: 'json', limitWaitTime: true, limitType: 'afterTimeInterval', resumeAmount: 1, resumeUnit: 'hours', options: { buttonLabel: 'Review', formDescription: 'Nothing changes until you approve on the next page.' } } });
@@ -2618,11 +2688,13 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       const { $ } = changePath('feed <b>', rows, auth);
       // jsonFormFields also checks that no "$" reaches n8n's String.replace, so "$&" in a step stays as written.
       const fields = jsonFormFields(String(page.parameters.jsonOutput), { $ });
-      expect(fields.map((f) => f.fieldType)).toEqual(['html', 'textarea']);
+      expect(fields.map((f) => f.fieldType)).toEqual(['html', 'radio', 'textarea']);
+      // Two explicit choices, one required: an empty box no longer means anything by itself.
+      expect(fields[1]).toEqual({ fieldLabel: 'What to do', fieldName: 'choice', fieldType: 'radio', fieldOptions: { values: [{ option: SIGN_AGAIN }, { option: CHANGE }] }, requiredField: true });
       // The box is empty and optional: the approved steps never go to the browser and come back through it. n8n escapes
       // < and > in every field's text but html (n8n-workflow type-validation.ts tryToParseJsonToFormFields), so a
       // default value would come back changed.
-      expect(fields[1]).toEqual({ fieldLabel: 'Changed steps (JSON). Leave empty to sign the steps again as they are.', fieldName: 'changedSteps', fieldType: 'textarea', requiredField: false });
+      expect(fields[2]).toEqual({ fieldLabel: 'Changed steps (JSON). Only when you change the steps.', fieldName: 'changedSteps', fieldType: 'textarea', requiredField: false });
       const html = String(fields[0].html);
       // The steps in a <pre> (n8n's sanitizer keeps pre and code, Form utils.ts sanitizeHtml), escaped once: the page
       // shows, and a person copies, the real text.
@@ -2632,7 +2704,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       expect(JSON.parse(unescaped)).toEqual(doc);
       // Five sentences: the description and four on the page, nothing else.
       expect(html.replace(/<pre>[\s\S]*<\/pre>/, '<pre/>')).toBe('<p>These are the steps that run now as <b>feed &lt;b&gt;</b> (version 1).</p><pre/>'
-        + '<p>Leave the box empty to sign them again, or paste changed steps.</p>'
+        + '<p>Choose what to do below. To change the steps, paste the changed steps in the box.</p>'
         + '<p><em>This form cannot tell steps signed with an older key from steps changed in the table, so read every step on the next page.</em></p>'
         + `<p><em>${who}</em></p>`);
       expect(render(String((page.parameters.options as IDataObject).formTitle), { $ })).toBe('Change or sign again: feed <b>');

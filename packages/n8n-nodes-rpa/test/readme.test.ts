@@ -59,7 +59,7 @@ const GOLDEN_MESSAGES = [
   'Visible Text "Submit" matches 3 elements. Use a more specific locator; it must match exactly one.',
   'The steps are not signed, or the signature is not valid, and Require Signed Steps is on. To sign a bot again, for example after the signing key changed, open the import form, leave Bot file empty and type the bot\'s name. Steps used without the form: sign them with Sign Steps first.',
   'Expected 120 rows (the page says "120 results") but found 117. Nothing was marked successful.',
-  'A previous login for example.com failed, so no login was tried.',
+  'A previous login of this account on example.com failed, so no login was tried.',
 ];
 /** The browser guide's setup command: run in the compose stack's n8n container, where the image installs the package. */
 const SETUP_IN_STACK = 'RPA_BROWSER_TOKEN="$(sed -n \'s/^BROWSER_TOKEN=//p\' .env)" docker compose exec -e RPA_BROWSER_TOKEN n8n /opt/n8n-rpa/node_modules/.bin/n8n-nodes-rpa setup --browser-url ws://browser:3000/';
@@ -293,7 +293,7 @@ describe('the operations reference', () => {
       '**RPA Recording**', '**Input Binary Field**', '**Recording or Code**', 'The file is larger than 20 MiB, so it was not read.', '`<name>-1`', 'starting with `=` is refused',
       'is never imported', 'one `signIn` step', 'refused before the browser opens', 'no rows or files from these runs are delivered', 'about twice **Max Seconds** per step list',
       '**TOTP Secret** or **Options → One-Time Code Workflow**', 'at most 10 step lists', 'A `signature` and `approvedBy` beside the steps are not imported',
-      'also when a higher version was active', '{ report, drafts: [{ name, steps, adopted, code?, reason?, traceRef? }], workflowName? }', '`adopted: false`',
+      'also when a higher version was active', '{ report, drafts: [{ name, steps, adopted, code?, reason?, traceRef?, secretVariables?, mayBeTypedInto? }], workflowName? }', '`adopted: false`',
       'never on Repaired Steps', '`<name>.workflow.json`', '`leftOut`', NOT_REPLAYED_EVIDENCE_LINE,
     ]) expect(s, text).toContain(text);
     for (const m of [IMPORT_NEEDS_SITE_LOGIN, IMPORT_REFUSES_WRITES, IMPORT_NOT_ADOPTABLE, IMPORT_UNSUPPORTED_TARGET, IMPORT_EMPTY, IMPORT_PROOF_FAILED]) {

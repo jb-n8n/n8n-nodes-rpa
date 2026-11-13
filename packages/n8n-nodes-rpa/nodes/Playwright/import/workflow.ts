@@ -10,7 +10,7 @@
 // notes and stickies as text. The RPA credentials the import was given are attached by id and name (opts.credentials),
 // so the file needs nothing picked; without them the desktop runner is named by name only. No secret is ever written.
 import type { DesktopDraft, Draft, FlowNode, UiPathFlow } from 'n8n-rpa-engine';
-import { CREDENTIALS } from '../config.js';
+import { CREDENTIALS, normalizeHost } from '../config.js';
 import { RPA_NODE_TYPE } from '../node-type.js';
 import { RUN_TABLE, RUN_TABLE_COLUMNS, STEPS_TABLE, STEPS_TABLE_COLUMNS } from '../rows.js';
 
@@ -202,7 +202,7 @@ function size(node: FlowNode): number {
 /** The draft a browser or desktop flow node runs: its own `draft`, else `<name>-<sequence>`. */
 const draftOf = (prefix: string, n: { sequence: number; draft?: string }): string => n.draft ?? `${prefix}-${n.sequence}`;
 /** The run variables steps name ({{var.name}}), in order, and those a secret fill or a password change types. */
-function stepVariables(steps: unknown): { all: string[]; secret: string[] } {
+export function stepVariables(steps: unknown): { all: string[]; secret: string[] } {
   const all = [...new Set([...JSON.stringify(steps ?? null).matchAll(/\{\{\s*var\.([A-Za-z0-9_]+)\s*\}\}/g)].map((m) => m[1]))];
   const secret = new Set<string>();
   const walk = (v: unknown): void => {
@@ -218,6 +218,38 @@ function stepVariables(steps: unknown): { all: string[]; secret: string[] } {
   };
   walk(steps);
   return { all, secret: all.filter((v) => secret.has(v)) };
+}
+/**
+ * Where a step list's secret values are typed, as the RPA Secret Variables credential's May Be Typed Into takes it: the
+ * app's program file name for desktop steps, the start site's host for browser steps (normalised as the credential
+ * reads a host). '' when the steps do not say, or say it in a form that field would refuse.
+ */
+export function secretTypedInto(script: unknown, desktop: boolean): string {
+  const s = (typeof script === 'object' && script !== null ? script : {}) as { app?: { exe?: unknown }; startUrl?: unknown };
+  if (desktop) {
+    const exe = basename(typeof s.app?.exe === 'string' ? s.app.exe : '').trim();
+    return exe.length <= 260 && /^[^\\/:*?"<>|`\u0000-\u001f]+\.exe$/i.test(exe) ? exe : '';
+  }
+  const url = typeof s.startUrl === 'string' && URL.canParse(s.startUrl) ? new URL(s.startUrl) : undefined;
+  if (!url || (url.protocol !== 'http:' && url.protocol !== 'https:') || !url.hostname) return '';
+  return hostOf(`${url.protocol}//${url.host}`);
+}
+/** normalizeHost, or '' for an entry it refuses: kept out of a catch block's caller. */
+function hostOf(entry: string): string {
+  try {
+    return normalizeHost(entry);
+  } catch {
+    return '';
+  }
+}
+/**
+ * What a person copies into the RPA Secret Variables credential for a step list's secret variables, as a sticky note's
+ * markdown: one fenced block with the credential, each variable's name as the steps use it, and May Be Typed Into (its
+ * lines, when the steps say where they type). The value itself is never part of it.
+ */
+export function secretBlock(variables: readonly string[], typedInto: readonly string[]): string {
+  const where = typedInto.length === 1 ? [`May Be Typed Into: ${typedInto[0]}`] : typedInto.length ? ['May Be Typed Into, one per line:', ...typedInto] : [];
+  return ['```', 'Credential: RPA Secret Variables', ...variables.map((v) => `Name: ${line(v, 60)}`), ...where, '```'].join('\n');
 }
 /**
  * The start values that may be shown: none for a variable that is secret under any casing (UiPath's VB names do not
@@ -376,6 +408,8 @@ class Builder {
   }
   /** Run variables that come from the RPA Secret Variables credential, over every Run steps. */
   readonly secretVariables = new Set<string>();
+  /** Where those values are typed (secretTypedInto) by the Run steps that type one: May Be Typed Into's lines. */
+  readonly secretTargets = new Set<string>();
 
   /**
    * The run options the import was proven with: Max Seconds when it is not the default, and on browser steps Also Allow
@@ -666,10 +700,12 @@ class Builder {
       const listedVars = plainVars.length
         ? `On **${md(run)}**, Options → Variables: ${plainVars.map((v) => (literal(start[v]) !== undefined ? `${code(v, 60)} (starts as ${code(start[v], 120)})` : code(v, 60))).join(', ')}.`
         : '';
-      const secretVars = secret.size ? `Secret: ${[...secret].map((v) => code(v, 60)).join(', ')}: in an ${SECRET_VARIABLES} credential selected on **${md(run)}**, never typed here. To keep these values to this app, put ${code(String(draft.script.app?.exe ?? '').split(/[\\/]/).pop() ?? '', 120)} in that credential's May Be Typed Into.` : '';
-      this.sticky(`Fill in the variables (${draftName})`,
-        `### Fill in the variables (gold)\n${[listedVars, secretVars, this.approvedBeforeHandOver ? '' : `Desktop steps run only once approved: ${FROM[this.source].importIt} with **${IMPORT_FORM}** and approve ${code(draftName)} on its review page.`].filter(Boolean).join(' ')}`,
-        COLOUR.gold, [runX - 80, y + 160], 320, 260);
+      const typedInto = secretTypedInto(draft.script, true);
+      if (secret.size && typedInto) this.secretTargets.add(typedInto);
+      // What to copy into the credential: its name, each variable's name and May Be Typed Into. The value is typed there only.
+      const secretVars = secret.size ? `Secret: make an ${SECRET_VARIABLES} credential, select it on **${md(run)}**, and copy these into it. Type the value there, never here.\n${secretBlock([...secret], typedInto ? [typedInto] : [])}` : '';
+      const content = `### Fill in the variables (gold)\n${[[listedVars, this.approvedBeforeHandOver ? '' : `Desktop steps run only once approved: ${FROM[this.source].importIt} with **${IMPORT_FORM}** and approve ${code(draftName)} on its review page.`].filter(Boolean).join(' '), secretVars].filter(Boolean).join('\n')}`;
+      this.sticky(`Fill in the variables (${draftName})`, content, COLOUR.gold, [runX - 80, y + 160], 320, Math.max(260, noteSize(content, 320).height));
     }
     this.lastFile = downloadProperty(draft);
     return { tails: [{ node: run, output: 0 }], x: x + 2 * STEP };
@@ -689,6 +725,8 @@ class Builder {
         const run = this.runName(n, draftName);
         const runX = x + STEP;
         const vars = stepVariables(draft.script);
+        const typedInto = vars.secret.length ? secretTypedInto(draft.script, false) : '';
+        if (typedInto) this.secretTargets.add(typedInto);
         const creds = this.slots(BROWSER_SLOTS);
         // Runs as generated: no repair branch (a Chat model and an Approve steps would need a credential and a workflow
         // picked first). The note says how to add it.
@@ -950,8 +988,9 @@ export function buildWorkflow(flow: UiPathFlow, drafts: Draft[], opts: BuildWork
   const browserCreds = used(BROWSER_SLOTS, b.runNodes);
   const desktopCreds = used(DESKTOP_SLOTS, b.desktopRunNodes);
   const picked = [...new Set([...browserCreds.picked, ...desktopCreds.picked])];
+  // What to copy into the one credential the secret variables come from: its name, each variable's name, May Be Typed Into.
   const secretLine = b.secretVariables.size
-    ? `- ${SECRET_VARIABLES}, holding ${[...b.secretVariables].slice(0, 10).map((v) => code(v, 60)).join(', ')}: pick it on the Run steps that name them, and list where its values may be typed (the app or the site) in its May Be Typed Into.`
+    ? `- ${SECRET_VARIABLES}: make one, pick it on the Run steps that name its variables, and copy these into it. Type each value there, never in this workflow.\n${secretBlock([...b.secretVariables].slice(0, 10), [...b.secretTargets].slice(0, 10))}`
     : '';
   const toPick = [
     browserCreds.missing.length ? `- ${and(browserCreds.missing.map((l) => `**${l}**`))}: ${listed(b.runNodes)}` : '',

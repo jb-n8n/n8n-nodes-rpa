@@ -128,14 +128,16 @@ form asks for nothing more. Without one, the last page says:
 ## Change an approved bot, or sign it again
 
 1. Open the **Import a bot** form. Leave **Bot file** empty and type the bot's name in **Name for the steps**.
-2. The next page shows the steps that run now under that name, to read or copy. Leave the box empty to sign them
-   again, for example after the signing key changed. To change them, copy the steps into an editor, change what you
-   need, and paste the whole step document into the box.
+2. The next page shows the steps that run now under that name, to read or copy. Under **What to do**, choose **Sign
+   the approved steps again, unchanged**, for example after the signing key changed, and leave the box empty. To
+   change them, choose **Change the steps**, copy the steps into an editor, change what you need, and paste the whole
+   step document into the box.
 3. Click **Review**. The review page of an import follows: read every step, check the write ticks of desktop steps,
    and choose **Approve and sign** or **Reject**.
 
-With the box left empty, the steps are the active row's steps as the workflow reads them from the Data Table: they do
-not pass through your browser. Pasted text is taken as you typed it. A line near the top of the review page, in bold, says
+Signed again unchanged, the steps are the active row's steps as the workflow reads them from the Data Table: they do
+not pass through your browser. A choice that does not fit the box (sign again with text in the box, or change with an
+empty box) ends on a page that says which of the two to correct, and nothing is imported or signed. Pasted text is taken as you typed it. A line near the top of the review page, in bold, says
 whether the steps differ from the approved version, and which steps or settings do, with each changed value as old →
 new (`step 6: value "2026-09-15" → "2026-09-30"`). Text that is not a step document ends on a
 page that says so, and nothing changes.

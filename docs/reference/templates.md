@@ -26,9 +26,12 @@ first, before anything reads or writes them.
   not a ZIP, XAML, code or a recording) and **Asks about a download?** looks for the step document's shape.
 - **Bot file** may be left empty to change an approved bot or sign it again. **Approved bots** reads the rows of
   `playwright_steps` (the `active` ones are the approved bots), and **Change or sign again** shows the newest active steps of the name typed, to read
-  and copy, with one box that is empty to start with. **Compared with the approved version** takes the steps to
-  review: with the box left empty, the active row's steps as **The bot to change** read them from the table (they never
-  pass through the browser); with text in the box, that text. It also gives the review page its first line: unchanged,
+  and copy, a required choice, **Sign the approved steps again, unchanged** or **Change the steps**, and one box that is
+  empty to start with. **Choice fits the box?** lets through only sign again with the box empty, or change with text in
+  it; any other answer ends on **Choice and box differ**, which says which of the two to correct, and nothing is
+  imported or signed. **Compared with the approved version** takes the steps to review: signed again, the active row's
+  steps as **The bot to change** read them from the table (they never pass through the browser); changed, the text in
+  the box. It also gives the review page its first line: unchanged,
   or which steps differ and how: for each changed step, at most three, its number and its changed values, old → new
   (`step 6: value "2026-09-15" → "2026-09-30"`), each on one line and cut at 60 characters, `several fields` for a
   step with more than three, then the other steps by number. **Review** sends those steps to **Import steps** as a step document, then to the same review
@@ -69,8 +72,11 @@ first, before anything reads or writes them.
   `Rejected: <name> version 5. Nothing was signed. Version 4 keeps running.` After a change or a re-sign it says
   `Signed again: <name> version N, unchanged.`, `Changed: <name> version N is now the version that runs, replacing
   version M.`, or `Nothing changed: <name> version M keeps running.` When Sign steps signed a step list, it
-  also downloads the workflow that runs the bot. When nothing was signed (rejected, or Sign steps refused), it neither
-  gives the file nor says it does.
+  also downloads the workflow that runs the bot. After an approval (not on the change page), a step list that types a
+  secret adds what to copy into an RPA Secret Variables credential: each variable's name as the steps use it, and May
+  Be Typed Into (the app's file name for desktop steps, the start site's host for browser steps). The page never asks
+  for the value. The workflow file's notes carry the same block. When nothing was signed (rejected, or Sign steps
+  refused), it neither gives the file nor says it does.
 - In another n8n, or once a credential the workflow file picks is deleted, n8n picks the only credential of the same
   name if there is one: otherwise pick it on the node again.
 - **Add the login page** shows when the sign-in stopped at an address the Site Login does not list. Add it under

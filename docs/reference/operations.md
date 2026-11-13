@@ -121,6 +121,11 @@ sites its values go to, see [Security](security.md#secret-variables)), and
 
 The error output is output 1, or output 2 when AI Repair is on.
 
+The Data item's `confirmed` says whether the rows were counted against a total: `true` when the page states one
+(**Options → Stated Total Pattern (Regex)**) and it matched the rows read, or after an AI repair whose proof passed.
+`false` is not a failure: a run that reads no rows, downloads a file, runs desktop steps, or reads rows with no total
+to check them against says `false` and succeeds. A count that does not match fails the run (`incomplete`).
+
 ### Runs On
 
 Run Steps and Import Steps have **Runs On**. It only chooses which credential slots the node shows, and on Run Steps
@@ -234,7 +239,9 @@ Login. A step found by a row position (`Vendor Row 1`) is reported, because a la
 - **Repaired Steps**: one item per step list that passed the replay or goes to approval as written. Steps the import
   could not translate, or dropped in a way that changes what the bot does, are on each item as `leftOut`, and the
   review page and emails show them.
-- **Data**: `{ report, drafts: [{ name, steps, adopted, code?, reason?, traceRef? }], workflowName? }`. The report lists
+- **Data**: `{ report, drafts: [{ name, steps, adopted, code?, reason?, traceRef?, secretVariables?, mayBeTypedInto? }], workflowName? }`.
+  A step list that types a secret names its variables in `secretVariables` and where they are typed in `mayBeTypedInto`
+  (the app's file name, or the start site's host): never a value. The report lists
   every step that was not translated, dropped, converted or removed as a secret. Steps that cannot be proved (no ID
   Pattern, no file check) come out here with `adopted: false` and the reason, never on Repaired Steps. Binary
   `workflow` (`<name>.workflow.json`) is an n8n workflow that runs the steps: **Get active steps** → **Run steps**, a

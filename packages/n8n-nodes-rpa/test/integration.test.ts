@@ -101,7 +101,7 @@ describe('Run Steps and Sign Steps against the sandbox (real engine)', () => {
     const logins = portal.state().logins;
     expect(logins).toBe(1);
     const [locked] = await run(record, { staticData, password: 'wrong-pass-123' });
-    expect(locked[0].json.error).toBe(`locked_out: A previous login for ${portal.host} failed, so no login was tried.`);
+    expect(locked[0].json.error).toBe(`locked_out: A previous login of this account on ${portal.host} failed, so no login was tried.`);
     expect(portal.state().logins).toBe(logins);
     // The password corrected in the Site Login, with no new reset key: one login, accepted, and the breaker is cleared.
     const [corrected] = await run(record, { staticData });
@@ -128,7 +128,7 @@ describe('Run Steps and Sign Steps against the sandbox (real engine)', () => {
     expect(portal.state().logins).toBe(1);
     expect(Object.keys(staticData.playwrightLoginBreakers as IDataObject)).toEqual([BREAKER]);
     const [locked] = await run(record, { staticData, password: 'wrong-pass-123' });
-    expect(locked[0].json.error).toBe(`locked_out: A previous login for ${portal.host} failed, so no login was tried.`);
+    expect(locked[0].json.error).toBe(`locked_out: A previous login of this account on ${portal.host} failed, so no login was tried.`);
     expect(portal.state().logins).toBe(1);
     // Another Site Login is not affected by this breaker.
     const other = await sign(repairedItem(handWritten, null), true, 'site-login-2');

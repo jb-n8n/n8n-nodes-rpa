@@ -108,7 +108,9 @@ an **RPA Step Signing** credential that its own project owns, and never one of t
     address in **Sign steps → Approver Allowlist**, not who approved.
 - **The form's address.** The setup command gives the form a readable address, `/form/rpa-import`, so that it can be
   typed on another machine. The address is not a secret: the form's sign-in decides who can open it, in both ways
-  above, and the pages after the first keep their own addresses, which n8n signs.
+  above, and the pages after the first keep their own addresses, which n8n signs. A form of a Site Login's own
+  (`--new-workflow --site-login`) gets `/form/rpa-import-<its name>` under the same rules, and signs with the same RPA
+  Step Signing key.
 - **Values in the form's address.** n8n fills the fields of every page of a form, the review page too, from the
   address the form was opened with. So the import form refuses an address that carries values, before anything is
   read or imported, and an approval never arrives with its answer chosen by whoever made the link.
@@ -198,8 +200,8 @@ To sign the step lists again with the new key:
    create the credential with a new key of 32 or more random characters, and select it on **Sign steps** in template
    5 (and template 3) and on every **Run steps** node.
 2. For each bot, open the **Import a bot** form, leave **Bot file** empty and type the bot's name. The next page
-   shows the steps of its `active` row. Leave the box empty and click **Review**: the row's steps go to the import as
-   a **Step document**.
+   shows the steps of its `active` row. Choose **Sign the approved steps again, unchanged**, leave the box empty and
+   click **Review**: the row's steps go to the import as a **Step document**.
 3. Read every step on the review page. Browser steps are replayed, desktop steps go to approval as written. Steps
    that were signed as writes come back as candidates: tick them again.
 4. Approve. The new row supersedes the old ones under that name, and the bot runs again.

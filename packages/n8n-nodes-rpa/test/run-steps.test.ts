@@ -424,13 +424,13 @@ describe('breaker and lock: only with a Site Login, keyed by its credential id a
     expect(engine.calls).toHaveLength(1);
     expect(data.map(errorOf)).toEqual([
       'login_failed: the site rejected the sign-in',
-      'locked_out: A previous login for example.com failed, so no login was tried.',
-      'locked_out: A previous login for example.com failed, so no login was tried.',
+      'locked_out: A previous login of this account on example.com failed, so no login was tried.',
+      'locked_out: A previous login of this account on example.com failed, so no login was tried.',
     ]);
     expect(data.map((d) => d.pairedItem)).toEqual([[{ item: 0 }], [{ item: 1 }], [{ item: 2 }]]);
     expect(Object.keys(h.staticData[BREAKER_KEY] as IDataObject)).toEqual([siteLoginKey('site-a', USER)]);
     const [other] = await executeRunSteps(ctx({ nodeName: 'Another node', staticData: {}, continueOnFail: true }), engine);
-    expect(errorOf(other[0])).toBe('locked_out: A previous login for example.com failed, so no login was tried.');
+    expect(errorOf(other[0])).toBe('locked_out: A previous login of this account on example.com failed, so no login was tried.');
     expect(engine.calls).toHaveLength(1);
   });
 });
@@ -442,7 +442,7 @@ describe('one Site Login, many accounts: a username and password set by expressi
   const perAccount = (wrong?: number) => (type: string, i: number) =>
     type === 'playwrightSiteLoginApi' ? { ...SITE_LOGIN, username: ACCOUNTS[i % 3], password: i === wrong ? WRONG : `pass-${ACCOUNTS[i % 3]}` } : undefined;
   const rejectWrong = () => fakeEngine((input) => (input.secrets?.password === WRONG ? taskFail('login_failed', 'the site rejected the sign-in') : scriptOk()));
-  const LOCKED = 'locked_out: A previous login for example.com failed, so no login was tried.';
+  const LOCKED = 'locked_out: A previous login of this account on example.com failed, so no login was tried.';
   const users = (engine: ReturnType<typeof fakeEngine>) => engine.calls.map((c) => c.secrets?.username);
 
   it("each item signs in as its own account, and item 2's rejected login stops neither item 1 nor item 3, now or later", async () => {
@@ -508,7 +508,7 @@ describe('one Site Login, many accounts: a username and password set by expressi
 });
 
 describe('Login Breaker Reset Key is literal-only and cannot reset the breaker item by item', () => {
-  const LOCKED = 'locked_out: A previous login for example.com failed, so no login was tried.';
+  const LOCKED = 'locked_out: A previous login of this account on example.com failed, so no login was tried.';
   const EXPRESSION = 'Login Breaker Reset Key must be set directly, not with an expression.';
   // Each item resolves its own key, as {{ $json.id }} would: before the fix every new key reset the breaker.
   const perItem = (i: number) => params({}, { breakerResetKey: `id-${i}` });
@@ -1002,7 +1002,7 @@ describe('no message carries a token, a query string or a username', () => {
       'policy_violation: URL must start with http:// or https:// (got "file:").',
       expect.stringMatching(/^policy_violation: /),
     ]);
-    expect(siteOut.map(errorOf)).toEqual(['login_failed: the site rejected the sign-in', 'locked_out: A previous login for example.com failed, so no login was tried.']);
+    expect(siteOut.map(errorOf)).toEqual(['login_failed: the site rejected the sign-in', 'locked_out: A previous login of this account on example.com failed, so no login was tried.']);
   });
 });
 
