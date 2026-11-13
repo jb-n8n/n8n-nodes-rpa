@@ -28,6 +28,9 @@ import { agentOk, fakeEngine, scriptOk, taskFail } from './fake-engine.js';
 import { nodeContext, siteLoginData } from './feed-fixtures.js';
 import { harness } from './harness.js';
 
+/** A review entry as the page shows it: the sentence, then the author's description under the page's own label. */
+const line = (r: { text: string; describedAs?: string }) => (r.describedAs === undefined ? r.text : `${r.text} (described differently as: ${r.describedAs})`);
+
 interface TemplateNode {
   id: string; name: string; type: string; typeVersion: number; position: [number, number]; parameters: Record<string, unknown>;
   onError?: string; alwaysOutputData?: boolean; executeOnce?: boolean; notes?: string;
@@ -615,7 +618,7 @@ describe('3-approve-steps.json', () => {
       .split('The steps:\n')[1].split('\n\nClick Review and decide')[0];
     // A description that says something else is marked ⚠ (the message is plain text).
     expect(shownSteps(fromNode)).toBe('1. Click Post ⚠ (described differently as: Read the total)\n'
-      + '2. Type &quot;&lt;b&gt;9999&lt;/b&gt;&quot; into a field without a name (described as: Read the total)\n'
+      + '2. Type &quot;&lt;b&gt;9999&lt;/b&gt;&quot; into a field without a name ⚠ (described differently as: Read the total)\n'
       + '3. Type into User name (secret variable username)');
     // Without reviewSteps, or with a list that does not match the steps, the email words the steps itself, as before.
     const { reviewSteps: _r, ...older } = fromNode;
@@ -851,6 +854,26 @@ describe('template 3 emails lead with what browser steps do (reviewSteps), as th
       expect(ask(json)).not.toContain('The steps');
       expect(ask(json)).toContain('What changed (as reported by the run):');
     }
+  });
+
+  it('the emails write the label themselves and show each field escaped: a marker, brackets or angle brackets inside a name, a value or a description change nothing', () => {
+    const MARK = ' (described differently as: ';
+    const odd = [
+      { intent: `Open the list${MARK}Click Pay now) <b>`, fill: { field: { label: 'Amount' }, value: '1' } },
+      { intent: 'Click it', click: { role: 'button', name: `Save${MARK}Delete all) <i>` } },
+    ];
+    const json = { ...item, steps: { startUrl: 'https://a.example/', steps: odd }, reviewSteps: reviewSteps(odd, { desktop: false, shownUrl: (u: string) => u }) };
+    const page = render(html, { $json: json });
+    expect(page).toContain('<li>Type into Amount: &quot;1&quot; <b style="color:#b00020">(described differently as: Open the list (described differently as: Click Pay now) &lt;b&gt;)</b></li>'
+      + '<li>Click &quot;Save (described differently as: Delete all) &lt;i&gt;&quot; <b style="color:#b00020">(described differently as: Click it)</b></li>');
+    expect(ask(json)).toContain('1. Type into Amount: &quot;1&quot; ⚠ (described differently as: Open the list (described differently as: Click Pay now) &lt;b&gt;)\n'
+      + '2. Click &quot;Save (described differently as: Delete all) &lt;i&gt;&quot; ⚠ (described differently as: Click it)\n');
+    // Desktop steps: the one approval email, the same way.
+    const desktop = String(byName(t3, 'Ask for approval (desktop steps)').parameters.message);
+    const dsteps = [{ intent: `Read it${MARK}x) <b>`, click: { uia: { path: [{ controlType: 'Button', name: `Post${MARK}y) <i>` }] } } }];
+    const djson = { name: 'erp', version: 1, steps: { surface: 'desktop', app: { exe: 'App.exe' }, steps: dsteps }, reviewSteps: reviewSteps(dsteps, { desktop: true }) };
+    const dshown = render(desktop, { $: (name: string) => ({ item: { json: name === 'Settings' ? { approvalTimeoutHours: 72 } : djson } }) });
+    expect(dshown).toContain('\n1. Click &quot;Post (described differently as: y) &lt;i&gt;&quot; ⚠ (described differently as: Read it (described differently as: x) &lt;b&gt;)\n');
   });
 
   it('Sign Steps checks the sentences the emails showed: the item goes to Sign steps whole, reviewSteps included', () => {
@@ -1599,7 +1622,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(notRun[0].html).not.toContain('Screenshots');
     // A variable written with spaces gets its mark too (the page's own regex used to miss it).
     expect(reviewSteps([{ intent: 'Type the note', fill: { field: { label: 'Note' }, value: '{{ var.note }}' } }], { desktop: false, shownUrl }))
-      .toEqual([{ text: 'Type into Note: a variable (described differently as: Type the note)', marks: ['variable note'] }]);
+      .toEqual([{ text: 'Type into Note: a variable', describedAs: 'Type the note', marks: ['variable note'] }]);
     expect(reviewSteps([{ intent: 'Pick', select: { field: { uia: { path: [{ controlType: 'ComboBox', name: 'Plant' }] } }, option: '{{ var.plant }}' } }], { desktop: true }))
       .toEqual([{ text: 'Choose an item in Plant', marks: ['variable plant'] }]);
     // A desktop read names its control by the name a person sees, never by its automation id, and says the output once.
@@ -1618,12 +1641,12 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       { intent: 'Pick the plant', select: { field: bare, option: '1000' } },
       { intent: 'Uncheck the box', check: { field: bare, checked: true } },
       { intent: '', check: { field: bare, checked: false } },
-    ], { desktop: true }).map((r) => r.text)).toEqual([
-      'Type "2026-01-20" into a field without a name (described as: Type into the date field)',
-      'Type "a" into a field without a name (described as: Read the total (a value such as a))',
-      'Type into a field without a name (described as: Type the date)',
-      'Choose "1000" in a field without a name (described as: Pick the plant)',
-      'Check a box without a name (described as: Uncheck the box)',
+    ], { desktop: true }).map(line)).toEqual([
+      'Type "2026-01-20" into a field without a name (described differently as: Type into the date field)',
+      'Type "a" into a field without a name (described differently as: Read the total (a value such as a))',
+      'Type into a field without a name (described differently as: Type the date)',
+      'Choose "1000" in a field without a name (described differently as: Pick the plant)',
+      'Check a box without a name (described differently as: Uncheck the box)',
       'Uncheck a box without a name',
     ]);
     // A click names its control from the step, too. A description that says something else stands beside it, in brackets.
@@ -1633,7 +1656,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       { intent: 'Read the total', click: post },
       { intent: 'Open the row', doubleClick: post },
       { intent: 'Look at the list', click: { uia: { path: [{ controlType: 'Pane' }] } } },
-    ], { desktop: true }).map((r) => r.text)).toEqual([
+    ], { desktop: true }).map(line)).toEqual([
       'Click Post',
       'Click Post (described differently as: Read the total)',
       'Double-click Post (described differently as: Open the row)',
@@ -1642,7 +1665,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
   });
 
   it('a browser step\'s sentence comes from the step itself; the description stands beside it only when it says something else', () => {
-    const texts = (steps: object[]) => reviewSteps(steps, { desktop: false, shownUrl }).map((r) => r.text);
+    const texts = (steps: object[]) => reviewSteps(steps, { desktop: false, shownUrl }).map(line);
     const save = { role: 'button', name: 'Save', exact: true };
     // Every kind that acts on the page or sends something, with the descriptions an import writes: no brackets.
     expect(texts([
@@ -1804,6 +1827,23 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     ]);
   });
 
+  it('the review page writes the label itself and shows each field escaped, for browser and desktop entries alike', () => {
+    const MARK = ' (described differently as: ';
+    const entries = [
+      { text: `Click "Save${MARK}Delete all) <i>"`, describedAs: `Open${MARK}x) <b>`, marks: [] },
+      { text: `Type into Note: "v${MARK}w)"`, marks: [] },
+    ];
+    for (const steps of [{ startUrl: 'https://a.example/', steps: [{}, {}] }, { surface: 'desktop', app: { exe: 'App.exe' }, steps: [{}, {}] }]) {
+      const item = { name: 'feed', version: 1, steps, safetyFlags: [], safetyLine: 'none', evidenceLine: '3 rows', changeList: '', reviewSteps: entries };
+      const ran = { Settings: [[{ json: settingsJson() }]], 'Import steps': [[{ json: { report: { steps: 2, items: [] }, drafts: [] } }], [{ json: item }]] } as Record<string, INodeExecutionData[][]>;
+      const html = String(jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan(ran) })[0].html);
+      expect(html).toContain('<ol><li>Click &quot;Save (described differently as: Delete all) &lt;i&gt;&quot; <strong>(described differently as: Open (described differently as: x) &lt;b&gt;)</strong></li>'
+        + '<li>Type into Note: &quot;v (described differently as: w)&quot;</li></ol>');
+      // Only describedAs is in red: the sentence's own words are never.
+      expect(html.match(/<strong>/g)).toHaveLength(1);
+    }
+  });
+
   it('a paginate lists the steps it runs on each page under its own line, each worded from the step, with its own marks', () => {
     // paginate is the only step that holds steps (no nested paginate, no signIn inside): its body comes under it.
     const steps = [
@@ -1817,11 +1857,11 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     ];
     const listed = reviewSteps(steps, { desktop: false, shownUrl });
     expect(listed[1]).toEqual({
-      text: 'Page through with Next, at most 3 pages, 3 steps on each (described differently as: Go through the pages)', marks: [],
+      text: 'Page through with Next, at most 3 pages, 3 steps on each', describedAs: 'Go through the pages', marks: [],
       each: [
         { text: 'Read the rows', marks: [] },
-        { text: 'Type into Note: a variable (described differently as: Close the banner)', marks: ['variable note'] },
-        { text: 'Click Delete <all> (described differently as: Close the banner)', marks: [] },
+        { text: 'Type into Note: a variable', describedAs: 'Close the banner', marks: ['variable note'] },
+        { text: 'Click Delete <all>', describedAs: 'Close the banner', marks: [] },
       ],
     });
     expect(listed.map((r) => r.each === undefined)).toEqual([true, false, true]);

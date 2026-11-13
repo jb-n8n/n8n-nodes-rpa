@@ -161,7 +161,20 @@ export function importAddedSteps(steps: readonly DesktopStep[]): number[] {
  * One step as the review page lists it: its sentence, its marks (variables, a returned file, a sign-in), whether the
  * import added it, and for a browser `paginate` (the only step that holds steps) the steps it runs on each page.
  */
-export interface ReviewStep { text: string; marks: string[]; added?: true; each?: ReviewStep[] }
+export interface ReviewStep {
+  /** The sentence built from the step: what it does, where, and the value. Never the author's description. */
+  text: string;
+  /**
+   * The step's own description (its intent), only when it says something else than `text`: a separate field, so that
+   * the review page and the emails put it beside the sentence with a label they write themselves, and nothing is found
+   * by searching the sentence.
+   */
+  describedAs?: string;
+  marks: string[]; added?: true; each?: ReviewStep[];
+}
+/** A step's sentence and, when it says something else, the author's description. */
+type Sentence = { text: string; describedAs?: string };
+const sentence = (text: string, describedAs?: string): Sentence => (describedAs ? { text, describedAs } : { text });
 /** A candidate write as the review page asks about it; `signsIn`: a key pressed in a secret field (signInKeySteps), asked unticked. */
 export interface ReviewWrite { step: number; intent: string; signsIn?: true }
 
@@ -191,46 +204,52 @@ function targetName(t: unknown): string {
  * what a person approves, and the intent is the author's own description (a step document's or a UiPath project's
  * author may be someone else). A variable's value is never shown.
  */
-function desktopSentence(s: Json): string {
+function desktopSentence(s: Json): Sentence {
   const fill = s.fill === undefined ? undefined : asJson(s.fill);
   const select = s.select === undefined ? undefined : asJson(s.select);
   const key = s.key === undefined ? undefined : asJson(s.key);
   const check = s.check === undefined ? undefined : asJson(s.check);
   const named = targetName(fill?.field ?? select?.field ?? key?.target ?? check?.field);
-  const field = named || String(s.intent ?? '');
+  // A name as one name: quoted when it holds a bracket or a double quote, as a browser step's name is (shownName).
+  const field = named ? shownName(named) : '';
   if (fill) {
     const file = /^\{\{\$exportDir\}\}[\\/](.+)$/.exec(String(fill.value ?? ''));
-    if (file) return `Save ${file[1]} into the run's export folder`;
+    if (file) return sentence(`Save ${file[1]} into the run's export folder`);
   }
   // A control with neither a name nor an id. What the step does and the value it types or chooses come from the step
   // itself, as for a named control: this page is what a person approves, and the intent is only the author's own
-  // description, so it is shown as that, in brackets, and never in place of the action or the value.
+  // description, so it is shown as that (describedAs), and never in place of the action or the value.
   const described = String(s.intent ?? '').replace(/\s+/g, ' ').trim();
   if (!named && (fill || select || check)) {
-    const says = described ? ` (described as: ${described})` : '';
-    if (fill) return `${holdsVariable(fill.value) ? 'Type' : `Type "${String(fill.value)}"`} into a field without a name${says}`;
-    if (select) return `${holdsVariable(select.option) ? 'Choose an item' : `Choose "${String(select.option)}"`} in a field without a name${says}`;
-    return `${asJson(check).checked === false ? 'Uncheck' : 'Check'} a box without a name${says}`;
+    const text = fill ? `${holdsVariable(fill.value) ? 'Type' : `Type "${String(fill.value)}"`} into a field without a name`
+      : select ? `${holdsVariable(select.option) ? 'Choose an item' : `Choose "${String(select.option)}"`} in a field without a name`
+      : `${asJson(check).checked === false ? 'Uncheck' : 'Check'} a box without a name`;
+    return sentence(text, described || undefined);
   }
   if (fill) {
-    return holdsVariable(fill.value) ? `Type into ${field}` : `Type "${String(fill.value)}" into ${field}`;
+    return sentence(holdsVariable(fill.value) ? `Type into ${field}` : `Type "${String(fill.value)}" into ${field}`);
   }
-  if (select) return holdsVariable(select.option) ? `Choose an item in ${field}` : `Choose "${String(select.option)}" in ${field}`;
-  if (key) return `Press ${String(key.key)}${field ? ` in ${field}` : ''}`;
-  if (check) return `${check.checked === false ? 'Uncheck ' : 'Check '}${field}`;
+  if (select) return sentence(holdsVariable(select.option) ? `Choose an item in ${field}` : `Choose "${String(select.option)}" in ${field}`);
+  if (key) {
+    // The key goes to the control it names, or to the one in front (no target). The author's description is never the target.
+    const text = `Press ${String(key.key)}${field ? ` in ${field}` : key.target ? ' in a control without a name' : ''}`;
+    return sentence(text, !named && described && comparable(described) !== comparable(text) ? described : undefined);
+  }
+  if (check) return sentence(`${check.checked === false ? 'Uncheck ' : 'Check '}${field}`);
   // A read: the name a person sees, never the control's automation id; the output name is the step's mark.
   if (s.read !== undefined) {
     const name = ownCondition(asJson(s.read).target)?.name;
-    return typeof name === 'string' && name.trim() ? `Read ${name.trim()}` : 'Read a value from the app';
+    return sentence(typeof name === 'string' && name.trim() ? `Read ${shownName(name.trim())}` : 'Read a value from the app');
   }
   // A click: the control comes from the step itself. The author's description stands beside it when it says something
   // else, compared as a browser step's is (comparable).
   for (const [verb, word] of [['click', 'Click'], ['doubleClick', 'Double-click']] as const) {
     if (s[verb] === undefined) continue;
-    const text = `${word} ${targetName(s[verb]) || 'a control without a name'}`;
-    return described && comparable(described) !== comparable(text) ? describedDifferently(text, described) : text;
+    const name = targetName(s[verb]);
+    const text = `${word} ${name ? shownName(name) : 'a control without a name'}`;
+    return sentence(text, described && comparable(described) !== comparable(text) ? described : undefined);
   }
-  return String(s.intent ?? '');
+  return sentence(String(s.intent ?? ''));
 }
 
 /** Names, values, selectors and addresses in a browser step's sentence are at most this many characters (the importer's label length). */
@@ -247,7 +266,7 @@ function clean(v: unknown, max: number): string {
 
 /**
  * A name as the importer's descriptions show it (import/draft.ts `shown`): quoted when it has a bracket or a double quote,
- * so page text cannot fake the `(described differently as: …)` group.
+ * so a name reads as one name in the sentence.
  */
 const shownName = (name: string): string => (/[()"]/.test(name) ? `"${name.replaceAll('"', "'")}"` : name);
 
@@ -352,28 +371,27 @@ function browserAction(s: Json, shownUrl: (url: string) => string): { core: stri
 export const comparable = (t: string): string =>
   t.replace(/["'\u2018\u2019\u201c\u201d]/g, '').replace(/\s+/g, ' ').trim().replace(/\.$/, '').trimEnd().toLowerCase();
 /**
- * How a description that says something else than the sentence built from the step is shown beside it. The review page
- * and the approval emails render it as a warning (`described differently as:` starts it).
+ * The label the review page and the approval emails write before a step's `describedAs`, as a warning. Written by them,
+ * never part of the sentence.
  */
 export const DESCRIBED_DIFFERENTLY = 'described differently as:';
-const describedDifferently = (text: string, described: string): string => `${text} (${DESCRIBED_DIFFERENTLY} ${described})`;
 
 /**
  * A browser step's sentence. For every step that acts on the page or sends something, the action, the target and the
  * value come from the step itself, never from its intent: the page is what a person approves, and the intent is the
  * author's own description (a step document's or a UiPath project's author may be someone else). The description
- * stands beside the sentence, in brackets that start `described differently as:`, when it says something else: neither
+ * stands beside the sentence (`describedAs`, which the page labels), when it says something else: neither
  * the action alone nor all of it, compared without case, quotes, extra spaces or a full stop at the end (comparable). An import's descriptions (import/draft.ts describeEvent) say the action
  * in the same words, so a recording reads without brackets. A secret's and a variable's value is never shown.
  */
-function browserSentence(s: Json, shownUrl: (url: string) => string): string {
+function browserSentence(s: Json, shownUrl: (url: string) => string): Sentence {
   const described = clean(s.intent, MAX_DESCRIBED);
-  if (READ_OR_WAIT.some((v) => s[v] !== undefined)) return String(s.intent ?? '');
+  if (READ_OR_WAIT.some((v) => s[v] !== undefined)) return sentence(String(s.intent ?? ''));
   const action = browserAction(s, shownUrl);
-  if (!action) return String(s.intent ?? '');
+  if (!action) return sentence(String(s.intent ?? ''));
   const text = `${action.core}${action.more}`;
   const same = [action.core, text, action.alike ?? text].some((t) => comparable(t) === comparable(described));
-  return described && !same ? describedDifferently(text, described) : text;
+  return sentence(text, described && !same ? described : undefined);
 }
 
 /**
@@ -401,7 +419,7 @@ export function reviewSteps(
       ...(s.signIn ? ['signs in with the RPA Site Login'] : []),
     ];
     return {
-      text: o.desktop ? desktopSentence(s) : browserSentence(s, o.shownUrl), marks,
+      ...(o.desktop ? desktopSentence(s) : browserSentence(s, o.shownUrl)), marks,
       ...((o.added ?? []).includes(j + 1) ? { added: true as const } : {}),
       ...(body?.length ? { each: body.map((b) => review(b, -1)) } : {}),
     };

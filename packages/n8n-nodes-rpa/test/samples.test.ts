@@ -11,15 +11,15 @@ const DIR = new URL('../../../docs/samples/', import.meta.url);
 const SAMPLES = readdirSync(DIR).filter((f) => f.endsWith('.steps.json')).sort();
 
 type Step = { intent?: string; paginate?: { each?: Step[] } };
-type Shown = { text: string; each?: Shown[] };
+type Shown = { text: string; describedAs?: string; each?: Shown[] };
 
 const stepsOf = (file: string) => (JSON.parse(readFileSync(new URL(file, DIR), 'utf8')) as { steps: Step[] }).steps;
 const shown = (steps: Step[]) => reviewSteps(steps, { desktop: false, shownUrl }) as Shown[];
 
 /** Each step's description beside the sentence the review page shows for it, paginate bodies included. */
-function pairs(steps: Step[], seen: Shown[], at = ''): { at: string; intent: string | undefined; text: string }[] {
+function pairs(steps: Step[], seen: Shown[], at = ''): { at: string; intent: string | undefined; text: string; describedAs: string | undefined }[] {
   return steps.flatMap((s, i) => [
-    { at: `${at}step ${i + 1}`, intent: s.intent, text: seen[i].text },
+    { at: `${at}step ${i + 1}`, intent: s.intent, text: seen[i].text, describedAs: seen[i].describedAs },
     ...pairs(s.paginate?.each ?? [], seen[i].each ?? [], `${at}step ${i + 1}, each `),
   ]);
 }
@@ -33,7 +33,8 @@ describe('the sample bots read as their steps on the review page', () => {
     const steps = stepsOf(file);
     for (const p of pairs(steps, shown(steps))) {
       expect(p.intent, `${file} ${p.at}`).toBeTruthy();
-      expect(p.text, `${file} ${p.at}`).not.toMatch(/\(described/);
+      // The page shows the author's description (in red) only when an entry has describedAs.
+      expect(p.describedAs, `${file} ${p.at}`).toBeUndefined();
       expect(p.text, `${file} ${p.at}`).toBe(p.intent);
     }
   });
@@ -41,6 +42,6 @@ describe('the sample bots read as their steps on the review page', () => {
   it('a sample step whose description says something else would show it in brackets', () => {
     const steps = stepsOf('sandbox-line-items.steps.json');
     const misleading = steps.map((s, i) => (i === 4 ? { ...s, intent: 'Read the total' } : s));
-    expect(shown(misleading)[4].text).toMatch(/^Type into From: "2026-09-01" \(described.*Read the total/);
+    expect(shown(misleading)[4]).toMatchObject({ text: 'Type into From: "2026-09-01"', describedAs: 'Read the total' });
   });
 });
