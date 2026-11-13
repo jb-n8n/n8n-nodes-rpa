@@ -46,6 +46,8 @@ interface Options {
   test?: 'ok' | 'error' | 'forbidden';
   /** What a failed test says (default RUNNER_UNREACHABLE). */
   testMessage?: string;
+  /** Workflows the API key cannot see (not listed), whose forms still hold their paths. */
+  hiddenForms?: Wf[];
 }
 
 // The fake's projects, as n8n 2.45 describes them: two personal projects and a team project.
@@ -80,7 +82,8 @@ async function fakeN8n(o: Options = {}) {
       const send = (status: number, json: unknown) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(json)); };
       const form = /^\/form\/(.+)$/.exec(url.pathname);
       if (form) {
-        const trigger = state.workflows.filter((w) => w.active).flatMap((w) => w.nodes).find((x) => x.webhookId === form[1]);
+        // n8n 2.45's Form Trigger answers at its Form Path (Options → Form Path) when it has one, else at its webhook id.
+        const trigger = state.workflows.filter((w) => w.active).flatMap((w) => w.nodes).find((x) => /\.formTrigger$/.test(x.type) && (x.parameters?.options?.path || x.webhookId) === form[1]);
         if (!trigger) return send(404, { message: 'not registered' });
         // n8n's sign-in: the browser goes to n8n's authorize page, then its sign-in. Basic Auth: 401.
         if (trigger.parameters?.authentication === 'n8nUserAuth') {
@@ -153,6 +156,12 @@ async function fakeN8n(o: Options = {}) {
         if (o.echo === 'activate' && m[2] === 'activate') return send(400, { message: `could not activate: ${JSON.stringify(state.workflows[0])}` });
         const w = state.workflows.find((x) => x.id === m![1]);
         if (!w) return send(404, { message: 'Not Found' });
+        // n8n refuses a form path an active workflow holds already, also one this key cannot see: n8n 2.45's public API
+        // answers 409 with this message (seen on a real n8n in round 14's live proof).
+        const pathOf = (x: Wf) => x.nodes.find((y) => /\.formTrigger$/.test(y.type))?.parameters?.options?.path;
+        if (m[2] === 'activate' && pathOf(w) && [...state.workflows, ...(o.hiddenForms ?? [])].some((x) => x !== w && x.active && pathOf(x) === pathOf(w))) {
+          return send(409, { message: 'There is a conflict with one of the webhooks.' });
+        }
         if (m[2] === 'activate') w.active = true;
         return send(200, wfItem(w));
       }
@@ -238,7 +247,10 @@ describe('npx n8n-nodes-rpa setup', () => {
     expect(node('Sign steps').credentials).toEqual({ playwrightScriptSigningApi: { id: signing.id, name: 'RPA Step Signing' } });
     expect(node('Sign steps').parameters).toMatchObject({ approverAllowlist: 'ops@example.com', approvalFormPage: 'Review and approve' });
     expect(String(node('Sign steps').parameters.approverFrom)).toContain("'basicAuth' ? 'approvedBy' : 'formSignIn'");
-    expect(stdout).toContain(`${fake.url}/form/${node('Import a bot').webhookId}`);
+    // A readable address (Options → Form Path), typed by hand on the Windows machine; the webhook id stays.
+    expect(node('Import a bot').parameters.options).toEqual({ path: 'rpa-import' });
+    expect(node('Import a bot').webhookId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(stdout).toContain(`  Address:    ${fake.url}/form/rpa-import\n`);
     expect(stdout).toContain('  Sign-in:    the form opens with your n8n sign-in. Who approves is recorded as the n8n user who approved.');
     expect(stdout).not.toMatch(/User name:|Password:/);
     expect(stdout).toMatch(/1\. Record a bot.*\n.*2\. Open the form address in your browser and sign in to n8n\. The first time, n8n asks whether the form may use your n8n login: choose Allow access\.\n.*3\. Upload the file/);
@@ -333,7 +345,7 @@ describe('npx n8n-nodes-rpa setup', () => {
     expect(node('Import steps').credentials).toEqual({ playwrightScriptSigningApi: { id: signing.id, name: 'RPA Step Signing' } });
     for (const n of wf.nodes.filter((x) => /\.(formTrigger|form)$/.test(x.type))) expect(n.webhookId, n.name).toMatch(/^[0-9a-f-]{36}$/);
 
-    expect(stdout).toContain(`${fake.url}/form/${node('Import a bot').webhookId}`);
+    expect(stdout).toContain(`${fake.url}/form/rpa-import`);
     expect(stdout).toMatch(/User name: +rpa/);
     expect(count(out, form.data.password)).toBe(1);
     expect(stdout).toMatch(new RegExp(`Password: +${form.data.password} +\\(shown once: keep it in your password manager\\)`));
@@ -510,7 +522,7 @@ describe('npx n8n-nodes-rpa setup', () => {
   });
 
   it("the form's address: n8n's own from its environment where the command runs with n8n, else as reached, with one line more", async () => {
-    const formOf = (fake: Fake) => fake.state.workflows.at(-1)!.nodes.find((n) => n.name === 'Import a bot').webhookId as string;
+    const formOf = (fake: Fake) => fake.state.workflows.at(-1)!.nodes.find((n) => n.name === 'Import a bot').parameters.options.path as string;
     const probes = (fake: Fake) => fake.state.requests.filter((r) => r.path.startsWith('/form/')).length;
     // Inside n8n's container: WEBHOOK_URL is n8n's address for its forms. The form is still checked where n8n was reached.
     const inside = await n8n();
@@ -520,6 +532,13 @@ describe('npx n8n-nodes-rpa setup', () => {
     expect(r.stdout).not.toContain(`${inside.url}/form/`);
     expect(r.stdout).not.toContain('Replace the host and port');
     expect(probes(inside)).toBeGreaterThan(0);
+    // Two addresses, each said once with what it is for: the one the command talks to, and the one to open.
+    expect(r.stdout.split('\n')[0]).toBe(`Setting up n8n for RPA. This command talks to n8n at ${inside.url}; in your browser, n8n is at https://n8n.example.com/.`);
+    expect(r.stdout.split(inside.url)).toHaveLength(2);
+    // The same address twice is one address.
+    const same = await n8n();
+    const s = await run(setup(same.url), { ...ENV, WEBHOOK_URL: `${same.url}/` });
+    expect(s.stdout.split('\n')[0]).toBe(`Setting up ${same.url} for RPA`);
     // N8N_EDITOR_BASE_URL when WEBHOOK_URL is not set; an n8n under a path keeps it.
     const editor = await n8n();
     const e = await run(setup(editor.url), { ...ENV, N8N_EDITOR_BASE_URL: 'https://example.com/n8n' });
@@ -532,6 +551,42 @@ describe('npx n8n-nodes-rpa setup', () => {
       expect(o.stdout).toContain(`  Address:    ${fake.url}/form/${formOf(fake)}\n              Replace the host and port with the ones you open n8n with, if they differ.\n`);
       expect(o.stdout).not.toContain('n8n.example.com');
     }
+  });
+
+  it('the readable address /form/rpa-import only when no other form uses it; otherwise the address with an id, and why', async () => {
+    const pathOf = (w: Wf) => w.nodes.find((n) => n.name === 'Import a bot').parameters.options?.path;
+    const idOf = (w: Wf) => w.nodes.find((n) => n.name === 'Import a bot').webhookId as string;
+    const other: Wf = {
+      id: 'w-other', name: 'Contact form', active: false, versionId: 'v0', connections: {}, settings: {},
+      nodes: [{ name: 'Form', type: 'n8n-nodes-base.formTrigger', typeVersion: 2.6, webhookId: 'aaaa', parameters: { options: { path: 'RPA-Import' } } }],
+    };
+    // A form of another workflow at that path, published or not (publishing it would take the address).
+    const taken = await n8n({ workflows: [other] });
+    const t = await run(setup(taken.url), ENV);
+    expect(t.code, t.out).toBe(0);
+    const made = taken.state.workflows.find((w) => w.name === 'RPA: 5 Import a bot')!;
+    expect(pathOf(made)).toBeUndefined();
+    expect(t.stdout).toContain('         its form keeps an address with an id, not /form/rpa-import: the workflow "Contact form" (id w-other) has a form at /form/rpa-import.\n');
+    expect(t.stdout).toContain(`  Address:    ${taken.url}/form/${idOf(made)}\n`);
+    // A run that makes a second form (--new-workflow) leaves the first one its address.
+    const twice = await n8n();
+    expect((await run(setup(twice.url), ENV)).code).toBe(0);
+    twice.state.workflows[0].nodes.find((n) => n.name === 'Sign steps').type = 'n8n-nodes-base.noOp';
+    const second = await run(setup(twice.url, '--new-workflow'), ENV);
+    expect(second.code, second.out).toBe(0);
+    expect(twice.state.workflows.map(pathOf)).toEqual(['rpa-import', undefined]);
+    expect(second.stdout).toContain(`  Address:    ${twice.url}/form/${idOf(twice.state.workflows[1])}\n`);
+    // Held by a workflow this API key cannot see: n8n refuses to publish; the form keeps its id, is published, and says why.
+    const hidden = await n8n({ hiddenForms: [{ ...other, id: 'w-hidden', active: true, nodes: [{ ...other.nodes[0], parameters: { options: { path: 'rpa-import' } } }] }] });
+    const h = await run(setup(hidden.url), ENV);
+    expect(h.code, h.out).toBe(0);
+    const [w] = hidden.state.workflows;
+    expect(w.active).toBe(true);
+    expect(pathOf(w)).toBeUndefined();
+    expect(h.stdout).toContain('         its form keeps an address with an id, not /form/rpa-import: n8n says that address is taken (HTTP 409: There is a conflict with one of the webhooks.).\n');
+    expect(h.stdout).toContain(`  Address:    ${hidden.url}/form/${idOf(w)}\n`);
+    // One refusal, one more try.
+    expect(hidden.state.requests.filter((r) => r.path.endsWith('/activate'))).toHaveLength(2);
   });
 
   it('a Connection Line that parses: the RPA Desktop Runner credential holds it, and the output never shows it', async () => {
@@ -641,12 +696,14 @@ describe('npx n8n-nodes-rpa setup', () => {
     it('exactly one, whatever its name: picked on Import steps by id and name, said, and tested by n8n', async () => {
       // Another user's runner is not this project's: it does not count, and it is never picked.
       const fake = await n8n({ credentials: [HAND, ELSEWHERE] });
-      const { code, out } = await run(setup(fake.url), ENV);
+      const { code, out, stdout } = await run(setup(fake.url), ENV);
       expect(code, out).toBe(0);
       expect(onImport(fake).rpaDesktopRunnerApi).toEqual({ id: 'c-hand', name: 'RPA Desktop Runner account' });
       expect(out).toContain('picked   credential "RPA Desktop Runner account" (id c-hand): the only RPA Desktop Runner in your project');
       expect(out).toContain(`tested   credential "RPA Desktop Runner account" (id c-hand): ${RUNNER_CONNECTED}`);
       expect(out).toContain('The workflow the form gives you already uses the RPA Desktop Runner "RPA Desktop Runner account" (id c-hand).');
+      // The last line says that it is connected.
+      expect(stdout.trimEnd().split('\n').at(-1)).toBe(`The import form is ready, and the Windows machine is connected. n8n's test said: ${RUNNER_CONNECTED}.`);
       expect(out).not.toContain('c-else');
       expect(fake.state.credentials.filter((c) => c.type === 'rpaDesktopRunnerApi')).toHaveLength(2);
       neverRead(fake);
@@ -708,16 +765,38 @@ describe('npx n8n-nodes-rpa setup', () => {
       const f = await run(setup(failing.url), ENV);
       expect(f.code, f.out).toBe(0);
       expect(f.out).toContain(`tested   credential "RPA Desktop Runner account" (id c-hand), and it failed: ${RUNNER_UNREACHABLE}`);
+      // The closing lines do not read as if all went well: the form is ready, the machine is not connected, why, and
+      // what to do (the message's own instruction), after the API key's line.
+      expect(f.stdout.trimEnd().split('\n').slice(-5)).toEqual([
+        '',
+        'The import form is ready, but the Windows machine is not connected yet.',
+        '  Reason:     Could not connect to the desktop runner at wss://win-1.example.internal:8765/rpa/v1 (no answer within 60 s).',
+        '  What to do: Is it running, and is the port open?',
+        '              Then run this command again, with the new line if you printed one.',
+      ]);
+      expect(f.stdout.indexOf('The API key you gave')).toBeLessThan(f.stdout.indexOf('not connected yet'));
       expectNoSecrets(f.out);
-      // The node's longest message ends in the command to run on the Windows machine: it is printed whole.
+      // The node's longest message ends in the command to run on the Windows machine: it is printed whole, and its
+      // instruction is what to do at the end.
       const long = runnerNoTcpAnswer('wss://10.0.0.5:8765/rpa/v1', 10, '10.0.0.5');
       expect(long.length).toBeGreaterThan(300);
       const l = await run(setup((await n8n({ credentials: [HAND], test: 'error', testMessage: long })).url), ENV);
+      expect(l.code, l.out).toBe(0);
       expect(l.out).toContain(`and it failed: ${long}`);
+      expect(l.stdout).toContain('\n  Reason:     Could not connect to the desktop runner at wss://10.0.0.5:8765/rpa/v1 (no answer within 10 s).\n');
+      expect(l.stdout).toContain(`\n  What to do: ${long.slice(long.indexOf('Check, in this order'))}\n`);
+      // A message with no instruction: what to do is to correct the line.
+      const odd = await run(setup((await n8n({ credentials: [HAND], test: 'error', testMessage: 'The desktop runner at wss://x.example.com:8765/rpa/v1 presented another certificate. Nothing was sent.' })).url), ENV);
+      expect(odd.stdout).toContain('\n  Reason:     The desktop runner at wss://x.example.com:8765/rpa/v1 presented another certificate.\n  What to do: Correct the Connection Line of "RPA Desktop Runner account".\n');
       const forbidden = await n8n({ credentials: [HAND], test: 'forbidden' });
       const r = await run(setup(forbidden.url), ENV);
       expect(r.code, r.out).toBe(0);
       expect(r.out).toContain('not tested credential "RPA Desktop Runner account" (id c-hand) (HTTP 403: Forbidden). To test it, open it in n8n, which tests it as it opens. For this command to test it, the API key needs the scope credential:read.');
+      expect(r.stdout.trimEnd().split('\n').slice(-3)).toEqual([
+        'The import form is ready. Whether the Windows machine is connected is not known: n8n did not test it.',
+        '  Reason:     HTTP 403: Forbidden. For this command to test it, the API key needs the scope credential:read.',
+        '  What to do: open the credential "RPA Desktop Runner account" in n8n, which tests it as it opens.',
+      ]);
       expect(onImport(forbidden).rpaDesktopRunnerApi).toEqual({ id: 'c-hand', name: 'RPA Desktop Runner account' });
     });
 
@@ -796,7 +875,9 @@ describe('npx n8n-nodes-rpa setup', () => {
       expect(node(wf, 'Import steps').credentials.playwrightSiteLoginApi).toEqual(ref);
       expect(node(wf, 'Sign steps').credentials.playwrightSiteLoginApi).toEqual(ref);
       // Typed in beside the template's own Version option, which it keeps.
-      expect(node(wf, 'Import steps').parameters.options).toEqual({ allowPrivateNetwork: true, version: "={{ $('The bot to change').isExecuted ? Number($('The bot to change').first().json.version) + 1 : $('What it replaces').isExecuted ? Math.max(0, ...$('What it replaces').first().json.running.map((r) => Number(r.version))) + 1 : 1 }}" });
+      const templateOptions = JSON.parse(readFileSync(TEMPLATE, 'utf8')).nodes.find((n: { name: string }) => n.name === 'Import steps').parameters.options;
+      expect(templateOptions).toHaveProperty('version');
+      expect(node(wf, 'Import steps').parameters.options).toEqual({ ...templateOptions, allowPrivateNetwork: true });
       // Never one of another user or project, never made.
       expect(stdout).toContain('left alone credential "RPA Site Login account" (playwrightSiteLoginApi, id c-other): it belongs to another project or user, so it is not used');
       expect(fake.state.credentials.filter((c) => c.type === 'playwrightSiteLoginApi')).toHaveLength(2);

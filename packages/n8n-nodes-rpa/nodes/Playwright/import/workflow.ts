@@ -65,6 +65,11 @@ export interface BuildWorkflowOptions {
    * Browser, the Site Login and the Step Signing; desktop Run steps get the Desktop Runner and the Step Signing.
    */
   credentials?: PassedOn;
+  /**
+   * The workflow that imported the steps approves them before it hands this file over (the import form): the notes then
+   * do not ask the reader to import and approve them. Import Steps alone approves nothing, so off by default.
+   */
+  approvedBeforeHandOver?: boolean;
 }
 /** The credentials an import passes on to the workflow file. */
 export interface PassedOn { browser?: CredentialRef; siteLogin?: CredentialRef; signing?: CredentialRef; desktopRunner?: CredentialRef }
@@ -259,10 +264,11 @@ const rowExpression = (fields: string): string =>
  * check only when the steps read rows, and the file's name when the run returned one.
  */
 export const LOG_RUN_ROW = rowExpression([
-  "name: $json.name ?? ''", 'lane: $json.lane ?? null', 'version: $json.version ?? null', "hash: $json.hash ?? ''",
+  "name: $json.name ?? ''", "code: ''", "message: ''", "guidance: ''",
+  "file: [].concat($json.files ?? []).map((f) => f?.fileName).filter((n) => n).join(', ')", "account: $json.account ?? ''",
+  'lane: $json.lane ?? null', 'version: $json.version ?? null', "hash: $json.hash ?? ''",
   'confirmed: Array.isArray($json.rows) ? $json.confirmed === true : null', 'rowCount: Array.isArray($json.rows) ? $json.rows.length : null',
-  'durationMs: $json.durationMs ?? null', 'llmTokens: $json.llmTokens ?? null', "code: ''", 'executionId: $execution.id',
-  "message: ''", "guidance: ''", "file: [].concat($json.files ?? []).map((f) => f?.fileName).filter((n) => n).join(', ')", "account: $json.account ?? ''",
+  'durationMs: $json.durationMs ?? null', 'llmTokens: $json.llmTokens ?? null', 'executionId: $execution.id',
 ].join(', '));
 /**
  * The run log keeps at most this many characters of a failure's message (the rest is in Run steps' error item). Long
@@ -276,11 +282,12 @@ export const LOGGED_MESSAGE_CHARS = 1000;
  * run refused before it started (locked_out, busy: no lane) has no lane, duration or tokens.
  */
 export const LOG_FAILED_ROW = rowExpression([
-  "name: $json.details?.name ?? ''", 'lane: $json.details?.lane ?? null', 'version: $json.details?.version ?? null', "hash: $json.details?.hash ?? ''",
-  'confirmed: null', 'rowCount: null', 'durationMs: $json.details?.lane ? ($json.details?.durationMs ?? null) : null',
-  'llmTokens: $json.details?.lane ? ($json.details?.llmTokens ?? null) : null',
-  "code: $json.details?.code || 'config_error'", 'executionId: $execution.id', `message: ((m) => (m.length > ${LOGGED_MESSAGE_CHARS} ? m.slice(0, ${LOGGED_MESSAGE_CHARS - 1}).join('') + '…' : m.join('')))(Array.from(String($json.message ?? '')))`, "guidance: $json.details?.guidance ?? ''",
+  "name: $json.details?.name ?? ''", "code: $json.details?.code || 'config_error'",
+  `message: ((m) => (m.length > ${LOGGED_MESSAGE_CHARS} ? m.slice(0, ${LOGGED_MESSAGE_CHARS - 1}).join('') + '…' : m.join('')))(Array.from(String($json.message ?? '')))`, "guidance: $json.details?.guidance ?? ''",
   "file: ''", "account: $json.details?.account ?? ''",
+  'lane: $json.details?.lane ?? null', 'version: $json.details?.version ?? null', "hash: $json.details?.hash ?? ''",
+  'confirmed: null', 'rowCount: null', 'durationMs: $json.details?.lane ? ($json.details?.durationMs ?? null) : null',
+  'llmTokens: $json.details?.lane ? ($json.details?.llmTokens ?? null) : null', 'executionId: $execution.id',
 ].join(', '));
 /**
  * Stop and Error's message, from the row Log failed run shaped (also when writing it failed): the code and the step
@@ -344,6 +351,7 @@ class Builder {
     private readonly codeWorkflow?: BuildWorkflowOptions['codeWorkflow'], readonly source: ImportedFrom = 'uipath',
     private readonly run: NonNullable<BuildWorkflowOptions['run']> = {},
     private readonly passedOn: PassedOn = {},
+    private readonly approvedBeforeHandOver = false,
   ) {}
 
   /**
@@ -660,7 +668,7 @@ class Builder {
         : '';
       const secretVars = secret.size ? `Secret: ${[...secret].map((v) => code(v, 60)).join(', ')}: in an ${SECRET_VARIABLES} credential selected on **${md(run)}**, never typed here. To keep these values to this app, put ${code(String(draft.script.app?.exe ?? '').split(/[\\/]/).pop() ?? '', 120)} in that credential's May Be Typed Into.` : '';
       this.sticky(`Fill in the variables (${draftName})`,
-        `### Fill in the variables (gold)\n${[listedVars, secretVars].filter(Boolean).join(' ')} Desktop steps run only once approved: ${FROM[this.source].importIt} with **${IMPORT_FORM}** and approve ${code(draftName)} on its review page.`,
+        `### Fill in the variables (gold)\n${[listedVars, secretVars, this.approvedBeforeHandOver ? '' : `Desktop steps run only once approved: ${FROM[this.source].importIt} with **${IMPORT_FORM}** and approve ${code(draftName)} on its review page.`].filter(Boolean).join(' ')}`,
         COLOUR.gold, [runX - 80, y + 160], 320, 260);
     }
     this.lastFile = downloadProperty(draft);
@@ -881,7 +889,7 @@ export function buildWorkflow(flow: UiPathFlow, drafts: Draft[], opts: BuildWork
   for (const d of [...drafts, ...(opts.desktopDrafts ?? [])]) {
     if (d.name.trim() === '' || d.name.startsWith('=')) throw new Error(`The Name of a step list must not be empty or start with "=": ${JSON.stringify(d.name.slice(0, 60))}`);
   }
-  const b = new Builder(opts.name, new Map(drafts.map((d) => [d.name, d])), new Map((opts.desktopDrafts ?? []).map((d) => [d.name, d])), opts.codeWorkflow, opts.source, opts.run, opts.credentials);
+  const b = new Builder(opts.name, new Map(drafts.map((d) => [d.name, d])), new Map((opts.desktopDrafts ?? []).map((d) => [d.name, d])), opts.codeWorkflow, opts.source, opts.run, opts.credentials, opts.approvedBeforeHandOver === true);
   const from = FROM[b.source];
   const uipath = b.source === 'uipath';
   b.add(T.manualTrigger, b.unique('Run the bot'), [0, 0], {});

@@ -84,12 +84,13 @@ you as its approver. It never reads the Site Login's values. Near the end it pri
 
 ```text
 The import form is ready.
-  Address:    http://localhost:5678/form/<id>
+  Address:    http://localhost:5678/form/rpa-import
   Sign-in:    the form opens with your n8n sign-in. Who approves is recorded as the n8n user who approved.
   Private network: on. Imports may open sites on this computer or your own network, and the workflow the form hands over has it on too.
 ```
 
-Keep the address. If **RPA: 5 Import a bot** is there already from an earlier run, the command leaves it as it is and
+Keep the address. It ends in `/form/rpa-import`, or in a long id when another form in your n8n has that address
+already (the command says so). If **RPA: 5 Import a bot** is there already from an earlier run, the command leaves it as it is and
 says what to set on it in n8n. The command's last line is about the API key: it can act as you in n8n within its
 scopes, so revoke it now. In **Settings → n8n API**, open the key's **⋯** menu and choose **Revoke**. The signing key stays in
 n8n, and n8n does not show it again. The `Signing key:` line says how to keep a copy: you need one only to move signed
@@ -111,7 +112,7 @@ steps written as JSON. It signs in, opens the sandbox's SAP report screen, runs 
    "LINEITEMS_1000_2026-09-01_2026-09-30.csv"`. The page builds each step's sentence from the step itself. A
    step's own description stands beside it in grey, as `(the author calls it: …)`, and in red when it names another
    action or site: read the red ones twice. The sample shows none. Under **Decision**, choose **Approve and sign**, then **Submit**.
-4. The last page says `Approved and signed: sandbox-line-items v1 is now the version that runs under that name.` Your
+4. The last page says `Approved and signed: sandbox-line-items version 1 is now the version that runs under that name.` Your
    browser downloads `sandbox-line-items.workflow.json`, the workflow that runs the bot.
 
 If the last page says `Nothing to approve`, it names the problem:

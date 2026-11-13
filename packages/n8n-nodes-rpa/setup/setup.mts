@@ -505,19 +505,55 @@ const oneLine = (text: unknown, most = 300) => String(text ?? '').replace(/[\u00
  * connects to the Windows machine. One line with the node's message; the credential's values never leave n8n. The test
  * waits up to 60 s for a machine that does not answer, so the call may take 90 s.
  */
-async function testRunner(client: Client, ref: Ref) {
+async function testRunner(client: Client, ref: Ref): Promise<RunnerTest> {
   const what = `credential "${clean(ref.name, ref.id)}" (id ${clean(ref.id)})`;
   say(`testing  ${what}: n8n connects to the Windows machine (up to a minute)`);
   const r = await client.api('POST', `/credentials/${encodeURIComponent(ref.id)}/test`, undefined, { timeoutMs: 90_000 }).catch(() => undefined);
   const status = r?.status === 200 ? r.json?.status : undefined;
   // The node's own message, whole: the longest ends in the command to run on the Windows machine.
   const message = oneLine(r?.json?.message, 1200);
-  if (status === 'OK') say(`tested   ${what}: ${message || 'OK'}`);
-  else if (status === 'Error') say(`tested   ${what}, and it failed: ${message || 'n8n gave no reason'}`);
-  else {
-    const scope = r?.status === 403 ? ' For this command to test it, the API key needs the scope credential:read.' : '';
-    say(`not tested ${what} (${r ? client.reason(r) : 'no answer from n8n'}). To test it, open it in n8n, which tests it as it opens.${scope}`);
+  if (status === 'OK') {
+    say(`tested   ${what}: ${message || 'OK'}`);
+    return { result: 'connected', message: message || 'OK' };
   }
+  if (status === 'Error') {
+    say(`tested   ${what}, and it failed: ${message || 'n8n gave no reason'}`);
+    return { result: 'failed', message: message || 'n8n gave no reason' };
+  }
+  const why = r ? client.reason(r) : 'no answer from n8n';
+  const scope = r?.status === 403 ? ' For this command to test it, the API key needs the scope credential:read.' : '';
+  say(`not tested ${what} (${why}). To test it, open it in n8n, which tests it as it opens.${scope}`);
+  return { result: 'untested', message: `${why}.${scope}` };
+}
+
+/** What n8n's test of the RPA Desktop Runner gave, for the closing lines. */
+interface RunnerTest { result: 'connected' | 'failed' | 'untested'; message: string }
+
+/**
+ * The closing lines about the Windows machine: the form is ready either way (exit 0), and whether the machine is
+ * connected. A failed test's message is split into its reason (the first sentence) and what to do (the rest), when the
+ * rest says what to do; else what to do is to correct the line and run this again.
+ */
+function closingRunner(test: RunnerTest, ref: Ref): string[] {
+  const name = `"${clean(ref.name, ref.id)}"`;
+  if (test.result === 'connected') return [`The import form is ready, and the Windows machine is connected. n8n's test said: ${test.message}${/[.!?]$/.test(test.message) ? '' : '.'}`];
+  if (test.result === 'untested') {
+    return [
+      'The import form is ready. Whether the Windows machine is connected is not known: n8n did not test it.',
+      `  Reason:     ${test.message}`,
+      `  What to do: open the credential ${name} in n8n, which tests it as it opens.`,
+    ];
+  }
+  // The first sentence ends at a full stop or question mark followed by a space (an address has no space after its dots).
+  const cut = /^(.*?[.?])\s+(.*)$/.exec(test.message);
+  const reason = cut ? cut[1] : test.message;
+  const rest = cut ? cut[2].replace(/^Nothing was sent\.\s*/, '').trim() : '';
+  return [
+    'The import form is ready, but the Windows machine is not connected yet.',
+    `  Reason:     ${reason}`,
+    `  What to do: ${rest || `Correct the Connection Line of ${name}.`}`,
+    '              Then run this command again, with the new line if you printed one.',
+  ];
 }
 
 /** One line for something of the same name that this run leaves alone. */
@@ -585,6 +621,29 @@ function loadTemplate() {
   return t;
 }
 
+/**
+ * The form's readable address, /form/rpa-import, typed on the Windows machine by hand. n8n 2.45's Form Trigger (2.2 and
+ * later) takes it as Options → Form Path; without one the address is the node's webhook id. The form's sign-in (n8n's
+ * or Basic Auth) is what protects it, not its address, and the pages after it keep their own signed addresses.
+ */
+const FORM_PATH = 'rpa-import';
+/** The Form Path a workflow's form trigger answers at (Options → Form Path, or the older Form Path field), or ''. */
+const formPathOf = (node: any): string => String(node?.parameters?.options?.path || node?.parameters?.path || '').trim().replace(/^\/+|\/+$/g, '');
+/**
+ * Why /form/rpa-import cannot be this form's, or undefined when no form n8n lists uses it: a workflow (published or not,
+ * as publishing it would take the address) with a form trigger at that path. One whose nodes n8n does not list counts as
+ * using it, since this run cannot tell.
+ */
+function formPathTaken(workflows: any[]): string | undefined {
+  for (const w of workflows) {
+    if (!Array.isArray(w?.nodes)) return `n8n does not list the nodes of the workflow "${clean(w?.name, w?.id)}" (id ${clean(w?.id)})`;
+    if (w.nodes.some((n: any) => /\.formTrigger$/.test(String(n?.type)) && formPathOf(n).toLowerCase() === FORM_PATH)) {
+      return `the workflow "${clean(w.name, w.id)}" (id ${clean(w.id)}) has a form at /form/${FORM_PATH}`;
+    }
+  }
+  return undefined;
+}
+
 /** The form trigger's Authentication for each --form-login. */
 const FORM_AUTH = { n8n: 'n8nUserAuth', basic: 'basicAuth' } as const;
 /** How a workflow's form signs people in: its trigger's Authentication (a form saved without one has none). */
@@ -593,9 +652,10 @@ const formAuthentication = (workflow: any): unknown => workflow?.nodes?.find((n:
 /**
  * The template's nodes, with the approver on the allowlist and an address for each form page; no credentials. With
  * --form-login basic the form asks for Basic Auth (Sign steps then takes Approved By: its Approver follows the form).
- * With --allow-private-network, Import steps has Options → Allow Private Network on.
+ * With --allow-private-network, Import steps has Options → Allow Private Network on. With formPath, the form answers at
+ * /form/<formPath> instead of its webhook id.
  */
-function templateNodes(approver: string, formLogin: Options['formLogin'], allowPrivateNetwork: boolean): Record<string, any>[] {
+function templateNodes(approver: string, formLogin: Options['formLogin'], allowPrivateNetwork: boolean, formPath?: string): Record<string, any>[] {
   return loadTemplate().nodes.map((node: Record<string, any>) => {
     const n: Record<string, any> = { ...node, parameters: { ...node.parameters } };
     delete n.credentials;
@@ -608,6 +668,7 @@ function templateNodes(approver: string, formLogin: Options['formLogin'], allowP
       delete n.parameters.requireExecuteAccess;
       n.parameters.authentication = FORM_AUTH.basic;
     }
+    if (n.name === NODE.form && formPath) n.parameters.options = { ...n.parameters.options, path: formPath };
     return n;
   });
 }
@@ -664,9 +725,12 @@ async function createWorkflow(client: Client, name: string, nodes: Record<string
   return r.json;
 }
 
-async function publish(client: Client, id: string, versionId: unknown, name: string) {
+async function publish(client: Client, id: string, versionId: unknown, name: string, retry?: (r: Awaited<ReturnType<Client['api']>>) => Promise<{ versionId: unknown } | undefined>) {
   const r = await client.api('POST', `/workflows/${encodeURIComponent(id)}/activate`, typeof versionId === 'string' ? { versionId } : undefined);
   if (r.status !== 200 || r.json?.active !== true) {
+    // One more try, when the caller can change what n8n refused (a form path another workflow holds).
+    const again = retry ? await retry(r) : undefined;
+    if (again) return publish(client, id, again.versionId, name);
     throw new Stop(`The workflow "${name}" (id ${id}) is in n8n but not published (${client.reason(r)}). Open it in n8n and click Publish, or run this again.`);
   }
 }
@@ -686,7 +750,10 @@ async function run(inputs: Inputs): Promise<number> {
   if (inputs.plaintext) {
     warn('WARNING: --allow-http: the API key crosses the network unencrypted.');
   }
-  say(`Setting up ${origin} for RPA`);
+  // One address for n8n, or two said once with what each is for: the one this command talks to (inside n8n's container,
+  // n8n's own port) and the one to open in the browser (n8n's own address, formBase), which the form's address uses.
+  const browserBase = inputs.formBase && inputs.formBase !== `${origin}/` ? inputs.formBase : undefined;
+  say(browserBase ? `Setting up n8n for RPA. This command talks to n8n at ${origin}; in your browser, n8n is at ${browserBase}.` : `Setting up ${origin} for RPA`);
   await checkN8n(inputs, [
     { type: SIGNING.type, fields: ['secretKey'] },
     ...(inputs.line ? [{ type: RUNNER.type, fields: ['connectionLine'] }] : []),
@@ -814,6 +881,8 @@ async function run(inputs: Inputs): Promise<number> {
   // A workflow to make: made first without credentials when the project is not known yet, so that its project is.
   let made: Record<string, any> | undefined;
   let nodes: Record<string, any>[] | undefined;
+  // Why a workflow made here keeps the address with an id, when /form/rpa-import is not free.
+  let pathTaken: string | undefined;
   let workflowName = WORKFLOW_NAME;
   if (!workflow) {
     if (differs || named.some((w) => w.name === WORKFLOW_NAME)) {
@@ -822,7 +891,8 @@ async function run(inputs: Inputs): Promise<number> {
       const taken = new Set(workflows.items.map((w) => w?.name));
       workflowName = taken.has(`${WORKFLOW_NAME} (${date})`) ? `${WORKFLOW_NAME} (${date} ${new Date().toISOString().slice(11, 16).replace(':', '-')})` : `${WORKFLOW_NAME} (${date})`;
     }
-    nodes = templateNodes(approver as string, options.formLogin, options.allowPrivateNetwork);
+    pathTaken = formPathTaken(workflows.items);
+    nodes = templateNodes(approver as string, options.formLogin, options.allowPrivateNetwork, pathTaken ? undefined : FORM_PATH);
     if (!home) {
       made = await createWorkflow(client, workflowName, nodes, projectId);
       halfMade = { client, id: String(made.id) };
@@ -900,6 +970,7 @@ async function run(inputs: Inputs): Promise<number> {
   const siteRef: Ref | undefined = SITE && siteMine ? { id: String(siteMine.id), name: SITE.name } : undefined;
   if (SITE && !siteRef) say(`not used credential "${clean(SITE.name)}": this run does not use what it found in the shared project, so no Site Login is set. Pick one on "${NODE.importSteps}" and "${NODE.signSteps}" in n8n.`);
 
+  const reused = workflow !== undefined;
   if (workflow) {
     say(`reused   workflow "${clean(workflow.name, workflow.id)}" (id ${clean(workflow.id)}): it matches the template${workflow.active ? '' : ', publishing it'}`);
     if (options.approver !== undefined) say(`         its Approver Allowlist was left as it is: change it on "${NODE.signSteps}" in n8n.`);
@@ -930,6 +1001,7 @@ async function run(inputs: Inputs): Promise<number> {
     workflow = workflow as Record<string, any>;
     say(`created  workflow "${workflowName}" (id ${clean(workflow.id)}), approver ${approver}`);
     if (siteRef) say(`         with the Site Login "${clean(siteRef.name)}" (id ${clean(siteRef.id)}) on "${NODE.importSteps}" and "${NODE.signSteps}"`);
+    if (pathTaken) say(`         its form keeps an address with an id, not /form/${FORM_PATH}: ${pathTaken}.`);
     const same = named.filter((w) => w.name === workflowName);
     if (same.length) say(`         n8n now has more than one workflow named "${workflowName}": this run's is id ${clean(workflow.id)}.`);
   }
@@ -937,12 +1009,29 @@ async function run(inputs: Inputs): Promise<number> {
   const usesKey = String(workflow.nodes?.find((n: any) => n.name === NODE.signSteps)?.credentials?.[SIGNING.type]?.id) === signing.ref.id;
   const showKey = signingKey !== undefined && usesKey && (options.showSigningKey || options.replaceSigningKey);
   if (!workflow.active) {
-    await publish(client, String(workflow.id), workflow.versionId, clean(workflow.name, workflow.id));
+    const made = workflow;
+    // A form path held by a workflow this API key cannot see: n8n refuses to publish. The form then keeps the address
+    // with its webhook id, and the run says why.
+    const dropPath = !reused && formPathOf(made.nodes.find((n: any) => n.name === NODE.form)) === FORM_PATH
+      ? async (r: Awaited<ReturnType<Client['api']>>) => {
+        if (!/already taken|conflict with one of the webhooks/i.test(client.reason(r))) return undefined;
+        const without = made.nodes.map((n: any) => (n.name === NODE.form ? { ...n, parameters: { ...n.parameters, options: Object.fromEntries(Object.entries(n.parameters?.options ?? {}).filter(([k]) => k !== 'path')) } } : n));
+        const put = await client.api('PUT', `/workflows/${encodeURIComponent(String(made.id))}`, { name: made.name, nodes: without, connections: made.connections, settings: made.settings ?? { executionOrder: 'v1' } });
+        if (put.status !== 200 || !put.json?.id) return undefined;
+        workflow = put.json;
+        say(`         its form keeps an address with an id, not /form/${FORM_PATH}: n8n says that address is taken (${client.reason(r)}).`);
+        return { versionId: put.json.versionId };
+      }
+      : undefined;
+    await publish(client, String(made.id), made.versionId, clean(made.name, made.id), dropPath);
+    workflow = workflow as Record<string, any>;
     say(`published workflow "${clean(workflow.name, workflow.id)}"`);
   }
 
-  // The form's webhook id comes from n8n: used only when it is an id, never printed otherwise.
-  const webhookId = workflow.nodes.find((n: { name: string }) => n.name === NODE.form)?.webhookId;
+  // The form's address: its Form Path (rpa-import, set here) or its webhook id, which comes from n8n. Used only when it is
+  // a plain id, never printed otherwise.
+  const formNode = workflow.nodes.find((n: { name: string }) => n.name === NODE.form);
+  const webhookId = formPathOf(formNode) || formNode?.webhookId;
   const formUrl = typeof webhookId === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(webhookId) ? `${origin}/form/${webhookId}` : undefined;
   const shownName = clean(workflow.name, workflow.id);
   if (formUrl) {
@@ -960,7 +1049,7 @@ async function run(inputs: Inputs): Promise<number> {
     if (!signsIn(probe)) warn(`Note: the form did not answer as expected at ${formUrl} (${probe ? `HTTP ${probe.status}` : 'no answer'}). In n8n, open "${shownName}", then the node "${NODE.form}", for its production URL.`);
   }
   // Last, as it may wait a minute for a machine that does not answer: the form is ready by then.
-  if (runnerRef) await testRunner(client, runnerRef);
+  const runnerTest = runnerRef ? await testRunner(client, runnerRef) : undefined;
 
   // The address to open: n8n's own when its environment gives it here, else the one this command reached n8n at.
   const shownUrl = formUrl && inputs.formBase ? new URL(`form/${webhookId}`, inputs.formBase).href : formUrl;
@@ -1001,6 +1090,12 @@ async function run(inputs: Inputs): Promise<number> {
   }
   say();
   say(keyAdvice(inputs.keyExpires));
+  // Last, where a reader looks: the form is ready, and whether the Windows machine is connected. The exit code stays 0:
+  // the form is set up either way.
+  if (runnerTest && runnerRef) {
+    say();
+    for (const line of closingRunner(runnerTest, runnerRef)) say(line);
+  }
   return 0;
 }
 

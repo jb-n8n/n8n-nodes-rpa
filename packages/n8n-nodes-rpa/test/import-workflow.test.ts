@@ -771,6 +771,12 @@ describe('buildWorkflow', () => {
     expect(content(byName(secretOnly, 'Fill in the variables (d)'))).toBe(
       '### Fill in the variables (gold)\nSecret: `password`: in an **RPA Secret Variables** credential selected on **Desk**, never typed here. To keep these values to this app, put `App.exe` in that credential\'s May Be Typed Into. Desktop steps run only once approved: import the recording with **RPA: 5 Import a bot** and approve `d` on its review page.',
     );
+    // Handed over after approval (the import form approves before it hands the file over): the note does not ask to
+    // import and approve the steps; Import Steps alone approves nothing, so by default it does.
+    const approved = buildWorkflow({ name: 'd', nodes: [{ kind: 'desktop', sequence: 1, displayName: 'Desk', draft: 'd' }] }, [], { name: 'd', desktopDrafts: [desktop(['password'], ['password'])], source: 'recording', approvedBeforeHandOver: true });
+    expect(content(byName(approved, 'Fill in the variables (d)'))).toBe(
+      '### Fill in the variables (gold)\nSecret: `password`: in an **RPA Secret Variables** credential selected on **Desk**, never typed here. To keep these values to this app, put `App.exe` in that credential\'s May Be Typed Into.',
+    );
     // A gold note: three colours, so the legend.
     expect(content(byName(secretOnly, 'About this import'))).toContain('- Gold: fill in. Green: set once. Grey: leave as is.');
     // A UiPath project with nothing left untranslated has no grey notes to explain.
@@ -930,9 +936,12 @@ describe('buildWorkflow', () => {
       expect(whole.length).toBeLessThan(LOGGED_MESSAGE_CHARS);
       expect(shape(LOG_FAILED_ROW, { ...lockedOut, message: whole }, all).message).toBe(whole);
     }
-    // A table made by an earlier version: the row has only its ten columns, so n8n's insert never refuses it.
-    expect(Object.keys(shape(LOG_FAILED_ROW, lockedOut, first))).toEqual(RUN_TABLE_FIRST_COLUMNS.map((c) => c.name));
-    expect(Object.keys(shape(LOG_RUN_ROW, { name: 'bot', lane: 'script', version: 1, hash: 'h', durationMs: 900 }, first))).toEqual(RUN_TABLE_FIRST_COLUMNS.map((c) => c.name));
+    // A table made by an earlier version: the row has only its ten columns, so n8n's insert never refuses it. Its
+    // columns stand in the first version's order; n8n inserts by column name, so the order of either does not matter.
+    const byName_ = (names: string[]) => [...names].sort();
+    expect(byName_(Object.keys(shape(LOG_FAILED_ROW, lockedOut, first)))).toEqual(byName_(RUN_TABLE_FIRST_COLUMNS.map((c) => c.name)));
+    expect(byName_(Object.keys(shape(LOG_RUN_ROW, { name: 'bot', lane: 'script', version: 1, hash: 'h', durationMs: 900 }, first)))).toEqual(byName_(RUN_TABLE_FIRST_COLUMNS.map((c) => c.name)));
+    expect(shape(LOG_FAILED_ROW, lockedOut, first)).toMatchObject({ name: 'bot', code: 'locked_out', executionId: '22', version: 1 });
     // Create run log table gives no columns (never seen in n8n): every column is written, as for a table made now.
     expect(Object.keys(shape(LOG_RUN_ROW, { name: 'bot' }, { 'Create run log table': {} }))).toEqual(RUN_TABLE_COLUMNS.map((c) => c.name));
 

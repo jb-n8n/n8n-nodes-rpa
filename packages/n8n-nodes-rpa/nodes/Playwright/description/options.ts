@@ -325,7 +325,16 @@ export const OPTION_ENTRIES: INodeProperties[] = [
     default: 1,
     typeOptions: { minValue: 1, numberPrecision: 0 },
     description:
-      'The version the imported steps get. 1 for a new bot. To change an approved bot, give its approved version plus one, so the new steps are a new version under the same name: the import form does this. A version in a step document is never used.',
+      'The version the imported steps get. 1 for a new bot. To change an approved bot, give one more than the highest version any row of its name has in the steps table (active, rejected or superseded), so the new steps are a new version under the same name and no two rows share a name and version: the import form does this. A version in a step document is never used.',
+    displayOptions: only(['importSteps']),
+  },
+  {
+    displayName: 'Approved Before Hand-Over',
+    name: 'approvedBeforeHandOver',
+    type: 'boolean',
+    default: false,
+    description:
+      'Whether this workflow approves the imported steps before it hands the workflow file over, as the import form does. When on, the notes in the workflow file do not ask to import and approve the steps.',
     displayOptions: only(['importSteps']),
   },
   {

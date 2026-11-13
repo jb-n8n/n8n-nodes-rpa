@@ -5,23 +5,23 @@ import type { ErrorCode } from 'n8n-rpa-engine';
 export const GUIDANCE: Record<ErrorCode, string> = {
   login_failed: 'The site rejected the username or password. Correct them in the RPA Site Login credential, or, when its Username and Password are expressions, in the data they read: the next run tries once more. If they were right, type a new value (any text, such as today\'s date) in Options → Login Breaker Reset Key.',
   account_locked: 'The site says the account is locked. Unlock it with the site owner, then change Options → Login Breaker Reset Key.',
-  auth_blocked: 'The site asked for a second factor that this run could not answer; the first line says which. A push message or a hardware key needs a person to sign in.',
+  auth_blocked: 'The site asked for a second factor that this run could not answer; the message says which. A push message or a hardware key needs a person to sign in.',
   site_down: 'The site did not answer, returned a server error, or the first page did not finish loading in time. Try again later.',
   browser_unavailable: 'The browser server could not be reached or was rejected. Check the RPA Browser credential (README: Where the browser runs).',
-  drift_detected: 'A step did not find what it expected; the first line says which step and what it found. Correct that step, or record it again, and approve the new version. Browser steps can also repair themselves with AI Repair.',
+  drift_detected: 'A step did not find what it expected; the message says which step and what it found. Correct that step, or record it again, and approve the new version. Browser steps can also repair themselves with AI Repair.',
   not_found: 'The page or the data was not found.',
   incomplete: 'Not every row the page states was read, a capture failed, a limit was hit, the run timed out, or it was cancelled.',
   script_untrusted: 'Nothing ran: the steps are not signed, or their signature does not fit this node (another Step Signing key, Site Login, name, version or start site). Approve the steps again, or set the node up as it was when they were signed.',
-  policy_violation: 'The run tried something its rules do not allow and stopped; the first line says what was refused. If that was meant, change the rule that refused it where it is kept: in the RPA Site Login, the RPA Secret Variables credential, this node\'s Options, or the desktop runner\'s policy on the Windows machine. For a desktop step that saves or sends, the rule is its mark as a write, set when its steps are approved.',
+  policy_violation: 'The run tried something its rules do not allow and stopped; the message says what was refused. If that was meant, change the rule that refused it where it is kept: in the RPA Site Login, the RPA Secret Variables credential, this node\'s Options, or the desktop runner\'s policy on the Windows machine. For a desktop step that saves or sends, the rule is its mark as a write, set when its steps are approved.',
   locked_out: 'No login was tried, because an earlier login with this Site Login failed. Correct the username or password in the RPA Site Login credential, or, when its Username and Password are expressions, in the data they read, and run again: a changed login gets one try. If the login was right, or the account is unlocked now, type a new value (any text) in Options → Login Breaker Reset Key.',
   busy: 'Another run using this Site Login or desktop runner is in progress. This run was skipped.',
   password_change_failed: 'The site did not confirm the new password: its change-password page came back, or still showed when the wait for its answer ran out (then the new password may or may not be in force). The login breaker stays closed. Keep the pending password, and check the site\'s password rules and the run variable that holds it.',
-  runner_unavailable: 'n8n could not use the desktop runner; the first line says why. Check the RPA Desktop Runner credential, then run rpa status on the runner machine.',
+  runner_unavailable: 'n8n could not use the desktop runner; the message says why. Check the RPA Desktop Runner credential, then run rpa status on the runner machine.',
 };
 
 /** auth_blocked because the One-Time Code Workflow gave no code (the engine's `the one-time code workflow …` failures). */
 export const CODE_WORKFLOW_GUIDANCE =
-  'The One-Time Code Workflow gave no code; the first line says why. Run that workflow by itself until it returns one item with a code field, publish it, then run again.';
+  'The One-Time Code Workflow gave no code; the message says why. Run that workflow by itself until it returns one item with a code field, publish it, then run again.';
 /**
  * auth_blocked because the steps type a code and the Site Login has no TOTP Secret (`detected:mfa_totp: …`). A detect
  * step that found a check named mfa_totp fails with the bare `detected:mfa_totp`, which this does not match.
@@ -30,7 +30,7 @@ export const NO_TOTP_SECRET_GUIDANCE =
   'The site asked for a one-time code and the RPA Site Login has no TOTP Secret. Put the authenticator\'s seed in its TOTP Secret. To take the code from a workflow instead, set Options → One-Time Code Workflow (steps you wrote also need "source": "workflow" in the sign-in step).';
 /** policy_violation because a sign-in met an address the Site Login does not list as a login page (the engine's signIn refusals). */
 export const LOGIN_PAGE_GUIDANCE =
-  'The sign-in stopped at an address that is not listed as a login page. Add the address the first line names to Pages Where the Password May Be Typed in the RPA Site Login, then run again.';
+  'The sign-in stopped at an address that is not listed as a login page. Add the address the message names to Pages Where the Password May Be Typed in the RPA Site Login, then run again.';
 /** locked_out because a run changed the Site Login's password earlier in this execution (execute.ts SITE_LOGIN_PASSWORD_CHANGED). */
 export const PASSWORD_CHANGED_GUIDANCE =
   'A run changed this Site Login\'s password earlier in this execution. Store the new password where the Site Login reads it, then run again.';

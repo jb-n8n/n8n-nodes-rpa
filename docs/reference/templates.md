@@ -24,17 +24,22 @@ first, before anything reads or writes them.
   required columns. Leave both empty when the bot downloads nothing in a browser. A step document's download steps
   carry their own checks, so it is not asked: **Read the upload** reads the file's text (a file of at most 5 MB that is
   not a ZIP, XAML, code or a recording) and **Asks about a download?** looks for the step document's shape.
-- **Bot file** may be left empty to change an approved bot or sign it again. **Approved bots** reads the `active`
-  rows of `playwright_steps`, and **Change or sign again** shows the newest active steps of the name typed, to read
+- **Bot file** may be left empty to change an approved bot or sign it again. **Approved bots** reads the rows of
+  `playwright_steps` (the `active` ones are the approved bots), and **Change or sign again** shows the newest active steps of the name typed, to read
   and copy, with one box that is empty to start with. **Compared with the approved version** takes the steps to
   review: with the box left empty, the active row's steps as **The bot to change** read them from the table (they never
   pass through the browser); with text in the box, that text. It also gives the review page its first line: unchanged,
-  or which steps differ. **Review** sends those steps to **Import steps** as a step document, then to the same review
+  or which steps differ and how: for each changed step, at most three, its number and its changed values, old → new
+  (`step 6: value "2026-09-15" → "2026-09-30"`), each on one line and cut at 60 characters, `several fields` for a
+  step with more than three, then the other steps by number. **Review** sends those steps to **Import steps** as a step document, then to the same review
   page and **Sign steps**. Text that is not a step document ends on **Import failed**, which says the old version keeps
   running.
-  The steps get the next version: **Import steps → Options → Version** is the approved version plus one, read by
-  **The bot to change** from the active row (never from the box), so the review page says `version 2, replacing version
-  1`. Signing the same steps again also gives the next version: it is a new approval. The workflow that runs the bot
+  The steps get the next version: **Import steps → Options → Version** is one more than the highest version any row
+  of that name has, active, rejected or superseded, read by **The bot to change** (never from the box). A rejected
+  attempt keeps its number and the next attempt takes a new one, so the table never holds two rows of one name and
+  version. The review page names the version that runs: `version 2, replacing version 1`, or after a rejected
+  attempt `version 3, replacing version 1`. Signing the same steps again also gives the next version: it is a new
+  approval. The workflow that runs the bot
   reads Expected Version from the active row, so it keeps running. Approved, the new row supersedes the old one. Rejected, the old one keeps running. This path gives no workflow file:
   the bot's workflow exists already. A name with no active row ends on **No approved bot**, which lists the approved
   names.
@@ -42,24 +47,26 @@ first, before anything reads or writes them.
   RPA Site Login it signs for, and after **Change or sign again** it checks the approved version's signature with its
   own signing key and Site Login, as a run checks it. **Checked?** sends that to the review page. The page's opening
   lines name the Site Login (desktop steps are signed for the app they start, without one). When the approved version
-  does not fit, a warning at the top says so: it was signed with another signing key or for another Site Login than
-  this form's. If the bot's workflow uses another Site Login, a version approved here will not run there; after a new
-  signing key, approving here is right. Its first sentence stands again directly above the **Decision**. The page does
-  not refuse.
+  does not fit, a warning at the top says so: it was signed for another Site Login than this form's (browser steps),
+  or with another signing key, or its row was changed after it was approved. The page cannot tell which, so it says to
+  read every step before approving: approving signs the steps shown with this form's key, which is the way back after
+  a new signing key; if the bot's workflow uses another Site Login, a version approved here will not run there. Its
+  first sentence stands again directly above the **Decision**. The page does not refuse.
 - **Review and approve** shows each step list: what it opens, whether it signs in, forms it submits, files it returns,
   what the replay proved, the steps it left out, and the numbered steps. For desktop steps it asks "Which of these steps
   save, send or submit?". The **Decision** is **Approve and sign** or **Reject**. A page left unanswered for an hour
   signs nothing.
-- The last page says `Approved and signed: <name> v<version> is now the version that runs under that name.`, or
-  `Rejected: <name> v<version>. Nothing was signed.` An import is version 1. A file uploaded under the name of an
-  approved bot is its next version (**Running versions** and **What it replaces** read what runs under that name, and
-  the step lists named after it, `<name>-1`, `<name>-2`): the review page says `version 5, replacing version 4`, the
+- The last page says `Approved and signed: <name> version <version> is now the version that runs under that name.`,
+  or `Rejected: <name> version <version>. Nothing was signed.` An import of a new name is version 1. A file uploaded
+  under a name used before gets the number after the highest any row of that name has (**Running versions** and
+  **What it replaces** read the rows of that name, and of the step lists named after it, `<name>-1`, `<name>-2`). Under
+  the name of an approved bot it replaces what runs: the review page says `version 5, replacing version 4`, the
   part of each step list that has a running version says how it differs from that version (**Compared with the
   running version**, the change path's comparison, for each list: `<name>: changed from the approved version 4: step
-  6.`, or `unchanged`, or that it could not be compared; a new list says nothing; which desktop steps are writes is
+  6: value "2026-09-15" → "2026-09-30".`, or `unchanged`, or that it could not be compared; a new list says nothing; which desktop steps are writes is
   chosen again on the review page, so that mark is not compared, and the line says so), and
   the last page `Approved and signed: <name> version 5 is now the version that runs, replacing version 4.` or
-  `Rejected: <name> v5. Nothing was signed. Version 4 keeps running.` After a change or a re-sign it says
+  `Rejected: <name> version 5. Nothing was signed. Version 4 keeps running.` After a change or a re-sign it says
   `Signed again: <name> version N, unchanged.`, `Changed: <name> version N is now the version that runs, replacing
   version M.`, or `Nothing changed: <name> version M keeps running.` When Sign steps signed a step list, it
   also downloads the workflow that runs the bot. When nothing was signed (rejected, or Sign steps refused), it neither
@@ -157,11 +164,17 @@ after `approvalTimeoutHours` (72), then:
 | `status` | string | `pending`, `active`, `superseded`, `rejected` or `expired` |
 | `expiresAt` | string | When a `pending` row stops blocking a new repair |
 
-`playwright_runs` gets one row per run of the data feed, and of every workflow the import form hands over.
+`playwright_runs` gets one row per run of the data feed, and of every workflow the import form hands over. A table
+made now has its columns in this order, the ones a person reads first.
 
 | Column | Type | Meaning |
 |---|---|---|
 | `name` | string | The step list's name |
+| `code` | string | Error code, empty on success |
+| `message` | string | What failed, as Run Steps' error item says it (masked as the node masks it), cut to 1,000 characters. Empty on success |
+| `guidance` | string | What to do about it: the same text as the node error's description. Empty on success |
+| `file` | string | The name of the file the run returned, empty when none |
+| `account` | string | The user name the RPA Site Login signed in with, empty without one. Never the password |
 | `lane` | string | `script` (signed steps) or `agent` (a repair or a first run) |
 | `version` | number | The version used, 0 (the data feed) or empty when none |
 | `hash` | string | Hash of those steps: the same as the `hash` of their row in `playwright_steps` |
@@ -169,12 +182,7 @@ after `approvalTimeoutHours` (72), then:
 | `rowCount` | number | Rows returned |
 | `durationMs` | number | Run time |
 | `llmTokens` | number | Model tokens used |
-| `code` | string | Error code, empty on success |
 | `executionId` | string | The n8n execution |
-| `message` | string | What failed, as Run Steps' error item says it (masked as the node masks it), cut to 1,000 characters. Empty on success |
-| `guidance` | string | What to do about it: the same text as the node error's description. Empty on success |
-| `file` | string | The name of the file the run returned, empty when none |
-| `account` | string | The user name the RPA Site Login signed in with, empty without one. Never the password |
 
 In the workflow the import form hands over, a value that was not counted is left empty: `confirmed` and `rowCount`
 when the steps read no rows (for example a run that returns a file), and `lane`, `durationMs` and `llmTokens` for a run
@@ -183,4 +191,6 @@ refused before it started (`locked_out`, `busy`).
 The workflow the import form hands over writes the columns the table has. A `playwright_runs` made by an earlier
 version keeps its columns, and a run never fails on it: the newer columns are left out of its rows. To have them, add
 them to the table in n8n (**Data tables** → `playwright_runs` → add a column, with the name and type above), or delete
-the table and its rows: the next run makes it again. The data feed writes only the first ten columns.
+the table and its rows: the next run makes it again. Rows are written by column name, so a table made in the earlier
+order (`name`, `lane`, `version`, …) gets its rows as before. The data feed writes only the ten columns every table
+has: `name`, `lane`, `version`, `hash`, `confirmed`, `rowCount`, `durationMs`, `llmTokens`, `code`, `executionId`.

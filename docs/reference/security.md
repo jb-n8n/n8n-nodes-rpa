@@ -92,7 +92,10 @@ an **RPA Step Signing** credential that its own project owns, and never one of t
   page of the form and chooses **Approve and sign** or **Reject**. Who can approve depends on how the form signs
   people in:
   - **n8n's sign-in (the default).** The form opens only for n8n users who may run the workflow. Every later page
-    asks for an n8n sign-in too, but any signed-in n8n user who has a page's address can open and submit it. So the
+    asks for an n8n sign-in too, but any signed-in n8n user who has a page's address can open and submit it. A later
+    page's address, such as the review page's `/form-waiting/<execution>?signature=…`, carries a signature n8n made,
+    so the execution number alone does not open it. A signed-in user who has the whole address can read the steps
+    there; approving still needs a place on the Approver Allowlist. So the
     approver is the n8n user who submits **Review and approve**, as n8n reports it. Sign Steps signs only when that
     user is on **Sign steps → Approver Allowlist**, and the row records their n8n address. Nobody signed in, or a user
     not on the list, signs nothing. Removing a person from n8n, or from the list, ends their access. An n8n user who
@@ -103,6 +106,9 @@ an **RPA Step Signing** credential that its own project owns, and never one of t
     password can open the form. The pages after the first are not behind the password: anyone who has a page's
     address can open and submit it, and n8n puts that address in the browser's address bar. The row records the
     address in **Sign steps → Approver Allowlist**, not who approved.
+- **The form's address.** The setup command gives the form a readable address, `/form/rpa-import`, so that it can be
+  typed on another machine. The address is not a secret: the form's sign-in decides who can open it, in both ways
+  above, and the pages after the first keep their own addresses, which n8n signs.
 - **Values in the form's address.** n8n fills the fields of every page of a form, the review page too, from the
   address the form was opened with. So the import form refuses an address that carries values, before anything is
   read or imported, and an approval never arrives with its answer chosen by whoever made the link.
@@ -136,7 +142,7 @@ an **RPA Step Signing** credential that its own project owns, and never one of t
 
   Sign Steps refuses steps that hold a Site Login secret, and a secret variable appears in steps only by its name.
   Steps still show the sites, apps and fields they use and the other values they type. The page says who can open it.
-  The review page's first line, worked out in n8n from the row it read, says whether and where the steps submitted
+  The review page's first line, worked out in n8n from the row it read, says whether, where and how the steps submitted
   differ from the approved version, so a slip in the box shows before anyone approves.
 - **An old key or an edit.** A row signed with an older key and a row changed in the Data Table after it was approved
   look the same to the current key: neither verifies, and the old key is gone. The row's `hash` column is not keyed,

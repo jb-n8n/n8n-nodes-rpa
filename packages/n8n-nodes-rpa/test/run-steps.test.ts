@@ -889,9 +889,9 @@ describe('outputs', () => {
       ['Sign in: detected:mfa_code: the one-time code workflow did not return a code within 120 s', 'Sign in: the one-time code workflow did not return a code within 120 s', `auth_blocked: ${CODE_WORKFLOW_GUIDANCE}`],
       ['Sign in: detected:mfa_totp: the site asked for a one-time code and the Site Login has no TOTP Secret',
         'Sign in: the site asked for a one-time code and the Site Login has no TOTP Secret', `auth_blocked: ${NO_TOTP_SECRET_GUIDANCE}`],
-      ['Sign in: detected:mfa_sms', 'Sign in: mfa_sms', 'auth_blocked: The site asked for a second factor that this run could not answer; the first line says which. A push message or a hardware key needs a person to sign in.'],
+      ['Sign in: detected:mfa_sms', 'Sign in: mfa_sms', 'auth_blocked: The site asked for a second factor that this run could not answer; the message says which. A push message or a hardware key needs a person to sign in.'],
       // A detect step that found the code page is not the missing seed: the steps have no code step.
-      ['Check sign-in: detected:mfa_totp', 'Check sign-in: mfa_totp', 'auth_blocked: The site asked for a second factor that this run could not answer; the first line says which. A push message or a hardware key needs a person to sign in.'],
+      ['Check sign-in: detected:mfa_totp', 'Check sign-in: mfa_totp', 'auth_blocked: The site asked for a second factor that this run could not answer; the message says which. A push message or a hardware key needs a person to sign in.'],
     ];
     for (const [message, shown, description] of cases) {
       const err = await executeRunSteps(ctx(), fakeEngine(() => taskFail('auth_blocked', message))).catch((e: unknown) => e);

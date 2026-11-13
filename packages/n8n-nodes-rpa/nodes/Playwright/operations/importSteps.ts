@@ -64,7 +64,7 @@ export const WRITES_FOR_APPROVAL =
   "These browser steps are not replayed at import, because they submit a form, download through a form, type a secret or change a password: they go to approval as written. Review every step, each form's target and each download, and supply the variables in Run steps.";
 /** The guidance for a step document that goes to approval as written and fails the check Sign Steps will make: nothing ran. */
 export const CHECKED_NOT_RUN =
-  "The steps were checked against the rules that Sign Steps and Run Steps apply, and were not run: the first line says which rule they break. Correct the step document, or the Site Login's settings, and import it again.";
+  "The steps were checked against the rules that Sign Steps and Run Steps apply, and were not run: the message says which rule they break. Correct the step document, or the Site Login's settings, and import it again.";
 /** A UiPath project with browser sequences, imported without an RPA Browser credential (its desktop sequences need none). */
 export const IMPORT_BROWSER_NEEDED = 'The project has browser steps: attach an RPA Browser credential to replay them.';
 
@@ -95,6 +95,8 @@ interface ImportParams {
   codeTimeoutMs: number;
   /** Options → Version: the version every draft gets (1 by default). */
   version: number;
+  /** Options → Approved Before Hand-Over: this workflow approves the steps before it hands the workflow file over. */
+  approvedBeforeHandOver: boolean;
   common: CommonOptions;
 }
 
@@ -126,6 +128,7 @@ function readImportParams(ctx: NodeContext, i: number): ImportParams {
     vars: variablesOption(ctx.getNodeParameter('options.variables', i, {})),
     breakerResetKey,
     version,
+    approvedBeforeHandOver: asBoolean(ctx.getNodeParameter('options.approvedBeforeHandOver', i, false), false),
     ...codeWorkflowOptions(ctx, (option) => field(ctx.getNodeParameter('options', i, {}), option)),
     common,
   };
@@ -301,7 +304,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
   if (flow) {
     try {
       const file = workflowFile(flow, imported.drafts, {
-        name: p.name, desktopDrafts, source, credentials: passedOn(node, (type) => hiddenByRunsOn(ctx, type)),
+        name: p.name, desktopDrafts, source, credentials: passedOn(node, (type) => hiddenByRunsOn(ctx, type)), approvedBeforeHandOver: p.approvedBeforeHandOver,
         ...(p.codeWorkflowId ? { codeWorkflow: { id: p.codeWorkflowId, timeoutSeconds: p.codeTimeoutMs / 1000 } } : {}),
         run: { maxSeconds: p.common.maxSeconds, allowedHosts: p.common.allowedHosts, allowPrivateNetwork: p.common.allowPrivateNetwork, idPatterns },
       });

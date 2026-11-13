@@ -108,7 +108,7 @@
         "resource": "table",
         "operation": "create",
         "tableName": "playwright_runs",
-        "columns": { "column": [{ "name": "name", "type": "string" }, { "name": "lane", "type": "string" }, { "name": "version", "type": "number" }, { "name": "hash", "type": "string" }, { "name": "confirmed", "type": "boolean" }, { "name": "rowCount", "type": "number" }, { "name": "durationMs", "type": "number" }, { "name": "llmTokens", "type": "number" }, { "name": "code", "type": "string" }, { "name": "executionId", "type": "string" }, { "name": "message", "type": "string" }, { "name": "guidance", "type": "string" }, { "name": "file", "type": "string" }, { "name": "account", "type": "string" }] },
+        "columns": { "column": [{ "name": "name", "type": "string" }, { "name": "code", "type": "string" }, { "name": "message", "type": "string" }, { "name": "guidance", "type": "string" }, { "name": "file", "type": "string" }, { "name": "account", "type": "string" }, { "name": "lane", "type": "string" }, { "name": "version", "type": "number" }, { "name": "hash", "type": "string" }, { "name": "confirmed", "type": "boolean" }, { "name": "rowCount", "type": "number" }, { "name": "durationMs", "type": "number" }, { "name": "llmTokens", "type": "number" }, { "name": "executionId", "type": "string" }] },
         "options": { "createIfNotExists": true }
       },
       "id": "3d6f1a20-7b4c-4e8a-9c11-000000000218",

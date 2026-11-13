@@ -68,21 +68,25 @@ The command creates the **RPA Desktop Runner** credential with the line, an **RP
 the bot runs only steps whose signature matches. You are the approver (`--approver` names another). Then n8n tests
 the connection: the line that starts `tested` says `Connected to the desktop runner`, or why it could not. For a new
 line, such as one printed again with `-Address`, run the command again and paste it: it asks
-`Replace the Connection Line of "RPA Desktop Runner" with the line for …? (y/N)` before it changes anything. The
-command ends with:
+`Replace the Connection Line of "RPA Desktop Runner" with the line for …? (y/N)` before it changes anything. Near
+the end the command prints:
 
 ```text
 The import form is ready.
-  Address:    http://localhost:5678/form/<id>
+  Address:    http://localhost:5678/form/rpa-import
   Sign-in:    the form opens with your n8n sign-in. Who approves is recorded as the n8n user who approved.
 ```
+
+The address ends in `/form/rpa-import`, or in a long id when another form in your n8n has that address already (the
+command says so). Its last lines say whether the Windows machine is connected: `The import form is ready, and the
+Windows machine is connected.`, or `… but the Windows machine is not connected yet.` with the reason and what to do.
 
 If you made an RPA Desktop Runner credential in n8n already, answer `n` instead: the command picks it when your project
 has only that one, and names it. With several, add `--desktop-runner "<its name>"`. It never reads a credential's
 values. The signing key stays in n8n, which does not show it again. The `Signing key:` line says how to keep a copy:
 you need one only to move signed bots to another n8n, so otherwise skip it. Without a copy, a lost key means approving
-every bot again ([sign it again](move-a-bot.md#change-an-approved-bot-or-sign-it-again)). The
-command's last line is about the API key: revoke it when you are done (**Settings → n8n API**, **⋯**, **Revoke**).
+every bot again ([sign it again](move-a-bot.md#change-an-approved-bot-or-sign-it-again)). One
+line is about the API key: revoke it when you are done (**Settings → n8n API**, **⋯**, **Revoke**).
 Run the command again at any time: it reuses only what your own project holds, asks first in a shared project, and
 leaves a workflow there already as it is. `--form-login basic` serves approvers with no n8n account. To set the form
 up by hand, import `packages/n8n-nodes-rpa/templates/5-import-a-bot.json` ([Templates](../reference/templates.md#set-it-up-by-hand)).
@@ -127,7 +131,7 @@ you use n8n from, and open the form there. [Record a bot](record-a-bot.md) expla
 
    <img src="../images/import-review-page.png" alt="The Review and approve page for the ERP Demo recording: the numbered steps, the tick boxes and the decision" width="360">
 
-3. The last page says `Approved and signed: erp-line-items v1 is now the version that runs under that name.` The
+3. The last page says `Approved and signed: erp-line-items version 1 is now the version that runs under that name.` The
    browser downloads `erp-line-items.workflow.json`, the workflow that runs the bot. The signed row records the email
    address of your n8n user as **approvedBy**. Someone not on **Sign steps → Approver Allowlist** cannot approve: the last page says
    `Sign Steps refused` and nothing is signed.

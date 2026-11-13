@@ -233,7 +233,7 @@ describe('Import Steps: the description', () => {
       'File Type', 'File Name Pattern (Regex)', 'Minimum Size (Bytes)', 'Required Columns', 'Minimum Rows',
     ]);
     expect(optionsFor('importSteps').map((o) => o.name)).toEqual([
-      'timeout', 'maxSeconds', 'viewport', 'allowedHosts', 'allowPrivateNetwork', 'variables', 'codeWorkflowId', 'codeTimeout', 'version', 'breakerResetKey', 'saveTrace', 'maxItems',
+      'timeout', 'maxSeconds', 'viewport', 'allowedHosts', 'allowPrivateNetwork', 'variables', 'codeWorkflowId', 'codeTimeout', 'version', 'approvedBeforeHandOver', 'breakerResetKey', 'saveTrace', 'maxItems',
     ]);
     // Credentials: the browser, the Site Login and its Redis guard store; then the signing key and the desktop runner,
     // which the import only passes on to the workflow file (Sign Steps signs, and the import never reads them).
@@ -1405,7 +1405,7 @@ describe('Import Steps: a step document', () => {
       const thrown = await run(watched(), { params: docParams(doc, {}, { variables }), items: textItem, continueOnFail: false }).catch((e: unknown) => e);
       expect(thrown).toBeInstanceOf(NodeOperationError);
       expect((thrown as NodeOperationError).description).toBe(
-        'policy_violation: The steps were checked against the rules that Sign Steps and Run Steps apply, and were not run: the first line says which rule they break. Correct the step document, or the Site Login\'s settings, and import it again.',
+        'policy_violation: The steps were checked against the rules that Sign Steps and Run Steps apply, and were not run: the message says which rule they break. Correct the step document, or the Site Login\'s settings, and import it again.',
       );
       // Sign Steps, given the same steps for approval, refuses them with the same reason.
       const script = real.parseScript({ ...doc, name: 'sap-export', version: 1 });
