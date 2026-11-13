@@ -1598,7 +1598,7 @@ const CLI_PROJECTS = {
   'P-other': { id: 'P-other', name: 'Oth Er <other@example.com>', type: 'personal', creatorId: 'u-other' },
   'P-team': { id: 'P-team', name: 'Ops', type: 'team', creatorId: 'u-other' },
 };
-interface CliState { credentials: (Cred & { updatedAt?: string })[]; workflows: any[]; calls: { command: string; args: string[]; secretsInEnv: string[] }[]; inputs: { path: string; fileMode: string; dirMode: string }[]; fail?: string }
+interface CliState { credentials: (Cred & { updatedAt?: string; sharedWith?: string[] })[]; workflows: any[]; calls: { command: string; args: string[]; secretsInEnv: string[] }[]; inputs: { path: string; fileMode: string; dirMode: string }[]; fail?: string }
 let cliRoots: string[] = [];
 afterEach(() => {
   for (const r of cliRoots) rmSync(r, { recursive: true, force: true });
@@ -1609,7 +1609,7 @@ afterEach(() => {
  * n8n with its command line on PATH: a running n8n (/healthz, its forms, from the same state), seen in a made-up /proc as
  * one process "n8n" of this user, with HOME and its database file open, unless the options say otherwise.
  */
-async function cliN8n(o: { credentials?: Cred[]; workflows?: any[]; environ?: Record<string, string>; uid?: number; dbOpen?: boolean; noPackage?: boolean; fail?: string; processes?: number } = {}) {
+async function cliN8n(o: { credentials?: (Cred & { sharedWith?: string[] })[]; workflows?: any[]; environ?: Record<string, string>; uid?: number; dbOpen?: boolean; noPackage?: boolean; fail?: string; processes?: number } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'r16-cli-'));
   cliRoots.push(root);
   const home = join(root, 'home');
@@ -1624,6 +1624,8 @@ async function cliN8n(o: { credentials?: Cred[]; workflows?: any[]; environ?: Re
   const stateFile = join(root, 'state.json');
   writeFileSync(stateFile, JSON.stringify({
     projects: CLI_PROJECTS, ownerProject: 'P-owner', fail: o.fail, calls: [], inputs: [],
+    users: [{ id: 'u-owner', email: 'owner@example.com', roleSlug: 'global:owner' }, { id: 'u-other', email: 'other@example.com', roleSlug: 'global:member' }],
+    relations: [{ userId: 'u-owner', projectId: 'P-owner', role: 'project:personalOwner' }, { userId: 'u-other', projectId: 'P-other', role: 'project:personalOwner' }],
     credentials: (o.credentials ?? []).map((c) => ({ projectId: 'P-owner', ...c })), workflows: (o.workflows ?? []).map((w) => ({ projectId: 'P-owner', ...w })),
   }));
   const proc = join(root, 'proc');
@@ -1702,28 +1704,67 @@ describe("setup through n8n's own command line, with no API key", () => {
     expectNoSecrets(r.out, [signing.data.secretKey, 'made-up-site-pw']);
   });
 
-  it('again: asks whether the personal project it found is yours; with yes nothing is imported or replaced', async () => {
+  it("again: nothing imported or replaced, no question: its project is n8n's owner's, named by n8n's own tables", async () => {
     const f = await cliN8n({ credentials: [SITE] });
-    expect((await run(guide(f, '--site-login', 'RPA Site Login account'), f.env)).code).toBe(0);
+    const first = await run(guide(f, '--site-login', 'RPA Site Login account'), f.env);
+    expect(first.code, first.out).toBe(0);
+    expect(first.stdout.split('\n')[2]).toBe('  Your project: n8n\'s owner\'s personal project "Own Er <owner@example.com>" (id P-owner), where n8n\'s command line puts what it imports.');
     const key = f.state().credentials.find((c) => c.type === 'playwrightScriptSigningApi')!;
     const before = imports(f).length;
-    const piped = await run(guide(f, '--site-login', 'RPA Site Login account'), f.env);
-    expect(piped.code).toBe(2);
-    expect(piped.out).toContain('Found in the personal project "Own Er <owner@example.com>" (id P-owner):');
-    expect(piped.out).toContain('Without a terminal, add --reuse-project-credentials to use it. Nothing was changed.');
-    const no = await runAtTerminal(guide(f, '--site-login', 'RPA Site Login account'), f.env, [[/Connect a Windows machine now/, 'n'], [/Is that your personal project\? \(y\/N\) /, 'n']]);
-    expect(no.code).toBe(1);
-    const yes = await runAtTerminal(guide(f, '--site-login', 'RPA Site Login account'), f.env, [[/Connect a Windows machine now/, 'n'], [/Is that your personal project\? \(y\/N\) /, 'y']]);
-    expect(yes.code, yes.out).toBe(0);
-    const flag = await run(guide(f, '--site-login', 'RPA Site Login account', '--reuse-project-credentials'), f.env);
-    expect(flag.code, flag.out).toBe(0);
+    const again = await run(['setup', '--url', f.url, '--site-login', 'RPA Site Login account'], f.env);
+    expect(again.code, again.out).toBe(0);
     expect(imports(f).length, 'nothing imported, nothing published').toBe(before);
     const after = f.state().credentials.find((c) => c.id === key.id)!;
     expect(after.data.secretKey).toBe(key.data.secretKey);
     expect(after.updatedAt).toBe(key.updatedAt);
-    expect(flag.out).toMatch(/reused +credential "RPA Step Signing" .*its key stays as it is/);
-    expect(flag.out).toMatch(/reused +workflow "RPA: 5 Import a bot"/);
-    expect(flag.stdout).toContain('The import form is ready.');
+    expect(again.out).toMatch(/reused +credential "RPA Step Signing" .*its key stays as it is/);
+    expect(again.out).toMatch(/reused +workflow "RPA: 5 Import a bot"/);
+    expect(again.stdout).toContain('The import form is ready.');
+    // The approver of a first run without --approver: n8n's owner, from its user table.
+    const fresh = await cliN8n();
+    const own = await run(['setup', '--url', fresh.url], fresh.env);
+    expect(own.out).toContain("approver owner@example.com: n8n's owner (another with --approver)");
+    expectFilesGone(f);
+  });
+
+  it('ownership from n8n\'s tables: a credential only shared into the owner\'s project, and a form another user owns, are never taken; --reuse-project-credentials does not widen that', async () => {
+    // Another user's "RPA Step Signing", shared into the owner's project; another user's form of the template's name.
+    const THEIRS: Cred & { sharedWith: string[] } = { id: 'c-theirs', name: 'RPA Step Signing', type: 'playwrightScriptSigningApi', data: { secretKey: 'made-up-key-of-another-user-0123456789' }, projectId: 'P-other', sharedWith: ['P-owner'] };
+    const tpl = template();
+    const FORM = { id: 'w-theirs', name: 'RPA: 5 Import a bot', nodes: tpl.nodes, connections: tpl.connections, settings: {}, versionId: 'v0', activeVersionId: null, projectId: 'P-other' };
+    for (const extra of [[], ['--reuse-project-credentials']]) {
+      const f = await cliN8n({ credentials: [THEIRS], workflows: [FORM] });
+      const r = await run(guide(f, ...extra), f.env);
+      expect(r.code, r.out).toBe(0);
+      expect(r.out).toContain('left alone credential "RPA Step Signing" (playwrightScriptSigningApi, id c-theirs): it belongs to another project or user, so it is not used');
+      expect(r.out).toContain('left alone workflow "RPA: 5 Import a bot" (id w-theirs): it belongs to another project or user, so it is not used');
+      const s = f.state();
+      const mine = s.credentials.find((c) => c.type === 'playwrightScriptSigningApi' && c.id !== 'c-theirs')!;
+      expect(mine.projectId).toBe('P-owner');
+      const made = s.workflows.find((w) => w.id !== 'w-theirs');
+      expect(made.projectId).toBe('P-owner');
+      expect(made.nodes.find((n: any) => n.name === 'Sign steps').credentials.playwrightScriptSigningApi.id).toBe(mine.id);
+      expect(s.credentials.find((c) => c.id === 'c-theirs')!.data.secretKey).toBe(THEIRS.data.secretKey);
+      expect(s.workflows.find((w) => w.id === 'w-theirs').activeVersionId).toBeNull();
+      expect(r.out).not.toMatch(/Is that your|Use these\?/);
+    }
+  });
+
+  it("--project-id names another project: what it holds goes through the shared project's question, as on the API key way", async () => {
+    const OTHERS: Cred = { id: 'c-o', name: 'RPA Step Signing', type: 'playwrightScriptSigningApi', data: { secretKey: 'made-up-other-key-0123456789abcdef' }, projectId: 'P-other' };
+    const f = await cliN8n({ credentials: [OTHERS] });
+    const no = await run(guide(f, '--project-id', 'P-other'), f.env);
+    expect(no.code, no.out).toBe(0);
+    expect(no.out).toContain('  Your project: "Oth Er <other@example.com>" (id P-other), as --project-id says.');
+    expect(no.out).toMatch(/The project "Oth Er <other@example\.com>" \(id P-other\) is shared/);
+    expect(no.out).toContain('Not used: without a terminal they are used only with --reuse-project-credentials.');
+    const g = await cliN8n({ credentials: [OTHERS] });
+    const yes = await run(guide(g, '--project-id', 'P-other', '--reuse-project-credentials'), g.env);
+    expect(yes.code, yes.out).toBe(0);
+    expect(yes.out).toMatch(/reused +credential "RPA Step Signing" \(id c-o\)/);
+    const bad = await run(guide(g, '--project-id', 'P-nope'), g.env);
+    expect(bad.code).toBe(2);
+    expect(bad.out).toContain('--project-id: n8n has no project with the id P-nope.');
   });
 
   it('never the wrong database: another HOME, another user, the file not open, several n8n: refused before any call; --no-api-key stops, else the API key way', async () => {
@@ -1768,7 +1809,7 @@ describe("setup through n8n's own command line, with no API key", () => {
     const r = await run(guide(f), f.env);
     expect(r.code).toBe(1);
     expect(r.out).toMatch(/The RPA node is not installed in n8n's folder/);
-    expect(f.state().calls).toEqual([]);
+    expect(imports(f)).toEqual([]);
   });
 
   it('an import that fails: the file is removed all the same, the reason is said, and nothing is published', async () => {
@@ -1777,7 +1818,7 @@ describe("setup through n8n's own command line, with no API key", () => {
     expect(r.code).toBe(1);
     expect(r.out).toMatch(/Could not create the credential "RPA Step Signing" \(n8n's command line did not import the credential "RPA Step Signing" \(.*made-up failure\)\)/);
     expect(f.state().calls.some((c) => c.command === 'publish:workflow')).toBe(false);
-    expect(r.out).toContain('has no credentials and is not published: delete it in n8n.');
+    expect(f.state().workflows).toEqual([]);
     expectFilesGone(f);
   });
 
@@ -1791,10 +1832,10 @@ describe("setup through n8n's own command line, with no API key", () => {
     expect(r.out).toContain('Whether the Windows machine is connected is not known: n8n did not test it.');
     for (const c of f.state().calls) expect(c.secretsInEnv).toEqual([]);
     const QUESTION = /Replace the Connection Line of "RPA Desktop Runner" with the line for rpa\.example\.com:8765\? n8n's command line cannot test the new line first, and the old line will be gone\. \(y\/N\) /;
-    const no = await runAtTerminal(guide(f, '--reuse-project-credentials'), { ...f.env, RPA_CONNECTION_LINE: NEW_LINE }, [[QUESTION, 'n']]);
+    const no = await runAtTerminal(guide(f), { ...f.env, RPA_CONNECTION_LINE: NEW_LINE }, [[QUESTION, 'n']]);
     expect(no.code, no.out).toBe(0);
     expect(f.state().credentials.find((c) => c.id === runner.id)!.data.connectionLine).toBe(LINE);
-    const yes = await runAtTerminal(guide(f, '--reuse-project-credentials'), { ...f.env, RPA_CONNECTION_LINE: NEW_LINE }, [[QUESTION, 'y']]);
+    const yes = await runAtTerminal(guide(f), { ...f.env, RPA_CONNECTION_LINE: NEW_LINE }, [[QUESTION, 'y']]);
     expect(yes.code, yes.out).toBe(0);
     expect(f.state().credentials.find((c) => c.id === runner.id)!.data.connectionLine).toBe(NEW_LINE);
     expectFilesGone(f);
@@ -1809,11 +1850,11 @@ describe("setup through n8n's own command line, with no API key", () => {
     wf.nodes.push({ id: 'n1', name: 'Sticky Note', type: 'n8n-nodes-base.stickyNote', typeVersion: 1, position: [0, 0], parameters: { content: 'x' } });
     writeFileSync(f.stateFile, JSON.stringify(s));
     const QUESTION = /Update this form to this version\? \(y\/N\) /;
-    const no = await runAtTerminal(guide(f, '--reuse-project-credentials'), f.env, [[/Connect a Windows/, 'n'], [QUESTION, 'n']]);
+    const no = await runAtTerminal(guide(f), f.env, [[/Connect a Windows/, 'n'], [QUESTION, 'n']]);
     expect(no.code, no.out).toBe(0);
     expect(no.out).toContain('It is published, and answers at');
     expect(f.state().workflows[0].nodes.some((n: any) => n.name === 'Sticky Note')).toBe(true);
-    const yes = await runAtTerminal(guide(f, '--reuse-project-credentials'), f.env, [[/Connect a Windows/, 'n'], [QUESTION, 'y']]);
+    const yes = await runAtTerminal(guide(f), f.env, [[/Connect a Windows/, 'n'], [QUESTION, 'y']]);
     expect(yes.code, yes.out).toBe(0);
     const [after] = f.state().workflows;
     expect(after.id).toBe(wf.id);

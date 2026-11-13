@@ -22,6 +22,11 @@
 // ('personal' | 'team'), creatorId }. The key owner's user id is the subject of the API key, a JWT
 // (PublicApiKeyService.generateApiKey), and a personal project's creatorId is its user. /projects needs a license.
 //
+// Through n8n's command line (setup/n8n-cli.mts) the same rule holds: n8n's own tables (export:entities) name the owner,
+// the owner's personal project (where n8n's import puts things by default, and this run's project unless --project-id
+// names another), and each credential's and workflow's project with its role. Only what this run's project owns is
+// reused; a credential merely shared into it is not.
+//
 // It never rewrites what is there on its own: a credential or workflow of its project with the same name is reused as it
 // is, and a reused workflow must match the template (node names and types, credentials of its project) before it is
 // published. Only a flag made for it changes one: --new-form-password (the form's login) and --replace-signing-key,
@@ -37,7 +42,7 @@ import { CREDENTIALS, parseConnectionLine } from '../nodes/Playwright/config.js'
 import {
   browserCredentialData, clean, type Client, createClient, createRedactor, isLoopback, MIN_BROWSER_TOKEN_LENGTH, parseBrowserUrl, parseN8nUrl,
 } from './n8n-api.mjs';
-import { checkSameN8n, cliClient, createCli, findN8n, n8nFolderOf, removeSecretDirs } from './n8n-cli.mjs';
+import { checkSameN8n, CliError, cliClient, createCli, findN8n, n8nFolderOf, removeSecretDirs, type Ownership } from './n8n-cli.mjs';
 
 const DEFAULT_URL = 'http://localhost:5678';
 const WORKFLOW_NAME = 'RPA: 5 Import a bot';
@@ -96,8 +101,7 @@ const USAGE = [
   '  --project-id <id>      the n8n project to work in (default: the API key owner\'s personal project). Only what that',
   '                         project owns is reused.',
   '  --reuse-project-credentials  in a shared project, use the credentials and the workflow of these names found there',
-  '                         without asking (anyone in the project could have made them). Through n8n\'s command line, which',
-  '                         does not say whose a project is: use what your personal project holds without asking.',
+  '                         without asking (anyone in the project could have made them).',
   `  --new-workflow         leave a "${WORKFLOW_NAME}" that differs from the template alone and make a fresh one, with the date in its name.`,
   '                         With --site-login: a second form for that Site Login (see --site-login).',
   '',
@@ -273,7 +277,7 @@ interface Inputs {
   /** n8n's own address for its forms, when n8n's environment gives it here (formBase); undefined otherwise. */
   formBase?: string;
   /** The way through n8n's command line: set when this run takes it. */
-  cli?: { tagOwned: (items: any[], projectId: string) => Promise<void>; folder: string; postgres: boolean };
+  cli?: { ownership: Ownership; folder: string; postgres: boolean };
 }
 
 /** How to reach the way without an API key, said when it is not possible. */
@@ -286,7 +290,6 @@ const CLI_HOW = "Run this as n8n's user where n8n runs, with n8n's settings (in 
 function chooseWay(options: Options, env: NodeJS.ProcessEnv): { command: string; database: string; postgres: boolean } | { why: string; chosen: boolean } {
   if (options.apiKey) return { why: '--api-key was given', chosen: true };
   if ((env.N8N_API_KEY ?? '').trim()) return { why: 'N8N_API_KEY is set', chosen: true };
-  if (options.projectId !== undefined) return { why: "--project-id names a project, and the way through n8n's command line is built for your personal project only", chosen: false };
   const command = findN8n(env);
   if (!command) return { why: 'the command n8n is not here', chosen: false };
   // Tests give a made-up /proc: one cannot be made on another system. Whoever sets it can only fool their own run.
@@ -356,11 +359,23 @@ async function readInputs(options: Options, env: NodeJS.ProcessEnv): Promise<Inp
   }
   if (cliWay) {
     const cli = createCli({ command: cliWay.command, env, redact, clean });
-    const adapter = cliClient(cli, redact, clean);
+    // Who owns what, from n8n's own tables, before anything is decided: the project this run works in, and which
+    // credentials and workflows that project owns (not merely has shared into it).
+    let ownership: Ownership;
+    try {
+      ownership = await cli.ownership();
+    } catch (err) {
+      throw new Stop(`${err instanceof CliError ? err.message : `n8n's command line could not say who owns what (${clean(redact((err as Error)?.message))})`}. Use an API key (--api-key). Nothing was changed.`);
+    }
+    const project = options.projectId !== undefined ? ownership.projects.get(options.projectId) : ownership.ownerProject;
+    if (!project) throw new Stop(`--project-id: n8n has no project with the id ${clean(options.projectId)}. Nothing was changed.`, 2);
+    say(options.projectId !== undefined
+      ? `  Your project: "${clean(project.name, project.id)}" (id ${clean(project.id)}), as --project-id says.`
+      : `  Your project: n8n's owner's personal project "${clean(project.name, project.id)}" (id ${clean(project.id)}), where n8n's command line puts what it imports.`);
     return {
-      options, origin: n8n.origin, plaintext: false, client: adapter, line, browser,
+      options, origin: n8n.origin, plaintext: false, client: cliClient(cli, ownership, redact, clean), line, browser, userId: ownership.owner.id,
       formBase: formBase(env, new URL(n8n.origin).hostname),
-      cli: { tagOwned: adapter.tagOwned, folder: n8nFolderOf(env, process.cwd()), postgres: cliWay.postgres },
+      cli: { ownership, folder: n8nFolderOf(env, process.cwd()), postgres: cliWay.postgres },
     };
   }
   const claims = keyClaims(apiKey);
@@ -1070,33 +1085,6 @@ async function checkCli(inputs: Inputs, types: { type: string; fields: string[] 
   say(`  The RPA node in n8n: version ${clean(pkg.version)}.`);
 }
 
-/**
- * Through n8n's command line, which does not say who runs it or whose a credential is: the personal project that holds
- * the workflows of this run's names, when the person says it is theirs (or --reuse-project-credentials). Undefined when
- * no personal project holds one: the run then learns its project from the workflow it makes, which n8n's command line
- * puts in the n8n owner's personal project. Those of a team project are left alone; several personal projects stop it.
- */
-async function cliHome(named: any[], reuse: boolean): Promise<string | undefined> {
-  const personal = new Map<string, any>();
-  for (const w of named) {
-    const p = ownerEntryProject(w);
-    if (p?.type === 'personal' && typeof p.id === 'string' && p.id) personal.set(p.id, p);
-  }
-  const label = (p: any) => `"${clean(p.name, p.id)}" (id ${clean(p.id)})`;
-  if (personal.size > 1) {
-    throw new Stop(`Workflows of this name are in ${personal.size} personal projects, ${[...personal.values()].map(label).join(', ')}, and n8n's command line does not say which one is yours. Use an API key (--api-key), which tells, or rename those that are not yours. Nothing was changed.`);
-  }
-  if (!personal.size) return undefined;
-  const [p] = personal.values();
-  say(`Found in the personal project ${label(p)}:`);
-  for (const w of named.filter((x) => ownerEntryProject(x)?.id === p.id)) say(`  workflow "${clean(w.name, w.id)}" (id ${clean(w.id)})`);
-  say("n8n's command line does not say who you are in n8n: this run uses what that project holds only when it is yours.");
-  if (reuse) return p.id;
-  if (!interactive()) throw new Stop('Without a terminal, add --reuse-project-credentials to use it. Nothing was changed.', 2);
-  if (!/^y(es)?$/i.test(await ask('Is that your personal project? (y/N) '))) throw new Stop("Nothing was changed. For someone else's project, use an API key of theirs (--api-key).");
-  return p.id;
-}
-
 async function createWorkflow(client: Client, name: string, nodes: Record<string, any>[], projectId: string | undefined): Promise<Record<string, any>> {
   const t = loadTemplate();
   const r = await client.api('POST', '/workflows', { name, nodes, connections: t.connections, settings: t.settings ?? { executionOrder: 'v1' }, ...(projectId ? { projectId } : {}) });
@@ -1172,9 +1160,13 @@ async function run(inputs: Inputs): Promise<number> {
   // n8n's command line, the personal project that holds these workflows, when the person says it is theirs.
   const projectId = options.projectId;
   shared.reuse = options.reuseProject;
-  let home = projectId ?? (inputs.cli ? await cliHome(named, options.reuseProject) : await personalProject(client, workflows.items, inputs.userId));
-  if (projectId) setProject(await projectOf(client, workflows.items, projectId), projectId, inputs.userId);
-  if (inputs.cli && home) await inputs.cli.tagOwned(list.items, home);
+  // Through n8n's command line, its owner's personal project, named by n8n's own tables (readInputs): what its import uses
+  // by default. A project found holding these names is never taken for this run's: what another project holds goes
+  // through the same question as on the API key way.
+  const own = inputs.cli?.ownership;
+  let home = projectId ?? (own ? own.ownerProject.id : await personalProject(client, workflows.items, inputs.userId));
+  if (own) setProject(projectId ? own.projects.get(projectId) : own.ownerProject, home as string, inputs.userId, !projectId);
+  else if (projectId) setProject(await projectOf(client, workflows.items, projectId), projectId, inputs.userId);
 
   // The workflow: one of this project's that matches the template.
   const ours = home ? named.filter((w) => ownerProject(w, 'workflow') === home) : [];
@@ -1294,7 +1286,7 @@ async function run(inputs: Inputs): Promise<number> {
   let approver = options.approver;
   if (!workflow && approver === undefined) {
     approver = await keyOwnerEmail(client, inputs.userId);
-    if (approver) say(`approver ${approver}: the API key's owner (another with --approver)`);
+    if (approver) say(`approver ${approver}: ${inputs.cli ? "n8n's owner" : "the API key's owner"} (another with --approver)`);
     else if (!interactive()) throw new Stop('Give your email address with --approver: it goes into the Approver Allowlist of Sign steps.', 2);
     else approver = checkApprover(await ask(basic ? 'Your email address (recorded as the approver of each bot): ' : 'Your n8n email address (the approver of each bot): '));
   }
@@ -1326,7 +1318,6 @@ async function run(inputs: Inputs): Promise<number> {
       // Made without a projectId, so n8n put it in the key owner's personal project: nothing to ask about there.
       if (home) setProject(ownerEntryProject(r.json), home, inputs.userId, !projectId);
       if (!home) say('Note: n8n does not say which project owns the new workflow, so no credential of the same name is reused: fresh ones are made.');
-      if (home && inputs.cli) await inputs.cli.tagOwned(list.items, home);
       if (!home && SITE) throw new Stop(`--site-login: n8n does not say which project owns the new workflow, so this run cannot tell that "${clean(SITE.name)}" is yours. Pick it on "${NODE.importSteps}" and "${NODE.signSteps}" in n8n instead.`);
       findAll();
       if (shared.is && !(await useFound([...found].filter(([, f]) => f.mine).map(([, f]) => ({ kind: 'credential', name: String(f.mine.name), id: String(f.mine.id) }))))) {

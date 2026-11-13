@@ -9,15 +9,19 @@
 // - Overwrites. import:credentials and import:workflow replace a credential or workflow of the same id without asking
 //   (and an import over a published workflow takes its form down). New ids are random and checked to be free first.
 //
+// - Who owns what. export:credentials does not say which project owns a credential, and --projectId lists those shared
+//   into a project too. Cli.ownership reads it from n8n's own tables instead (see there).
+//
 // Secrets: a credential reaches n8n only through a file of mode 0600 in a directory of mode 0700 made for it, on a memory
 // file system when there is one (/dev/shm), removed right after the import, also when it fails or the process is
 // stopped. No secret is ever in a command's arguments, and the children get this process's environment without the
 // setup command's own secrets (the API key, a Connection Line, the browser token).
 import { spawn } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { accessSync, closeSync, constants, mkdtempSync, openSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, isAbsolute, join, resolve } from 'node:path';
+import { unzipSync } from 'fflate';
 
 /** The setup command's own secrets: never handed on to n8n's command line. */
 const OWN_SECRETS = ['N8N_API_KEY', 'RPA_CONNECTION_LINE', 'RPA_BROWSER_TOKEN'];
@@ -193,7 +197,7 @@ function secretBase(): string {
  * Writes text to a file only this user can read (0600, in a new directory of mode 0700), runs use(path), and removes the
  * directory afterwards, whatever happens.
  */
-export async function withSecretFile<T>(text: string, use: (path: string) => Promise<T>): Promise<T> {
+export async function withSecretFile<T>(text: string, use: (path: string, dir: string) => Promise<T>): Promise<T> {
   guardExit();
   const dir = mkdtempSync(join(secretBase(), 'rpa-setup-'));
   secretDirs.add(dir);
@@ -205,11 +209,34 @@ export async function withSecretFile<T>(text: string, use: (path: string) => Pro
     } finally {
       closeSync(fd);
     }
-    return await use(file);
+    return await use(file, dir);
   } finally {
     rmSync(dir, { recursive: true, force: true });
     secretDirs.delete(dir);
   }
+}
+
+/** n8n's AES-256-CBC with a passphrase (n8n-core CipherAes256CBC: "Salted__", an 8-byte salt, MD5 key derivation). */
+function decryptCbc(data: string, passphrase: string): string {
+  const input = Buffer.from(data, 'base64');
+  const salt = input.subarray(8, 16);
+  const password = Buffer.concat([Buffer.from(passphrase, 'binary'), salt]);
+  const h1 = createHash('md5').update(password).digest();
+  const h2 = createHash('md5').update(Buffer.concat([h1, password])).digest();
+  const iv = createHash('md5').update(Buffer.concat([h2, password])).digest();
+  const decipher = createDecipheriv('aes-256-cbc', Buffer.concat([h1, h2]), iv);
+  return Buffer.concat([decipher.update(input.subarray(16)), decipher.final()]).toString('utf8');
+}
+
+/** Who owns what in n8n, as its own tables say. */
+export interface Ownership {
+  owner: { id: string; email?: string };
+  /** The owner's personal project: where import:credentials and import:workflow put what they import by default. */
+  ownerProject: { id: string; name: string; type: string; creatorId: string | null };
+  projects: Map<string, { id: string; name: string; type: string; creatorId: string | null }>;
+  /** Each credential's projects with the role there (credential:owner, credential:user). */
+  credentials: Map<string, { projectId: string; role: string }[]>;
+  workflows: Map<string, { projectId: string; role: string }[]>;
 }
 
 /** An id as n8n makes them: 16 letters and digits. */
@@ -224,8 +251,8 @@ export class CliError extends Error {}
 export interface Cli {
   /** Every credential, by id, name and type only (n8n lists them encrypted; the encrypted data is dropped at once). */
   listCredentials(): Promise<{ id: string; name: string; type: string }[]>;
-  /** The ids of the credentials of one project (n8n's command line says which project a credential is in only this way). */
-  credentialIdsOf(projectId: string): Promise<Set<string>>;
+  /** Who owns what (see createCli's ownership). */
+  ownership(): Promise<Ownership>;
   credentialExists(id: string): Promise<boolean>;
   /** Every workflow, with its nodes, whether it is published, and the project that owns it (shared[].project). */
   listWorkflows(): Promise<any[]>;
@@ -292,9 +319,52 @@ export function createCli({ command, env, redact, clean }: { command: string; en
       const items = await list(['export:credentials', '--all'], NO_CREDENTIALS, 'credentials');
       return items.map((c) => ({ id: String(c?.id ?? ''), name: String(c?.name ?? ''), type: String(c?.type ?? '') }));
     },
-    async credentialIdsOf(projectId) {
-      const items = await list(['export:credentials', `--projectId=${projectId}`], NO_CREDENTIALS, 'credentials of your project');
-      return new Set(items.map((c) => String(c?.id ?? '')));
+    /**
+     * Who owns what: n8n's own tables user, project, project_relation, shared_credentials and shared_workflow, from
+     * export:entities, the command line's export of every table. The export goes to a directory of mode 0700 made for it,
+     * encrypted with a random key this run makes (--keyFile, a 0600 file beside it), and is removed right after. Only the
+     * five tables are opened and decrypted with that key, and only these columns kept: a user's id, email and role, a
+     * project's id, name, type and creator, each sharing's credential or workflow, project and role. No credential's data
+     * is decrypted (n8n keeps it encrypted with its own key inside the export, and this run never opens that table).
+     */
+    async ownership() {
+      const key = randomBytes(32).toString('hex');
+      const tables = await withSecretFile(key, async (keyFile, dir) => {
+        const out = join(dir, 'export');
+        const r = await call(['export:entities', `--outputDir=${out}`, `--keyFile=${keyFile}`, '--includeDataTableRows=false']);
+        let zip: Buffer;
+        try {
+          zip = readFileSync(join(out, 'entities.zip'));
+        } catch {
+          throw new CliError(`n8n's command line did not export who owns what (${said(r.out)})`);
+        }
+        const wanted = /^(user|project|projectrelation|sharedcredentials|sharedworkflow)(\.\d+)?\.jsonl$/;
+        const files = unzipSync(new Uint8Array(zip), { filter: (f) => wanted.test(f.name) });
+        const rows: Record<string, any[]> = { user: [], project: [], projectrelation: [], sharedcredentials: [], sharedworkflow: [] };
+        for (const [name, bytes] of Object.entries(files)) {
+          const table = (wanted.exec(name) as RegExpExecArray)[1];
+          for (const line of Buffer.from(bytes).toString('utf8').split('\n').filter(Boolean)) {
+            for (const row of decryptCbc(line, key).split('\n').filter(Boolean)) {
+              const r0 = JSON.parse(row);
+              // Only the columns used here: a user row also holds a password hash and settings, never kept.
+              rows[table].push(table === 'user' ? { id: r0.id, email: r0.email, roleSlug: r0.roleSlug } : r0);
+            }
+          }
+        }
+        return rows;
+      });
+      const owners = tables.user.filter((u) => u?.roleSlug === 'global:owner');
+      if (owners.length !== 1) throw new CliError(`n8n's tables name ${owners.length} owners, so this run cannot tell whose project n8n's command line imports into`);
+      const owner = { id: String(owners[0].id), email: typeof owners[0].email === 'string' ? owners[0].email : undefined };
+      const projects = new Map<string, Ownership['ownerProject']>(tables.project.map((p) => [String(p.id), { id: String(p.id), name: String(p.name ?? ''), type: String(p.type ?? ''), creatorId: p.creatorId == null ? null : String(p.creatorId) }]));
+      const personal = tables.projectrelation.filter((r) => String(r?.userId) === owner.id && r?.role === 'project:personalOwner').map((r) => projects.get(String(r.projectId))).filter((p) => p?.type === 'personal');
+      if (personal.length !== 1) throw new CliError("n8n's tables do not name the owner's personal project");
+      const shares = (rows: any[], idKey: string) => {
+        const map = new Map<string, { projectId: string; role: string }[]>();
+        for (const r of rows) map.set(String(r[idKey]), [...(map.get(String(r[idKey])) ?? []), { projectId: String(r.projectId), role: String(r.role) }]);
+        return map;
+      };
+      return { owner, ownerProject: personal[0] as Ownership['ownerProject'], projects, credentials: shares(tables.sharedcredentials, 'credentialsId'), workflows: shares(tables.sharedworkflow, 'workflowId') };
     },
     async credentialExists(id) {
       const r = await call(['export:credentials', `--id=${id}`]);
@@ -342,9 +412,10 @@ const asApi = (w: any) => (w ? { ...w, active: w.activeVersionId != null || w.ac
  *   one the person agreed to bring up to date), imported over it; n8n's import unpublishes it until it is published again.
  * - POST /workflows/{id}/activate: publish:workflow.
  */
-export function cliClient(cli: Cli, redact: (text: unknown) => string, clean: (text: unknown, fallback?: unknown) => string) {
-  /** Credential items, tagged with the project that owns them once known (n8n's command line lists them without it). */
+export function cliClient(cli: Cli, own: Ownership, redact: (text: unknown) => string, clean: (text: unknown, fallback?: unknown) => string) {
+  /** Credential items, with their projects and roles there from n8n's tables, as n8n's public API lists them (shared[]). */
   let credentials: { id: string; name: string; type: string; shared?: unknown[] }[] | undefined;
+  const sharedOf = (id: string) => (own.credentials.get(id) ?? []).map((s) => ({ id: s.projectId, role: s.role }));
   const failed = (err: unknown) => answer(500, { message: err instanceof CliError ? err.message : `n8n's command line failed (${clean(redact((err as Error)?.message))})` });
 
   async function api(method: string, path: string, body?: any): Promise<Answer> {
@@ -360,7 +431,9 @@ export function cliClient(cli: Cli, redact: (text: unknown) => string, clean: (t
         for (let i = 0; i < 3 && (await cli.credentialExists(id)); i++) id = newId();
         if (await cli.credentialExists(id)) return answer(500, { message: 'no free credential id' });
         await cli.importCredential({ id, name: body.name, type: body.type, data: body.data }, body.projectId);
-        credentials?.push({ id, name: body.name, type: body.type, ...(body.projectId ? { shared: [{ id: body.projectId, role: 'credential:owner' }] } : {}) });
+        // n8n's import makes the project it imports into (the owner's personal project by default) the owner.
+        own.credentials.set(id, [{ projectId: body.projectId ?? own.ownerProject.id, role: 'credential:owner' }]);
+        credentials?.push({ id, name: body.name, type: body.type, shared: sharedOf(id) });
         return answer(200, { id, name: body.name, type: body.type });
       }
       if ((m = /^PATCH \/credentials\/([^/]+)$/.exec(route))) {
@@ -392,6 +465,8 @@ export function cliClient(cli: Cli, redact: (text: unknown) => string, clean: (t
         return w && w.activeVersionId === w.versionId ? answer(200, asApi(w)) : answer(500, { message: "n8n's command line did not publish it" });
       }
       if (/^POST \/credentials\/[^/]+\/test$/.test(route)) return answer(501, { message: "n8n's command line cannot test a credential" });
+      // n8n's owner's address, from its user table (the default approver, as an API key's owner is on that way).
+      if ((m = /^GET \/users\/([^/]+)$/.exec(route))) return decodeURIComponent(m[1]) === own.owner.id && own.owner.email ? answer(200, { id: own.owner.id, email: own.owner.email }) : answer(404, { message: 'Not Found' });
       return answer(501, { message: `n8n's command line cannot do this (${route.replace(/\/[^/ ]+$/, '/…')})` });
     } catch (err) {
       return failed(err);
@@ -406,7 +481,7 @@ export function cliClient(cli: Cli, redact: (text: unknown) => string, clean: (t
   async function listAll(path: string): Promise<{ ok: true; items: any[] } | { ok: false; response: Answer }> {
     try {
       if (path === '/credentials') {
-        credentials ??= await cli.listCredentials();
+        credentials ??= (await cli.listCredentials()).map((c) => ({ ...c, shared: sharedOf(c.id) }));
         return { ok: true, items: credentials };
       }
       if (path === '/workflows') return { ok: true, items: (await cli.listWorkflows()).map(asApi) };
@@ -416,11 +491,5 @@ export function cliClient(cli: Cli, redact: (text: unknown) => string, clean: (t
     }
   }
 
-  /** Tags the listed credentials of a project as owned by it (n8n's command line lists a project's credentials, not who owns each). */
-  async function tagOwned(items: any[], projectId: string) {
-    const ids = await cli.credentialIdsOf(projectId);
-    for (const c of items) if (ids.has(String(c?.id))) c.shared = [{ id: projectId, role: 'credential:owner' }];
-  }
-
-  return { api, reason, listAll, tagOwned };
+  return { api, reason, listAll };
 }

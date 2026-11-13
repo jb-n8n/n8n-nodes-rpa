@@ -1,8 +1,10 @@
 // A fake of n8n 2.45's command line for test/setup.test.ts: the commands the setup command uses, on a JSON state file
 // (FAKE_N8N_STATE) instead of a database, with n8n's own output lines. It records each call's arguments, which of the setup
 // command's secrets its environment held (it must hold none), and the mode of each file it imported from.
-import { readFileSync, statSync, writeFileSync, writeSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { createCipheriv, createHash, randomBytes } from 'node:crypto';
+import { mkdirSync, readFileSync, statSync, writeFileSync, writeSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { strToU8, zipSync } from 'fflate';
 
 const file = process.env.FAKE_N8N_STATE;
 const state = JSON.parse(readFileSync(file, 'utf8'));
@@ -43,8 +45,37 @@ function readInput() {
   return JSON.parse(readFileSync(path, 'utf8'));
 }
 
+/** n8n's AES-256-CBC with a passphrase, as n8n-core's CipherAes256CBC writes it. */
+function encrypt(text, key) {
+  const salt = randomBytes(8);
+  const password = Buffer.concat([Buffer.from(key, 'binary'), salt]);
+  const h1 = createHash('md5').update(password).digest();
+  const h2 = createHash('md5').update(Buffer.concat([h1, password])).digest();
+  const iv = createHash('md5').update(Buffer.concat([h2, password])).digest();
+  const c = createCipheriv('aes-256-cbc', Buffer.concat([h1, h2]), iv);
+  return Buffer.concat([Buffer.from('Salted__'), salt, c.update(text), c.final()]).toString('base64');
+}
+
+if (command === 'export:entities') {
+  // n8n's tables, each a .jsonl of encrypted pages, zipped; a credential table too, which the setup command never opens.
+  const key = readFileSync(String(flags.keyFile), 'utf8').trim();
+  state.inputs.push({ path: String(flags.keyFile), fileMode: (statSync(String(flags.keyFile)).mode & 0o777).toString(8), dirMode: (statSync(dirname(String(flags.keyFile))).mode & 0o777).toString(8) });
+  const tables = {
+    user: state.users.map((u) => ({ ...u, password: '$2a$10$madeuphash' })),
+    project: Object.values(state.projects),
+    projectrelation: state.relations,
+    sharedcredentials: state.credentials.flatMap((c) => [{ credentialsId: c.id, projectId: c.projectId, role: 'credential:owner' }, ...(c.sharedWith ?? []).map((p) => ({ credentialsId: c.id, projectId: p, role: 'credential:user' }))]),
+    sharedworkflow: state.workflows.map((w) => ({ workflowId: w.id, projectId: w.projectId, role: 'workflow:owner' })),
+    credentialsentity: state.credentials.map(credentialItem),
+  };
+  const files = Object.fromEntries(Object.entries(tables).filter(([, rows]) => rows.length).map(([name, rows]) => [`${name}.jsonl`, strToU8(`${encrypt(rows.map((r) => JSON.stringify(r)).join('\n'), key)}\n`)]));
+  mkdirSync(String(flags.outputDir), { recursive: true });
+  writeFileSync(join(String(flags.outputDir), 'entities.zip'), zipSync(files));
+  out('✅ Task completed successfully!');
+  done(0);
+}
 if (command === 'export:credentials') {
-  const items = state.credentials.filter((c) => (flags.all ? true : flags.id ? c.id === flags.id : flags.projectId ? c.projectId === flags.projectId : false));
+  const items = state.credentials.filter((c) => (flags.all ? true : flags.id ? c.id === flags.id : flags.projectId ? c.projectId === flags.projectId || (c.sharedWith ?? []).includes(flags.projectId) : false));
   if (!items.length) {
     out('Error exporting credentials. See log messages for details.');
     out('No credentials found with specified filters');
