@@ -224,12 +224,14 @@ describe('npx n8n-nodes-rpa setup', () => {
     expect(stdout).toContain(`${fake.url}/form/${node('Import a bot').webhookId}`);
     expect(stdout).toContain('  Sign-in:    the form opens with your n8n sign-in. Who approves is recorded as the n8n user who approved.');
     expect(stdout).not.toMatch(/User name:|Password:/);
-    expect(stdout).toMatch(/1\. Record a bot.*\n.*2\. Open the form address in your browser and sign in to n8n\. The first time, n8n asks whether the form may use your n8n login: choose Allow\.\n.*3\. Upload the file/);
+    expect(stdout).toMatch(/1\. Record a bot.*\n.*2\. Open the form address in your browser and sign in to n8n\. The first time, n8n asks whether the form may use your n8n login: choose Allow access\.\n.*3\. Upload the file/);
     expect(stdout).toContain('Only the n8n users on "Sign steps" → Approver Allowlist may approve: add others there in n8n.');
+    // n8n's own labels: Settings → n8n API → Create API key, and Revoke on the key's ⋯ menu.
+    expect(stdout).not.toMatch(/Create an API key|Delete it/);
     // The form answered as a sign-in form (a redirect to n8n's authorize page): no note.
     expect(out).not.toMatch(/Note:|WARNING/);
     // The last line: what the API key can do, and what to do with it.
-    expect(stdout.trimEnd().split('\n').at(-1)).toBe('The API key you gave can do everything its owner can in n8n, within its scopes, and it never expires. Delete it in n8n (Settings → n8n API) when the setup is done, or make the next one with an expiry.');
+    expect(stdout.trimEnd().split('\n').at(-1)).toBe('The API key you gave can do everything its owner can in n8n, within its scopes, and it never expires. Revoke it when the setup is done: in n8n, Settings → n8n API, the key\'s ⋯ menu → Revoke. Make the next one with an expiry.');
     expectNoSecrets(out, [signing.data.secretKey]);
   });
 
@@ -239,7 +241,7 @@ describe('npx n8n-nodes-rpa setup', () => {
     expect(own.code, own.out).toBe(0);
     expect(own.stdout).toContain("approver owner@example.com: the API key's owner (another with --approver)");
     expect(fake.state.workflows[0].nodes.find((n) => n.name === 'Sign steps').parameters.approverAllowlist).toBe('owner@example.com');
-    expect(own.stdout.trimEnd().split('\n').at(-1)).toBe('The API key you gave can do everything its owner can in n8n, within its scopes, until 2026-12-01 00:00 UTC. Delete it in n8n (Settings → n8n API) when the setup is done.');
+    expect(own.stdout.trimEnd().split('\n').at(-1)).toBe('The API key you gave can do everything its owner can in n8n, within its scopes, until 2026-12-01 00:00 UTC. Revoke it when the setup is done: in n8n, Settings → n8n API, the key\'s ⋯ menu → Revoke.');
     // A key whose owner n8n does not tell (no user id in it, or no right to read users): asked, or --approver.
     for (const [fakeOptions, key] of [[{}, PLAIN_KEY], [{ users: false }, API_KEY]] as const) {
       const other = await n8n(fakeOptions);
@@ -251,7 +253,7 @@ describe('npx n8n-nodes-rpa setup', () => {
     const plain = await n8n();
     const p = await run(setup(plain.url), { N8N_API_KEY: PLAIN_KEY });
     expect(p.code, p.out).toBe(0);
-    expect(p.stdout.trimEnd().split('\n').at(-1)).toBe('The API key you gave can do everything its owner can in n8n, within its scopes. Delete it in n8n (Settings → n8n API) when the setup is done, or make the next one with an expiry.');
+    expect(p.stdout.trimEnd().split('\n').at(-1)).toBe('The API key you gave can do everything its owner can in n8n, within its scopes. Revoke it when the setup is done: in n8n, Settings → n8n API, the key\'s ⋯ menu → Revoke. Make the next one with an expiry.');
     expectNoSecrets(own.out + p.out, [EXPIRING_KEY]);
   });
 
@@ -420,7 +422,7 @@ describe('npx n8n-nodes-rpa setup', () => {
     const fake = await n8n();
     const { code, out } = await run(setup(fake.url), { N8N_API_KEY: 'wrong-key-0123456789-0123456789' });
     expect(code).toBe(1);
-    expect(out).toMatch(/refused the API key.*Settings → n8n API/);
+    expect(out).toMatch(/refused the API key.*Make an API key in n8n: Settings → n8n API → Create API key \(as the owner or an admin\)\./);
     expect(fake.state.requests).toHaveLength(1);
     expect(out).not.toContain('wrong-key-0123456789-0123456789');
   });

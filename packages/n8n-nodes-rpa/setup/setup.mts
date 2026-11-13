@@ -53,7 +53,7 @@ const NODE = { form: 'Import a bot', importSteps: 'Import steps', signSteps: 'Si
 const DOCS = 'https://github.com/jb-n8n/n8n-nodes-rpa/blob/main/docs';
 const INSTALL_DOC = `${DOCS}/reference/operator.md#install-the-node`;
 const LOST_KEY_DOC = `${DOCS}/reference/security.md#if-the-signing-key-is-lost-or-changed`;
-const WHERE_KEYS = 'Make an API key in n8n: Settings → n8n API → Create an API key (as the owner or an admin).';
+const WHERE_KEYS = 'Make an API key in n8n: Settings → n8n API → Create API key (as the owner or an admin).';
 const USAGE = [
   'Usage: npx n8n-nodes-rpa setup [--url <n8n address>] [--approver <email>] [options]',
   '',
@@ -311,11 +311,12 @@ async function keyOwnerEmail(client: Client, userId: string | undefined): Promis
 /** One line about the API key, at the end of a run: what it can do, when it expires (never the key). */
 function keyAdvice(keyExpires: number | null | undefined): string {
   const can = 'The API key you gave can do everything its owner can in n8n, within its scopes';
-  const where = 'in n8n (Settings → n8n API) when the setup is done';
-  if (typeof keyExpires === 'number') return `${can}, until ${new Date(keyExpires * 1000).toISOString().slice(0, 16).replace('T', ' ')} UTC. Delete it ${where}.`;
-  // n8n sets a key's expiry only when the key is made: a key without one is deleted, or the next one made with one.
-  if (keyExpires === null) return `${can}, and it never expires. Delete it ${where}, or make the next one with an expiry.`;
-  return `${can}. Delete it ${where}, or make the next one with an expiry.`;
+  // n8n's own labels (2.45): the place, then the action, so that the words still lead there when a label changes.
+  const where = "when the setup is done: in n8n, Settings → n8n API, the key's ⋯ menu → Revoke";
+  if (typeof keyExpires === 'number') return `${can}, until ${new Date(keyExpires * 1000).toISOString().slice(0, 16).replace('T', ' ')} UTC. Revoke it ${where}.`;
+  // n8n sets a key's expiry only when the key is made: a key without one is revoked, or the next one made with one.
+  if (keyExpires === null) return `${can}, and it never expires. Revoke it ${where}. Make the next one with an expiry.`;
+  return `${can}. Revoke it ${where}. Make the next one with an expiry.`;
 }
 
 /** The project that owns a list item: its one shared entry with the owner role, or undefined when n8n does not say. */
@@ -850,7 +851,7 @@ async function run(inputs: Inputs): Promise<number> {
   say('Next:');
   say('  1. Record a bot, or pick a bot file you have: an RPA recording, a UiPath project, a Chrome Recorder export, Playwright code or a step document.');
   if (basic) say('  2. Open the form address in your browser and sign in with the user name and password above.');
-  else say('  2. Open the form address in your browser and sign in to n8n. The first time, n8n asks whether the form may use your n8n login: choose Allow.');
+  else say('  2. Open the form address in your browser and sign in to n8n. The first time, n8n asks whether the form may use your n8n login: choose Allow access.');
   say('  3. Upload the file, give the steps a name, and submit. On the next page, review the steps and approve them.');
   if (!basic) say(`  Only the n8n users on "${NODE.signSteps}" → Approver Allowlist may approve: add others there in n8n.`);
   if (runnerRef) {
