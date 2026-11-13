@@ -1134,10 +1134,13 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       binary: { [binaryName]: { data: file.toString('base64'), mimeType: 'application/octet-stream', fileName: 'bot', bytes: file.length } },
     };
   }
+  /** The form's workflow as n8n's expressions see it ($workflow), and the running execution ($execution: its form-waiting address). */
+  const FORM_WORKFLOW = { id: 'wf-5', name: 'RPA: 5 Import a bot (Sample accounts)', active: true };
+  const FORM_EXECUTION = { id: '12', resumeFormUrl: 'http://localhost:5720/form-waiting/12' };
   /** Import steps' parameters as n8n resolves them for one form item: every "={{ … }}" evaluated with $json. */
   /** Import steps' parameters as n8n resolves them for one form item, with the nodes that ran before it (`ran`). */
   function resolved(item: INodeExecutionData, ran: Record<string, INodeExecutionData[][]> = {}): Record<string, unknown> {
-    const walk = (v: unknown): unknown => typeof v === 'string' && v.startsWith('=') ? evaluate(v, { $json: item.json, $: nodesRan(ran) })
+    const walk = (v: unknown): unknown => typeof v === 'string' && v.startsWith('=') ? evaluate(v, { $json: item.json, $: nodesRan(ran), $workflow: FORM_WORKFLOW, $execution: FORM_EXECUTION })
       : typeof v === 'object' && v !== null && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x)])) : v;
     return walk(imp.parameters) as Record<string, unknown>;
   }
@@ -2675,6 +2678,18 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(on('on this form').approvedBeforeHandOver).toBe(true);
     // By email the form hands the file over before anyone approved (template 3 approves later).
     expect(on('by email').approvedBeforeHandOver).toBe(false);
+    // The notes name the form that made the file (IB-4): this workflow's name, and its address when its form has a path
+    // (the setup command sets one). The address is n8n's own base, from the execution's form-waiting address (whose
+    // token, if any, is dropped with everything after the base).
+    expect(on('on this form')).toMatchObject({ importFormName: 'RPA: 5 Import a bot (Sample accounts)', importFormAddress: '' });
+    const address = (path: unknown, resumeFormUrl: string) => evaluate(String((imp.parameters.options as IDataObject).importFormAddress), {
+      $: (name: string) => (name === 'Import a bot' ? { params: { ...form.parameters, options: { ...(form.parameters.options as IDataObject), path } } } : nodesRan({})(name)),
+      $execution: { resumeFormUrl },
+    });
+    expect(address('rpa-import-sample-accounts', 'http://localhost:5720/form-waiting/12')).toBe('http://localhost:5720/form/rpa-import-sample-accounts');
+    expect(address('rpa-import', 'https://n8n.example.com/sub/form-waiting/7?token=abc')).toBe('https://n8n.example.com/sub/form/rpa-import');
+    expect(address(undefined, 'http://localhost:5720/form-waiting/12')).toBe('');
+    expect(address('rpa-import', '')).toBe('');
   });
 
   it('Change or sign again shows the active steps to read in a block of the page, a required choice, one empty box, and five short sentences', () => {
@@ -2933,8 +2948,11 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // form's Site Login, not with keys; then the two causes' advice, shortest first. Its first sentence stands again
     // directly above the Decision.
     const FIT = '⚠ Version 4 does not fit this form: it was signed for another Site Login than "Shop &lt;login&gt;", or with another signing key, or its row was changed after it was approved.';
-    const READ = "This page cannot tell which. Read every step before you approve: approving signs the steps shown here with this form's key, which is the way back after a new signing key.";
-    const WARNING = `<p><strong>${FIT} ${READ} If the bot's workflow uses another Site Login, a version approved here will not run there: put that Site Login on Import steps and Sign steps first.</strong></p>`;
+    // A bot of another Site Login's form opened here (IB-4): the first advice is to change it on that form; the page does
+    // not tell the person to switch this form's Site Login.
+    const READ = "every step before you approve: approving signs the steps shown here with this form's key, which is the way back after a new signing key.";
+    const WARNING = `<p><strong>${FIT} This page cannot tell which. If the bot was approved on the import form of another Site Login, change it on that form: approved here, it would run only with the Site Login "Shop &lt;login&gt;". Otherwise read ${READ}</strong></p>`;
+    expect(WARNING).not.toContain('Import steps and Sign steps');
     // The comparison is with the stored row, whose signature does not fit: it is not called approved, nor unchanged (IB-3).
     const STORED = '<p><b>feed: these are the steps of the stored version 4, whose signature does not fit this form (the warning says what that can mean).</b></p>';
     expect(await head(row(KEY, 'site-b'), KEY, SHOP)).toBe(STORED + NAMED + WARNING);
@@ -2950,7 +2968,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // No Site Login on Sign steps: the line says so, and a version signed for one does not fit.
     const NONE = '<p>Signs for no RPA Site Login. The workflow that runs the bot must have none.</p>';
     expect(await head(row(KEY), KEY)).toBe(UNCHANGED + NONE);
-    expect(await head(row(KEY, SHOP.id), KEY)).toBe(STORED + NONE + `<p><strong>⚠ Version 4 does not fit this form: it was signed for a Site Login, which this form does not have, or with another signing key, or its row was changed after it was approved. ${READ} If the bot's workflow uses a Site Login, a version approved here will not run there: put that Site Login on Import steps and Sign steps first.</strong></p>`);
+    expect(await head(row(KEY, SHOP.id), KEY)).toBe(STORED + NONE + `<p><strong>⚠ Version 4 does not fit this form: it was signed for a Site Login, which this form does not have, or with another signing key, or its row was changed after it was approved. This page cannot tell which. If the bot was approved on the import form of a Site Login, change it on that form: approved here, it would run only without a Site Login. Otherwise read ${READ}</strong></p>`);
     // No key, signature or Site Login data is shown.
     const shown = await head(row(KEY, 'site-b'), KEY, SHOP);
     for (const secret of [KEY, String(row(KEY, 'site-b').signature), 'site-a', 'site-b']) expect(shown).not.toContain(secret);

@@ -53,7 +53,8 @@ first, before anything reads or writes them.
   does not fit, a warning at the top says so: it was signed for another Site Login than this form's (browser steps),
   or with another signing key, or its row was changed after it was approved. The page cannot tell which, so it says to
   read every step before approving: approving signs the steps shown with this form's key, which is the way back after
-  a new signing key; if the bot's workflow uses another Site Login, a version approved here will not run there. Its
+  a new signing key. For browser steps it first says: if the bot was approved on the import form of another Site
+  Login, change it on that form, because approved here it would run only with this form's Site Login. Its
   first sentence stands again directly above the **Decision**. The page does not refuse. The comparison line then
   never calls that version approved and never says unchanged: `<name>: these are the steps of the stored version 4,
   whose signature does not fit this form (the warning says what that can mean).`, or `changed from the stored

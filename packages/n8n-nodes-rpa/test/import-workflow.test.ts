@@ -777,6 +777,14 @@ describe('buildWorkflow', () => {
     expect(content(byName(approved, 'Fill in the variables (d)'))).toBe(
       '### Fill in the variables (gold)\nSecret: make an **RPA Secret Variables** credential, select it on **Desk**, and copy these into it. Type the value there, never here.\n```\nCredential: RPA Secret Variables\nName: password\nMay Be Typed Into: App.exe\n```',
     );
+    // Made by a Site Login's own form (IB-4): the notes name that form and its address, not the default form.
+    const formOpts = { name: 'RPA: 5 Import a bot (Sample *accounts*)', address: 'http://localhost:5720/form/rpa-import-sample-accounts' };
+    const fromForm = buildWorkflow({ name: 'd', nodes: [{ kind: 'desktop', sequence: 1, displayName: 'Desk', draft: 'd' }] }, [], { name: 'd', desktopDrafts: [desktop(['password'], ['password'])], source: 'recording', importForm: formOpts });
+    expect(content(byName(fromForm, 'Fill in the variables (d)'))).toContain('import the recording with **RPA: 5 Import a bot (Sample \\*accounts\\*)** at `http://localhost:5720/form/rpa-import-sample-accounts` and approve `d`');
+    expect(content(byName(fromForm, 'About this import'))).toContain("- To change the steps or sign them again, use **RPA: 5 Import a bot (Sample \\*accounts\\*)** at `http://localhost:5720/form/rpa-import-sample-accounts` with the bot's name.");
+    // An address that is not http(s) is left out; no name: the default form.
+    const odd = buildWorkflow({ name: 'd', nodes: [{ kind: 'desktop', sequence: 1, displayName: 'Desk', draft: 'd' }] }, [], { name: 'd', desktopDrafts: [desktop(['password'], ['password'])], source: 'recording', importForm: { name: '', address: 'javascript:alert(1)' } });
+    expect(content(byName(odd, 'About this import'))).toContain("- To change the steps or sign them again, use **RPA: 5 Import a bot** with the bot's name.");
     // A gold note: three colours, so the legend.
     expect(content(byName(secretOnly, 'About this import'))).toContain('- Gold: fill in. Green: set once. Grey: leave as is.');
     // A UiPath project with nothing left untranslated has no grey notes to explain.

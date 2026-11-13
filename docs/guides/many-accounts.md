@@ -48,8 +48,10 @@ docker compose exec n8n /opt/n8n-rpa/node_modules/.bin/n8n-nodes-rpa setup --new
 It makes and publishes **RPA: 5 Import a bot (Sample accounts)**, with this Site Login on **Import steps** and **Sign
 steps**, and prints its address: `/form/rpa-import-sample-accounts`. It signs with the same **RPA Step Signing** key
 and leaves your first form as it is. Leave out `--allow-private-network` for a site on the internet. Use this form for
-the bots of this Site Login: the workflow it hands over has the Site Login on its RPA node. A bot is changed or signed
-again on the form it was approved on.
+the bots of this Site Login: the workflow it hands over has the Site Login on its RPA node, and its note names this form
+and its address. A bot is changed or signed again on the form it was approved on. Every form lists every approved
+bot, so a bot opened on another Site Login's form gets a red warning on its review page: change it on its own form.
+Approved there, it would run only with that form's Site Login, and its own runs would stop.
 
 ## Try it on the sample site
 

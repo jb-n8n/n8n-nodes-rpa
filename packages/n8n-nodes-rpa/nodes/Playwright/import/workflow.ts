@@ -70,6 +70,12 @@ export interface BuildWorkflowOptions {
    * do not ask the reader to import and approve them. Import Steps alone approves nothing, so off by default.
    */
   approvedBeforeHandOver?: boolean;
+  /**
+   * The import form that made this file: its workflow's name and, when known, its address. The notes send the reader
+   * there to change the steps or sign them again (a form of each Site Login signs for its own). Without it they name
+   * the default form, RPA: 5 Import a bot.
+   */
+  importForm?: { name?: string; address?: string };
 }
 /** The credentials an import passes on to the workflow file. */
 export interface PassedOn { browser?: CredentialRef; siteLogin?: CredentialRef; signing?: CredentialRef; desktopRunner?: CredentialRef }
@@ -91,6 +97,16 @@ export const PRIVATE_NETWORK_OFF = 'For a site on your own network, turn on Opti
 export const PRIVATE_NETWORK_ON = 'Options → Allow Private Network is on because the import had it on: the steps may open addresses on your own network.';
 /** Where the steps get approved by default. */
 const IMPORT_FORM = 'RPA: 5 Import a bot';
+/**
+ * The import form as the notes name it: in bold, its workflow's name (the default form's without one), then its address
+ * as code when it is an http(s) address. Both come from the workflow that ran the import, never from the steps.
+ */
+export function importFormText(form: BuildWorkflowOptions['importForm']): string {
+  const name = line(form?.name, 128);
+  const address = line(form?.address, 300);
+  const shown = /^https?:\/\//i.test(address) && URL.canParse(address) ? ` at ${code(address)}` : '';
+  return `**${md(name || IMPORT_FORM, 128)}**${shown}`;
+}
 
 /** The display name of each RPA credential a Run steps uses, as the node shows it. */
 const LABEL = { browser: 'RPA Browser', siteLogin: 'RPA Site Login', signing: 'RPA Step Signing', desktopRunner: 'RPA Desktop Runner' } as const;
@@ -384,6 +400,7 @@ class Builder {
     private readonly run: NonNullable<BuildWorkflowOptions['run']> = {},
     private readonly passedOn: PassedOn = {},
     private readonly approvedBeforeHandOver = false,
+    readonly importForm = importFormText(undefined),
   ) {}
 
   /**
@@ -704,7 +721,7 @@ class Builder {
       if (secret.size && typedInto) this.secretTargets.add(typedInto);
       // What to copy into the credential: its name, each variable's name and May Be Typed Into. The value is typed there only.
       const secretVars = secret.size ? `Secret: make an ${SECRET_VARIABLES} credential, select it on **${md(run)}**, and copy these into it. Type the value there, never here.\n${secretBlock([...secret], typedInto ? [typedInto] : [])}` : '';
-      const content = `### Fill in the variables (gold)\n${[[listedVars, this.approvedBeforeHandOver ? '' : `Desktop steps run only once approved: ${FROM[this.source].importIt} with **${IMPORT_FORM}** and approve ${code(draftName)} on its review page.`].filter(Boolean).join(' '), secretVars].filter(Boolean).join('\n')}`;
+      const content = `### Fill in the variables (gold)\n${[[listedVars, this.approvedBeforeHandOver ? '' : `Desktop steps run only once approved: ${FROM[this.source].importIt} with ${this.importForm} and approve ${code(draftName)} on its review page.`].filter(Boolean).join(' '), secretVars].filter(Boolean).join('\n')}`;
       this.sticky(`Fill in the variables (${draftName})`, content, COLOUR.gold, [runX - 80, y + 160], 320, Math.max(260, noteSize(content, 320).height));
     }
     this.lastFile = downloadProperty(draft);
@@ -927,7 +944,7 @@ export function buildWorkflow(flow: UiPathFlow, drafts: Draft[], opts: BuildWork
   for (const d of [...drafts, ...(opts.desktopDrafts ?? [])]) {
     if (d.name.trim() === '' || d.name.startsWith('=')) throw new Error(`The Name of a step list must not be empty or start with "=": ${JSON.stringify(d.name.slice(0, 60))}`);
   }
-  const b = new Builder(opts.name, new Map(drafts.map((d) => [d.name, d])), new Map((opts.desktopDrafts ?? []).map((d) => [d.name, d])), opts.codeWorkflow, opts.source, opts.run, opts.credentials, opts.approvedBeforeHandOver === true);
+  const b = new Builder(opts.name, new Map(drafts.map((d) => [d.name, d])), new Map((opts.desktopDrafts ?? []).map((d) => [d.name, d])), opts.codeWorkflow, opts.source, opts.run, opts.credentials, opts.approvedBeforeHandOver === true, importFormText(opts.importForm));
   const from = FROM[b.source];
   const uipath = b.source === 'uipath';
   b.add(T.manualTrigger, b.unique('Run the bot'), [0, 0], {});
@@ -979,7 +996,7 @@ export function buildWorkflow(flow: UiPathFlow, drafts: Draft[], opts: BuildWork
     '- **Run the bot** runs it now. **On a schedule** is off: set the time, turn it on, publish.',
     b.allRuns.length ? `- Each run writes a row to ${RUN_TABLE}. Failed runs show as failed in Executions.` : '',
     b.allRuns.length ? '- To hear of a failed run, set an Error Workflow in the workflow settings.' : '',
-    names.length ? `- To change the steps or sign them again, use **${IMPORT_FORM}** with the bot's name.` : '',
+    names.length ? `- To change the steps or sign them again, use ${b.importForm} with the bot's name.` : '',
     b.draftNames.length ? '- For self-repair when the site changes, see the browser guide, Part 2.' : '',
     colours.size > 2 ? `- ${[colours.has(COLOUR.gold) ? 'Gold: fill in.' : '', 'Green: set once.', 'Grey: leave as is.'].filter(Boolean).join(' ')}` : '',
   ].filter(Boolean).join('\n');

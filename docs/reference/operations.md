@@ -194,7 +194,9 @@ schedule until a person approves it. Template **RPA: 5 Import a bot** puts a for
 - **Options**: **Variables**, **One-Time Code Workflow** and **Code Timeout (Seconds)** (120), as in Run Steps, and
   the quick operations' options. **Version**: the version the steps get (1 for a new bot). **Approved Before
   Hand-Over**: on when the workflow approves the steps before it hands the workflow file over, as the import form does;
-  the file's notes then do not ask to import and approve the steps.
+  the file's notes then do not ask to import and approve the steps. **Import Form Name** and **Import Form Address**:
+  the form the file's notes send the reader to, to change the steps or sign them again (empty: **RPA: 5 Import a
+  bot**, no address). The import form sets both to its own workflow's name and address.
 
 **What is never imported.** A value typed into a password, PIN, secret or code field, or a value equal to the Site
 Login's username or password, is never imported. A field counts as one when its type, label, name, ID or locator says

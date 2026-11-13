@@ -97,6 +97,8 @@ interface ImportParams {
   version: number;
   /** Options → Approved Before Hand-Over: this workflow approves the steps before it hands the workflow file over. */
   approvedBeforeHandOver: boolean;
+  /** Options → Import Form Name and Import Form Address: the form the workflow file's notes name. */
+  importForm: { name: string; address: string };
   common: CommonOptions;
 }
 
@@ -129,6 +131,7 @@ function readImportParams(ctx: NodeContext, i: number): ImportParams {
     breakerResetKey,
     version,
     approvedBeforeHandOver: asBoolean(ctx.getNodeParameter('options.approvedBeforeHandOver', i, false), false),
+    importForm: { name: asString(ctx.getNodeParameter('options.importFormName', i, '')).trim(), address: asString(ctx.getNodeParameter('options.importFormAddress', i, '')).trim() },
     ...codeWorkflowOptions(ctx, (option) => field(ctx.getNodeParameter('options', i, {}), option)),
     common,
   };
@@ -304,7 +307,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
   if (flow) {
     try {
       const file = workflowFile(flow, imported.drafts, {
-        name: p.name, desktopDrafts, source, credentials: passedOn(node, (type) => hiddenByRunsOn(ctx, type)), approvedBeforeHandOver: p.approvedBeforeHandOver,
+        name: p.name, desktopDrafts, source, credentials: passedOn(node, (type) => hiddenByRunsOn(ctx, type)), approvedBeforeHandOver: p.approvedBeforeHandOver, importForm: p.importForm,
         ...(p.codeWorkflowId ? { codeWorkflow: { id: p.codeWorkflowId, timeoutSeconds: p.codeTimeoutMs / 1000 } } : {}),
         run: { maxSeconds: p.common.maxSeconds, allowedHosts: p.common.allowedHosts, allowPrivateNetwork: p.common.allowPrivateNetwork, idPatterns },
       });

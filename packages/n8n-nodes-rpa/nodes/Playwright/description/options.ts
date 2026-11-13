@@ -338,6 +338,23 @@ export const OPTION_ENTRIES: INodeProperties[] = [
     displayOptions: only(['importSteps']),
   },
   {
+    displayName: 'Import Form Name',
+    name: 'importFormName',
+    type: 'string',
+    default: '',
+    description:
+      'The name of the workflow whose form imports and approves these steps. The notes in the workflow file send the reader there to change the steps or sign them again. Empty: RPA: 5 Import a bot. The import form sets it.',
+    displayOptions: only(['importSteps']),
+  },
+  {
+    displayName: 'Import Form Address',
+    name: 'importFormAddress',
+    type: 'string',
+    default: '',
+    description: "The address of that form (http or https), shown beside its name in the workflow file's notes. Empty: no address. The import form sets it.",
+    displayOptions: only(['importSteps']),
+  },
+  {
     displayName: 'Login Breaker Reset Key',
     name: 'breakerResetKey',
     type: 'string',
