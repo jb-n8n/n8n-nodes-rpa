@@ -172,7 +172,7 @@ const NETWORK_SENTENCES: [RegExp, (host: string) => string][] = [
   [/^ERR_NAME_NOT_RESOLVED$/, (h) => `${h} could not be found: no site answers to that name. Check the address, and that the site is up.`],
   [/^ERR_CONNECTION_REFUSED$/, (h) => `${h} refused the connection: nothing answers at that address and port. Check the address, and that the site is up.`],
   [/^ERR_(CONNECTION_)?TIMED_OUT$/, (h) => `${h} did not answer in time. Check the address, or try again later.`],
-  [/^ERR_(CERT_[A-Z_]+|SSL_[A-Z_]+|BAD_SSL_CLIENT_AUTH_CERT)$/, (h) => `The certificate of ${h} was not accepted: it may have expired, be made by the site itself, or name another site. Check the address, or the site's certificate.`],
+  [/^ERR_(CERT_[A-Z_]+|SSL_[A-Z_]+|BAD_SSL_CLIENT_AUTH_CERT)$/, (h) => `The certificate of ${h.replace(/^The site/, 'the site')} was not accepted: it may have expired, be made by the site itself, or name another site. Check the address, or the site's certificate.`],
 ];
 /**
  * A browser error that names a network failure (`page.goto: net::ERR_NAME_NOT_RESOLVED at http://site/x`) as a sentence
@@ -185,7 +185,8 @@ export function networkSentence(text: string): string {
   const say = NETWORK_SENTENCES.find(([re]) => re.test(m[1]))?.[1];
   if (!say) return text;
   const url = m[2] !== undefined && URL.canParse(m[2]) ? new URL(m[2]) : undefined;
-  return `${say(url ? url.host : 'The site')} (browser: ${text.trim()})`;
+  // "The site …" first: a message may be shown with its first letter in capitals, which a host name must not get.
+  return `${say(url ? `The site ${url.host}` : 'The site')} (browser: ${text.trim()})`;
 }
 
 /** A desktop choose step whose option is only run variables that are all empty: there is no item to look for. */

@@ -78,11 +78,11 @@ describe('startPageFailure', () => {
   it('a network error the browser names becomes a sentence that names the site, the browser\'s text after it (IB-10)', () => {
     const say = (raw: string) => networkSentence(raw);
     expect(say('page.goto: net::ERR_NAME_NOT_RESOLVED at http://sandbox:8080/acme/login'))
-      .toBe('sandbox:8080 could not be found: no site answers to that name. Check the address, and that the site is up. (browser: page.goto: net::ERR_NAME_NOT_RESOLVED at http://sandbox:8080/acme/login)');
+      .toBe('The site sandbox:8080 could not be found: no site answers to that name. Check the address, and that the site is up. (browser: page.goto: net::ERR_NAME_NOT_RESOLVED at http://sandbox:8080/acme/login)');
     expect(say('page.goto: net::ERR_CONNECTION_REFUSED at https://erp.example.com/a'))
-      .toBe('erp.example.com refused the connection: nothing answers at that address and port. Check the address, and that the site is up. (browser: page.goto: net::ERR_CONNECTION_REFUSED at https://erp.example.com/a)');
-    expect(say('page.goto: net::ERR_CONNECTION_TIMED_OUT at https://erp.example.com/a')).toMatch(/^erp\.example\.com did not answer in time\. Check the address, or try again later\. \(browser: /);
-    expect(say('page.goto: net::ERR_CERT_DATE_INVALID at https://erp.example.com/a')).toMatch(/^The certificate of erp\.example\.com was not accepted: .* \(browser: page\.goto: net::ERR_CERT_DATE_INVALID at /);
+      .toBe('The site erp.example.com refused the connection: nothing answers at that address and port. Check the address, and that the site is up. (browser: page.goto: net::ERR_CONNECTION_REFUSED at https://erp.example.com/a)');
+    expect(say('page.goto: net::ERR_CONNECTION_TIMED_OUT at https://erp.example.com/a')).toMatch(/^The site erp\.example\.com did not answer in time\. Check the address, or try again later\. \(browser: /);
+    expect(say('page.goto: net::ERR_CERT_DATE_INVALID at https://erp.example.com/a')).toMatch(/^The certificate of the site erp\.example\.com was not accepted: .* \(browser: page\.goto: net::ERR_CERT_DATE_INVALID at /);
     // No address: the site; another network error, or another text: as it was.
     expect(say('page.goto: net::ERR_NAME_NOT_RESOLVED')).toMatch(/^The site could not be found: /);
     expect(say('page.goto: net::ERR_ABORTED at https://a.example/')).toBe('page.goto: net::ERR_ABORTED at https://a.example/');
