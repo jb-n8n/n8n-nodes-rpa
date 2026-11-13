@@ -621,6 +621,29 @@ function loadTemplate() {
   return t;
 }
 
+/**
+ * The form's readable address, /form/rpa-import, typed on the Windows machine by hand. n8n 2.45's Form Trigger (2.2 and
+ * later) takes it as Options → Form Path; without one the address is the node's webhook id. The form's sign-in (n8n's
+ * or Basic Auth) is what protects it, not its address, and the pages after it keep their own signed addresses.
+ */
+const FORM_PATH = 'rpa-import';
+/** The Form Path a workflow's form trigger answers at (Options → Form Path, or the older Form Path field), or ''. */
+const formPathOf = (node: any): string => String(node?.parameters?.options?.path || node?.parameters?.path || '').trim().replace(/^\/+|\/+$/g, '');
+/**
+ * Why /form/rpa-import cannot be this form's, or undefined when no form n8n lists uses it: a workflow (published or not,
+ * as publishing it would take the address) with a form trigger at that path. One whose nodes n8n does not list counts as
+ * using it, since this run cannot tell.
+ */
+function formPathTaken(workflows: any[]): string | undefined {
+  for (const w of workflows) {
+    if (!Array.isArray(w?.nodes)) return `n8n does not list the nodes of the workflow "${clean(w?.name, w?.id)}" (id ${clean(w?.id)})`;
+    if (w.nodes.some((n: any) => /\.formTrigger$/.test(String(n?.type)) && formPathOf(n).toLowerCase() === FORM_PATH)) {
+      return `the workflow "${clean(w.name, w.id)}" (id ${clean(w.id)}) has a form at /form/${FORM_PATH}`;
+    }
+  }
+  return undefined;
+}
+
 /** The form trigger's Authentication for each --form-login. */
 const FORM_AUTH = { n8n: 'n8nUserAuth', basic: 'basicAuth' } as const;
 /** How a workflow's form signs people in: its trigger's Authentication (a form saved without one has none). */
@@ -629,9 +652,10 @@ const formAuthentication = (workflow: any): unknown => workflow?.nodes?.find((n:
 /**
  * The template's nodes, with the approver on the allowlist and an address for each form page; no credentials. With
  * --form-login basic the form asks for Basic Auth (Sign steps then takes Approved By: its Approver follows the form).
- * With --allow-private-network, Import steps has Options → Allow Private Network on.
+ * With --allow-private-network, Import steps has Options → Allow Private Network on. With formPath, the form answers at
+ * /form/<formPath> instead of its webhook id.
  */
-function templateNodes(approver: string, formLogin: Options['formLogin'], allowPrivateNetwork: boolean): Record<string, any>[] {
+function templateNodes(approver: string, formLogin: Options['formLogin'], allowPrivateNetwork: boolean, formPath?: string): Record<string, any>[] {
   return loadTemplate().nodes.map((node: Record<string, any>) => {
     const n: Record<string, any> = { ...node, parameters: { ...node.parameters } };
     delete n.credentials;
@@ -644,6 +668,7 @@ function templateNodes(approver: string, formLogin: Options['formLogin'], allowP
       delete n.parameters.requireExecuteAccess;
       n.parameters.authentication = FORM_AUTH.basic;
     }
+    if (n.name === NODE.form && formPath) n.parameters.options = { ...n.parameters.options, path: formPath };
     return n;
   });
 }
@@ -700,9 +725,12 @@ async function createWorkflow(client: Client, name: string, nodes: Record<string
   return r.json;
 }
 
-async function publish(client: Client, id: string, versionId: unknown, name: string) {
+async function publish(client: Client, id: string, versionId: unknown, name: string, retry?: (r: Awaited<ReturnType<Client['api']>>) => Promise<{ versionId: unknown } | undefined>) {
   const r = await client.api('POST', `/workflows/${encodeURIComponent(id)}/activate`, typeof versionId === 'string' ? { versionId } : undefined);
   if (r.status !== 200 || r.json?.active !== true) {
+    // One more try, when the caller can change what n8n refused (a form path another workflow holds).
+    const again = retry ? await retry(r) : undefined;
+    if (again) return publish(client, id, again.versionId, name);
     throw new Stop(`The workflow "${name}" (id ${id}) is in n8n but not published (${client.reason(r)}). Open it in n8n and click Publish, or run this again.`);
   }
 }
@@ -853,6 +881,8 @@ async function run(inputs: Inputs): Promise<number> {
   // A workflow to make: made first without credentials when the project is not known yet, so that its project is.
   let made: Record<string, any> | undefined;
   let nodes: Record<string, any>[] | undefined;
+  // Why a workflow made here keeps the address with an id, when /form/rpa-import is not free.
+  let pathTaken: string | undefined;
   let workflowName = WORKFLOW_NAME;
   if (!workflow) {
     if (differs || named.some((w) => w.name === WORKFLOW_NAME)) {
@@ -861,7 +891,8 @@ async function run(inputs: Inputs): Promise<number> {
       const taken = new Set(workflows.items.map((w) => w?.name));
       workflowName = taken.has(`${WORKFLOW_NAME} (${date})`) ? `${WORKFLOW_NAME} (${date} ${new Date().toISOString().slice(11, 16).replace(':', '-')})` : `${WORKFLOW_NAME} (${date})`;
     }
-    nodes = templateNodes(approver as string, options.formLogin, options.allowPrivateNetwork);
+    pathTaken = formPathTaken(workflows.items);
+    nodes = templateNodes(approver as string, options.formLogin, options.allowPrivateNetwork, pathTaken ? undefined : FORM_PATH);
     if (!home) {
       made = await createWorkflow(client, workflowName, nodes, projectId);
       halfMade = { client, id: String(made.id) };
@@ -939,6 +970,7 @@ async function run(inputs: Inputs): Promise<number> {
   const siteRef: Ref | undefined = SITE && siteMine ? { id: String(siteMine.id), name: SITE.name } : undefined;
   if (SITE && !siteRef) say(`not used credential "${clean(SITE.name)}": this run does not use what it found in the shared project, so no Site Login is set. Pick one on "${NODE.importSteps}" and "${NODE.signSteps}" in n8n.`);
 
+  const reused = workflow !== undefined;
   if (workflow) {
     say(`reused   workflow "${clean(workflow.name, workflow.id)}" (id ${clean(workflow.id)}): it matches the template${workflow.active ? '' : ', publishing it'}`);
     if (options.approver !== undefined) say(`         its Approver Allowlist was left as it is: change it on "${NODE.signSteps}" in n8n.`);
@@ -968,6 +1000,7 @@ async function run(inputs: Inputs): Promise<number> {
     }
     workflow = workflow as Record<string, any>;
     say(`created  workflow "${workflowName}" (id ${clean(workflow.id)}), approver ${approver}`);
+    if (pathTaken) say(`         its form keeps an address with an id, not /form/${FORM_PATH}: ${pathTaken}.`);
     if (siteRef) say(`         with the Site Login "${clean(siteRef.name)}" (id ${clean(siteRef.id)}) on "${NODE.importSteps}" and "${NODE.signSteps}"`);
     const same = named.filter((w) => w.name === workflowName);
     if (same.length) say(`         n8n now has more than one workflow named "${workflowName}": this run's is id ${clean(workflow.id)}.`);
@@ -976,12 +1009,29 @@ async function run(inputs: Inputs): Promise<number> {
   const usesKey = String(workflow.nodes?.find((n: any) => n.name === NODE.signSteps)?.credentials?.[SIGNING.type]?.id) === signing.ref.id;
   const showKey = signingKey !== undefined && usesKey && (options.showSigningKey || options.replaceSigningKey);
   if (!workflow.active) {
-    await publish(client, String(workflow.id), workflow.versionId, clean(workflow.name, workflow.id));
+    const made = workflow;
+    // A form path held by a workflow this API key cannot see: n8n refuses to publish. The form then keeps the address
+    // with its webhook id, and the run says why.
+    const dropPath = !reused && formPathOf(made.nodes.find((n: any) => n.name === NODE.form)) === FORM_PATH
+      ? async (r: Awaited<ReturnType<Client['api']>>) => {
+        if (!/already taken|conflict with one of the webhooks/i.test(client.reason(r))) return undefined;
+        const without = made.nodes.map((n: any) => (n.name === NODE.form ? { ...n, parameters: { ...n.parameters, options: Object.fromEntries(Object.entries(n.parameters?.options ?? {}).filter(([k]) => k !== 'path')) } } : n));
+        const put = await client.api('PUT', `/workflows/${encodeURIComponent(String(made.id))}`, { name: made.name, nodes: without, connections: made.connections, settings: made.settings ?? { executionOrder: 'v1' } });
+        if (put.status !== 200 || !put.json?.id) return undefined;
+        workflow = put.json;
+        say(`         its form keeps an address with an id, not /form/${FORM_PATH}: n8n says that address is taken (${client.reason(r)}).`);
+        return { versionId: put.json.versionId };
+      }
+      : undefined;
+    await publish(client, String(made.id), made.versionId, clean(made.name, made.id), dropPath);
+    workflow = workflow as Record<string, any>;
     say(`published workflow "${clean(workflow.name, workflow.id)}"`);
   }
 
-  // The form's webhook id comes from n8n: used only when it is an id, never printed otherwise.
-  const webhookId = workflow.nodes.find((n: { name: string }) => n.name === NODE.form)?.webhookId;
+  // The form's address: its Form Path (rpa-import, set here) or its webhook id, which comes from n8n. Used only when it is
+  // a plain id, never printed otherwise.
+  const formNode = workflow.nodes.find((n: { name: string }) => n.name === NODE.form);
+  const webhookId = formPathOf(formNode) || formNode?.webhookId;
   const formUrl = typeof webhookId === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(webhookId) ? `${origin}/form/${webhookId}` : undefined;
   const shownName = clean(workflow.name, workflow.id);
   if (formUrl) {

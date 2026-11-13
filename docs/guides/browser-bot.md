@@ -84,12 +84,13 @@ you as its approver. It never reads the Site Login's values. Near the end it pri
 
 ```text
 The import form is ready.
-  Address:    http://localhost:5678/form/<id>
+  Address:    http://localhost:5678/form/rpa-import
   Sign-in:    the form opens with your n8n sign-in. Who approves is recorded as the n8n user who approved.
   Private network: on. Imports may open sites on this computer or your own network, and the workflow the form hands over has it on too.
 ```
 
-Keep the address. If **RPA: 5 Import a bot** is there already from an earlier run, the command leaves it as it is and
+Keep the address. It ends in `/form/rpa-import`, or in a long id when another form in your n8n has that address
+already (the command says so). If **RPA: 5 Import a bot** is there already from an earlier run, the command leaves it as it is and
 says what to set on it in n8n. The command's last line is about the API key: it can act as you in n8n within its
 scopes, so revoke it now. In **Settings → n8n API**, open the key's **⋯** menu and choose **Revoke**. The signing key stays in
 n8n, and n8n does not show it again. The `Signing key:` line says how to keep a copy: you need one only to move signed

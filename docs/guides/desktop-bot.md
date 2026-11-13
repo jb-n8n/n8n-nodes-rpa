@@ -73,12 +73,13 @@ the end the command prints:
 
 ```text
 The import form is ready.
-  Address:    http://localhost:5678/form/<id>
+  Address:    http://localhost:5678/form/rpa-import
   Sign-in:    the form opens with your n8n sign-in. Who approves is recorded as the n8n user who approved.
 ```
 
-Its last lines say whether the Windows machine is connected: `The import form is ready, and the Windows machine is
-connected.`, or `… but the Windows machine is not connected yet.` with the reason and what to do.
+The address ends in `/form/rpa-import`, or in a long id when another form in your n8n has that address already (the
+command says so). Its last lines say whether the Windows machine is connected: `The import form is ready, and the
+Windows machine is connected.`, or `… but the Windows machine is not connected yet.` with the reason and what to do.
 
 If you made an RPA Desktop Runner credential in n8n already, answer `n` instead: the command picks it when your project
 has only that one, and names it. With several, add `--desktop-runner "<its name>"`. It never reads a credential's
