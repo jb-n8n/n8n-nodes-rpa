@@ -3013,7 +3013,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
   });
 
   it('a member who may not approve: the last page ends its sentence, says whom to ask, and points to no execution', () => {
-    const POINTER = 'The full report, and the reason for any step list that could not be proved, is on the Data output of Import steps in this execution.';
+    const POINTER = 'The full report is on the Data output of Import steps in this execution.';
     const page = (error: string) => render(completion('Imported').completionMessage, { $: nodesRan({
       Settings: [[{ json: settingsJson() }]], 'Import steps': [[{ json: { report: { steps: 2, items: [] }, drafts: [{ name: 'feed', forApproval: true }] } }], []],
       [REVIEW]: [[{ json: { decision_0: 'Approve and sign' } }]], 'Sign steps': [[], [{ json: { error, details: { name: 'feed', version: 1 } } }]],
@@ -3025,6 +3025,15 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(page('Sign Steps refused: the steps do not match the hash that was reviewed')).toEqual(['Imported: 2 steps.', 'Not signed: feed version 1. Sign Steps refused: the steps do not match the hash that was reviewed.', POINTER]);
     // A reason that ends its own sentence gets no second full stop.
     expect(page('Sign Steps refused: the steps changed.')[1]).toBe('Not signed: feed version 1. Sign Steps refused: the steps changed.');
+    // A deliberate Reject, with every step list decided: the page does not point to the reason for a step list that
+    // failed. When one did fail its replay, it does.
+    const decided = (drafts: IDataObject[]) => render(completion('Imported').completionMessage, { $: nodesRan({
+      Settings: [[{ json: settingsJson() }]], 'Import steps': [[{ json: { report: { steps: 2, items: [] }, drafts } }], []],
+      [REVIEW]: [[{ json: { decision_0: 'Reject' } }]], 'Sign steps': [[{ json: { status: 'rejected', name: 'feed', version: 1 } }], []],
+    }) }).split('\n');
+    expect(decided([{ name: 'feed', adopted: true }])).toEqual(['Imported: 2 steps.', '1 of 1 step list passed the replay.', 'Rejected: feed version 1. Nothing was signed.', POINTER]);
+    expect(decided([{ name: 'feed', adopted: true }, { name: 'feed-2', reason: 'no download' }]).at(-1))
+      .toBe('The full report, and the reason for any step list that could not be proved, is on the Data output of Import steps in this execution.');
   });
 
   it('has the stickies: About (grey), Set once (green, a checklist), Approval by email (grey, the option), Why approval (grey)', () => {
