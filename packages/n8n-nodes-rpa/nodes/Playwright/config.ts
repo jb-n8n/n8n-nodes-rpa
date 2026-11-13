@@ -57,7 +57,7 @@ const parseUrl = (value: string): URL | undefined => (URL.canParse(value) ? new 
  * string or fragment (which can carry a token) is cut from every word of it.
  */
 const hasUserinfo = (token: string): boolean => /^(?:[a-z][a-z0-9+.-]*:\/\/)?[^/?#]*@/i.test(token);
-const shown = (entry: string): string => (entry.split(/\s+/).some(hasUserinfo) ? '<entry with credentials>' : `"${entry.replace(/[?#]\S*/g, '')}"`);
+const shown = (entry: string): string => (entry.split(/\s+/).some(hasUserinfo) ? 'an entry with credentials' : `"${entry.replace(/[?#]\S*/g, '')}"`);
 const lines = (value: string): string[] => value.split('\n').map((l) => l.trim()).filter(Boolean);
 
 /** Exact host as the engine compares it: lowercase, no trailing dot, no default port, no path, no wildcard. */
@@ -248,7 +248,7 @@ export function parseConnectionLine(kind: LineKind, line: string): { url: string
     throw new ConfigError(`${inLine} is the ${other.what} line (${other.scheme}://). Paste it into an ${other.credential} credential, and here the line that starts with ${k.scheme}://.`);
   }
   const hostPort = /^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9_.-]+):(\d+)$/.exec(m[2]);
-  const noAddress = `${inLine} has no address and port (${k.scheme}://<address>:<port>${k.path}).`;
+  const noAddress = `${inLine} has no address and port: it starts ${k.scheme}:// followed by the address, a colon and the port, then ${k.path}.`;
   if (!hostPort) throw new ConfigError(noAddress);
   const port = Number(hostPort[2]);
   if (port < 1 || port > 65535) throw new ConfigError(`${ofLine('port')} must be a number from 1 to 65535.`);

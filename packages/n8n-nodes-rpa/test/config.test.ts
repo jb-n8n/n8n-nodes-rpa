@@ -89,7 +89,7 @@ describe('config errors never echo credentials in an entry', () => {
     } catch (error) {
       message = (error as Error).message;
     }
-    expect(message).toContain('<entry with credentials>');
+    expect(message).toContain('an entry with credentials');
     expect(message).not.toMatch(/secret|user:/);
   });
 });
@@ -391,9 +391,9 @@ describe('Connection Line (RPA Desktop Runner and RPA Browser credentials)', () 
   });
   it.each([
     ['not a line at all', 'wss://rpa-bot-01:8765/rpa/v1', 'must be the whole line that starts with rpa-runner://, as the installer prints it'],
-    ['no port', RUNNER.line.replace(`:${RUNNER.port}`, ''), 'has no address and port (rpa-runner://<address>:<port>/rpa/v1)'],
-    ['no address', RUNNER.line.replace(RUNNER.address, ''), 'has no address and port (rpa-runner://<address>:<port>/rpa/v1)'],
-    ['credentials in the address', RUNNER.line.replace(RUNNER.address, `user:pw@${RUNNER.address}`), 'has no address and port (rpa-runner://<address>:<port>/rpa/v1)'],
+    ['no port', RUNNER.line.replace(`:${RUNNER.port}`, ''), 'has no address and port: it starts rpa-runner:// followed by the address, a colon and the port, then /rpa/v1.'],
+    ['no address', RUNNER.line.replace(RUNNER.address, ''), 'has no address and port: it starts rpa-runner:// followed by the address, a colon and the port, then /rpa/v1.'],
+    ['credentials in the address', RUNNER.line.replace(RUNNER.address, `user:pw@${RUNNER.address}`), 'has no address and port: it starts rpa-runner:// followed by the address, a colon and the port, then /rpa/v1.'],
     ['port 0', RUNNER.line.replace(`:${RUNNER.port}`, ':0'), 'The port in the Connection Line of the RPA Desktop Runner credential must be a number from 1 to 65535.'],
     ['port 70000', RUNNER.line.replace(`:${RUNNER.port}`, ':70000'), 'The port in the Connection Line of the RPA Desktop Runner credential must be a number from 1 to 65535.'],
     ['another path', RUNNER.line.replace('/rpa/v1', '/rpa/v2'), 'must continue with /rpa/v1 after the port'],
