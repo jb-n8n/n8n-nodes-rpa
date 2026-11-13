@@ -26,10 +26,12 @@ default a bot runs only steps that a person reviewed and approved.
 ### A browser bot
 
 1. Start n8n, a browser and a sample site with `docker compose up` from this repository.
-2. Connect n8n to the browser with an **RPA Browser** credential and take a first screenshot.
-3. Add an **RPA Site Login** for the sample site and import the data feed template.
-4. Run it: a chat model writes the first steps, you approve them in an email, and the next runs need no model.
+2. Set up the **Import a bot** form with one command, run in the n8n container.
+3. Add an **RPA Site Login** for the sample site and give it to the form.
+4. Upload the sample bot on the form, review its steps and approve them.
+5. Import the workflow the form gives you and run it. It signs in and returns a report as a CSV file, with no AI model.
 
+Then a chat model can let a bot repair itself when the site changes.
 Guide: [Your first browser bot](docs/guides/browser-bot.md).
 
 ### A Windows desktop bot
@@ -80,7 +82,7 @@ run `rpa status` there. Every option, the token gate, TLS and version matching:
 
 | Page | What it covers |
 |---|---|
-| [Your first browser bot](docs/guides/browser-bot.md) | From nothing to a browser bot that repairs itself |
+| [Your first browser bot](docs/guides/browser-bot.md) | From nothing to a first browser bot, then one that repairs itself |
 | [Your first Windows desktop bot](docs/guides/desktop-bot.md) | Install, connect, record, approve and run |
 | [Record a bot](docs/guides/record-a-bot.md) | The RPA Recorder, stage by stage |
 | [Move a bot](docs/guides/move-a-bot.md) | UiPath, recordings, Playwright code, step documents, Power Automate Desktop |
@@ -113,7 +115,7 @@ Known limits:
 - **Not released yet:** the Windows package and node version 0.2.0. The Windows package is not code-signed.
 - **Windows:** tested on Windows Server 2022 (CI also installs it on Windows Server 2025). Windows 10 and 11 were not
   tested. The recorder was tried on WinForms and Win32 apps only.
-- **n8n connects in to the Windows machine.** The machine never dials out to n8n, so n8n must reach it on the runner's port. Where it cannot, a private network or tunnel between them is needed, and the product does not provide one ([Windows guide](docs/install/windows.md#who-can-reach-the-ports)).
+- **n8n connects in to the Windows machine.** The machine never dials out to n8n, so n8n must reach it on the runner's port. Where it cannot, a private network or tunnel between them is needed. The product does not run one, and the Windows guide has a recipe ([When n8n cannot reach this machine](docs/install/windows.md#when-n8n-cannot-reach-this-machine)).
 - **Desktop steps** have no AI repair, no replay before approval, no loops and no right-click, scroll or drag
   ([Steps](docs/reference/steps.md#desktop-steps)).
 - **AI-built and AI-repaired steps** read record IDs only, and AI repair does not write.

@@ -1,0 +1,29 @@
+{
+  "name": "sandbox-line-items",
+  "startUrl": "http://sandbox:8080/acme/login",
+  "steps": [
+    {
+      "intent": "Sign in, with the authenticator code when the site asks for one",
+      "signIn": {
+        "username": { "label": "user ID" },
+        "password": { "label": "Password", "exact": true },
+        "submit": { "role": "button", "name": "Sign in", "exact": true },
+        "totp": { "field": { "label": "Authentication code", "exact": true }, "submit": { "role": "button", "name": "Verify", "exact": true } }
+      }
+    },
+    { "intent": "Open the SAP web GUI", "goto": "http://sandbox:8080/sap/bc/gui/sap/its/webgui" },
+    { "intent": "Open Line Item Report", "click": { "role": "button", "name": "Line Item Report", "exact": true } },
+    { "intent": "Choose company code 1000", "select": { "field": { "label": "Company Code", "exact": true }, "value": "1000" } },
+    { "intent": "Type the first day of September 2026 into From", "fill": { "field": { "label": "From", "exact": true }, "value": "2026-09-01" } },
+    { "intent": "Type the last day of September 2026 into To", "fill": { "field": { "label": "To", "exact": true }, "value": "2026-09-30" } },
+    { "intent": "Run the report", "click": { "role": "button", "name": "Execute", "exact": true } },
+    {
+      "intent": "Export the line items as a CSV file",
+      "download": {
+        "trigger": { "role": "button", "name": "Export", "exact": true },
+        "mime": ["text/csv"],
+        "check": { "name": "^LINEITEMS_1000_", "columns": ["Document", "Posting Date", "Company Code", "Amount", "Currency"], "minRows": 1 }
+      }
+    }
+  ]
+}

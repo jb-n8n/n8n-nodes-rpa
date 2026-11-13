@@ -54,6 +54,12 @@ function templateDocuments(): { at: string; doc: unknown }[] {
   return out;
 }
 
+/** The sample step documents the guides tell a person to upload as they are (docs/samples). */
+function sampleDocuments(): { at: string; doc: unknown }[] {
+  const dir = new URL('docs/samples/', ROOT);
+  return readdirSync(dir).filter((f) => f.endsWith('.steps.json')).map((f) => ({ at: `docs/samples/${f}`, doc: JSON.parse(readFileSync(new URL(f, dir), 'utf8')) as unknown }));
+}
+
 /** The UiPath fixture project, zipped as Studio exports it. */
 function uipathZip(): Buffer {
   const dir = fileURLToPath(new URL('./fixtures/import/uipath-sap-report/', import.meta.url));
@@ -174,12 +180,14 @@ describe('the step-document JSON Schema', () => {
       ...templateDocuments(),
       ...['README.md', 'docs/reference/steps.md', 'docs/guides/move-a-bot.md'].flatMap((page) => jsonBlocks(page).map((doc, i) => ({ at: `${page} block ${i}`, doc }))),
       ...jsonBlocks('docs/onboarding/sap-lookalike.md').map((doc, i) => ({ at: `sap-lookalike block ${i}`, doc })),
+      ...sampleDocuments(),
       ...fixtureDrafts(),
       ...helpers.map((doc, i) => ({ at: `test helper ${i}`, doc })),
       { at: 'every field', doc: EVERY_FIELD },
     ];
     // Templates map their steps from the playwright_steps Data Table, so none carries a literal document today.
     expect(templateDocuments()).toEqual([]);
+    expect(sampleDocuments().map((d) => d.at)).toContain('docs/samples/sandbox-line-items.steps.json');
     expect(jsonBlocks('docs/reference/steps.md').length).toBeGreaterThanOrEqual(5);
     // chrome and playwright: one draft each per variant; uipath: one per browser sequence per variant.
     expect(fixtureDrafts().length).toBeGreaterThanOrEqual(6);
