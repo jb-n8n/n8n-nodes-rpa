@@ -383,7 +383,9 @@ describe('the security reference', () => {
   });
 
   it('says who may hold secret variables, and what a lost or changed signing key does and how to sign again', () => {
-    expect(section(doc.security, '## Secret variables')).toContain('The credential is not tied to the steps that were approved.');
+    const secret = section(doc.security, '## Secret variables').replace(/\s+/g, ' ');
+    for (const text of ['The credential is not tied to the steps that were approved.', '**May Be Typed Into**', 'refused before the app starts',
+      'refused before it types', 'Empty, the field limits nothing', 'What it does not do:']) expect(secret, text).toContain(text);
     const key = section(doc.security, '## If the signing key is lost or changed');
     for (const text of ['`script_untrusted`', '**Step document**', '`active`', 'tick them again']) expect(key, text).toContain(text);
   });

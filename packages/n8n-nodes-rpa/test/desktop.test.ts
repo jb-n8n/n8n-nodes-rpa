@@ -187,6 +187,23 @@ describe('desktop steps with the RPA Secret Variables credential', () => {
     expect(data[0].json.error).toBe('policy_violation: Step 2 (Type the password): Unsigned steps cannot type a secret variable. Sign them with Sign Steps; Allow Unsigned Writes does not cover it.');
     expect(JSON.stringify(runner.requests)).not.toContain(DEMO_PASSWORD);
   });
+  it('May Be Typed Into: an app it does not list is refused before the runner is reached; a listed app runs as before', async () => {
+    runner = await FakeRunner.start();
+    const limited = (mayBeTypedInto: string) => {
+      const c = secretCreds(runner!.endpoint);
+      return { ...c, rpaSecretVariablesApi: { ...c.rpaSecretVariablesApi, mayBeTypedInto } };
+    };
+    const p = { ...params(DESKTOP_STEPS), options: onlyUser };
+    const [refused] = await executeRunSteps(ctx(limited('Other.exe\nerp.example.com'), p), fakeEngine(() => scriptOk()));
+    expect(refused[0].json.error).toBe("policy_violation: The RPA Secret Variables credential's May Be Typed Into does not list ErpDemo.exe, so this run may not start it. Add ErpDemo.exe there, or remove the credential from this node.");
+    expect(details(refused[0].json)).toMatchObject({ code: 'policy_violation', lane: 'script', submitted: false });
+    expect(runner.tcpConnections).toBe(0);
+    expect(JSON.stringify(refused)).not.toContain(DEMO_PASSWORD);
+    const [ok] = await executeRunSteps(ctx(limited('erpdemo.exe'), p), fakeEngine(() => scriptOk()));
+    expect(ok[0].json.error).toBeUndefined();
+    const typed = runner.requests.filter((q) => q.method === 'act').flatMap((q) => ((q.params.segments ?? []) as { text?: string }[]).map((x) => x.text ?? ''));
+    expect(typed).toContain(DEMO_PASSWORD);
+  });
   it('a password nobody supplied fails as a missing variable, and the message says where a secret goes', async () => {
     runner = await FakeRunner.start();
     const creds = { rpaDesktopRunnerApi: { ...runner.endpoint }, playwrightScriptSigningApi: { secretKey: KEY } };

@@ -15,6 +15,7 @@ import {
 } from '../../messages.js';
 import { SECRET_FILL_VALUE } from '../../secrets/render.js';
 import { renderSecretValue } from '../../secrets/secret-fills.js';
+import { assertSecretTarget, typeSecret } from '../secret-target.js';
 import { isLoginPage, maskSessionSegments } from '../urls.js';
 
 type S<K extends string> = Extract<Step, Record<K, unknown>>;
@@ -681,6 +682,9 @@ async function changePassword(ctx: StepContext, spec: ChangePasswordSpec, secret
   const name = SECRET_FILL_VALUE.exec(spec.value)?.[1];
   if (name === undefined) throw new Error('signIn: changePassword.value must be exactly one {{var.name}} template');
   const value = renderSecretValue(name, spec.value, ctx.vars, ctx.masker);
+  // A new password from the RPA Secret Variables credential: every new field on a host its May Be Typed Into lists,
+  // before anything (the current password included) is typed.
+  for (const field of fresh) await assertSecretTarget(ctx, field, value, timeout);
   // From here a failure leaves a half-done change on the page: AI repair must not take it over (runTask).
   state.passwordChangeStarted = true;
   // Each field is checked again right before it is typed into, as signIn does: the page may have moved since.
@@ -690,7 +694,7 @@ async function changePassword(ctx: StepContext, spec: ChangePasswordSpec, secret
   }
   for (const field of fresh) {
     await assertFieldOnLoginPage(ctx, field, 'new password');
-    await field.fill(value, { timeout });
+    await typeSecret(ctx, field, value, timeout);
   }
   const typed = await fresh[0].elementHandle({ timeout });
   await submit.click({ timeout });

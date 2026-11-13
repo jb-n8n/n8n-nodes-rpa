@@ -6,6 +6,7 @@ import type { RunState, Step } from '../../types.js';
 import { PolicyError } from '../errors.js';
 import { formTarget as formTargetInPage, type FormTarget } from '../form-target.js';
 import { build, resolveUnique } from '../locator.js';
+import { typeSecret } from '../secret-target.js';
 import { shownUrl } from '../urls.js';
 import { poll, sleep } from '../poll.js';
 import { settle, type Handler, type StepContext } from '../run.js';
@@ -217,7 +218,9 @@ const fill: Handler = async (ctx, step, _state, timeout) => {
   // Before the page is touched: an unsigned or malformed secret fill never locates its field.
   const value = secret ? renderSecretFill(ctx, s.fill.value) : undefined;
   const { locator, candidate } = await resolveUnique(ctx.page, s.fill.field, timeout);
-  await withoutPasswords(ctx, locator, () => locator.fill(value ?? renderVars(s.fill.value, ctx.vars, ctx.masker), { timeout }), secret);
+  // A secret fill types a value of the RPA Secret Variables credential only where its May Be Typed Into allows
+  // (typeSecret). A plain fill never types one: renderVars refuses every value the masker holds.
+  await withoutPasswords(ctx, locator, () => (value !== undefined ? typeSecret(ctx, locator, value, timeout) : locator.fill(renderVars(s.fill.value, ctx.vars, ctx.masker), { timeout })), secret);
   return candidate;
 };
 

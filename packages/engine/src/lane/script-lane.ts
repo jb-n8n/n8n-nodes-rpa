@@ -9,6 +9,7 @@ import { loginBlockEnd, validateScript } from '../policy/validate.js';
 import { createMasker, maskRequests, maskViolations, type Masker } from '../secrets/mask.js';
 import { MAX_RENDERED } from '../secrets/render.js';
 import { registerSecretVars, secretFillValues } from '../secrets/secret-fills.js';
+import { secretTypingLimit, type SecretTargets } from '../secrets/secret-targets.js';
 import { scriptHash } from '../sign.js';
 import { MAX_SCREENSHOT_HEIGHT } from '../steps/handlers/capture.js';
 import { runBinaryProblem } from '../steps/limits.js';
@@ -48,6 +49,11 @@ export interface ScriptLaneInput {
   vars?: Record<string, string>;
   /** The names in `vars` whose values are secrets (registerSecretVars): masked from the run start, typed only by a secret fill. */
   secretVars?: string[];
+  /**
+   * Where the secret variables' values may be typed (in n8n, the RPA Secret Variables credential's May Be Typed Into):
+   * a step that would type one on a page or frame whose host is not listed is a fatal policy violation. Absent: no limit.
+   */
+  secretTargets?: SecretTargets;
   /** Row checks, run only after an extract step. Absent: rows are returned unchecked (none are required). */
   output?: OutputSpec;
   /** How the start page's status is read: 'classify' (default, v1) or 'report' (quick operations). */
@@ -270,6 +276,7 @@ async function executeScript(
 
   const ctx: StepContext = {
     page: session.page, script, policy: input.policy, secrets: input.secrets, vars: input.vars ?? {}, signed,
+    ...(input.secretTargets ? { secretTyping: secretTypingLimit(input.secretTargets, input.secretVars, input.vars ?? {}) } : {}),
     masker, defaultTimeoutMs, violations: session.violations, interrupts, stepHooks: session.stepHooks, ...codeSettings(input),
     ...(input.output?.emptyPattern ? { emptyPattern: input.output.emptyPattern } : {}),
     ...(session.writeWindow ? { writeWindow: session.writeWindow } : {}),

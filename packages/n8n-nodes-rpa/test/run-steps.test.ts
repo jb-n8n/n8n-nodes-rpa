@@ -1091,10 +1091,38 @@ describe('Run Steps: RPA Secret Variables', () => {
     await executeRunSteps(withSecrets({ variables: { values: [{ name: 'from', value: '2026-01-01' }] } }, { name: 'pw', value: SECRET }), engine);
     expect(engine.calls[0]).toMatchObject({ vars: { from: '2026-01-01', pw: SECRET }, secretVars: ['pw'] });
   });
+  it('May Be Typed Into goes to the engine as secretTargets, hosts read as Also Allow These Sites reads them; empty is no limit', async () => {
+    const withTargets = (mayBeTypedInto: string | undefined) =>
+      ctx({
+        params: params({}, {}), credentials: { ...ALL, rpaSecretVariablesApi: { variables: { values: [{ name: 'pw', value: SECRET }] }, ...(mayBeTypedInto === undefined ? {} : { mayBeTypedInto }) } },
+        credentialIds: { ...IDS, rpaSecretVariablesApi: 'secret-1' }, continueOnFail: true,
+      });
+    const engine = fakeEngine(() => scriptOk());
+    await executeRunSteps(withTargets('ErpDemo.exe\nhttps://ERP.example.com/\nerp.example.com:443\nlogin.example.com:8443'), engine);
+    expect(engine.calls[0]).toMatchObject({ secretVars: ['pw'], secretTargets: { apps: ['ErpDemo.exe'], hosts: ['erp.example.com', 'login.example.com:8443'] } });
+    for (const empty of ['', ' \n ', undefined]) {
+      await executeRunSteps(withTargets(empty), engine);
+      expect(engine.calls.at(-1)?.secretTargets, String(empty)).toBeUndefined();
+    }
+    // A bad line or an expression stops the item before the engine runs, and shows no value.
+    const calls = engine.calls.length;
+    for (const [v, message] of [
+      ['erp.example.com/login', 'Line 1 of May Be Typed Into in the RPA Secret Variables credential ("erp.example.com/login"): it is neither a program file name such as ErpDemo.exe nor a site host such as erp.example.com.'],
+      [`${SECRET}.example.com`, "Line 1 of May Be Typed Into in the RPA Secret Variables credential: it holds one of this credential's values: list where they may be typed, not the values."],
+      ['={{ $json.host }}', 'May Be Typed Into in the RPA Secret Variables credential must be typed in, not set with an expression.'],
+    ]) {
+      const [data] = await executeRunSteps(withTargets(v), engine);
+      expect(errorOf(data[0])).toBe(message);
+      expect(details(data[0])).toMatchObject({ configError: true });
+      expect(JSON.stringify(data)).not.toContain(SECRET);
+    }
+    expect(engine.calls).toHaveLength(calls);
+  });
   it('without the credential no variable is secret', async () => {
     const engine = fakeEngine(() => scriptOk());
     await executeRunSteps(ctx(), engine);
     expect(engine.calls[0].secretVars).toBeUndefined();
+    expect(engine.calls[0].secretTargets).toBeUndefined();
   });
   it('a name in both places is a configuration error that names the variable, never its value, before the engine runs', async () => {
     const engine = fakeEngine(() => scriptOk());

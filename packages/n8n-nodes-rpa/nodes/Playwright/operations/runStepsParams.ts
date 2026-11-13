@@ -1,7 +1,7 @@
 // Run Steps' parameters: the Steps document, the trust and repair settings, Options → Variables with the RPA Secret
 // Variables credential merged in, and Expected File. Import Steps reads Variables and Expected File the same way.
-import type { DownloadTemplate, FileCheck, OutputSpec, TrustInput } from 'n8n-rpa-engine';
-import { ConfigError, CREDENTIALS, secretVariablesConfig, VARIABLE_NAME } from '../config.js';
+import type { DownloadTemplate, FileCheck, OutputSpec, SecretTargets, TrustInput } from 'n8n-rpa-engine';
+import { ConfigError, CREDENTIALS, secretTargetsConfig, secretVariablesConfig, VARIABLE_NAME } from '../config.js';
 import type { NodeContext } from '../context.js';
 import type { Engine } from '../engine.js';
 import { codeWorkflowOptions } from './codeWorkflow.js';
@@ -60,6 +60,8 @@ export interface RunStepsParams {
   vars: Record<string, string>;
   /** The names in `vars` that came from the RPA Secret Variables credential (withSecretVariables); [] without it. */
   secretVars: string[];
+  /** The credential's May Be Typed Into (secretTargetsConfig); absent without the credential or when it is empty (no limit). */
+  secretTargets?: SecretTargets;
   name: string;
   expectedVersion?: number;
   allowUnsignedWrites: boolean;
@@ -103,14 +105,18 @@ export const SECRET_VARIABLE_TWICE = (name: string) =>
 
 /**
  * The run variables with the RPA Secret Variables credential's pairs merged in, as secret variables (the engine masks
- * their values from the run start, and only signed steps type them). A name in both places is a configuration
- * error that names the variable, never a value. Without the credential, `p` as it is.
+ * their values from the run start, and only signed steps type them), and its May Be Typed Into as the engine's
+ * secretTargets when it is filled (the engine checks it by value, so a plain variable holding the same value is checked
+ * too). A name in both places is a configuration error that names the variable, never a value. Without the credential,
+ * `p` as it is.
  */
 export async function withSecretVariables(ctx: NodeContext, i: number, p: RunStepsParams): Promise<RunStepsParams> {
   if (credentialId(ctx, CREDENTIALS.secretVariables) === undefined) return p;
-  const secret = secretVariablesConfig(await ctx.getCredentials(CREDENTIALS.secretVariables, i));
+  const data = await ctx.getCredentials(CREDENTIALS.secretVariables, i);
+  const secret = secretVariablesConfig(data);
+  const secretTargets = secretTargetsConfig(data, Object.values(secret));
   for (const name of Object.keys(secret)) if (Object.hasOwn(p.vars, name)) throw new ConfigError(SECRET_VARIABLE_TWICE(name));
-  return { ...p, vars: { ...p.vars, ...secret }, secretVars: Object.keys(secret) };
+  return { ...p, vars: { ...p.vars, ...secret }, secretVars: Object.keys(secret), ...(secretTargets ? { secretTargets } : {}) };
 }
 
 export const MISSING_VARIABLE_HINT = 'a secret goes in an RPA Secret Variables credential, any other value in Options → Variables';

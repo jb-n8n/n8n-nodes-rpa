@@ -10,7 +10,7 @@ import { createMasker } from '../src/secrets/mask.js';
 import { signScript } from '../src/sign.js';
 import type { DesktopLocator } from '../src/types.js';
 import { NoRunError } from '../src/desktop/protocol.js';
-import { runBinaryTooLarge, runnerAppMissing, runnerAppNotAllowed } from '../src/messages.js';
+import { runBinaryTooLarge, runnerAppMissing, runnerAppNotAllowed, secretAppNotListed } from '../src/messages.js';
 import { MAX_RUN_BINARY_BYTES } from '../src/steps/limits.js';
 import { MAX_EXPECTED_FILE_BYTES } from '../src/steps/parse.js';
 import { newRunState, runSteps, type StepContext } from '../src/steps/run.js';
@@ -415,6 +415,20 @@ describe('desktop task: refusals and runner errors', () => {
     const typed = runner!.requests.filter((q) => q.method === 'act').map((q) => JSON.stringify(q.params));
     expect(typed.join()).not.toContain(DEMO_PASSWORD);
     expect(JSON.stringify(f)).not.toContain(DEMO_PASSWORD);
+  });
+
+  it('May Be Typed Into: an app the list does not name is refused before the runner is reached; a listed one runs; no list is as before', async () => {
+    const d = doc(SIGN_IN);
+    const refused = failed(await run(d, { secretVars: ['password'], secretTargets: { apps: ['Other.exe'], hosts: ['erp.example.com'] } }));
+    expect({ code: refused.code, message: refused.message }).toEqual({ code: 'policy_violation', message: secretAppNotListed('ErpDemo.exe') });
+    expect(runner!.tcpConnections).toBe(0);
+    expect(JSON.stringify(refused)).not.toContain(DEMO_PASSWORD);
+    // Hosts are for browser steps: a list with no app refuses every app.
+    expect(failed(await run(d, { secretVars: ['password'], secretTargets: { apps: [], hosts: ['erp.example.com'] } })).code).toBe('policy_violation');
+    expect(runner!.tcpConnections).toBe(0);
+    // Listed (compared without case, by file name), or no list at all: the run types the password as before.
+    succeeded(await run(d, { secretVars: ['password'], secretTargets: { apps: ['erpdemo.EXE'], hosts: [] } }));
+    succeeded(await run(d, { secretVars: ['password'] }));
   });
 
   it('an app outside the runner policy is refused at launch', async () => {

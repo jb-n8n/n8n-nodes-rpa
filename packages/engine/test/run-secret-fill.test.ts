@@ -3,9 +3,10 @@ import { startPortal } from 'n8n-rpa-sandbox/testing.js';
 import { openSession } from '../src/browser/session.js';
 import { laneMasker, runScriptLane, screenshotMasks } from '../src/lane/script-lane.js';
 import { checkTrust } from '../src/lane/trust.js';
-import { INPUT_CONTAINS_SECRET, PASSWORD_FILL_REFUSED_STEPS, UNSIGNED_SECRET_FILL } from '../src/messages.js';
+import { INPUT_CONTAINS_SECRET, PASSWORD_FILL_REFUSED_STEPS, secretHostNotListed, UNSIGNED_SECRET_FILL } from '../src/messages.js';
 import { createMasker } from '../src/secrets/mask.js';
 import { registerSecretVars, secretFillValues } from '../src/secrets/secret-fills.js';
+import { appListed, secretTypingLimit } from '../src/secrets/secret-targets.js';
 import { parseScript, ScriptShapeError } from '../src/steps/parse.js';
 import { runSteps, type StepContext } from '../src/steps/run.js';
 import type { PortalPolicy, Step } from '../src/types.js';
@@ -25,13 +26,18 @@ const secretFill = (value: string, over: Record<string, unknown> = {}): Step =>
   ({ intent: 'Type the export password', fill: { field: { label: 'Password' }, value, secret: true, ...over } }) as Step;
 
 /** Runs steps on /public/form with a live masker, as a signed run does unless `signed` is false. */
-async function direct(steps: Step[], vars: Record<string, string>, opts: { signed?: boolean; masker?: ReturnType<typeof createMasker> } = {}) {
+async function direct(
+  steps: Step[], vars: Record<string, string>,
+  opts: { signed?: boolean; masker?: ReturnType<typeof createMasker>; policy?: PortalPolicy; secretTyping?: StepContext['secretTyping'] } = {},
+) {
   const masker = opts.masker ?? createMasker([]);
-  const s = await openSession({ endpoint: LOCAL, policy: pub(), masker });
+  const policy = opts.policy ?? pub();
+  const s = await openSession({ endpoint: LOCAL, policy, masker });
   await s.page.goto(`${portal.url}/public/form`);
   const ctx: StepContext = {
-    page: s.page, script: { name: 't', version: 1, startUrl: `${portal.url}/public/form`, steps }, policy: pub(), vars,
+    page: s.page, script: { name: 't', version: 1, startUrl: `${portal.url}/public/form`, steps }, policy, vars,
     masker, defaultTimeoutMs: 2000, violations: s.violations, ...(opts.signed === false ? {} : { signed: true }),
+    ...(opts.secretTyping ? { secretTyping: opts.secretTyping } : {}),
   };
   return { s, ctx, masker, r: await runSteps(ctx, steps) };
 }
@@ -251,5 +257,111 @@ describe('secret variables (TaskInput.secretVars, the RPA Secret Variables crede
     expect(refused).toMatchObject({ ok: false });
     if (!refused.ok) expect(refused.message).toContain(INPUT_CONTAINS_SECRET);
     expect(JSON.stringify(refused)).not.toContain(EXPORT_PW);
+  });
+});
+
+describe('May Be Typed Into (TaskInput.secretTargets, the RPA Secret Variables credential in n8n)', () => {
+  const VARS = { pw: EXPORT_PW, plain: 'Widget-77' };
+  const masker = () => laneMasker({ endpoint: LOCAL, vars: VARS, secretVars: ['pw'] });
+  const limit = (hosts: string[], vars: Record<string, string> = VARS) => secretTypingLimit({ apps: [], hosts }, ['pw'], vars);
+  /** Runs `steps` with the limit; returns the result, the password field's value and the session's violations. */
+  async function typed(steps: Step[], hosts: string[], opts: { vars?: Record<string, string>; policy?: PortalPolicy; prepare?: (s: Awaited<ReturnType<typeof openSession>>) => Promise<void> } = {}) {
+    const vars = opts.vars ?? VARS;
+    const m = laneMasker({ endpoint: LOCAL, vars, secretVars: ['pw'] });
+    const run = await direct(steps, vars, { masker: m, secretTyping: limit(hosts, vars), ...(opts.policy ? { policy: opts.policy } : {}) });
+    try {
+      return { r: run.r, value: await run.s.page.inputValue('input[name=password]'), violations: [...run.s.violations] };
+    } finally { await run.s.close(); }
+  }
+
+  it('a listed host gets the value; the host is compared as URL.host gives it, without case', async () => {
+    const ok = await typed([secretFill('{{var.pw}}')], [portal.host.toUpperCase()]);
+    expect(ok.r.ok).toBe(true);
+    expect(ok.value).toBe(EXPORT_PW);
+  });
+  it('a host not listed is a fatal secret violation before anything is typed; the message names the host, never the value or the variable', async () => {
+    for (const hosts of [['erp.example.com'], []]) {
+      const { r, value, violations } = await typed([secretFill('{{var.pw}}')], hosts);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.failure.message).toBe(secretHostNotListed(portal.host));
+      expect(value).toBe('');
+      expect(violations).toEqual([{ kind: 'secret', url: `${portal.url}/public/form`, fatal: true }]);
+      expect(JSON.stringify(r)).not.toContain(EXPORT_PW);
+      expect(JSON.stringify(r)).not.toContain('"pw"');
+    }
+  });
+  it('the value under another name is checked too: a plain variable that holds it, typed by a secret fill', async () => {
+    const vars = { ...VARS, copy: EXPORT_PW };
+    const { r, value } = await typed([secretFill('{{var.copy}}')], ['erp.example.com'], { vars });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.failure.message).toBe(secretHostNotListed(portal.host));
+    expect(value).toBe('');
+  });
+  it('the other ways to type it stay refused by the masker, whatever the field lists', async () => {
+    for (const fill of [{ field: { label: 'Password' }, value: '{{var.pw}}' }, { field: { label: 'Name' }, value: 'x{{var.pw}}' }]) {
+      const { r, value } = await typed([{ intent: 'Type', fill } as Step], [portal.host]);
+      expect(r.ok, fill.value).toBe(false);
+      expect(value).toBe('');
+    }
+    // A secret fill whose value only contains the secret: renderVars refuses it, listed host or not.
+    const { r } = await typed([secretFill('{{var.plain}}')], [portal.host], { vars: { ...VARS, plain: `${EXPORT_PW}!` } });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.failure.message).toBe(INPUT_CONTAINS_SECRET);
+  });
+  it('a secret fill of a value that is not the credential\'s is not limited', async () => {
+    const vars = { ...VARS, other: 'Other-pw-5521' };
+    const { r, value } = await typed([secretFill('{{var.other}}')], ['erp.example.com'], { vars });
+    expect(r.ok).toBe(true);
+    expect(value).toBe('Other-pw-5521');
+  });
+  it('a field in a frame counts the frame\'s own address too: a frame without a host is never listed', async () => {
+    const field = { label: 'Password', frame: 'iframe#embedded' };
+    const steps: Step[] = [{ ...secretFill('{{var.pw}}'), fill: { field, value: '{{var.pw}}', secret: true } } as Step];
+    const embed = async (page: Awaited<ReturnType<typeof openSession>>['page'], how: { src?: string; srcdoc?: string }) => {
+      await page.evaluate((h) => {
+        document.getElementById('embedded')?.remove();
+        const f = document.createElement('iframe');
+        f.id = 'embedded';
+        if (h.src) f.src = h.src;
+        if (h.srcdoc) f.srcdoc = h.srcdoc;
+        document.body.append(f);
+      }, how);
+      const input = page.frameLocator('iframe#embedded').locator('input[name=password]');
+      await input.waitFor();
+      return input;
+    };
+    const m = masker();
+    const run = await direct([], VARS, { masker: m });
+    try {
+      const ctx: StepContext = {
+        page: run.s.page, script: { name: 't', version: 1, startUrl: `${portal.url}/public/form`, steps }, policy: pub(), vars: VARS, masker: m,
+        defaultTimeoutMs: 2000, violations: run.s.violations, signed: true, secretTyping: limit([portal.host]),
+      };
+      // The page's host is listed, the frame (about:srcdoc) has none.
+      const blank = await embed(run.s.page, { srcdoc: '<label>Password <input name="password" type="password"></label>' });
+      const r = await runSteps(ctx, steps);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.failure.message).toBe(secretHostNotListed('about:srcdoc'));
+      expect(await blank.inputValue()).toBe('');
+      // A frame on the listed host: typed.
+      const same = await embed(run.s.page, { src: `${portal.url}/public/form` });
+      expect((await runSteps({ ...ctx, violations: [] }, steps)).ok).toBe(true);
+      expect(await same.inputValue()).toBe(EXPORT_PW);
+    } finally { await run.s.close(); }
+  });
+  it('through the lane: secretTargets limits a signed run, and without it the run types as before', async () => {
+    const steps: Step[] = [secretFill('{{var.pw}}'), { intent: 'Done', waitFor: { target: { css: 'form#contact' } } }];
+    const doc = { name: 'export', version: 1, startUrl: `${portal.url}/public/form`, steps };
+    const base = { policy: pub(), endpoint: LOCAL, defaultStepTimeoutMs: 3000, vars: VARS, secretVars: ['pw'], saveTrace: 'never' as const };
+    const refused = await runScriptLane(signedLaneInput(doc, { ...base, secretTargets: { apps: ['ErpDemo.exe'], hosts: ['erp.example.com'] } }));
+    expect(refused).toMatchObject({ ok: false, code: 'policy_violation', message: `Type the export password: ${secretHostNotListed(portal.host)}` });
+    expect(JSON.stringify(refused)).not.toContain(EXPORT_PW);
+    expect((await runScriptLane(signedLaneInput(doc, { ...base, secretTargets: { apps: [], hosts: [portal.host] } }))).ok).toBe(true);
+    expect((await runScriptLane(signedLaneInput(doc, base))).ok).toBe(true);
+  });
+  it('apps are compared by their file name, without case, as the runner does', () => {
+    const t = { apps: ['ErpDemo.exe'], hosts: [] };
+    for (const exe of ['ErpDemo.exe', 'erpdemo.EXE', 'C:\\Program Files\\ERP Demo\\ErpDemo.exe', 'C:/Apps/ErpDemo.exe']) expect(appListed(t, exe), exe).toBe(true);
+    for (const exe of ['Other.exe', 'ErpDemo.exe.bak', 'C:\\ErpDemo.exe\\Other.exe', '']) expect(appListed(t, exe), exe).toBe(false);
   });
 });

@@ -6,7 +6,7 @@ import { runScriptLane, screenshotMasks, type ScriptLaneInput } from '../src/lan
 import { checkTrust } from '../src/lane/trust.js';
 import { runTask } from '../src/lane/task.js';
 import { fakeModel } from './fake-model.js';
-import { REPAIR_PASSWORD_CHANGE_HALF_DONE, UNSIGNED_CHANGE_PASSWORD } from '../src/messages.js';
+import { REPAIR_PASSWORD_CHANGE_HALF_DONE, secretHostNotListed, UNSIGNED_CHANGE_PASSWORD } from '../src/messages.js';
 import { describeStep } from '../src/proposal/describe.js';
 import { createMasker } from '../src/secrets/mask.js';
 import { runSteps, type StepContext } from '../src/steps/run.js';
@@ -250,5 +250,25 @@ describe('signIn.changePassword', () => {
     const old = await runScriptLane(input(script()));
     expect(old).toMatchObject({ ok: false, code: 'login_failed' });
     expect(portal.state().logins).toBe(3);
+  });
+
+  it('a new password from the RPA Secret Variables credential is typed only on a host its May Be Typed Into lists', async () => {
+    // Not listed: refused on the change page before anything is typed there, the current password included.
+    portal.setState({ forcePasswordChange: true });
+    const secret = { secretVars: ['newPassword'] };
+    const refused = await runScriptLane(input(script(), { ...secret, secretTargets: { apps: ['ErpDemo.exe'], hosts: ['erp.example.com'] }, saveTrace: 'always' }));
+    expect(refused).toMatchObject({ ok: false, code: 'policy_violation' });
+    if (refused.ok) return;
+    expect(refused.message).toBe(`Sign in: ${secretHostNotListed(portal.host)}`);
+    expect(refused).not.toHaveProperty('passwordChanged');
+    for (const text of [jsonOf(refused), ...traceTexts(refused.trace)]) expect(text).not.toContain(NEW_PW);
+    expect(portal.state()).toMatchObject({ password: null, forcePasswordChange: true });
+    // Listed: the change goes through as without the field.
+    portal.reset();
+    portal.setState({ forcePasswordChange: true });
+    const listed = await runScriptLane(input(script(), { ...secret, secretTargets: { apps: [], hosts: [portal.host] } }));
+    if (!listed.ok) throw new Error(`${listed.code}: ${listed.message}`);
+    expect(listed.passwordChanged).toBe(true);
+    expect(portal.state()).toMatchObject({ password: NEW_PW, forcePasswordChange: false });
   });
 });
