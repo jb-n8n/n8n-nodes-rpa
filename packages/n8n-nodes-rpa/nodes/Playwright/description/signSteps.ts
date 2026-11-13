@@ -73,4 +73,15 @@ export const signStepsProperties: INodeProperties[] = [
       'Desktop steps only: the numbers of the steps that save, post or submit, as the approver declared them (the change list numbers every step; the safety flags list the candidates). Listed steps are signed as writes, so the desktop runner lets them act on the write controls and gated keys of its policy. The runner refuses a write only on those: leaving a step unlisted does not stop it from saving unless its control is in the runner policy. Map it from the approval answer. Browser steps refuse a value here.',
     displayOptions: signSteps,
   },
+  {
+    // Shown with every other field: a field hidden by an expression's value would be dropped when n8n saves the node.
+    displayName: 'Check Only',
+    name: 'checkOnly',
+    type: 'boolean',
+    default: false,
+    hint: 'On signs and records nothing',
+    description:
+      "Whether to only report what this node signs for: the name of its RPA Site Login, and whether the signature of an approved version on the input item (an active row of the steps table) verifies with this node's RPA Step Signing key and Site Login. RPA: 5 Import a bot does this before its review page.",
+    displayOptions: signSteps,
+  },
 ];

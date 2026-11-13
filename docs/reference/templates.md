@@ -37,6 +37,12 @@ Templates 2, 3 and 5 create the two Data Tables when they are missing.
   reads Expected Version from the active row, so it keeps running. Approved, the new row supersedes the old one. Rejected, the old one keeps running. This path gives no workflow file:
   the bot's workflow exists already. A name with no active row ends on **No approved bot**, which lists the approved
   names.
+- Before the review page, **Sign steps** runs once with **Check Only** on: it signs nothing. It gives the name of the
+  RPA Site Login it signs for, and after **Change or sign again** it checks the approved version's signature with its
+  own signing key and Site Login, as a run checks it. **Checked?** sends that to the review page. The page's opening
+  lines name the Site Login (desktop steps are signed for the app they start, without one). When the approved version
+  does not fit, a warning says so above the decision: after a new signing key that is expected, but if the bot's
+  workflow uses another Site Login, a version signed here will not run there. The page does not refuse.
 - **Review and approve** shows each step list: what it opens, whether it signs in, forms it submits, files it returns,
   what the replay proved, the steps it left out, and the numbered steps. For desktop steps it asks "Which of these steps
   save, send or submit?". The **Decision** is **Approve and sign** or **Reject**. A page left unanswered for an hour

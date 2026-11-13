@@ -550,9 +550,56 @@ export function desktopWriteLine(writes: { step: number; intent: string }[]): st
   return `Signed as writes: ${writes.map((w) => `step ${w.step} (${w.intent.replace(/\s+/g, ' ').trim()})`).join(', ')}`;
 }
 
+/** What Check Only gives for one item. Names and yes or no only: never a key, a signature or a credential's data. */
+export interface SigningCheck {
+  checkOnly: true;
+  /** The name of the RPA Site Login on this node, or null when it has none. Desktop steps are signed without it. */
+  siteLogin: string | null;
+  /**
+   * The approved version the item carries (an active row of the steps table: steps, signature, approvedBy), or null
+   * when it carries no signature. `signatureFits` is what the run's own check (engine verifyScript) says with this
+   * node's Step Signing key and, for browser steps, its Site Login: null when this node has no key to check with.
+   */
+  approvedVersion: { version: number | null; desktop: boolean; signatureFits: boolean | null } | null;
+}
+
+/**
+ * The name of the credential of `type` on this node, or null. n8n gives a node the id and the name of each credential
+ * picked on it; only getCredentials reads its data, and this does not call it.
+ */
+function credentialName(ctx: NodeContext, type: string): string | null {
+  if (credentialId(ctx, type) === undefined) return null;
+  const name = ctx.getNode().credentials?.[type]?.name;
+  return typeof name === 'string' ? name : null;
+}
+
+/**
+ * Check Only: signs and records nothing. Names the RPA Site Login this node signs for and, when the item carries an
+ * approved version, says whether its signature verifies with this node's Step Signing key and Site Login, with the
+ * verification a run makes (engine verifyScript): a browser signature binds the Site Login's id, a desktop signature
+ * binds none (signDesktop). The Site Login's data is never read. Never an error: a missing key gives null.
+ */
+async function checkOne(ctx: NodeContext, engine: Engine, i: number, json: IDataObject): Promise<SigningCheck> {
+  const siteLogin = credentialName(ctx, CREDENTIALS.siteLogin);
+  const signature = json.signature;
+  if (typeof signature !== 'string' || signature.trim() === '') return { checkOnly: true, siteLogin, approvedVersion: null };
+  const steps = parseOnce(json.steps);
+  const desktop = engine.isDesktopDocument(steps);
+  let key: string | undefined;
+  try {
+    key = credentialId(ctx, CREDENTIALS.signing) === undefined ? undefined : signingKey(await ctx.getCredentials(CREDENTIALS.signing, i));
+  } catch {
+    key = undefined;
+  }
+  const siteLoginId = desktop ? undefined : credentialId(ctx, CREDENTIALS.siteLogin) || undefined;
+  const signatureFits = key === undefined ? null : engine.verifyScript(steps, key, { approvedBy: asString(json.approvedBy), signature, ...(siteLoginId ? { siteLoginId } : {}) });
+  return { checkOnly: true, siteLogin, approvedVersion: { version: wholeNumber(json.version), desktop, signatureFits } };
+}
+
 /**
  * Sign Steps: one steps-table record per input item, `active` (signed) or `rejected`. No browser is opened.
  * Refusals and configuration errors are error items under continue-on-fail (n8n routes them to the error output).
+ * With Check Only on, one SigningCheck per item instead (checkOne): nothing is signed.
  */
 export async function executeSignSteps(ctx: NodeContext, engine: Engine, now: () => Date = () => new Date()): Promise<INodeExecutionData[][]> {
   const items = ctx.getInputData();
@@ -562,6 +609,10 @@ export async function executeSignSteps(ctx: NodeContext, engine: Engine, now: ()
   for (let i = 0; i < items.length; i++) {
     let r: SignOutcome;
     try {
+      if (asBoolean(ctx.getNodeParameter('checkOnly', i, false), false)) {
+        out.push({ json: { ...(await checkOne(ctx, engine, i, items[i].json)) }, pairedItem: [{ item: i }] });
+        continue;
+      }
       r = await signOne(ctx, engine, i, items[i].json, now());
     } catch (error) {
       // signOne turns every expected problem into an outcome; anything else is a configuration error item, as in

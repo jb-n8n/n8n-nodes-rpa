@@ -24,6 +24,8 @@ export interface HarnessOptions {
   credentialId?: string;
   /** Credential ids by credential type (only for types present in `credentials`). */
   credentialIds?: Record<string, string>;
+  /** Credential names by credential type (default `<type> credential`), as n8n gives them on getNode().credentials. */
+  credentialNames?: Record<string, string>;
   staticData?: IDataObject;
   /** What getInputConnectionData returns. Leave undefined for "no model sub-node connected". */
   model?: unknown;
@@ -82,7 +84,7 @@ function dig(value: unknown, parts: string[]): unknown {
 export function harness(o: HarnessOptions): Harness {
   const fallbackId = o.credentialId ?? 'cred-1';
   const credentials: INodeCredentials = {};
-  for (const type of Object.keys(o.credentials ?? {})) credentials[type] = { id: o.credentialIds?.[type] ?? fallbackId, name: `${type} credential` };
+  for (const type of Object.keys(o.credentials ?? {})) credentials[type] = { id: o.credentialIds?.[type] ?? fallbackId, name: o.credentialNames?.[type] ?? `${type} credential` };
   const raw = o.rawParameters ?? defaultRaw(o.params, Math.max(1, o.items?.length ?? 1));
   const node: INode = {
     id: 'node-1', name: o.nodeName ?? 'RPA', type: 'n8n-nodes-rpa.playwright', typeVersion: 1, position: [0, 0],
