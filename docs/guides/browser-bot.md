@@ -57,11 +57,12 @@ The **import form** is an n8n form where you upload a bot, read its steps and ap
 with the Site Login of step 2.
 
 1. In n8n, make an API key, a key that lets a program act as you in n8n: **Settings → n8n API → Create API key**.
-   Give it a label and keep the expiry. Under **Scopes**, choose **Custom** and tick only the scopes the command uses:
-   `workflow:create`, `workflow:read`, `workflow:update`, `workflow:delete`, `workflow:list` and `workflow:activate`
-   (group **Workflow and executions**), `credential:create`, `credential:update` and `credential:list` (group
-   **Credentials and variables**), and `user:read` (group **Members**: the command reads your address there for the
-   approver list). A key with these is enough. Choose **Save**, and copy the key with the copy button next to it.
+   Give it a label, leave **Scopes** on **All**, and set **Expiration** to **7 days**, the shortest in its list. The
+   command uses the key once, and you revoke it right after (below). Choose **Save**, and copy the key with the copy
+   button next to it.
+
+   The stricter way: under **Scopes**, choose **Custom** and tick only the scopes the command uses:
+   `workflow:create`, `workflow:read`, `workflow:update`, `workflow:delete`, `workflow:list`, `workflow:activate`, `credential:create`, `credential:read`, `credential:update`, `credential:list`, `user:read`.
 2. In the repository folder, run the setup command. It is already installed in the n8n container. The first part of
    the line hands it the browser token from `.env`:
 
@@ -90,7 +91,7 @@ The import form is ready.
 
 Keep the address. If **RPA: 5 Import a bot** is there already from an earlier run, the command leaves it as it is and
 says what to set on it in n8n. The command's last line is about the API key: it can act as you in n8n within its
-scopes, so remove it now. In **Settings → n8n API**, open the key's **⋯** menu and choose **Revoke**. The signing key stays in
+scopes, so revoke it now. In **Settings → n8n API**, open the key's **⋯** menu and choose **Revoke**. The signing key stays in
 n8n, and n8n does not show it again. The command's other options, and how to run it for an n8n outside this stack
 (`npx n8n-nodes-rpa setup`), are in step 2 of the [desktop bot guide](desktop-bot.md#2-set-up-n8n-with-one-command).
 

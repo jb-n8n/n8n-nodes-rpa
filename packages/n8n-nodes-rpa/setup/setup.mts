@@ -55,7 +55,9 @@ const NODE = { form: 'Import a bot', importSteps: 'Import steps', signSteps: 'Si
 const DOCS = 'https://github.com/jb-n8n/n8n-nodes-rpa/blob/main/docs';
 const INSTALL_DOC = `${DOCS}/reference/operator.md#install-the-node`;
 const LOST_KEY_DOC = `${DOCS}/reference/security.md#if-the-signing-key-is-lost-or-changed`;
-const WHERE_KEYS = 'Make an API key in n8n: Settings → n8n API → Create API key (as the owner or an admin).';
+const WHERE_KEYS = 'Make an API key in n8n: Settings → n8n API → Create API key (as the owner or an admin), with Scopes All and the shortest expiry, and revoke it when the setup is done.';
+/** The stricter key: only the scopes this command uses, as n8n names them under Scopes → Custom. */
+const SCOPES = 'workflow:create, workflow:read, workflow:update, workflow:delete, workflow:list, workflow:activate, credential:create, credential:read, credential:update, credential:list, user:read';
 const USAGE = [
   'Usage: npx n8n-nodes-rpa setup [--url <n8n address>] [--approver <email>] [options]',
   '',
@@ -88,6 +90,7 @@ const USAGE = [
   '',
   'Secrets never go in flags. The command asks for them, or reads them from the environment:',
   `  N8N_API_KEY            the n8n API key. ${WHERE_KEYS}`,
+  `                         The stricter way, Scopes Custom with only: ${SCOPES}`,
   '  RPA_CONNECTION_LINE    the rpa-runner:// line of a Windows machine (optional): creates the RPA Desktop Runner credential,',
   '                         or, for one your project has (that name, or --desktop-runner), asks whether to replace its line.',
   '  RPA_BROWSER_TOKEN      the browser service token, with --browser-url.',

@@ -45,9 +45,10 @@ machine by another name or address (a NAT, a tunnel), run the command again with
 ## 2. Set up n8n with one command
 
 One command makes the **import form**, where you upload a bot, read its steps and approve them, and connects the
-Windows machine. In n8n, make an API key: **Settings → n8n API → Create API key**, with an expiry. Under **Scopes**,
-choose **Custom** and tick `workflow:create`, `workflow:read`, `workflow:update`, `workflow:delete`, `workflow:list`,
-`workflow:activate`, `credential:create`, `credential:read`, `credential:update`, `credential:list` and `user:read`.
+Windows machine. In n8n, make an API key: **Settings → n8n API → Create API key**. Leave **Scopes** on **All**, and
+set **Expiration** to **7 days**, the shortest in its list. The command uses the key once, and you revoke it right after
+(below). The stricter way: under **Scopes**, choose **Custom** and tick only the scopes the command uses:
+`workflow:create`, `workflow:read`, `workflow:update`, `workflow:delete`, `workflow:list`, `workflow:activate`, `credential:create`, `credential:read`, `credential:update`, `credential:list`, `user:read`.
 
 With the compose stack, run the command inside the n8n container, in the repository folder. Nothing to install:
 

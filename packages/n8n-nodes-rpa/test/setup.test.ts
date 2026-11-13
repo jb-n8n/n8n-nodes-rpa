@@ -452,7 +452,7 @@ describe('npx n8n-nodes-rpa setup', () => {
     const fake = await n8n();
     const { code, out } = await run(setup(fake.url), { N8N_API_KEY: 'wrong-key-0123456789-0123456789' });
     expect(code).toBe(1);
-    expect(out).toMatch(/refused the API key.*Make an API key in n8n: Settings → n8n API → Create API key \(as the owner or an admin\)\./);
+    expect(out).toMatch(/refused the API key.*Make an API key in n8n: Settings → n8n API → Create API key \(as the owner or an admin\), with Scopes All and the shortest expiry, and revoke it when the setup is done\./);
     expect(fake.state.requests).toHaveLength(1);
     expect(out).not.toContain('wrong-key-0123456789-0123456789');
   });
@@ -1162,6 +1162,9 @@ describe('npx n8n-nodes-rpa setup', () => {
     const help = await run(['--help']);
     expect(help.code).toBe(0);
     for (const flag of ['--url', '--approver', '--form-login', '--allow-http', '--show-signing-key', '--replace-signing-key', '--new-form-password', '--browser-url', '--site-login', '--allow-private-network', 'N8N_API_KEY', 'RPA_CONNECTION_LINE']) expect(help.out).toContain(flag);
+    // The API key: all scopes and the shortest expiry by default, revoked after; the stricter scope list on one line.
+    expect(help.out).toContain('with Scopes All and the shortest expiry, and revoke it when the setup is done.');
+    expect(help.out).toContain('The stricter way, Scopes Custom with only: workflow:create, workflow:read, workflow:update, workflow:delete, workflow:list, workflow:activate, credential:create, credential:read, credential:update, credential:list, user:read\n');
     expect((await run([])).code).toBe(2);
   });
 });

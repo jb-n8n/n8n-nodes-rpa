@@ -46,7 +46,8 @@ Guide: [Your first Windows desktop bot](docs/guides/desktop-bot.md).
 
 ### Move a bot you already have
 
-1. Set up the **Import a bot** form with one command: `npx n8n-nodes-rpa setup`.
+1. Set up the **Import a bot** form with one command: `npx n8n-nodes-rpa setup`. It asks for an n8n API key: one with
+   all scopes and the shortest expiry, revoked right after, or a stricter one with only the scopes the guides list.
 2. Upload a UiPath project, a Chrome Recorder export, Playwright code, an RPA recording, or steps you wrote.
 3. Review what the import made, and what it left out, on the next page. Approve it.
 4. Import the workflow it gives you and run it.

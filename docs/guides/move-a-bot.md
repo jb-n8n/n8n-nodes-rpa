@@ -12,8 +12,8 @@ to n8n.
 
 Template **RPA: 5 Import a bot** (`packages/n8n-nodes-rpa/templates/5-import-a-bot.json`) is a form in front of the
 node's **Import Steps** operation. Set it up once, with one command (Node.js 22 or later, and an n8n API key from
-**Settings → n8n API**, with the **Custom** scopes that [the browser bot guide](browser-bot.md#3-set-up-the-import-form-with-one-command)
-lists):
+**Settings → n8n API**: Scopes **All** and the shortest expiry, revoked right after, or the stricter **Custom** scopes
+that [the browser bot guide](browser-bot.md#3-set-up-the-import-form-with-one-command) lists):
 
 ```sh
 npx n8n-nodes-rpa setup --url http://localhost:5678
