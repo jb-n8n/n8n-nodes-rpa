@@ -900,10 +900,19 @@ describe('outputs', () => {
     }
   });
   it('the error item shows the message without the engine\'s detected: mark, in every place it is read', async () => {
-    const engine = fakeEngine(() => taskFail('login_failed', 'Sign in: detected:login_failed: the site sent the sign-in page back'));
+    const log = [
+      { index: 0, intent: 'Open the start page', status: 'ok' as const, ms: 5 },
+      { index: 1, intent: 'Sign in', status: 'failed' as const, ms: 9, note: 'detected:login_failed: the site sent the sign-in page back' },
+      { index: 2, intent: 'Check the page', status: 'failed' as const, ms: 3, note: 'detected:account_locked' },
+    ];
+    const engine = fakeEngine(() => taskFail('login_failed', 'Sign in: detected:login_failed: the site sent the sign-in page back', { log }));
     const [data] = await executeRunSteps(ctx({ continueOnFail: true }), engine);
     const shown = 'Sign in: the site sent the sign-in page back';
     expect(data[0].json).toMatchObject({ error: `login_failed: ${shown}`, message: shown, details: { code: 'login_failed', message: shown, guidance: GUIDANCE.login_failed } });
+    // The step log's notes too (the engine's own log keeps the mark, for its classification).
+    expect((data[0].json.details as { log: unknown[] }).log).toEqual([log[0], { ...log[1], note: 'the site sent the sign-in page back' }, { ...log[2], note: 'account_locked' }]);
+    expect(log[1].note).toBe('detected:login_failed: the site sent the sign-in page back');
+    expect(JSON.stringify(data[0].json)).not.toContain('detected:');
   });
   it('every output item is paired with its input item', async () => {
     const engine = fakeEngine((_input, call) => (call === 0 ? scriptOk() : taskFail('not_found', 'the page or the data was not found')));

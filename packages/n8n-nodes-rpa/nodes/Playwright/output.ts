@@ -21,6 +21,9 @@ type RunOk = Extract<TaskResult, { ok: true }>;
 type RunFailure = Extract<TaskResult, { ok: false }>;
 /** A JSON copy: log entries and step documents are plain data; n8n items must not share objects with the engine result. */
 export const plain = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
+/** The step log as a person reads it: each note without the engine's `detected:` mark (shownMessage), as the message. */
+const shownLog = (log: { note?: string }[]): IDataObject[] =>
+  (plain(log) as unknown as IDataObject[]).map((e) => (typeof e.note === 'string' ? { ...e, note: shownMessage(e.note) } : e));
 /** A failure after a run that finished: its output could not be built (for example the binary store failed). */
 export const OUTPUT_NOT_BUILT = (why: string): string => `the run finished but its output could not be built: ${why}`;
 
@@ -73,7 +76,7 @@ export async function dataItem(
     // The run log columns (template 2): wall time of the whole run, and chat model tokens (script lane: none).
     durationMs: r.durationMs,
     llmTokens: r.lane === 'agent' ? r.tokens : 0,
-    log: plain(r.log) as unknown as IDataObject[],
+    log: shownLog(r.log),
     // Rows only when row checks ran: an extract step on the script lane, always for agent-lane rows (the proof ran).
     ...(r.lane === 'agent' || f.verified ? { rows: r.rows.map((row) => ({ ...row })) } : {}),
     ...(Object.keys(values).length ? { values } : {}),
@@ -204,7 +207,7 @@ export async function failureItem(
     traceRef: binary?.trace ? 'trace' : null,
     durationMs: full?.durationMs ?? 0,
     llmTokens: full?.tokens ?? 0,
-    log: full ? (plain(full.log) as unknown as IDataObject[]) : [],
+    log: full ? shownLog(full.log) : [],
     submitted: full?.submitted === true,
     ...(f.passwordChanged ? { passwordChanged: true as const } : {}),
     guidance: guidanceFor(f.code, f.message),
