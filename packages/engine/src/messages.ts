@@ -27,8 +27,10 @@ export const NO_TOTP_SECRET = 'no authenticator secret is configured for this si
 export const LOOKS_DESTRUCTIVE = 'looks like it deletes, cancels, pays, sends or otherwise changes something, or signs out';
 
 // Trust gate. Golden: tests assert them verbatim.
+/** Also what steps signed with an earlier Step Signing key get: the way back is the import form's sign-again page. */
 export const UNSIGNED_REQUIRED =
-  'The steps are not signed, or the signature is not valid, and Require Signed Steps is on. Sign them with Sign Steps first.';
+  'The steps are not signed, or the signature is not valid, and Require Signed Steps is on. Sign them with Sign Steps first. '
+  + 'To sign a bot again, for example after the signing key changed, open the import form, leave Bot file empty and type the bot\'s name.';
 export const SIGNATURE_INVALID =
   'The signature is not valid for these steps: it does not match their name, version, start site, Site Login or approver.';
 export const SIGNATURE_WITHOUT_KEY = 'a signature is present but no Step Signing credential is attached';

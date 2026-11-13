@@ -57,7 +57,7 @@ const GOLDEN_MESSAGES = [
   'Blocked: the page tried to open cdn.other.com, which is not allowed. This run only visits example.com. Add it under Options → Also Allow These Sites if this is expected.',
   'No element found for Visible Text "Sign In" on https://example.com/account after 30 s. Check the spelling or try Find by: Role and Name.',
   'Visible Text "Submit" matches 3 elements. Use a more specific locator; it must match exactly one.',
-  'The steps are not signed, or the signature is not valid, and Require Signed Steps is on. Sign them with Sign Steps first.',
+  'The steps are not signed, or the signature is not valid, and Require Signed Steps is on. Sign them with Sign Steps first. To sign a bot again, for example after the signing key changed, open the import form, leave Bot file empty and type the bot\'s name.',
   'Expected 120 rows (the page says "120 results") but found 117. Nothing was marked successful.',
   'A previous login for example.com failed, so no login was tried.',
 ];
