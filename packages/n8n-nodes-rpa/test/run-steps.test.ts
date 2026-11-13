@@ -1025,9 +1025,9 @@ describe('Run Steps: RPA Secret Variables', () => {
     expect(engine.calls[0]).toMatchObject({ vars: { from: '2026-01-01', pw: SECRET }, secretVars: ['pw'] });
   });
   it('May Be Typed Into goes to the engine as secretTargets, hosts read as Also Allow These Sites reads them; empty is no limit', async () => {
-    const withTargets = (mayBeTypedInto: unknown) =>
+    const withTargets = (mayBeTypedInto: string | undefined) =>
       ctx({
-        params: params({}, {}), credentials: { ...ALL, rpaSecretVariablesApi: { variables: { values: [{ name: 'pw', value: SECRET }] }, mayBeTypedInto } },
+        params: params({}, {}), credentials: { ...ALL, rpaSecretVariablesApi: { variables: { values: [{ name: 'pw', value: SECRET }] }, ...(mayBeTypedInto === undefined ? {} : { mayBeTypedInto }) } },
         credentialIds: { ...IDS, rpaSecretVariablesApi: 'secret-1' }, continueOnFail: true,
       });
     const engine = fakeEngine(() => scriptOk());
