@@ -7,8 +7,10 @@
 #   rpa status                                                     (this script -Status)
 #
 # A connection line is rpa-runner://<address>:<port>/rpa/v1#token=<token>&fingerprint=<64 hex> or
-# rpa-browser://<address>:<port>/#token=<token>&fingerprint=<64 hex>. Its address is this machine's name, or the
-# -Address given (the name or address n8n really uses, through a NAT or a tunnel); an IPv6 address goes in brackets.
+# rpa-browser://<address>:<port>/#token=<token>&fingerprint=<64 hex>. Its address is the -Address given (the name or
+# address n8n really uses, through a NAT or a tunnel). Without -Address, where install.json records one IP address that
+# may connect (-AllowFrom, the n8n host), it is the address this machine has on its route to that one, else this
+# machine's name; one line says which, and how to choose another. An IPv6 address goes in brackets.
 # -Status shows whether each program listens, the mode, the bot user's sessions and, in unattended mode, the
 # supervisor's state: nothing that goes into a credential.
 #
@@ -46,6 +48,39 @@ function Get-ConnectionHost([string]$Text) {
   $null
 }
 
+# The parsed address of a text that is an IPv4 or IPv6 address and could be another machine's (not a loopback or the
+# unspecified address), or nothing. No range, no name, no zone.
+function Get-OtherMachineAddress([string]$Text) {
+  $parsed = $null
+  $v4 = $Text -match '^\d{1,3}(\.\d{1,3}){3}$'
+  $v6 = $Text -match '^[0-9A-Fa-f:.]+$' -and $Text.Contains(':')
+  if (-not ($v4 -or $v6) -or -not [Net.IPAddress]::TryParse($Text, [ref]$parsed)) { return $null }
+  if ([Net.IPAddress]::IsLoopback($parsed) -or $parsed.Equals([Net.IPAddress]::Any) -or $parsed.Equals([Net.IPAddress]::IPv6Any)) { return $null }
+  $parsed
+}
+
+# Without -Address: the address this machine has on its route to n8n, when install.json's allowFrom holds one IP
+# address (the n8n host), as @{ Host = <as it goes into a line>; Address; Towards = <that n8n address> }. Nothing for
+# several addresses, a range, a name, any or none, a loopback address, no route, an answer that cannot go into a line,
+# or a Find-NetRoute that is missing or fails: the lines then carry this machine's name. Find-NetRoute reads this
+# machine's routing table: nothing is sent to that address.
+function Get-RouteAddress($AllowFrom) {
+  $entries = @($AllowFrom | Where-Object { $null -ne $_ })
+  if ($entries.Count -ne 1) { return $null }
+  $target = [string]$entries[0]
+  if (-not (Get-OtherMachineAddress $target)) { return $null }
+  $local = $null
+  try {
+    foreach ($found in @(Find-NetRoute -RemoteIPAddress $target -ErrorAction Stop)) {
+      if ($found.IPAddress) { $local = [string]$found.IPAddress; break }
+    }
+  } catch { return $null }
+  if (-not $local -or -not (Get-OtherMachineAddress $local)) { return $null }
+  $lineHost = Get-ConnectionHost $local
+  if (-not $lineHost) { return $null }
+  @{ Host = $lineHost; Address = $local; Towards = $target }
+}
+
 # A connection line (Line), or why there is none (Problem). -Fingerprint is in the form the other lines show it
 # (upper-case pairs joined by colons) and goes into the line as 64 lower-case hexadecimal digits. With -WithToken the
 # token is read here from -TokenFile, so that it is never a parameter of a command; without it the line holds the
@@ -77,10 +112,7 @@ if ($givenAddress) {
     Write-Output ('-Address: {0} is not a host name, an IPv4 address or an IPv6 address.' -f $givenAddress)
     exit 1
   }
-} else { $lineHost = Get-ConnectionHost ([Net.Dns]::GetHostName()) }
-# A name that cannot go into a line (an underscore in it, for example) leaves the lines to -Address.
-$noLine = $null
-if (-not $lineHost) { $noLine = 'the name of this machine, {0}, cannot go into a line: run this with -Address <the name or address n8n uses>' -f [Net.Dns]::GetHostName() }
+}
 $dataDir = Join-Path $env:ProgramData 'RPA Runner'
 $logDir = Join-Path $dataDir 'logs'
 $installFile = Join-Path $installDir 'install.json'
@@ -95,6 +127,19 @@ if ($ShowTokens) {
   if (-not (New-Object Security.Principal.WindowsPrincipal $identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Write-Output '-ShowTokens needs an administrator PowerShell.'
     exit 1
+  }
+}
+
+# The address in the lines: -Address, else the one on the route to n8n, else this machine's name. A name that cannot
+# go into a line (an underscore in it, for example) leaves the lines to -Address.
+$route = $null
+$noLine = $null
+if (-not $givenAddress -and -not $Status) {
+  $route = Get-RouteAddress $install.allowFrom
+  if ($route) { $lineHost = $route.Host }
+  else {
+    $lineHost = Get-ConnectionHost ([Net.Dns]::GetHostName())
+    if (-not $lineHost) { $noLine = 'the name of this machine, {0}, cannot go into a line: run this with -Address <the name or address n8n uses>' -f [Net.Dns]::GetHostName() }
   }
 }
 
@@ -193,7 +238,8 @@ if (-not $Status -and -not $ShowTokens) {
   if ($services.Count -eq 1) { Write-Output ('The token is hidden in the line (token={0}). For the line to paste, run as an administrator: {1}' -f $hidden, $command) }
   else { Write-Output ('The tokens are hidden in the lines (token={0}). For the lines to paste, run as an administrator: {1}' -f $hidden, $command) }
 }
-if (-not $Status -and -not $givenAddress) { Write-Output 'Where n8n reaches this machine by another name or address (a NAT, a tunnel), add -Address <that name or address>.' }
+if ($route) { Write-Output ("The line's address is {0}: the one this machine has towards {1}. If n8n reaches this machine by another name or address, run this again with -Address <that name or address>." -f $route.Address, $route.Towards) }
+elseif (-not $Status -and -not $givenAddress -and -not $noLine) { Write-Output ("The line's address is this computer's name, {0}. If n8n cannot find it by that name, run this again with -Address <an address n8n can reach>." -f $lineHost) }
 
 if ($Status -and $install.mode -ne 'unattended') {
   if ($install.autoSignIn -eq $true) { Write-Output ('Mode: automatic sign-in. Windows signs {0} in at every start of this machine.' -f $install.user) }
