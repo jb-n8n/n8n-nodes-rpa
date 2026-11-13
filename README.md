@@ -26,8 +26,8 @@ default a bot runs only steps that a person reviewed and approved.
 ### A browser bot
 
 1. Start n8n, a browser and a sample site with `docker compose up` from this repository.
-2. Set up the **Import a bot** form with one command, run in the n8n container.
-3. Add an **RPA Site Login** for the sample site and give it to the form.
+2. Add an **RPA Site Login** for the sample site.
+3. Set up the **Import a bot** form with one command, run in the n8n container. It gives the form that Site Login.
 4. Upload the sample bot on the form, review its steps and approve them.
 5. Import the workflow the form gives you and run it. It signs in and returns a report as a CSV file, with no AI model.
 

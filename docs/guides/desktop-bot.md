@@ -88,7 +88,11 @@ which. If n8n reaches the machine by another name or address (a NAT, a tunnel), 
 
 1. Set up the import form with one command, on the computer you use n8n from (Node.js 22 or later). It asks for an n8n
    API key (make one in n8n: **Settings → n8n API → Create API key**, with an expiry) and does not show what you type.
-   Answer `n` when it asks `Connect a Windows machine now?`: you did that in step 2.
+   Under **Scopes**, choose **Custom** and tick only the scopes the command uses: `workflow:create`, `workflow:read`,
+   `workflow:update`, `workflow:delete`, `workflow:list` and `workflow:activate` (group **Workflow and executions**),
+   `credential:create`, `credential:update` and `credential:list` (group **Credentials and variables**), and
+   `user:read` (group **Members**, for your address). A key with these is enough. Answer `n` when it asks `Connect a
+   Windows machine now?`: you did that in step 2.
 
    ```sh
    npx n8n-nodes-rpa setup --url http://localhost:5678
@@ -105,7 +109,7 @@ which. If n8n reaches the machine by another name or address (a NAT, a tunnel), 
      Sign-in:    the form opens with your n8n sign-in. Who approves is recorded as the n8n user who approved.
    ```
 
-   Its last line is about the API key: it can do everything you can in n8n. Revoke it when the setup is done
+   Its last line is about the API key: it can act as you in n8n within its scopes. Revoke it when the setup is done
    (**Settings → n8n API**, the key's **⋯** menu, **Revoke**).
 
    The signing key stays in n8n, and n8n does not show it again. A lost key means approving every bot again, on the

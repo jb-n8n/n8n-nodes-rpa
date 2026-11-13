@@ -1292,17 +1292,15 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const ran = { Settings: [[{ json: settingsJson() }]], 'Import steps': [data, repaired] } as Record<string, INodeExecutionData[][]>;
     const shown = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan(ran) });
     expect(shown.map((f) => f.fieldType)).toEqual(['html', 'radio']);
-    expect(String(shown[0].html)).toContain('On each page: Read the notices on this page');
+    expect(String(shown[0].html)).toContain('On each page: Read the notices table on this page');
     expect(String(shown[0].html)).toContain('Proven in a fresh browser:');
     const approved = await signAfterReview(ran, { decision_0: 'Approve and sign' }, {}, true);
     expect(approved.errors).toEqual([]);
     expect(approved.signed).toEqual([expect.objectContaining({ status: 'active', name: 'line-item-export', version: 1 })]);
 
     // The same bot whose extract step states no ID Pattern: refused before any browser, and the page says what to add.
-    const bare = JSON.parse(sample) as { steps: { paginate?: { each: { extract: IDataObject }[] } }[] };
-    const read = bare.steps.at(-1)!.paginate!.each[0].extract;
-    delete read.idPattern;
-    read.item = { css: 'li' };
+    const bare = JSON.parse(sample) as { steps: { paginate?: { each: { extractTable: IDataObject }[] } }[] };
+    delete bare.steps.at(-1)!.paginate!.each[0].extractTable.idPattern;
     const [refused] = await runImport(formItem('Step document', Buffer.from(JSON.stringify(bare))), (input) => realAdoptDraft(input) as never);
     expect(refused[0].json.drafts).toEqual([expect.objectContaining({ adopted: false, code: 'policy_violation', reason: IMPORT_ROWS_NEED_ID })]);
     const page = render(completion('Imported, with the workflow file').completionMessage, { $: nodesRan({ Settings: [[{ json: settingsJson() }]], 'Import steps': [refused, []] }) });
