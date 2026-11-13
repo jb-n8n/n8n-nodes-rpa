@@ -35,8 +35,8 @@ export interface GuardSpec {
   fingerprints?: LoginFingerprints;
 }
 
-/** Golden `locked_out` message for a Site Login. */
-export const siteLoginLockedOut = (loginHost: string): string => `A previous login for ${loginHost} failed, so no login was tried.`;
+/** Golden `locked_out` message for a Site Login: the breaker is kept per account, so it says this account (the item's `account` names it). */
+export const siteLoginLockedOut = (loginHost: string): string => `A previous login of this account on ${loginHost} failed, so no login was tried.`;
 /**
  * Golden `locked_out` message for a Site Login whose password a run changed earlier in this execution: the credential
  * still holds the old one, so no later item or node of the execution signs in with it.

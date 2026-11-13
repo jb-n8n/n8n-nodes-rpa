@@ -917,7 +917,7 @@ describe('buildWorkflow', () => {
         return { first: () => ({ json: nodes[name] }) };
       }) as Record<string, unknown>;
     const lockedOut = {
-      error: 'locked_out: A previous login for sandbox:8080 failed, so no login was tried.', message: 'A previous login for sandbox:8080 failed, so no login was tried.',
+      error: 'locked_out: A previous login of this account on sandbox:8080 failed, so no login was tried.', message: 'A previous login of this account on sandbox:8080 failed, so no login was tried.',
       details: { code: 'locked_out', name: 'bot', version: 1, hash: 'h', lane: null, durationMs: 0, llmTokens: 0, guidance: GUIDANCE.locked_out },
     };
     const failedRow = shape(LOG_FAILED_ROW, lockedOut, all);

@@ -121,6 +121,11 @@ sites its values go to, see [Security](security.md#secret-variables)), and
 
 The error output is output 1, or output 2 when AI Repair is on.
 
+The Data item's `confirmed` says whether the rows were counted against a total: `true` when the page states one
+(**Options → Stated Total Pattern (Regex)**) and it matched the rows read, or after an AI repair whose proof passed.
+`false` is not a failure: a run that reads no rows, downloads a file, runs desktop steps, or reads rows with no total
+to check them against says `false` and succeeds. A count that does not match fails the run (`incomplete`).
+
 ### Runs On
 
 Run Steps and Import Steps have **Runs On**. It only chooses which credential slots the node shows, and on Run Steps

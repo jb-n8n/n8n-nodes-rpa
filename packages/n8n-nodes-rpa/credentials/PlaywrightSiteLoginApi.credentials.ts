@@ -12,7 +12,7 @@ export class PlaywrightSiteLoginApi implements ICredentialType {
   properties: INodeProperties[] = [
     {
       displayName:
-        'What the browser signs in with, and the only sites it may open, load files from or post to. Anything outside these lists is blocked and the run fails as policy_violation. Used by Run Steps, Sign Steps and Import Steps.',
+        'What the browser signs in with, and the only sites it may open, load files from or post to. Anything outside these lists is blocked and the run fails as policy_violation. Used by Run Steps, Sign Steps and Import Steps. n8n\'s connection test checks these fields, not the password: the password is tried on the first run.',
       name: 'notice',
       type: 'notice',
       default: '',
