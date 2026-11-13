@@ -36,7 +36,7 @@ public sealed class NoticeLine
 
     public void Clear() => _all.Clear();
 
-    public static NoticeTone Tone(NoticeKind kind) => kind is NoticeKind.OtherProgram or NoticeKind.OverwriteLeftOut ? NoticeTone.Information : NoticeTone.Check;
+    public static NoticeTone Tone(NoticeKind kind) => kind == NoticeKind.OtherProgram ? NoticeTone.Information : NoticeTone.Check;
 
     /// <summary>A notice as the list of earlier notices shows it: its time, then its text.</summary>
     public static string Listed(BarNotice notice) => $"{notice.At.ToString("HH:mm:ss", CultureInfo.InvariantCulture)}  {notice.Text}";

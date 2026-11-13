@@ -159,7 +159,7 @@ public class FileDialogTests
         Assert.False(s.TakeOverwriteNotice());
         Assert.Equal("Yes to replacing the file is not a step: a run saves into a new folder of its own, where the file is not there yet.", Notices.OverwriteLeftOut);
 
-        // A typed name, and keys that move to Yes; Yes by Enter or by Space; the classic message box's Yes (6).
+        // A typed name, and keys that move to Yes; Yes by Enter or by Space.
         var typed = Record(Click(1, NameBox, window: SaveAs), Typed(2, NameBox, SaveAs), Left(3, NameBox, "report.csv", window: SaveAs), Accepted(3, null),
             Click(3, SaveButton, window: SaveAs), Key(4, No, "Shift+Tab", ConfirmSaveAs), Key(4, Yes, "Left", ConfirmSaveAs), Click(4, Yes, window: ConfirmSaveAs));
         Assert.Equal(["Save report.csv into the run's export folder", "Click Save"], typed.Steps.Select(x => StepText.Action(x)));
@@ -167,7 +167,6 @@ public class FileDialogTests
         foreach (var answer in new Observation[]
                  {
                      Key(4, Yes, "Enter", ConfirmSaveAs), new Activated(At(4), ConfirmSaveAs, Yes),
-                     Click(4, El("Button", "6", "Yes", "Button", false, false, Confirm), window: ConfirmSaveAs),
                  })
         {
             var by = Record(Accepted(1, "report.csv"), Key(1, NameBox, "Enter", SaveAs), answer);
@@ -185,14 +184,16 @@ public class FileDialogTests
         Assert.Equal("Click Yes", StepText.Action(again.Steps[^1]));
         Assert.False(again.TakeOverwriteNotice());
 
-        // No, a Save that keeps the app's folder (a run is asked as the person was), a step in between, and a Yes with
-        // no Save before it: each is recorded as before.
+        // No, a Save that keeps the app's folder (a run is asked as the person was), a step in between, a Yes with no
+        // Save before it, and a message box's Yes: each is recorded as before.
         Observation[][] kept =
         [
             [Accepted(1, "report.csv"), Click(1, SaveButton, window: SaveAs), Click(2, No, window: ConfirmSaveAs)],
             [Accepted(1, @"C:\out\report.csv"), Click(1, SaveButton, window: SaveAs), Click(2, Yes, window: ConfirmSaveAs)],
             [Accepted(1, "report.csv"), Click(1, SaveButton, window: SaveAs), Click(2, Post), Click(3, Yes, window: ConfirmSaveAs)],
             [Click(1, Export), Click(2, Yes, window: ConfirmSaveAs)],
+            // A message box's Yes (6) is the app's own question.
+            [Accepted(1, "report.csv"), Click(1, SaveButton, window: SaveAs), Click(2, El("Button", "6", "Yes", "Button", false, false, Confirm), window: ConfirmSaveAs)],
         ];
         foreach (var observations in kept)
         {

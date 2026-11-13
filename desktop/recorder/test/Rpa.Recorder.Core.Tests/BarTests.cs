@@ -193,9 +193,7 @@ public class BarTests
     public void A_notice_is_amber_when_the_person_should_check_something_and_plain_when_it_only_informs()
     {
         Assert.Equal(NoticeTone.Information, NoticeLine.Tone(NoticeKind.OtherProgram));
-        Assert.Equal(NoticeTone.Information, NoticeLine.Tone(NoticeKind.OverwriteLeftOut));
-        foreach (var kind in Enum.GetValues<NoticeKind>().Where(k => k is not (NoticeKind.OtherProgram or NoticeKind.OverwriteLeftOut)))
-            Assert.Equal(NoticeTone.Check, NoticeLine.Tone(kind));
+        foreach (var kind in Enum.GetValues<NoticeKind>().Where(k => k != NoticeKind.OtherProgram)) Assert.Equal(NoticeTone.Check, NoticeLine.Tone(kind));
     }
 
     [Fact]

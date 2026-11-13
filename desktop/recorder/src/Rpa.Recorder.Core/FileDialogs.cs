@@ -34,9 +34,9 @@ public static class FileDialogs
 
     /// <summary>
     /// Whether <paramref name="o"/> answers Yes to the question Windows asks when a Save dialog of
-    /// <paramref name="saveDialog"/> names a file that is there already ("Confirm Save As"): a click, Space or Enter on
-    /// the Yes button (IDYES: <c>CommandButton_6</c> in a task dialog, <c>6</c> in a message box) of another
-    /// <c>#32770</c> window of the same program.
+    /// <paramref name="saveDialog"/> names a file that is there already ("Confirm Save As", a task dialog): a click,
+    /// Space or Enter on a task dialog's Yes button (IDYES, <c>CommandButton_6</c>) in another <c>#32770</c> window of
+    /// the same program. A message box's Yes (<c>6</c>) is an app's own question, and stays a step.
     /// </summary>
     public static bool AnswersReplace(Observation o, WindowFacts saveDialog)
     {
@@ -48,7 +48,7 @@ public static class FileDialogs
             _ => (null, null),
         };
         return window is not null && button is not null && IsQuestion(window, saveDialog)
-               && button.ControlType == "Button" && button.AutomationId is "CommandButton_6" or "6";
+               && button.ControlType == "Button" && button.AutomationId == "CommandButton_6";
     }
 
     /// <summary>Whether <paramref name="window"/> may be the question a Save of <paramref name="saveDialog"/> asks:
