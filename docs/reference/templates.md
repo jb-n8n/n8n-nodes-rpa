@@ -42,8 +42,10 @@ first, before anything reads or writes them.
   RPA Site Login it signs for, and after **Change or sign again** it checks the approved version's signature with its
   own signing key and Site Login, as a run checks it. **Checked?** sends that to the review page. The page's opening
   lines name the Site Login (desktop steps are signed for the app they start, without one). When the approved version
-  does not fit, a warning says so above the decision: after a new signing key that is expected, but if the bot's
-  workflow uses another Site Login, a version signed here will not run there. The page does not refuse.
+  does not fit, a warning at the top says so: it was signed with another signing key or for another Site Login than
+  this form's. If the bot's workflow uses another Site Login, a version approved here will not run there; after a new
+  signing key, approving here is right. Its first sentence stands again directly above the **Decision**. The page does
+  not refuse.
 - **Review and approve** shows each step list: what it opens, whether it signs in, forms it submits, files it returns,
   what the replay proved, the steps it left out, and the numbered steps. For desktop steps it asks "Which of these steps
   save, send or submit?". The **Decision** is **Approve and sign** or **Reject**. A page left unanswered for an hour

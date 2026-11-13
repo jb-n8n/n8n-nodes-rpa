@@ -2692,10 +2692,12 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       expect(all[0]).toEqual({
         fieldType: 'html',
         html: `<p><b>${escapeHtml(line.compared)}</b></p><p>Desktop steps are signed for the app they start, without a Site Login.</p>`
-          + "<p><strong>⚠ Version 1 was not signed with this form's signing key. After a new signing key, that is expected.</strong></p>",
+          + '<p><strong>⚠ Version 1 does not fit this form: it was signed with another signing key. After a new signing key, approving here is right.</strong></p>',
       });
       const fields = all.slice(1);
-      expect(fields.map((f) => f.fieldName ?? f.fieldType)).toEqual(['html', 'writes_0', 'html', 'moreWrites_0', 'decision_0']);
+      // The warning's first sentence again, directly above the Decision (the top is out of view by then).
+      expect(fields.map((f) => f.fieldName ?? f.fieldType)).toEqual(['html', 'writes_0', 'html', 'moreWrites_0', 'html', 'decision_0']);
+      expect(fields[4].html).toBe('<p><strong>⚠ Version 1 does not fit this form: it was signed with another signing key. The warning at the top says what to do.</strong></p>');
       // Every step list is the same without the line: an ordinary import shows none.
       expect(jsonFormFields(String(byName(t, REVIEW).parameters.jsonOutput), { $: nodesRan({ ...after, [COMPARED]: undefined as never }) }).slice(1)).toEqual(fields);
       const signed = await signAfterReview(after, answer, {}, false, by, undefined, NEW_KEY);
@@ -2792,26 +2794,34 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     });
     /** The Repaired steps item of the next version, as the review page lists it. */
     const next = (surface?: string) => ({ json: { name: 'feed', version: 5, baseVersion: null, steps: { ...doc, version: 5, ...(surface ? { surface } : {}) }, reviewSteps: [], safetyFlags: [] } });
-    const head = async (r: IDataObject, key: string, siteLogin?: { id: string; name: string }) => {
+    const checked = async (r: IDataObject, key: string, siteLogin?: { id: string; name: string }) => {
       const { ran } = changePath('feed', [r]);
-      const after = await checkBeforeReview({ ...ran, 'Change or sign again': [[{ json: { changedSteps: '' } }]], [COMPARED]: [[{ json: compared(ran, '') }]], 'Import steps': [[{ json: {} }], [next()]] }, key, siteLogin);
-      return reviewHead({ $: nodesRan(after) });
+      return checkBeforeReview({ ...ran, 'Change or sign again': [[{ json: { changedSteps: '' } }]], [COMPARED]: [[{ json: compared(ran, '') }]], 'Import steps': [[{ json: {} }], [next()]] }, key, siteLogin);
     };
+    const head = async (r: IDataObject, key: string, siteLogin?: { id: string; name: string }) => reviewHead({ $: nodesRan(await checked(r, key, siteLogin)) });
+    /** The page's fields after its opening lines. */
+    const fieldsOf = async (r: IDataObject, key: string, siteLogin?: { id: string; name: string }) => reviewFields({ $: nodesRan(await checked(r, key, siteLogin)) });
     const SHOP = { id: 'site-a', name: 'Shop <login>' };
     const UNCHANGED = '<p><b>These are the steps of the approved version 4, unchanged.</b></p>';
     // The name in quotes: n8n's default credential name, "RPA Site Login account", does not read doubled.
     const NAMED = '<p>Signs for the Site Login named "<b>Shop &lt;login&gt;</b>". The workflow that runs the bot must use this Site Login.</p>';
     // Signed with this key for this Site Login: the line names it, and nothing more is said.
     expect(await head(row(KEY, SHOP.id), KEY, SHOP)).toBe(UNCHANGED + NAMED);
-    // Signed for another Site Login (the many-accounts one): the warning, above the decision, names this form's.
-    const WARNING = "<p><strong>⚠ Version 4 was not signed with this form's signing key and the Site Login Shop &lt;login&gt;. After a new signing key, that is expected. If the bot's workflow uses another Site Login, a version signed here will not run there: put that Site Login on Import steps and Sign steps of this form first.</strong></p>";
+    // Signed for another Site Login (the many-accounts one): the warning leads with what the person can check, this
+    // form's Site Login, and says what to do; its first sentence stands again directly above the Decision.
+    const FIT = '⚠ Version 4 does not fit this form: it was signed with another signing key or for another Site Login than "Shop &lt;login&gt;".';
+    const WARNING = `<p><strong>${FIT} If the bot's workflow uses another Site Login, a version approved here will not run there: put that Site Login on Import steps and Sign steps first. After a new signing key, approving here is right.</strong></p>`;
     expect(await head(row(KEY, 'site-b'), KEY, SHOP)).toBe(UNCHANGED + NAMED + WARNING);
+    expect((await fieldsOf(row(KEY, 'site-b'), KEY, SHOP)).map((f) => f.fieldName ?? f.fieldType)).toEqual(['html', 'html', 'decision_0']);
+    expect((await fieldsOf(row(KEY, 'site-b'), KEY, SHOP))[1].html).toBe(`<p><strong>${FIT} The warning at the top says what to do.</strong></p>`);
+    // It fits: no line above the Decision either.
+    expect((await fieldsOf(row(KEY, SHOP.id), KEY, SHOP)).map((f) => f.fieldName ?? f.fieldType)).toEqual(['html', 'decision_0']);
     // Signed with another key: the same warning (the row alone cannot tell the two apart), and it does not refuse.
     expect(await head(row('o'.repeat(32), SHOP.id), KEY, SHOP)).toBe(UNCHANGED + NAMED + WARNING);
     // No Site Login on Sign steps: the line says so, and a version signed for one does not fit.
     const NONE = '<p>Signs for no RPA Site Login. The workflow that runs the bot must have none.</p>';
     expect(await head(row(KEY), KEY)).toBe(UNCHANGED + NONE);
-    expect(await head(row(KEY, SHOP.id), KEY)).toContain(" and no Site Login. After a new signing key, that is expected.");
+    expect(await head(row(KEY, SHOP.id), KEY)).toBe(UNCHANGED + NONE + "<p><strong>⚠ Version 4 does not fit this form: it was signed with another signing key or for a Site Login, and this form has none. If the bot's workflow uses a Site Login, a version approved here will not run there: put that Site Login on Import steps and Sign steps first. After a new signing key, approving here is right.</strong></p>");
     // No key, signature or Site Login data is shown.
     const shown = await head(row(KEY, 'site-b'), KEY, SHOP);
     for (const secret of [KEY, String(row(KEY, 'site-b').signature), 'site-a', 'site-b']) expect(shown).not.toContain(secret);
