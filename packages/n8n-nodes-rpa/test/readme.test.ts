@@ -61,6 +61,8 @@ const GOLDEN_MESSAGES = [
   'Expected 120 rows (the page says "120 results") but found 117. Nothing was marked successful.',
   'A previous login for example.com failed, so no login was tried.',
 ];
+/** The browser guide's setup command: run in the compose stack's n8n container, where the image installs the package. */
+const SETUP_IN_STACK = 'RPA_BROWSER_TOKEN="$(sed -n \'s/^BROWSER_TOKEN=//p\' .env)" docker compose exec -e RPA_BROWSER_TOKEN n8n /opt/n8n-rpa/node_modules/.bin/n8n-nodes-rpa setup --browser-url ws://browser:3000/';
 const TOKEN_REFUSED = 'The browser server at ws://browser:3000/ refused the token. Check the Token in the RPA Browser credential.';
 
 describe('the README', () => {
@@ -158,23 +160,40 @@ describe('every page', () => {
 });
 
 describe('the browser bot guide', () => {
-  it('gets a person to a first screenshot: one-command start, credential fields, template file', () => {
+  it('gets a person to a first bot through the import form: one-command start, the setup command, the sample, approve, run', () => {
     for (const text of [
       'openssl rand -hex 32', 'BROWSER_TOKEN', 'docker compose up --build -d', 'docker compose up -d browser', 'http://localhost:5678', 'http://localhost:8025',
-      'ws://browser:3000/', 'Private Network Endpoint', '+ → New credential → RPA Browser', '**Mode**: Browser Server', 'Connection tested successfully',
-      'packages/n8n-nodes-rpa/templates/hello-world.json', 'docker-compose.dev.yml', 'SKU-1001', TOKEN_REFUSED, 'Mismatching encryption keys',
+      '**Settings → n8n API → Create API key**', SETUP_IN_STACK, 'Connect a Windows machine now?', 'The import form is ready.',
+      '+ → New credential → RPA Site Login', 'Add Option → Allow Private Network', 'docs/samples/sandbox-line-items.steps.json', '**Allow access**',
+      'Approved and signed: sandbox-line-items v1 is now the version that runs under that name.', 'sandbox-line-items.workflow.json',
+      'packages/n8n-nodes-rpa/templates/hello-world.json', 'docker-compose.dev.yml', 'SKU-1001', 'Private Network Endpoint', TOKEN_REFUSED, 'Mismatching encryption keys',
     ]) expect(doc.browserBot, text).toContain(text);
   });
 
-  it("the sandbox's Site Login lists the requests the sandbox's SAP pages post to read", () => {
-    const reads = SANDBOX.erp.readPosts('sandbox:8080').map((r) => `\`POST ${r.host}${r.path}\``);
-    expect(reads).toEqual(['`POST sandbox:8080/sap*/bc/gui/sap/its/webgui`', '`POST sandbox:8080/sap/opu/odata/sap/ZLINEITEMS_SRV/$batch`']);
-    expect(doc.browserBot).toContain(`Requests That Only Read ${reads.join(' and ')} (one per line)`);
-    expect(doc.browserBot).toContain('Login Page URL `http://sandbox:8080/acme/login`');
+  it("runs the setup command where the n8n image installs it, and the first bot needs no chat model and no email server", () => {
+    // docker/n8n.Dockerfile installs the package under /opt/n8n-rpa, and npm links its bin there.
+    expect(read('docker/n8n.Dockerfile')).toContain('npm install --ignore-scripts --omit=dev --omit=peer --no-audit --no-fund /packs/n8n-nodes-rpa-*.tgz');
+    expect(read('docker/n8n.Dockerfile')).toContain('WORKDIR /opt/n8n-rpa');
+    expect(JSON.parse(read('packages/n8n-nodes-rpa/package.json')).bin).toEqual({ 'n8n-nodes-rpa': 'dist/setup.mjs' });
+    const part1 = doc.browserBot.slice(0, doc.browserBot.indexOf('\n## Part 2: Let it repair itself\n'));
+    expect(part1.length).toBeGreaterThan(1000);
+    for (const text of ['SMTP', 'Anthropic', 'mailpit', '2-data-feed.json', '3-approve-steps.json']) expect(part1, text).not.toContain(text);
   });
 
-  it('sets up the data feed as the templates ship it: workflow 3 published first, then 2', () => {
-    const s = section(doc.browserBot, '## 5. Import the two workflows');
+  it("the sandbox's Site Login lists the request the sample's SAP pages post to read", () => {
+    const reads = SANDBOX.erp.readPosts('sandbox:8080').map((r) => `\`POST ${r.host}${r.path}\``);
+    expect(reads[0]).toBe('`POST sandbox:8080/sap*/bc/gui/sap/its/webgui`');
+    expect(doc.browserBot).toContain(`Requests That Only Read ${reads[0]}`);
+    expect(doc.browserBot).toContain('Login Page URL `http://sandbox:8080/acme/login`');
+    // The proof the review page shows: the file the sample's download step checks for.
+    const sample = JSON.parse(read('docs/samples/sandbox-line-items.steps.json')) as { name: string; steps: { download?: { check: { name: string } } }[] };
+    expect(sample.name).toBe('sandbox-line-items');
+    expect('LINEITEMS_1000_2026-09-01_2026-09-30.csv').toMatch(new RegExp(sample.steps.at(-1)?.download?.check.name ?? '^$'));
+    expect(doc.browserBot).toContain('`LINEITEMS_1000_2026-09-01_2026-09-30.csv`');
+  });
+
+  it('sets up the self-repair part as the templates ship it: workflow 3 published first, then 2', () => {
+    const s = section(doc.browserBot, '## 8. Import the two workflows');
     expect(s.indexOf('3-approve-steps.json')).toBeLessThan(s.indexOf('2-data-feed.json'));
     for (const text of ['**Publish**', 'Allow Private Network', '**RPA: 3 Approve steps** in **Approve steps**']) expect(s, text).toContain(text);
     expect(doc.browserBot).toContain('`lane: "script"`, `version: 1` and `llmCalls: 0`');

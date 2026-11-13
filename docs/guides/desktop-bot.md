@@ -86,8 +86,8 @@ by another name or address than the one in the line (a NAT, a tunnel), run the c
 ## 4. Import and approve
 
 1. Set up the import form with one command, on the computer you use n8n from (Node.js 22 or later). It asks for an n8n
-   API key (make one in n8n: **Settings → n8n API**, with an expiry) and does not show what you type. Answer `n` when
-   it asks `Connect a Windows machine now?`: you did that in step 2.
+   API key (make one in n8n: **Settings → n8n API → Create API key**, with an expiry) and does not show what you type.
+   Answer `n` when it asks `Connect a Windows machine now?`: you did that in step 2.
 
    ```sh
    npx n8n-nodes-rpa setup --url http://localhost:5678
@@ -104,7 +104,8 @@ by another name or address than the one in the line (a NAT, a tunnel), run the c
      Sign-in:    the form opens with your n8n sign-in. Who approves is recorded as the n8n user who approved.
    ```
 
-   Its last line is about the API key: it can do everything you can in n8n. Delete it in n8n when the setup is done.
+   Its last line is about the API key: it can do everything you can in n8n. Revoke it when the setup is done
+   (**Settings → n8n API**, the key's **⋯** menu, **Revoke**).
 
    The signing key stays in n8n, and n8n does not show it again. A lost key means approving every bot again. Add
    `--show-signing-key` to the first run to see it once. The command never changes a key that exists: only
@@ -123,7 +124,7 @@ by another name or address than the one in the line (a NAT, a tunnel), run the c
    To set the form up by hand, import `packages/n8n-nodes-rpa/templates/5-import-a-bot.json` as
    [Templates](../reference/templates.md#set-it-up-by-hand) says.
 2. Open the form's address in your browser and sign in to n8n. The first time, n8n asks whether the form may use your
-   n8n login: choose **Allow**. (With `--form-login basic`, sign in with the user name and password instead.)
+   n8n login: choose **Allow access**. (With `--form-login basic`, sign in with the user name and password instead.)
 3. Upload the recording, give the steps a name such as `erp-line-items`, and submit.
 4. The next page, **Review and approve**, lists the steps by number. The lighter, grey steps are the ones the import added (a wait
    for each window, and one for the file the bot returns). Under **Which of these steps save, send or submit?**, keep
