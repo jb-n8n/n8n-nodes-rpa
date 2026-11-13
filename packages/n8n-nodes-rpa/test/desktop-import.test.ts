@@ -114,7 +114,7 @@ describe('Import Steps with a UiPath desktop project', () => {
     const get = wf.nodes.find((n) => n.name === 'Get active steps (erp-1)')!;
     expect(get.parameters).toMatchObject({ dataTableId: { value: 'playwright_steps' }, filters: { conditions: [{ keyName: 'name', keyValue: 'erp-1' }, { keyName: 'status', keyValue: 'active' }] } });
     const gold = wf.nodes.find((n) => n.name === 'Fill in the variables (erp-1)')!;
-    expect(String(gold.parameters.content)).toBe('### Fill in the variables (gold)\nOn **Open Application \'ERP Demo - Sign in\'**, Options → Variables: `username`, `in_CompanyCode` (starts as `1000`), `in_DateFrom` (starts as `2026-01-01`), `in_DateTo` (starts as `2026-12-31`). Secret: `password`: in an **RPA Secret Variables** credential selected on **Open Application \'ERP Demo - Sign in\'**, never typed here. Desktop steps run only once approved: import the project with **RPA: 5 Import a bot** and approve `erp-1` on its review page.');
+    expect(String(gold.parameters.content)).toBe('### Fill in the variables (gold)\nOn **Open Application \'ERP Demo - Sign in\'**, Options → Variables: `username`, `in_CompanyCode` (starts as `1000`), `in_DateFrom` (starts as `2026-01-01`), `in_DateTo` (starts as `2026-12-31`). Secret: `password`: in an **RPA Secret Variables** credential selected on **Open Application \'ERP Demo - Sign in\'**, never typed here. To keep these values to this app, put `ErpDemo.exe` in that credential\'s May Be Typed Into. Desktop steps run only once approved: import the project with **RPA: 5 Import a bot** and approve `erp-1` on its review page.');
     expect(run.notes).toContain('password: put it in an RPA Secret Variables credential (type rpaSecretVariablesApi, field Variables) and select it here.');
     const credentialSticky = wf.nodes.find((n) => n.name.startsWith('Credential:'))!;
     expect(String(credentialSticky.parameters.content)).toContain("Desktop steps type the user name and password from their Run steps' **Variables**");
@@ -316,7 +316,7 @@ describe('Import Steps with an RPA recording', () => {
     // It only adds to a mark, never to the sentence.
     const { repaired } = await importSample();
     const started = (repaired[0].json.reviewSteps as { text: string; marks: string[] }[])
-      .map((r) => ({ ...r, marks: r.marks.map((m) => (m === 'variable in_CompanyCode' ? `${m}, starts as 2000` : m)) }));
+      .map((r) => ({ ...r, marks: r.marks.map((m) => (m.startsWith('variable in_CompanyCode') ? 'variable in_CompanyCode, starts as 2000' : m)) }));
     expect(JSON.stringify(started)).toContain('starts as 2000');
     expect(await sign({ ...repaired[0].json, reviewSteps: started as unknown as IDataObject[] }, { writeSteps: '16' })).toMatchObject({ status: 'active' });
   });

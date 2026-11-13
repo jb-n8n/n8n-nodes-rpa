@@ -694,7 +694,7 @@ describe('buildWorkflow', () => {
     const secretOnly = build(desktop(['password'], ['password']));
     expect(byName(secretOnly, 'Desk').notes).not.toContain('Fill in the Variables');
     expect(content(byName(secretOnly, 'Fill in the variables (d)'))).toBe(
-      '### Fill in the variables (gold)\nSecret: `password`: in an **RPA Secret Variables** credential selected on **Desk**, never typed here. Desktop steps run only once approved: import the recording with **RPA: 5 Import a bot** and approve `d` on its review page.',
+      '### Fill in the variables (gold)\nSecret: `password`: in an **RPA Secret Variables** credential selected on **Desk**, never typed here. To keep these values to this app, put `App.exe` in that credential\'s May Be Typed Into. Desktop steps run only once approved: import the recording with **RPA: 5 Import a bot** and approve `d` on its review page.',
     );
     expect(content(byName(secretOnly, 'About this import'))).toContain('Gold: fill in. Green: set once.');
     // A UiPath project with nothing left untranslated has no grey notes to explain.

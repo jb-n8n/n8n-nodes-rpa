@@ -584,7 +584,7 @@ class Builder {
       const listedVars = plainVars.length
         ? `On **${md(run)}**, Options → Variables: ${plainVars.map((v) => (literal(start[v]) !== undefined ? `${code(v, 60)} (starts as ${code(start[v], 120)})` : code(v, 60))).join(', ')}.`
         : '';
-      const secretVars = secret.size ? `Secret: ${[...secret].map((v) => code(v, 60)).join(', ')}: in an ${SECRET_VARIABLES} credential selected on **${md(run)}**, never typed here.` : '';
+      const secretVars = secret.size ? `Secret: ${[...secret].map((v) => code(v, 60)).join(', ')}: in an ${SECRET_VARIABLES} credential selected on **${md(run)}**, never typed here. To keep these values to this app, put ${code(String(draft.script.app?.exe ?? '').split(/[\\/]/).pop() ?? '', 120)} in that credential's May Be Typed Into.` : '';
       this.sticky(`Fill in the variables (${draftName})`,
         `### Fill in the variables (gold)\n${[listedVars, secretVars].filter(Boolean).join(' ')} Desktop steps run only once approved: ${FROM[this.source].importIt} with **${IMPORT_FORM}** and approve ${code(draftName)} on its review page.`,
         COLOUR.gold, [runX - 80, y + 160], 320, 260);
