@@ -163,11 +163,18 @@ describe('the browser bot guide', () => {
   it('gets a person to a first bot through the import form: one-command start, the setup command, the sample, approve, run', () => {
     for (const text of [
       'openssl rand -hex 32', 'BROWSER_TOKEN', 'docker compose up --build -d', 'docker compose up -d browser', 'http://localhost:5678', 'http://localhost:8025',
-      '**Settings → n8n API → Create API key**', SETUP_IN_STACK, 'Connect a Windows machine now?', 'The import form is ready.',
+      SETUP_IN_STACK, 'Connect a Windows machine now?', 'The import form is ready.', "no API key", 'Update this form to this version? (y/N)',
       '+ → New credential → RPA Site Login', '--site-login "RPA Site Login account" --allow-private-network', 'Private network: on.', 'docs/samples/sandbox-line-items.steps.json', '**Allow access**',
       'Approved and signed: sandbox-line-items version 1 is now the version that runs under that name.', 'sandbox-line-items.workflow.json',
       'packages/n8n-nodes-rpa/templates/hello-world.json', 'docker-compose.dev.yml', 'SKU-1001', 'Private Network Endpoint', TOKEN_REFUSED, 'Mismatching encryption keys',
     ]) expect(doc.browserBot, text).toContain(text);
+  });
+
+  it('runs the setup command with no API key; the API key way is one section of the desktop guide', () => {
+    expect(doc.browserBot).not.toContain('Settings → n8n API');
+    expect(doc.browserBot).not.toContain('n8n API key (not shown)');
+    expect(section(doc.desktopBot, '### No shell on n8n\'s machine: with an API key')).toContain('**Settings → n8n API → Create API key**');
+    expect(read('README.md')).not.toContain('It asks for an n8n API key');
   });
 
   it('makes the Site Login before the setup command, which picks it by the name n8n gives it: no step opens the import workflow', () => {

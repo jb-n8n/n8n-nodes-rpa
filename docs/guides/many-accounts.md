@@ -39,14 +39,15 @@ signed in as. An empty TOTP Secret means that account gets no code.
 
 One approval covers every account: a signature binds the Site Login's credential ID, not the values it holds. Give this
 Site Login an import form of its own, beside the one you have, with one command (here for a Site Login named
-**Sample accounts**, in the compose stack; the API key as in step 3 of the [browser bot guide](browser-bot.md)):
+**Sample accounts**, in the compose stack, as in step 3 of the [browser bot guide](browser-bot.md), with no API key):
 
 ```bash
 docker compose exec n8n /opt/n8n-rpa/node_modules/.bin/n8n-nodes-rpa setup --new-workflow --site-login "Sample accounts" --allow-private-network
 ```
 
 It makes and publishes **RPA: 5 Import a bot (Sample accounts)**, with this Site Login on **Import steps** and **Sign
-steps**, and prints its address: `/form/rpa-import-sample-accounts`. It signs with the same **RPA Step Signing** key
+steps**, and prints its address: `/form/rpa-import-sample-accounts`. Run again, also after the Site Login was renamed,
+it finds that form by the Site Login it holds and makes no second one. It signs with the same **RPA Step Signing** key
 and leaves your first form as it is. Leave out `--allow-private-network` for a site on the internet. Use this form for
 the bots of this Site Login: the workflow it hands over has the Site Login on its RPA node. A bot is changed or signed
 again on the form it was approved on.

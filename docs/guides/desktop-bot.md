@@ -46,33 +46,32 @@ machine by another name or address (a NAT, a tunnel), run the command again with
 ## 2. Set up n8n with one command
 
 One command makes the **import form**, where you upload a bot, read its steps and approve them, and connects the
-Windows machine. In n8n, make an API key: **Settings → n8n API → Create API key**. Leave **Scopes** on **All**, and
-set **Expiration** to **7 days**, the shortest in its list. The command uses the key once, and you revoke it right after
-(below). The stricter way: under **Scopes**, choose **Custom** and tick only the scopes the command uses:
-`workflow:create`, `workflow:read`, `workflow:update`, `workflow:delete`, `workflow:list`, `workflow:activate`, `credential:create`, `credential:read`, `credential:update`, `credential:list`, `user:read`.
-
-With the compose stack, run the command inside the n8n container, in the repository folder. Nothing to install:
+Windows machine. With the compose stack, run it inside the n8n container, in the repository folder. Nothing to
+install, and no API key: it works through n8n's own command line.
 
 ```bash
 docker compose exec n8n /opt/n8n-rpa/node_modules/.bin/n8n-nodes-rpa setup
 ```
 
-For another n8n, run `npx n8n-nodes-rpa setup --url <n8n address>` (Node.js 22 or later). Until 0.2.0 is on npm, run
+For an n8n you installed another way, with the node installed from **Settings → Community nodes**, run it where n8n
+runs, as the user n8n runs as, for example
+`docker exec -it <n8n container> node /home/node/.n8n/nodes/node_modules/n8n-nodes-rpa/dist/setup.mjs setup`. Until 0.2.0 is on npm, run
 `pnpm install`, `pnpm --filter n8n-nodes-rpa build`, then `node packages/n8n-nodes-rpa/dist/setup.mjs setup` instead.
+Its first lines say which way it took and why. Before it changes anything it checks that n8n's command line works on
+the database of the n8n that runs there. As another user, or with another `HOME`, it would not, and it stops and says
+so.
 
-Paste the API key when it asks `n8n API key (not shown):`. Answer `y` to `Connect a Windows machine now?`, and paste
-the `rpa-runner://` line at `Paste the line that starts with rpa-runner:// (not shown):`. The terminal shows nothing
-while you paste. Close the PowerShell window on Windows afterwards: the line holds a token.
+Answer `y` to `Connect a Windows machine now?`, and paste the `rpa-runner://` line at `Paste the line that starts
+with rpa-runner:// (not shown):`. The terminal shows nothing while you paste. Close the PowerShell window on Windows
+afterwards: the line holds a token.
 
 The command creates the **RPA Desktop Runner** credential with the line, an **RPA Step Signing** key, and the workflow
 **RPA: 5 Import a bot** with both on its node **Import steps**, and publishes it. **Signing** marks steps as approved:
-the bot runs only steps whose signature matches. You are the approver (`--approver` names another). Then n8n tests
-the connection: the line that starts `tested` says `Connected to the desktop runner`, or why it could not. When it
-gets no answer, the command asks once for a corrected line, such as one printed again with `-Address`: paste it at
-`Corrected Connection Line for "RPA Desktop Runner" (not shown), or Enter to finish:`. It replaces the line, names
-only its address and port, and n8n tests it again. Later, for a new line, run the command again and paste it: it asks
-`Replace the Connection Line of "RPA Desktop Runner" with the line for …? (y/N)` before it changes anything. Near
-the end the command prints:
+the bot runs only steps whose signature matches. The n8n owner is the approver (`--approver` names another). n8n's
+command line cannot test a credential: open **RPA Desktop Runner** in n8n, which tests it as it opens and says
+`Connection tested successfully`, or why it could not. Later, for a new line, run the command again and paste it: it
+asks `Replace the Connection Line of "RPA Desktop Runner" with the line for …?`, says that it cannot test the new line
+first and that the old one will be gone, and changes nothing unless you answer `y`. Near the end the command prints:
 
 ```text
 The import form is ready.
@@ -81,22 +80,40 @@ The import form is ready.
 ```
 
 The address ends in `/form/rpa-import`, or in a long id when another form in your n8n has that address already (the
-command says so). Its last lines say whether the Windows machine is connected: `The import form is ready, and the
-Windows machine is connected.`, or `… but the Windows machine is not connected yet.` with the reason and what to do.
+command says so).
 
 If you made an RPA Desktop Runner credential in n8n already, answer `n` instead: the command picks it when your project
 has only that one, and names it. With several, add `--desktop-runner "<its name>"`. It never reads a credential's
 values. The signing key stays in n8n, which does not show it again. The `Signing key:` line says how to keep a copy:
 you need one only to move signed bots to another n8n, so otherwise skip it. Without a copy, a lost key means approving
-every bot again ([sign it again](move-a-bot.md#change-an-approved-bot-or-sign-it-again)). One
-line is about the API key: revoke it when you are done (**Settings → n8n API**, **⋯**, **Revoke**).
-Run the command again at any time: it reuses only what your own project holds, asks first in a shared project, and
-leaves a workflow there already as it is. `--form-login basic` serves approvers with no n8n account. To set the form
-up by hand, import `packages/n8n-nodes-rpa/templates/5-import-a-bot.json` ([Templates](../reference/templates.md#set-it-up-by-hand)).
+every bot again ([sign it again](move-a-bot.md#change-an-approved-bot-or-sign-it-again)).
+Run the command again at any time: it reuses only what your own project owns, and asks first about what it finds in
+another project. A form it made that differs from this version's template, for example after an upgrade, is listed by
+what differs, with the question `Update this form to this version? (y/N)`. `--form-login basic` serves approvers with
+no n8n account. To set the form up by hand, import `packages/n8n-nodes-rpa/templates/5-import-a-bot.json`
+([Templates](../reference/templates.md#set-it-up-by-hand)).
 
 Open the form's address once, in your browser, and sign in to n8n. The first time, n8n asks whether the form may use
 your n8n login: choose **Allow access**. Someone who may not run the form's workflow sees n8n's own page
 `Authorization unavailable` instead.
+
+### No shell on n8n's machine: with an API key
+
+Where you cannot run a command as n8n's user on n8n's machine, run `npx n8n-nodes-rpa setup --url <n8n address>`
+(Node.js 22 or later) anywhere: it uses n8n's public API and asks for an API key. `--api-key` takes this way also
+where the other would work, and `--no-api-key` refuses it.
+
+1. In n8n, make an API key: **Settings → n8n API → Create API key**. Leave **Scopes** on **All**, and set
+   **Expiration** to **7 days**, the shortest in its list. The stricter way: under **Scopes**, choose **Custom** and
+   tick only `workflow:create`, `workflow:read`, `workflow:update`, `workflow:delete`, `workflow:list`, `workflow:activate`, `credential:create`, `credential:read`, `credential:update`, `credential:delete`, `credential:list`, `user:read`.
+2. Run the command and paste the key when it asks `n8n API key (not shown):`.
+3. Revoke the key when the command is done: **Settings → n8n API**, the key's **⋯**, **Revoke**. Its last lines say so.
+
+This way, n8n tests the RPA Desktop Runner: the line that starts `tested` says `Connected to the desktop runner`, or
+why it could not, and the last lines say whether the Windows machine is connected. When it gets no answer, the
+command asks once for a corrected line, such as one printed again with `-Address`. A new line for a credential you
+have is tested first, in a credential of its own that the command deletes again: it replaces the old line only when
+n8n's test reaches the machine.
 
 ## 3. Record the bot
 

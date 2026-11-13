@@ -11,17 +11,20 @@ to n8n.
 ## The import form
 
 Template **RPA: 5 Import a bot** (`packages/n8n-nodes-rpa/templates/5-import-a-bot.json`) is a form in front of the
-node's **Import Steps** operation. Set it up once, with one command (Node.js 22 or later, and an n8n API key from
-**Settings → n8n API**: Scopes **All** and the shortest expiry, revoked right after, or the stricter **Custom** scopes
-that [the browser bot guide](browser-bot.md#3-set-up-the-import-form-with-one-command) lists):
+node's **Import Steps** operation. Set it up once, with one command, run where n8n runs, as n8n's user. In the compose
+stack:
 
 ```sh
-npx n8n-nodes-rpa setup --url http://localhost:5678
+docker compose exec n8n /opt/n8n-rpa/node_modules/.bin/n8n-nodes-rpa setup
 ```
 
+There it works through n8n's own command line and needs no API key. Where you cannot run a command on n8n's machine,
+`npx n8n-nodes-rpa setup --url <n8n address>` (Node.js 22 or later) asks for an API key instead
+([how](desktop-bot.md#no-shell-on-n8ns-machine-with-an-api-key)).
+
 It creates the **RPA Step Signing** key and the workflow, and publishes it. The form opens with your n8n sign-in: it
-has no password of its own. Your n8n user's email address goes on **Sign steps → Approver Allowlist** (the API key's owner, or
-`--approver`). It prints the form's address. For approvers with no n8n account, `--form-login basic` gives the form a
+has no password of its own. An email address goes on **Sign steps → Approver Allowlist**: the n8n owner's (with an API
+key, the key's owner's), or `--approver`. It prints the form's address. For approvers with no n8n account, `--form-login basic` gives the form a
 user name and password instead, printed once. For browser bots, add
 `--browser-url <ws-url>` with the browser service's token in `RPA_BROWSER_TOKEN`: it creates **RPA Browser** and
 picks it on **Import steps**. With a Connection Line it creates **RPA Desktop Runner**. It puts the signing key and
@@ -31,7 +34,7 @@ reads them, it writes their name and id into the workflow it hands over. A bot t
 the command picks that one of your project by its name, and never makes one or reads its values. For a site on this
 computer or your own network, `--allow-private-network` turns on **Allow Private Network** on **Import steps**. Both
 apply when the command makes the workflow: one there already is left as it is, and the command says what to set on it
-in n8n. A bot that signs in with many accounts needs only one Site Login: see [One bot, many accounts](many-accounts.md). The
+in n8n. After an upgrade, it offers to bring a form it made up to date in place, keeping what you set on it. A bot that signs in with many accounts needs only one Site Login: see [One bot, many accounts](many-accounts.md). The
 [desktop bot guide](desktop-bot.md#2-set-up-n8n-with-one-command) shows the output, and
 [Templates](../reference/templates.md#set-it-up-by-hand) the way by hand.
 

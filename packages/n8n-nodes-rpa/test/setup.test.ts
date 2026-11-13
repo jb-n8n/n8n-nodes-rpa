@@ -2,9 +2,11 @@
 // run, a missing node, a wrong key, an http address that is not this machine, a Connection Line that does not parse, and
 // that no secret reaches the output on any path, also when n8n echoes a request.
 import { execFile, spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { runnerNoTcpAnswer } from '../../engine/src/messages.js';
@@ -48,6 +50,8 @@ interface Options {
   testMessage?: string;
   /** With test 'error': the test passes once the credential's Connection Line holds this text (a corrected line). */
   testOkWhen?: string;
+  /** DELETE /credentials/{id}: false answers 403 (a key without credential:delete). */
+  deleteCredentials?: boolean;
   /** Workflows the API key cannot see (not listed), whose forms still hold their paths. */
   hiddenForms?: Wf[];
 }
@@ -134,6 +138,13 @@ async function fakeN8n(o: Options = {}) {
         const fixed = o.testOkWhen !== undefined && String(tested.data?.connectionLine ?? '').includes(o.testOkWhen);
         if (o.test === 'error' && !fixed) return send(200, { status: 'Error', message: o.testMessage ?? RUNNER_UNREACHABLE });
         return send(200, { status: 'OK', message: RUNNER_CONNECTED });
+      }
+      if ((m = /^DELETE \/api\/v1\/credentials\/([\w-]+)$/.exec(route))) {
+        if (o.deleteCredentials === false) return send(403, { message: 'Forbidden' });
+        const c = state.credentials.find((x) => x.id === m![1]);
+        if (!c) return send(404, { message: 'Not Found' });
+        state.credentials = state.credentials.filter((x) => x !== c);
+        return send(200, { id: c.id, name: c.name, type: c.type });
       }
       if ((m = /^PATCH \/api\/v1\/credentials\/([\w-]+)$/.exec(route))) {
         if (o.patch === false) return send(405, { message: 'Method not allowed' });
@@ -488,7 +499,7 @@ describe('npx n8n-nodes-rpa setup', () => {
     expect(none.out).toMatch(/N8N_API_KEY.*Settings → n8n API/);
     const flag = await run([...setup(fake.url), '--api-key', API_KEY], ENV);
     expect(flag.code).toBe(2);
-    expect(flag.out).toMatch(/Unknown option --api-key.*never in flags/);
+    expect(flag.out).toMatch(/--api-key takes no value: the key goes in N8N_API_KEY or the prompt, never in flags/);
     expectNoSecrets(flag.out);
     expect(fake.state.requests).toEqual([]);
   });
@@ -542,12 +553,13 @@ describe('npx n8n-nodes-rpa setup', () => {
     expect(r.stdout).not.toContain('Replace the host and port');
     expect(probes(inside)).toBeGreaterThan(0);
     // Two addresses, each said once with what it is for: the one the command talks to, and the one to open.
-    expect(r.stdout.split('\n')[0]).toBe(`Setting up n8n for RPA. This command talks to n8n at ${inside.url}; in your browser, n8n is at https://n8n.example.com/.`);
+    expect(r.stdout.split('\n')[0]).toBe('This run uses an n8n API key: N8N_API_KEY is set.');
+    expect(r.stdout.split('\n')[1]).toBe(`Setting up n8n for RPA. This command talks to n8n at ${inside.url}; in your browser, n8n is at https://n8n.example.com/.`);
     expect(r.stdout.split(inside.url)).toHaveLength(2);
     // The same address twice is one address.
     const same = await n8n();
     const s = await run(setup(same.url), { ...ENV, WEBHOOK_URL: `${same.url}/` });
-    expect(s.stdout.split('\n')[0]).toBe(`Setting up ${same.url} for RPA`);
+    expect(s.stdout.split('\n')[1]).toBe(`Setting up ${same.url} for RPA`);
     // N8N_EDITOR_BASE_URL when WEBHOOK_URL is not set; an n8n under a path keeps it.
     const editor = await n8n();
     const e = await run(setup(editor.url), { ...ENV, N8N_EDITOR_BASE_URL: 'https://example.com/n8n' });
@@ -696,23 +708,29 @@ describe('npx n8n-nodes-rpa setup', () => {
     const HAND: Cred = { id: 'c-hand', name: 'RPA Desktop Runner account', type: 'rpaDesktopRunnerApi', data: { connectionLine: LINE } };
     const SECOND: Cred = { id: 'c-second', name: 'Night shift', type: 'rpaDesktopRunnerApi', data: { connectionLine: LINE } };
     const ELSEWHERE: Cred = { id: 'c-else', name: 'RPA Desktop Runner', type: 'rpaDesktopRunnerApi', data: { connectionLine: LINE }, projectId: 'P-other' };
+    const NAMED = ['--desktop-runner', 'RPA Desktop Runner account'];
     const onImport = (fake: Fake) => fake.state.workflows.find((w) => w.projectId === HOME)!.nodes.find((n) => n.name === 'Import steps').credentials;
     /** Only listed: never read one by one, never changed. */
     const neverRead = (fake: Fake) => {
       expect(fake.state.requests.filter((r) => /^\/api\/v1\/credentials\/c-/.test(r.path) && !r.path.endsWith('/test'))).toEqual([]);
     };
 
-    it('exactly one, whatever its name: picked on Import steps by id and name, said, and tested by n8n', async () => {
+    it('exactly one, whatever its name: picked on Import steps by id and name, said; tested only when named (IB-9)', async () => {
       // Another user's runner is not this project's: it does not count, and it is never picked.
       const fake = await n8n({ credentials: [HAND, ELSEWHERE] });
       const { code, out, stdout } = await run(setup(fake.url), ENV);
       expect(code, out).toBe(0);
       expect(onImport(fake).rpaDesktopRunnerApi).toEqual({ id: 'c-hand', name: 'RPA Desktop Runner account' });
-      expect(out).toContain('picked   credential "RPA Desktop Runner account" (id c-hand): the only RPA Desktop Runner in your project');
-      expect(out).toContain(`tested   credential "RPA Desktop Runner account" (id c-hand): ${RUNNER_CONNECTED}`);
+      expect(out).toContain('picked   credential "RPA Desktop Runner account" (id c-hand): the only RPA Desktop Runner in your project. Not tested: this run tests a Windows machine only when you give its Connection Line or name it with --desktop-runner');
       expect(out).toContain('The workflow the form gives you already uses the RPA Desktop Runner "RPA Desktop Runner account" (id c-hand).');
-      // The last line says that it is connected.
-      expect(stdout.trimEnd().split('\n').at(-1)).toBe(`The import form is ready, and the Windows machine is connected. n8n's test said: ${RUNNER_CONNECTED}.`);
+      // No line and no --desktop-runner: no test, and the closing lines say nothing about a Windows machine.
+      expect(fake.state.requests.some((r) => r.path.endsWith('/test'))).toBe(false);
+      expect(out).not.toMatch(/Windows machine is|not connected/);
+      expect(stdout.trimEnd().split('\n').at(-1)).toMatch(/^The API key you gave/);
+      // Named: tested, and the last line says that it is connected.
+      const named = await run(setup(fake.url, '--desktop-runner', 'RPA Desktop Runner account'), ENV);
+      expect(named.out).toContain(`tested   credential "RPA Desktop Runner account" (id c-hand): ${RUNNER_CONNECTED}`);
+      expect(named.stdout.trimEnd().split('\n').at(-1)).toBe(`The import form is ready, and the Windows machine is connected. n8n's test said: ${RUNNER_CONNECTED}.`);
       expect(out).not.toContain('c-else');
       expect(fake.state.credentials.filter((c) => c.type === 'rpaDesktopRunnerApi')).toHaveLength(2);
       neverRead(fake);
@@ -771,7 +789,7 @@ describe('npx n8n-nodes-rpa setup', () => {
 
     it('the test: a failed one is said with the node\'s message, without the token, and the run still ends well; a key that may not test says how', async () => {
       const failing = await n8n({ credentials: [HAND], test: 'error' });
-      const f = await run(setup(failing.url), ENV);
+      const f = await run(setup(failing.url, ...NAMED), ENV);
       expect(f.code, f.out).toBe(0);
       expect(f.out).toContain(`tested   credential "RPA Desktop Runner account" (id c-hand), and it failed: ${RUNNER_UNREACHABLE}`);
       // The closing lines do not read as if all went well: the form is ready, the machine is not connected, why, and
@@ -789,16 +807,16 @@ describe('npx n8n-nodes-rpa setup', () => {
       // instruction is what to do at the end.
       const long = runnerNoTcpAnswer('wss://10.0.0.5:8765/rpa/v1', 10, '10.0.0.5');
       expect(long.length).toBeGreaterThan(300);
-      const l = await run(setup((await n8n({ credentials: [HAND], test: 'error', testMessage: long })).url), ENV);
+      const l = await run(setup((await n8n({ credentials: [HAND], test: 'error', testMessage: long })).url, ...NAMED), ENV);
       expect(l.code, l.out).toBe(0);
       expect(l.out).toContain(`and it failed: ${long}`);
       expect(l.stdout).toContain('\n  Reason:     Could not connect to the desktop runner at wss://10.0.0.5:8765/rpa/v1 (no answer within 10 s).\n');
       expect(l.stdout).toContain(`\n  What to do: ${long.slice(long.indexOf('Check, in this order'))}\n`);
       // A message with no instruction: what to do is to correct the line.
-      const odd = await run(setup((await n8n({ credentials: [HAND], test: 'error', testMessage: 'The desktop runner at wss://x.example.com:8765/rpa/v1 presented another certificate. Nothing was sent.' })).url), ENV);
+      const odd = await run(setup((await n8n({ credentials: [HAND], test: 'error', testMessage: 'The desktop runner at wss://x.example.com:8765/rpa/v1 presented another certificate. Nothing was sent.' })).url, ...NAMED), ENV);
       expect(odd.stdout).toContain('\n  Reason:     The desktop runner at wss://x.example.com:8765/rpa/v1 presented another certificate.\n  What to do: Correct the Connection Line of "RPA Desktop Runner account".\n');
       const forbidden = await n8n({ credentials: [HAND], test: 'forbidden' });
-      const r = await run(setup(forbidden.url), ENV);
+      const r = await run(setup(forbidden.url, ...NAMED), ENV);
       expect(r.code, r.out).toBe(0);
       expect(r.out).toContain('not tested credential "RPA Desktop Runner account" (id c-hand) (HTTP 403: Forbidden). To test it, open it in n8n, which tests it as it opens. For this command to test it, the API key needs the scope credential:read.');
       expect(r.stdout.trimEnd().split('\n').slice(-3)).toEqual([
@@ -810,12 +828,11 @@ describe('npx n8n-nodes-rpa setup', () => {
     });
 
     it('no answer, at a terminal: it offers once to paste a corrected line, replaces it, says only its address and port, and n8n tests it again', async () => {
-      const NO_WINDOWS = /Connect a Windows machine now\? \(y\/N\)/;
       const ASK = /Corrected Connection Line for "RPA Desktop Runner account" \(not shown\), or Enter to finish: /;
       const lineOf = (fake: Fake) => fake.state.credentials.find((c) => c.id === 'c-hand')!.data.connectionLine;
       const tests = (fake: Fake) => fake.state.requests.filter((r) => r.path === '/api/v1/credentials/c-hand/test').length;
       const fake = await n8n({ credentials: [HAND], test: 'error', testOkWhen: 'rpa.example.com' });
-      const r = await runAtTerminal(setup(fake.url), ENV, [[NO_WINDOWS, ''], [ASK, NEW_LINE]]);
+      const r = await runAtTerminal(setup(fake.url, ...NAMED), ENV, [[ASK, NEW_LINE]]);
       expect(r.code, r.out).toBe(0);
       expect(lineOf(fake)).toBe(NEW_LINE);
       expect(r.out).toContain('n8n got no answer from the Windows machine. If you printed its line again, for example with -Address, paste it now.');
@@ -826,7 +843,7 @@ describe('npx n8n-nodes-rpa setup', () => {
 
       // Enter: nothing changes, and the closing lines are today's.
       const enter = await n8n({ credentials: [HAND], test: 'error' });
-      const e = await runAtTerminal(setup(enter.url), ENV, [[NO_WINDOWS, ''], [ASK, '']]);
+      const e = await runAtTerminal(setup(enter.url, ...NAMED), ENV, [[ASK, '']]);
       expect(e.code, e.out).toBe(0);
       expect(lineOf(enter)).toBe(LINE);
       expect(enter.state.requests.filter((q) => q.method === 'PATCH')).toEqual([]);
@@ -834,7 +851,7 @@ describe('npx n8n-nodes-rpa setup', () => {
       expect(e.out).toContain('The import form is ready, but the Windows machine is not connected yet.');
       // A line that does not parse: the node's message, nothing changed, nothing more asked.
       const bad = await n8n({ credentials: [HAND], test: 'error' });
-      const b = await runAtTerminal(setup(bad.url), ENV, [[NO_WINDOWS, ''], [ASK, 'rpa-runner://half-a-line']]);
+      const b = await runAtTerminal(setup(bad.url, ...NAMED), ENV, [[ASK, 'rpa-runner://half-a-line']]);
       expect(b.code, b.out).toBe(0);
       expect(lineOf(bad)).toBe(LINE);
       expect(b.out).toMatch(/ {9}not used: .* The Connection Line of credential "RPA Desktop Runner account" \(id c-hand\) stays as it is\./);
@@ -842,7 +859,7 @@ describe('npx n8n-nodes-rpa setup', () => {
       expect(tests(bad)).toBe(1);
       // Still no answer after the new line: asked once only, and the closing lines say so.
       const still = await n8n({ credentials: [HAND], test: 'error' });
-      const st = await runAtTerminal(setup(still.url), ENV, [[NO_WINDOWS, ''], [ASK, NEW_LINE]]);
+      const st = await runAtTerminal(setup(still.url, ...NAMED), ENV, [[ASK, NEW_LINE]]);
       expect(st.code, st.out).toBe(0);
       expect(tests(still)).toBe(2);
       expect(st.out.match(/Corrected Connection Line/g)).toHaveLength(1);
@@ -852,11 +869,11 @@ describe('npx n8n-nodes-rpa setup', () => {
 
     it('another failure than no answer, or no terminal: it does not ask, and the closing lines are today\'s', async () => {
       const other = await n8n({ credentials: [HAND], test: 'error', testMessage: 'The desktop runner at wss://x.example.com:8765/rpa/v1 refused the token. Check the Token in the RPA Desktop Runner credential.' });
-      const o = await runAtTerminal(setup(other.url), ENV, [[/Connect a Windows machine now\? \(y\/N\)/, '']]);
+      const o = await runAtTerminal(setup(other.url, ...NAMED), ENV, []);
       expect(o.code, o.out).toBe(0);
       expect(o.out).not.toContain('Corrected Connection Line');
       const plain = await n8n({ credentials: [HAND], test: 'error' });
-      const p = await run(setup(plain.url), ENV);
+      const p = await run(setup(plain.url, ...NAMED), ENV);
       expect(p.code, p.out).toBe(0);
       expect(p.out).not.toContain('Corrected Connection Line');
       expect(p.out).not.toContain('n8n got no answer');
@@ -871,7 +888,8 @@ describe('npx n8n-nodes-rpa setup', () => {
       const before = fake.state.requests.length;
       const r = await run(setup(fake.url), ENV);
       expect(r.code, r.out).toBe(0);
-      expect(fake.state.requests.slice(before).filter((q) => q.method !== 'GET').map((q) => q.path)).toEqual(['/api/v1/credentials/c-hand/test']);
+      // Not named: picked for what the form hands over, not tested (IB-9).
+      expect(fake.state.requests.slice(before).filter((q) => q.method !== 'GET').map((q) => q.path)).toEqual([]);
       expect(wf.nodes.find((n) => n.name === 'Import steps').credentials.rpaDesktopRunnerApi).toBeUndefined();
       expect(r.out).toContain('its credentials were left as they are: pick "RPA Desktop Runner account" (id c-hand) on "Import steps" in n8n, so the workflow file the form hands over carries them.');
       expect(r.out).toContain('The workflow the form gives you does not use "RPA Desktop Runner account" yet: pick it on "Import steps" in n8n (see above).');
@@ -1217,7 +1235,7 @@ describe('npx n8n-nodes-rpa setup', () => {
       const fake = await n8n({ workflows: [planted(HOME, (nodes) => { nodes.find((x) => x.name === 'Sign steps').type = 'n8n-nodes-base.noOp'; })] });
       const first = await run(setup(fake.url), ENV);
       expect(first.code, first.out).toBe(1);
-      expect(first.out).toMatch(/"RPA: 5 Import a bot" \(id w-P-owner\) in your project differs from the template: its node "Sign steps" is not a n8n-nodes-rpa\.playwright node\. It was not published.*--new-workflow/);
+      expect(first.out).toMatch(/"RPA: 5 Import a bot" \(id w-P-owner\) in your project differs from the template: its node "Sign steps" is not a n8n-nodes-rpa\.playwright node\. It is not published, and this run changed nothing\. To keep its address, undo that change in n8n, or delete that workflow, and run this again\. --new-workflow makes another form at a new address\./);
       expect(first.out).not.toMatch(/The import form is ready|\/form\//);
       expect(fake.posts()).toEqual([]);
 
@@ -1404,10 +1422,446 @@ describe('npx n8n-nodes-rpa setup', () => {
   it('prints its usage, and names the command', async () => {
     const help = await run(['--help']);
     expect(help.code).toBe(0);
-    for (const flag of ['--url', '--approver', '--form-login', '--allow-http', '--show-signing-key', '--replace-signing-key', '--new-form-password', '--browser-url', '--site-login', '--allow-private-network', 'N8N_API_KEY', 'RPA_CONNECTION_LINE']) expect(help.out).toContain(flag);
+    for (const flag of ['--api-key', '--no-api-key', '--url', '--approver', '--form-login', '--allow-http', '--show-signing-key', '--replace-signing-key', '--new-form-password', '--browser-url', '--site-login', '--allow-private-network', 'N8N_API_KEY', 'RPA_CONNECTION_LINE']) expect(help.out).toContain(flag);
     // The API key: all scopes and the shortest expiry by default, revoked after; the stricter scope list on one line.
     expect(help.out).toContain('with Scopes All and the shortest expiry, and revoke it when the setup is done.');
-    expect(help.out).toContain('The stricter way, Scopes Custom with only: workflow:create, workflow:read, workflow:update, workflow:delete, workflow:list, workflow:activate, credential:create, credential:read, credential:update, credential:list, user:read\n');
+    expect(help.out).toContain('The stricter way, Scopes Custom with only: workflow:create, workflow:read, workflow:update, workflow:delete, workflow:list, workflow:activate, credential:create, credential:read, credential:update, credential:delete, credential:list, user:read\n');
     expect((await run([])).code).toBe(2);
+  });
+});
+
+const DESKTOP_HAND: Cred = { id: 'c-hand', name: 'RPA Desktop Runner account', type: 'rpaDesktopRunnerApi', data: { connectionLine: LINE } };
+const REPLACE_QUESTION = /Replace the Connection Line of "RPA Desktop Runner account" with the line for rpa\.example\.com:8765\? \(y\/N\)/;
+const lineIn = (fake: Fake, id: string) => fake.state.credentials.find((c) => c.id === id)!.data.connectionLine;
+const trials = (fake: Fake) => fake.state.credentials.filter((c) => c.name === 'RPA Desktop Runner (testing a new line)');
+
+describe('a new Connection Line is tested before it replaces one that works (IW-14)', () => {
+  const NAMED = ['--desktop-runner', 'RPA Desktop Runner account'];
+  const ENV_NEW = { ...ENV, RPA_CONNECTION_LINE: NEW_LINE };
+
+  it('the new line passes n8n\'s test in a credential of its own: then it replaces the old one, and that credential is gone', async () => {
+    const fake = await n8n({ credentials: [DESKTOP_HAND] });
+    const r = await runAtTerminal(setup(fake.url, ...NAMED), ENV_NEW, [[REPLACE_QUESTION, 'y']]);
+    expect(r.code, r.out).toBe(0);
+    expect(lineIn(fake, 'c-hand')).toBe(NEW_LINE);
+    expect(trials(fake)).toEqual([]);
+    // The trial credential was made, tested and deleted before the real one was changed.
+    const order = fake.state.requests.filter((q) => q.method !== 'GET').map((q) => `${q.method} ${q.path.replace(/c\d+/, 'TRIAL')}`);
+    const at = (x: string) => order.indexOf(x);
+    expect(at('POST /api/v1/credentials/TRIAL/test')).toBeLessThan(at('DELETE /api/v1/credentials/TRIAL'));
+    expect(at('DELETE /api/v1/credentials/TRIAL')).toBeLessThan(at('PATCH /api/v1/credentials/c-hand'));
+    expect(r.out).toContain("replaced Connection Line of credential \"RPA Desktop Runner account\" (id c-hand): it now names rpa.example.com:8765, which n8n's test reached first");
+    expectNoSecrets(r.out, [NEW_LINE, NEW_TOKEN, 'CD'.repeat(32)]);
+  });
+
+  it('the new line fails its test: the credential is unchanged, nothing temporary is left, and it says why and what to do', async () => {
+    // The old line (win-1) answers; the new one (rpa.example.com) does not.
+    const fake = await n8n({ credentials: [DESKTOP_HAND], test: 'error', testOkWhen: 'win-1' });
+    const r = await runAtTerminal(setup(fake.url, ...NAMED), ENV_NEW, [[REPLACE_QUESTION, 'y']]);
+    expect(r.code, r.out).toBe(0);
+    expect(lineIn(fake, 'c-hand')).toBe(LINE);
+    expect(fake.state.requests.filter((q) => q.method === 'PATCH')).toEqual([]);
+    expect(trials(fake)).toEqual([]);
+    expect(r.out).toContain(`tested   the new line for rpa.example.com:8765, and it failed: ${RUNNER_UNREACHABLE}`);
+    expect(r.out).toContain("not replaced: the line for rpa.example.com:8765 did not pass n8n's test (above).");
+    expect(r.out).toContain('The Connection Line of credential "RPA Desktop Runner account" (id c-hand) stays as it is. Check the new line (print it again on the Windows machine, with -Address when n8n reaches it by another name), then run this again.');
+    // The credential that works is still tested, and connected.
+    expect(r.out.trimEnd().split('\n').at(-1)).toBe(`The import form is ready, and the Windows machine is connected. n8n's test said: ${RUNNER_CONNECTED}.`);
+    expectNoSecrets(r.out, [NEW_LINE, NEW_TOKEN]);
+  });
+
+  it('no test possible (a key without credential:read): asked again, said that the old line will be gone; no keeps it, yes replaces it', async () => {
+    const UNTESTED = /Replace the line of "RPA Desktop Runner account" untested\? The old line will be gone\. \(y\/N\)/;
+    for (const [answer, want] of [['n', LINE], ['y', NEW_LINE]] as const) {
+      const fake = await n8n({ credentials: [DESKTOP_HAND], test: 'forbidden' });
+      const r = await runAtTerminal(setup(fake.url, ...NAMED), ENV_NEW, [[REPLACE_QUESTION, 'y'], [UNTESTED, answer]]);
+      expect(r.code, r.out).toBe(0);
+      expect(r.out).toContain('n8n could not test the new line first (HTTP 403: Forbidden');
+      expect(lineIn(fake, 'c-hand')).toBe(want);
+      expect(trials(fake)).toEqual([]);
+      expectNoSecrets(r.out, [NEW_LINE, NEW_TOKEN]);
+    }
+  });
+
+  it('a key that may not delete: the test credential keeps no line, and the run says to delete it', async () => {
+    const fake = await n8n({ credentials: [DESKTOP_HAND], deleteCredentials: false });
+    const r = await runAtTerminal(setup(fake.url, ...NAMED), ENV_NEW, [[REPLACE_QUESTION, 'y']]);
+    expect(r.code, r.out).toBe(0);
+    const [left] = trials(fake);
+    expect(left.data.connectionLine).not.toContain(NEW_TOKEN);
+    expect(left.data.connectionLine).toMatch(/^rpa-runner:\/\/removed\.invalid:1\//);
+    expect(r.out).toMatch(/The credential "RPA Desktop Runner \(testing a new line\)" \(id c\d+\) that tested the new line is still in n8n, without the line: delete it there/);
+    expectNoSecrets(r.out, [NEW_LINE, NEW_TOKEN]);
+  });
+});
+
+const template = () => JSON.parse(readFileSync(TEMPLATE, 'utf8'));
+
+describe('a form this command made, brought up to date (item 2, IB-1)', () => {
+  /** A form the first run made, then changed: a sticky note added by hand, and the form's text as an older version had it. */
+  async function madeThenChanged(extra: string[] = []) {
+    const fake = await n8n();
+    expect((await run(setup(fake.url, ...extra), ENV)).code).toBe(0);
+    const [wf] = fake.state.workflows;
+    wf.nodes.push({ id: 'note-1', name: 'Sticky Note', type: 'n8n-nodes-base.stickyNote', typeVersion: 1, position: [0, 0], parameters: { content: 'Approvers: ask Sam.' } });
+    wf.nodes.find((n) => n.name === 'Import a bot').parameters.formDescription = 'An older text.';
+    wf.nodes = wf.nodes.filter((n) => n.name !== 'Choice fits the box?');
+    const sign = wf.nodes.find((n) => n.name === 'Sign steps');
+    sign.parameters.approverAllowlist = 'ops@example.com, second@example.com';
+    return { fake, wf };
+  }
+
+  it('without a terminal: says what differs, changes nothing, says the form is live at its address, exit 0', async () => {
+    const { fake, wf } = await madeThenChanged();
+    const before = JSON.stringify(wf);
+    const writes = fake.posts().length;
+    const r = await run(setup(fake.url), ENV);
+    expect(r.code, r.out).toBe(0);
+    expect(fake.posts().length).toBe(writes);
+    expect(JSON.stringify(fake.state.workflows[0])).toBe(before);
+    expect(r.out).toContain(`The form "RPA: 5 Import a bot" (id ${wf.id}) was made by this command, and differs from this version's template:`);
+    expect(r.out).toContain('  Added in the template:     "Choice fits the box?"');
+    expect(r.out).toContain('  Not in the template:       "Sticky Note"');
+    expect(r.out).toMatch(/ {2}Set differently: +.*"Import a bot"/);
+    expect(r.out).toContain('  Lost with it: the node "Sticky Note", which the template does not have.');
+    expect(r.out).toContain('Not updated: without a terminal this command does not ask. To update it, run this command again at a terminal and answer y.');
+    expect(r.out).toContain(`  It is published, and answers at ${fake.url}/form/rpa-import.`);
+    // IB-1: no line says the form is not ready.
+    expect(r.out).not.toMatch(/not ready|not published/);
+  });
+
+  it('n at a terminal: the same; y: its nodes and connections are the template\'s, what the person set is kept, published again', async () => {
+    const { fake, wf } = await madeThenChanged(['--allow-private-network']);
+    const QUESTION = /Update this form to this version\? \(y\/N\) /;
+    const no = await runAtTerminal(setup(fake.url), ENV, [[/Connect a Windows machine now/, 'n'], [QUESTION, 'n']]);
+    expect(no.code, no.out).toBe(0);
+    expect(fake.state.workflows[0].nodes.some((n) => n.name === 'Sticky Note')).toBe(true);
+    const webhooks = Object.fromEntries(wf.nodes.filter((n) => n.webhookId).map((n) => [n.name, n.webhookId]));
+    const signing = wf.nodes.find((n) => n.name === 'Sign steps').credentials;
+    const yes = await runAtTerminal(setup(fake.url), ENV, [[/Connect a Windows machine now/, 'n'], [QUESTION, 'y']]);
+    expect(yes.code, yes.out).toBe(0);
+    const [after] = fake.state.workflows;
+    expect(fake.state.workflows).toHaveLength(1);
+    expect(after.id).toBe(wf.id);
+    expect(after.name).toBe('RPA: 5 Import a bot');
+    expect(after.nodes.map((n) => n.name).sort()).toEqual(template().nodes.map((n: any) => n.name).sort());
+    expect(after.connections).toEqual(template().connections);
+    const n = (name: string) => after.nodes.find((x) => x.name === name);
+    expect(n('Sign steps').parameters.approverAllowlist).toBe('ops@example.com, second@example.com');
+    expect(n('Sign steps').credentials).toEqual(signing);
+    expect(n('Import steps').credentials).toEqual(signing);
+    expect(n('Import steps').parameters.options.allowPrivateNetwork).toBe(true);
+    expect(n('Import a bot').parameters.options.path).toBe('rpa-import');
+    expect(n('Import a bot').parameters.formDescription).toBe(template().nodes.find((x: any) => x.name === 'Import a bot').parameters.formDescription);
+    for (const [name, id] of Object.entries(webhooks)) expect(n(name).webhookId, name).toBe(id);
+    expect(after.active).toBe(true);
+    expect(yes.out).toContain(`updated  workflow "RPA: 5 Import a bot" (id ${wf.id}): its nodes and connections are this version's template, with what you set kept`);
+    const activations = fake.state.requests.filter((q) => q.path === `/api/v1/workflows/${wf.id}/activate`);
+    expect(JSON.parse(activations.at(-1)!.body).versionId).toBe(after.versionId);
+    expect(yes.out).toContain('The import form is ready.');
+    // Run again: it matches now, nothing asked.
+    const again = await run(setup(fake.url), ENV);
+    expect(again.out).toMatch(/reused +workflow "RPA: 5 Import a bot" \(id .*\): it matches the template/);
+  });
+
+  it('a form whose own nodes are gone is not one this command made: it stops, says that form is still published, and how to keep its address', async () => {
+    const fake = await n8n();
+    expect((await run(setup(fake.url), ENV)).code).toBe(0);
+    fake.state.workflows[0].nodes.find((n) => n.name === 'Sign steps').type = 'n8n-nodes-base.noOp';
+    const r = await run(setup(fake.url), ENV);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain('This run changed nothing: that form is still published at its address. To keep its address, undo that change in n8n, or delete that workflow, and run this again.');
+    expect(r.out).not.toMatch(/not ready/);
+  });
+});
+
+describe("a Site Login's own form is found by the Site Login's id (IB-11)", () => {
+  it('after the Site Login is renamed, the guide\'s command for the new name reuses its form, by name and address', async () => {
+    const SITE: Cred = { id: 'c-acme', name: 'Sample accounts', type: 'playwrightSiteLoginApi', data: { username: 'u', password: 'p-made-up' } };
+    const fake = await n8n({ credentials: [SITE] });
+    const first = await run(setup(fake.url, '--new-workflow', '--site-login', 'Sample accounts'), ENV);
+    expect(first.code, first.out).toBe(0);
+    fake.state.credentials.find((c) => c.id === 'c-acme')!.name = 'Dealer accounts';
+    const r = await run(setup(fake.url, '--new-workflow', '--site-login', 'Dealer accounts'), ENV);
+    expect(r.code, r.out).toBe(0);
+    expect(fake.state.workflows).toHaveLength(1);
+    expect(r.out).toMatch(/reused +workflow "RPA: 5 Import a bot \(Sample accounts\)"/);
+    expect(r.out).toContain(`  Address:    ${fake.url}/form/rpa-import-sample-accounts`);
+  });
+});
+
+// ---- The way through n8n's own command line (no API key): a fake n8n command, a made-up /proc and a fake running n8n.
+
+const FAKE_CLI = fileURLToPath(new URL('./fixtures/fake-n8n-cli.mjs', import.meta.url));
+const PACKAGE = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+const CLI_PROJECTS = {
+  'P-owner': { id: 'P-owner', name: 'Own Er <owner@example.com>', type: 'personal', creatorId: 'u-owner' },
+  'P-other': { id: 'P-other', name: 'Oth Er <other@example.com>', type: 'personal', creatorId: 'u-other' },
+  'P-team': { id: 'P-team', name: 'Ops', type: 'team', creatorId: 'u-other' },
+};
+interface CliState { credentials: (Cred & { updatedAt?: string; sharedWith?: string[] })[]; workflows: any[]; calls: { command: string; args: string[]; secretsInEnv: string[] }[]; inputs: { path: string; fileMode: string; dirMode: string }[]; fail?: string }
+let cliRoots: string[] = [];
+afterEach(() => {
+  for (const r of cliRoots) rmSync(r, { recursive: true, force: true });
+  cliRoots = [];
+});
+
+/**
+ * n8n with its command line on PATH: a running n8n (/healthz, its forms, from the same state), seen in a made-up /proc as
+ * one process "n8n" of this user, with HOME and its database file open, unless the options say otherwise.
+ */
+async function cliN8n(o: { credentials?: (Cred & { sharedWith?: string[] })[]; workflows?: any[]; environ?: Record<string, string>; uid?: number; dbOpen?: boolean; noPackage?: boolean; fail?: string; processes?: number } = {}) {
+  const root = mkdtempSync(join(tmpdir(), 'r16-cli-'));
+  cliRoots.push(root);
+  const home = join(root, 'home');
+  const pkgDir = join(home, '.n8n', 'nodes', 'node_modules', 'n8n-nodes-rpa');
+  mkdirSync(pkgDir, { recursive: true });
+  writeFileSync(join(home, '.n8n', 'database.sqlite'), '');
+  if (!o.noPackage) writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name: 'n8n-nodes-rpa', version: PACKAGE.version, n8n: PACKAGE.n8n }));
+  const bin = join(root, 'bin');
+  mkdirSync(bin);
+  writeFileSync(join(bin, 'n8n'), `#!/bin/sh\nexec "${process.execPath}" "${FAKE_CLI}" "$@"\n`);
+  chmodSync(join(bin, 'n8n'), 0o755);
+  const stateFile = join(root, 'state.json');
+  writeFileSync(stateFile, JSON.stringify({
+    projects: CLI_PROJECTS, ownerProject: 'P-owner', fail: o.fail, calls: [], inputs: [],
+    users: [{ id: 'u-owner', email: 'owner@example.com', roleSlug: 'global:owner' }, { id: 'u-other', email: 'other@example.com', roleSlug: 'global:member' }],
+    relations: [{ userId: 'u-owner', projectId: 'P-owner', role: 'project:personalOwner' }, { userId: 'u-other', projectId: 'P-other', role: 'project:personalOwner' }],
+    credentials: (o.credentials ?? []).map((c) => ({ projectId: 'P-owner', ...c })), workflows: (o.workflows ?? []).map((w) => ({ projectId: 'P-owner', ...w })),
+  }));
+  const proc = join(root, 'proc');
+  for (let i = 0; i < (o.processes ?? 1); i++) {
+    const pdir = join(proc, String(4242 + i));
+    mkdirSync(join(pdir, 'fd'), { recursive: true });
+    writeFileSync(join(pdir, 'cmdline'), 'n8n\0\0\0\0');
+    const uid = o.uid ?? process.getuid!();
+    writeFileSync(join(pdir, 'status'), `Name:\tnode\nUid:\t${uid}\t${uid}\t${uid}\t${uid}\n`);
+    writeFileSync(join(pdir, 'environ'), `${Object.entries({ HOME: home, PATH: '/usr/bin', ...o.environ }).map(([k, v]) => `${k}=${v}`).join('\0')}\0`);
+    symlinkSync(home, join(pdir, 'cwd'));
+    if (o.dbOpen !== false) symlinkSync(join(home, '.n8n', 'database.sqlite'), join(pdir, 'fd', '21'));
+  }
+  // Another process: a task runner, never taken for n8n.
+  mkdirSync(join(proc, '19'), { recursive: true });
+  writeFileSync(join(proc, '19', 'cmdline'), 'n8n task-runner\0');
+  const state = (): CliState => JSON.parse(readFileSync(stateFile, 'utf8'));
+  const server = createServer((req, res) => {
+    const url = new URL(req.url ?? '/', 'http://fake');
+    if (url.pathname === '/healthz') return res.writeHead(200).end('{"status":"ok"}');
+    const form = /^\/form\/(.+)$/.exec(url.pathname);
+    const trigger = form && state().workflows.filter((w) => w.activeVersionId).flatMap((w) => w.nodes).find((x: any) => /\.formTrigger$/.test(x.type) && (x.parameters?.options?.path || x.webhookId) === form[1]);
+    if (!trigger) return res.writeHead(404).end('{}');
+    if (trigger.parameters?.authentication === 'basicAuth') return res.writeHead(401).end('{}');
+    return res.writeHead(302, { location: 'http://127.0.0.1/signin?redirect=x' }).end();
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  open.push({ close: () => new Promise<void>((resolve) => server.close(() => resolve())) });
+  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const env = { PATH: `${bin}:${dirname(process.execPath)}:/usr/bin:/bin`, HOME: home, FAKE_N8N_STATE: stateFile, N8N_RPA_SETUP_TEST_PROC: proc };
+  return { url, home, env, state, stateFile };
+}
+type CliFake = Awaited<ReturnType<typeof cliN8n>>;
+const imports = (f: CliFake) => f.state().calls.filter((c) => c.command.startsWith('import:') || c.command.startsWith('publish:'));
+/** Every file n8n's command line imported from: 0600, in a directory of 0700, and gone afterwards. */
+function expectFilesGone(f: CliFake) {
+  for (const i of f.state().inputs) {
+    expect(i.fileMode).toBe('600');
+    expect(i.dirMode).toBe('700');
+    expect(existsSync(dirname(i.path)), i.path).toBe(false);
+  }
+}
+
+describe("setup through n8n's own command line, with no API key", () => {
+  const SITE: Cred = { id: 'c-site', name: 'RPA Site Login account', type: 'playwrightSiteLoginApi', data: { username: 'summit-ops', password: 'made-up-site-pw' } };
+  const guide = (f: CliFake, ...more: string[]) => ['setup', '--url', f.url, '--approver', 'ops@example.com', ...more];
+
+  it('first run: says which way and why; imports the signing key and the browser, picks the Site Login, imports and publishes the form, which answers', async () => {
+    const f = await cliN8n({ credentials: [SITE] });
+    const r = await run(guide(f, '--browser-url', 'ws://browser:3000/', '--site-login', 'RPA Site Login account', '--allow-private-network'), { ...f.env, RPA_BROWSER_TOKEN: BROWSER_TOKEN });
+    expect(r.code, r.out).toBe(0);
+    const lines = r.stdout.split('\n');
+    expect(lines[0]).toBe("Setting up n8n for RPA through n8n's own command line: no API key is needed.");
+    expect(lines[1]).toBe(`  Why this way: no API key was given, the command n8n is here, and it works on the database of the n8n that runs here (${join(f.home, '.n8n', 'database.sqlite')}).`);
+    const s = f.state();
+    const signing = s.credentials.find((c) => c.type === 'playwrightScriptSigningApi')!;
+    const browser = s.credentials.find((c) => c.type === 'playwrightBrowserApi')!;
+    expect(signing.data.secretKey).toMatch(/^[0-9a-f]{64}$/);
+    expect(browser.data).toEqual({ mode: 'playwright', wsUrl: 'ws://browser:3000/', token: BROWSER_TOKEN, privateNetwork: true });
+    expect(s.credentials.find((c) => c.id === 'c-site')!.data, 'never read or changed').toEqual(SITE.data);
+    const [wf] = s.workflows;
+    expect(wf.activeVersionId).toBe(wf.versionId);
+    const node = (name: string) => wf.nodes.find((n: any) => n.name === name);
+    expect(node('Sign steps').credentials).toEqual({ playwrightScriptSigningApi: { id: signing.id, name: 'RPA Step Signing' }, playwrightSiteLoginApi: { id: 'c-site', name: 'RPA Site Login account' } });
+    expect(node('Import steps').parameters.options.allowPrivateNetwork).toBe(true);
+    expect(r.out).toContain('answered the form, after');
+    expect(r.stdout).toContain(`The import form is ready.\n  Address:    ${f.url}/form/rpa-import\n`);
+    expect(r.out).not.toMatch(/API key you gave|Revoke/);
+    // Secrets: in no argument, not in the children's environment, files 0600 in 0700 and removed.
+    for (const c of s.calls) {
+      expect(c.secretsInEnv, c.command).toEqual([]);
+      for (const a of c.args) for (const secret of [BROWSER_TOKEN, signing.data.secretKey]) expect(a).not.toContain(secret);
+    }
+    expect(s.inputs.length).toBeGreaterThanOrEqual(3);
+    expectFilesGone(f);
+    expectNoSecrets(r.out, [signing.data.secretKey, 'made-up-site-pw']);
+  });
+
+  it("again: nothing imported or replaced, no question: its project is n8n's owner's, named by n8n's own tables", async () => {
+    const f = await cliN8n({ credentials: [SITE] });
+    const first = await run(guide(f, '--site-login', 'RPA Site Login account'), f.env);
+    expect(first.code, first.out).toBe(0);
+    expect(first.stdout.split('\n')[2]).toBe('  Your project: n8n\'s owner\'s personal project "Own Er <owner@example.com>" (id P-owner), where n8n\'s command line puts what it imports.');
+    const key = f.state().credentials.find((c) => c.type === 'playwrightScriptSigningApi')!;
+    const before = imports(f).length;
+    const again = await run(['setup', '--url', f.url, '--site-login', 'RPA Site Login account'], f.env);
+    expect(again.code, again.out).toBe(0);
+    expect(imports(f).length, 'nothing imported, nothing published').toBe(before);
+    const after = f.state().credentials.find((c) => c.id === key.id)!;
+    expect(after.data.secretKey).toBe(key.data.secretKey);
+    expect(after.updatedAt).toBe(key.updatedAt);
+    expect(again.out).toMatch(/reused +credential "RPA Step Signing" .*its key stays as it is/);
+    expect(again.out).toMatch(/reused +workflow "RPA: 5 Import a bot"/);
+    expect(again.stdout).toContain('The import form is ready.');
+    // The approver of a first run without --approver: n8n's owner, from its user table.
+    const fresh = await cliN8n();
+    const own = await run(['setup', '--url', fresh.url], fresh.env);
+    expect(own.out).toContain("approver owner@example.com: n8n's owner (another with --approver)");
+    expectFilesGone(f);
+  });
+
+  it('ownership from n8n\'s tables: a credential only shared into the owner\'s project, and a form another user owns, are never taken; --reuse-project-credentials does not widen that', async () => {
+    // Another user's "RPA Step Signing", shared into the owner's project; another user's form of the template's name.
+    const THEIRS: Cred & { sharedWith: string[] } = { id: 'c-theirs', name: 'RPA Step Signing', type: 'playwrightScriptSigningApi', data: { secretKey: 'made-up-key-of-another-user-0123456789' }, projectId: 'P-other', sharedWith: ['P-owner'] };
+    const tpl = template();
+    const FORM = { id: 'w-theirs', name: 'RPA: 5 Import a bot', nodes: tpl.nodes, connections: tpl.connections, settings: {}, versionId: 'v0', activeVersionId: null, projectId: 'P-other' };
+    for (const extra of [[], ['--reuse-project-credentials']]) {
+      const f = await cliN8n({ credentials: [THEIRS], workflows: [FORM] });
+      const r = await run(guide(f, ...extra), f.env);
+      expect(r.code, r.out).toBe(0);
+      expect(r.out).toContain('left alone credential "RPA Step Signing" (playwrightScriptSigningApi, id c-theirs): it belongs to another project or user, so it is not used');
+      expect(r.out).toContain('left alone workflow "RPA: 5 Import a bot" (id w-theirs): it belongs to another project or user, so it is not used');
+      const s = f.state();
+      const mine = s.credentials.find((c) => c.type === 'playwrightScriptSigningApi' && c.id !== 'c-theirs')!;
+      expect(mine.projectId).toBe('P-owner');
+      const made = s.workflows.find((w) => w.id !== 'w-theirs');
+      expect(made.projectId).toBe('P-owner');
+      expect(made.nodes.find((n: any) => n.name === 'Sign steps').credentials.playwrightScriptSigningApi.id).toBe(mine.id);
+      expect(s.credentials.find((c) => c.id === 'c-theirs')!.data.secretKey).toBe(THEIRS.data.secretKey);
+      expect(s.workflows.find((w) => w.id === 'w-theirs').activeVersionId).toBeNull();
+      expect(r.out).not.toMatch(/Is that your|Use these\?/);
+    }
+  });
+
+  it("--project-id names another project: what it holds goes through the shared project's question, as on the API key way", async () => {
+    const OTHERS: Cred = { id: 'c-o', name: 'RPA Step Signing', type: 'playwrightScriptSigningApi', data: { secretKey: 'made-up-other-key-0123456789abcdef' }, projectId: 'P-other' };
+    const f = await cliN8n({ credentials: [OTHERS] });
+    const no = await run(guide(f, '--project-id', 'P-other'), f.env);
+    expect(no.code, no.out).toBe(0);
+    expect(no.out).toContain('  Your project: "Oth Er <other@example.com>" (id P-other), as --project-id says.');
+    expect(no.out).toMatch(/The project "Oth Er <other@example\.com>" \(id P-other\) is shared/);
+    expect(no.out).toContain('Not used: without a terminal they are used only with --reuse-project-credentials.');
+    const g = await cliN8n({ credentials: [OTHERS] });
+    const yes = await run(guide(g, '--project-id', 'P-other', '--reuse-project-credentials'), g.env);
+    expect(yes.code, yes.out).toBe(0);
+    expect(yes.out).toMatch(/reused +credential "RPA Step Signing" \(id c-o\)/);
+    const bad = await run(guide(g, '--project-id', 'P-nope'), g.env);
+    expect(bad.code).toBe(2);
+    expect(bad.out).toContain('--project-id: n8n has no project with the id P-nope.');
+  });
+
+  it('never the wrong database: another HOME, another user, the file not open, several n8n: refused before any call; --no-api-key stops, else the API key way', async () => {
+    const cases: [NonNullable<Parameters<typeof cliN8n>[0]>, Record<string, string>, RegExp][] = [
+      [{}, { HOME: '/tmp/another-home' }, /the running n8n and n8n's command line here would differ in HOME/],
+      [{ uid: 4321 }, {}, /n8n runs here as another user \(user id 4321\) than this command/],
+      [{ dbOpen: false }, {}, /the running n8n does not have .*database\.sqlite open, so n8n's command line here would use another database/],
+      [{ processes: 2 }, {}, /2 n8n processes run here/],
+      [{ environ: { DB_SQLITE_DATABASE: 'other.sqlite' } }, {}, /would differ in DB_SQLITE_DATABASE/],
+      [{ environ: { EXECUTIONS_MODE: 'queue' } }, { EXECUTIONS_MODE: 'queue' }, /n8n runs in queue mode, and the way through n8n's command line is not built for queue mode/],
+    ];
+    for (const [options, env, why] of cases) {
+      const f = await cliN8n(options);
+      const e = { ...f.env, ...env };
+      const strict = await run(['setup', '--url', f.url, '--approver', 'ops@example.com', '--no-api-key'], e);
+      expect(strict.code, strict.out).toBe(2);
+      expect(strict.out).toMatch(why);
+      expect(strict.out).toContain("--no-api-key: n8n's command line cannot be used here");
+      expect(strict.out).toContain("Run this as n8n's user where n8n runs, with n8n's settings");
+      const fallback = await run(['setup', '--url', f.url, '--approver', 'ops@example.com'], e);
+      expect(fallback.code).toBe(2);
+      expect(fallback.out.split('\n')[0]).toMatch(/^This run uses an n8n API key, because .*Where n8n runs, as n8n's user, it needs none\.$/);
+      expect(fallback.out).toMatch(/No API key: set N8N_API_KEY/);
+      expect(f.state().calls, 'n8n\'s command line never ran').toEqual([]);
+    }
+  });
+
+  it('--api-key takes the API key way where the command line could be used; no n8n command: the API key way, and why', async () => {
+    const f = await cliN8n();
+    const forced = await run(['setup', '--url', f.url, '--api-key'], f.env);
+    expect(forced.out.split('\n')[0]).toBe('This run uses an n8n API key: --api-key was given.');
+    expect(f.state().calls).toEqual([]);
+    const none = await run(['setup', '--url', f.url, '--no-api-key'], { ...f.env, PATH: dirname(process.execPath) });
+    expect(none.code).toBe(2);
+    expect(none.out).toContain("--no-api-key: n8n's command line cannot be used here: the command n8n is not here.");
+    const both = await run(['setup', '--api-key', '--no-api-key'], f.env);
+    expect(both.out).toContain('Give --api-key or --no-api-key, not both.');
+  });
+
+  it('the RPA node not installed in n8n\'s folder: stops before any import', async () => {
+    const f = await cliN8n({ noPackage: true });
+    const r = await run(guide(f), f.env);
+    expect(r.code).toBe(1);
+    expect(r.out).toMatch(/The RPA node is not installed in n8n's folder/);
+    expect(imports(f)).toEqual([]);
+  });
+
+  it('an import that fails: the file is removed all the same, the reason is said, and nothing is published', async () => {
+    const f = await cliN8n({ fail: 'import:credentials' });
+    const r = await run(guide(f), f.env);
+    expect(r.code).toBe(1);
+    expect(r.out).toMatch(/Could not create the credential "RPA Step Signing" \(n8n's command line did not import the credential "RPA Step Signing" \(.*made-up failure\)\)/);
+    expect(f.state().calls.some((c) => c.command === 'publish:workflow')).toBe(false);
+    expect(f.state().workflows).toEqual([]);
+    expectFilesGone(f);
+  });
+
+  it('a Windows machine: n8n\'s command line cannot test it, and says so; a new line for one there is asked about with the old line\'s loss said', async () => {
+    const f = await cliN8n();
+    const r = await run(guide(f), { ...f.env, RPA_CONNECTION_LINE: LINE });
+    expect(r.code, r.out).toBe(0);
+    const runner = f.state().credentials.find((c) => c.type === 'rpaDesktopRunnerApi')!;
+    expect(runner.data.connectionLine).toBe(LINE);
+    expect(r.out).toContain(`not tested credential "RPA Desktop Runner" (id ${runner.id}): n8n's command line cannot test a credential. To test it, open it in n8n, which tests it as it opens.`);
+    expect(r.out).toContain('Whether the Windows machine is connected is not known: n8n did not test it.');
+    for (const c of f.state().calls) expect(c.secretsInEnv).toEqual([]);
+    const QUESTION = /Replace the Connection Line of "RPA Desktop Runner" with the line for rpa\.example\.com:8765\? n8n's command line cannot test the new line first, and the old line will be gone\. \(y\/N\) /;
+    const no = await runAtTerminal(guide(f), { ...f.env, RPA_CONNECTION_LINE: NEW_LINE }, [[QUESTION, 'n']]);
+    expect(no.code, no.out).toBe(0);
+    expect(f.state().credentials.find((c) => c.id === runner.id)!.data.connectionLine).toBe(LINE);
+    const yes = await runAtTerminal(guide(f), { ...f.env, RPA_CONNECTION_LINE: NEW_LINE }, [[QUESTION, 'y']]);
+    expect(yes.code, yes.out).toBe(0);
+    expect(f.state().credentials.find((c) => c.id === runner.id)!.data.connectionLine).toBe(NEW_LINE);
+    expectFilesGone(f);
+    expectNoSecrets(r.out + no.out + yes.out, [NEW_LINE, NEW_TOKEN]);
+  });
+
+  it('item 2 through the command line: a form it made that differs is updated in place, by its id, and published again', async () => {
+    const f = await cliN8n();
+    expect((await run(guide(f), f.env)).code).toBe(0);
+    const s = f.state();
+    const [wf] = s.workflows;
+    wf.nodes.push({ id: 'n1', name: 'Sticky Note', type: 'n8n-nodes-base.stickyNote', typeVersion: 1, position: [0, 0], parameters: { content: 'x' } });
+    writeFileSync(f.stateFile, JSON.stringify(s));
+    const QUESTION = /Update this form to this version\? \(y\/N\) /;
+    const no = await runAtTerminal(guide(f), f.env, [[/Connect a Windows/, 'n'], [QUESTION, 'n']]);
+    expect(no.code, no.out).toBe(0);
+    expect(no.out).toContain('It is published, and answers at');
+    expect(f.state().workflows[0].nodes.some((n: any) => n.name === 'Sticky Note')).toBe(true);
+    const yes = await runAtTerminal(guide(f), f.env, [[/Connect a Windows/, 'n'], [QUESTION, 'y']]);
+    expect(yes.code, yes.out).toBe(0);
+    const [after] = f.state().workflows;
+    expect(after.id).toBe(wf.id);
+    expect(after.nodes.some((n: any) => n.name === 'Sticky Note')).toBe(false);
+    expect(after.activeVersionId).toBe(after.versionId);
+    expect(yes.out).toContain('The import form is ready.');
+    expect(f.state().workflows).toHaveLength(1);
   });
 });

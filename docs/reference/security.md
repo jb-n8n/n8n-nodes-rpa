@@ -85,7 +85,12 @@ Login.
 **One bot, many accounts.** A Site Login whose username and password are expressions signs in with each item's account under one signature, and the passwords then travel through the workflow's items, where whoever can open its executions can read them ([One bot, many accounts](../guides/many-accounts.md#what-it-means-for-secrets)).
 
 **Who holds the key.** Anyone who knows the signing key can sign steps. `npx n8n-nodes-rpa setup` therefore uses only
-an **RPA Step Signing** credential that its own project owns, and never one of the same name made by another user.
+an **RPA Step Signing** credential that its own project owns, and never one of the same name made by another user, or
+one another user shared into the project. Run where n8n runs, with no API key, it works through n8n's own command
+line: its project is the n8n owner's personal project, and it reads who owns what from n8n's own tables (an export
+encrypted with a key of its own, removed right after; no credential's data is decrypted). Before it writes anything it
+checks that the command line works on the running n8n's database. A credential's secret reaches n8n's command line in
+a file only its user can read, which is removed right after, never in a command's arguments.
 
 **Approval.** Nothing an import or an AI repair makes runs until a person approves it and Sign Steps signs it.
 - **On the form (the default).** In **RPA: 5 Import a bot**, the person who imports reviews every step list on the next
