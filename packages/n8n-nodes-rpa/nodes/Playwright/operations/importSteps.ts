@@ -95,6 +95,8 @@ interface ImportParams {
   codeTimeoutMs: number;
   /** Options → Version: the version every draft gets (1 by default). */
   version: number;
+  /** Options → Approved Before Hand-Over: this workflow approves the steps before it hands the workflow file over. */
+  approvedBeforeHandOver: boolean;
   common: CommonOptions;
 }
 
@@ -126,6 +128,7 @@ function readImportParams(ctx: NodeContext, i: number): ImportParams {
     vars: variablesOption(ctx.getNodeParameter('options.variables', i, {})),
     breakerResetKey,
     version,
+    approvedBeforeHandOver: asBoolean(ctx.getNodeParameter('options.approvedBeforeHandOver', i, false), false),
     ...codeWorkflowOptions(ctx, (option) => field(ctx.getNodeParameter('options', i, {}), option)),
     common,
   };
@@ -301,7 +304,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
   if (flow) {
     try {
       const file = workflowFile(flow, imported.drafts, {
-        name: p.name, desktopDrafts, source, credentials: passedOn(node, (type) => hiddenByRunsOn(ctx, type)),
+        name: p.name, desktopDrafts, source, credentials: passedOn(node, (type) => hiddenByRunsOn(ctx, type)), approvedBeforeHandOver: p.approvedBeforeHandOver,
         ...(p.codeWorkflowId ? { codeWorkflow: { id: p.codeWorkflowId, timeoutSeconds: p.codeTimeoutMs / 1000 } } : {}),
         run: { maxSeconds: p.common.maxSeconds, allowedHosts: p.common.allowedHosts, allowPrivateNetwork: p.common.allowPrivateNetwork, idPatterns },
       });

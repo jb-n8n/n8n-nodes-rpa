@@ -604,7 +604,8 @@
           }
         },
         "options": {
-          "version": "={{ $('The bot to change').isExecuted ? Number($('The bot to change').first().json.next) : $('What it replaces').isExecuted ? Number($('What it replaces').first().json.next) : 1 }}"
+          "version": "={{ $('The bot to change').isExecuted ? Number($('The bot to change').first().json.next) : $('What it replaces').isExecuted ? Number($('What it replaces').first().json.next) : 1 }}",
+          "approvedBeforeHandOver": "={{ $('Settings').isExecuted && $('Settings').first().json.approval !== 'by email' }}"
         }
       },
       "id": "3d6f1a20-7b4c-4e8a-9c11-000000000505",
@@ -616,7 +617,7 @@
         0
       ],
       "onError": "continueErrorOutput",
-      "notes": "Outputs: Data (0), Repaired Steps (1), error (2). Options → Version: the next version number of the name, one more than the highest any row of it has (from The bot to change after Change or sign again, else from What it replaces), so a change, the same steps signed again, or an upload under the name of an approved bot is a new version, and a rejected attempt keeps its own number; any other upload is version 1."
+      "notes": "Outputs: Data (0), Repaired Steps (1), error (2). Options → Version: the next version number of the name, one more than the highest any row of it has (from The bot to change after Change or sign again, else from What it replaces), so a change, the same steps signed again, or an upload under the name of an approved bot is a new version, and a rejected attempt keeps its own number; any other upload is version 1. Options → Approved Before Hand-Over: on when approval is on this form, which hands the workflow file over only after approval, so its notes do not ask to approve the steps again."
     },
     {
       "parameters": {

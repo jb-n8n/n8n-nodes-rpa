@@ -233,7 +233,7 @@ describe('Import Steps: the description', () => {
       'File Type', 'File Name Pattern (Regex)', 'Minimum Size (Bytes)', 'Required Columns', 'Minimum Rows',
     ]);
     expect(optionsFor('importSteps').map((o) => o.name)).toEqual([
-      'timeout', 'maxSeconds', 'viewport', 'allowedHosts', 'allowPrivateNetwork', 'variables', 'codeWorkflowId', 'codeTimeout', 'version', 'breakerResetKey', 'saveTrace', 'maxItems',
+      'timeout', 'maxSeconds', 'viewport', 'allowedHosts', 'allowPrivateNetwork', 'variables', 'codeWorkflowId', 'codeTimeout', 'version', 'approvedBeforeHandOver', 'breakerResetKey', 'saveTrace', 'maxItems',
     ]);
     // Credentials: the browser, the Site Login and its Redis guard store; then the signing key and the desktop runner,
     // which the import only passes on to the workflow file (Sign Steps signs, and the import never reads them).

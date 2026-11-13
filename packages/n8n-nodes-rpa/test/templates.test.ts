@@ -2599,6 +2599,14 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(render(none.completionMessage, { $: changePath('erp', []).$ }).split('\n')[0]).toBe('No bot has been approved yet.');
   });
 
+  it('the workflow file is handed over after approval on this form: Import steps says so, so its notes do not ask to approve again', () => {
+    const upload = formItem('RPA recording', Buffer.from('{}'));
+    const on = (approval: string) => resolved(upload, { Settings: [[{ json: { ...upload.json, ...settingsJson(), approval } }]] }).options as IDataObject;
+    expect(on('on this form').approvedBeforeHandOver).toBe(true);
+    // By email the form hands the file over before anyone approved (template 3 approves later).
+    expect(on('by email').approvedBeforeHandOver).toBe(false);
+  });
+
   it('Change or sign again shows the active steps to read in a block of the page, one empty box, and five short sentences', () => {
     const doc = { startUrl: `${SITE.url}/a`, name: 'feed <b>', version: 1, steps: [{ intent: 'Type $& and $$ <b>Tom & Jerry</b> café', goto: '/b?x=$1&y=<2>' }] };
     const page = byName(t, 'Change or sign again');

@@ -187,7 +187,9 @@ schedule until a person approves it. Template **RPA: 5 Import a bot** puts a for
   steps. The Expected File's checks go onto the click that exports. Without an ID Pattern, a step document that reads
   rows is checked with the `idPattern` its steps state ([ID Pattern](steps.md#id-pattern)).
 - **Options**: **Variables**, **One-Time Code Workflow** and **Code Timeout (Seconds)** (120), as in Run Steps, and
-  the quick operations' options.
+  the quick operations' options. **Version**: the version the steps get (1 for a new bot). **Approved Before
+  Hand-Over**: on when the workflow approves the steps before it hands the workflow file over, as the import form does;
+  the file's notes then do not ask to import and approve the steps.
 
 **What is never imported.** A value typed into a password, PIN, secret or code field, or a value equal to the Site
 Login's username or password, is never imported. A field counts as one when its type, label, name, ID or locator says

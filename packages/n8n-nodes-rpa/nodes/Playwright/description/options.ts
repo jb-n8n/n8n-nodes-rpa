@@ -329,6 +329,15 @@ export const OPTION_ENTRIES: INodeProperties[] = [
     displayOptions: only(['importSteps']),
   },
   {
+    displayName: 'Approved Before Hand-Over',
+    name: 'approvedBeforeHandOver',
+    type: 'boolean',
+    default: false,
+    description:
+      'Whether this workflow approves the imported steps before it hands the workflow file over, as the import form does. When on, the notes in the workflow file do not ask to import and approve the steps.',
+    displayOptions: only(['importSteps']),
+  },
+  {
     displayName: 'Login Breaker Reset Key',
     name: 'breakerResetKey',
     type: 'string',

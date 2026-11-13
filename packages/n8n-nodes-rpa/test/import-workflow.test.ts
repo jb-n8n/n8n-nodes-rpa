@@ -771,6 +771,12 @@ describe('buildWorkflow', () => {
     expect(content(byName(secretOnly, 'Fill in the variables (d)'))).toBe(
       '### Fill in the variables (gold)\nSecret: `password`: in an **RPA Secret Variables** credential selected on **Desk**, never typed here. To keep these values to this app, put `App.exe` in that credential\'s May Be Typed Into. Desktop steps run only once approved: import the recording with **RPA: 5 Import a bot** and approve `d` on its review page.',
     );
+    // Handed over after approval (the import form approves before it hands the file over): the note does not ask to
+    // import and approve the steps; Import Steps alone approves nothing, so by default it does.
+    const approved = buildWorkflow({ name: 'd', nodes: [{ kind: 'desktop', sequence: 1, displayName: 'Desk', draft: 'd' }] }, [], { name: 'd', desktopDrafts: [desktop(['password'], ['password'])], source: 'recording', approvedBeforeHandOver: true });
+    expect(content(byName(approved, 'Fill in the variables (d)'))).toBe(
+      '### Fill in the variables (gold)\nSecret: `password`: in an **RPA Secret Variables** credential selected on **Desk**, never typed here. To keep these values to this app, put `App.exe` in that credential\'s May Be Typed Into.',
+    );
     // A gold note: three colours, so the legend.
     expect(content(byName(secretOnly, 'About this import'))).toContain('- Gold: fill in. Green: set once. Grey: leave as is.');
     // A UiPath project with nothing left untranslated has no grey notes to explain.

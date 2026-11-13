@@ -65,6 +65,11 @@ export interface BuildWorkflowOptions {
    * Browser, the Site Login and the Step Signing; desktop Run steps get the Desktop Runner and the Step Signing.
    */
   credentials?: PassedOn;
+  /**
+   * The workflow that imported the steps approves them before it hands this file over (the import form): the notes then
+   * do not ask the reader to import and approve them. Import Steps alone approves nothing, so off by default.
+   */
+  approvedBeforeHandOver?: boolean;
 }
 /** The credentials an import passes on to the workflow file. */
 export interface PassedOn { browser?: CredentialRef; siteLogin?: CredentialRef; signing?: CredentialRef; desktopRunner?: CredentialRef }
@@ -344,6 +349,7 @@ class Builder {
     private readonly codeWorkflow?: BuildWorkflowOptions['codeWorkflow'], readonly source: ImportedFrom = 'uipath',
     private readonly run: NonNullable<BuildWorkflowOptions['run']> = {},
     private readonly passedOn: PassedOn = {},
+    private readonly approvedBeforeHandOver = false,
   ) {}
 
   /**
@@ -660,7 +666,7 @@ class Builder {
         : '';
       const secretVars = secret.size ? `Secret: ${[...secret].map((v) => code(v, 60)).join(', ')}: in an ${SECRET_VARIABLES} credential selected on **${md(run)}**, never typed here. To keep these values to this app, put ${code(String(draft.script.app?.exe ?? '').split(/[\\/]/).pop() ?? '', 120)} in that credential's May Be Typed Into.` : '';
       this.sticky(`Fill in the variables (${draftName})`,
-        `### Fill in the variables (gold)\n${[listedVars, secretVars].filter(Boolean).join(' ')} Desktop steps run only once approved: ${FROM[this.source].importIt} with **${IMPORT_FORM}** and approve ${code(draftName)} on its review page.`,
+        `### Fill in the variables (gold)\n${[listedVars, secretVars, this.approvedBeforeHandOver ? '' : `Desktop steps run only once approved: ${FROM[this.source].importIt} with **${IMPORT_FORM}** and approve ${code(draftName)} on its review page.`].filter(Boolean).join(' ')}`,
         COLOUR.gold, [runX - 80, y + 160], 320, 260);
     }
     this.lastFile = downloadProperty(draft);
@@ -881,7 +887,7 @@ export function buildWorkflow(flow: UiPathFlow, drafts: Draft[], opts: BuildWork
   for (const d of [...drafts, ...(opts.desktopDrafts ?? [])]) {
     if (d.name.trim() === '' || d.name.startsWith('=')) throw new Error(`The Name of a step list must not be empty or start with "=": ${JSON.stringify(d.name.slice(0, 60))}`);
   }
-  const b = new Builder(opts.name, new Map(drafts.map((d) => [d.name, d])), new Map((opts.desktopDrafts ?? []).map((d) => [d.name, d])), opts.codeWorkflow, opts.source, opts.run, opts.credentials);
+  const b = new Builder(opts.name, new Map(drafts.map((d) => [d.name, d])), new Map((opts.desktopDrafts ?? []).map((d) => [d.name, d])), opts.codeWorkflow, opts.source, opts.run, opts.credentials, opts.approvedBeforeHandOver === true);
   const from = FROM[b.source];
   const uipath = b.source === 'uipath';
   b.add(T.manualTrigger, b.unique('Run the bot'), [0, 0], {});
