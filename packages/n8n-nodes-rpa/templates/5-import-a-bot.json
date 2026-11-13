@@ -776,6 +776,10 @@
             {
               "name": "guidance",
               "type": "string"
+            },
+            {
+              "name": "file",
+              "type": "string"
             }
           ]
         },

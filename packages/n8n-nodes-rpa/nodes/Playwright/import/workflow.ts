@@ -250,20 +250,27 @@ const autoRow = () => ({
  */
 const rowExpression = (fields: string): string =>
   `={{ ((row, have) => (have.length ? Object.fromEntries(Object.entries(row).filter(([k]) => have.includes(k))) : row))({ ${fields} }, [].concat($('${LOG.create}').first().json.columns ?? []).map((c) => c?.name)) }}`;
-/** A successful run: Run steps' Data item. */
+/**
+ * A successful run: Run steps' Data item. What was not counted is left empty (null), never false or 0: rows and their
+ * check only when the steps read rows, and the file's name when the run returned one.
+ */
 export const LOG_RUN_ROW = rowExpression([
-  "name: $json.name ?? ''", "lane: $json.lane ?? ''", 'version: $json.version ?? 0', "hash: $json.hash ?? ''", 'confirmed: $json.confirmed ?? false',
-  'rowCount: ($json.rows ?? []).length', 'durationMs: $json.durationMs ?? 0', 'llmTokens: $json.llmTokens ?? 0', "code: ''", 'executionId: $execution.id',
-  "message: ''", "guidance: ''",
+  "name: $json.name ?? ''", 'lane: $json.lane ?? null', 'version: $json.version ?? null', "hash: $json.hash ?? ''",
+  'confirmed: Array.isArray($json.rows) ? $json.confirmed === true : null', 'rowCount: Array.isArray($json.rows) ? $json.rows.length : null',
+  'durationMs: $json.durationMs ?? null', 'llmTokens: $json.llmTokens ?? null', "code: ''", 'executionId: $execution.id',
+  "message: ''", "guidance: ''", "file: [].concat($json.files ?? []).map((f) => f?.fileName).filter((n) => n).join(', ')",
 ].join(', '));
 /**
  * A failed run: Run steps' error item, its facts under details (a configuration error has no code: config_error), the
- * message, and what to do (details.guidance, the node error's description).
+ * message, and what to do (details.guidance, the node error's description). Nothing was counted. A run refused before
+ * it started (locked_out, busy: no lane) has no lane, duration or tokens.
  */
 export const LOG_FAILED_ROW = rowExpression([
-  "name: $json.details?.name ?? ''", "lane: $json.details?.lane ?? ''", 'version: $json.details?.version ?? 0', "hash: $json.details?.hash ?? ''",
-  'confirmed: false', 'rowCount: 0', 'durationMs: $json.details?.durationMs ?? 0', 'llmTokens: $json.details?.llmTokens ?? 0',
+  "name: $json.details?.name ?? ''", 'lane: $json.details?.lane ?? null', 'version: $json.details?.version ?? null', "hash: $json.details?.hash ?? ''",
+  'confirmed: null', 'rowCount: null', 'durationMs: $json.details?.lane ? ($json.details?.durationMs ?? null) : null',
+  'llmTokens: $json.details?.lane ? ($json.details?.llmTokens ?? null) : null',
   "code: $json.details?.code || 'config_error'", 'executionId: $execution.id', "message: $json.message ?? ''", "guidance: $json.details?.guidance ?? ''",
+  "file: ''",
 ].join(', '));
 /**
  * Stop and Error's message, from the row Log failed run shaped (also when writing it failed): the code, the step list's

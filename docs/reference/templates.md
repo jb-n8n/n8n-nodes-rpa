@@ -127,8 +127,8 @@ after `approvalTimeoutHours` (72), then:
 |---|---|---|
 | `name` | string | The step list's name |
 | `lane` | string | `script` (signed steps) or `agent` (a repair or a first run) |
-| `version` | number | The version used, 0 when none |
-| `hash` | string | Hash of those steps |
+| `version` | number | The version used, 0 (the data feed) or empty when none |
+| `hash` | string | Hash of those steps: the same as the `hash` of their row in `playwright_steps` |
 | `confirmed` | boolean | The row count matched the total the page states |
 | `rowCount` | number | Rows returned |
 | `durationMs` | number | Run time |
@@ -137,6 +137,11 @@ after `approvalTimeoutHours` (72), then:
 | `executionId` | string | The n8n execution |
 | `message` | string | What failed, as Run Steps' error item says it. Empty on success |
 | `guidance` | string | What to do about it: the same text as the node error's description. Empty on success |
+| `file` | string | The name of the file the run returned, empty when none |
+
+In the workflow the import form hands over, a value that was not counted is left empty: `confirmed` and `rowCount`
+when the steps read no rows (for example a run that returns a file), and `lane`, `durationMs` and `llmTokens` for a run
+refused before it started (`locked_out`, `busy`).
 
 The workflow the import form hands over writes the columns the table has. A `playwright_runs` made by an earlier
 version keeps its columns, and a run never fails on it: the newer columns are left out of its rows. To have them, add

@@ -117,7 +117,8 @@
             { "name": "code", "type": "string" },
             { "name": "executionId", "type": "string" },
             { "name": "message", "type": "string" },
-            { "name": "guidance", "type": "string" }
+            { "name": "guidance", "type": "string" },
+            { "name": "file", "type": "string" }
           ]
         },
         "options": { "createIfNotExists": true }

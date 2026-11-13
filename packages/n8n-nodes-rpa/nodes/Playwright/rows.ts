@@ -30,6 +30,7 @@ export const RUN_TABLE_COLUMNS: readonly { name: string; type: ColumnType }[] = 
   // the table has (see import/workflow.ts), and the templates write only the first ten.
   { name: 'message', type: 'string' },
   { name: 'guidance', type: 'string' },
+  { name: 'file', type: 'string' },
 ];
 /** The run log's columns of the first version: every playwright_runs table has them, also one made by an earlier version. */
 export const RUN_TABLE_FIRST_COLUMNS = RUN_TABLE_COLUMNS.slice(0, 10);

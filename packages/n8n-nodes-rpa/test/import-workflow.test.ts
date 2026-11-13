@@ -891,6 +891,24 @@ describe('buildWorkflow', () => {
     // Create run log table gives no columns (never seen in n8n): every column is written, as for a table made now.
     expect(Object.keys(shape(LOG_RUN_ROW, { name: 'bot' }, { 'Create run log table': {} }))).toEqual(RUN_TABLE_COLUMNS.map((c) => c.name));
 
+    // A refusal before the run (locked_out: no lane) leaves lane, duration and tokens empty, and nothing was counted.
+    expect(failedRow).toMatchObject({ lane: null, durationMs: null, llmTokens: null, confirmed: null, rowCount: null, version: 1, file: '' });
+    // A failed run that ran keeps its lane and duration.
+    expect(shape(LOG_FAILED_ROW, { ...lockedOut, details: { ...lockedOut.details, code: 'drift_detected', lane: 'script', durationMs: 1200 } }, all))
+      .toMatchObject({ lane: 'script', durationMs: 1200, llmTokens: 0 });
+    // A successful download: the file's name, and no row count or check (the steps read no rows).
+    const download = {
+      name: 'bot', lane: 'script', version: 2, hash: 'h2', confirmed: false, durationMs: 986, llmTokens: 0,
+      files: [{ fileName: 'LINEITEMS_1000_2026-09-01_2026-09-30.csv', mimeType: 'text/csv', bytes: 357, binaryProperty: 'file_7' }],
+    };
+    expect(shape(LOG_RUN_ROW, download, all)).toEqual({
+      name: 'bot', lane: 'script', version: 2, hash: 'h2', confirmed: null, rowCount: null, durationMs: 986, llmTokens: 0, code: '', executionId: '22',
+      message: '', guidance: '', file: 'LINEITEMS_1000_2026-09-01_2026-09-30.csv',
+    });
+    // Rows: their count and whether it matched the stated total; no file.
+    expect(shape(LOG_RUN_ROW, { ...download, files: undefined, rows: [{ id: 'N1' }, { id: 'N2' }], confirmed: false }, all)).toMatchObject({ confirmed: false, rowCount: 2, file: '' });
+    expect(shape(LOG_RUN_ROW, { ...download, files: undefined, rows: [], confirmed: true }, all)).toMatchObject({ confirmed: true, rowCount: 0 });
+
     // Stop and Error: the code, the steps, the message and what to do, from the row Log failed run shaped.
     const message = (row: object) => shape(STOP_MESSAGE, {}, { 'Log failed run': row }) as unknown as string;
     expect(message(failedRow)).toBe(`The run failed: locked_out on bot. ${lockedOut.message} ${GUIDANCE.locked_out}`);
