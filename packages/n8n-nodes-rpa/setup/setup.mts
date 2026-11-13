@@ -923,7 +923,8 @@ async function run(inputs: Inputs): Promise<number> {
   if (showKey && signingKey) reveal(`  Signing key: `, signingKey, '   (shown once: keep a copy where you keep recovery secrets)');
   // Made earlier: bots may be approved with it by now, so a new key is no way to keep a copy.
   else if (signingKey === undefined) say('  Signing key: made earlier and kept in n8n, which does not show it again. A new key (--replace-signing-key) stops every bot signed with this one until it is approved again.');
-  else say(`Your signing key is kept in n8n only ("${SIGNING.name}"), and n8n never shows it again. A lost key means approving every bot again. To keep a copy, run this again with --replace-signing-key before you approve a bot: it makes a new key and shows it. Later, see ${LOST_KEY_DOC}`);
+  // Made now and not shown: a new key now costs nothing, as no bot is signed with this one yet.
+  else say('  Signing key: made by this run and kept in n8n, which does not show it again. To have a copy, run this again now, before you approve a bot, with --replace-signing-key --show-signing-key.');
   say();
   say('Next:');
   say('  1. Record a bot, or pick a bot file you have: an RPA recording, a UiPath project, a Chrome Recorder export, Playwright code or a step document.');

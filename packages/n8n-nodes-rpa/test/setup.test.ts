@@ -332,7 +332,7 @@ describe('npx n8n-nodes-rpa setup', () => {
     expect(count(out, form.data.password)).toBe(1);
     expect(stdout).toMatch(new RegExp(`Password: +${form.data.password} +\\(shown once: keep it in your password manager\\)`));
     expect(out).not.toContain(signing.data.secretKey);
-    expect(stdout).toMatch(/kept in n8n only.*never shows it again. A lost key means approving every bot again.*--replace-signing-key before you approve a bot/);
+    expect(stdout).toContain('  Signing key: made by this run and kept in n8n, which does not show it again. To have a copy, run this again now, before you approve a bot, with --replace-signing-key --show-signing-key.');
     expect(stdout).toMatch(/1\. Record a bot.*\n.*2\. Open the form.*\n.*3\. Upload the file/);
     for (const name of ['RPA import form', 'RPA Step Signing', 'RPA: 5 Import a bot']) expect(stdout).toMatch(new RegExp(`created .*${name}`));
     expect(out).not.toMatch(/Note:|WARNING/);
@@ -418,6 +418,22 @@ describe('npx n8n-nodes-rpa setup', () => {
     expect(patches()).toBe(1);
     expect(yes.out).not.toContain(key);
     expectNoSecrets(yes.out);
+
+    // What the first run's note says to do for a copy: the new key once, the old one never.
+    const both = await runAtTerminal(['setup', '--url', fake.url, '--replace-signing-key', '--show-signing-key'], ENV, [[/Connect a Windows machine now/, 'n'], [/Type REPLACE/, 'REPLACE']]);
+    expect(both.code, both.out).toBe(0);
+    const third = signingKeyOf(fake);
+    expect(third).not.toBe(replaced);
+    expect(count(both.out, third)).toBe(1);
+    expect(both.out).toMatch(/Signing key: +[0-9a-f]{64} +\(shown once/);
+    expect(both.out).not.toContain(replaced);
+    // A run that does not make a key shows none, with or without --show-signing-key.
+    for (const extra of [[], ['--show-signing-key']]) {
+      const plain = await run(['setup', '--url', fake.url, ...extra], ENV);
+      expect(plain.code, plain.out).toBe(0);
+      expect(plain.out).not.toContain(third);
+      expect(plain.out).not.toMatch(/Signing key: +[0-9a-f]{64}/);
+    }
   });
 
   it('a missing node: says how to install it and stops before creating anything', async () => {
