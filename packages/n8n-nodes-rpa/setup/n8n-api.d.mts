@@ -17,7 +17,7 @@ export interface ApiResponse {
   text: string;
 }
 export interface Client {
-  api(method: string, path: string, body?: unknown): Promise<ApiResponse>;
+  api(method: string, path: string, body?: unknown, options?: { timeoutMs?: number }): Promise<ApiResponse>;
   reason(r: ApiResponse): string;
   listAll(path: string, filter?: Record<string, string>): Promise<{ ok: true; items: any[] } | { ok: false; response: ApiResponse }>;
 }

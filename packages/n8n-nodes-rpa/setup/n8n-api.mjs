@@ -90,14 +90,14 @@ export function browserCredentialData(href, token) {
  * listAll() pages through a list; reason() is the server's error message, redacted and cut short.
  */
 export function createClient({ base, apiKey, redact }) {
-  async function api(method, path, body) {
+  async function api(method, path, body, { timeoutMs = TIMEOUT_MS } = {}) {
     let res;
     try {
       res = await fetch(`${base}${path}`, {
         method,
         headers: { 'X-N8N-API-KEY': apiKey, accept: 'application/json', ...(body ? { 'content-type': 'application/json' } : {}) },
         body: body ? JSON.stringify(body) : undefined,
-        signal: AbortSignal.timeout(TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeoutMs),
         redirect: 'error', // never replay the API key to another host
       });
     } catch (err) {

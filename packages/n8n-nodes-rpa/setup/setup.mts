@@ -1,6 +1,8 @@
 // `npx n8n-nodes-rpa setup`: sets an n8n up for importing a first bot, through n8n's public API. It creates the RPA Step
 // Signing credential and (with a Connection Line) the RPA Desktop Runner credential, imports "RPA: 5 Import a bot" with
-// those set and the approver on the allowlist, and publishes it. The form opens with n8n's own sign-in; with
+// those set and the approver on the allowlist, and publishes it. Without a line it picks the project's RPA Desktop
+// Runner when there is exactly one (or the one --desktop-runner names), by id and name only, and asks n8n to test it
+// (POST /credentials/{id}/test, n8n 2.18+, scope credential:read). The form opens with n8n's own sign-in; with
 // --form-login basic it gets a Basic Auth login (a credential made here) instead. Node 22+, no dependencies:
 // scripts/build-setup.mjs bundles this file, setup/n8n-api.mjs and the Connection Line parser of the node into
 // dist/setup.mjs, the package's bin.
@@ -74,6 +76,8 @@ const USAGE = [
   '                         RPA_BROWSER_TOKEN, and sets it on Import steps.',
   '  --site-login <name>    the RPA Site Login of the site your bots open, made in n8n before this runs: picks it by its name',
   '                         on Import steps and Sign steps. It is never made, read or changed here.',
+  '  --desktop-runner <name>  the RPA Desktop Runner to pick on Import steps when your project has several. Without it and',
+  '                         without a Connection Line, the only one your project has is picked. It is never read or changed here.',
   '  --allow-private-network  turn on Allow Private Network on Import steps, for a site on this computer or your network.',
   '  --project-id <id>      the n8n project to work in (default: the API key owner\'s personal project). Only what that',
   '                         project owns is reused.',
@@ -113,6 +117,8 @@ interface Options {
   browserUrl?: string;
   /** The name of an RPA Site Login of the project, picked on Import steps and Sign steps. */
   siteLogin?: string;
+  /** The name of an RPA Desktop Runner of the project, picked on Import steps. */
+  desktopRunner?: string;
   allowPrivateNetwork: boolean;
   projectId?: string;
   newWorkflow: boolean;
@@ -128,7 +134,7 @@ function readOptions(argv: string[]): Options | 'help' {
         url: { type: 'string' }, approver: { type: 'string' }, 'form-login': { type: 'string' }, 'allow-http': { type: 'boolean' }, 'show-signing-key': { type: 'boolean' },
         'replace-signing-key': { type: 'boolean' },
         'new-form-password': { type: 'boolean' }, 'browser-url': { type: 'string' }, 'project-id': { type: 'string' },
-        'site-login': { type: 'string' }, 'allow-private-network': { type: 'boolean' },
+        'site-login': { type: 'string' }, 'desktop-runner': { type: 'string' }, 'allow-private-network': { type: 'boolean' },
         'new-workflow': { type: 'boolean' }, 'reuse-project-credentials': { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
       },
       strict: true,
@@ -149,10 +155,16 @@ function readOptions(argv: string[]): Options | 'help' {
   if (values['new-form-password'] && formLogin !== 'basic') throw new Stop("--new-form-password applies only with --form-login basic: with n8n's sign-in the form has no password.", 2);
   const siteLogin = values['site-login'];
   // n8n's credential names are 3 to 128 characters. A control character could change what a printed line looks like.
-  if (siteLogin !== undefined && (!siteLogin.trim() || siteLogin.length > 128 || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(siteLogin))) {
+  const badName = (name: string) => !name.trim() || name.length > 128 || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(name);
+  if (siteLogin !== undefined && badName(siteLogin)) {
     throw new Stop('--site-login must be the name of an RPA Site Login as n8n shows it, such as "RPA Site Login account".', 2);
   }
   if (siteLogin !== undefined && OWN_NAMES.includes(siteLogin)) throw new Stop(`--site-login names a credential this command makes ("${siteLogin}"): give the name of your RPA Site Login.`, 2);
+  const desktopRunner = values['desktop-runner'];
+  // "RPA Desktop Runner" is allowed: the one an earlier run made from a Connection Line.
+  if (desktopRunner !== undefined && (badName(desktopRunner) || (desktopRunner !== RUNNER.name && OWN_NAMES.includes(desktopRunner)))) {
+    throw new Stop('--desktop-runner must be the name of an RPA Desktop Runner credential as n8n shows it, such as "RPA Desktop Runner account".', 2);
+  }
   return {
     url: values.url ?? DEFAULT_URL,
     approver: values.approver,
@@ -163,6 +175,7 @@ function readOptions(argv: string[]): Options | 'help' {
     newFormPassword: values['new-form-password'] === true,
     browserUrl: values['browser-url'],
     siteLogin,
+    desktopRunner,
     allowPrivateNetwork: values['allow-private-network'] === true,
     projectId: values['project-id'],
     newWorkflow: values['new-workflow'] === true,
@@ -263,7 +276,11 @@ async function readInputs(options: Options, env: NodeJS.ProcessEnv): Promise<Inp
   }
 
   let line = (env.RPA_CONNECTION_LINE ?? '').trim() || undefined;
-  if (!line && interactive() && /^y(es)?$/i.test(await ask('Connect a Windows machine now? (y/N) '))) {
+  if (line && options.desktopRunner !== undefined) {
+    throw new Stop('Give a Connection Line (RPA_CONNECTION_LINE) or --desktop-runner, not both: the line makes an RPA Desktop Runner credential, the flag picks one you have. Nothing was sent to n8n.', 2);
+  }
+  // --desktop-runner picks one that exists: nothing to connect.
+  if (!line && options.desktopRunner === undefined && interactive() && /^y(es)?$/i.test(await ask('Connect a Windows machine now? (y/N) '))) {
     say('On that machine, in an administrator PowerShell: & "C:\\Program Files\\RPA Runner\\rpa.cmd" connection -ShowTokens');
     line = (await askHidden('Paste the line that starts with rpa-runner:// (not shown): ')) || undefined;
     redactor.add(line);
@@ -442,6 +459,39 @@ function noSiteLogin(name: string, items: any[], home: string | undefined): stri
   const ours = items.filter((c) => c?.type === CREDENTIALS.siteLogin && home !== undefined && ownerProject(c, 'credential') === home);
   const listed = ours.length ? `Your project's RPA Site Logins: ${ours.map((c) => `"${clean(c.name, c.id)}" (id ${clean(c.id)})`).join(', ')}.` : 'Your project has no RPA Site Login.';
   return `No RPA Site Login named "${clean(name)}" in your project. ${listed} Create it in n8n (+ → New credential → RPA Site Login), or give its name as n8n shows it. Nothing was changed.`;
+}
+
+/** This run's project's credentials of a type (the owner n8n names is that project), by id and name only. */
+const projectCredentials = (items: any[], type: string, home: string | undefined) => (home === undefined ? [] : items.filter((c) => c?.type === type && ownerProject(c, 'credential') === home));
+const byNameAndId = (items: any[]) => items.map((c) => `"${clean(c.name, c.id)}" (id ${clean(c.id)})`).join(', ');
+
+/** Why --desktop-runner found nothing to pick, with the RPA Desktop Runners this run's project has, by name and id. */
+function noDesktopRunner(name: string, items: any[], home: string | undefined): string {
+  const ours = projectCredentials(items, CREDENTIALS.desktopRunner, home);
+  const listed = ours.length ? `Your project's RPA Desktop Runners: ${byNameAndId(ours)}.` : 'Your project has no RPA Desktop Runner.';
+  return `No RPA Desktop Runner named "${clean(name)}" in your project. ${listed} Give its name as n8n shows it, or leave --desktop-runner out and give the Windows machine's Connection Line instead. Nothing was changed.`;
+}
+
+/** A message from n8n fit for one printed line: control characters removed, spaces collapsed, cut at 300 characters. */
+const oneLine = (text: unknown) => String(text ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300);
+
+/**
+ * Asks n8n to test the RPA Desktop Runner credential (POST /credentials/{id}/test): n8n runs the node's own test, which
+ * connects to the Windows machine. One line with the node's message; the credential's values never leave n8n. The test
+ * waits up to 60 s for a machine that does not answer, so the call may take 90 s.
+ */
+async function testRunner(client: Client, ref: Ref) {
+  const what = `credential "${clean(ref.name, ref.id)}" (id ${clean(ref.id)})`;
+  say(`testing  ${what}: n8n connects to the Windows machine (up to a minute)`);
+  const r = await client.api('POST', `/credentials/${encodeURIComponent(ref.id)}/test`, undefined, { timeoutMs: 90_000 }).catch(() => undefined);
+  const status = r?.status === 200 ? r.json?.status : undefined;
+  const message = oneLine(r?.json?.message);
+  if (status === 'OK') say(`tested   ${what}: ${message || 'OK'}`);
+  else if (status === 'Error') say(`tested   ${what}, and it failed: ${message || 'n8n gave no reason'}`);
+  else {
+    const scope = r?.status === 403 ? ' For this command to test it, the API key needs the scope credential:read.' : '';
+    say(`not tested ${what} (${r ? client.reason(r) : 'no answer from n8n'}). To test it, open it in n8n, which tests it as it opens.${scope}`);
+  }
 }
 
 /** One line for something of the same name that this run leaves alone. */
@@ -648,17 +698,28 @@ async function run(inputs: Inputs): Promise<number> {
   // The credentials found in the project, by name (the browser's too without --browser-url: a reused workflow may use it).
   // The Site Login (--site-login) is found the same way, and only picked: it must be there.
   const SITE = options.siteLogin !== undefined ? { name: options.siteLogin, type: CREDENTIALS.siteLogin } : undefined;
-  const specs = [...(basic ? [FORM] : []), SIGNING, ...(inputs.line ? [RUNNER] : []), BROWSER, ...(SITE ? [SITE] : [])];
+  // The RPA Desktop Runner: made from the Connection Line; else the one --desktop-runner names; else, when the project
+  // has exactly one, that one, whatever its name (n8n names one made by hand "RPA Desktop Runner account").
+  const DESKTOP = options.desktopRunner !== undefined ? { name: options.desktopRunner, type: RUNNER.type } : undefined;
+  const specs = [...(basic ? [FORM] : []), SIGNING, ...(inputs.line ? [RUNNER] : DESKTOP ? [DESKTOP] : []), BROWSER, ...(SITE ? [SITE] : [])];
+  // Its key in `found`: no credential name has a control character (--site-login and --desktop-runner refuse them).
+  const ONLY_RUNNER = '\u0000the only RPA Desktop Runner';
+  let runners: any[] = [];
   let found = new Map<string, { mine?: any; others: any[] }>();
   const findAll = () => {
     found = new Map(specs.map((spec) => [spec.name, sameName(list.items, spec, home)]));
     if (SITE && !found.get(SITE.name)?.mine) throw new Stop(noSiteLogin(SITE.name, list.items, home), 2);
+    if (DESKTOP && !found.get(DESKTOP.name)?.mine) throw new Stop(noDesktopRunner(DESKTOP.name, list.items, home), 2);
+    if (!inputs.line && !DESKTOP) {
+      runners = projectCredentials(list.items, RUNNER.type, home);
+      if (runners.length === 1) found.set(ONLY_RUNNER, { mine: runners[0], others: [] });
+    }
   };
   if (home) findAll();
 
   // In a shared project, one answer for what was found there, as a set: all of it is used, or none of it.
   if (home) {
-    const set = [...[...found].filter(([, f]) => f.mine).map(([name, f]) => ({ kind: 'credential', name, id: String(f.mine.id) })),
+    const set = [...[...found].filter(([, f]) => f.mine).map(([, f]) => ({ kind: 'credential', name: String(f.mine.name), id: String(f.mine.id) })),
       ...(workflow ? [{ kind: 'workflow', name: String(workflow.name), id: String(workflow.id) }] : [])];
     if (!(await useFound(set))) {
       say(`left alone in the shared project: ${set.map((f) => `${f.kind} id ${clean(f.id)}`).join(', ')}. This run makes its own set.`);
@@ -722,7 +783,7 @@ async function run(inputs: Inputs): Promise<number> {
       if (!home) say('Note: n8n does not say which project owns the new workflow, so no credential of the same name is reused: fresh ones are made.');
       if (!home && SITE) throw new Stop(`--site-login: n8n does not say which project owns the new workflow, so this run cannot tell that "${clean(SITE.name)}" is yours. Pick it on "${NODE.importSteps}" and "${NODE.signSteps}" in n8n instead.`);
       findAll();
-      if (shared.is && !(await useFound([...found].filter(([, f]) => f.mine).map(([name, f]) => ({ kind: 'credential', name, id: String(f.mine.id) }))))) {
+      if (shared.is && !(await useFound([...found].filter(([, f]) => f.mine).map(([, f]) => ({ kind: 'credential', name: String(f.mine.name), id: String(f.mine.id) }))))) {
         for (const f of found.values()) { if (f.mine) f.others.push(f.mine); f.mine = undefined; }
       }
     }
@@ -760,6 +821,18 @@ async function run(inputs: Inputs): Promise<number> {
   if (inputs.line) {
     const line = inputs.line;
     runnerRef = (await credential(client, of(RUNNER), projectId, RUNNER, () => ({ connectionLine: line }), 'its Connection Line stays as it is (to change it, paste the new line in n8n)')).ref;
+  } else {
+    // Picked by id and name, as n8n listed them: its values are never read.
+    const pick = DESKTOP ? of(DESKTOP).mine : found.get(ONLY_RUNNER)?.mine;
+    if (pick) {
+      runnerRef = { id: String(pick.id), name: String(pick.name) };
+      say(`picked   credential "${clean(pick.name, pick.id)}" (id ${clean(pick.id)}): ${DESKTOP ? 'the RPA Desktop Runner --desktop-runner names' : 'the only RPA Desktop Runner in your project'}`);
+    } else if (DESKTOP || runners.length === 1) {
+      // Found in a shared project whose set this run does not use.
+      say(`not used credential "${clean(DESKTOP ? DESKTOP.name : runners[0].name)}": this run does not use what it found in the shared project, so no RPA Desktop Runner is set. Pick one on "${NODE.importSteps}" in n8n.`);
+    } else if (runners.length > 1) {
+      say(`not picked: your project has ${runners.length} RPA Desktop Runners, ${byNameAndId(runners)}, and this run picks one only by --desktop-runner <name>. Pick one on "${NODE.importSteps}" in n8n, so the workflow the form hands over uses it.`);
+    }
   }
   let browserRef: Ref | undefined;
   if (inputs.browser) {
@@ -777,8 +850,10 @@ async function run(inputs: Inputs): Promise<number> {
     say(`reused   workflow "${clean(workflow.name, workflow.id)}" (id ${clean(workflow.id)}): it matches the template${workflow.active ? '' : ', publishing it'}`);
     if (options.approver !== undefined) say(`         its Approver Allowlist was left as it is: change it on "${NODE.signSteps}" in n8n.`);
     const onImport = workflow.nodes.find((n: any) => n.name === NODE.importSteps)?.credentials ?? {};
-    const toPick = [inputs.browser && !onImport[BROWSER.type] ? BROWSER.name : '', !onImport[SIGNING.type] ? SIGNING.name : '', runnerRef && !onImport[RUNNER.type] ? RUNNER.name : ''].filter(Boolean);
-    if (toPick.length) say(`         its credentials were left as they are: pick ${toPick.map((c) => `"${c}"`).join(', ')} on "${NODE.importSteps}" in n8n, so the workflow file the form hands over carries them.`);
+    // The runner by name and id: the one picked may have any name, and Import steps may hold another one.
+    const toPick = [inputs.browser && !onImport[BROWSER.type] ? `"${BROWSER.name}"` : '', !onImport[SIGNING.type] ? `"${SIGNING.name}"` : '',
+      runnerRef && String(onImport[RUNNER.type]?.id) !== runnerRef.id ? `"${clean(runnerRef.name, runnerRef.id)}" (id ${clean(runnerRef.id)})` : ''].filter(Boolean);
+    if (toPick.length) say(`         its credentials were left as they are: pick ${toPick.join(', ')} on "${NODE.importSteps}" in n8n, so the workflow file the form hands over carries them.`);
     // --site-login and --allow-private-network change a workflow only when this run makes it: one it reuses is left as it is.
     const onSign = workflow.nodes.find((n: any) => n.name === NODE.signSteps)?.credentials ?? {};
     const siteOn = (creds: any) => siteRef !== undefined && String(creds?.[CREDENTIALS.siteLogin]?.id) === siteRef.id;
@@ -830,6 +905,8 @@ async function run(inputs: Inputs): Promise<number> {
     }
     if (!signsIn(probe)) warn(`Note: the form did not answer as expected at ${formUrl} (${probe ? `HTTP ${probe.status}` : 'no answer'}). In n8n, open "${shownName}", then the node "${NODE.form}", for its production URL.`);
   }
+  // Last, as it may wait a minute for a machine that does not answer: the form is ready by then.
+  if (runnerRef) await testRunner(client, runnerRef);
 
   say();
   say('The import form is ready.');
@@ -854,9 +931,15 @@ async function run(inputs: Inputs): Promise<number> {
   else say('  2. Open the form address in your browser and sign in to n8n. The first time, n8n asks whether the form may use your n8n login: choose Allow access.');
   say('  3. Upload the file, give the steps a name, and submit. On the next page, review the steps and approve them.');
   if (!basic) say(`  Only the n8n users on "${NODE.signSteps}" → Approver Allowlist may approve: add others there in n8n.`);
-  if (runnerRef) {
-    const passed = String(workflow.nodes?.find((n: any) => n.name === NODE.importSteps)?.credentials?.[RUNNER.type]?.id) === runnerRef.id;
-    say(passed ? `The Windows machine is connected: the workflow the form gives you already uses "${RUNNER.name}".` : `The Windows machine is connected: pick "${RUNNER.name}" on the RPA node of the workflow the form gives you.`);
+  // What the workflow the form hands over carries for a desktop bot: the runner on Import steps, by id and name.
+  const handed = workflow.nodes?.find((n: any) => n.name === NODE.importSteps)?.credentials?.[RUNNER.type];
+  if (handed?.id !== undefined && handed?.id !== null) {
+    say(`The workflow the form gives you already uses the RPA Desktop Runner "${clean(handed.name, handed.id)}" (id ${clean(handed.id)}).`);
+  } else if (runnerRef) {
+    say(`The workflow the form gives you does not use "${clean(runnerRef.name, runnerRef.id)}" yet: pick it on "${NODE.importSteps}" in n8n (see above).`);
+  } else if (!runners.length && !browserRef) {
+    // Not said to a browser user: a browser bot's workflow has no runner slot.
+    say('No RPA Desktop Runner is set, so a desktop bot\'s workflow asks for one. To connect a Windows machine, run this again and paste its Connection Line when it asks.');
   }
   say();
   say(keyAdvice(inputs.keyExpires));
