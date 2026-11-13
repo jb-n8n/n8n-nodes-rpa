@@ -97,10 +97,8 @@ The parameters (all of them work with `Get-Rpa.ps1` and `Install-Rpa.ps1`):
 | `-NoBrowser` | No browser, which is the default. On an install that has the browser, it removes the browser. |
 | `-Force` | Do not ask, and upgrade even while a run is going on. |
 
-**Through a tunnel or a port forward** (SSH, a cloud port forward): the connection arrives from the machine itself,
-which Windows Firewall lets in, so install with `-NoFirewall` and keep the ports closed in your network. Give n8n the
-tunnel's address with `rpa connection -Address <name>` (section 6). A forward that closes when idle makes later runs
-fail: for scheduled runs, use an address that stays.
+**When n8n cannot reach this machine** (a NAT, a home or office network, another cloud): install with `-NoFirewall`
+and follow [When n8n cannot reach this machine](#when-n8n-cannot-reach-this-machine).
 
 When it has finished, the installer prints where everything is, `RPA is installed.`, and with `-Unattended` the
 Connection Lines with their tokens hidden, then `For how the supervisor is doing: & "C:\Program Files\RPA Runner\rpa.cmd" status`.
@@ -131,12 +129,73 @@ use `-AllowFrom` with n8n's address.
 
 n8n opens the connection to this machine, and the machine never dials out to n8n. So n8n must be able to reach the
 runner's port: a firewall rule for n8n's address, and `-Address` on `rpa connection` when n8n reaches the machine by
-another name or address. Where n8n cannot reach the machine directly, put a private network or a tunnel between them.
-The product does not provide one.
+another name or address.
 
 In the mode where nobody is signed in, any connection that reaches the runner's port makes the supervisor sign the bot
 user in, before the token is checked. Without the token nothing runs. Give `-AllowFrom` only n8n's address, so that
 nothing else can cause a sign-in.
+
+### When n8n cannot reach this machine
+
+When this machine is behind a NAT (a router that shares one public address) or in a network n8n has no route into,
+carry n8n's connection through a tunnel (a connection that carries other connections inside it) or a private network
+that both machines join. The product does not run one. Any tunnel or private network works when these hold:
+
+- **This machine listens, n8n connects.** The listening end on n8n's side is an address n8n can open, on the runner's
+  port (8765, and 3000 for the browser), because the Connection Line carries the port. It leads to that port here.
+- **The line names that address**: `rpa connection -ShowTokens -Address <that address>` (section 6).
+- **Only n8n reaches the listening end.** Any connection there makes the supervisor sign the bot user in.
+- **It stays up.** Runs fail `runner_unavailable` while it is down.
+
+On a private network (a WireGuard network, a VPN, two cloud networks joined), install with
+`-AllowFrom <n8n's address on it>` and print the line with `-Address <this machine's address on it>`.
+
+The connection inside stays encrypted (TLS) from n8n to the runner: n8n checks the runner's certificate fingerprint
+before it sends the token, and refuses any other certificate. Whoever runs the tunnel or the network sees that the two machines talk,
+when and how much, but not the token, the steps or the values. They can stop or delay the connection.
+
+**A widely used way: an SSH tunnel from this machine to n8n's host.** This machine opens an SSH connection to the
+machine n8n runs on and has it listen on `127.0.0.1:8765` there, for the runner here. You need an OpenSSH server on
+n8n's host and the OpenSSH client on Windows (`ssh.exe`, an optional feature of Windows Server 2019 and later). For n8n
+in a container, use the host's address on the Docker bridge (often `172.17.0.1`) in place of `127.0.0.1` below, and add
+`GatewayPorts clientspecified` to the `Match` block.
+
+1. Install RPA with `-NoFirewall`: the tunnel's connections arrive from this machine itself, so no port opens.
+2. On n8n's host, add the user (`sudo useradd -m -s /usr/sbin/nologin rpa-tunnel`), append this to
+   `/etc/ssh/sshd_config`, check it with `sudo sshd -t` and reload the SSH server. The user may only listen on that port:
+
+   ```text
+   Match User rpa-tunnel
+       AllowTcpForwarding remote
+       PermitListen 127.0.0.1:8765
+       PermitTTY no
+       X11Forwarding no
+       ForceCommand /bin/false
+   ```
+
+3. On Windows, in the administrator PowerShell, add the client if `Get-WindowsCapability -Online -Name OpenSSH.Client*`
+   does not say `Installed`, make a key that only administrators and SYSTEM can read, and connect once by hand:
+
+   ```powershell
+   Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0
+   $dir = "$env:ProgramData\rpa-tunnel"; New-Item -ItemType Directory -Force $dir | Out-Null
+   icacls $dir /inheritance:r /grant:r 'SYSTEM:(OI)(CI)F' 'Administrators:(OI)(CI)F'
+   ssh-keygen -t ed25519 -N '""' -f "$dir\id_ed25519"
+   $arg = "-N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o UserKnownHostsFile=""$dir\known_hosts"" -i ""$dir\id_ed25519"" -R 127.0.0.1:8765:127.0.0.1:8765 rpa-tunnel@<n8n host>"
+   ```
+
+   Put the line in `$dir\id_ed25519.pub` into `/home/rpa-tunnel/.ssh/authorized_keys` on n8n's host (folder mode 700,
+   file 600, both owned by `rpa-tunnel`). Then run `Start-Process -NoNewWindow -Wait ssh.exe $arg`, check that the host
+   key it shows is the server's, type `yes`, and stop it with Ctrl+C.
+4. Keep it up with a task that SYSTEM runs at start-up and every minute (a second copy does not start while one runs):
+
+   ```powershell
+   $triggers = @((New-ScheduledTaskTrigger -AtStartup), (New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 1)))
+   Register-ScheduledTask -TaskPath '\RPA Tunnel\' -TaskName 'RPA Tunnel' -User 'SYSTEM' -Trigger $triggers -Action (New-ScheduledTaskAction -Execute "$env:WINDIR\System32\OpenSSH\ssh.exe" -Argument "-o BatchMode=yes $arg") -Settings (New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew)
+   ```
+
+5. Print the line with `rpa connection -ShowTokens -Address 127.0.0.1` and paste it into n8n. For the browser
+   (`-WithBrowser`), add `PermitListen 127.0.0.1:3000` and `-R 127.0.0.1:3000:127.0.0.1:3000` the same way.
 
 ## 4. Signing in
 
