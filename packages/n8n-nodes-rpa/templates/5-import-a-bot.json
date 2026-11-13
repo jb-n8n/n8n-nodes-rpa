@@ -540,7 +540,7 @@
           "formTitle": "={{ 'Change or sign again: ' + $('The bot to change').first().json.name }}",
           "formDescription": "Nothing changes until you approve on the next page.",
           "buttonLabel": "Review",
-          "customCss": "div.html pre { max-height: 24em; overflow: auto; white-space: pre; margin: 8px 0 16px; padding: 8px 10px; border: 1px solid #dbdfe7; border-radius: 4px; background: #f8f8fa; font-size: 12px; line-height: 1.4; user-select: all; -webkit-user-select: all; }\nform textarea { min-height: 10em; }"
+          "customCss": "div.html pre { max-height: 24em; overflow: auto; white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; margin: 8px 0 16px; padding: 8px 10px; border: 1px solid #dbdfe7; border-radius: 4px; background: #f8f8fa; font-size: 12px; line-height: 1.4; user-select: all; -webkit-user-select: all; }\nform textarea { min-height: 10em; }"
         }
       },
       "id": "3d6f1a20-7b4c-4e8a-9c11-000000000535",

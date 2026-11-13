@@ -2567,6 +2567,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     }
     // The block scrolls at a sensible height and one click selects it all.
     expect(String((page.parameters.options as IDataObject).customCss)).toMatch(/div\.html pre \{ max-height: 24em; overflow: auto;[^}]*user-select: all;/);
+    // Long lines wrap inside the block (a desktop step's window name is longer than the page is wide): no sideways scroll.
+    expect(String((page.parameters.options as IDataObject).customCss)).toMatch(/div\.html pre \{[^}]*white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere;/);
+    expect(String((page.parameters.options as IDataObject).customCss)).not.toMatch(/white-space: pre;/);
     // A row whose steps are not JSON is shown as it is.
     const broken = jsonFormFields(String(page.parameters.jsonOutput), { $: changePath('x', [{ id: 1, name: 'x', version: 2, steps: '{broken <', status: 'active' }]).$ });
     expect(String(broken[0].html)).toContain('<pre>{broken &lt;</pre>');
