@@ -53,6 +53,26 @@ public static class ImportForm
         return new(uri.Scheme == "https" || IsLocal(uri) ? AddressVerdict.Open : AddressVerdict.AskFirst, target, null);
     }
 
+    /// <summary>
+    /// The address to fill the box with, the first time the form's address is asked for, from the clipboard's text: the
+    /// normalised address (<see cref="Check"/>, not refused) when the text is one http or https address, at most
+    /// <see cref="MaxLength"/> characters with the spaces and line breaks around it, whose path starts with
+    /// <c>/form/</c> (no <c>.</c> or <c>..</c> in it), without a login, a query or a fragment. Null for anything else.
+    /// The person still checks it and chooses OK; nothing else of the text is kept.
+    /// </summary>
+    public static string? FromClipboard(string? text)
+    {
+        if (text is null || text.Length > MaxLength) return null;
+        var address = Check(text);
+        if (address is not { Verdict: not AddressVerdict.Refused, Target: { } target }) return null;
+        var typed = text.Trim();
+        var rest = typed[(typed.IndexOf("://", StringComparison.Ordinal) + 3)..];
+        var path = rest.IndexOf('/') is var slash and >= 0 ? rest[slash..] : "";
+        if (rest.Contains('?') || rest.Contains('#')) return null;
+        if (!path.StartsWith("/form/", StringComparison.Ordinal) || path.Split('/').Any(part => part is "." or "..")) return null;
+        return new Uri(target).AbsolutePath.StartsWith("/form/", StringComparison.Ordinal) ? target : null;
+    }
+
     /// <summary>The kept address, checked again, or null when there is none, it cannot be read or it is refused now.</summary>
     public static FormAddress? Kept(string? path)
     {
