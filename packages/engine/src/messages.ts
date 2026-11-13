@@ -248,6 +248,18 @@ export const RUNNER_URL_HAS_CREDENTIALS = 'The desktop runner URL must not carry
 export const RUNNER_FINGERPRINT_INVALID =
   'The certificate fingerprint must be the SHA-256 fingerprint rpa connection prints: 64 hexadecimal digits, colons optional.';
 export const runnerUnreachable = (where: string, why: string) => `Could not connect to the desktop runner at ${where} (${why}). Is it running, and is the port open?`;
+/**
+ * Nothing answered the TCP connection itself: what to check, in order. `privateHost` is the line's host when it is a
+ * private address (the installer's address on the route to n8n, which n8n outside that network cannot reach).
+ */
+export const runnerNoTcpAnswer = (where: string, seconds: number, privateHost?: string) =>
+  `Could not connect to the desktop runner at ${where} (no answer within ${seconds} s). Check, in this order: `
+  + '1. The address in the Connection Line is one n8n can reach. '
+  + (privateHost
+    ? `${privateHost} is a private address: if n8n is outside the Windows machine's network, print the line there with rpa connection -Address <the name or address n8n can reach> and paste it again. `
+    : '')
+  + '2. The port is open to n8n\'s address (Install-Rpa.ps1 -AllowFrom, and any firewall on the way). '
+  + '3. The Windows machine is on and the runner runs there (rpa status).';
 export const runnerFingerprintMismatch = (where: string, presented: string) =>
   `The desktop runner at ${where} presented a certificate with fingerprint ${presented}, which is not the fingerprint in the RPA Desktop Runner credential. Nothing was sent.`;
 export const runnerTokenRefused = (where: string) => `The desktop runner at ${where} refused the token. Check the Token in the RPA Desktop Runner credential.`;

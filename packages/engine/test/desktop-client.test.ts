@@ -234,6 +234,9 @@ describe('the wait for a runner that signs a user in first', () => {
     try {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
       const connecting = connectRunner(endpoint);
+      // The proxy takes the TCP connection at once, as the RPA Supervisor does: only the handshake waits.
+      await proxy.whenHeld();
+      await new Promise((r) => setImmediate(r));
       await vi.advanceTimersByTimeAsync(20_000);
       proxy.release();
       const client = await connecting;

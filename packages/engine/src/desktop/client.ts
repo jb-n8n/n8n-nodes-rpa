@@ -7,7 +7,7 @@ import { isIP } from 'node:net';
 import { connect as tlsConnect, type TLSSocket } from 'node:tls';
 import {
   RUNNER_DISCONNECTED, RUNNER_FINGERPRINT_INVALID, RUNNER_URL_HAS_CREDENTIALS, RUNNER_URL_NOT_SECURE, runnerFingerprintMismatch, runnerTokenRefused,
-  runnerUnreachable,
+  runnerNoTcpAnswer, runnerUnreachable,
 } from '../messages.js';
 import {
   DEFAULT_RUNNER_PORT, FingerprintMismatchError, NoRunError, RUNNER_PATH, RunnerConnectError, RunnerDisconnectedError, runnerError, RunnerTokenRefusedError, type HelloResult, type RunnerMethod, type RunnerMethods,
@@ -22,7 +22,16 @@ export interface RunnerEndpoint {
   fingerprint: string;
 }
 
+/**
+ * The whole connect: the TCP connection, the TLS handshake and the upgrade. In unattended mode the RPA Supervisor takes
+ * the TCP connection at once and holds it while it signs the bot user in, so the TLS handshake can take most of this.
+ */
 export const RUNNER_CONNECT_TIMEOUT_MS = 60_000;
+/**
+ * The TCP connection alone, within the limit above. Whatever listens on the runner's port (the runner, or the RPA
+ * Supervisor in unattended mode) takes it at once, so no answer in this time means nothing on n8n's way reaches it.
+ */
+export const RUNNER_TCP_CONNECT_TIMEOUT_MS = 10_000;
 /** How long a call waits beyond the timeout it gives the runner. */
 const CALL_MARGIN_MS = 5_000;
 /** Calls without a timeout of their own (hello, run.begin, run.end, app.launch, snapshot) wait this long. */
@@ -71,7 +80,16 @@ class EndedBeforeSecureError extends RunnerConnectError {}
 const RETRY_MIN_MS = 1_000;
 const SECOND_ATTEMPT_NOTE = 'The first attempt ended before the secure connection was set up, so a second attempt was made.';
 
-/** Opens TLS and resolves once the handshake finished, before anything is written. */
+/** A private IPv4 address (10/8, 172.16/12, 192.168/16) or a unique-local or link-local IPv6 address. */
+function isPrivateAddress(host: string): boolean {
+  if (isIP(host) === 4) return /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host);
+  return isIP(host) === 6 && /^(f[cd]|fe[89ab])/i.test(host);
+}
+
+/**
+ * Opens TLS and resolves once the handshake finished, before anything is written. The TCP connection gets
+ * RUNNER_TCP_CONNECT_TIMEOUT_MS of the time, and the handshake the rest of timeoutMs.
+ */
 function openTls(addr: RunnerAddress, timeoutMs: number, signal?: AbortSignal): Promise<TLSSocket> {
   return new Promise((resolve, reject) => {
     // The runner's certificate is self-signed: chain and name checks are replaced by the fingerprint pin below.
@@ -81,7 +99,9 @@ function openTls(addr: RunnerAddress, timeoutMs: number, signal?: AbortSignal): 
     });
     const done = (err?: Error) => {
       clearTimeout(timer);
+      clearTimeout(tcpTimer);
       signal?.removeEventListener('abort', onAbort);
+      socket.off('connect', onConnect);
       socket.off('secureConnect', onSecure);
       socket.off('error', onError);
       if (err) { socket.destroy(); reject(err); } else resolve(socket);
@@ -92,7 +112,15 @@ function openTls(addr: RunnerAddress, timeoutMs: number, signal?: AbortSignal): 
       done((e as NodeJS.ErrnoException).code === 'ECONNRESET' ? new EndedBeforeSecureError(why) : new RunnerConnectError(why));
     };
     const onAbort = () => done(new RunnerConnectError(runnerUnreachable(addr.shown, 'cancelled')));
+    // Set first, so that it fires first when both limits are the same.
+    const tcpMs = Math.min(RUNNER_TCP_CONNECT_TIMEOUT_MS, timeoutMs);
+    const tcpTimer = setTimeout(
+      () => done(new RunnerConnectError(runnerNoTcpAnswer(addr.shown, Math.round(tcpMs / 1000), isPrivateAddress(addr.host) ? addr.host : undefined))),
+      tcpMs,
+    );
     const timer = setTimeout(() => done(new RunnerConnectError(runnerUnreachable(addr.shown, `no answer within ${Math.round(timeoutMs / 1000)} s`))), timeoutMs);
+    const onConnect = () => clearTimeout(tcpTimer);
+    socket.once('connect', onConnect);
     socket.once('secureConnect', onSecure);
     socket.once('error', onError);
     signal?.addEventListener('abort', onAbort, { once: true });

@@ -61,6 +61,7 @@ All notable changes to `n8n-nodes-rpa`, the `rpa-browser` image and the Windows 
 
 ### Fixed
 
+- **A Connection Line n8n cannot use says so, on both ends.** When the address on this machine's route to n8n is a private one and n8n's `-AllowFrom` address is not (a cloud machine behind a NAT), the installer and `rpa connection` say so before the line and name `rpa connection -Address`. In n8n, the connection to the runner's port gets 10 seconds of its own. With no answer, a run or the credential test fails after 10 seconds instead of 60, and says what to check in order: the address (a private one is named as such), the port open to n8n's address, the machine on and the runner running. The 60 seconds stay for the rest, which in the mode where nobody is signed in covers the sign-in. The error code is still `runner_unavailable`.
 - **RPA Recorder**: a file saved through a Save dialog under the name it offers now comes back to n8n, as a typed name does. Before, the run saved it in the bot user's Documents folder and returned no file.
 - An installer run in the seconds after an unattended install, while the bot user's session waits to be signed out and no run holds the runner, says so and how long it stays, instead of "a run in progress will fail".
 - `Get-Rpa.ps1 -Zip` and `rpa policy apply` read a relative path from PowerShell's current folder, not from `C:\Windows\system32`.

@@ -81,6 +81,18 @@ function Get-RouteAddress($AllowFrom) {
   @{ Host = $lineHost; Address = $local; Towards = $target }
 }
 
+# Whether an IP address is a private one: 10/8, 172.16/12, 192.168/16, or a unique-local (fc00::/7) or link-local
+# (fe80::/10) IPv6 address.
+function Test-PrivateAddress([string]$Text) {
+  $parsed = $null
+  if (-not [Net.IPAddress]::TryParse($Text, [ref]$parsed)) { return $false }
+  $bytes = $parsed.GetAddressBytes()
+  if ($parsed.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork) {
+    return $bytes[0] -eq 10 -or ($bytes[0] -eq 172 -and $bytes[1] -ge 16 -and $bytes[1] -le 31) -or ($bytes[0] -eq 192 -and $bytes[1] -eq 168)
+  }
+  ($bytes[0] -band 0xFE) -eq 0xFC -or ($bytes[0] -eq 0xFE -and ($bytes[1] -band 0xC0) -eq 0x80)
+}
+
 # A connection line (Line), or why there is none (Problem). -Fingerprint is in the form the other lines show it
 # (upper-case pairs joined by colons) and goes into the line as 64 lower-case hexadecimal digits. With -WithToken the
 # token is read here from -TokenFile, so that it is never a parameter of a command; without it the line holds the
@@ -211,6 +223,10 @@ function Write-Sessions([string]$User) {
 }
 
 if (-not $Status -and $addresses.Count -eq 0) { Write-Output 'This machine has no IPv4 address on a network.' }
+# A private address on the route to an n8n that is not on a private network (a cloud machine behind a NAT, for example):
+# n8n cannot use the line as it is. Said before the lines, which still carry that address.
+$outside = $route -and (Test-PrivateAddress $route.Address) -and -not (Test-PrivateAddress $route.Towards)
+if ($outside) { Write-Output ("This machine's address towards n8n is {0}, a private one. n8n at {1} is outside this network and cannot use it. The line needs the name or address n8n can reach: rpa connection -Address <that name or address>" -f $route.Address, $route.Towards) }
 foreach ($service in $services) {
   $notListening = ('{0}: not listening yet. It starts within a minute of the bot user''s sign-in: run this again. If it stays like this, read {1}' -f $service.Name, $service.Log)
   if ($Status) {
@@ -238,7 +254,9 @@ if (-not $Status -and -not $ShowTokens) {
   if ($services.Count -eq 1) { Write-Output ('The token is hidden in the line (token={0}). For the line to paste, run as an administrator: {1}' -f $hidden, $command) }
   else { Write-Output ('The tokens are hidden in the lines (token={0}). For the lines to paste, run as an administrator: {1}' -f $hidden, $command) }
 }
-if ($route) { Write-Output ("The line's address is {0}: the one this machine has towards {1}. If n8n reaches this machine by another name or address, run this again with -Address <that name or address>." -f $route.Address, $route.Towards) }
+if ($route) {
+  if (-not $outside) { Write-Output ("The line's address is {0}: the one this machine has towards {1}. If n8n reaches this machine by another name or address, run this again with -Address <that name or address>." -f $route.Address, $route.Towards) }
+}
 elseif (-not $Status -and -not $givenAddress -and -not $noLine) { Write-Output ("The line's address is this computer's name, {0}. If n8n cannot find it by that name, run this again with -Address <an address n8n can reach>." -f $lineHost) }
 
 if ($Status -and $install.mode -ne 'unattended') {

@@ -72,7 +72,8 @@ The messages you meet most, word for word:
 | Not signed | `script_untrusted`: `The steps are not signed, or the signature is not valid, and Require Signed Steps is on. Sign them with Sign Steps first.` |
 | Count mismatch | `incomplete`: `Expected 120 rows (the page says "120 results") but found 117. Nothing was marked successful.` |
 | Breaker open | `locked_out`: `A previous login for example.com failed, so no login was tried.` |
-| Runner not reachable | `runner_unavailable`: `Could not connect to the desktop runner at wss://...:8765/rpa/v1 (...). Is it running, and is the port open?` |
+| Runner's address gets no answer | `runner_unavailable`: `Could not connect to the desktop runner at wss://...:8765/rpa/v1 (no answer within 10 s). Check, in this order: 1. The address in the Connection Line is one n8n can reach. ...` Nothing answered the connection itself within 10 seconds. When the line's address is a private one (10.x, 172.16.x to 172.31.x, 192.168.x, fc00::/7, fe80::/10), the message says so and names `rpa connection -Address`. |
+| Runner not reachable | `runner_unavailable`: `Could not connect to the desktop runner at wss://...:8765/rpa/v1 (...). Is it running, and is the port open?` The connection was refused, or it was made and the runner did not answer within 60 seconds. In the mode where nobody is signed in, the sign-in takes part of that time. |
 | Runner's desktop locked | `runner_unavailable`: `the desktop runner's Windows session is locked: unlock it or sign the runner user in again` |
 | Runner token wrong | `The desktop runner at ... refused the token. Check the Token in the RPA Desktop Runner credential.` |
 | Runner certificate changed | `The desktop runner at ... presented a certificate with fingerprint ..., which is not the fingerprint in the RPA Desktop Runner credential. Nothing was sent.` |

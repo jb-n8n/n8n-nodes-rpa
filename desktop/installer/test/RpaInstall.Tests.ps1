@@ -3828,6 +3828,38 @@ Describe 'Show-RpaConnection.ps1' {
       $output[-1] | Should -BeExactly "The line's address is fd00::20: the one this machine has towards fd00::5. If n8n reaches this machine by another name or address, run this again with -Address <that name or address>."
     }
 
+    # A cloud machine behind a NAT: its address on the route to n8n is a private one, and n8n, outside that network,
+    # cannot reach it. The warning comes before the first line, and the lines still carry that address.
+    It 'warns before the lines when the address is <Local>, a private one, and n8n at <Towards> is outside the network' -ForEach @(
+      @{ Local = '10.90.0.10'; Towards = '108.64.230.10'; LineHost = '10.90.0.10' }
+      @{ Local = '172.16.0.20'; Towards = '203.0.113.5'; LineHost = '172.16.0.20' }
+      @{ Local = '172.31.255.20'; Towards = '203.0.113.5'; LineHost = '172.31.255.20' }
+      @{ Local = '192.168.1.20'; Towards = '203.0.113.5'; LineHost = '192.168.1.20' }
+      @{ Local = 'fd00::20'; Towards = '2001:db8::5'; LineHost = '[fd00::20]' }
+      @{ Local = 'fe80::20'; Towards = '2001:db8::5'; LineHost = '[fe80::20]' }
+    ) {
+      $output = Invoke-WithRoute @($Towards) (New-RouteAnswer $Local)
+      $warning = "This machine's address towards n8n is $Local, a private one. n8n at $Towards is outside this network and cannot use it. The line needs the name or address n8n can reach: rpa connection -Address <that name or address>"
+      $output[0] | Should -BeExactly $warning
+      $output[1] | Should -BeExactly 'Runner connection line, for the Connection Line of the RPA Desktop Runner credential:'
+      @($output | Where-Object { $_ -eq $warning }).Count | Should -Be 1
+      Get-LineHosts $output | Should -BeExactly @($LineHost, $LineHost)
+      ($output -join "`n") | Should -Not -Match "The line's address"
+    }
+
+    It 'prints as before when the address is not private, or n8n at <Towards> is private too: <Why>' -ForEach @(
+      @{ Why = 'both private'; Local = '10.90.0.10'; Towards = '192.168.5.5' }
+      @{ Why = 'a public address'; Local = '198.51.100.20'; Towards = '203.0.113.5' }
+      @{ Why = 'just outside 172.16/12'; Local = '172.32.0.20'; Towards = '203.0.113.5' }
+      @{ Why = 'just below 172.16/12'; Local = '172.15.0.20'; Towards = '203.0.113.5' }
+      @{ Why = 'both unique-local IPv6'; Local = 'fd00::20'; Towards = 'fd00::5' }
+    ) {
+      $output = Invoke-WithRoute @($Towards) (New-RouteAnswer $Local)
+      $output[0] | Should -BeExactly 'Runner connection line, for the Connection Line of the RPA Desktop Runner credential:'
+      ($output -join "`n") | Should -Not -Match 'a private one'
+      $output[-1] | Should -BeExactly ("The line's address is {0}: the one this machine has towards {1}. If n8n reaches this machine by another name or address, run this again with -Address <that name or address>." -f $Local, $Towards)
+    }
+
     It 'without the browser carries the routed address in the one line' {
       $install = $script:InstallJson -replace '"browser":\s*true', '"browser": false'
       $saved = $script:InstallJson
