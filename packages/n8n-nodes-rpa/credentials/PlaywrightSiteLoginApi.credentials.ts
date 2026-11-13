@@ -20,6 +20,9 @@ export class PlaywrightSiteLoginApi implements ICredentialType {
     {
       displayName: 'Login Page URL',
       name: 'loginUrl',
+      // Decides where the browser may go and where the password may be typed: typed by the credential's owner, never read
+      // from an item. (The editor then offers no Expression switch for it.)
+      noDataExpression: true,
       type: 'string',
       default: '',
       required: true,
@@ -47,6 +50,7 @@ export class PlaywrightSiteLoginApi implements ICredentialType {
     {
       displayName: 'Sites the Browser May Open',
       name: 'navHosts',
+      noDataExpression: true,
       type: 'string',
       typeOptions: { rows: 3 },
       default: '',
@@ -56,6 +60,7 @@ export class PlaywrightSiteLoginApi implements ICredentialType {
     {
       displayName: 'Sites It May Load Files From',
       name: 'subresourceHosts',
+      noDataExpression: true,
       type: 'string',
       typeOptions: { rows: 3 },
       default: '',
@@ -65,6 +70,7 @@ export class PlaywrightSiteLoginApi implements ICredentialType {
     {
       displayName: 'Sites Allowed in Embedded Frames',
       name: 'frameHosts',
+      noDataExpression: true,
       type: 'string',
       typeOptions: { rows: 2 },
       default: '',
@@ -74,6 +80,7 @@ export class PlaywrightSiteLoginApi implements ICredentialType {
     {
       displayName: 'Pages Where the Password May Be Typed',
       name: 'login',
+      noDataExpression: true,
       type: 'string',
       typeOptions: { rows: 2 },
       default: '',
