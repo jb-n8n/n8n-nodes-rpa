@@ -179,7 +179,7 @@ describe('Run Steps and Sign Steps against the sandbox (real engine)', () => {
     const [swapped] = await run({ ...record, approvedBy: 'mallory@example.com' });
     expect(swapped[0].json.details).toMatchObject({ code: 'script_untrusted' });
     const [blank] = await run({ ...record, signature: '' });
-    expect(blank[0].json.error).toBe('script_untrusted: The steps are not signed, or the signature is not valid, and Require Signed Steps is on. Sign them with Sign Steps first.');
+    expect(blank[0].json.error).toBe('script_untrusted: The steps are not signed, or the signature is not valid, and Require Signed Steps is on. Sign them with Sign Steps first. To sign a bot again, for example after the signing key changed, open the import form, leave Bot file empty and type the bot\'s name.');
     const [rolledBack] = await run(record, { options: { expectedVersion: '2' } });
     expect(rolledBack[0].json.error).toBe('script_untrusted: the signed steps are version 1, but Expected Version is 2');
     expect(portal.state().logins).toBe(before);

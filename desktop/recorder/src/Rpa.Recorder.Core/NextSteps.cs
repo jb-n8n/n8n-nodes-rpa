@@ -1,3 +1,5 @@
+using System.ComponentModel;
+
 namespace Rpa.Recorder.Core;
 
 /// <summary>Where allowing the recorded app stands: not done yet, the policy tool is open, or it reported success.</summary>
@@ -45,8 +47,24 @@ public static class NextSteps
         _ => $"Choose the file {opened.File} in {opened.Folder}.",
     }, ShowFile, null, true);
 
-    /// <summary>The notice when the browser did not start: Show the file stays the way to the file.</summary>
-    public static string BrowserNotStarted(string reason) => $"The browser did not start: {reason.Trim().TrimEnd('.')}. Choose {ShowFile} instead.";
+    /// <summary>
+    /// The notice when the browser did not start: the longest of its forms that <paramref name="fits"/> the bar's notice
+    /// line, which is one line. Each ends with what to do instead (Show the file), and the last of them, that alone, is
+    /// said when none fits. <paramref name="reason"/> is <see cref="WindowsReason"/>.
+    /// </summary>
+    public static string BrowserNotStarted(string reason, Func<string, bool> fits)
+    {
+        var instead = $"Choose {ShowFile} instead.";
+        var why = reason.Trim().TrimEnd('.');
+        string[] forms = why.Length > 0
+            ? [$"The browser did not start: {why}. {instead}", $"No browser started: {why}. {instead}", $"The browser did not start. {instead}", $"No browser started. {instead}"]
+            : [$"The browser did not start. {instead}", $"No browser started. {instead}"];
+        return forms.FirstOrDefault(fits) ?? instead;
+    }
+
+    /// <summary>Why the browser did not start, in Windows' own words for the error (Application not found, Access is
+    /// denied): not the exception's text, which names the form's address and the recorder's folder.</summary>
+    public static string WindowsReason(Win32Exception e) => new Win32Exception(e.NativeErrorCode).Message;
 
     /// <param name="app">The recorded program's file name.</param>
     /// <param name="tool">The policy tool (<see cref="FindPolicyTool"/>), or null when there is none to start.</param>

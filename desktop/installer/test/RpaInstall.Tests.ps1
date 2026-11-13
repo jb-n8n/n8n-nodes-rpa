@@ -1149,6 +1149,73 @@ Describe 'Get-RpaInstallPlan' {
       [array]::IndexOf($plan.Steps, 'remove the browser token and certificate') | Should -BeLessThan ([array]::IndexOf($plan.Steps, 'write install.json'))
     }
 
+    # Adding the browser opens a second port and installs a browser that can read what the bot user can read, and
+    # removing it stops the RPA Browser credential: either is listed, and Install-Rpa.ps1 asks for YES unless -Force.
+    It '-WithBrowser on an upgrade of an install without the browser lists what it adds' {
+      $files = @{ 'policy.json' = New-PathState 'ours'; 'token' = New-PathState 'ours'; 'browser-token' = New-PathState 'missing' }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters) -Facts (New-InstalledFacts @{ InstalledBrowser = $false; DataFiles = $files })
+      $plan.Refusals.Count | Should -Be 0
+      $plan.BrowserNotice | Should -BeExactly @(
+        '-WithBrowser adds the RPA browser to this install:'
+        '  - The browser (Node.js, Playwright and a Chromium browser) is installed, and the scheduled task \RPA\RPA Browser'
+        '    starts it when rpa-runner signs in.'
+        '  - It listens on port 3000. The firewall rule RPA-Browser-In lets 10.0.0.5 in to it.'
+        "  - A browser token and a certificate are made in $($script:DataDir)."
+        '  - Whoever holds the browser token and can reach port 3000 acts as rpa-runner through the browser. It can read the'
+        "    files rpa-runner can read, the runner's token among them."
+      )
+    }
+
+    It '-WithBrowser on an upgrade names <Why>' -ForEach @(
+      @{ Why = 'any address'; Parameters = @{ AllowFrom = @(); AllowFromAnyAddress = $true }; Unattended = $false; Line = '  - It listens on port 3000. The firewall rule RPA-Browser-In lets any address in to it.' }
+      @{ Why = 'no firewall rule'; Parameters = @{ AllowFrom = @(); NoFirewall = $true }; Unattended = $false; Line = '  - It listens on port 3000. No firewall rule is added for it (-NoFirewall).' }
+      @{ Why = 'the RPA Supervisor in unattended mode'; Parameters = @{}; Unattended = $true
+        Line = '  - The RPA Supervisor listens on port 3000 too, and passes connections to the browser at 127.0.0.1 port 13000. The firewall rule RPA-Browser-In lets 10.0.0.5 in to it.' }
+    ) {
+      $files = @{ 'policy.json' = New-PathState 'ours'; 'token' = New-PathState 'ours'; 'browser-token' = New-PathState 'missing' }
+      $change = @{ InstalledBrowser = $false; DataFiles = $files }
+      $facts = if ($Unattended) { New-UnattendedFacts $change } else { New-InstalledFacts $change }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters $Parameters) -Facts $facts
+      $plan.Refusals | Should -BeNullOrEmpty
+      $plan.BrowserNotice | Should -Contain $Line
+    }
+
+    It '-NoBrowser on an upgrade of an install with the browser lists what it removes' {
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ NoBrowser = $true; WithBrowser = $false }) -Facts (New-InstalledFacts)
+      $plan.BrowserNotice | Should -BeExactly @(
+        '-NoBrowser removes the RPA browser from this install:'
+        '  - Its scheduled task \RPA\RPA Browser, its firewall rule RPA-Browser-In and its files are removed.'
+        "  - Its token and certificate are removed from $($script:DataDir). The RPA Browser credential in n8n then stops working."
+      )
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ NoBrowser = $true; WithBrowser = $false }) -Facts (New-UnattendedFacts)
+      $plan.BrowserNotice | Should -Contain '  - The RPA Supervisor no longer listens on port 3000.'
+    }
+
+    It 'lists nothing about the browser when <Why>' -ForEach @(
+      @{ Why = 'a first install has it (-WithBrowser)'; Parameters = @{ UserPassword = 'password' }; Facts = 'first' }
+      @{ Why = 'a first install has none'; Parameters = @{ UserPassword = 'password'; WithBrowser = $false }; Facts = 'first' }
+      @{ Why = 'an upgrade keeps it'; Parameters = @{ WithBrowser = $false }; Facts = 'with' }
+      @{ Why = 'an upgrade keeps it, and -WithBrowser is given again'; Parameters = @{}; Facts = 'with' }
+      @{ Why = 'an upgrade stays without it'; Parameters = @{ WithBrowser = $false }; Facts = 'without' }
+      @{ Why = 'an upgrade stays without it, and -NoBrowser is given'; Parameters = @{ WithBrowser = $false; NoBrowser = $true }; Facts = 'without' }
+    ) {
+      $change = @{}
+      foreach ($key in $Parameters.Keys) { $change[$key] = $Parameters[$key] }
+      if ($change.UserPassword) { $change.UserPassword = New-TestPassword }
+      $files = @{ 'policy.json' = New-PathState 'ours'; 'token' = New-PathState 'ours'; 'browser-token' = New-PathState 'missing' }
+      $facts = switch ($Facts) { 'first' { New-TestFacts } 'with' { New-InstalledFacts } 'without' { New-InstalledFacts @{ InstalledBrowser = $false; DataFiles = $files } } }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters $change) -Facts $facts
+      $plan.Refusals | Should -BeNullOrEmpty
+      @($plan.BrowserNotice).Count | Should -Be 0
+    }
+
+    It 'Install-Rpa.ps1 shows the list, also with -Force, and asks for YES unless -Force' {
+      $source = (Get-Content -Raw -LiteralPath (Join-Path $script:InstallerDir 'Install-Rpa.ps1')) -replace "`r`n", "`n"
+      $source | Should -Match ([regex]::Escape('$askBrowser = @($plan.BrowserNotice).Count -gt 0 -and -not $Force'))
+      $source | Should -Match ([regex]::Escape('foreach ($line in @($plan.BrowserNotice)) { Write-Host $line }'))
+      $source | Should -Match ([regex]::Escape("if (`$plan.Questions.Count -gt 0 -or `$askSignIn -or `$askUnattended -or `$askBrowser) {`n  `$answer = ''"))
+    }
+
     It 'with -Unattended and without the browser names only the runner port' {
       $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ Unattended = $true; WithBrowser = $false }) -Facts (New-TestFacts @{ PortsInUse = @{ 13000 = 'node' } })
       $plan.Refusals.Count | Should -Be 0
@@ -3731,6 +3798,14 @@ Describe 'Show-RpaConnection.ps1' {
       ($output -join "`n") | Should -Not -Match "-Address <|The line's address"
     }
 
+    It 'with -Address names that address in the URL for the separate fields too, and no other' {
+      $output = @(& $script:ShowScript -Address 'fd00::20')
+      @($output | Where-Object { $_ -like 'Runner URL:*' }) | Should -BeExactly @(('Runner URL: wss://[fd00::20]:{0}/rpa/v1' -f $script:RunnerPort))
+      @($output | Where-Object { $_ -like 'Browser URL:*' }) | Should -BeExactly @(('Browser URL: wss://[fd00::20]:{0}' -f $script:BrowserPort))
+      $output = @(& $script:ShowScript -Address 'rpa.corp.example')
+      @($output | Where-Object { $_ -like 'Runner URL:*' }) | Should -BeExactly @(('Runner URL: wss://rpa.corp.example:{0}/rpa/v1' -f $script:RunnerPort))
+    }
+
     It 'without the browser says one token and one line' {
       $file = Join-Path $script:MadeUpInstall 'install.json'
       Set-Content -LiteralPath $file -Value ($script:InstallJson -replace '"browser":\s*true', '"browser": false') -Encoding UTF8
@@ -3826,6 +3901,38 @@ Describe 'Show-RpaConnection.ps1' {
       $global:RpaRouteAsked | Should -BeExactly @('fd00::5')
       Get-LineHosts $output | Should -BeExactly @('[fd00::20]', '[fd00::20]')
       $output[-1] | Should -BeExactly "The line's address is fd00::20: the one this machine has towards fd00::5. If n8n reaches this machine by another name or address, run this again with -Address <that name or address>."
+    }
+
+    # A cloud machine behind a NAT: its address on the route to n8n is a private one, and n8n, outside that network,
+    # cannot reach it. The warning comes before the first line, and the lines still carry that address.
+    It 'warns before the lines when the address is <Local>, a private one, and n8n at <Towards> is outside the network' -ForEach @(
+      @{ Local = '10.90.0.10'; Towards = '108.64.230.10'; LineHost = '10.90.0.10' }
+      @{ Local = '172.16.0.20'; Towards = '203.0.113.5'; LineHost = '172.16.0.20' }
+      @{ Local = '172.31.255.20'; Towards = '203.0.113.5'; LineHost = '172.31.255.20' }
+      @{ Local = '192.168.1.20'; Towards = '203.0.113.5'; LineHost = '192.168.1.20' }
+      @{ Local = 'fd00::20'; Towards = '2001:db8::5'; LineHost = '[fd00::20]' }
+      @{ Local = 'fe80::20'; Towards = '2001:db8::5'; LineHost = '[fe80::20]' }
+    ) {
+      $output = Invoke-WithRoute @($Towards) (New-RouteAnswer $Local)
+      $warning = "This machine's address towards n8n is $Local, a private one. n8n at $Towards is outside this network and cannot use it. The line needs the name or address n8n can reach: rpa connection -Address <that name or address>"
+      $output[0] | Should -BeExactly $warning
+      $output[1] | Should -BeExactly 'Runner connection line, for the Connection Line of the RPA Desktop Runner credential:'
+      @($output | Where-Object { $_ -eq $warning }).Count | Should -Be 1
+      Get-LineHosts $output | Should -BeExactly @($LineHost, $LineHost)
+      ($output -join "`n") | Should -Not -Match "The line's address"
+    }
+
+    It 'prints as before when the address is not private, or n8n at <Towards> is private too: <Why>' -ForEach @(
+      @{ Why = 'both private'; Local = '10.90.0.10'; Towards = '192.168.5.5' }
+      @{ Why = 'a public address'; Local = '198.51.100.20'; Towards = '203.0.113.5' }
+      @{ Why = 'just outside 172.16/12'; Local = '172.32.0.20'; Towards = '203.0.113.5' }
+      @{ Why = 'just below 172.16/12'; Local = '172.15.0.20'; Towards = '203.0.113.5' }
+      @{ Why = 'both unique-local IPv6'; Local = 'fd00::20'; Towards = 'fd00::5' }
+    ) {
+      $output = Invoke-WithRoute @($Towards) (New-RouteAnswer $Local)
+      $output[0] | Should -BeExactly 'Runner connection line, for the Connection Line of the RPA Desktop Runner credential:'
+      ($output -join "`n") | Should -Not -Match 'a private one'
+      $output[-1] | Should -BeExactly ("The line's address is {0}: the one this machine has towards {1}. If n8n reaches this machine by another name or address, run this again with -Address <that name or address>." -f $Local, $Towards)
     }
 
     It 'without the browser carries the routed address in the one line' {
