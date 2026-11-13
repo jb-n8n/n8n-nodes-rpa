@@ -1181,7 +1181,14 @@ Describe 'Get-RpaInstallPlan' {
       $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ WithBrowser = $false }) -Facts $facts
       $plan.Refusals.Count | Should -Be 0
       $plan.Browser | Should -BeFalse
-      foreach ($step in $script:BrowserSteps + 'remove the browser token and certificate') { $plan.Steps | Should -Not -Contain $step }
+      # Nothing of the browser is there to remove, so the list of steps names none of it (also with -NoBrowser).
+      foreach ($step in $script:BrowserSteps + $script:RemoveSteps) { $plan.Steps | Should -Not -Contain $step }
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ NoBrowser = $true; WithBrowser = $false }) -Facts $facts
+      foreach ($step in $script:BrowserSteps + $script:RemoveSteps) { $plan.Steps | Should -Not -Contain $step }
+      # A browser token left over from an earlier install with the browser: what is left of it goes, as before.
+      $files['browser-token'] = New-PathState 'ours'
+      $plan = Get-RpaInstallPlan -Parameters (New-TestParameters @{ WithBrowser = $false }) -Facts $facts
+      @($plan.Steps | Where-Object { $script:RemoveSteps -contains $_ }) | Should -BeExactly $script:RemoveSteps
     }
 
     It '-NoBrowser on an upgrade of an install with the browser removes its task, firewall rule, token and certificate, and does not ask for its files' {

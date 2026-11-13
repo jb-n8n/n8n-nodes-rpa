@@ -547,16 +547,17 @@ function Get-RpaInstallPlan {
       if ($Facts.DataFiles) { $state = $Facts.DataFiles[$name] }
       if (-not $state -or -not $state.Exists -or ($replaceTokens -and $tokens -contains $name)) { $steps.Add($script:DataFiles[$name]) }
     }
+    # An upgrade without the browser, of an install that had it (or that still holds its token): its firewall rule,
+    # task, token and certificate go (its program files go with the copy). An install that never had it lists none.
+    $browserToken = $Facts.DataFiles -and $Facts.DataFiles['browser-token'] -and $Facts.DataFiles['browser-token'].Exists
+    $removeBrowser = -not $browser -and $upgrade -and ($installedBrowser -or $browserToken)
     if ($firewall) {
       $steps.Add('add the runner firewall rule')
-      if ($browser) { $steps.Add('add the browser firewall rule') } elseif ($upgrade) { $steps.Add('remove the browser firewall rule') }
+      if ($browser) { $steps.Add('add the browser firewall rule') } elseif ($removeBrowser) { $steps.Add('remove the browser firewall rule') }
     }
     $steps.Add('register the runner task')
-    if ($browser) { $steps.Add('register the browser task') } elseif ($upgrade) { $steps.Add('remove the browser task') }
-    # An upgrade without the browser, of an install that had it (or that still holds its token): its token and
-    # certificate go as well (its program files go with the copy).
-    $browserToken = $Facts.DataFiles -and $Facts.DataFiles['browser-token'] -and $Facts.DataFiles['browser-token'].Exists
-    if (-not $browser -and $upgrade -and ($installedBrowser -or $browserToken)) { $steps.Add('remove the browser token and certificate') }
+    if ($browser) { $steps.Add('register the browser task') } elseif ($removeBrowser) { $steps.Add('remove the browser task') }
+    if ($removeBrowser) { $steps.Add('remove the browser token and certificate') }
     $steps.Add('write install.json')
     if ($back -and -not $hasPassword) { $steps.Add('keep the supervisor password for automatic sign-in') }
     if ($autoSignIn) {
