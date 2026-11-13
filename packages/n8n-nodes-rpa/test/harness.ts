@@ -35,6 +35,8 @@ export interface HarnessOptions {
   binaryFileSizes?: Record<string, number>;
   /** Stands in for n8n's executeWorkflow (a sub-workflow run). Absent: calling it throws. */
   executeWorkflow?: (workflowInfo: IExecuteWorkflowInfo, inputData?: INodeExecutionData[]) => Promise<ExecuteWorkflowData>;
+  /** Stands in for n8n's evaluateExpression (the expression as given, `{{ … }}`). Absent: calling it throws. */
+  evaluateExpression?: (expression: string, itemIndex: number) => unknown;
 }
 export interface Harness extends NodeContext {
   readonly modelRequests: number;
@@ -144,6 +146,10 @@ export function harness(o: HarnessOptions): Harness {
     getExecutionCancelSignal: () => o.signal,
     continueOnFail: () => o.continueOnFail ?? false,
     getExecutionId: () => 'exec-1',
+    evaluateExpression(expression: string, itemIndex: number): unknown {
+      if (!o.evaluateExpression) throw new Error('evaluateExpression is not set up in this test');
+      return o.evaluateExpression(expression, itemIndex);
+    },
     async executeWorkflow(workflowInfo: IExecuteWorkflowInfo, inputData?: INodeExecutionData[]): Promise<ExecuteWorkflowData> {
       if (!o.executeWorkflow) throw new Error('executeWorkflow is not set up in this test');
       return o.executeWorkflow(workflowInfo, inputData);

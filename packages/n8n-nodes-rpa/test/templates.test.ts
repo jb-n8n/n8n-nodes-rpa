@@ -73,9 +73,9 @@ const rowNodes = (t: Template) => t.nodes.filter((n) => n.type === DATA_TABLE &&
 const sticky = (t: Template, name: string) => byName(t, name).parameters as { content: string; color: number };
 const columnsOf: Record<string, string[]> = { [STEPS_TABLE]: STEPS_TABLE_COLUMNS.map((c) => c.name), [RUN_TABLE]: RUN_TABLE_COLUMNS.map((c) => c.name) };
 
-/** Evaluates one n8n expression ("={{ … }}") as JavaScript with the given globals. */
+/** Evaluates one n8n expression ("={{ … }}", or "{{ … }}" as a node evaluates one) as JavaScript with the given globals. */
 function evaluate(expression: string, scope: Record<string, unknown>): unknown {
-  const code = expression.replace(/^=\{\{/, '').replace(/\}\}$/, '');
+  const code = expression.replace(/^=?\{\{/, '').replace(/\}\}$/, '');
   return new Function(...Object.keys(scope), `return (${code});`)(...Object.values(scope)) as unknown;
 }
 /**
@@ -981,24 +981,33 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(data[0].json.error).toBeUndefined();
     return { data, repaired, ran: { Settings: [[{ json: { ...formItem('RPA recording', rec).json, ...settingsJson() } }]], 'Import steps': [data, repaired] } as Record<string, INodeExecutionData[][]> };
   }
+  /** The n8n user on a form page's output, as n8n 2.45 writes it for a signed-in submitter (after the page's fields). */
+  const signedIn = (email: string) => ({ id: 'user-1', email, firstName: 'Ann', lastName: 'Approver' });
   /**
-   * The review page answered with `answer` (n8n gives each field under its fieldName), then Step lists, Step lists to sign
-   * (one item per list, Split Out) and Sign steps with its parameters resolved per item, as n8n resolves them.
+   * The review page answered with `answer` (n8n gives each field under its fieldName) by `user` (the signed-in n8n user:
+   * the approver by default; null for none, as with Basic Auth), then Step lists, Step lists to sign (one item per list,
+   * Split Out) and Sign steps with its parameters resolved per item, as n8n resolves them.
    */
-  async function signAfterReview(ran: Record<string, INodeExecutionData[][]>, answer: IDataObject, over: IDataObject = {}, withSiteLogin = false) {
-    const after = { ...ran, [REVIEW]: [[{ json: { ...answer, submittedAt: '2026-11-11T10:00:00.000Z', formMode: 'production' } }]] };
-    const { lists } = evaluate(String(byName(t, 'Step lists').parameters.jsonOutput), { $: nodesRan(after) }) as { lists: IDataObject[] };
+  async function signAfterReview(ran: Record<string, INodeExecutionData[][]>, answer: IDataObject, over: IDataObject = {}, withSiteLogin = false, user: IDataObject | null = signedIn(APPROVER), formAuthentication?: string) {
+    const after = { ...ran, [REVIEW]: [[{ json: { ...answer, submittedAt: '2026-11-11T10:00:00.000Z', formMode: 'production', ...(user ? { user } : {}) } }]] };
+    // The form's Authentication as the user set it (the template's own when not given).
+    const ran_ = nodesRan(after);
+    const $ = (name: string) => (name === 'Import a bot' && formAuthentication ? { ...ran_(name), params: { ...form.parameters, authentication: formAuthentication } } : ran_(name));
+    const { lists } = evaluate(String(byName(t, 'Step lists').parameters.jsonOutput), { $ }) as { lists: IDataObject[] };
     expect(byName(t, 'Step lists to sign').parameters).toEqual({ fieldToSplitOut: 'lists', options: {} });
     const sign = { ...byName(t, 'Sign steps').parameters, ...over };
-    const params = (i: number) => Object.fromEntries(Object.entries(sign).map(([k, v]) => [k, typeof v === 'string' && v.startsWith('=') ? evaluate(v, { $: nodesRan(after), $itemIndex: i }) : v]));
-    const ctx = harness({ params, rawParameters: sign, items: lists.map((json) => ({ json })), credentials: { playwrightScriptSigningApi: { secretKey: 'k'.repeat(32) }, ...(withSiteLogin ? { playwrightSiteLoginApi: siteLoginData(SITE) } : {}) }, continueOnFail: true });
+    const params = (i: number) => Object.fromEntries(Object.entries(sign).map(([k, v]) => [k, typeof v === 'string' && v.startsWith('=') ? evaluate(v, { $, $itemIndex: i }) : v]));
+    const ctx = harness({
+      params, rawParameters: sign, items: lists.map((json) => ({ json })), credentials: { playwrightScriptSigningApi: { secretKey: 'k'.repeat(32) }, ...(withSiteLogin ? { playwrightSiteLoginApi: siteLoginData(SITE) } : {}) }, continueOnFail: true,
+      evaluateExpression: (expression, i) => evaluate(expression, { $, $itemIndex: i }),
+    });
     const out = await executeSignSteps(ctx, importEngine(() => NOT_ADOPTABLE), () => new Date('2026-11-11T10:00:01.000Z'));
     const items = out[0].map((i) => i.json);
     return { lists, signed: items.filter((j) => j.error === undefined), errors: items.filter((j) => j.error !== undefined) };
   }
 
   it('the import template wires the form, Settings, Import steps, the review page and Sign steps; approval by email is a switched-off hand-off', () => {
-    expect(form).toMatchObject({ type: 'n8n-nodes-base.formTrigger', typeVersion: 2.5 });
+    expect(form).toMatchObject({ type: 'n8n-nodes-base.formTrigger', typeVersion: 2.6 });
     expect(imp).toMatchObject({ type: NODE_TYPE, typeVersion: 1, onError: 'continueErrorOutput' });
     expect(targets(t, 'Import a bot')).toEqual([['Settings']]);
     // The download question only for a browser source, on a second page; Import steps always reads The upload.
@@ -1092,9 +1101,14 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(signed.conditions.conditions).toEqual([expect.objectContaining({ leftValue: '={{ $json.status }}', rightValue: 'active', operator: { type: 'string', operation: 'equals' } })]);
     const sign = byName(t, 'Sign steps');
     expect(sign).toMatchObject({ type: NODE_TYPE, onError: 'continueErrorOutput', parameters: { operation: 'signSteps', approverAllowlist: APPROVER } });
-    // The approver typed once: Approved By is left empty, so Sign Steps records the allowlist's one address.
+    // The approver is the n8n user who submitted the review page; with Basic Auth on the form, Approved By as before
+    // (left empty, so Sign Steps records the allowlist's one address). Any other form login is no one: refused.
     expect(sign.parameters).not.toHaveProperty('approverId');
-    expect(sign.notes).toContain('Approver Allowlist: your address, typed here once');
+    expect(sign.parameters.approvalFormPage).toBe(REVIEW);
+    const approverFrom = (authentication: string) => evaluate(String(sign.parameters.approverFrom), { $: (name: string) => ({ params: name === 'Import a bot' ? { authentication } : {} }) });
+    expect(['n8nUserAuth', 'basicAuth', 'none', ''].map(approverFrom)).toEqual(['formSignIn', 'approvedBy', 'formSignIn', 'formSignIn']);
+    expect(sign.notes).toContain('Approver: the n8n user who submitted Review and approve (with Basic Auth on Import a bot, Approved By)');
+    expect(sign.notes).toContain('Approver Allowlist: the n8n address of each person who may approve, typed here');
     expect(loadInN8n(sign).outputs).toEqual(['Success', 'Error']);
     // The allowlist is a literal: Sign Steps refuses an expression there, so item data cannot choose who may approve.
     expect(String(sign.parameters.approverAllowlist).startsWith('=')).toBe(false);
@@ -1151,10 +1165,13 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // One file per import: the form refuses a second, so the upload is always binary `bot` (n8n adds `_0`, `_1` only for 2+ files).
     expect(fields[0].multipleFiles).toBe(false);
     expect(fields[1].fieldOptions?.values.map((o) => o.option)).toEqual(Object.keys(SOURCES));
-    // Sign-in on by default: an anonymous form could start logins with the attached Site Login
-    // (login breaker trips) and model spend. The Basic Auth credential slot stays empty: the user picks one first.
-    expect(form.parameters.authentication).toBe('basicAuth');
+    // Sign-in on by default: an anonymous form could start logins with the attached Site Login (login breaker trips)
+    // and model spend. n8n's own sign-in (Form Trigger 2.6), limited to people who may run this workflow: each page then
+    // gives the n8n user who submitted it, and the review page's is the approver. No credential to pick.
+    expect(form).toMatchObject({ typeVersion: 2.6, parameters: { authentication: 'n8nUserAuth', requireExecuteAccess: true } });
+    expect(form.parameters).not.toHaveProperty('options.includeUserInOutput');
     expect(form).not.toHaveProperty('credentials');
+    expect(form.notes).toContain('For approvers without an n8n account: Authentication → Basic Auth, and pick or create a Basic Auth credential here.');
   });
 
   it('Import steps reads the form: Source mapped to its value, the binary bot, Name, AI Repair off, Expected File from the optional fields', () => {
@@ -1367,8 +1384,26 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const refused = await signAfterReview(ran, { writes_0: [], moreWrites_0: '99', decision_0: 'Approve and sign' });
     expect(refused.signed).toEqual([]);
     expect(String(refused.errors[0].error)).toBe('Sign Steps refused: Write Steps: there is no step 99 (the steps are numbered 1 to 17)');
-    // With a second address on the allowlist, Approved By must say which one decided: an empty one is refused.
-    const two = await signAfterReview(ran, { decision_0: 'Approve and sign' }, { approverAllowlist: `${APPROVER}, someone-else@example.com` });
+    const approve = { decision_0: 'Approve and sign' };
+    const twoListed = { approverAllowlist: `someone-else@example.com, ${APPROVER}` };
+    // n8n sign-in: the n8n user who submitted the review page is the approver, recorded as n8n gives the address.
+    expect((await signAfterReview(ran, approve)).signed[0]).toMatchObject({ status: 'active', approvedBy: APPROVER });
+    expect((await signAfterReview(ran, approve, twoListed)).signed[0]).toMatchObject({ status: 'active', approvedBy: APPROVER });
+    // Signed in, but not on the allowlist (a member who has the review page's address): refused, nothing signed.
+    const other = await signAfterReview(ran, approve, {}, false, signedIn('member@example.com'));
+    expect(other.signed).toEqual([]);
+    expect(String(other.errors[0].error)).toBe('Sign Steps refused: The n8n user who submitted the approval form is not on the Approver Allowlist');
+    // No one signed in on the review page (its form switched to None): refused, even with one address on the allowlist,
+    // and a review answer that carries a field named like the user does not stand in for one.
+    for (const [answer, auth] of [[approve, 'none'], [{ ...approve, user: APPROVER }, undefined]] as const) {
+      const none = await signAfterReview(ran, answer, {}, false, null, auth);
+      expect(none.signed).toEqual([]);
+      expect(String(none.errors[0].error)).toMatch(/^Sign Steps refused: No n8n user signed in on the form page "Review and approve"/);
+    }
+    // Basic Auth on the form: as before. The allowlist's one address is recorded; with a second address on the allowlist,
+    // Approved By must say which one decided: an empty one is refused.
+    expect((await signAfterReview(ran, approve, {}, false, null, 'basicAuth')).signed[0]).toMatchObject({ status: 'active', approvedBy: APPROVER });
+    const two = await signAfterReview(ran, approve, twoListed, false, null, 'basicAuth');
     expect(two.signed).toEqual([]);
     expect(String(two.errors[0].error)).toBe('Sign Steps refused: Approved By is empty, and the Approver Allowlist holds more than one address: set Approved By to the one who decided');
   });
@@ -1823,9 +1858,10 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       '**step document**', 'this is how hand-written steps get approved and signed']) expect(about, s).toContain(s);
     const set = sticky(t, 'Set once').content;
     expectChecklist(set);
-    for (const s of ['Keep **Authentication** on', 'Basic Auth credential on **Import a bot**', '**RPA Browser**', '**RPA Site Login**', '**RPA Step Signing**',
-      '**Sign steps → Approver Allowlist**', '**Options → Allow Private Network**', 'Publish']) expect(set, s).toContain(s);
-    expect(set).toContain('Type your address once, in **Sign steps → Approver Allowlist**');
+    for (const s of ['opens with your n8n sign-in', 'set its **Authentication** to Basic Auth and pick or create a Basic Auth credential', '**RPA Browser**', '**RPA Site Login**',
+      '**RPA Step Signing**', '**Sign steps → Approver Allowlist**', '**Options → Allow Private Network**', 'Publish']) expect(set, s).toContain(s);
+    expect(set).toContain('type the n8n address of each person who may approve');
+    expect(set).toContain('With Basic Auth, type your address once: it is recorded as the approver.');
     expect(set).not.toContain('Settings → approver');
     // The default path needs no other template.
     expect(set).not.toContain('RPA: 3');

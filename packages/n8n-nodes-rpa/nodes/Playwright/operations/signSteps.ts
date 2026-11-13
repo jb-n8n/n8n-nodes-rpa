@@ -17,6 +17,12 @@ export const NOT_REPAIRED_STEPS = 'The input item is not a Repaired steps item f
 export const MISSING_NAME_OR_VERSION = 'The Repaired steps item has no name or version.';
 export const APPROVER_NOT_ALLOWED = 'Approved By is not on the Approver Allowlist';
 export const APPROVER_NEEDED = 'Approved By is empty, and the Approver Allowlist holds more than one address: set Approved By to the one who decided';
+export const SIGNED_IN_NOT_ALLOWED = 'The n8n user who submitted the approval form is not on the Approver Allowlist';
+export const APPROVER_FROM_UNKNOWN = 'Approver must be Approved By or Who Signed In to n8n on the Approval Form.';
+export const APPROVAL_FORM_PAGE_INVALID = 'Approval Form Page must be the name of the form page where the approver decides (no { or }).';
+/** No n8n user on the approval form page: the form does not use n8n User Auth, or the page is not the one named. */
+export const notSignedIn = (page: string) =>
+  `No n8n user signed in on the form page "${page}": with Approver set to who signed in to n8n, the form must use n8n User Auth (Authentication on its form trigger), and Approval Form Page must name the page where the approver decides`;
 export const SIGN_NEEDS_KEY = 'Sign Steps needs an RPA Step Signing credential';
 export const SHOWN_TEXT_CHANGED = 'the evidence, change list or safety line changed after it was reviewed';
 export const RECORD_HOLDS_SECRET = 'the Repaired steps contain a credential secret';
@@ -329,12 +335,31 @@ function hashMatches(engine: Engine, steps: unknown, hash: string): boolean {
   return matches;
 }
 
+/**
+ * The email of the n8n user who submitted the form page `page` in this execution, or '' when there is none. n8n's Form
+ * node puts the signed-in submitter in that page's output as `user` ({ id, email, firstName, lastName }), written after
+ * the page's fields, so no form field can stand in for it. Anything else there (no page run, no `user`, a `user` without
+ * an id and an email as text) is no one.
+ */
+function formSubmitter(ctx: NodeContext, page: string, i: number): string {
+  let user: unknown;
+  try {
+    user = ctx.evaluateExpression(`{{ $(${JSON.stringify(page)}).first().json.user }}`, i);
+  } catch {
+    return '';
+  }
+  if (!isObject(user) || typeof user.id !== 'string' || !user.id.trim() || typeof user.email !== 'string') return '';
+  return user.email.trim();
+}
+
 async function signOne(ctx: NodeContext, engine: Engine, i: number, json: IDataObject, at: Date): Promise<SignOutcome> {
   const paired: IPairedItemData[] = [{ item: i }];
   const siteLoginId = credentialId(ctx, CREDENTIALS.siteLogin);
   let key: string;
   let siteLogin: SiteLogin | undefined = undefined;
   let approverId: string;
+  /** The approval form page, when the approver is who signed in to n8n there. */
+  let signInPage: string | undefined;
   let allowlist: string[];
   let approved: boolean;
   let writeStepsText: string;
@@ -345,12 +370,22 @@ async function signOne(ctx: NodeContext, engine: Engine, i: number, json: IDataO
     // No address contains "{{". Not literalString: that also refuses a raw object or boolean, which is read as text here.
     literalRaw(ctx, 'approverAllowlist', 'Approver Allowlist');
     // Read here, inside the try: a parameter whose expression fails is a configuration error item, never a raw throw.
-    approverId = asString(ctx.getNodeParameter('approverId', i, '')).trim();
     const listed = splitList(asString(ctx.getNodeParameter('approverAllowlist', i, '')));
     allowlist = listed.map((a) => a.toLowerCase());
-    // The approver typed once: with one address on the (literal) allowlist, an empty Approved By is that address, as
-    // the allowlist spells it. Any Approved By that is given must still be on the allowlist (below).
-    if (!approverId && new Set(allowlist).size === 1) approverId = listed[0];
+    const approverFrom = asString(ctx.getNodeParameter('approverFrom', i, 'approvedBy'));
+    if (approverFrom === 'formSignIn') {
+      // Which page is the approval is part of the security configuration: a literal, like the allowlist.
+      literalRaw(ctx, 'approvalFormPage', 'Approval Form Page');
+      signInPage = asString(ctx.getNodeParameter('approvalFormPage', i, 'Review and approve')).trim();
+      if (!signInPage || /[{}]/.test(signInPage)) throw new ConfigError(APPROVAL_FORM_PAGE_INVALID);
+      // The person n8n signed in, never a typed or mapped value: no default from the allowlist, and Approved By is not read.
+      approverId = formSubmitter(ctx, signInPage, i);
+    } else if (approverFrom === 'approvedBy') {
+      approverId = asString(ctx.getNodeParameter('approverId', i, '')).trim();
+      // The approver typed once: with one address on the (literal) allowlist, an empty Approved By is that address, as
+      // the allowlist spells it. Any Approved By that is given must still be on the allowlist (below).
+      if (!approverId && new Set(allowlist).size === 1) approverId = listed[0];
+    } else throw new ConfigError(APPROVER_FROM_UNKNOWN);
     // An unknown answer (for example a send-and-wait that timed out) is a rejection, never an approval.
     approved = asBoolean(ctx.getNodeParameter('approved', i, false), false);
     // Desktop steps only: the steps the approver declares writes. An expression (the approval form's answer) is expected.
@@ -381,6 +416,10 @@ async function signOne(ctx: NodeContext, engine: Engine, i: number, json: IDataO
   if (siteLoginId === '') return refuse([SITE_LOGIN_NO_ID]);
   if (!p.digest) return refuse([NOT_REPAIRED_STEPS]);
   if (p.name === null || p.version === null) return refuse([MISSING_NAME_OR_VERSION]);
+  if (signInPage !== undefined) {
+    if (!approverId) return refuse([notSignedIn(signInPage)]);
+    if (!allowlist.includes(approverId.toLowerCase())) return refuse([SIGNED_IN_NOT_ALLOWED]);
+  }
   if (!approverId && allowlist.length > 1) return refuse([APPROVER_NEEDED]);
   if (!approverId || !allowlist.includes(approverId.toLowerCase())) return refuse([APPROVER_NOT_ALLOWED]);
   if (!approved) {

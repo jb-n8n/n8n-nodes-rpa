@@ -16,6 +16,8 @@ const TEMPLATE = fileURLToPath(new URL('../templates/5-import-a-bot.json', impor
 const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
 const PLAIN_KEY = 'n8n-api-key-0123456789-abcdefghij-KLMNOP';
 const API_KEY = [b64({ alg: 'HS256', typ: 'JWT' }), b64({ sub: 'u-owner', iss: 'n8n', aud: 'public-api' }), PLAIN_KEY].join('.');
+// A key made with an expiry carries it (exp, seconds): 2026-12-01 00:00 UTC.
+const EXPIRING_KEY = [b64({ alg: 'HS256', typ: 'JWT' }), b64({ sub: 'u-owner', iss: 'n8n', aud: 'public-api', exp: 1796083200 }), PLAIN_KEY].join('.');
 const FINGERPRINT = 'AB'.repeat(32);
 const RUNNER_TOKEN = 'runner-token-ZYXWVUTSRQPONMLKJIHGFEDCBA-98765';
 const LINE = `rpa-runner://win-1.example.internal:8765/rpa/v1#token=${RUNNER_TOKEN}&fingerprint=${FINGERPRINT}`;
@@ -29,7 +31,11 @@ const FIELDS: Record<string, string[]> = {
 
 interface Cred { id: string; name: string; type: string; data: Record<string, any>; projectId?: string }
 interface Wf { id: string; name: string; active: boolean; versionId: string; nodes: any[]; connections: unknown; settings: unknown; projectId?: string; updatedAt?: string }
-interface Options { teamName?: string; knowsNode?: boolean; echo?: 'credentials' | 'activate'; credentials?: Cred[]; workflows?: Wf[]; patch?: boolean; ownership?: boolean }
+interface Options {
+  teamName?: string; knowsNode?: boolean; echo?: 'credentials' | 'activate'; credentials?: Cred[]; workflows?: Wf[]; patch?: boolean; ownership?: boolean;
+  /** GET /users/{id}: false answers 403 (a key whose owner may not read users). */
+  users?: boolean;
+}
 
 // The fake's projects, as n8n 2.45 describes them: two personal projects and a team project.
 const PROJECTS: Record<string, { id: string; name: string; type: string; creatorId: string | null }> = {
@@ -63,10 +69,16 @@ async function fakeN8n(o: Options = {}) {
       const send = (status: number, json: unknown) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(json)); };
       const form = /^\/form\/(.+)$/.exec(url.pathname);
       if (form) {
-        const live = state.workflows.some((w) => w.active && w.nodes.some((x) => x.webhookId === form[1]));
-        return live ? send(401, { message: 'Authorization is required!' }) : send(404, { message: 'not registered' });
+        const trigger = state.workflows.filter((w) => w.active).flatMap((w) => w.nodes).find((x) => x.webhookId === form[1]);
+        if (!trigger) return send(404, { message: 'not registered' });
+        // n8n's sign-in: the browser goes to n8n's authorize page, then its sign-in. Basic Auth: 401.
+        if (trigger.parameters?.authentication === 'n8nUserAuth') {
+          res.writeHead(302, { location: `http://127.0.0.1/mcp-oauth/authorize?response_type=code&client_id=c1&redirect_uri=${encodeURIComponent(url.href)}` });
+          return res.end();
+        }
+        return send(401, { message: 'Authorization is required!' });
       }
-      if (req.headers['x-n8n-api-key'] !== API_KEY && req.headers['x-n8n-api-key'] !== PLAIN_KEY) return send(401, { message: "'X-N8N-API-KEY' header required" });
+      if (![API_KEY, PLAIN_KEY, EXPIRING_KEY].includes(String(req.headers['x-n8n-api-key']))) return send(401, { message: "'X-N8N-API-KEY' header required" });
       const page = (items: unknown[]) => {
         const offset = Number(url.searchParams.get('cursor') ?? 0);
         const limit = Math.min(Number(url.searchParams.get('limit') ?? 100), 2);
@@ -86,6 +98,10 @@ async function fakeN8n(o: Options = {}) {
         const fields = FIELDS[m[1]];
         if (!fields || (o.knowsNode === false && m[1] !== 'httpBasicAuth')) return send(404, { message: 'Not Found' });
         return send(200, { additionalProperties: false, type: 'object', properties: Object.fromEntries(fields.map((f) => [f, { type: 'string' }])), required: [] });
+      }
+      if ((m = /^GET \/api\/v1\/users\/([\w-]+)$/.exec(route))) {
+        if (o.users === false) return send(403, { message: 'Forbidden' });
+        return m[1] === 'u-owner' ? send(200, { id: 'u-owner', email: 'owner@example.com', firstName: 'O', lastName: 'Wner' }) : send(404, { message: 'Not Found' });
       }
       if (route === 'GET /api/v1/credentials') return send(200, page(state.credentials.map(credItem)));
       if (route === 'POST /api/v1/credentials') {
@@ -175,6 +191,11 @@ function runAtTerminal(args: string[], env: Record<string, string>, answers: [Re
 
 const ENV = { N8N_API_KEY: API_KEY };
 const setup = (url: string, ...more: string[]) => ['setup', '--url', url, '--approver', 'ops@example.com', ...more];
+/** The same with the form's Basic Auth login (--form-login basic): today's way, for approvers without an n8n account. */
+const basicSetup = (url: string, ...more: string[]) => setup(url, '--form-login', 'basic', ...more);
+type Fake = Awaited<ReturnType<typeof fakeN8n>>;
+const credOf = (fake: Fake, type: string) => fake.state.credentials.find((c) => c.type === type)!;
+const signingKeyOf = (fake: Fake) => credOf(fake, 'playwrightScriptSigningApi').data.secretKey as string;
 const count = (text: string, part: string) => text.split(part).length - 1;
 /** No secret, in any form the redactor knows, in the output. */
 function expectNoSecrets(out: string, extra: string[] = []) {
@@ -185,9 +206,90 @@ function expectNoSecrets(out: string, extra: string[] = []) {
 }
 
 describe('npx n8n-nodes-rpa setup', () => {
-  it('first run: creates the form login, the signing key and the workflow with both set, publishes it, prints the password once', async () => {
+  it("first run: the form opens with n8n's sign-in: no form login is made; the signing key and the workflow, published", async () => {
     const fake = await n8n();
     const { code, out, stdout } = await run(setup(fake.url), ENV);
+    expect(code, out).toBe(0);
+    expect(fake.state.credentials.map((c) => [c.name, c.type])).toEqual([['RPA Step Signing', 'playwrightScriptSigningApi']]);
+    const [signing] = fake.state.credentials;
+    const [wf] = fake.state.workflows;
+    expect(wf.active).toBe(true);
+    const node = (name: string) => wf.nodes.find((n) => n.name === name);
+    // The template's form as it ships: n8n's sign-in, for people who may run the workflow; no credential.
+    expect(node('Import a bot')).toMatchObject({ typeVersion: 2.6, parameters: { authentication: 'n8nUserAuth', requireExecuteAccess: true } });
+    expect(node('Import a bot')).not.toHaveProperty('credentials');
+    expect(node('Sign steps').credentials).toEqual({ playwrightScriptSigningApi: { id: signing.id, name: 'RPA Step Signing' } });
+    expect(node('Sign steps').parameters).toMatchObject({ approverAllowlist: 'ops@example.com', approvalFormPage: 'Review and approve' });
+    expect(String(node('Sign steps').parameters.approverFrom)).toContain("'basicAuth' ? 'approvedBy' : 'formSignIn'");
+    expect(stdout).toContain(`${fake.url}/form/${node('Import a bot').webhookId}`);
+    expect(stdout).toContain('  Sign-in:    the form opens with your n8n sign-in. Who approves is recorded as the n8n user who approved.');
+    expect(stdout).not.toMatch(/User name:|Password:/);
+    expect(stdout).toMatch(/1\. Record a bot.*\n.*2\. Open the form address in your browser and sign in to n8n\. The first time, n8n asks whether the form may use your n8n login: choose Allow\.\n.*3\. Upload the file/);
+    expect(stdout).toContain('Only the n8n users on "Sign steps" → Approver Allowlist may approve: add others there in n8n.');
+    // The form answered as a sign-in form (a redirect to n8n's authorize page): no note.
+    expect(out).not.toMatch(/Note:|WARNING/);
+    // The last line: what the API key can do, and what to do with it.
+    expect(stdout.trimEnd().split('\n').at(-1)).toBe('The API key you gave can do everything its owner can in n8n, within its scopes, and it never expires. Delete it in n8n (Settings → n8n API) when the setup is done, or make the next one with an expiry.');
+    expectNoSecrets(out, [signing.data.secretKey]);
+  });
+
+  it("the approver: the API key owner's address when n8n tells it, else --approver or the question; a key with an expiry says when", async () => {
+    const fake = await n8n();
+    const own = await run(['setup', '--url', fake.url], { N8N_API_KEY: EXPIRING_KEY });
+    expect(own.code, own.out).toBe(0);
+    expect(own.stdout).toContain("approver owner@example.com: the API key's owner (another with --approver)");
+    expect(fake.state.workflows[0].nodes.find((n) => n.name === 'Sign steps').parameters.approverAllowlist).toBe('owner@example.com');
+    expect(own.stdout.trimEnd().split('\n').at(-1)).toBe('The API key you gave can do everything its owner can in n8n, within its scopes, until 2026-12-01 00:00 UTC. Delete it in n8n (Settings → n8n API) when the setup is done.');
+    // A key whose owner n8n does not tell (no user id in it, or no right to read users): asked, or --approver.
+    for (const [fakeOptions, key] of [[{}, PLAIN_KEY], [{ users: false }, API_KEY]] as const) {
+      const other = await n8n(fakeOptions);
+      const r = await run(['setup', '--url', other.url], { N8N_API_KEY: key });
+      expect(r.code, r.out).toBe(2);
+      expect(r.out).toMatch(/Give your email address with --approver/);
+      expect(other.posts()).toEqual([]);
+    }
+    const plain = await n8n();
+    const p = await run(setup(plain.url), { N8N_API_KEY: PLAIN_KEY });
+    expect(p.code, p.out).toBe(0);
+    expect(p.stdout.trimEnd().split('\n').at(-1)).toBe('The API key you gave can do everything its owner can in n8n, within its scopes. Delete it in n8n (Settings → n8n API) when the setup is done, or make the next one with an expiry.');
+    expectNoSecrets(own.out + p.out, [EXPIRING_KEY]);
+  });
+
+  it('--form-login: only n8n or basic; --new-form-password only with basic; nothing sent', async () => {
+    const fake = await n8n();
+    for (const [args, message] of [
+      [['--form-login', 'none'], /--form-login must be n8n .* or basic/],
+      [['--new-form-password'], /--new-form-password applies only with --form-login basic: with n8n's sign-in the form has no password\./],
+      [['--form-login', 'n8n', '--new-form-password'], /--new-form-password applies only with --form-login basic/],
+    ] as const) {
+      const r = await run(setup(fake.url, ...args), ENV);
+      expect(r.code, r.out).toBe(2);
+      expect(r.out).toMatch(message);
+    }
+    expect(fake.state.requests).toEqual([]);
+  });
+
+  it("a workflow whose form signs in another way is not used: a fresh one is made, and the old one named", async () => {
+    const fake = await n8n();
+    expect((await run(basicSetup(fake.url), ENV)).code).toBe(0);
+    const [old] = fake.state.workflows;
+    const r = await run(setup(fake.url), ENV);
+    expect(r.code, r.out).toBe(0);
+    expect(r.stdout).toContain(`not used workflow "RPA: 5 Import a bot" (id ${old.id}): its form uses Basic Auth, and this run sets up n8n's sign-in. This run makes a fresh one: unpublish the old one in n8n when you no longer use it.`);
+    expect(fake.state.workflows).toHaveLength(2);
+    const fresh = fake.state.workflows[1];
+    expect(fresh.name).toMatch(/^RPA: 5 Import a bot \(\d{4}-\d{2}-\d{2}\)$/);
+    expect(fresh.nodes.find((n) => n.name === 'Import a bot')).not.toHaveProperty('credentials');
+    expect(old.nodes.find((n) => n.name === 'Import a bot').credentials.httpBasicAuth.id, 'the old one is left as it is').toBe(credOf(fake, 'httpBasicAuth').id);
+    // And back: --form-login basic does not take the n8n sign-in one.
+    const back = await run(basicSetup(fake.url), ENV);
+    expect(back.code, back.out).toBe(0);
+    expect(back.stdout).toMatch(/reused +workflow "RPA: 5 Import a bot" \(id /);
+  });
+
+  it('first run with --form-login basic: creates the form login, the signing key and the workflow with both set, publishes it, prints the password once', async () => {
+    const fake = await n8n();
+    const { code, out, stdout } = await run(basicSetup(fake.url), ENV);
     expect(code, out).toBe(0);
 
     const [form, signing] = fake.state.credentials;
@@ -203,6 +305,9 @@ describe('npx n8n-nodes-rpa setup', () => {
       .toEqual(['connections', 'name', 'nodes', 'settings']);
     const node = (name: string) => wf.nodes.find((n) => n.name === name);
     expect(node('Import a bot').credentials).toEqual({ httpBasicAuth: { id: form.id, name: 'RPA import form' } });
+    // Basic Auth on the form, so Sign steps takes Approved By (the allowlist's one address), as before.
+    expect(node('Import a bot').parameters.authentication).toBe('basicAuth');
+    expect(node('Import a bot').parameters).not.toHaveProperty('requireExecuteAccess');
     expect(node('Sign steps').credentials).toEqual({ playwrightScriptSigningApi: { id: signing.id, name: 'RPA Step Signing' } });
     expect(node('Sign steps').parameters.approverAllowlist).toBe('ops@example.com');
     // Import steps carries the signing key only to pass it on to the workflow file the form hands over (it never reads it).
@@ -221,14 +326,14 @@ describe('npx n8n-nodes-rpa setup', () => {
     expectNoSecrets(out);
   });
 
-  it('second run: creates nothing, says what it reused, cannot show the old password and offers --new-form-password', async () => {
+  it('second run with --form-login basic: creates nothing, says what it reused, cannot show the old password and offers --new-form-password', async () => {
     const fake = await n8n();
-    expect((await run(setup(fake.url), ENV)).code).toBe(0);
+    expect((await run(basicSetup(fake.url), ENV)).code).toBe(0);
     const before = fake.posts().length;
     const [form, signing] = fake.state.credentials;
     const oldPassword = form.data.password as string;
 
-    const again = await run(['setup', '--url', fake.url], ENV); // no --approver: the workflow exists
+    const again = await run(['setup', '--url', fake.url, '--form-login', 'basic'], ENV); // no --approver: the workflow exists
     expect(again.code, again.out).toBe(0);
     expect(fake.posts().length, 'nothing created or changed').toBe(before);
     expect(fake.state.credentials).toHaveLength(2);
@@ -238,14 +343,14 @@ describe('npx n8n-nodes-rpa setup', () => {
     expect(again.stdout).toMatch(/made earlier.*--new-form-password/);
     expectNoSecrets(again.out, [form.data.password, signing.data.secretKey]);
 
-    const fresh = await run(['setup', '--url', fake.url, '--new-form-password'], ENV);
+    const fresh = await run(['setup', '--url', fake.url, '--form-login', 'basic', '--new-form-password'], ENV);
     expect(fresh.code, fresh.out).toBe(0);
     const patched = fake.state.credentials[0].data;
     expect(patched.user).toBe('rpa');
     expect(patched.password).toMatch(/^[A-Za-z0-9_-]{32}$/);
     expect(patched.password).not.toBe(oldPassword);
     expect(count(fresh.out, patched.password)).toBe(1);
-    expect(fake.state.credentials[1].data.secretKey, 'the signing key stays').toBe(signing.data.secretKey);
+    expect(signingKeyOf(fake), 'the signing key stays').toBe(signing.data.secretKey);
     expect(fake.state.workflows).toHaveLength(1);
   });
 
@@ -253,7 +358,7 @@ describe('npx n8n-nodes-rpa setup', () => {
     const fake = await n8n();
     const first = await run(setup(fake.url, '--show-signing-key'), ENV);
     expect(first.code, first.out).toBe(0);
-    const key = fake.state.credentials[1].data.secretKey;
+    const key = signingKeyOf(fake);
     expect(count(first.stdout, key)).toBe(1);
     expect(first.stdout).toMatch(/Signing key: +[0-9a-f]{64} +\(shown once/);
   });
@@ -277,7 +382,7 @@ describe('npx n8n-nodes-rpa setup', () => {
   it('--replace-signing-key: refused without a terminal, stops without the typed word, replaces and shows the key once with it', async () => {
     const fake = await n8n();
     expect((await run(setup(fake.url), ENV)).code).toBe(0);
-    const key = fake.state.credentials[1].data.secretKey;
+    const key = signingKeyOf(fake);
     const patches = () => fake.state.requests.filter((r) => r.method === 'PATCH').length;
 
     const piped = await run(['setup', '--url', fake.url, '--replace-signing-key'], ENV);
@@ -289,11 +394,11 @@ describe('npx n8n-nodes-rpa setup', () => {
     expect(no.out).toMatch(/script_untrusted/);
     expect(no.out).toMatch(/Nothing was changed/);
     expect(patches()).toBe(0);
-    expect(fake.state.credentials[1].data.secretKey).toBe(key);
+    expect(signingKeyOf(fake)).toBe(key);
 
     const yes = await runAtTerminal(['setup', '--url', fake.url, '--replace-signing-key'], ENV, [[/Connect a Windows machine now/, 'n'], [/Type REPLACE/, 'REPLACE']]);
     expect(yes.code, yes.out).toBe(0);
-    const replaced = fake.state.credentials[1].data.secretKey;
+    const replaced = signingKeyOf(fake);
     expect(replaced).toMatch(/^[0-9a-f]{64}$/);
     expect(replaced).not.toBe(key);
     expect(count(yes.out, replaced)).toBe(1);
@@ -407,13 +512,19 @@ describe('npx n8n-nodes-rpa setup', () => {
 
   it('redacts every secret when n8n echoes a request: a credential body, a workflow on a failed publish', async () => {
     const echo = await n8n({ echo: 'credentials' });
-    const failed = await run(setup(echo.url), { ...ENV, RPA_CONNECTION_LINE: LINE });
+    const failed = await run(basicSetup(echo.url), { ...ENV, RPA_CONNECTION_LINE: LINE });
     expect(failed.code).toBe(1);
     expect(failed.out).toMatch(/Could not create the credential "RPA import form" \(HTTP 400: request\.body\.data is not valid: .*\*\*\*/);
     const sent = echo.state.requests.filter((r) => r.method === 'POST' && r.path === '/api/v1/credentials').map((r) => JSON.parse(r.body).data.password as string);
     expect(sent).toHaveLength(1);
     expectNoSecrets(failed.out, sent);
     expect(echo.state.workflows, 'the workflow it started without credentials is removed again').toEqual([]);
+    // n8n's sign-in: the signing key is the first credential sent, and it is redacted the same way.
+    const echoKey = await n8n({ echo: 'credentials' });
+    const keyFailed = await run(setup(echoKey.url), ENV);
+    expect(keyFailed.code).toBe(1);
+    expect(keyFailed.out).toMatch(/Could not create the credential "RPA Step Signing" \(HTTP 400: request\.body\.data is not valid: .*\*\*\*/);
+    expectNoSecrets(keyFailed.out, echoKey.state.requests.filter((r) => r.method === 'POST' && r.path === '/api/v1/credentials').map((r) => JSON.parse(r.body).data.secretKey as string));
 
     const unpublished = await n8n({ echo: 'activate' });
     const notPublished = await run(setup(unpublished.url), ENV);
@@ -424,7 +535,7 @@ describe('npx n8n-nodes-rpa setup', () => {
   });
 
   it('stops before creating anything: no approver without a terminal, a bad approver, a same-name credential of another type', async () => {
-    const fake = await n8n();
+    const fake = await n8n({ users: false });
     const noApprover = await run(['setup', '--url', fake.url], ENV);
     expect(noApprover.code).toBe(2);
     expect(noApprover.out).toMatch(/--approver/);
@@ -452,11 +563,11 @@ describe('npx n8n-nodes-rpa setup', () => {
 
     it('a same-name signing credential and form login in another project are left alone: its own are made, and the ids named', async () => {
       const fake = await n8n({ credentials: [SIGNING_ELSEWHERE, FORM_ELSEWHERE] });
-      const { code } = await run(setup(fake.url, '--new-form-password', '--replace-signing-key'), ENV);
+      const { code } = await run(basicSetup(fake.url, '--new-form-password', '--replace-signing-key'), ENV);
       // --replace-signing-key asks for the typed word whenever a key of that name exists: no terminal here, so it stops.
       expect(code).toBe(2);
       expect(fake.posts()).toEqual([]);
-      const ok = await run(setup(fake.url, '--new-form-password'), ENV);
+      const ok = await run(basicSetup(fake.url, '--new-form-password'), ENV);
       expect(ok.code, ok.out).toBe(0);
       expect(fake.state.credentials.find((c) => c.id === 'c-planted')!.data.secretKey, 'never changed').toBe('k'.repeat(64));
       expect(fake.state.credentials.find((c) => c.id === 'c-form-other')!.data.password, 'never changed').toBe('p'.repeat(32));
@@ -534,7 +645,12 @@ describe('npx n8n-nodes-rpa setup', () => {
         const fake = await n8n({ credentials: [TEAM_KEY], workflows: [OTHER_WORK] });
         const { code, out } = await run(setup(fake.url, '--project-id', 'P-team'), ENV);
         expect(code, out).toBe(0);
-        expect(out).toMatch(/The project "Ops" \(id P-team\) is shared: everyone in it can use the form's login and the signing key this command sets up there\. A personal project keeps them to one person\./);
+        expect(out).toMatch(/The project "Ops" \(id P-team\) is shared: everyone in it who may run its workflows can open the form, and use the signing key this command sets up there\. A personal project keeps them to one person\./);
+        // With --form-login basic, the form's login is shared there too.
+        const basic = await n8n({ credentials: [TEAM_KEY], workflows: [OTHER_WORK] });
+        const b = await run(basicSetup(basic.url, '--project-id', 'P-team'), ENV);
+        expect(b.code, b.out).toBe(0);
+        expect(b.out).toMatch(/The project "Ops" \(id P-team\) is shared: everyone in it can use the form's login and the signing key this command sets up there\. A personal project keeps them to one person\./);
         const made = fake.state.credentials.find((c) => c.name === 'RPA Step Signing' && c.id !== 'c-team')!;
         expect(made.projectId).toBe('P-team');
         expect(signingOf(fake)).toBe(made.id);
@@ -576,10 +692,10 @@ describe('npx n8n-nodes-rpa setup', () => {
         const t = JSON.parse(readFileSync(TEMPLATE, 'utf8'));
         const FORM_TEAM: Cred = { id: 'c-tform', name: 'RPA import form', type: 'httpBasicAuth', data: { user: 'rpa', password: 'q'.repeat(32) }, projectId: 'P-team' };
         const nodes = t.nodes.map((x: any) => ({ ...x, ...(x.name === 'Sign steps' ? { credentials: { playwrightScriptSigningApi: { id: 'c-team', name: 'RPA Step Signing' } } } : {}),
-          ...(x.name === 'Import a bot' ? { credentials: { httpBasicAuth: { id: 'c-tform', name: 'RPA import form' } }, webhookId: 'team-form' } : {}) }));
+          ...(x.name === 'Import a bot' ? { parameters: { ...x.parameters, authentication: 'basicAuth' }, credentials: { httpBasicAuth: { id: 'c-tform', name: 'RPA import form' } }, webhookId: 'team-form' } : {}) }));
         const teamWf: Wf = { id: 'w-team', name: 'RPA: 5 Import a bot', active: true, versionId: 'v', nodes, connections: t.connections, settings: {}, projectId: 'P-team' };
         const fake = await n8n({ credentials: [TEAM_KEY, FORM_TEAM], workflows: [teamWf] });
-        const r = await runAtTerminal(setup(fake.url, '--project-id', 'P-team', '--show-signing-key'), ENV, [[/Connect a Windows machine now/, 'n'], [/Use these\?/, 'n']]);
+        const r = await runAtTerminal(basicSetup(fake.url, '--project-id', 'P-team', '--show-signing-key'), ENV, [[/Connect a Windows machine now/, 'n'], [/Use these\?/, 'n']]);
         expect(r.code, r.out).toBe(0);
         expect(r.out).toMatch(/credential "RPA import form" \(id c-tform\)\n {2}credential "RPA Step Signing" \(id c-team\)\n {2}workflow "RPA: 5 Import a bot" \(id w-team\)\n/);
         expect(r.out.match(/Use these\?/g)).toHaveLength(1);
@@ -675,7 +791,7 @@ describe('npx n8n-nodes-rpa setup', () => {
   it('prints its usage, and names the command', async () => {
     const help = await run(['--help']);
     expect(help.code).toBe(0);
-    for (const flag of ['--url', '--approver', '--allow-http', '--show-signing-key', '--replace-signing-key', '--new-form-password', '--browser-url', 'N8N_API_KEY', 'RPA_CONNECTION_LINE']) expect(help.out).toContain(flag);
+    for (const flag of ['--url', '--approver', '--form-login', '--allow-http', '--show-signing-key', '--replace-signing-key', '--new-form-password', '--browser-url', 'N8N_API_KEY', 'RPA_CONNECTION_LINE']) expect(help.out).toContain(flag);
     expect((await run([])).code).toBe(2);
   });
 });

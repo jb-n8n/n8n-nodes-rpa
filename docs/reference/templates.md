@@ -30,6 +30,13 @@ Templates 2, 3 and 5 create the two Data Tables when they are missing.
   the bot.
 - **Add the login page** shows when the sign-in stopped at an address the Site Login does not list. Add it under
   **Pages Where the Password May Be Typed**, then choose **Import again**.
+- **Import a bot** opens with n8n's sign-in (**Authentication**: n8n User Auth, with **Require Workflow Execute
+  Permission** on): only n8n users who may run this workflow can start an import. Each page of the form gives the n8n
+  user who submitted it, and **Sign steps** takes the one who submitted **Review and approve** as the approver
+  (**Approver**: who signed in to n8n on the approval form). That person must be on the **Approver Allowlist**.
+- For approvers with no n8n account, set **Authentication** to **Basic Auth** and pick a Basic Auth credential. **Sign
+  steps** then takes **Approved By**: empty, it records the one address on the allowlist. With Basic Auth, the pages
+  after the first are not behind the password: anyone who has a page's address can open and submit it.
 - Keep **Authentication** on: an anonymous form could start logins with the attached Site Login and approve steps.
   The form's page stays open until the import ends. Behind a reverse proxy, set its read timeout above twice
   **Max Seconds** (for nginx, `proxy_read_timeout`). Do not submit the form again after a timeout: the first import
@@ -41,10 +48,12 @@ Templates 2, 3 and 5 create the two Data Tables when they are missing.
 By hand:
 
 1. Import `packages/n8n-nodes-rpa/templates/5-import-a-bot.json` and follow its green **Set once** note.
-2. On **Import a bot**, create a **Basic Auth** credential with a user name and password of your choice.
+2. **Import a bot** opens with your n8n sign-in: nothing to pick. For approvers with no n8n account, set its
+   **Authentication** to **Basic Auth** and create a Basic Auth credential with a user name and password of your choice.
 3. On **Sign steps**, create an **RPA Step Signing** credential with a key of 32 or more random characters, for
    example from `openssl rand -hex 32`. Keep a copy where you keep recovery secrets.
-4. In **Sign steps → Approver Allowlist**, replace `approver@example.com` with your email address.
+4. In **Sign steps → Approver Allowlist**, replace `approver@example.com` with the n8n address of each person who may
+   approve. With Basic Auth, type your own address once: it is recorded as the approver.
 5. Browser bots only: pick **RPA Browser** on **Import steps**, and the same **RPA Site Login** on **Import steps** and
    **Sign steps** when the bot signs in.
 6. On **Import steps**, pick the same **RPA Step Signing**, and your **RPA Desktop Runner** for desktop bots, in the
@@ -100,7 +109,7 @@ after `approvalTimeoutHours` (72), then:
 | `steps` | string | The steps as JSON (empty for a rejected row) |
 | `hash` | string | SHA-256 of the steps: ties the approval to what was shown |
 | `signature` | string | The HMAC with the Step Signing key |
-| `approvedBy` | string | Who decided: the address on the Approver Allowlist |
+| `approvedBy` | string | Who decided: the n8n user who approved on the form, or the address on the Approver Allowlist |
 | `approvedAt` | string | When (ISO 8601) |
 | `status` | string | `pending`, `active`, `superseded`, `rejected` or `expired` |
 | `expiresAt` | string | When a `pending` row stops blocking a new repair |

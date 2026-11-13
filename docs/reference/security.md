@@ -89,8 +89,17 @@ an **RPA Step Signing** credential that its own project owns, and never one of t
 
 **Approval.** Nothing an import or an AI repair makes runs until a person approves it and Sign Steps signs it.
 - **On the form (the default).** In **RPA: 5 Import a bot**, the person who imports reviews every step list on the next
-  page of the form and chooses **Approve and sign** or **Reject**. Anyone who can open the form (its Basic Auth
-  credential) can approve. The row records the address in **Sign steps → Approver Allowlist**, not who opened the form.
+  page of the form and chooses **Approve and sign** or **Reject**. Who can approve depends on how the form signs
+  people in:
+  - **n8n's sign-in (the default).** The form opens only for n8n users who may run the workflow. Every later page
+    asks for an n8n sign-in too, but any signed-in n8n user who has a page's address can open and submit it. So the
+    approver is the n8n user who submits **Review and approve**, as n8n reports it. Sign Steps signs only when that
+    user is on **Sign steps → Approver Allowlist**, and the row records their n8n address. Nobody signed in, or a user
+    not on the list, signs nothing. Removing a person from n8n, or from the list, ends their access.
+  - **Basic Auth (`--form-login basic`, for approvers with no n8n account).** Anyone who has the form's user name and
+    password can open the form. The pages after the first are not behind the password: anyone who has a page's
+    address can open and submit it, and n8n puts that address in the browser's address bar. The row records the
+    address in **Sign steps → Approver Allowlist**, not who approved.
 - **By email (an option).** Set `approval` to `by email` in template 5's **Settings**, and each step list goes to
   **RPA: 3 Approve steps**, which emails a named approver. The approval link is a bearer link: anyone who receives or
   forwards it can approve. Send it to one person. The AI repairs of **RPA: 2 Data feed** use this path.

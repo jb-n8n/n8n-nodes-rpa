@@ -55,7 +55,9 @@ Guide: [Move a bot](docs/guides/move-a-bot.md).
 ## How approval works
 
 An import or an AI repair makes a draft. Nothing in it runs until a person approves it. By default, the person who
-imports a bot reviews every step on the import form and chooses **Approve and sign**. The steps are then signed with
+imports a bot reviews every step on the import form and chooses **Approve and sign**. The form opens with your n8n
+sign-in, and the approval is recorded under the n8n user who approved, who must be on the form's approver list. The
+steps are then signed with
 the **RPA Step Signing** key, and the bot runs only steps whose signature matches. A team that wants a second person to
 decide turns on approval by email in the form's settings. Details: [Security](docs/reference/security.md#signing-and-approval).
 

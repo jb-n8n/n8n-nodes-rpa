@@ -19,7 +19,7 @@
     },
     {
       "parameters": {
-        "content": "### Set once (green)\n1. Keep **Authentication** on: pick or create a Basic Auth credential on **Import a bot**.\n2. Pick **RPA Step Signing** on **Sign steps**.\n3. Type your address once, in **Sign steps → Approver Allowlist**: it is recorded as the approver.\n4. Browser bots only: pick **RPA Browser** on **Import steps**. When the bot signs in, pick the same **RPA Site Login** on **Import steps** and on **Sign steps**.\n5. Browser bots on your own network (the sandbox): turn on **Options → Allow Private Network** in **Import steps**.\n6. Publish, then open the form.",
+        "content": "### Set once (green)\n1. **Import a bot** opens with your n8n sign-in, and the approver is the n8n user who submits the review page. For approvers without an n8n account: set its **Authentication** to Basic Auth and pick or create a Basic Auth credential.\n2. Pick **RPA Step Signing** on **Sign steps**.\n3. In **Sign steps → Approver Allowlist**, type the n8n address of each person who may approve (yours at least). With Basic Auth, type your address once: it is recorded as the approver.\n4. Browser bots only: pick **RPA Browser** on **Import steps**. When the bot signs in, pick the same **RPA Site Login** on **Import steps** and on **Sign steps**.\n5. Browser bots on your own network (the sandbox): turn on **Options → Allow Private Network** in **Import steps**.\n6. Publish, then open the form.",
         "height": 300,
         "width": 480,
         "color": 4
@@ -67,7 +67,8 @@
     },
     {
       "parameters": {
-        "authentication": "basicAuth",
+        "authentication": "n8nUserAuth",
+        "requireExecuteAccess": true,
         "formTitle": "Import a bot",
         "formDescription": "Upload a bot: an RPA recording, a UiPath project (ZIP or XAML), a Chrome Recorder export (JSON), Playwright code, or steps you wrote (JSON). You review every step on the next page. Nothing runs until you approve it.",
         "formFields": {
@@ -122,12 +123,12 @@
       "id": "3d6f1a20-7b4c-4e8a-9c11-000000000504",
       "name": "Import a bot",
       "type": "n8n-nodes-base.formTrigger",
-      "typeVersion": 2.5,
+      "typeVersion": 2.6,
       "position": [
         0,
         0
       ],
-      "notes": "Basic Auth on: pick or create a Basic Auth credential here before the first run. The upload arrives as binary `bot` (Field Name bot, one file)."
+      "notes": "Opens with n8n sign-in (n8n User Auth, Require Workflow Execute Permission on): only people who may run this workflow start an import, and each page of the form records the n8n user who submitted it. For approvers without an n8n account: Authentication → Basic Auth, and pick or create a Basic Auth credential here. The upload arrives as binary `bot` (Field Name bot, one file)."
     },
     {
       "parameters": {
@@ -584,6 +585,8 @@
       "parameters": {
         "operation": "signSteps",
         "approved": "={{ $('Review and approve').first().json['decision_' + $itemIndex] === 'Approve and sign' }}",
+        "approverFrom": "={{ $('Import a bot').params.authentication === 'basicAuth' ? 'approvedBy' : 'formSignIn' }}",
+        "approvalFormPage": "Review and approve",
         "approverAllowlist": "approver@example.com",
         "writeSteps": "={{ [].concat($('Review and approve').first().json['writes_' + $itemIndex] ?? []).map((l) => (/^Step (\\d+):/.exec(String(l)) ?? [])[1]).filter((n) => n).concat(String($('Review and approve').first().json['moreWrites_' + $itemIndex] ?? '')).join(' ').trim() }}"
       },
@@ -596,7 +599,7 @@
         -220
       ],
       "onError": "continueErrorOutput",
-      "notes": "Item n is step list n of the review page: its Decision, and for desktop steps the ticked steps and the numbers typed under them. Approver Allowlist: your address, typed here once (it cannot be an expression); with one address there, Approved By can stay empty and that address is recorded as the approver. Outputs: the active or rejected record (0), error (1)."
+      "notes": "Item n is step list n of the review page: its Decision, and for desktop steps the ticked steps and the numbers typed under them. Approver: the n8n user who submitted Review and approve (with Basic Auth on Import a bot, Approved By). Approver Allowlist: the n8n address of each person who may approve, typed here (it cannot be an expression). With Basic Auth and one address there, Approved By can stay empty and that address is recorded. Outputs: the active or rejected record (0), error (1)."
     },
     {
       "parameters": {

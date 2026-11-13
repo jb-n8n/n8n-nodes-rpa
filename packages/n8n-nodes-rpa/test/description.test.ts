@@ -164,16 +164,21 @@ describe('Run Steps and Sign Steps fields', () => {
     expect(field('steps').placeholder).toBe(STEPS_PLACEHOLDER);
     expect(parseScript(JSON.parse(STEPS_PLACEHOLDER)).steps).toHaveLength(3);
   });
-  it('Sign Steps shows Approved (hint "Off records a rejection"), Approved By, Approver Allowlist and Write Steps', () => {
+  it('Sign Steps shows Approved (hint "Off records a rejection"), Approver, Approval Form Page, Approved By, Approver Allowlist and Write Steps', () => {
     const sign = d.properties.filter((p) => p.displayOptions?.show?.operation?.includes('signSteps') && p.name !== 'options').map((p) => p.name);
-    expect(sign).toEqual(['signInputNotice', 'approved', 'approverId', 'approverAllowlist', 'writeSteps']);
+    expect(sign).toEqual(['signInputNotice', 'approved', 'approverFrom', 'approvalFormPage', 'approverId', 'approverAllowlist', 'writeSteps']);
+    // Approved By stays the default, so a node saved before the choice existed keeps working as it did.
+    expect(field('approverFrom')).toMatchObject({ displayName: 'Approver', type: 'options', default: 'approvedBy' });
+    expect((field('approverFrom').options as { value: string }[]).map((o) => o.value)).toEqual(['approvedBy', 'formSignIn']);
+    // Which page is the approval is security configuration: a literal, as the allowlist.
+    expect(field('approvalFormPage')).toMatchObject({ displayName: 'Approval Form Page', type: 'string', default: 'Review and approve', noDataExpression: true });
     expect(field('writeSteps')).toMatchObject({ displayName: 'Write Steps', type: 'string', default: '', placeholder: '7, 9', hint: 'Desktop steps only. Leave empty when no step saves, posts or submits.' });
     expect(field('approved')).toMatchObject({ displayName: 'Approved', type: 'boolean', default: false, hint: 'Off records a rejection' });
     expect(field('approverId').displayName).toBe('Approved By');
     // Optional in the editor: with one address on the allowlist, an empty Approved By is that address (signSteps.ts).
     expect(field('approverId').required).not.toBe(true);
     expect(field('approverId').description).toBe(
-      'Who decided: an address on the Approver Allowlist. Leave it empty when the allowlist holds one address: that address is recorded. With more than one, it is required.',
+      'Who decided: an address on the Approver Allowlist. Leave it empty when the allowlist holds one address: that address is recorded. With more than one, it is required. Not used when Approver is who signed in to n8n.',
     );
     expect(field('approverAllowlist').displayName).toBe('Approver Allowlist');
   });

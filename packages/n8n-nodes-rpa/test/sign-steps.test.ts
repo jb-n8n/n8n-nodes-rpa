@@ -375,6 +375,76 @@ describe('Sign Steps: refusals', () => {
   });
 });
 
+describe('Sign Steps: the approver who signed in to n8n on the approval form', () => {
+  const PAGE = 'Review and approve';
+  const NOT_SIGNED_IN = `Sign Steps refused: No n8n user signed in on the form page "${PAGE}": with Approver set to who signed in to n8n, the form must use n8n User Auth (Authentication on its form trigger), and Approval Form Page must name the page where the approver decides`;
+  const NOT_ON_LIST = 'Sign Steps refused: The n8n user who submitted the approval form is not on the Approver Allowlist';
+  /** n8n's Form node output for the page: `user` as n8n 2.45 writes it for a signed-in submitter. */
+  const signedIn = (email: string) => ({ id: 'u-1', email, firstName: 'Ann', lastName: 'Approver' });
+  const asked: string[] = [];
+  /** Sign with Approver = who signed in; `user` is what the page's output holds under user (undefined: the page never ran). */
+  async function signAs(user: unknown, over: Record<string, unknown> = {}, item: IDataObject = repairedItem(STEPS)) {
+    const p = params({ approverFrom: 'formSignIn', approvalFormPage: PAGE, approverId: '', ...over });
+    return only(await sign(item, {
+      params: p,
+      evaluateExpression: (expression) => {
+        asked.push(expression);
+        if (user === undefined) throw new Error(`Referenced node doesn't exist`);
+        return user;
+      },
+    })).json;
+  }
+
+  it('records the signed-in n8n user when the allowlist lists them, from the page n8n names, for approvals and rejections', async () => {
+    asked.length = 0;
+    expect(await signAs(signedIn(APPROVER))).toMatchObject({ status: 'active', approvedBy: APPROVER });
+    expect(asked).toEqual([`{{ $("${PAGE}").first().json.user }}`]);
+    // As n8n spells the address; the allowlist compares without case.
+    expect(await signAs(signedIn('Approver@Example.com'))).toMatchObject({ status: 'active', approvedBy: 'Approver@Example.com' });
+    expect(await signAs(signedIn(APPROVER), { approved: false })).toMatchObject({ status: 'rejected', approvedBy: APPROVER });
+    // The signature binds the person n8n signed in.
+    const rec = await signAs(signedIn(APPROVER));
+    expect(verifyScript(JSON.parse(rec.steps as string) as unknown, KEY, { approvedBy: APPROVER, signature: rec.signature as string })).toBe(true);
+  });
+  it('a signed-in user not on the allowlist is refused, for approvals and rejections; Approved By cannot speak for them', async () => {
+    for (const approved of [true, false]) {
+      expect((await signAs(signedIn('mallory@example.com'), { approved })).message).toBe(NOT_ON_LIST);
+      // A typed or mapped Approved By is not read in this mode.
+      expect((await signAs(signedIn('mallory@example.com'), { approved, approverId: APPROVER })).message).toBe(NOT_ON_LIST);
+    }
+    // An empty allowlist lets no one approve.
+    expect((await signAs(signedIn(APPROVER), { approverAllowlist: '' })).message).toBe(NOT_ON_LIST);
+  });
+  it('no signed-in user is refused, even with one address on the allowlist (no default from it) or with Approved By set', async () => {
+    for (const user of [undefined, null, {}, { id: 'u-1' }, { id: '', email: APPROVER }, { id: 'u-1', email: '' }, { id: 'u-1', email: '  ' }]) {
+      for (const approved of [true, false]) {
+        expect((await signAs(user, { approved, approverAllowlist: APPROVER })).message, JSON.stringify(user)).toBe(NOT_SIGNED_IN);
+        expect((await signAs(user, { approved, approverId: APPROVER })).message, JSON.stringify(user)).toBe(NOT_SIGNED_IN);
+      }
+    }
+  });
+  it('a user forged through a form field is no one: only the object n8n writes counts, and the incoming item is never read for it', async () => {
+    // A form field named "user" gives text, a list (checkboxes) or a file's description: none of them is n8n's user.
+    for (const forged of [APPROVER, [APPROVER], { filename: 'x.json', mimetype: 'application/json', size: 2 }, { email: APPROVER }, { id: 1, email: APPROVER }]) {
+      expect((await signAs(forged)).message, JSON.stringify(forged)).toBe(NOT_SIGNED_IN);
+    }
+    // A user on the Repaired steps item (incoming data) does not count: the page's own output is read.
+    expect((await signAs(undefined, {}, repairedItem(STEPS, { user: signedIn(APPROVER) }))).message).toBe(NOT_SIGNED_IN);
+  });
+  it('the approval page is a literal page name; an unknown Approver is a configuration error', async () => {
+    const p = params({ approverFrom: 'formSignIn', approvalFormPage: PAGE });
+    const viaExpression = only(await sign(repairedItem(STEPS), { params: p, rawParameters: { ...p, approvalFormPage: '={{ $json.page }}' }, evaluateExpression: () => signedIn(APPROVER) })).json;
+    expect(viaExpression).toMatchObject({ error: 'Approval Form Page must be set directly, not with an expression.', details: { configError: true } });
+    for (const page of ['', '  ', 'a { b', 'page}']) {
+      expect((await signAs(signedIn(APPROVER), { approvalFormPage: page })).error).toBe('Approval Form Page must be the name of the form page where the approver decides (no { or }).');
+    }
+    expect((await signAs(signedIn(APPROVER), { approverFrom: 'anyone' })).error).toBe('Approver must be Approved By or Who Signed In to n8n on the Approval Form.');
+    // Without the parameter (a node saved before it existed), Approved By is used, as before.
+    const old = params();
+    expect(only(await sign(repairedItem(STEPS), { params: old })).json).toMatchObject({ status: 'active', approvedBy: APPROVER });
+  });
+});
+
 describe('Sign Steps: reject', () => {
   it('Approved off records a rejection with empty steps and signature', async () => {
     expect(only(await sign(repairedItem(STEPS), { params: params({ approved: false }) })).json).toEqual({

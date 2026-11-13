@@ -86,38 +86,44 @@ by another name or address than the one in the line (a NAT, a tunnel), run the c
 ## 4. Import and approve
 
 1. Set up the import form with one command, on the computer you use n8n from (Node.js 22 or later). It asks for an n8n
-   API key (make one in n8n: **Settings → n8n API**) and does not show what you type. Answer `n` when it asks
-   `Connect a Windows machine now?`: you did that in step 2.
+   API key (make one in n8n: **Settings → n8n API**, with an expiry) and does not show what you type. Answer `n` when
+   it asks `Connect a Windows machine now?`: you did that in step 2.
 
    ```sh
-   npx n8n-nodes-rpa setup --url http://localhost:5678 --approver you@example.com
+   npx n8n-nodes-rpa setup --url http://localhost:5678
    ```
 
-   It creates a login for the form, an **RPA Step Signing** key and the workflow **RPA: 5 Import a bot**, with your
-   address as the approver, and publishes it. **Signing** marks steps as approved, and the bot runs only steps whose
-   signature matches. It ends with:
+   It creates an **RPA Step Signing** key and the workflow **RPA: 5 Import a bot**, and publishes it. **Signing** marks
+   steps as approved, and the bot runs only steps whose signature matches. The form opens with your n8n sign-in, so it
+   has no password of its own. The approver is your n8n address: the command takes it from the API key's owner, or
+   asks (`--approver` gives another). It ends with:
 
    ```text
    The import form is ready.
      Address:    http://localhost:5678/form/<id>
-     User name:  rpa
-     Password:   <32 characters>   (shown once: keep it in your password manager)
+     Sign-in:    the form opens with your n8n sign-in. Who approves is recorded as the n8n user who approved.
    ```
+
+   Its last line is about the API key: it can do everything you can in n8n. Delete it in n8n when the setup is done.
 
    The signing key stays in n8n, and n8n does not show it again. A lost key means approving every bot again. Add
    `--show-signing-key` to the first run to see it once. The command never changes a key that exists: only
    `--replace-signing-key` does, after you type `REPLACE`, and every bot signed with the old key must then be approved
-   again. Run it again at any time: it reuses what it made, and `--new-form-password` gives the form a new password.
+   again. Run it again at any time: it reuses what it made.
    It reuses only what your own project holds (your personal project, or the one `--project-id` names). A credential
    or workflow of the same name that belongs to someone else is left alone, and the command says so. In a shared
-   project, everyone in it can use the form's login and the signing key, so the command lists what it finds there and
-   asks once before it uses them (`--reuse-project-credentials` answers yes without a terminal).
+   project, everyone in it can use the signing key, so the command lists what it finds there and asks once before it
+   uses them (`--reuse-project-credentials` answers yes without a terminal).
+
+   For approvers with no n8n account, add `--form-login basic`: the form then asks for a user name and password that
+   the command makes and prints once, and `--new-form-password` gives it a new one.
 
    Until version 0.2.0 is on npm, run it from this repository instead: `pnpm install`, then
    `pnpm --filter n8n-nodes-rpa build`, then `node packages/n8n-nodes-rpa/dist/setup.mjs setup` with the same options.
    To set the form up by hand, import `packages/n8n-nodes-rpa/templates/5-import-a-bot.json` as
    [Templates](../reference/templates.md#set-it-up-by-hand) says.
-2. Open the form's address in your browser and sign in with the user name and password.
+2. Open the form's address in your browser and sign in to n8n. The first time, n8n asks whether the form may use your
+   n8n login: choose **Allow**. (With `--form-login basic`, sign in with the user name and password instead.)
 3. Upload the recording, give the steps a name such as `erp-line-items`, and submit.
 4. The next page, **Review and approve**, lists the steps by number. The lighter, grey steps are the ones the import added (a wait
    for each window, and one for the file the bot returns). Under **Which of these steps save, send or submit?**, keep
@@ -126,7 +132,9 @@ by another name or address than the one in the line (a NAT, a tunnel), run the c
    <img src="../images/import-review-page.png" alt="The Review and approve page for the ERP Demo recording: the numbered steps, the tick boxes and the decision" width="360">
 
 5. The last page says `Approved and signed: erp-line-items v1 is now the version that runs under that name.` Your
-   browser downloads `erp-line-items.workflow.json`, the workflow that runs the bot.
+   browser downloads `erp-line-items.workflow.json`, the workflow that runs the bot. The signed row records your n8n
+   address as **approvedBy**. Someone signed in to n8n who is not on **Sign steps → Approver Allowlist** cannot
+   approve: the last page says `Sign Steps refused` and nothing is signed.
 
 ## 5. Run it
 
