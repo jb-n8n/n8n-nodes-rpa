@@ -973,6 +973,86 @@
     },
     {
       "parameters": {
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "playwright_steps"
+        },
+        "returnAll": true
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000550",
+      "name": "Versions now",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        3520,
+        -120
+      ],
+      "alwaysOutputData": true,
+      "notes": "Reads every row of the steps table again once the review page is answered, before anything is signed or rejected: another approval of the same name may have come first."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005d3",
+              "leftValue": "={{ ((rows, lists) => lists.every((l) => !(rows.some((r) => r.name === l.name && Number(r.version) >= Number(l.version)))))($('Versions now').all().map((i) => i.json).filter((r) => typeof r.name === 'string'), $('Import steps').all(1).map((i) => i.json)) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000551",
+      "name": "Still the next version?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3740,
+        -120
+      ],
+      "executeOnce": true,
+      "notes": "Signs or rejects only when no row of a name on the review page has its version or a higher one: no other approval or rejection of that name came first while the page was open."
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "respondWith": "text",
+        "completionTitle": "Approved or rejected meanwhile",
+        "completionMessage": "={{ ((rows, lists, e) => 'Nothing was signed or rejected. While this page was open, another version of ' + lists.filter((l) => rows.some((r) => r.name === l.name && Number(r.version) >= Number(l.version))).map((l) => e(l.name) + ' (version ' + e(Math.max(...rows.filter((r) => r.name === l.name).map((r) => Number(r.version)))) + ')').join(', ') + ' was approved or rejected.\\nOpen the form again and start again: it shows the version that runs now.')($('Versions now').all().map((i) => i.json).filter((r) => typeof r.name === 'string'), $('Import steps').all(1).map((i) => i.json), (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c])) }}",
+        "limitWaitTime": true,
+        "limitType": "afterTimeInterval",
+        "resumeAmount": 1,
+        "resumeUnit": "hours",
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000552",
+      "name": "Approved meanwhile",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        3960,
+        40
+      ],
+      "notes": "The choice and the box do not fit together: this page says which of the two to correct, and nothing is imported or signed. The run pauses here until the browser shows this page, at most 1 hour."
+    },
+    {
+      "parameters": {
         "mode": "raw",
         "jsonOutput": "={{ { lists: $('Review and approve').first().json.decision_0 === undefined ? [] : $('Import steps').all(1).map((i) => i.json) } }}",
         "options": {}
@@ -982,7 +1062,7 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [
-        3520,
+        3960,
         -220
       ],
       "notes": "The Repaired steps items exactly as Import steps gave them, in the order the review page showed them. None when the page was not answered in time."
@@ -997,7 +1077,7 @@
       "type": "n8n-nodes-base.splitOut",
       "typeVersion": 1,
       "position": [
-        3740,
+        4180,
         -220
       ]
     },
@@ -1016,7 +1096,7 @@
       "type": "n8n-nodes-rpa.playwright",
       "typeVersion": 1,
       "position": [
-        3960,
+        4400,
         -220
       ],
       "onError": "continueErrorOutput",
@@ -1052,7 +1132,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        4180,
+        4620,
         -220
       ],
       "notes": "Sign steps runs twice. Before the review page it only checks (Check Only): that item goes to Review and approve. After it, it signs: the records go on to Signed?."
@@ -1086,7 +1166,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        4400,
+        4840,
         -280
       ]
     },
@@ -1194,7 +1274,7 @@
       "type": "n8n-nodes-base.dataTable",
       "typeVersion": 1.1,
       "position": [
-        4620,
+        5060,
         -340
       ],
       "notes": "Writes the signed steps as an active row, from Sign steps' record only."
@@ -1258,7 +1338,7 @@
       "type": "n8n-nodes-base.dataTable",
       "typeVersion": 1.1,
       "position": [
-        4840,
+        5280,
         -340
       ],
       "notes": "Every other active row of the same name becomes superseded (an import is a first version, so whatever its version), so the steps just approved are what runs under that name."
@@ -1347,7 +1427,7 @@
       "type": "n8n-nodes-base.dataTable",
       "typeVersion": 1.1,
       "position": [
-        4620,
+        5060,
         -180
       ],
       "notes": "A rejected step list: a rejected row, with no steps and no signature. A step list Sign steps refused writes no row; the last page names the reason."
@@ -1382,7 +1462,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        3520,
+        3960,
         160
       ],
       "notes": "Every import with steps carries the bot as binary workflow on the Data output of Import steps. After the review page, only when Sign steps signed a step list: a rejected bot, or one Sign steps refused, gets no workflow to run, and the last page does not say a file comes. A change or a new signature of an approved bot gets no file: its workflow exists already."
@@ -1407,7 +1487,7 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        3740,
+        4180,
         80
       ],
       "notes": "The run pauses here until the browser shows this page, at most 1 hour. The file comes from the Data output of Import steps."
@@ -1431,7 +1511,7 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        3740,
+        4180,
         240
       ],
       "notes": "The run pauses here until the browser shows this page, at most 1 hour."
@@ -1617,12 +1697,7 @@
       "main": [
         [
           {
-            "node": "Step lists",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "Workflow file?",
+            "node": "Versions now",
             "type": "main",
             "index": 0
           }
@@ -1973,6 +2048,40 @@
         [
           {
             "node": "Choice and box differ",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Versions now": {
+      "main": [
+        [
+          {
+            "node": "Still the next version?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Still the next version?": {
+      "main": [
+        [
+          {
+            "node": "Step lists",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Workflow file?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Approved meanwhile",
             "type": "main",
             "index": 0
           }

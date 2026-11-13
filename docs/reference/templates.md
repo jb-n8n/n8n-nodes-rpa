@@ -39,8 +39,8 @@ first, before anything reads or writes them.
   running.
   The steps get the next version: **Import steps → Options → Version** is one more than the highest version any row
   of that name has, active, rejected or superseded, read by **The bot to change** (never from the box). A rejected
-  attempt keeps its number and the next attempt takes a new one, so the table never holds two rows of one name and
-  version. The review page names the version that runs: `version 2, replacing version 1`, or after a rejected
+  attempt keeps its number and the next attempt takes a new one, and an answer is refused when another one of that name
+  came first (see the review page below), so the table does not hold two rows of one name and version. The review page names the version that runs: `version 2, replacing version 1`, or after a rejected
   attempt `version 3, replacing version 1`. Signing the same steps again also gives the next version: it is a new
   approval. The workflow that runs the bot
   reads Expected Version from the active row, so it keeps running. Approved, the new row supersedes the old one. Rejected, the old one keeps running. This path gives no workflow file:
@@ -62,7 +62,12 @@ first, before anything reads or writes them.
 - **Review and approve** shows each step list: what it opens, whether it signs in, forms it submits, files it returns,
   what the replay proved, the steps it left out, and the numbered steps. For desktop steps it asks "Which of these steps
   save, send or submit?". The **Decision** is **Approve and sign** or **Reject**. A page left unanswered for an hour
-  signs nothing.
+  signs nothing. Once it is answered, **Versions now** reads the steps table again and **Still the next version?**
+  checks that no row of a name on the page has that version or a higher one: another review page of the same bot,
+  open at the same time, may have been answered first. Then nothing is signed or rejected, and **Approved meanwhile**
+  says that another version was approved or rejected meanwhile and to start again. The check runs a moment before
+  **Save signed steps** writes, not in one step with it (n8n has no transaction across nodes): two answers sent within
+  that moment, well under a second, can still both be saved.
 - The last page says `Approved and signed: <name> version <version> is now the version that runs under that name.`,
   or `Rejected: <name> version <version>. Nothing was signed.` An import of a new name is version 1. A file uploaded
   under a name used before gets the number after the highest any row of that name has (**Running versions** and

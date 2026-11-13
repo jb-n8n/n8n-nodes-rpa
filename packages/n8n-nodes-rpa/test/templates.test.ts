@@ -217,7 +217,7 @@ describe('every Data Table is made before anything reads or writes it, on every 
   it('the reads of template 5 are covered: the check finds the round 12 wiring, where the tables were made late', () => {
     const t = load('5-import-a-bot.json');
     expect(t.nodes.filter((n) => used(n) !== undefined).map((n) => n.name).sort()).toEqual([
-      'Approved bots', 'Record rejection', 'Running versions', 'Save signed steps', 'Supersede older versions',
+      'Approved bots', 'Record rejection', 'Running versions', 'Save signed steps', 'Supersede older versions', 'Versions now',
     ]);
     // As at 1ac5167: Settings → Change an approved bot? only, and the tables made after Approve on this form?.
     const late = structuredClone(t);
@@ -228,7 +228,7 @@ describe('every Data Table is made before anything reads or writes it, on every 
     // The order matters too: the tables' branch below the rest would run after it, so nothing is made first.
     const below = structuredClone(t);
     byName(below, 'Create steps table').position = [660, 600];
-    expect(tablesNotMadeFirst(below)).toEqual(['Running versions uses playwright_steps', 'Approved bots uses playwright_steps', 'Save signed steps uses playwright_steps', 'Supersede older versions uses playwright_steps', 'Record rejection uses playwright_steps']);
+    expect(tablesNotMadeFirst(below)).toEqual(['Running versions uses playwright_steps', 'Approved bots uses playwright_steps', 'Versions now uses playwright_steps', 'Save signed steps uses playwright_steps', 'Supersede older versions uses playwright_steps', 'Record rejection uses playwright_steps']);
   });
   it('no read of a Data Table goes on with an error item: none has onError set', () => {
     for (const file of Object.keys(FILES)) for (const n of load(file).nodes.filter((x) => used(x) !== undefined && table(x).operation === 'get')) expect(n.onError, `${file}: ${n.name}`).toBeUndefined();
@@ -1297,7 +1297,12 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(targets(t, 'The approved version')).toEqual([['Sign steps']]);
     expect(targets(t, 'Checked?')).toEqual([[REVIEW], ['Signed?']]);
     // v1 order runs the topmost child's branch to its end first: every step list is signed and saved before the last page.
-    expect(targets(t, REVIEW)).toEqual([['Step lists', 'Workflow file?']]);
+    // Once the review page is answered, the steps table is read again, and only if no other approval or rejection of a
+    // name on the page came first do Step lists (to sign) and the last pages follow (IB-5).
+    expect(targets(t, REVIEW)).toEqual([['Versions now']]);
+    expect(targets(t, 'Versions now')).toEqual([['Still the next version?']]);
+    expect(targets(t, 'Still the next version?')).toEqual([['Step lists', 'Workflow file?'], ['Approved meanwhile']]);
+    expect(targets(t, 'Approved meanwhile')).toEqual([]);
     expect(byName(t, 'Step lists').position[1]).toBeLessThan(byName(t, 'Workflow file?').position[1]);
     expect(targets(t, 'Step lists')).toEqual([['Step lists to sign']]);
     expect(targets(t, 'Step lists to sign')).toEqual([['Sign steps']]);
@@ -1322,12 +1327,12 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(byName(t, 'Approval by email?').position[1]).toBeLessThan(Math.min(...['Approve on this form?', 'Import failed'].map((n) => byName(t, n).position[1])));
     const working = t.nodes.filter((n) => n.type !== STICKY).map((n) => n.name).sort();
     expect(working).toEqual([
-      'Add the login page', 'Address with values', 'Approval by email?', 'Approve on this form?', 'Approve steps', 'Approved bot found?', 'Approved bots', 'Asks about a download?', 'Change an approved bot?',
+      'Add the login page', 'Address with values', 'Approval by email?', 'Approve on this form?', 'Approve steps', 'Approved bot found?', 'Approved bots', 'Approved meanwhile', 'Asks about a download?', 'Change an approved bot?',
       'Change or sign again', 'Checked?', 'Choice and box differ', 'Choice fits the box?', 'Compared with the approved version', 'Compared with the running version', 'Create run log table', 'Create steps table', 'Import a bot', 'Import failed', 'Import steps', 'Imported', 'Imported, with the workflow file', 'Missing login page?',
-      'No approved bot', 'Plain address?', 'Read the upload', 'Record rejection', REVIEW, 'Running versions', 'Save signed steps', 'Settings', 'Sign steps', 'Signed?', 'Step lists', 'Step lists to sign', 'Supersede older versions',
-      'The approved version', 'The bot to change', 'The file it downloads', 'The steps as a file', 'The upload', 'What it replaces', 'Workflow file?',
+      'No approved bot', 'Plain address?', 'Read the upload', 'Record rejection', REVIEW, 'Running versions', 'Save signed steps', 'Settings', 'Sign steps', 'Signed?', 'Step lists', 'Step lists to sign', 'Still the next version?', 'Supersede older versions',
+      'The approved version', 'The bot to change', 'The file it downloads', 'The steps as a file', 'The upload', 'Versions now', 'What it replaces', 'Workflow file?',
     ]);
-    expect(t.nodes.filter((n) => n.type === COMPLETION).map((n) => n.typeVersion)).toEqual(Array(10).fill(2.5));
+    expect(t.nodes.filter((n) => n.type === COMPLETION).map((n) => n.typeVersion)).toEqual(Array(11).fill(2.5));
     // A form page pauses the run until the browser loads it; a closed tab must not leave the execution waiting for ever.
     for (const n of t.nodes.filter((x) => x.type === COMPLETION)) {
       expect(n.parameters, n.name).toMatchObject({ limitWaitTime: true, limitType: 'afterTimeInterval', resumeAmount: 1, resumeUnit: 'hours' });
@@ -2999,6 +3004,48 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const last = render(completion('Imported').completionMessage, { $: nodesRan({ ...fresh, 'Import steps': [[{ json: { drafts: [], report: { steps: 1, items: [] } } }], [next()]], [REVIEW]: [[{ json: {} }]] }) });
     expect(last).toContain('Nothing was signed: the review page was not answered in time.');
     expect(last).not.toContain('Rejected');
+  });
+
+  it('two review pages of one bot open at once: the first answer signs, the second signs and rejects nothing and says to start again (IB-5)', () => {
+    // Nothing on the way to Sign steps, Save signed steps or Record rejection bypasses the check: it is the only way from
+    // the review page, and Step lists (the only way to Sign steps after the page) follows it.
+    expect(targets(t, REVIEW)).toEqual([['Versions now']]);
+    const into = (name: string) => Object.entries(t.connections).filter(([, c]) => (c.main ?? []).some((out) => out.some((x) => x.node === name))).map(([from]) => from).sort();
+    expect(into('Step lists')).toEqual(['Still the next version?']);
+    expect(into('Sign steps')).toEqual(['Step lists to sign', 'The approved version']);
+    expect(into('Versions now')).toEqual([REVIEW]);
+    // The read is the steps table's full read, made on every answer (several rows: the check runs once).
+    expect(table(byName(t, 'Versions now'))).toEqual(table(byName(t, 'Running versions')));
+    expect(byName(t, 'Versions now')).toMatchObject({ alwaysOutputData: true });
+    expect(byName(t, 'Still the next version?')).toMatchObject({ executeOnce: true });
+    const cond = (byName(t, 'Still the next version?').parameters as { conditions: { conditions: { leftValue: string }[] } }).conditions.conditions[0].leftValue;
+    const list = (name: string, version: number) => ({ json: { name, version, baseVersion: null, steps: { steps: [] } } });
+    const row = (name: string, version: number, status = 'active') => ({ json: { id: version, name, version, status } });
+    /** The check and the page it leads to, for the step lists on the review page and the rows read after it was answered. */
+    const after = (lists: { json: IDataObject }[], rows: { json: IDataObject }[]) => {
+      const $ = nodesRan({ 'Import steps': [[{ json: {} }], lists], 'Versions now': [rows] });
+      return { next: evaluate(cond, { $ }), page: render(completion('Approved meanwhile').completionMessage, { $ }) };
+    };
+    // Both pages were made when version 6 ran, so both show version 7. The first answer comes back: nothing has 7 yet.
+    expect(after([list('feed', 7)], [row('feed', 5, 'superseded'), row('feed', 6)]).next).toBe(true);
+    // The second answer, after the first one signed version 7 (or rejected it: a rejected row keeps its number).
+    for (const status of ['active', 'rejected']) {
+      const second = after([list('feed', 7)], [row('feed', 6, 'superseded'), row('feed', 7, status)]);
+      expect(second.next).toBe(false);
+      expect(second.page.split('\n')).toEqual([
+        'Nothing was signed or rejected. While this page was open, another version of feed (version 7) was approved or rejected.',
+        'Open the form again and start again: it shows the version that runs now.',
+      ]);
+    }
+    // A new bot (an empty table, which still gives one empty item) and another name's rows do not stop it.
+    expect(after([list('feed', 1)], [{ json: {} }]).next).toBe(true);
+    expect(after([list('feed', 1)], [row('other', 9)]).next).toBe(true);
+    // Several step lists: any one taken stops them all, and the page names it, escaped.
+    const many = after([list('feed-1', 8), list('feed <2>', 8)], [row('feed-1', 7), row('feed <2>', 8)]);
+    expect(many.next).toBe(false);
+    expect(many.page.split('\n')[0]).toBe('Nothing was signed or rejected. While this page was open, another version of feed &lt;2&gt; (version 8) was approved or rejected.');
+    // The completion page ends the run: nothing after it.
+    expect(completion('Approved meanwhile')).toMatchObject({ operation: 'completion', respondWith: 'text', completionTitle: 'Approved or rejected meanwhile' });
   });
 
   it('a file uploaded under the name of an approved bot is its next version, and the review page and the last page say which version it replaces', () => {
