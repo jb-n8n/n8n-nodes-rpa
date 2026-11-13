@@ -24,6 +24,7 @@ Templates 2, 3 and 5 create the two Data Tables when they are missing.
 - **Bot file** may be left empty to change an approved bot or sign it again. **Approved bots** reads the `active`
   rows of `playwright_steps`, and **Change or sign again** shows the newest active steps of the name typed, in a box.
   **Review** sends the box to **Import steps** as a step document, then to the same review page and **Sign steps**.
+  **Compared with the approved version** gives the review page its first line: unchanged, or which steps differ.
   Approved, the new row supersedes the old one. Rejected, the old one keeps running. This path gives no workflow file:
   the bot's workflow exists already. A name with no active row ends on **No approved bot**, which lists the approved
   names.

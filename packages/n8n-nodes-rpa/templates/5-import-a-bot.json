@@ -354,7 +354,7 @@
     {
       "parameters": {
         "mode": "raw",
-        "jsonOutput": "={{ ((name, rows) => ((mine) => ({ name, found: mine.length > 0, version: mine.length ? mine[0].version : null, steps: mine.length ? ((s) => { try { return JSON.stringify(JSON.parse(s), null, 2); } catch (e) { return s; } })(mine[0].steps) : '', names: [...new Set(rows.map((r) => r.name))].sort() }))(rows.filter((r) => r.name === name).sort((a, b) => Number(b.version) - Number(a.version))))(String($('Settings').first().json.name ?? '').trim(), $('Approved bots').all().map((i) => i.json).filter((r) => r.status === 'active' && typeof r.name === 'string' && typeof r.steps === 'string' && r.steps !== '')) }}",
+        "jsonOutput": "={{ ((name, rows) => ((mine) => ({ name, found: mine.length > 0, version: mine.length ? mine[0].version : null, steps: mine.length ? ((s) => { try { return JSON.stringify(JSON.parse(s), null, 2); } catch (e) { return s; } })(mine[0].steps) : '', names: [...new Set(rows.map((r) => r.name))].sort(), prefilled: ((q) => q !== null && typeof q === 'object' && 'steps' in q)($('Settings').first().json.formQueryParameters ?? null) }))(rows.filter((r) => r.name === name).sort((a, b) => Number(b.version) - Number(a.version))))(String($('Settings').first().json.name ?? '').trim(), $('Approved bots').all().map((i) => i.json).filter((r) => r.status === 'active' && typeof r.name === 'string' && typeof r.steps === 'string' && r.steps !== '')) }}",
         "options": {}
       },
       "id": "3d6f1a20-7b4c-4e8a-9c11-000000000533",
@@ -366,7 +366,7 @@
         240
       ],
       "executeOnce": true,
-      "notes": "One item: the newest active row whose name is exactly the name typed (trimmed), its steps laid out for reading, and the names of every approved bot for the page that says none was found."
+      "notes": "One item: the newest active row whose name is exactly the name typed (trimmed), its steps laid out for reading, and the names of every approved bot for the page that says none was found. prefilled: the form's address carried a value for the steps box (n8n fills a field of a later page from the first page's address), and nothing is shown."
     },
     {
       "parameters": {
@@ -380,7 +380,7 @@
           "conditions": [
             {
               "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005b8",
-              "leftValue": "={{ $json.found === true }}",
+              "leftValue": "={{ $json.found === true && $json.prefilled !== true }}",
               "rightValue": "",
               "operator": {
                 "type": "boolean",
@@ -448,10 +448,27 @@
     },
     {
       "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ (() => { const bot = $('The bot to change').first().json; const parse = (s) => { try { return JSON.parse(String(s)); } catch (e) { return undefined; } }; const asDoc = (v) => (Array.isArray(v) ? { steps: v } : v); const canon = (v) => (Array.isArray(v) ? '[' + v.map(canon).join(',') + ']' : v !== null && typeof v === 'object' ? '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + canon(v[k])).join(',') + '}' : JSON.stringify(v === undefined ? null : v)); const was = asDoc(parse(bot.steps)); const now = asDoc(parse($('Change or sign again').first().json.steps)); const n = String(bot.version); const usable = (d) => d !== null && typeof d === 'object' && Array.isArray(d.steps); if (bot.found !== true || !usable(was) || !usable(now)) return { compared: 'Could not compare with the approved version: read every step.' }; const steps = []; for (let i = 0; i < Math.max(was.steps.length, now.steps.length); i++) if (i >= was.steps.length || i >= now.steps.length || canon(was.steps[i]) !== canon(now.steps[i])) steps.push(i + 1); const labels = [['startUrl', 'the start site'], ['app', 'the app'], ['interrupts', 'the pop-up handlers'], ['surface', 'browser or desktop']]; const others = [...new Set(Object.keys(was).concat(Object.keys(now)))].filter((k) => !['name', 'version', 'steps', 'signature', 'approvedBy'].includes(k) && canon(was[k]) !== canon(now[k])).sort().map((k) => (labels.find((p) => p[0] === k) || [k, 'the field ' + k])[1]); if (steps.length === 0 && others.length === 0) return { compared: 'These are the steps of the approved version ' + n + ', unchanged.' }; const listed = (steps.length === 1 ? 'step ' : 'steps ') + steps.slice(0, 20).join(', ') + (steps.length > 20 ? ' and more' : ''); const counts = now.steps.length === was.steps.length ? '' : ' ' + now.steps.length + ' steps now, ' + was.steps.length + ' in the approved version.'; return { compared: 'Changed from the approved version ' + n + ': ' + (steps.length ? [listed] : []).concat(others).join(', ') + '.' + counts }; })() }}",
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000538",
+      "name": "Compared with the approved version",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1760,
+        160
+      ],
+      "executeOnce": true,
+      "notes": "Computed here in n8n, from this execution only: the active row The bot to change read from the Data Table, and the text submitted on Change or sign again. The parsed step lists are compared step by step (spacing and key order do not count), and the other signed fields (start site, app, pop-up handlers). The review page shows the line at the top."
+    },
+    {
+      "parameters": {
         "operation": "completion",
         "respondWith": "text",
         "completionTitle": "No approved bot of that name",
-        "completionMessage": "={{ ((b, e) => (b.names.length ? 'No approved bot is named ' + e(b.name) + '. The approved bots: ' + b.names.map(e).join(', ') + '.' : 'No bot has been approved yet.') + '\\nTo import a bot, open the form again and upload its file. To change an approved bot or sign it again, open the form again, leave Bot file empty and type its name.')($('The bot to change').first().json, (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c])) }}",
+        "completionMessage": "={{ ((b, e) => (b.prefilled ? 'The address of this form carried a value for the steps box. Nothing was shown and nothing was imported. Open the form from its own address, with nothing after a question mark.' : b.names.length ? 'No approved bot is named ' + e(b.name) + '. The approved bots: ' + b.names.map(e).join(', ') + '.' : 'No bot has been approved yet.') + '\\nTo import a bot, open the form again and upload its file. To change an approved bot or sign it again, open the form again, leave Bot file empty and type its name.')($('The bot to change').first().json, (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c])) }}",
         "limitWaitTime": true,
         "limitType": "afterTimeInterval",
         "resumeAmount": 1,
@@ -466,7 +483,7 @@
         1320,
         320
       ],
-      "notes": "No file, and no active row of that name. The run pauses here until the browser shows this page, at most 1 hour."
+      "notes": "No file, and no active row of that name; or the form's address carried a value for the steps box. The run pauses here until the browser shows this page, at most 1 hour."
     },
     {
       "parameters": {
@@ -714,7 +731,7 @@
       "parameters": {
         "operation": "page",
         "defineForm": "json",
-        "jsonOutput": "={{ JSON.stringify(((lists, e, list, detail, label, details) => lists.flatMap((l, k) => ((desktop, writes, who) => [{ fieldType: 'html', html: (lists.length > 1 ? '<h3>' + (k + 1) + ' of ' + lists.length + ': ' + e(l.name) + ', version ' + e(l.version) + '</h3>' : '') + list(l, e) + (details ? '<h4>Details of every step (how each one finds its control)</h4>' + detail(l, 1, e) : '<p><em>How each step finds its control is in this run\\'s execution in n8n (the Import steps node\\'s output), and in the approval email when approval is by email.</em></p>') }].concat(writes.length ? [{ fieldLabel: who + 'Which of these steps save, send or submit?', fieldName: 'writes_' + k, fieldType: 'checkbox', fieldOptions: { values: writes.map((c) => ({ option: label(c) })) }, defaultValue: writes.filter((c) => !c.signsIn).map(label).join(',') }] : [], desktop ? [{ fieldType: 'html', html: '<p><em>' + (writes.length ? 'Ticked steps are' : 'The steps you list here are') + ' allowed to save or send. ' + (writes.length ? 'An unticked step' : 'Any other step') + ' is stopped only when it tries to use a control or key that your administrator has protected on the bot machine.</em></p>' }, { fieldLabel: who + (writes.length ? 'Any other step that saves, sends or submits (its number, optional)' : 'Steps that save, send or submit (their numbers, optional)'), fieldName: 'moreWrites_' + k, fieldType: 'text', placeholder: '7, 9' }] : [], [{ fieldLabel: who + 'Decision', fieldName: 'decision_' + k, fieldType: 'radio', fieldOptions: { values: [{ option: 'Approve and sign' }, { option: 'Reject' }] }, requiredField: true }]))(l.steps?.surface === 'desktop', l.steps?.surface === 'desktop' ? l.writeCandidates ?? [] : [], lists.length > 1 ? String(l.name ?? '') + ': ' : '')))($('Import steps').all(1).map((i) => i.json), (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]), (l, e) => ((desktop, notRun, steps, flags) => '<p>' + [desktop ? 'Opens ' + String(l.steps.app?.exe ?? '') + ' on the desktop runner.' : (flags.filter((f) => f.startsWith('host: ')).length ? 'Opens ' + flags.filter((f) => f.startsWith('host: ')).map((f) => f.slice(6)).join(', ') + '.' : '')].concat(steps.some((s) => s.signIn) ? ['Signs in with the RPA Site Login.'] : [], flags.filter((f) => f.startsWith('form submission: ')).map((f) => 'Submits a form: ' + f.slice(17) + '.'), steps.map((s, i) => (s.expectFile || s.download ? i + 1 : 0)).filter((i) => i).map((i) => 'Returns a file to n8n: step ' + i + '.'), flags.filter((f) => !/^(host|form submission|desktop app|file returned to n8n|candidate write|write): /.test(f) && f !== 'download step'), [desktop ? 'Not tried by the import: read every step before you approve.' : notRun ? 'Not run by the import: check every step, each form\\'s target and each download before you approve.' : String(l.evidenceLine ?? '').split('; ')[0] + '.']).filter((x) => x).map(e).join('<br>') + '</p>' + (String(l.leftOutList ?? '') ? '<p><b>⚠ Left out by the import:</b><br>' + e(l.leftOutList).split('\\n').join('<br>') + '</p>' : '') + '<p><b>The steps</b></p>' + ((a) => (a.length ? '<p><em>' + (steps.length - a.length) + (steps.length - a.length === 1 ? ' recorded step' : ' recorded steps') + ', plus ' + a.length + ' the import added (waits for each window' + (a.some((r) => r.marks.includes('returns a file')) ? ', the returned file' : '') + ')</em></p>' : ''))((l.reviewSteps ?? []).filter((r) => r.added)) + '<ol>' + (l.reviewSteps ?? []).map((r) => '<li>' + ((t) => (r.added ? '<i>' + t + '</i>' : t))(e(r.text) + (r.marks.length ? ' <em>· ' + e(r.marks.join('; ')) + '</em>' : '')) + (Array.isArray(r.each) && r.each.length ? '<ul>' + r.each.map((x) => '<li>On each page: ' + e(x.text) + (x.marks.length ? ' <em>· ' + e(x.marks.join('; ')) + '</em>' : '') + '</li>').join('') + '</ul>' : '') + '</li>').join('') + '</ol>')(l.steps?.surface === 'desktop', String(l.evidenceLine ?? '').startsWith('Not replayed:'), Array.isArray(l.steps?.steps) ? l.steps.steps : [], (l.safetyFlags ?? []).map(String)), (l, n, e) => ((desktop, notRun) => (n > 1 ? '<p><b>' + e(l.name) + '</b></p>' : '') + '<p><em><b>Safety flags:</b> ' + e(l.safetyLine) + '</em></p>' + (String(l.leftOutList ?? '') ? '<p><em><b>Left out by the import (the source does these, the steps do not):</b><br>' + e(l.leftOutList).split('\\n').join('<br>') + '</em></p>' : '') + '<p><em><b>Evidence' + (notRun ? '' : ' (as reported by the run)') + ':</b> ' + e(l.evidenceLine) + '</em></p>' + '<p><em><b>' + (desktop ? 'The steps' : notRun ? 'What changed (as written; these steps were never run)' : 'What changed (as reported by the run)') + ':</b><br>' + e(l.changeList).split('\\n').join('<br>') + '</em></p>' + (String(l.attachmentNames ?? '') ? '<p><em>Screenshots of the replay are in this execution in n8n, on the Repaired Steps output of Import steps.</em></p>' : ''))(l.steps?.surface === 'desktop', l.steps?.surface === 'desktop' || String(l.evidenceLine ?? '').startsWith('Not replayed:')), (c) => 'Step ' + c.step + ': ' + String(c.intent).split(',').join(';').split('<').join('‹').split('>').join('›'), $('Settings').first().json.showDetails === true)).split('$').join('\\\\u0024') }}",
+        "jsonOutput": "={{ JSON.stringify(((c) => (c ? [{ fieldType: 'html', html: '<p><b>' + String(c).replace(/[&<>\"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[ch]) + '</b></p>' }] : []))($('Compared with the approved version').isExecuted ? $('Compared with the approved version').first().json.compared : '').concat(((lists, e, list, detail, label, details) => lists.flatMap((l, k) => ((desktop, writes, who) => [{ fieldType: 'html', html: (lists.length > 1 ? '<h3>' + (k + 1) + ' of ' + lists.length + ': ' + e(l.name) + ', version ' + e(l.version) + '</h3>' : '') + list(l, e) + (details ? '<h4>Details of every step (how each one finds its control)</h4>' + detail(l, 1, e) : '<p><em>How each step finds its control is in this run\\'s execution in n8n (the Import steps node\\'s output), and in the approval email when approval is by email.</em></p>') }].concat(writes.length ? [{ fieldLabel: who + 'Which of these steps save, send or submit?', fieldName: 'writes_' + k, fieldType: 'checkbox', fieldOptions: { values: writes.map((c) => ({ option: label(c) })) }, defaultValue: writes.filter((c) => !c.signsIn).map(label).join(',') }] : [], desktop ? [{ fieldType: 'html', html: '<p><em>' + (writes.length ? 'Ticked steps are' : 'The steps you list here are') + ' allowed to save or send. ' + (writes.length ? 'An unticked step' : 'Any other step') + ' is stopped only when it tries to use a control or key that your administrator has protected on the bot machine.</em></p>' }, { fieldLabel: who + (writes.length ? 'Any other step that saves, sends or submits (its number, optional)' : 'Steps that save, send or submit (their numbers, optional)'), fieldName: 'moreWrites_' + k, fieldType: 'text', placeholder: '7, 9' }] : [], [{ fieldLabel: who + 'Decision', fieldName: 'decision_' + k, fieldType: 'radio', fieldOptions: { values: [{ option: 'Approve and sign' }, { option: 'Reject' }] }, requiredField: true }]))(l.steps?.surface === 'desktop', l.steps?.surface === 'desktop' ? l.writeCandidates ?? [] : [], lists.length > 1 ? String(l.name ?? '') + ': ' : '')))($('Import steps').all(1).map((i) => i.json), (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]), (l, e) => ((desktop, notRun, steps, flags) => '<p>' + [desktop ? 'Opens ' + String(l.steps.app?.exe ?? '') + ' on the desktop runner.' : (flags.filter((f) => f.startsWith('host: ')).length ? 'Opens ' + flags.filter((f) => f.startsWith('host: ')).map((f) => f.slice(6)).join(', ') + '.' : '')].concat(steps.some((s) => s.signIn) ? ['Signs in with the RPA Site Login.'] : [], flags.filter((f) => f.startsWith('form submission: ')).map((f) => 'Submits a form: ' + f.slice(17) + '.'), steps.map((s, i) => (s.expectFile || s.download ? i + 1 : 0)).filter((i) => i).map((i) => 'Returns a file to n8n: step ' + i + '.'), flags.filter((f) => !/^(host|form submission|desktop app|file returned to n8n|candidate write|write): /.test(f) && f !== 'download step'), [desktop ? 'Not tried by the import: read every step before you approve.' : notRun ? 'Not run by the import: check every step, each form\\'s target and each download before you approve.' : String(l.evidenceLine ?? '').split('; ')[0] + '.']).filter((x) => x).map(e).join('<br>') + '</p>' + (String(l.leftOutList ?? '') ? '<p><b>⚠ Left out by the import:</b><br>' + e(l.leftOutList).split('\\n').join('<br>') + '</p>' : '') + '<p><b>The steps</b></p>' + ((a) => (a.length ? '<p><em>' + (steps.length - a.length) + (steps.length - a.length === 1 ? ' recorded step' : ' recorded steps') + ', plus ' + a.length + ' the import added (waits for each window' + (a.some((r) => r.marks.includes('returns a file')) ? ', the returned file' : '') + ')</em></p>' : ''))((l.reviewSteps ?? []).filter((r) => r.added)) + '<ol>' + (l.reviewSteps ?? []).map((r) => '<li>' + ((t) => (r.added ? '<i>' + t + '</i>' : t))(e(r.text) + (r.marks.length ? ' <em>· ' + e(r.marks.join('; ')) + '</em>' : '')) + (Array.isArray(r.each) && r.each.length ? '<ul>' + r.each.map((x) => '<li>On each page: ' + e(x.text) + (x.marks.length ? ' <em>· ' + e(x.marks.join('; ')) + '</em>' : '') + '</li>').join('') + '</ul>' : '') + '</li>').join('') + '</ol>')(l.steps?.surface === 'desktop', String(l.evidenceLine ?? '').startsWith('Not replayed:'), Array.isArray(l.steps?.steps) ? l.steps.steps : [], (l.safetyFlags ?? []).map(String)), (l, n, e) => ((desktop, notRun) => (n > 1 ? '<p><b>' + e(l.name) + '</b></p>' : '') + '<p><em><b>Safety flags:</b> ' + e(l.safetyLine) + '</em></p>' + (String(l.leftOutList ?? '') ? '<p><em><b>Left out by the import (the source does these, the steps do not):</b><br>' + e(l.leftOutList).split('\\n').join('<br>') + '</em></p>' : '') + '<p><em><b>Evidence' + (notRun ? '' : ' (as reported by the run)') + ':</b> ' + e(l.evidenceLine) + '</em></p>' + '<p><em><b>' + (desktop ? 'The steps' : notRun ? 'What changed (as written; these steps were never run)' : 'What changed (as reported by the run)') + ':</b><br>' + e(l.changeList).split('\\n').join('<br>') + '</em></p>' + (String(l.attachmentNames ?? '') ? '<p><em>Screenshots of the replay are in this execution in n8n, on the Repaired Steps output of Import steps.</em></p>' : ''))(l.steps?.surface === 'desktop', l.steps?.surface === 'desktop' || String(l.evidenceLine ?? '').startsWith('Not replayed:')), (c) => 'Step ' + c.step + ': ' + String(c.intent).split(',').join(';').split('<').join('‹').split('>').join('›'), $('Settings').first().json.showDetails === true))).split('$').join('\\\\u0024') }}",
         "limitWaitTime": true,
         "limitType": "afterTimeInterval",
         "resumeAmount": 1,
@@ -734,7 +751,7 @@
         3080,
         -120
       ],
-      "notes": "One block per step list on Repaired Steps: what it does besides reading, the steps the import left out, the numbered steps with what they type and their variables and files (the steps the import added to a recording in grey), then the write steps (desktop) and Approve and sign or Reject. With Settings → showDetails, each step list's own flags, evidence and change list above the question. The run pauses here until the person submits, at most 1 hour; without an answer nothing is signed."
+      "notes": "After Change or sign again only: a first line that says whether and where the steps differ from the approved version (Compared with the approved version). One block per step list on Repaired Steps: what it does besides reading, the steps the import left out, the numbered steps with what they type and their variables and files (the steps the import added to a recording in grey), then the write steps (desktop) and Approve and sign or Reject. With Settings → showDetails, each step list's own flags, evidence and change list above the question. The run pauses here until the person submits, at most 1 hour; without an answer nothing is signed."
     },
     {
       "parameters": {
@@ -1580,6 +1597,17 @@
       ]
     },
     "The steps as a file": {
+      "main": [
+        [
+          {
+            "node": "Compared with the approved version",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compared with the approved version": {
       "main": [
         [
           {

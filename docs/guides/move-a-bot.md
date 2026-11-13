@@ -122,7 +122,8 @@ written, marked so.
 3. Click **Review**. The review page of an import follows: read every step, check the write ticks of desktop steps,
    and choose **Approve and sign** or **Reject**.
 
-Approved, the steps become a new row under that name, signed with the current key, and the old row is superseded.
+The review page's first line says whether the steps differ from the approved version, and which steps or settings
+do. Approved, the steps become a new row under that name, signed with the current key, and the old row is superseded.
 Rejected, or not answered within an hour, the old version keeps running. A name the form does not find ends on a
 page that lists the approved bots. The box holds JSON: for a long step list, copy it into an editor, or upload the
 edited steps as a file with the source **Step document** and the same name.
