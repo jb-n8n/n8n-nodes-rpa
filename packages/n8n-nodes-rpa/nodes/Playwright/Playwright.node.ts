@@ -44,23 +44,25 @@ export class Playwright implements INodeType {
     outputs: OUTPUTS_EXPRESSION,
     // Literal names: the credential-test-required and valid-credential-references lint rules read only string literals.
     // test/node.test.ts checks they equal CREDENTIALS, which the operations read.
+    // Runs On (Run Steps and Import Steps) hides slots only through `hide`: a node saved without it (or with an
+    // expression) shows every slot, so n8n keeps every credential it holds. config.ts HIDDEN_BY_RUNS_ON says the same.
     credentials: [
       // Not required: Run Steps with desktop steps needs the RPA Desktop Runner instead. Every operation that runs a browser
       // refuses at run time, naming RPA Browser, when it is missing (operations/common.ts browserCredentials).
-      { name: 'playwrightBrowserApi', displayName: 'RPA Browser', required: false, testedBy: 'browserTest', displayOptions: { hide: { operation: ['signSteps'] } } },
-      { name: 'playwrightSiteLoginApi', displayName: 'RPA Site Login', required: false, testedBy: 'siteLoginTest', displayOptions: { show: { operation: ['runSteps', 'signSteps', 'importSteps'] } } },
+      { name: 'playwrightBrowserApi', displayName: 'RPA Browser', required: false, testedBy: 'browserTest', displayOptions: { hide: { operation: ['signSteps'], runsOn: ['desktop'] } } },
+      { name: 'playwrightSiteLoginApi', displayName: 'RPA Site Login', required: false, testedBy: 'siteLoginTest', displayOptions: { show: { operation: ['runSteps', 'signSteps', 'importSteps'] }, hide: { runsOn: ['desktop'] } } },
       // Required at run time for Sign Steps (and Run Steps with a signature); n8n cannot vary `required` by operation.
       { name: 'playwrightScriptSigningApi', displayName: 'RPA Step Signing', required: false, testedBy: 'scriptSigningTest', displayOptions: { show: { operation: ['runSteps', 'signSteps'] } } },
-      { name: 'playwrightRedisApi', displayName: 'RPA Redis', required: false, testedBy: 'guardRedisTest', displayOptions: { show: { operation: ['runSteps', 'importSteps'] } } },
+      { name: 'playwrightRedisApi', displayName: 'RPA Redis', required: false, testedBy: 'guardRedisTest', displayOptions: { show: { operation: ['runSteps', 'importSteps'] }, hide: { runsOn: ['desktop'] } } },
       // Desktop steps (surface "desktop") run on a desktop runner; Run Steps refuses them without this credential.
-      { name: 'rpaDesktopRunnerApi', displayName: 'RPA Desktop Runner', required: false, testedBy: 'desktopRunnerTest', displayOptions: { show: { operation: ['runSteps'] } } },
+      { name: 'rpaDesktopRunnerApi', displayName: 'RPA Desktop Runner', required: false, testedBy: 'desktopRunnerTest', displayOptions: { show: { operation: ['runSteps'] }, hide: { runsOn: ['browser'] } } },
       // Secret run variables, browser and desktop runs alike (operations/runSteps.ts withSecretVariables).
       { name: 'rpaSecretVariablesApi', displayName: 'RPA Secret Variables', required: false, testedBy: 'secretVariablesTest', displayOptions: { show: { operation: ['runSteps'] } } },
       // Import Steps never reads these two: it copies their id and name into the Run steps of the workflow file it makes,
       // so that file needs nothing picked. They come after the entries above on purpose: n8n reads a credential through the
       // first entry of its type, which Import Steps does not show, so a read here would fail ("Credentials not found").
       { name: 'playwrightScriptSigningApi', displayName: 'RPA Step Signing (only passed on to the workflow file)', required: false, testedBy: 'scriptSigningTest', displayOptions: { show: { operation: ['importSteps'] } } },
-      { name: 'rpaDesktopRunnerApi', displayName: 'RPA Desktop Runner (only passed on to the workflow file)', required: false, testedBy: 'desktopRunnerTest', displayOptions: { show: { operation: ['importSteps'] } } },
+      { name: 'rpaDesktopRunnerApi', displayName: 'RPA Desktop Runner (only passed on to the workflow file)', required: false, testedBy: 'desktopRunnerTest', displayOptions: { show: { operation: ['importSteps'] }, hide: { runsOn: ['browser'] } } },
     ],
     properties,
   };

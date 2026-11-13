@@ -27,6 +27,7 @@ All notable changes to `n8n-nodes-rpa`, the `rpa-browser` image and the Windows 
 
 ### Changed
 
+- **Runs On** on Run Steps and Import Steps chooses which credential slots the node shows: **A browser**, **A Windows desktop app**, or **Browser and desktop apps** (the default, every slot as before, so saved nodes keep their credentials). The steps still decide where they run. The workflow an import makes sets it on each **Run steps**, so a desktop bot shows three slots.
 - **The login breaker, the run lock and the block after a password change are kept per account** (the Site Login and the username). With a username set by an expression, one account's wrong password, run or password change no longer stops the other accounts. A breaker that opened in 0.2.0 or earlier still stops every account until the reset key changes. After a password change the message says `The password of this account was changed earlier in this execution`.
 - **Sign Steps** signs with a Site Login whose username and password are empty, as they are on an approval item when they are expressions on the account items. Run Steps and Import Steps still need both.
 - **The desktop runner asks the apps to close before it stops them.** When a run ends, it sends each launched app a close request (like the close button, with no typing, clicking or answering), waits up to 3 seconds in total, then stops what is still running as before. `run.end` now answers at once and the cleanup goes on after it. The log says how each app ended.

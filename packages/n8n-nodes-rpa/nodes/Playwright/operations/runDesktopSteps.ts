@@ -5,7 +5,7 @@ import type { NodeContext } from '../context.js';
 import type { Engine } from '../engine.js';
 import { configNodeError, stepsRunError, type FailureDetails } from '../errors.js';
 import { configErrorItem, dataItem, failureItem, OUTPUT_NOT_BUILT } from '../output.js';
-import { credentialId, errorMessage } from './common.js';
+import { credentialId, errorMessage, slotNote } from './common.js';
 import type { ItemOutcome } from './runSteps.js';
 import { stepsIdentity, trustInput, withVariableHint, type RunStepsParams } from './runStepsParams.js';
 
@@ -31,7 +31,7 @@ export async function runDesktopStepsItem(ctx: NodeContext, engine: Engine, i: n
   let runner: RunnerEndpoint;
   let key: string | undefined;
   try {
-    if (credentialId(ctx, CREDENTIALS.desktopRunner) === undefined) throw new ConfigError(DESKTOP_STEPS_NEED_RUNNER_CREDENTIAL);
+    if (credentialId(ctx, CREDENTIALS.desktopRunner) === undefined) throw new ConfigError(`${DESKTOP_STEPS_NEED_RUNNER_CREDENTIAL}${slotNote(ctx, CREDENTIALS.desktopRunner)}`);
     if (credentialId(ctx, CREDENTIALS.siteLogin) !== undefined) throw new ConfigError(DESKTOP_NO_SITE_LOGIN);
     if (p.aiRepair) throw new ConfigError(DESKTOP_NO_REPAIR);
     // Desktop steps read no rows, so a configured row check would silently never run.

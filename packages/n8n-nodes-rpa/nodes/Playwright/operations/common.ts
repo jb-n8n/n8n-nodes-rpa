@@ -1,6 +1,6 @@
 import { NodeOperationError, type INodeExecutionData } from 'n8n-workflow';
 import type { OutputSpec, SaveTrace } from 'n8n-rpa-engine';
-import { ConfigError, CREDENTIALS, MAX_SECONDS } from '../config.js';
+import { ConfigError, CREDENTIALS, HIDDEN_BY_RUNS_ON, MAX_SECONDS, RUNS_ON_DEFAULT, RUNS_ON_NAMES, RUNS_ON_OPERATIONS, type RunsOn } from '../config.js';
 import type { NodeContext } from '../context.js';
 import type { Engine } from '../engine.js';
 import { configErrorItem } from '../output.js';
@@ -27,12 +27,39 @@ export const BROWSER_CREDENTIAL_NEEDED = 'This operation runs in a browser: atta
  * Desktop Runner instead), so every operation that runs a browser refuses here, naming it, when it is not attached.
  */
 export async function browserCredentials(ctx: NodeContext, i: number, missing = BROWSER_CREDENTIAL_NEEDED): Promise<Record<string, unknown>> {
-  if (credentialId(ctx, CREDENTIALS.browser) === undefined) throw new ConfigError(missing);
+  if (credentialId(ctx, CREDENTIALS.browser) === undefined) throw new ConfigError(`${missing}${slotNote(ctx, CREDENTIALS.browser)}`);
   return await ctx.getCredentials(CREDENTIALS.browser, i);
 }
 
-/** The attached credential's id ('' when n8n has none), or undefined when the credential is not attached to the node. */
+/**
+ * The node's Runs On: the typed choice on Run Steps and Import Steps, else the default (a node saved before the field,
+ * an expression, another operation). It only chooses which credential slots the node shows.
+ */
+export function runsOn(ctx: NodeContext): RunsOn {
+  if (!RUNS_ON_OPERATIONS.includes(String(rawParameter(ctx, 'operation')))) return RUNS_ON_DEFAULT;
+  const v = rawParameter(ctx, 'runsOn');
+  return v === 'browser' || v === 'desktop' ? v : RUNS_ON_DEFAULT;
+}
+
+/** Whether Runs On hides this credential type's slot. n8n does not hand the node a credential whose slot is hidden. */
+export function hiddenByRunsOn(ctx: NodeContext, type: string): boolean {
+  const on = runsOn(ctx);
+  return on !== 'browserAndDesktop' && HIDDEN_BY_RUNS_ON[on].includes(type);
+}
+
+/** The sentence a "missing credential" message adds when Runs On is what hides the slot, else ''. */
+export function slotNote(ctx: NodeContext, type: string): string {
+  if (!hiddenByRunsOn(ctx, type)) return '';
+  const shownOn = (Object.keys(HIDDEN_BY_RUNS_ON) as (keyof typeof HIDDEN_BY_RUNS_ON)[]).filter((on) => !HIDDEN_BY_RUNS_ON[on].includes(type));
+  return ` Its slot shows when Runs On is ${[...shownOn, RUNS_ON_DEFAULT].map((on) => RUNS_ON_NAMES[on]).join(' or ')}.`;
+}
+
+/**
+ * The attached credential's id ('' when n8n has none), or undefined when the credential is not attached to the node or
+ * its slot is hidden by Runs On (n8n would refuse to read it, and drops it when the workflow is saved).
+ */
 export function credentialId(ctx: NodeContext, type: string): string | undefined {
+  if (hiddenByRunsOn(ctx, type)) return undefined;
   const c = ctx.getNode().credentials?.[type];
   return c ? (c.id ?? '') : undefined;
 }

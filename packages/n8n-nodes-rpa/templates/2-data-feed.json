@@ -169,6 +169,7 @@
     {
       "parameters": {
         "operation": "runSteps",
+        "runsOn": "browser",
         "steps": "={{ $('Get active steps').item.json.steps ?? '' }}",
         "requireSignedSteps": true,
         "signature": "={{ $('Get active steps').item.json.signature }}",

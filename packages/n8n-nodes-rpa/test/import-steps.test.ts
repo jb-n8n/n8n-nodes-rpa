@@ -191,7 +191,8 @@ const drafts = (item: INodeExecutionData) => item.json.drafts as IDataObject[];
 
 describe('Import Steps: the description', () => {
   const d = new Playwright().description;
-  const own = d.properties.filter((p) => p.name !== 'options' && p.displayOptions?.show?.operation?.includes('importSteps'));
+  // Runs On is shared with Run Steps (test/runs-on.test.ts).
+  const own = d.properties.filter((p) => p.name !== 'options' && p.name !== 'runsOn' && p.displayOptions?.show?.operation?.includes('importSteps'));
   const field = (name: string): INodeProperties => {
     const p = own.find((x) => x.name === name);
     if (!p) throw new Error(`no Import Steps field "${name}"`);

@@ -16,8 +16,8 @@ import { lazyChatModel } from '../model.js';
 import { configErrorItem, desktopRepairedStepsJson, plain, repairedStepsItem, repairedStepsJson, slug } from '../output.js';
 import { codeSettingsFor, codeWorkflowOptions } from './codeWorkflow.js';
 import {
-  asBoolean, asString, BROWSER_CREDENTIAL_NEEDED, browserCredentials, checkMaxItems, credentialId, errorMessage, field, hasDownloadStep, literalString, NO_MODEL,
-  readCommonOptions, refuseCdpDownload, regexOption, safeParam, SITE_LOGIN_NO_ID, type CommonOptions,
+  asBoolean, asString, BROWSER_CREDENTIAL_NEEDED, browserCredentials, checkMaxItems, credentialId, errorMessage, field, hasDownloadStep, hiddenByRunsOn, literalString, NO_MODEL,
+  readCommonOptions, refuseCdpDownload, regexOption, safeParam, SITE_LOGIN_NO_ID, slotNote, type CommonOptions,
 } from './common.js';
 import { expectedDownload, variablesOption } from './runStepsParams.js';
 import { signingPolicy } from './signSteps.js';
@@ -281,7 +281,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
   if (flow) {
     try {
       const file = workflowFile(flow, imported.drafts, {
-        name: p.name, desktopDrafts, source, credentials: passedOn(node),
+        name: p.name, desktopDrafts, source, credentials: passedOn(node, (type) => hiddenByRunsOn(ctx, type)),
         ...(p.codeWorkflowId ? { codeWorkflow: { id: p.codeWorkflowId, timeoutSeconds: p.codeTimeoutMs / 1000 } } : {}),
         run: { maxSeconds: p.common.maxSeconds, allowedHosts: p.common.allowedHosts, allowPrivateNetwork: p.common.allowPrivateNetwork },
       });
@@ -302,7 +302,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
   const asWritten = source === 'steps' ? imported.drafts.filter((d) => engine.needsApprovalAsWritten(d.script.steps)) : [];
   const toAdopt = imported.drafts.filter((d) => !asWritten.includes(d));
   if (toAdopt.length > 0 && !endpoint) {
-    const failed = configError(source === 'uipath' ? IMPORT_BROWSER_NEEDED : BROWSER_CREDENTIAL_NEEDED, p.name, { report, ...(workflow ? { workflowName: workflow.name } : {}) });
+    const failed = configError(`${source === 'uipath' ? IMPORT_BROWSER_NEEDED : BROWSER_CREDENTIAL_NEEDED}${slotNote(ctx, CREDENTIALS.browser)}`, p.name, { report, ...(workflow ? { workflowName: workflow.name } : {}) });
     if (workflow && failed.kind === 'error') failed.item.binary = { ...workflow.binary };
     return failed;
   }
@@ -473,11 +473,11 @@ function checkedCaptures(engine: Engine, r: { screenshot?: Buffer; trace?: Buffe
 /**
  * The RPA credentials on this node, by id and name only, for the workflow file: the RPA Browser and RPA Site Login the
  * import used, and the RPA Step Signing and RPA Desktop Runner slots it never reads (no getCredentials). A credential's
- * values never leave n8n's store here.
+ * values never leave n8n's store here. A slot Runs On hides passes nothing on.
  */
-function passedOn(node: { credentials?: Record<string, { id: string | null; name: string }> }): PassedOn {
+function passedOn(node: { credentials?: Record<string, { id: string | null; name: string }> }, hidden: (type: string) => boolean): PassedOn {
   const ref = (type: string): CredentialRef | undefined => {
-    const c = node.credentials?.[type];
+    const c = hidden(type) ? undefined : node.credentials?.[type];
     return c && typeof c.id === 'string' && c.id !== '' && typeof c.name === 'string' ? { id: c.id, name: c.name } : undefined;
   };
   const out: PassedOn = {};

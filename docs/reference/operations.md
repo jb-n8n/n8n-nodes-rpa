@@ -104,6 +104,7 @@ Runs a list of browser or desktop steps. [Steps](steps.md) lists every step.
 
 | Field | What it is |
 |---|---|
+| **Runs On** | Which credentials the node asks for: **Browser and desktop apps** (the default, every slot), **A browser** or **A Windows desktop app**. It does not decide where the steps run. The steps do. See [Runs On](#runs-on). |
 | **Steps (JSON)** | A step document or a bare array of steps. Usually mapped from a Data Table row: `{{ $json.steps }}`. Empty means a first run, which needs AI Repair. |
 | **Start URL** | Browser steps only. Required without a Site Login, and it sets the allowed site. With a Site Login it must be on the credential's sites. |
 | **Require Signed Steps** | On by default. **Signature** and **Approved By** must be present and verify, or the run fails `script_untrusted` before anything opens. Turn it off only for steps you typed here. |
@@ -119,6 +120,25 @@ sites its values go to, see [Security](security.md#secret-variables)), and
 **RPA Redis** (optional, needed in queue mode with a Site Login).
 
 The error output is output 1, or output 2 when AI Repair is on.
+
+### Runs On
+
+Run Steps and Import Steps have **Runs On**. It only chooses which credential slots the node shows. The steps
+themselves decide where they run: desktop steps run on the desktop runner and browser steps in a browser, whatever it
+says. Type it. An expression shows every slot.
+
+| Runs On | Run Steps shows | Import Steps shows |
+|---|---|---|
+| **Browser and desktop apps** (default) | RPA Browser, RPA Site Login, RPA Step Signing, RPA Redis, RPA Desktop Runner, RPA Secret Variables | RPA Browser, RPA Site Login, RPA Redis, and the two slots only passed on: RPA Step Signing, RPA Desktop Runner |
+| **A browser** | RPA Browser, RPA Site Login, RPA Step Signing, RPA Redis, RPA Secret Variables | RPA Browser, RPA Site Login, RPA Redis, RPA Step Signing (only passed on) |
+| **A Windows desktop app** | RPA Step Signing, RPA Desktop Runner, RPA Secret Variables | RPA Step Signing and RPA Desktop Runner (only passed on) |
+
+A node saved before Runs On existed has the default and keeps every credential it has. n8n removes a credential whose
+slot is hidden, so choosing **A browser** or **A Windows desktop app** removes the other kind's credentials from the
+node. When steps need a credential whose slot Runs On hides, the run fails with the usual message and one more
+sentence, for example `Its slot shows when Runs On is A Windows desktop app or Browser and desktop apps.` The workflow
+an import makes sets Runs On on each **Run steps**: **A browser** for browser steps, **A Windows desktop app** for
+desktop steps. Sign Steps and the quick operations have no Runs On.
 
 ## Sign Steps
 
@@ -146,6 +166,8 @@ schedule until a person approves it. Template **RPA: 5 Import a bot** puts a for
 ([Move a bot](../guides/move-a-bot.md)).
 
 **Fields**
+- **Runs On**: as in Run Steps ([Runs On](#runs-on)). **A Windows desktop app** hides RPA Browser, RPA Site Login and
+  RPA Redis, **A browser** hides RPA Desktop Runner. A hidden slot is not passed on to the workflow file.
 - **Source**: **Work It Out From the File** (by the file name: `.rpa-recording.json`, `.zip` or `.xaml`, `.js` or
   `.ts`, else by the JSON's shape), **Chrome Recorder (JSON)**, **Playwright Code (JavaScript or TypeScript)**,
   **UiPath Project (ZIP or XAML)**, **Step Document (JSON)** or **RPA Recording**.
@@ -216,7 +238,7 @@ Login. A step found by a row position (`Vendor Row 1`) is reported, because a la
   **Run steps**. To be told of a failure, choose an Error Workflow in the workflow's settings.
   Each **Run steps** has the import's RPA credentials picked, by name and id, never a value: a browser one gets the
   RPA Browser, the RPA Site Login and the RPA Step Signing, a desktop one the RPA Desktop Runner and the RPA Step
-  Signing. The last two come from the slots marked "only passed on to the workflow file", which the import never
+  Signing. Each also has **Runs On** set to its kind, so a desktop one shows three slots. The last two come from the slots marked "only passed on to the workflow file", which the import never
   reads. A slot left empty is left to pick. Imported into another n8n, or once a picked credential is deleted, n8n
   takes the only credential of that type with the same name, and otherwise asks for one on the node.
 - **Error output** (output 2): a configuration problem, nothing imported, or every step list failed. A failed step

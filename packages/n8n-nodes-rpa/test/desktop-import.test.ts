@@ -89,6 +89,29 @@ describe('Import Steps with a UiPath desktop project', () => {
     const [data] = await executeImportSteps(harness({ params: importParams, items: [fileItem(Buffer.from(xaml))], continueOnFail: true }), noBrowser());
     expect(data[0].json.error).toBe('The project has browser steps: attach an RPA Browser credential to replay them.');
     expect((data[0].json.details as IDataObject).report).toBeDefined();
+    // On a node set to A Windows desktop app the browser slot is hidden: the message says where it shows.
+    const onDesktop = { ...importParams, runsOn: 'desktop' };
+    const [hidden] = await executeImportSteps(harness({ params: onDesktop, items: [fileItem(Buffer.from(xaml))], credentials: { playwrightBrowserApi: { mode: 'local' } }, continueOnFail: true }), noBrowser());
+    expect(hidden[0].json.error).toBe('The project has browser steps: attach an RPA Browser credential to replay them. Its slot shows when Runs On is A browser or Browser and desktop apps.');
+  });
+
+  it('Runs On does not change what is imported; a slot it hides is not passed on to the workflow file', async () => {
+    const credentials = { rpaDesktopRunnerApi: { connectionLine: 'x' }, playwrightScriptSigningApi: { secretKey: KEY } };
+    const workflowOf = (item: INodeExecutionData) => JSON.parse(Buffer.from(item.binary!.workflow.data, 'base64').toString('utf8')) as { nodes: { type: string; parameters: IDataObject; credentials?: IDataObject }[] };
+    const runOf = async (runsOn?: string) => {
+      const [data, repaired] = await executeImportSteps(harness({ params: { ...importParams, ...(runsOn ? { runsOn } : {}) }, items: [fileItem(sampleZip())], credentials, continueOnFail: true }), noBrowser());
+      expect(data[0].json.error).toBeUndefined();
+      expect(repaired).toHaveLength(1);
+      return workflowOf(data[0]).nodes.find((n) => n.type === 'n8n-nodes-rpa.playwright')!;
+    };
+    const ref = (type: string) => ({ id: 'cred-1', name: `${type} credential` });
+    const passedOn = { rpaDesktopRunnerApi: ref('rpaDesktopRunnerApi'), playwrightScriptSigningApi: ref('playwrightScriptSigningApi') };
+    expect((await runOf()).credentials).toEqual(passedOn);
+    expect((await runOf('desktop')).credentials).toEqual(passedOn);
+    // Set to A browser, the runner slot is hidden: the generated desktop node names the runner by name, as without one.
+    const onBrowser = await runOf('browser');
+    expect(onBrowser.parameters.runsOn).toBe('desktop');
+    expect(onBrowser.credentials).toEqual({ rpaDesktopRunnerApi: { id: null, name: 'RPA Desktop Runner' }, playwrightScriptSigningApi: ref('playwrightScriptSigningApi') });
   });
 
   it('the workflow file wires a desktop Run steps on the RPA Desktop Runner credential with the variables to fill in', async () => {
@@ -97,7 +120,7 @@ describe('Import Steps with a UiPath desktop project', () => {
     const run = wf.nodes.find((n) => n.type === 'n8n-nodes-rpa.playwright')!;
     expect(run.name).toBe("Open Application 'ERP Demo - Sign in'");
     expect(run.parameters).toEqual({
-      operation: 'runSteps', steps: "={{ $json.steps ?? '' }}", requireSignedSteps: true, signature: '={{ $json.signature }}', approvedBy: '={{ $json.approvedBy }}', aiRepair: false,
+      operation: 'runSteps', runsOn: 'desktop', steps: "={{ $json.steps ?? '' }}", requireSignedSteps: true, signature: '={{ $json.signature }}', approvedBy: '={{ $json.approvedBy }}', aiRepair: false,
       options: {
         name: 'erp-1', expectedVersion: '={{ $json.version }}',
         // The secret one (password) is not here: it comes from the RPA Secret Variables credential the note names. The

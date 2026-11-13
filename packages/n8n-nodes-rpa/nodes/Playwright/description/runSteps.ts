@@ -1,4 +1,5 @@
 import type { INodeProperties } from 'n8n-workflow';
+import { RUNS_ON_DEFAULT, RUNS_ON_NAMES, RUNS_ON_OPERATIONS, type RunsOn } from '../config.js';
 
 const runSteps = { show: { operation: ['runSteps'] } };
 
@@ -64,6 +65,23 @@ export function expectedFileProperty(displayOptions: INodeProperties['displayOpt
     ],
   };
 }
+
+/**
+ * Runs On (Run Steps and Import Steps): which credential slots the node shows, nothing else. The default shows every slot,
+ * so a node saved before this field keeps every credential it holds. Typed, never an expression: n8n reads it to decide
+ * which credentials to keep.
+ */
+export const RUNS_ON_PROPERTY: INodeProperties = {
+  displayName: 'Runs On',
+  name: 'runsOn',
+  type: 'options',
+  noDataExpression: true,
+  default: RUNS_ON_DEFAULT,
+  options: (['browserAndDesktop', 'browser', 'desktop'] as RunsOn[]).map((value) => ({ name: RUNS_ON_NAMES[value], value })),
+  description: 'This only chooses which credentials the node asks for, and the steps themselves decide where they run',
+  hint: 'Choosing A browser or A Windows desktop app removes a credential whose slot it hides',
+  displayOptions: { show: { operation: [...RUNS_ON_OPERATIONS] } },
+};
 
 export const runStepsProperties: INodeProperties[] = [
   {
