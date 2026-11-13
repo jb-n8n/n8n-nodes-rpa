@@ -258,7 +258,7 @@ export const runnerNoTcpAnswer = (where: string, seconds: number, privateHost?: 
   `Could not connect to the desktop runner at ${where} (no answer within ${seconds} s). Check, in this order: `
   + '1. The address in the Connection Line is one n8n can reach. '
   + (privateHost
-    ? `${privateHost} is a private address: if n8n is outside the Windows machine's network, print the line there with rpa connection -Address <the name or address n8n can reach> and paste it again. `
+    ? `${privateHost} is a private address: if n8n is outside the Windows machine's network, print the line there in an administrator PowerShell with & "C:\\Program Files\\RPA Runner\\rpa.cmd" connection -ShowTokens -Address followed by the name or address n8n can reach, and paste it again. `
     : '')
   + '2. The port is open to n8n\'s address (Install-Rpa.ps1 -AllowFrom, and any firewall on the way). '
   + '3. The Windows machine is on and the runner runs there (rpa status).';

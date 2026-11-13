@@ -226,7 +226,7 @@ if (-not $Status -and $addresses.Count -eq 0) { Write-Output 'This machine has n
 # A private address on the route to an n8n that is not on a private network (a cloud machine behind a NAT, for example):
 # n8n cannot use the line as it is. Said before the lines, which still carry that address.
 $outside = $route -and (Test-PrivateAddress $route.Address) -and -not (Test-PrivateAddress $route.Towards)
-if ($outside) { Write-Output ("This machine's address towards n8n is {0}, a private one. n8n at {1} is outside this network and cannot use it. The line needs the name or address n8n can reach: rpa connection -Address <that name or address>" -f $route.Address, $route.Towards) }
+if ($outside) { Write-Output ("This machine's address towards n8n is {0}, a private one. n8n at {1} is outside this network and cannot use it. The line needs the name or address n8n can reach. In an administrator PowerShell, run: & ""{2}"" connection -ShowTokens -Address followed by that name or address." -f $route.Address, $route.Towards, (Join-Path $installDir 'rpa.cmd')) }
 foreach ($service in $services) {
   $notListening = ('{0}: not listening yet. It starts within a minute of the bot user''s sign-in: run this again. If it stays like this, read {1}' -f $service.Name, $service.Log)
   if ($Status) {
