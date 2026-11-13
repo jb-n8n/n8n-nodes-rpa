@@ -293,7 +293,7 @@ describe('the operations reference', () => {
       '**RPA Recording**', '**Input Binary Field**', '**Recording or Code**', 'The file is larger than 20 MiB, so it was not read.', '`<name>-1`', 'starting with `=` is refused',
       'is never imported', 'one `signIn` step', 'refused before the browser opens', 'no rows or files from these runs are delivered', 'about twice **Max Seconds** per step list',
       '**TOTP Secret** or **Options → One-Time Code Workflow**', 'at most 10 step lists', 'A `signature` and `approvedBy` beside the steps are not imported',
-      'also when a higher version was active', '{ report, drafts: [{ name, steps, adopted, code?, reason?, traceRef? }], workflowName? }', '`adopted: false`',
+      'also when a higher version was active', '{ report, drafts: [{ name, steps, adopted, code?, reason?, traceRef?, secretVariables?, mayBeTypedInto? }], workflowName? }', '`adopted: false`',
       'never on Repaired Steps', '`<name>.workflow.json`', '`leftOut`', NOT_REPLAYED_EVIDENCE_LINE,
     ]) expect(s, text).toContain(text);
     for (const m of [IMPORT_NEEDS_SITE_LOGIN, IMPORT_REFUSES_WRITES, IMPORT_NOT_ADOPTABLE, IMPORT_UNSUPPORTED_TARGET, IMPORT_EMPTY, IMPORT_PROOF_FAILED]) {

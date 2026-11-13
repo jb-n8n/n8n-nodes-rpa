@@ -1130,7 +1130,7 @@ describe('Import Steps: a step document', () => {
     const engine = importEngine(() => { throw new Error('a desktop step set is never adopted in a browser'); });
     const [data, repaired] = await run(engine, { params: docParams(doc, { stepsName: 'erp' }), items: textItem, credentials: {} });
     expect(data[0].json.error).toBeUndefined();
-    expect(drafts(data[0])).toEqual([expect.objectContaining({ variables: ['username', 'password'], secretVariables: ['password'], writeCandidates: [3, 4] })]);
+    expect(drafts(data[0])).toEqual([expect.objectContaining({ variables: ['username', 'password'], secretVariables: ['password'], writeCandidates: [3, 4], mayBeTypedInto: 'ErpDemo.exe' })]);
     const item = repaired[0].json;
     // The review page: the password is a secret variable, and the key pressed in its field signs in (asked unticked).
     expect((item.reviewSteps as IDataObject[])[1]).toEqual({ text: 'Type into Password', marks: ['secret variable password'] });
@@ -1272,6 +1272,21 @@ describe('Import Steps: a step document', () => {
       const without = await notReplayed({ startUrl: START, steps: [SIGN_IN, OPEN, SUBMIT] }, { playwrightSiteLoginApi: siteLoginData(SITE) });
       expect(without.data[0].json.error).toBeUndefined();
       expect(without.repaired).toHaveLength(1);
+    });
+
+    it('a step list that types a secret says which variables and where: the last page copies them into RPA Secret Variables', async () => {
+      // Names and the start site's host only: never a value.
+      const host = new URL(START).host;
+      for (const [doc, secret] of [[DOCS['a secret fill'], ['exportPassword']], [DOCS['a signIn with changePassword'], ['newPassword']]] as const) {
+        const { data } = await notReplayed(doc);
+        expect(drafts(data[0])).toEqual([expect.objectContaining({ forApproval: true, secretVariables: secret, mayBeTypedInto: host })]);
+        expect(JSON.stringify(data[0].json)).not.toContain(EXPORT_PW);
+        expect(JSON.stringify(data[0].json)).not.toContain(NEW_PW);
+      }
+      // No secret: neither field.
+      const { data } = await notReplayed(DOCS['a download with via']);
+      expect(drafts(data[0])[0]).not.toHaveProperty('secretVariables');
+      expect(drafts(data[0])[0]).not.toHaveProperty('mayBeTypedInto');
     });
 
     it('the review page words each step from the step, the description beside it; what is signed is unchanged', async () => {

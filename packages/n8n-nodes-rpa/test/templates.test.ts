@@ -1731,6 +1731,36 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(sticky(t, 'About this workflow').content).toContain('an **RPA recording** saved by the RPA recorder on the Windows machine');
   });
 
+  it('approved, a bot that types a secret gets on the last page what to copy into its RPA Secret Variables credential, never the value', async () => {
+    // The ERP Demo recording types {{var.password}} into ErpDemo.exe.
+    const { ran } = await importedRecording();
+    const approved = await signAfterReview(ran, { writes_0: ['Step 16: Click Save'], decision_0: 'Approve and sign' });
+    const name = String(approved.signed[0].name);
+    const after = (signed: IDataObject[], more: Record<string, INodeExecutionData[][]> = {}) => ({
+      ...ran, [REVIEW]: [[{ json: { decision_0: 'Approve and sign' } }]], 'Sign steps': [signed.map((json) => ({ json })), []], ...more,
+    });
+    const BLOCK = `\n\n${name} types a secret. In n8n, make an RPA Secret Variables credential (+ → New credential), select it on the bot's RPA node, and copy these into it:`
+      + '\nCredential: <code>RPA Secret Variables</code>\nName: <code>password</code>\nMay Be Typed Into: <code>ErpDemo.exe</code>\nType the value there only: this form never asks for it.';
+    for (const page of ['Imported, with the workflow file', 'Imported']) {
+      const p = completion(page);
+      const shown = render(p.completionMessage, { $: nodesRan(after(approved.signed)) });
+      expect(shown.endsWith(BLOCK), page).toBe(true);
+      // One click selects a value to copy.
+      expect((p as { options?: { customCss?: string } }).options?.customCss).toBe('code { user-select: all; -webkit-user-select: all; }');
+      // Rejected, or on the change page (the credential is there already): no block.
+      expect(render(p.completionMessage, { $: nodesRan(after([{ ...approved.signed[0], status: 'rejected' }])) })).not.toContain('types a secret');
+      expect(render(p.completionMessage, { $: nodesRan(after(approved.signed, { 'Change or sign again': [[{ json: { changedSteps: '' } }]], 'The bot to change': [[{ json: { name, version: 1 } }]] })) })).not.toContain('types a secret');
+    }
+    // Names and an app or host only: escaped like every other text on the page.
+    const odd = render(completion('Imported').completionMessage, { $: nodesRan({
+      Settings: [[{ json: settingsJson() }]], 'Import steps': [[{ json: { report: { steps: 2, items: [] }, drafts: [{ name: 'a<b', forApproval: true, secretVariables: ['pin'], mayBeTypedInto: 'erp.example.com' }, { name: 'plain', adopted: true }] } }], []],
+      [REVIEW]: [[{ json: { decision_0: 'Approve and sign' } }]], 'Sign steps': [[{ json: { status: 'active', name: 'a<b', version: 1 } }, { json: { status: 'active', name: 'plain', version: 1 } }], []],
+    }) });
+    expect(odd).toContain('\n\na&lt;b types a secret.');
+    expect(odd).toContain('\nName: <code>pin</code>\nMay Be Typed Into: <code>erp.example.com</code>\n');
+    expect(odd.match(/types a secret/g)).toHaveLength(1);
+  });
+
   it('a Sign steps refusal signs nothing and the last page names the reason; an approver not on the allowlist is refused', async () => {
     const { ran } = await importedRecording();
     const refused = await signAfterReview(ran, { writes_0: [], moreWrites_0: '99', decision_0: 'Approve and sign' });

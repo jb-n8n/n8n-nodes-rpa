@@ -69,8 +69,11 @@ first, before anything reads or writes them.
   `Rejected: <name> version 5. Nothing was signed. Version 4 keeps running.` After a change or a re-sign it says
   `Signed again: <name> version N, unchanged.`, `Changed: <name> version N is now the version that runs, replacing
   version M.`, or `Nothing changed: <name> version M keeps running.` When Sign steps signed a step list, it
-  also downloads the workflow that runs the bot. When nothing was signed (rejected, or Sign steps refused), it neither
-  gives the file nor says it does.
+  also downloads the workflow that runs the bot. After an approval (not on the change page), a step list that types a
+  secret adds what to copy into an RPA Secret Variables credential: each variable's name as the steps use it, and May
+  Be Typed Into (the app's file name for desktop steps, the start site's host for browser steps). The page never asks
+  for the value. The workflow file's notes carry the same block. When nothing was signed (rejected, or Sign steps
+  refused), it neither gives the file nor says it does.
 - In another n8n, or once a credential the workflow file picks is deleted, n8n picks the only credential of the same
   name if there is one: otherwise pick it on the node again.
 - **Add the login page** shows when the sign-in stopped at an address the Site Login does not list. Add it under

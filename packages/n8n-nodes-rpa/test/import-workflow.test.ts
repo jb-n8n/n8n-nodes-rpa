@@ -751,7 +751,7 @@ describe('buildWorkflow', () => {
     const run = byName(w, 'Desk');
     expect((run.parameters as { options: Record<string, unknown> }).options.variables).toEqual({ values: [{ name: 'company', value: '2000' }, { name: 'odd', value: '' }] });
     expect(JSON.stringify(w)).not.toContain('$env');
-    expect(content(byName(w, 'Fill in the variables (d)'))).toContain('Options → Variables: `company` (starts as `2000`), `odd`. Secret: `password`');
+    expect(content(byName(w, 'Fill in the variables (d)'))).toContain('Options → Variables: `company` (starts as `2000`), `odd`. Desktop steps run only once approved');
   });
 
   it('the notes say only what applies: no variables, no gold note; only secret ones, no Variables to fill in; the legend names the colours there are', () => {
@@ -769,13 +769,13 @@ describe('buildWorkflow', () => {
     const secretOnly = build(desktop(['password'], ['password']));
     expect(byName(secretOnly, 'Desk').notes).not.toContain('Fill in the Variables');
     expect(content(byName(secretOnly, 'Fill in the variables (d)'))).toBe(
-      '### Fill in the variables (gold)\nSecret: `password`: in an **RPA Secret Variables** credential selected on **Desk**, never typed here. To keep these values to this app, put `App.exe` in that credential\'s May Be Typed Into. Desktop steps run only once approved: import the recording with **RPA: 5 Import a bot** and approve `d` on its review page.',
+      '### Fill in the variables (gold)\nDesktop steps run only once approved: import the recording with **RPA: 5 Import a bot** and approve `d` on its review page.\nSecret: make an **RPA Secret Variables** credential, select it on **Desk**, and copy these into it. Type the value there, never here.\n```\nCredential: RPA Secret Variables\nName: password\nMay Be Typed Into: App.exe\n```',
     );
     // Handed over after approval (the import form approves before it hands the file over): the note does not ask to
     // import and approve the steps; Import Steps alone approves nothing, so by default it does.
     const approved = buildWorkflow({ name: 'd', nodes: [{ kind: 'desktop', sequence: 1, displayName: 'Desk', draft: 'd' }] }, [], { name: 'd', desktopDrafts: [desktop(['password'], ['password'])], source: 'recording', approvedBeforeHandOver: true });
     expect(content(byName(approved, 'Fill in the variables (d)'))).toBe(
-      '### Fill in the variables (gold)\nSecret: `password`: in an **RPA Secret Variables** credential selected on **Desk**, never typed here. To keep these values to this app, put `App.exe` in that credential\'s May Be Typed Into.',
+      '### Fill in the variables (gold)\nSecret: make an **RPA Secret Variables** credential, select it on **Desk**, and copy these into it. Type the value there, never here.\n```\nCredential: RPA Secret Variables\nName: password\nMay Be Typed Into: App.exe\n```',
     );
     // A gold note: three colours, so the legend.
     expect(content(byName(secretOnly, 'About this import'))).toContain('- Gold: fill in. Green: set once. Grey: leave as is.');
@@ -1053,7 +1053,8 @@ describe('buildWorkflow', () => {
     const set = (i: number) => content(byName(kinds[i][1], 'Set once'));
     expect(set(3)).toBe('### Set once\nNothing to pick: **RPA Browser**, **RPA Site Login** and **RPA Step Signing** are set on the RPA node.');
     expect(set(0)).toBe('### Set once\nNothing to pick: **RPA Desktop Runner** and **RPA Step Signing** are set on the RPA node.\n'
-      + '- **RPA Secret Variables**, holding `password`: pick it on the Run steps that name them, and list where its values may be typed (the app or the site) in its May Be Typed Into.');
+      + '- **RPA Secret Variables**: make one, pick it on the Run steps that name its variables, and copy these into it. Type each value there, never in this workflow.\n'
+      + '```\nCredential: RPA Secret Variables\nName: password\nMay Be Typed Into: ErpDemo.exe\n```');
   });
 
   it('a start value is never shown for a variable that is secret under another casing', () => {

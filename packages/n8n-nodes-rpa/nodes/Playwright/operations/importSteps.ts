@@ -11,7 +11,7 @@ import {
   DESKTOP_DOCUMENT_EVIDENCE_LINE, DESKTOP_EVIDENCE_LINE, DESKTOP_RECORDING_EVIDENCE_LINE, importAddedSteps, reviewSteps, reviewWrites,
 } from '../format.js';
 import { isQueueMode, openGuardStore, QUEUE_NEEDS_REDIS, type GuardStoreDeps } from '../guard-store.js';
-import { nonSecretStart, workflowFile, type CredentialRef, type PassedOn } from '../import/workflow.js';
+import { nonSecretStart, secretTypedInto, stepVariables, workflowFile, type CredentialRef, type PassedOn } from '../import/workflow.js';
 import { lazyChatModel } from '../model.js';
 import { configErrorItem, desktopRepairedStepsJson, plain, repairedStepsItem, repairedStepsJson, slug } from '../output.js';
 import { codeSettingsFor, codeWorkflowOptions } from './codeWorkflow.js';
@@ -367,6 +367,8 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
       writeCandidates: [...d.writeCandidates],
       variables: [...d.variables],
       secretVariables: [...d.secretVariables],
+      // Where they are typed (the app's file name), for the last page's copy block: never a value.
+      ...(d.secretVariables.length ? { mayBeTypedInto: secretTypedInto(d.script, true) } : {}),
       // A recording's start values (never a secret's), for the review page and the generated workflow.
       ...(hasStart ? { startValues } : {}),
       reason: withheld ? STEPS_WITHHELD : problem ?? DESKTOP_FOR_APPROVAL,
@@ -399,6 +401,8 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
     const withheld = containsSecret(o.draft.script);
     const reason = o.kind === 'forApproval' ? WRITES_FOR_APPROVAL : o.kind !== 'adopted' ? shownMessage(mask(o.reason)) : undefined;
     const why = withheld ? (reason ? `${reason} ${STEPS_WITHHELD}` : STEPS_WITHHELD) : reason;
+    // The variables a secret fill or a password change types, and the start site's host, for the last page's copy block.
+    const secret = stepVariables(o.draft.script).secret;
     return {
       name: o.draft.name,
       steps: withheld ? null : (plain(o.draft.script) as unknown as IDataObject),
@@ -407,6 +411,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
       ...((o.kind === 'notAdoptable' || o.kind === 'failed') && o.code ? { code: o.code } : {}),
       ...(why !== undefined ? { reason: why } : {}),
       ...(traceRefs.has(k) ? { traceRef: traceRefs.get(k) } : {}),
+      ...(secret.length ? { secretVariables: secret, mayBeTypedInto: secretTypedInto(o.draft.script, false) } : {}),
     };
   });
   entries.push(...desktopOut.map((o) => o.entry));

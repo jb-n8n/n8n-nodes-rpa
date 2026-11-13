@@ -234,7 +234,9 @@ Login. A step found by a row position (`Vendor Row 1`) is reported, because a la
 - **Repaired Steps**: one item per step list that passed the replay or goes to approval as written. Steps the import
   could not translate, or dropped in a way that changes what the bot does, are on each item as `leftOut`, and the
   review page and emails show them.
-- **Data**: `{ report, drafts: [{ name, steps, adopted, code?, reason?, traceRef? }], workflowName? }`. The report lists
+- **Data**: `{ report, drafts: [{ name, steps, adopted, code?, reason?, traceRef?, secretVariables?, mayBeTypedInto? }], workflowName? }`.
+  A step list that types a secret names its variables in `secretVariables` and where they are typed in `mayBeTypedInto`
+  (the app's file name, or the start site's host): never a value. The report lists
   every step that was not translated, dropped, converted or removed as a secret. Steps that cannot be proved (no ID
   Pattern, no file check) come out here with `adopted: false` and the reason, never on Repaired Steps. Binary
   `workflow` (`<name>.workflow.json`) is an n8n workflow that runs the steps: **Get active steps** → **Run steps**, a
