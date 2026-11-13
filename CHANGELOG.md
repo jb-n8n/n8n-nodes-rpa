@@ -92,6 +92,7 @@ All notable changes to `n8n-nodes-rpa`, the `rpa-browser` image and the Windows 
 - **The last page after a change or a re-sign says what happened to the bot**: `Signed again: <name> version N, unchanged.`, `Changed: <name> version N is now the version that runs, replacing version M.`, or after Reject `Nothing changed: <name> version M keeps running.` It no longer starts with `Imported: 16 steps.`, and no longer reads as if the version that keeps running was rejected.
 - **The run log's `message` for a failed run is at most 300 characters**, masked as the node masks it, beside the code and the guidance, so the table reads without a click per failure. A `playwright_runs` made before the column existed still takes the row without it, as for `guidance`.
 - **The RPA node of a workflow made from a UiPath project is named after its step list** (`<name>-1`, `<name>-2`), as **Get active steps (<name>-1)**, its notes and the run log name it, not after the project's first activity such as `Open Application 'ERP Demo - Sign in'`.
+- **A returned file named without an extension says so**: a recording or a UiPath project whose Save dialog kept the offered name `line-items` now imports the step as `Return the exported file line-items (with the extension the app adds)`, on the review page and in the emails. A name with an extension reads as before.
 
 ### Security
 

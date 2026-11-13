@@ -27,10 +27,10 @@ describe('a Save dialog accepted with the name it offers', () => {
       'Wait for the window Export line items',
       'Type into File name:',
       'Click Save',
-      'Return the exported file line-items',
+      'Return the exported file line-items (with the extension the app adds)',
     ]);
     expect(d.script.steps[14]).toMatchObject({ fill: { value: '{{$exportDir}}\\line-items' } });
-    expect(d.script.steps[16]).toEqual({ intent: 'Return the exported file line-items', expectFile: { pattern: '^line-items(?:\\.[^.]+)?$' } });
+    expect(d.script.steps[16]).toEqual({ intent: 'Return the exported file line-items (with the extension the app adds)', expectFile: { pattern: '^line-items(?:\\.[^.]+)?$' } });
     expect(r.report.items.filter((i) => i.kind === 'converted' && i.what === 'Return line-items')).toHaveLength(1);
     expect(parseDesktopScript(d.script)).toEqual(d.script);
   });
