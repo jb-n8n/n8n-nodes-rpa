@@ -66,7 +66,10 @@ first, before anything reads or writes them.
   what the replay proved, the steps it left out, and the numbered steps. For desktop steps it asks "Which of these steps
   save, send or submit?". A new bot's ticks start from the rule (every candidate but a key pressed in a secret
   field); a bot changed, signed again or uploaded again under its name starts from its approved version's own marks,
-  ticked boxes and typed numbers alike, and a step that differs from the approved one falls back to the rule. The
+  ticked boxes and typed numbers alike, only when **Sign steps**' check says that version's signature fits this form,
+  and the page says so. When it does not fit or could not be checked, the stored row's marks are not shown (it may have
+  been edited in the table): the rule, an empty numbers box, and a sentence saying why. A step that differs from the
+  approved one always falls back to the rule. The
   **Decision** is **Approve and sign** or **Reject**. A page left unanswered for an hour
   signs nothing. Once it is answered, **Versions now** reads the steps table again and **Still the next version?**
   checks that no row of a name on the page has that version or a higher one: another review page of the same bot,
