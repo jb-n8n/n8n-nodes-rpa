@@ -156,10 +156,11 @@ async function fakeN8n(o: Options = {}) {
         if (o.echo === 'activate' && m[2] === 'activate') return send(400, { message: `could not activate: ${JSON.stringify(state.workflows[0])}` });
         const w = state.workflows.find((x) => x.id === m![1]);
         if (!w) return send(404, { message: 'Not Found' });
-        // n8n refuses a form path an active workflow holds already (WebhookPathTakenError), also one this key cannot see.
+        // n8n refuses a form path an active workflow holds already, also one this key cannot see: n8n 2.45's public API
+        // answers 409 with this message (seen on a real n8n in round 14's live proof).
         const pathOf = (x: Wf) => x.nodes.find((y) => /\.formTrigger$/.test(y.type))?.parameters?.options?.path;
         if (m[2] === 'activate' && pathOf(w) && [...state.workflows, ...(o.hiddenForms ?? [])].some((x) => x !== w && x.active && pathOf(x) === pathOf(w))) {
-          return send(400, { message: 'The URL path that the "Import a bot" node uses is already taken. Please change it to something else.' });
+          return send(409, { message: 'There is a conflict with one of the webhooks.' });
         }
         if (m[2] === 'activate') w.active = true;
         return send(200, wfItem(w));
@@ -582,7 +583,7 @@ describe('npx n8n-nodes-rpa setup', () => {
     const [w] = hidden.state.workflows;
     expect(w.active).toBe(true);
     expect(pathOf(w)).toBeUndefined();
-    expect(h.stdout).toContain('         its form keeps an address with an id, not /form/rpa-import: n8n says that address is taken (HTTP 400: The URL path that the "Import a bot" node uses is already taken. Please change it to something else.).\n');
+    expect(h.stdout).toContain('         its form keeps an address with an id, not /form/rpa-import: n8n says that address is taken (HTTP 409: There is a conflict with one of the webhooks.).\n');
     expect(h.stdout).toContain(`  Address:    ${hidden.url}/form/${idOf(w)}\n`);
     // One refusal, one more try.
     expect(hidden.state.requests.filter((r) => r.path.endsWith('/activate'))).toHaveLength(2);
