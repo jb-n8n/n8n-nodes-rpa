@@ -105,7 +105,7 @@ after `approvalTimeoutHours` (72), then:
 | `status` | string | `pending`, `active`, `superseded`, `rejected` or `expired` |
 | `expiresAt` | string | When a `pending` row stops blocking a new repair |
 
-`playwright_runs` gets one row per run of the data feed.
+`playwright_runs` gets one row per run of the data feed, and of every workflow the import form hands over.
 
 | Column | Type | Meaning |
 |---|---|---|

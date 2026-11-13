@@ -202,6 +202,10 @@ Login. A step found by a row position (`Vendor Row 1`) is reported, because a la
   For Each, Excel, HTTP, email and delays as n8n nodes, with notes on what was not translated). Its browser **Run
   steps** keep the import's **Max Seconds**, **Also Allow These Sites** and **One-Time Code Workflow**. They have
   **Allow Private Network** on only when the import had it on, typed as a plain value, and their note says so.
+  Every run writes the run log: **Create run log table** makes `playwright_runs` when it is missing, **Log run** writes
+  one row per successful run, and the error output goes to **Log failed run** (the row has the error code) and then
+  **Stop and Error**, so a failed run shows as failed. One **Log run** and one **Log failed run** serve every
+  **Run steps**. To be told of a failure, choose an Error Workflow in the workflow's settings.
   Each **Run steps** has the import's RPA credentials picked, by name and id, never a value: a browser one gets the
   RPA Browser, the RPA Site Login and the RPA Step Signing, a desktop one the RPA Desktop Runner and the RPA Step
   Signing. The last two come from the slots marked "only passed on to the workflow file", which the import never

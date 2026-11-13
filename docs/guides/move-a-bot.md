@@ -44,7 +44,8 @@ Then, for each bot:
    downloads the workflow that runs the bot. For a UiPath project, notes in that workflow show what was not
    translated, such as a credential lookup. A log message is dropped without a note. Import the workflow in n8n. Its
    RPA credentials are the ones the import used, already picked by name and id (never a value): check them, pick any
-   other credential its notes name, and run it (the **Execute** button at the bottom of the canvas).
+   other credential its notes name, and run it (the **Execute** button at the bottom of the canvas). Each run writes a
+   row to the `playwright_runs` Data Table, and a failed run shows as failed under **Executions**.
 
 To have a second person approve by email instead, follow the template's **Approval by email** note. The
 [desktop bot guide](desktop-bot.md) walks the whole path with a recording.

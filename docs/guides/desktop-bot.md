@@ -144,7 +144,11 @@ by another name or address than the one in the line (a NAT, a tunnel), run the c
 The first run after a quiet time waits while Windows signs the bot user in, about 5 to 20 seconds. If it fails with
 `runner_unavailable`, run it again, then see the [Windows guide](../install/windows.md#11-when-something-fails).
 
-To run the bot on a schedule, open **On a schedule**, set the time, turn the node on, and **Publish** the workflow.
+Each run writes one row to the `playwright_runs` Data Table (**Log run**). A failed run writes its error code there
+(**Log failed run**) and then stops at **Stop and Error**, so it shows as failed under **Executions**.
+
+To run the bot on a schedule, open **On a schedule**, set the time, turn the node on, and **Publish** the workflow. To
+be told when a scheduled run fails, choose an Error Workflow in the workflow's settings.
 
 ## Next
 

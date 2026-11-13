@@ -12,7 +12,7 @@
 import type { DesktopDraft, Draft, FlowNode, UiPathFlow } from 'n8n-rpa-engine';
 import { CREDENTIALS } from '../config.js';
 import { RPA_NODE_TYPE } from '../node-type.js';
-import { STEPS_TABLE } from '../rows.js';
+import { RUN_TABLE, RUN_TABLE_COLUMNS, STEPS_TABLE } from '../rows.js';
 
 export interface WorkflowNode {
   id: string;
@@ -26,6 +26,8 @@ export interface WorkflowNode {
   executeOnce?: boolean;
   /** Switched off: n8n skips it (the Schedule Trigger, until a person sets the time). */
   disabled?: boolean;
+  /** Run steps: its failures leave on an error output (to the run log); the log write: a failure passes the item on. */
+  onError?: 'continueErrorOutput' | 'continueRegularOutput';
   /**
    * Credentials by type, in n8n's own form: the id and display name of one the import was given, or the name alone (id
    * null: n8n selects it when exactly one credential has that name). Never a secret.
@@ -119,6 +121,7 @@ const T = {
   emailSend: ['n8n-nodes-base.emailSend', 2.1],
   wait: ['n8n-nodes-base.wait', 1.1],
   if: ['n8n-nodes-base.if', 2.2],
+  stopAndError: ['n8n-nodes-base.stopAndError', 1],
 } as const satisfies Record<string, readonly [string, number]>;
 
 const COLOUR = { green: 4, gold: 2, grey: 7 } as const;
@@ -202,6 +205,34 @@ function pickText(picked: string[], missing: string[]): string {
     missing.length ? `Pick ${and(missing)} here.` : '',
   ].filter(Boolean).join(' ');
 }
+/** The run log's nodes: they are drawn once a workflow has a Run steps, and the cap keeps room for them. */
+const LOG = { create: 'Create run log table', run: 'Log run', failed: 'Log failed run', stop: 'Stop and Error' } as const;
+const LOG_NODES = Object.keys(LOG).length;
+/** The run log's columns as n8n's Data Table insert writes them: every value from the item it gets, never from a node by name. */
+const runRow = (values: Record<string, string>) => ({
+  mappingMode: 'defineBelow',
+  value: values,
+  matchingColumns: [],
+  schema: RUN_TABLE_COLUMNS.map((c) => ({ id: c.name, displayName: c.name, required: false, defaultMatch: false, display: true, type: c.type, canBeUsedToMatch: true })),
+});
+/** A successful run: Run steps' Data item. */
+const LOG_RUN_ROW = {
+  name: "={{ $json.name ?? '' }}", lane: "={{ $json.lane ?? '' }}", version: '={{ $json.version ?? 0 }}', hash: "={{ $json.hash ?? '' }}",
+  confirmed: '={{ $json.confirmed ?? false }}', rowCount: '={{ ($json.rows ?? []).length }}', durationMs: '={{ $json.durationMs ?? 0 }}',
+  llmTokens: '={{ $json.llmTokens ?? 0 }}', code: '', executionId: '={{ $execution.id }}',
+};
+/** A failed run: Run steps' error item, its facts under details (a configuration error has no code: config_error). */
+const LOG_FAILED_ROW = {
+  name: "={{ $json.details?.name ?? '' }}", lane: "={{ $json.details?.lane ?? '' }}", version: '={{ $json.details?.version ?? 0 }}',
+  hash: "={{ $json.details?.hash ?? '' }}", confirmed: '={{ false }}', rowCount: '={{ 0 }}', durationMs: '={{ $json.details?.durationMs ?? 0 }}',
+  llmTokens: '={{ $json.details?.llmTokens ?? 0 }}', code: "={{ $json.details?.code || 'config_error' }}", executionId: '={{ $execution.id }}',
+};
+/**
+ * Stop and Error's message: the code and the step list's name from the logged row, or from the error item itself when the
+ * log write failed (Log failed run passes its input on then), with the error's message when it is there.
+ */
+export const STOP_MESSAGE =
+  "={{ 'The run failed: ' + ($json.code || $json.details?.code || 'config_error') + ' on ' + ($json.name || $json.details?.name || 'the steps') + ($json.message ? '. ' + $json.message : '. Run steps in this execution has the message.') }}";
 const RUNS_ONCE = 'Run steps runs once for all items here, not once per item, because Get active steps has Execute Once on.';
 /** The binary property Run steps gives the draft's last top-level download or expected file (file_<index>, see the engine's binaryName). */
 function downloadProperty(draft: Draft | DesktopDraft): string | undefined {
@@ -228,6 +259,8 @@ class Builder {
   readonly draftNames: string[] = [];
   readonly desktopRunNodes: string[] = [];
   readonly desktopDraftNames: string[] = [];
+  /** Every Run steps drawn, browser and desktop, in the order drawn: each one writes the run log. */
+  readonly allRuns: string[] = [];
   /** The colours of the stickies drawn so far: the legend names only these. */
   readonly colours = new Set<number>();
   credentials = 0;
@@ -239,6 +272,8 @@ class Builder {
    */
   private lastFile: string | undefined;
 
+  /** Nodes the cap keeps free for what is drawn after the flow (the run log). */
+  kept = 0;
   /** Activities not drawn because the workflow reached MAX_WORKFLOW_NODES. */
   skipped = 0;
   /** Set when the first activity does not fit: everything after it is counted too, so nothing is drawn out of order. */
@@ -329,7 +364,7 @@ class Builder {
     return d;
   }
   /** Whether a browser pair (a browser node with its draft) is in these lists, at any depth. */
-  private hasBrowser(lists: FlowNode[][]): boolean {
+  hasBrowser(lists: FlowNode[][]): boolean {
     return lists.some((list) => list.some((n) => {
       if (n.kind === 'browser') return this.drafts.has(draftOf(this.prefix, n));
       if (n.kind === 'desktop') return this.desktopDrafts.has(draftOf(this.prefix, n));
@@ -404,11 +439,62 @@ class Builder {
       `### Not translated (grey)\nNot translated: ${md(displayName || activity)} (${md(activity)}): ${md(note, 600)}`, COLOUR.grey);
   }
 
+  /**
+   * The run log after the flow: each Run steps' Data output also feeds **Log run** (Execute Once), and its error output
+   * feeds **Log failed run** → **Stop and Error**, so a failed run is logged and the execution still fails. One set for
+   * every Run steps. A lone Run steps at the end of the flow has them right of it; otherwise they sit below the flow.
+   */
+  runLog(): void {
+    if (!this.allRuns.length) return;
+    const at = (name: string) => this.nodes.find((n) => n.name === name)?.position ?? [0, 0];
+    const lone = this.allRuns.length === 1 && !(this.connections[this.allRuns[0]]?.main?.[0]?.length);
+    let logAt: [number, number];
+    let failAt: [number, number];
+    if (lone) {
+      const [rx, ry] = at(this.allRuns[0]);
+      logAt = [rx + STEP, ry];
+      // Clear of a desktop pair's gold variables note, which sits under its Run steps.
+      failAt = [rx + STEP + 40, ry + 220];
+    } else {
+      let bottom = 0;
+      for (const n of this.nodes) bottom = Math.max(bottom, n.position[1] + (n.type === T.sticky[0] ? Number((n.parameters as { height?: number }).height ?? 0) : 100));
+      logAt = [2 * STEP, bottom + 80];
+      failAt = [2 * STEP, bottom + 280];
+    }
+    const table = { __rl: true, mode: 'name', value: RUN_TABLE };
+    this.add(T.dataTable, LOG.run, logAt, { resource: 'row', operation: 'insert', dataTableId: table, columns: runRow(LOG_RUN_ROW), options: {} }, {
+      executeOnce: true, notes: `One row in ${RUN_TABLE} per successful run of a Run steps.`,
+    });
+    this.add(T.dataTable, LOG.failed, failAt, { resource: 'row', operation: 'insert', dataTableId: table, columns: runRow(LOG_FAILED_ROW), options: {} }, {
+      onError: 'continueRegularOutput',
+      notes: `One row in ${RUN_TABLE} per failed run, with its error code. If the row cannot be written, the run still stops as failed.`,
+    });
+    this.add(T.stopAndError, LOG.stop, [failAt[0] + STEP, failAt[1]], { errorType: 'errorMessage', errorMessage: STOP_MESSAGE }, {
+      notes: 'Ends a failed run as failed, so it shows in Executions and an Error Workflow set in the workflow settings runs.',
+    });
+    for (const run of this.allRuns) {
+      this.connect([{ node: run, output: 0 }], LOG.run);
+      this.connect([{ node: run, output: 1 }], LOG.failed);
+    }
+    this.connect([{ node: LOG.failed, output: 0 }], LOG.stop);
+  }
+
+  /** Removes a node that has one input and one output, connecting each of `from` straight to what it fed. */
+  unlink(name: string, from: string[]): void {
+    const next = this.connections[name]?.main?.[0] ?? [];
+    delete this.connections[name];
+    for (const f of from) {
+      const outputs = this.connections[f]?.main ?? [];
+      outputs[0] = [...(outputs[0] ?? []).filter((c) => c.node !== name), ...next];
+    }
+    this.nodes.splice(this.nodes.findIndex((n) => n.name === name), 1);
+  }
+
   /** Draws the list; once the workflow has MAX_WORKFLOW_NODES nodes, the rest is only counted (see `overflow`). */
   walk(list: FlowNode[], tails: Tail[], x: number, y: number): Walked {
     let at: Walked = { tails, x };
     for (const n of list) {
-      if (!this.full && this.nodes.length + this.cost(n) > MAX_WORKFLOW_NODES) this.full = true;
+      if (!this.full && this.nodes.length + this.cost(n) > MAX_WORKFLOW_NODES - this.kept) this.full = true;
       if (this.full) this.skipped += size(n);
       else at = this.one(n, at.tails, at.x, y);
     }
@@ -479,11 +565,13 @@ class Builder {
       aiRepair: false,
       options: { name: draftName, expectedVersion: '={{ $json.version }}', ...this.runOptions(false), ...this.variablesOption(draft.variables, secret, start) },
     }, {
+      onError: 'continueErrorOutput',
       credentials: creds.credentials,
       notes: `Runs the signed desktop steps ${draftName} (${plural(draft.script.steps.length, 'step')} ${FROM[this.source].steps} "${line(n.displayName, 120)}") on the desktop runner. ${pickText(creds.picked, creds.missing)}${fillIn}${secret.size ? ` ${[...secret].join(', ')}: put ${secret.size === 1 ? 'it' : 'them'} in an RPA Secret Variables credential (type rpaSecretVariablesApi, field Variables) and select it here.` : ''}`,
     });
     this.connect([{ node: get, output: 0 }], run);
     this.desktopRunNodes.push(run);
+    this.allRuns.push(run);
     if (plainVars.length || secret.size) {
       const listedVars = plainVars.length
         ? `On **${md(run)}**, Options → Variables: ${plainVars.map((v) => (literal(start[v]) !== undefined ? `${code(v, 60)} (starts as ${code(start[v], 120)})` : code(v, 60))).join(', ')}.`
@@ -523,17 +611,19 @@ class Builder {
           aiRepair: false,
           options: { name: draftName, expectedVersion: '={{ $json.version }}', ...this.codeOptions(), ...this.runOptions(true), ...this.variablesOption(vars.all, new Set(vars.secret)) },
         }, {
+          onError: 'continueErrorOutput',
           ...(Object.keys(creds.credentials).length ? { credentials: creds.credentials } : {}),
           notes: [
             `Runs the signed steps ${draftName} (${plural(draft.script.steps.length, 'step')} ${FROM[this.source].steps} "${line(n.displayName, 120)}"). ${pickText(creds.picked, creds.missing)} ${this.privateNetwork ? PRIVATE_NETWORK_ON : PRIVATE_NETWORK_OFF}${vars.secret.length ? ` ${vars.secret.join(', ')}: put ${vars.secret.length === 1 ? 'it' : 'them'} in an RPA Secret Variables credential (type rpaSecretVariablesApi, field Variables) and select it here.` : ''}`,
             'To let it repair itself when the site changes:',
             '1. Connect a chat model to its Model input (after step 2).',
-            `2. Turn on AI Repair here and write the Goal in plain words.`,
-            `3. Connect its Repaired Steps output to an Execute Workflow node that calls ${APPROVE_WORKFLOW}.`,
+            `2. Turn on AI Repair here and write the Goal in plain words. The outputs become Data, Repaired Steps and error.`,
+            `3. Connect its Repaired Steps output to an Execute Workflow node that calls ${APPROVE_WORKFLOW}, and its error output to ${LOG.failed} again.`,
           ].join('\n'),
         });
         this.connect([{ node: get, output: 0 }], run);
         this.runNodes.push(run);
+        this.allRuns.push(run);
         this.lastFile = downloadProperty(draft);
         return { tails: [{ node: run, output: 0 }], x: x + 2 * STEP };
       }
@@ -699,7 +789,22 @@ export function buildWorkflow(flow: UiPathFlow, drafts: Draft[], opts: BuildWork
     disabled: true, notes: 'Set the time, then turn this node on and publish the workflow. Until then the bot runs only when you click Execute.',
   });
   b.reserve('About this import', 'Set once');
-  b.overflow(b.walk(flow.nodes, [{ node: 'Run the bot', output: 0 }, { node: 'On a schedule', output: 0 }], STEP, 0));
+  let start: Tail[] = [{ node: 'Run the bot', output: 0 }, { node: 'On a schedule', output: 0 }];
+  // A flow with a Run steps keeps a run log: the table is made when missing, first, as the templates do.
+  const logged = b.hasBrowser([flow.nodes]);
+  if (logged) {
+    b.reserve(...Object.values(LOG));
+    b.add(T.dataTable, LOG.create, [STEP, 0], {
+      resource: 'table', operation: 'create', tableName: RUN_TABLE, columns: { column: RUN_TABLE_COLUMNS.map((c) => ({ name: c.name, type: c.type })) }, options: { createIfNotExists: true },
+    }, { notes: `Creates the run log ${RUN_TABLE} when it is missing.` });
+    b.connect(start, LOG.create);
+    start = [{ node: LOG.create, output: 0 }];
+    b.kept = LOG_NODES - 1;
+  }
+  b.overflow(b.walk(flow.nodes, start, logged ? 2 * STEP : STEP, 0));
+  // No Run steps fitted under the cap: no run log, and the triggers start the flow directly.
+  if (logged && !b.allRuns.length) b.unlink(LOG.create, ['Run the bot', 'On a schedule']);
+  b.runLog();
 
   const project = line(flow.name, 120).replace(/^=+/, '').trim() || opts.name;
   const desktopPart = b.desktopDraftNames.length ? ` and ${plural(b.desktopDraftNames.length, 'desktop sequence')}` : '';
@@ -717,6 +822,9 @@ export function buildWorkflow(flow: UiPathFlow, drafts: Draft[], opts: BuildWork
       : '',
     b.desktopDraftNames.length
       ? `${uipath ? 'Each desktop sequence is' : 'The desktop steps are'} **Get active steps** → **Run steps** on the **RPA Desktop Runner**: it runs only the newest signed, active version of its steps (${b.desktopDraftNames.slice(0, 3).map((d) => code(d)).join(', ')}${b.desktopDraftNames.length > 3 ? ', …' : ''}) from ${STEPS_TABLE}. Desktop steps are not replayed at import and have no AI repair yet: approve them on the review page of **${IMPORT_FORM}**, ticking the steps that save, send or submit.`
+      : '',
+    b.allRuns.length
+      ? `Every run writes one row to ${RUN_TABLE}: **${LOG.run}**, or **${LOG.failed}** with the error code. A failed run then ends at **${LOG.stop}**, so it shows as failed in Executions. To be told when one fails, choose an Error Workflow in this workflow's settings.`
       : '',
     '**On a schedule** is off: set the time, turn it on and publish the workflow. **Run the bot** runs it now.',
     [
