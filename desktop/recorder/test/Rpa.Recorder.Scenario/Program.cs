@@ -12,8 +12,10 @@ namespace Rpa.Recorder.Scenario;
 /// <code>Rpa.Recorder.Scenario --recorder &lt;RpaRecorder.exe&gt; --app &lt;ErpDemo.exe&gt; --golden &lt;erp.rpa-recording.json&gt; --out &lt;folder&gt;</code>
 /// Pass 1 (v1) must equal the golden recording apart from timestamps; pass 2 (<c>--ui v2</c>) must be a valid recording
 /// with the v2 controls; in pass 3 (v1 again) the person keeps the name the Save dialog offers, and the recording must
-/// save that name into the run's export folder all the same. In no pass may the demo password occur in a file the
-/// recorder wrote or in what it printed.
+/// save that name into the run's export folder all the same; in pass 4 (v1 again) the person also clicks Post, and the
+/// policy change file must propose to protect Post and name the Save dialog's button as left out. In no pass may the
+/// demo password occur in a file the recorder wrote or in what it printed. The change file of pass 4 stays in
+/// <c>&lt;out&gt;\v1-post\saved</c>, where the workflow's next step applies it with the policy tool.
 /// Exit code 0 when every check passed.
 /// </summary>
 internal static class Program
@@ -39,16 +41,23 @@ internal static class Program
         {
             Check("v1: the recording equals the golden recording apart from timestamps", JsonNode.DeepEquals(WithoutTimes(first.Recording), WithoutTimes(golden)),
                 () => first.Recording.ToJsonString(new() { WriteIndented = true }));
-            CheckPolicyChange("v1", first.PolicyChange, app, []);
+            CheckPolicyChange("v1", first.PolicyChange, app, [], [], [("1", "Save")]);
         }
         var v2 = Record(recorder, app, ["--ui", "v2"], Path.Combine(output, "v2"), v2: true, seed: 72);
         if (v2 is { } second)
         {
             CheckV2(second.Recording);
-            CheckPolicyChange("v2", second.PolicyChange, app, ["--ui", "v2"]);
+            CheckPolicyChange("v2", second.PolicyChange, app, ["--ui", "v2"], [("btnConfirmExport", "Continue")], [("1", "Save")]);
         }
         var offered = Record(recorder, app, [], Path.Combine(output, "v1-offered"), v2: false, seed: 73, keepOfferedName: true);
         if (offered is { } third) CheckOfferedName(third.Recording);
+        var posted = Record(recorder, app, [], Path.Combine(output, "v1-post"), v2: false, seed: 74, post: true);
+        if (posted is { } fourth)
+        {
+            var events = fourth.Recording["events"]!.AsArray().Select(e => e!).ToList();
+            Check("v1, Post: the click on Post is a step", events.Any(e => Kind(e) == "click" && Id(e) == "btnPost"), () => string.Join("\n", events.Select(Shown)));
+            CheckPolicyChange("v1, Post", fourth.PolicyChange, app, [], [("btnPost", "Post")], [("1", "Save")]);
+        }
 
         Console.WriteLine();
         Console.WriteLine($"{Results.Count(r => r.Ok)} passed, {Results.Count(r => !r.Ok)} failed");
@@ -57,9 +66,9 @@ internal static class Program
 
     /// <summary>One pass: the recorder records the flow; null when the pass could not finish.</summary>
     private static (JsonNode Recording, JsonNode PolicyChange)? Record(string recorder, string app, string[] appArgs, string folder, bool v2, int seed,
-        bool keepOfferedName = false)
+        bool keepOfferedName = false, bool post = false)
     {
-        var pass = v2 ? "v2" : keepOfferedName ? "v1, offered name" : "v1";
+        var pass = v2 ? "v2" : keepOfferedName ? "v1, offered name" : post ? "v1, Post" : "v1";
         if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
         var saved = Path.Combine(folder, "saved");
         var start = new ProcessStartInfo(recorder)
@@ -83,7 +92,7 @@ internal static class Program
         try
         {
             using var person = new Person(appProcess, seed);
-            var flowed = Try(() => person.ErpFlow(Password, v2, keepOfferedName ? null : Path.Combine(folder, "export", "line-items.csv")), out var failure);
+            var flowed = Try(() => person.ErpFlow(Password, v2, keepOfferedName ? null : Path.Combine(folder, "export", "line-items.csv"), post), out var failure);
             Check($"{pass}: the person performs the flow", flowed, () => failure);
             process.StandardInput.Close();
             var ended = process.WaitForExit(60000);
@@ -153,16 +162,26 @@ internal static class Program
     private static string? NameOf(JsonNode e) => e["target"]?["path"]?.AsArray().Last()?["name"]?.GetValue<string>();
     private static string Kind(JsonNode e) => e["kind"]!.GetValue<string>();
 
-    private static void CheckPolicyChange(string pass, JsonNode change, string app, string[] args)
+    /// <summary>The change allows ErpDemo.exe by its path and SHA-256, proposes exactly <paramref name="writes"/> (id,
+    /// name) to protect, names exactly <paramref name="leftOut"/> as left out, and has nothing else (no gated key).</summary>
+    private static void CheckPolicyChange(string pass, JsonNode change, string app, string[] args, (string Id, string Name)[] writes, (string Id, string Name)[] leftOut)
     {
         var apps = change["allowedApps"]?.AsArray();
         var entry = apps is { Count: 1 } ? apps[0] : null;
         string sha;
         using (var file = File.OpenRead(app)) sha = Convert.ToHexString(SHA256.HashData(file));
         var expectedArgs = args.Length == 0 ? null : new JsonArray(new JsonArray(args.Select(a => (JsonNode)JsonValue.Create(a)!).ToArray())).ToJsonString();
-        Check($"{pass}: the policy change allows ErpDemo.exe by its path and SHA-256, and nothing else",
-            change.AsObject().Count == 1 && entry is not null && entry["exe"]?.GetValue<string>() == "ErpDemo.exe" && entry["path"]?.GetValue<string>() == app
+        Check($"{pass}: the policy change allows ErpDemo.exe by its path and SHA-256",
+            entry is not null && entry["exe"]?.GetValue<string>() == "ErpDemo.exe" && entry["path"]?.GetValue<string>() == app
             && entry["sha256"]?.GetValue<string>() == sha && entry["allowedArgs"]?.ToJsonString() == expectedArgs, () => change.ToJsonString());
+        static string Listed(JsonNode? list) => string.Join(", ", (list?.AsArray() ?? []).Select(c => $"{c!["exe"]} {c["automationId"]} {c["name"]}"));
+        static string Expected((string Id, string Name)[] controls) => string.Join(", ", controls.Select(c => $"ErpDemo.exe {c.Id} {c.Name}"));
+        var keys = new List<string> { "allowedApps" };
+        if (writes.Length > 0) keys.Add("writeControls");
+        if (leftOut.Length > 0) keys.Add("leftOutControls");
+        Check($"{pass}: the policy change proposes to protect [{Expected(writes)}], names [{Expected(leftOut)}] as left out, and has nothing else",
+            change.AsObject().Select(p => p.Key).SequenceEqual(keys) && Listed(change["writeControls"]) == Expected(writes) && Listed(change["leftOutControls"]) == Expected(leftOut),
+            () => change.ToJsonString());
     }
 
     /// <summary>The recording without its timestamps (the "at" of every event).</summary>

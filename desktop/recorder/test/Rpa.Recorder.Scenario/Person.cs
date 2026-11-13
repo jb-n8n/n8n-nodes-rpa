@@ -24,7 +24,7 @@ internal sealed class Person(int appProcessId, int seed) : IDisposable
     /// <summary>Sign in, pick company 2000, type and paste the dates, search, click a result cell, export the line items
     /// into <paramref name="exportFile"/>, or, when it is null, under the name the Save dialog offers. v2: Find instead
     /// of Search, Reports > Export line items..., a confirmation.</summary>
-    public void ErpFlow(string password, bool v2, string? exportFile)
+    public void ErpFlow(string password, bool v2, string? exportFile, bool post = false)
     {
         var login = Window(t => t == "ERP Demo - Sign in", 30000);
         Click(First(login, Find.ByAutomationId("txtUser")));
@@ -46,6 +46,7 @@ internal sealed class Person(int appProcessId, int seed) : IDisposable
         var count = First(main, Find.ByAutomationId("lblResultCount"));
         Until(() => (count.Properties.Name.ValueOrDefault ?? "").EndsWith("line items", StringComparison.Ordinal), 5000, "the results");
         Click(First(main, Find.ByName("Vendor Row 1")));
+        if (post) Click(First(main, Find.ByAutomationId("btnPost")));   // a write: the change file proposes to protect it
         if (!v2)
         {
             Click(First(main, Find.ByControlType(ControlType.MenuItem).And(Find.ByName("File"))));

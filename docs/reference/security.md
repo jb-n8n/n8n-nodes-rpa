@@ -217,8 +217,10 @@ the runner cannot filter. What holds is the runner's local policy on the Windows
 the gated keys and the export folder. n8n cannot switch it off.
 
 - The runner starts only the apps its policy lists, at the path the policy names.
-- A step marked `"write": true` may use a write control or gated key. The runner refuses those without the mark. Until
-  an app's write controls and keys are in the policy, the runner gates no write in it.
+- A step marked `"write": true` may use a write control or gated key. The runner refuses those without the mark. The
+  recorder's **Allow this app…** proposes, with the app, the clicked buttons that the review page ticks as writes and
+  that have an automation id, except a dialog's standard buttons (ids 1 to 11) and any key; the administrator's one
+  answer applies both. Until an app's write controls and keys are in the policy, the runner gates no write in it.
 - Whoever holds the RPA Desktop Runner credential can do whatever a marked write could do in the allowed apps. Protect
   it as you would the n8n instance.
 - The installer adds the browser beside the runner only with `-WithBrowser`. With it, whoever holds the browser token

@@ -31,6 +31,16 @@ public class PolicyCommandTests
     private static readonly string AllowErp = $"Allow app \"ErpDemo.exe\" at {L(ErpPath)}";
     private static readonly string OneApp = "This change: 1 app(s) allowed or updated, 0 helper process pattern(s), 0 write control(s), 0 gated key(s).";
 
+    // The note for an app the policy already had and that no write control protects (one allowed by an earlier version).
+    private const string NoWriteControl = "No write control is listed for \"ErpDemo.exe\", so the runner gates no write in it. To protect its save or post buttons, record a run that clicks them and apply that recording's change file the same way.";
+
+    // A change file as the recorder writes it for a recording that clicked Post and the Save button of a Save dialog.
+    private static readonly string RecorderChange = $$"""
+        { "allowedApps": [{ "exe": "ErpDemo.exe", "path": {{J(ErpPath)}} }],
+          "writeControls": [{ "exe": "ErpDemo.exe", "automationId": "btnPost", "name": "Post" }],
+          "leftOutControls": [{ "exe": "ErpDemo.exe", "automationId": "1", "name": "Save" }] }
+        """;
+
     private static string Changing(int apps = 0, int helpers = 0) =>
         $"Changing the policy at {PolicyPath} ({apps} app(s), {helpers} helper process pattern(s) today).";
 
@@ -511,9 +521,71 @@ public class PolicyCommandTests
         var tool = new Tool();
         Assert.Equal(0, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
         Assert.Equal(0, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
-        Assert.Equal($"{Changing(apps: 1)}\nNothing to change.\n", tool.Output);
+        Assert.Equal($"{Changing(apps: 1)}\nNothing to change.\n{R(NoWriteControl)}\n", tool.Output);
         Assert.Single(tool.Files.Writes);
         Assert.Equal(1, tool.Restarts);
+    }
+
+    [Fact]
+    public void The_recorder_s_change_asks_once_for_the_app_and_the_buttons_to_protect_and_says_which_it_left_out()
+    {
+        var tool = new Tool();
+        tool.Files.Text[ChangePath] = RecorderChange;
+        Assert.Equal(0, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Equal(
+            $"{Changing()}\n" +
+            R("Protect \"Post\" (\"btnPost\") of \"ErpDemo.exe\" as a write control", PolicyChange.ProtectMeaning,
+              "Not protected: \"Save\" (\"1\") of \"ErpDemo.exe\": 1 to 11 are the ids of Windows' standard dialog buttons, which every dialog of the app shares",
+              AllowErp) +
+            "\nThis change: 1 app(s) allowed or updated, 0 helper process pattern(s), 1 write control(s), 0 gated key(s).\n" +
+            $"{Prompt}{Updated}\n",
+            tool.Output);
+        var policy = RunnerPolicy.Parse(Assert.Single(tool.Files.Writes).Json);
+        Assert.Equal(("ErpDemo.exe", "btnPost"), (Assert.Single(policy.WriteControls).Exe, policy.WriteControls[0].AutomationId));
+        Assert.Single(policy.AllowedApps);
+
+        // No: neither the app nor the button.
+        var declined = new Tool();
+        declined.Files.Text[ChangePath] = RecorderChange;
+        Assert.Equal(3, declined.Run("n\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Empty(declined.Files.Writes);
+    }
+
+    [Fact]
+    public void An_app_allowed_without_write_controls_gets_them_from_a_new_recording_s_change_with_the_same_command()
+    {
+        var tool = new Tool();
+        Assert.Equal(0, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        tool.Files.Text[ChangePath] = RecorderChange;
+        Assert.Equal(0, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.StartsWith($"{Changing(apps: 1)}\n{R("Protect \"Post\" (\"btnPost\") of \"ErpDemo.exe\" as a write control")}\n", tool.Output);
+        Assert.DoesNotContain("No write control", tool.Output);
+        Assert.Equal(["btnPost"], RunnerPolicy.Parse(tool.Files.Writes[^1].Json).WriteControls.Select(w => w.AutomationId));
+    }
+
+    [Fact]
+    public void The_note_comes_before_the_lines_of_a_change_and_only_for_apply()
+    {
+        var tool = new Tool();
+        Assert.Equal(0, tool.Run("y\n", "apply", ChangePath, "--policy", PolicyPath));
+        tool.Files.Text[ChangePath] = $$"""{ "allowedApps": [{ "exe": "ErpDemo.exe", "path": {{J(ErpPath)}}, "allowedArgs": [["--ui", "v2"]] }] }""";
+        Assert.Equal(3, tool.Run("n\n", "apply", ChangePath, "--policy", PolicyPath));
+        Assert.Equal(
+            $"{Changing(apps: 1)}\n{R(NoWriteControl)}\n{R($"Update app \"ErpDemo.exe\" at {L(ErpPath)} (allowed arguments added)")}\n  with arguments: \"--ui\" \"v2\"\n{OneApp}\n{Prompt}",
+            tool.Output);
+        // allow-app is the way to allow an app without its buttons: it says nothing about them.
+        Assert.Equal(0, tool.Run("", "allow-app", ErpPath, "--yes", "--policy", PolicyPath));
+        Assert.Equal($"{Changing(apps: 1)}\nNothing to change.\n", tool.Output);
+    }
+
+    [Fact]
+    public void Started_by_the_recorder_the_tool_waits_after_nothing_to_change_when_it_printed_a_note()
+    {
+        var tool = new Tool { Console = OwnWindow };
+        Assert.Equal(0, tool.Run("y\n", "apply", ChangePath, "--close-on-success"));
+        Assert.Equal(0, tool.Run("\nrest", "apply", ChangePath, "--close-on-success"));
+        Assert.EndsWith($"Nothing to change.\n{R(NoWriteControl)}\n{Closing}\n", tool.Output);
+        Assert.Equal("rest", tool.Unread);
     }
 
     [Fact]
@@ -1113,7 +1185,7 @@ public class PolicyCommandTests
         Assert.Equal(0, tool.Run("", "apply", ChangePath, "--yes", "--policy", PolicyPath));
         Assert.Equal($"{Changing()}\n{AllowErp}\n{OneApp}\n{Updated}\n", tool.Output);
         Assert.Equal(0, tool.Run("", "apply", ChangePath, "--yes", "--policy", PolicyPath));
-        Assert.EndsWith("Nothing to change.\n", tool.Output);
+        Assert.EndsWith($"Nothing to change.\n{R(NoWriteControl)}\n", tool.Output);
         Assert.Equal(0, tool.Run("", "show", "--policy", PolicyPath));
 
         // The size is read once, when the tool is about to ask: not for a command that ends earlier.
@@ -1122,7 +1194,7 @@ public class PolicyCommandTests
         Assert.Equal(1, counting.Run("", "apply", Path.Combine(Root, "changes", "missing.json"), "--policy", PolicyPath));
         Assert.Equal(0, counting.Run("", "apply", ChangePath, "--yes", "--policy", PolicyPath));
         Assert.Equal(0, counting.Run("", "apply", ChangePath, "--policy", PolicyPath));
-        Assert.EndsWith("Nothing to change.\n", counting.Output);
+        Assert.EndsWith($"Nothing to change.\n{R(NoWriteControl)}\n", counting.Output);
         Assert.Equal(0, asked);
         counting.Files.Text[ChangePath] = """{ "gatedKeys": ["Ctrl+S"] }""";
         Assert.Equal(3, counting.Run("n\n", "apply", ChangePath, "--policy", PolicyPath));
@@ -1173,11 +1245,12 @@ public class PolicyCommandTests
         // The recorder's bar passes --close-on-success and reads the exit code; the tool run by hand waits as above.
         var policy = Path.Combine(RunnerOptions.DefaultDataDir(), "policy.json");
         var tool = new Tool { Console = OwnWindow };
+        tool.Files.Text[ChangePath] = RecorderChange;
         Assert.Equal(0, tool.Run("y\nrest", "apply", ChangePath, "--close-on-success"));
         Assert.EndsWith($"{Prompt}{Updated}\n", tool.Output);
         Assert.Equal("rest", tool.Unread);
         Assert.Equal(policy, Assert.Single(tool.Files.Writes).Path);
-        // Nothing to change is a success too.
+        // Nothing to change is a success too (with nothing to read: a note waits, as tested below).
         Assert.Equal(0, tool.Run("rest", "apply", ChangePath, "--close-on-success"));
         Assert.EndsWith("Nothing to change.\n", tool.Output);
         Assert.Equal("rest", tool.Unread);

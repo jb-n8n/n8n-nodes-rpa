@@ -237,7 +237,14 @@ run whether a user is signed in or not), or with input that comes from a file or
   (`Application file not found: <path>` when there is none).
 - `apply <change.json>` adds what a change file lists. A change file is a JSON object with any of `allowedApps`,
   `writeControls`, `gatedKeys`, `helperProcesses` and `clipboardRead`, written as in the policy file. It must be on a
-  local drive (`the change file must be on a local drive` for a UNC or device path).
+  local drive (`the change file must be on a local drive` for a UNC or device path). Two things only a change file
+  may have, both shown in the question and never written into the policy: a `name` in a `writeControls` entry (the
+  control's name), and `leftOutControls`, entries of `exe`, `automationId` and `name` for controls that were not
+  proposed because their ids, 1 to 11, are those of Windows' standard dialog buttons (OK, Cancel, Yes, No and the
+  like), which every dialog of an app shares. A `leftOutControls` entry with any other id is refused
+  (`the change: leftOutControls lists only the ids 1 to 11 of Windows' standard dialog buttons, not "<id>"`). The
+  recorder's change file has both: the buttons its recording clicked that the engine's review page ticks as writes
+  (`recorder/src/Rpa.Recorder.Core/WriteRules.cs`), and the standard dialog buttons among them.
 - The change file and the application are paths chosen by whoever started the tool, and the tool works with
   administrator rights. Before it opens such a path or writes it into the policy (`allow-app` with and without
   `--pin-hash`), it tests the path itself:
@@ -282,7 +289,7 @@ for it:
 | Refused | Message |
 |---|---|
 | A change file larger than 256 KiB (checked before it is read) | `the change file is larger than 256 KiB` |
-| More than 40 entries in `allowedApps`, `writeControls`, `gatedKeys` and `helperProcesses` together, each allowed argument list counting as one | `a change may hold at most 40 entries; this one holds <n>` |
+| More than 40 entries in `allowedApps`, `writeControls`, `gatedKeys`, `helperProcesses` and `leftOutControls` together, each allowed argument list counting as one | `a change may hold at most 40 entries; this one holds <n>` |
 | An argument list with more than 20 arguments | `an allowed argument list may hold at most 20 arguments` |
 | A name, path, id or argument longer than 260 characters | `a value in the change is longer than 260 characters` |
 | A short (8.3) name such as `C:\PROGRA~1\...` in an app `path` or a helper `pathPattern` (any `~` followed by a digit): it would name an existing entry's file without being that entry | `write the full path, not a short (8.3) name: <the path>` |
@@ -305,6 +312,8 @@ line is last, directly above the prompt:
 | Line | Meaning |
 |---|---|
 | `Add write control "<exe>" / "<automationId>"` | A new `writeControls` entry. |
+| `Protect "<name>" ("<automationId>") of "<exe>" as a write control` | A new `writeControls` entry with a `name`. Under the last of them: `A run must then mark a step as a write to press one of these, and to press any key but Tab, arrows, Home, End, PageUp, PageDown or Escape while a window that holds one is open.` |
+| `Not protected: "<name>" ("<automationId>") of "<exe>": 1 to 11 are the ids of Windows' standard dialog buttons, which every dialog of the app shares` | A `leftOutControls` entry the policy does not protect. Nothing is written for it, and a change that has nothing else gets no question. |
 | `Add gated key "<chord>"` | A new `gatedKeys` entry. |
 | `Allow app "<exe>" at "<path>"` | A new `allowedApps` entry. ` (SHA-256 pinned <64 hex digits>)` follows when it sets `sha256`. |
 | `Update app "<exe>" at "<path>" (<what changes>)` | The existing entry for this exe and path changes. In the parentheses, joined by `; `: `SHA-256 pinned <hash>` (it had no pin), `SHA-256 pin changed from <hash> to <hash>`, `allowed arguments added`, `user-writable path allowed`. |
@@ -451,6 +460,13 @@ path that looks right is the program you mean.
   comments in a hand-edited policy are not kept; the backup still has them.
 
 `Nothing to change.` means the policy already has everything; the file is not written and the runner is not restarted.
+
+For `apply`, when the change names an app the policy already had and no write control of that app is in the policy
+(an app allowed by an earlier version, for example), the tool says so, under the first line or under
+`Nothing to change.`: `No write control is listed for "<exe>", so the runner gates no write in it. To protect its save
+or post buttons, record a run that clicks them and apply that recording's change file the same way.` Started by the
+recorder, its window then waits for Enter after `Nothing to change.` too. `allow-app`, the way to allow an app
+without its buttons, does not say it.
 
 Exit codes: 0 applied or nothing to change, 1 refused or failed, 2 wrong arguments (the usage is printed), 3 declined
 at the prompt.

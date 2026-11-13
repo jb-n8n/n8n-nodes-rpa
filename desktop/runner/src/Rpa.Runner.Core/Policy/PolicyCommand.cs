@@ -571,13 +571,19 @@ public static class PolicyCommand
         Print(output, first);
 
         var result = PolicyChange.Apply(current ?? "", change);
+        // How to protect an app the policy had without write controls: said for a change file (the recorder's), not
+        // for allow-app, which is the way to allow an app without them.
+        var notes = arguments.Command == "apply" ? result.Notes.SelectMany(PolicyChange.Rows).ToList() : [];
         if (result.Summary.Count == 0)
         {
             Print(output, "Nothing to change.");
-            ending.Clean = true;
+            foreach (var row in notes) Print(output, row);
+            // A note is something left to read: a window of its own then waits for Enter.
+            ending.Clean = notes.Count == 0;
             return 0;
         }
-        var rows = PolicyChange.Printed(result.Summary);
+        // The notes come first: the lines that widen what may run stay last, next to the prompt.
+        var rows = notes.Concat(PolicyChange.Printed(result.Summary)).ToList();
         if (rows.Prepend(Visible(first)).Sum(row => row.Length + 1) > MaxSummaryLength)
             return Fail(output, $"the summary of this change would be longer than {MaxSummaryLength} characters; split it into smaller changes");
         if (!arguments.Yes && console.Buffer() is { } buffer)

@@ -7,7 +7,8 @@
 #   run's export dir, retrieve the file, end the run) plus the refusals (401, busy, policy, not found, not unique,
 #   lease expiry); the recorder core's unit tests, and the recorder scenario: RpaRecorder.exe (its scenario build, the
 #   only one with --headless) records the reference flow a stand-in for a person performs with synthetic input,
-#   checked against the engine's golden recording;
+#   checked against the engine's golden recording; and the write controls a recording proposes: its change file applied
+#   with the policy tool to a policy without them, then a bot's Post refused without write: true and run with it;
 # - the Windows package: the installer's tests, the browser host's and the gate's tests, the two packages staged by
 #   desktop/installer/build/Stage.ps1 (rpa-windows-x64.zip without the browser, rpa-browser-windows-x64.zip with it),
 #   then, in this order: an install from the first zip for a new standard user, without the browser (no browser task,
@@ -43,6 +44,9 @@ on:
       - "packages/engine/src/import/recording.ts"
       - "packages/engine/src/steps/desktop-vocabulary.ts"
       - "packages/engine/src/steps/parse.ts"
+      # The rule that ticks the review page's writes, which the recorder's proposed write controls follow.
+      - "packages/engine/src/proposal/desktop.ts"
+      - "packages/engine/src/import/draft.ts"
       # The install guide's sample policy change, which the runner's tests apply with the real parser.
       - "docs/install/samples/erp-demo-policy-change.json"
       # The connection lines the installer's Pester tests and the node's credential tests share.
@@ -65,6 +69,9 @@ on:
       - "packages/engine/src/import/recording.ts"
       - "packages/engine/src/steps/desktop-vocabulary.ts"
       - "packages/engine/src/steps/parse.ts"
+      # The rule that ticks the review page's writes, which the recorder's proposed write controls follow.
+      - "packages/engine/src/proposal/desktop.ts"
+      - "packages/engine/src/import/draft.ts"
       # The install guide's sample policy change, which the runner's tests apply with the real parser.
       - "docs/install/samples/erp-demo-policy-change.json"
       # The connection lines the installer's Pester tests and the node's credential tests share.
@@ -281,6 +288,65 @@ jobs:
             --recorder "$env:OUT\rpa-recorder-scenario\RpaRecorder.exe" --app "$env:OUT\erp-demo\v1\ErpDemo.exe" `
             --golden packages/engine/test/fixtures/import/recording-erp/erp.rpa-recording.json --out "$env:OUT\recorder-scenario"
           exit $LASTEXITCODE
+
+      # What "Allow this app..." does with the buttons a recording clicked, end to end. The recorder scenario's fourth
+      # pass clicked Post; its change file proposes btnPost and names the Save dialog's button 1 as left out. The policy
+      # starts as one an earlier version could have written (the v1 app, no write control), and a bot clicks Post
+      # without write: true, as before. Then the policy tool applies the change file (one question; --yes here), and a
+      # click on Post without write: true is refused with the policy's message while the one with write: true posts. Not
+      # continue-on-error: without the change file of the recorder's fourth pass this step fails.
+      - name: Protect the button a recording clicked (the policy tool with the recorder's change file, then the write gate)
+        timeout-minutes: 10
+        run: |
+          function Assert([bool]$ok, [string]$what) { if (-not $ok) { throw "FAILED: $what" }; Write-Host "ok: $what" }
+          $policy = Join-Path $env:ProgramData 'RPA Runner\policy.json'
+          $v1 = "$env:OUT\erp-demo\v1\ErpDemo.exe"
+          $change = "$env:OUT\recorder-scenario\v1-post\saved\ERP Demo line items.policy-change.json"
+          New-Item -ItemType Directory -Force "$env:OUT\logs" | Out-Null
+          Assert (Test-Path -LiteralPath $change) "the recorder scenario's Post pass saved its policy change file"
+          # allowUserWritable: the workspace belongs to this job's (admin) user, as in the protocol scenario.
+          @{ allowedApps = @(@{ exe = 'ErpDemo.exe'; path = $v1; allowUserWritable = $true }); maxFileBytes = 20971520 } |
+            ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 $policy
+          $bytes = [byte[]]::new(32); [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+          $env:RPA_RUNNER_TOKEN = [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+          Write-Host "::add-mask::$env:RPA_RUNNER_TOKEN"
+          # Starts the runner with the policy as it is, runs the write gate's check of the protocol scenario, ends the runner.
+          function Invoke-WriteGate([string]$Expect, [string]$Name) {
+            $out = "$env:OUT\logs\$Name-stdout.log"
+            $p = Start-Process -FilePath "$env:OUT\rpa-desktop-runner\RpaRunner.exe" -WindowStyle Hidden -PassThru `
+                   -RedirectStandardOutput $out -RedirectStandardError "$env:OUT\logs\$Name-stderr.log"
+            try {
+              $line = $null
+              for ($i = 0; $i -lt 60 -and -not $line -and -not $p.HasExited; $i++) {
+                Start-Sleep -Milliseconds 500
+                $line = Get-Content $out -ErrorAction SilentlyContinue | Select-String 'listening on wss://0\.0\.0\.0:8765/rpa/v1, fingerprint ((?:[0-9A-F]{2}:){31}[0-9A-F]{2})$' | Select-Object -First 1
+              }
+              Get-Content $out, "$env:OUT\logs\$Name-stderr.log" -ErrorAction SilentlyContinue | Out-Host
+              if (-not $line) { throw 'the runner did not start' }
+              dotnet desktop/runner/test/Rpa.Runner.Scenario/bin/Release/net8.0/Rpa.Runner.Scenario.dll `
+                --url wss://127.0.0.1:8765/rpa/v1 --fingerprint $line.Matches[0].Groups[1].Value --app $v1 --write-gate $Expect --out "$env:OUT\scenario-$Name" | Out-Host
+              $LASTEXITCODE
+            } finally {
+              Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+              $p.WaitForExit(10000) | Out-Null
+            }
+          }
+
+          $code = Invoke-WriteGate 'unprotected' 'gate-before'
+          Assert ($code -eq 0) "with no write control in the policy, a bot clicks Post without write: true, as before (exit code $code)"
+
+          $said = @('n' | & "$env:OUT\rpa-policy-tool\RpaPolicy.exe" apply $change --yes)
+          $code = $LASTEXITCODE
+          $said | ForEach-Object { Write-Host "  | $_" }
+          Assert ($code -eq 0 -and $said -contains 'Policy updated. The runner restarts within 10 seconds and uses the new policy.') "RpaPolicy.exe apply updates the policy (exit code $code)"
+          Assert ($said -contains 'Protect "Post" ("btnPost") of "ErpDemo.exe" as a write control') 'its question lists Post (btnPost) to protect'
+          Assert (@($said | Where-Object { $_ -like 'Not protected: "Save" ("1") of "ErpDemo.exe": 1 to 11 *' }).Count -eq 1) 'its question names the Save dialog''s button 1 as left out, and why'
+          $new = Get-Content -Raw -LiteralPath $policy | ConvertFrom-Json
+          Assert ((@($new.writeControls | ForEach-Object { '{0}/{1}' -f $_.exe, $_.automationId }) -join ',') -eq 'ErpDemo.exe/btnPost') 'policy.json protects btnPost of ErpDemo.exe and no other control'
+          Assert (@($new.gatedKeys).Count -eq 0 -and @($new.allowedApps).Count -eq 1) 'policy.json has no gated key and still the one app'
+
+          $code = Invoke-WriteGate 'protected' 'gate-after'
+          Assert ($code -eq 0) "Post without write: true is refused with the policy's message, and with write: true it posts (exit code $code)"
 
       - name: Collect the runner's logs
         if: always()
