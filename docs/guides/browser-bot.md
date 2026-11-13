@@ -48,7 +48,8 @@ fields. The values are the sandbox's sample values, not real secrets.
 - Requests That Only Read `POST sandbox:8080/sap*/bc/gui/sap/its/webgui`. The sample site's SAP pages post a form to
   show every screen. A run may not post anything else unless the Site Login lists it.
 
-Click **Save**. n8n names it **RPA Site Login account**.
+Click **Save**. n8n names it **RPA Site Login account** and says `Connection tested successfully`. The test checks the
+fields, not the password: a wrong password shows on the first run.
 
 ## 3. Set up the import form with one command
 
@@ -56,7 +57,11 @@ The **import form** is an n8n form where you upload a bot, read its steps and ap
 with the Site Login of step 2.
 
 1. In n8n, make an API key, a key that lets a program act as you in n8n: **Settings → n8n API → Create API key**.
-   Give it a label, keep the expiry, choose **Save**, and copy the key with the copy button next to it.
+   Give it a label and keep the expiry. Under **Scopes**, choose **Custom** and tick only the scopes the command uses:
+   `workflow:create`, `workflow:read`, `workflow:update`, `workflow:delete`, `workflow:list` and `workflow:activate`
+   (group **Workflow and executions**), `credential:create`, `credential:update` and `credential:list` (group
+   **Credentials and variables**), and `user:read` (group **Members**: the command reads your address there for the
+   approver list). A key with these is enough. Choose **Save**, and copy the key with the copy button next to it.
 2. In the repository folder, run the setup command. It is already installed in the n8n container. The first part of
    the line hands it the browser token from `.env`:
 
@@ -84,8 +89,8 @@ The import form is ready.
 ```
 
 Keep the address. If **RPA: 5 Import a bot** is there already from an earlier run, the command leaves it as it is and
-says what to set on it in n8n. The command's last line is about the API key: it can do everything you can in n8n, so
-remove it now. In **Settings → n8n API**, open the key's **⋯** menu and choose **Revoke**. The signing key stays in
+says what to set on it in n8n. The command's last line is about the API key: it can act as you in n8n within its
+scopes, so remove it now. In **Settings → n8n API**, open the key's **⋯** menu and choose **Revoke**. The signing key stays in
 n8n, and n8n does not show it again. The command's other options, and how to run it for an n8n outside this stack
 (`npx n8n-nodes-rpa setup`), are in step 4 of the [desktop bot guide](desktop-bot.md#4-import-and-approve).
 
@@ -103,7 +108,9 @@ steps written as JSON. It signs in, opens the sandbox's SAP report screen, runs 
    it, so leave both boxes empty and click **Import**.
 4. The import runs the steps once and then again in a fresh browser, to prove them. This takes about half a minute.
    The next page lists the steps, says where the bot signs in, and shows the proof: `downloaded
-   "LINEITEMS_1000_2026-09-01_2026-09-30.csv"`. Under **Decision**, choose **Approve and sign**, then **Submit**.
+   "LINEITEMS_1000_2026-09-01_2026-09-30.csv"`. The page builds each step's sentence from the step itself. Words in
+   brackets are the file's own description of a step where it says something else: read those twice. The sample shows
+   none. Under **Decision**, choose **Approve and sign**, then **Submit**.
 5. The last page says `Approved and signed: sandbox-line-items v1 is now the version that runs under that name.` Your
    browser downloads `sandbox-line-items.workflow.json`, the workflow that runs the bot.
 
@@ -127,14 +134,23 @@ If the last page says `Nothing to approve`, it names the problem:
 
 Each run writes one row to `playwright_runs`, a table in n8n's Data Tables (**Log run**). A failed run writes its
 error code there (**Log failed run**) and then stops at **Stop and Error**, so it shows as failed under **Executions**.
+After a failed run, open the RPA node: the failed item on its error output has a `guidance` field that says what to
+do. **Stop and Error** and the run log's row show it too.
 To run the bot on a schedule, open **On a schedule**, set the time, turn the node on, and **Publish** the workflow.
+
+**A bot that reads rows.** `docs/samples/sandbox-rows.steps.json` signs in and reads the sample site's notices. Import
+it as in step 4, with the name `sandbox-rows`, and leave **The file it downloads** empty. Run its workflow as in step 5.
+The RPA node returns one item with a `rows` list: one entry per notice, with its `id`, `Bulletin`, `Date`, `Type`,
+`Models` and `Summary` (the title and text). For one item per row, add n8n's **Split Out** node after it, with
+**Fields To Split Out** `rows`. A bot that reads rows is a step document whose `extract` or `extractTable` steps each have an
+`idPattern`, the shape of the ID every row has ([Steps](../reference/steps.md#id-pattern)). The import checks the rows
+with it, and the workflow it hands over does too.
 
 **Your own site.** Record it with Chrome's Recorder (DevTools → Recorder, then Export as JSON) and upload the export on
 the same form, with a Site Login for that site on **Import steps** and **Sign steps**. Turn **Allow Private Network**
 off for a public site. A bot that downloads a file needs the file's name or columns on **The file it downloads**. A
-bot that reads rows from a page is a step document whose `extract` or `extractTable` steps each have an `idPattern`,
-the shape of the ID every row has ([Steps](../reference/steps.md#id-pattern)). The import checks the rows with it, and
-the workflow it hands over does too. `docs/samples/sandbox-rows.steps.json` reads the sample site's notices this way.
+recording made on the sample site in your own browser holds `localhost:8080`: change it to `sandbox:8080` in the file
+before you upload it, because the bot's browser runs inside the stack, where the sample site is named `sandbox`.
 [Move a bot](move-a-bot.md) covers recordings, Playwright code, UiPath projects and step documents.
 
 **Where else the browser can run.** For your own n8n, install the node from **Settings → Community nodes → Install**
