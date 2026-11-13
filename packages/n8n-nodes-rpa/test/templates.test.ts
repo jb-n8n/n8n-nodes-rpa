@@ -1158,8 +1158,11 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(targets(t, 'Compared with the approved version')).toEqual([['The steps as a file']]);
     expect(targets(t, 'The steps as a file')).toEqual([['The upload']]);
     // The download question only for a browser source, on a second page; Import steps always reads The upload.
-    expect(targets(t, 'Asks about a download?')).toEqual([['The file it downloads'], ['The upload']]);
-    expect(targets(t, 'The file it downloads')).toEqual([['The upload']]);
+    // An upload then reads what runs under its name (What it replaces), so that it becomes the next version.
+    expect(targets(t, 'Asks about a download?')).toEqual([['The file it downloads'], ['Running versions']]);
+    expect(targets(t, 'The file it downloads')).toEqual([['Running versions']]);
+    expect(targets(t, 'Running versions')).toEqual([['What it replaces']]);
+    expect(targets(t, 'What it replaces')).toEqual([['The upload']]);
     expect(targets(t, 'The upload')).toEqual([['Import steps']]);
     // No chat model ships with it: a recording, a step document and a UiPath desktop sequence never use one, and n8n
     // would not publish the form while a model node has no credential. The README says how to add one.
@@ -1207,8 +1210,8 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(working).toEqual([
       'Add the login page', 'Address with values', 'Approval by email?', 'Approve on this form?', 'Approve steps', 'Approved bot found?', 'Approved bots', 'Asks about a download?', 'Change an approved bot?',
       'Change or sign again', 'Checked?', 'Compared with the approved version', 'Create run log table', 'Create steps table', 'Import a bot', 'Import failed', 'Import steps', 'Imported', 'Imported, with the workflow file', 'Missing login page?',
-      'No approved bot', 'Plain address?', 'Read the upload', 'Record rejection', REVIEW, 'Save signed steps', 'Settings', 'Sign steps', 'Signed?', 'Step lists', 'Step lists to sign', 'Supersede older versions',
-      'The approved version', 'The bot to change', 'The file it downloads', 'The steps as a file', 'The upload', 'Workflow file?',
+      'No approved bot', 'Plain address?', 'Read the upload', 'Record rejection', REVIEW, 'Running versions', 'Save signed steps', 'Settings', 'Sign steps', 'Signed?', 'Step lists', 'Step lists to sign', 'Supersede older versions',
+      'The approved version', 'The bot to change', 'The file it downloads', 'The steps as a file', 'The upload', 'What it replaces', 'Workflow file?',
     ]);
     expect(t.nodes.filter((n) => n.type === COMPLETION).map((n) => n.typeVersion)).toEqual([2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5]);
     // A form page pauses the run until the browser loads it; a closed tab must not leave the execution waiting for ever.
@@ -2668,6 +2671,64 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const last = render(completion('Imported').completionMessage, { $: nodesRan({ ...fresh, 'Import steps': [[{ json: { drafts: [], report: { steps: 1, items: [] } } }], [next()]], [REVIEW]: [[{ json: {} }]] }) });
     expect(last).toContain('Nothing was signed: the review page was not answered in time.');
     expect(last).not.toContain('Rejected');
+  });
+
+  it('a file uploaded under the name of an approved bot is its next version, and the review page and the last page say which version it replaces', () => {
+    const get = byName(t, 'Running versions');
+    expect(get).toMatchObject({ type: DATA_TABLE, typeVersion: 1.1, alwaysOutputData: true, onError: 'continueRegularOutput' });
+    expect(table(get)).toEqual(table(byName(t, 'Approved bots')));
+    expect(byName(t, 'What it replaces')).toMatchObject({ type: 'n8n-nodes-base.set', typeVersion: 3.4, executeOnce: true, parameters: { mode: 'raw' } });
+    const upload = formItem('Step document', Buffer.from('{}'));
+    /** The file path as n8n's expressions see it, with Running versions giving `rows`. */
+    const filePath = (rows: IDataObject[]) => {
+      const ran: Record<string, INodeExecutionData[][]> = { Settings: [[{ json: { ...upload.json, ...settingsJson() } }]], 'Running versions': [rows.map((json) => ({ json }))] };
+      const code = String(byName(t, 'What it replaces').parameters.jsonOutput);
+      expect(code.replace(/^=\{\{/, '').replace(/\}\}$/, '')).not.toMatch(/\{\{|\}\}/);
+      ran['What it replaces'] = [[{ json: evaluate(code, { $: nodesRan(ran) }) as IDataObject }]];
+      return ran;
+    };
+    const row = (name: string, version: number, status = 'active'): IDataObject => ({ id: version, name, version, steps: '{}', signature: 's', approvedBy: APPROVER, status });
+    // Version 4 runs: before this change the upload was version 1 and superseded it. Now it is version 5.
+    const ran = filePath([row('line-item-export', 3, 'superseded'), row('line-item-export', 4), row('other', 9)]);
+    expect(ran['What it replaces'][0][0].json).toEqual({ running: [{ name: 'line-item-export', version: 4, steps: '{}', signature: 's', approvedBy: APPROVER }] });
+    expect(resolved(upload, ran)).toMatchObject({ stepsName: 'line-item-export', options: { version: 5 } });
+    // The step lists an import names after it (a UiPath project's line-item-export-1, -2) count; another name does not.
+    const many = filePath([row('line-item-export-1', 3), row('line-item-export-2', 7), row('line-item-exporter', 12), row('line-item-export-x', 11)]);
+    expect((many['What it replaces'][0][0].json.running as IDataObject[]).map((r) => r.name)).toEqual(['line-item-export-1', 'line-item-export-2']);
+    expect(resolved(upload, many)).toMatchObject({ options: { version: 8 } });
+    // Nothing runs under the name (or no table yet): version 1, and no word about replacing.
+    for (const rows of [[], [{}], [{ error: 'The Data Table playwright_steps does not exist' }], [row('line-item-export', 4, 'rejected')]]) {
+      const none = filePath(rows);
+      expect(none['What it replaces'][0][0].json).toEqual({ running: [] });
+      expect(resolved(upload, none)).toMatchObject({ options: { version: 1 } });
+    }
+    expect(resolved(upload)).toMatchObject({ options: { version: 1 } });
+
+    // The review page: its title, and each block of several, name the version it replaces.
+    const list = (name: string, version: number) => ({ json: { name, version, baseVersion: null, steps: { startUrl: SITE.url, steps: [] }, reviewSteps: [], safetyFlags: [] } });
+    const title = (r: Record<string, INodeExecutionData[][]>) => evaluate(String((review.parameters.options as IDataObject).formTitle), { $: nodesRan(r) });
+    expect(title({ ...ran, 'Import steps': [[{ json: {} }], [list('line-item-export', 5)]] })).toBe('line-item-export, version 5, replacing version 4');
+    expect(title({ ...filePath([]), 'Import steps': [[{ json: {} }], [list('line-item-export', 1)]] })).toBe('line-item-export, version 1');
+    const blocks = reviewFields({ $: nodesRan({ ...many, 'Import steps': [[{ json: {} }], [list('line-item-export-1', 8), list('line-item-export-3', 8)]] }) })
+      .filter((f) => f.fieldType === 'html').map((f) => /<h3>(.*?)<\/h3>/.exec(String(f.html))?.[1]);
+    expect(blocks).toEqual(['1 of 2: line-item-export-1, version 8, replacing version 3', '2 of 2: line-item-export-3, version 8']);
+    // The version that runs is what Sign steps checks before the review page, as on a change.
+    expect(evaluate(String(byName(t, 'The approved version').parameters.jsonOutput), { $: nodesRan(ran) })).toEqual({ name: 'line-item-export', version: 4, steps: '{}', signature: 's', approvedBy: APPROVER });
+    expect(evaluate(String(byName(t, 'The approved version').parameters.jsonOutput), { $: nodesRan(filePath([])) })).toEqual({});
+
+    // The last page: approved, it replaces version 4; rejected or refused, version 4 keeps running.
+    const last = (signed: IDataObject[], errors: IDataObject[] = []) => render(completion('Imported').completionMessage, { $: nodesRan({
+      ...ran, 'Import steps': [[{ json: { drafts: [{ name: 'line-item-export', forApproval: true }], report: { steps: 1, items: [] } } }], [list('line-item-export', 5)]],
+      [REVIEW]: [[{ json: { decision_0: 'Approve and sign' } }]], 'Sign steps': [signed.map((json) => ({ json })), errors.map((json) => ({ json }))],
+    }) }).split('\n').slice(1);
+    expect(last([{ status: 'active', name: 'line-item-export', version: 5 }])[0]).toBe('Approved and signed: line-item-export version 5 is now the version that runs, replacing version 4.');
+    expect(last([{ status: 'rejected', name: 'line-item-export', version: 5 }])[0]).toBe('Rejected: line-item-export v5. Nothing was signed. Version 4 keeps running.');
+    expect(last([], [{ error: 'Sign Steps refused: a reason', details: { name: 'line-item-export', version: 5 } }]).slice(0, 2))
+      .toEqual(['Not signed: line-item-export v5. Sign Steps refused: a reason', 'Nothing changed: line-item-export version 4 keeps running.']);
+    // Approved, Supersede older versions turns version 4 superseded (an upload is a first version: every older active row).
+    const supersede = table(byName(t, 'Supersede older versions')).filters!.conditions;
+    const lte = supersede.find((c) => c.condition === 'lte')!;
+    expect(evaluate(String(lte.keyValue), { $: () => ({ item: { json: { baseVersion: null, version: 5 } } }) })).toBe(2147483647);
   });
 
   it('has the stickies: About (grey), Set once (green, a checklist), Approval by email (grey, the option), Why approval (grey)', () => {

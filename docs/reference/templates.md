@@ -48,7 +48,11 @@ Templates 2, 3 and 5 create the two Data Tables when they are missing.
   save, send or submit?". The **Decision** is **Approve and sign** or **Reject**. A page left unanswered for an hour
   signs nothing.
 - The last page says `Approved and signed: <name> v<version> is now the version that runs under that name.`, or
-  `Rejected: <name> v<version>. Nothing was signed.` An import is version 1. After a change or a re-sign it says
+  `Rejected: <name> v<version>. Nothing was signed.` An import is version 1. A file uploaded under the name of an
+  approved bot is its next version (**Running versions** and **What it replaces** read what runs under that name, and
+  the step lists named after it, `<name>-1`, `<name>-2`): the review page says `version 5, replacing version 4`, and
+  the last page `Approved and signed: <name> version 5 is now the version that runs, replacing version 4.` or
+  `Rejected: <name> v5. Nothing was signed. Version 4 keeps running.` After a change or a re-sign it says
   `Signed again: <name> version N, unchanged.`, `Changed: <name> version N is now the version that runs, replacing
   version M.`, or `Nothing changed: <name> version M keeps running.` When Sign steps signed a step list, it
   also downloads the workflow that runs the bot. When nothing was signed (rejected, or Sign steps refused), it neither
