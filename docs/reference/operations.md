@@ -13,7 +13,7 @@ no login. The three advanced ones run, sign and import step lists.
 | **Download File** | Download a file from a page | RPA Browser |
 | **Run Steps** | Run a list of browser or desktop steps | RPA Browser or RPA Desktop Runner, and optionally RPA Site Login, RPA Step Signing, RPA Secret Variables, RPA Redis |
 | **Sign Steps** | Sign a repaired step list | RPA Step Signing, and the RPA Site Login the steps use |
-| **Import Steps** | Import steps from a recording, code or a UiPath bot | RPA Browser when browser steps are replayed, RPA Site Login when the bot signs in |
+| **Import Steps** | Import steps from a recording, code or a UiPath bot | RPA Browser when browser steps are replayed, RPA Site Login when the bot signs in. RPA Step Signing and RPA Desktop Runner are never read: they are only passed on to the workflow file |
 
 Each input item is one run in a fresh browser context. Nothing (cookies, storage, the open page) carries over between
 items, nodes or executions. Failures and their codes are in [Errors](errors.md).
@@ -202,6 +202,11 @@ Login. A step found by a row position (`Vendor Row 1`) is reported, because a la
   For Each, Excel, HTTP, email and delays as n8n nodes, with notes on what was not translated). Its browser **Run
   steps** keep the import's **Max Seconds**, **Also Allow These Sites** and **One-Time Code Workflow**. They have
   **Allow Private Network** on only when the import had it on, typed as a plain value, and their note says so.
+  Each **Run steps** has the import's RPA credentials picked, by name and id, never a value: a browser one gets the
+  RPA Browser, the RPA Site Login and the RPA Step Signing, a desktop one the RPA Desktop Runner and the RPA Step
+  Signing. The last two come from the slots marked "only passed on to the workflow file", which the import never
+  reads. A slot left empty is left to pick. Imported into another n8n, or once a picked credential is deleted, n8n
+  takes the only credential of that type with the same name, and otherwise asks for one on the node.
 - **Error output** (output 2): a configuration problem, nothing imported, or every step list failed. A failed step
   list's trace and screenshot are binary `trace` and `screenshot`.
 

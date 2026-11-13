@@ -205,7 +205,8 @@ describe('npx n8n-nodes-rpa setup', () => {
     expect(node('Import a bot').credentials).toEqual({ httpBasicAuth: { id: form.id, name: 'RPA import form' } });
     expect(node('Sign steps').credentials).toEqual({ playwrightScriptSigningApi: { id: signing.id, name: 'RPA Step Signing' } });
     expect(node('Sign steps').parameters.approverAllowlist).toBe('ops@example.com');
-    expect(node('Import steps').credentials).toBeUndefined();
+    // Import steps carries the signing key only to pass it on to the workflow file the form hands over (it never reads it).
+    expect(node('Import steps').credentials).toEqual({ playwrightScriptSigningApi: { id: signing.id, name: 'RPA Step Signing' } });
     for (const n of wf.nodes.filter((x) => /\.(formTrigger|form)$/.test(x.type))) expect(n.webhookId, n.name).toMatch(/^[0-9a-f-]{36}$/);
 
     expect(stdout).toContain(`${fake.url}/form/${node('Import a bot').webhookId}`);
@@ -375,6 +376,12 @@ describe('npx n8n-nodes-rpa setup', () => {
     const runner = fake.state.credentials.find((c) => c.type === 'rpaDesktopRunnerApi');
     expect(runner).toMatchObject({ name: 'RPA Desktop Runner', data: { connectionLine: LINE } });
     expect(out).toMatch(/created .*RPA Desktop Runner/);
+    // Import steps passes the runner and the signing key on to the workflow file, by id and name: nothing to pick there.
+    const signing = fake.state.credentials.find((c) => c.type === 'playwrightScriptSigningApi')!;
+    expect(fake.state.workflows[0].nodes.find((n) => n.name === 'Import steps').credentials).toEqual({
+      playwrightScriptSigningApi: { id: signing.id, name: 'RPA Step Signing' }, rpaDesktopRunnerApi: { id: runner!.id, name: 'RPA Desktop Runner' },
+    });
+    expect(out).toContain('The Windows machine is connected: the workflow the form gives you already uses "RPA Desktop Runner".');
     expectNoSecrets(out);
     const again = await run(['setup', '--url', fake.url], { ...ENV, RPA_CONNECTION_LINE: LINE });
     expect(again.code).toBe(0);
@@ -388,7 +395,10 @@ describe('npx n8n-nodes-rpa setup', () => {
     expect(code, out).toBe(0);
     const browser = fake.state.credentials.find((c) => c.type === 'playwrightBrowserApi')!;
     expect(browser).toMatchObject({ name: 'RPA Browser', data: { mode: 'playwright', wsUrl: 'ws://browser:3000/', token: BROWSER_TOKEN, privateNetwork: true } });
-    expect(fake.state.workflows[0].nodes.find((n) => n.name === 'Import steps').credentials).toEqual({ playwrightBrowserApi: { id: browser.id, name: 'RPA Browser' } });
+    const signing = fake.state.credentials.find((c) => c.type === 'playwrightScriptSigningApi')!;
+    expect(fake.state.workflows[0].nodes.find((n) => n.name === 'Import steps').credentials).toEqual({
+      playwrightBrowserApi: { id: browser.id, name: 'RPA Browser' }, playwrightScriptSigningApi: { id: signing.id, name: 'RPA Step Signing' },
+    });
     expectNoSecrets(out);
     const noToken = await run(setup(fake.url, '--browser-url', 'ws://browser:3000/'), ENV);
     expect(noToken.code).toBe(2);

@@ -131,8 +131,9 @@ by another name or address than the one in the line (a NAT, a tunnel), run the c
 ## 5. Run it
 
 1. In n8n, create a workflow, **⋯ → Import → From File**, and pick the downloaded `erp-line-items.workflow.json`.
-2. On the RPA node, named after your recording (here **ErpDemo recording**), pick the **RPA Desktop Runner**
-   credential and the **RPA Step Signing** credential.
+2. The RPA node is named after your recording (here **ErpDemo recording**). Its **RPA Desktop Runner** and
+   **RPA Step Signing** credentials are already picked: the setup command gave them to the import form, and the form
+   passes them on. Check them. In another n8n, n8n takes the only credential of the same name, else pick it there.
 3. The password is a secret variable. Create an **RPA Secret Variables** credential on that node, with one variable:
    the name its note gives (such as `password`) and the value `demo1234`. **Options → Variables**
    already holds the company code you ticked, starting with the value you recorded.

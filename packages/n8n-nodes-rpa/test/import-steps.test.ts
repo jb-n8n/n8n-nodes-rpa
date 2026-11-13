@@ -231,9 +231,10 @@ describe('Import Steps: the description', () => {
     expect(optionsFor('importSteps').map((o) => o.name)).toEqual([
       'timeout', 'maxSeconds', 'viewport', 'allowedHosts', 'allowPrivateNetwork', 'variables', 'codeWorkflowId', 'codeTimeout', 'breakerResetKey', 'saveTrace', 'maxItems',
     ]);
-    // Credentials: the browser, the Site Login and its Redis guard store. No signing key: Sign Steps signs.
+    // Credentials: the browser, the Site Login and its Redis guard store; then the signing key and the desktop runner,
+    // which the import only passes on to the workflow file (Sign Steps signs, and the import never reads them).
     expect((d.credentials ?? []).filter((c) => NodeHelpers.displayParameter({ operation: 'importSteps' }, c, null, d)).map((c) => c.name)).toEqual([
-      'playwrightBrowserApi', 'playwrightSiteLoginApi', 'playwrightRedisApi',
+      'playwrightBrowserApi', 'playwrightSiteLoginApi', 'playwrightRedisApi', 'playwrightScriptSigningApi', 'rpaDesktopRunnerApi',
     ]);
     expect((OPERATIONS.options as INodePropertyOptions[]).at(-1)).toEqual({
       name: 'Import Steps', value: 'importSteps', action: 'Import steps from a recording, code or a UiPath bot',

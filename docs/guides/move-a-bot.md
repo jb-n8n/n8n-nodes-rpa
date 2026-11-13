@@ -21,8 +21,10 @@ npx n8n-nodes-rpa setup --url http://localhost:5678 --approver you@example.com
 It creates the form's login, the **RPA Step Signing** key and the workflow, with your address as the approver, and
 publishes it. It prints the form's address, its user name and its password, once. For browser bots, add
 `--browser-url <ws-url>` with the browser service's token in `RPA_BROWSER_TOKEN`: it creates **RPA Browser** and
-picks it on **Import steps**. A bot that signs in also needs an **RPA Site Login** on **Import steps** and **Sign
-steps**, which you pick in n8n. The [desktop bot guide](desktop-bot.md#4-import-and-approve) shows the output, and
+picks it on **Import steps**. With a Connection Line it creates **RPA Desktop Runner**. It puts the signing key and
+the desktop runner on **Import steps** too, in two slots marked "only passed on to the workflow file": the import never
+reads them, it writes their name and id into the workflow it hands over. A bot that signs in also needs an
+**RPA Site Login** on **Import steps** and **Sign steps**, which you pick in n8n. The [desktop bot guide](desktop-bot.md#4-import-and-approve) shows the output, and
 [Templates](../reference/templates.md#set-it-up-by-hand) the way by hand.
 
 <img src="../images/import-form.png" alt="The Import a bot form: a file, an optional source and a name for the steps" width="360">
@@ -40,8 +42,9 @@ Then, for each bot:
    import left a step out, a **Left out by the import** block lists it. Choose **Approve and sign** or **Reject**.
 5. The last page says what was signed, and counts the values removed as secrets and the steps not translated. It
    downloads the workflow that runs the bot. For a UiPath project, notes in that workflow show what was not
-   translated, such as a credential lookup. A log message is dropped without a note. Import the workflow in n8n, pick
-   the credentials its notes name, and run it (the **Execute** button at the bottom of the canvas).
+   translated, such as a credential lookup. A log message is dropped without a note. Import the workflow in n8n. Its
+   RPA credentials are the ones the import used, already picked by name and id (never a value): check them, pick any
+   other credential its notes name, and run it (the **Execute** button at the bottom of the canvas).
 
 To have a second person approve by email instead, follow the template's **Approval by email** note. The
 [desktop bot guide](desktop-bot.md) walks the whole path with a recording.

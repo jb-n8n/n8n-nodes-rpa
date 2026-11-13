@@ -47,7 +47,10 @@ By hand:
 4. In **Sign steps → Approver Allowlist**, replace `approver@example.com` with your email address.
 5. Browser bots only: pick **RPA Browser** on **Import steps**, and the same **RPA Site Login** on **Import steps** and
    **Sign steps** when the bot signs in.
-6. Click **Publish**. The form's address is the production URL on **Import a bot**.
+6. On **Import steps**, pick the same **RPA Step Signing**, and your **RPA Desktop Runner** for desktop bots, in the
+   two slots marked "only passed on to the workflow file". The import never reads them. The workflow it hands over then
+   has them picked. Left empty, you pick them on that workflow's **Run steps**.
+7. Click **Publish**. The form's address is the production URL on **Import a bot**.
 
 ## RPA: 2 Data feed
 

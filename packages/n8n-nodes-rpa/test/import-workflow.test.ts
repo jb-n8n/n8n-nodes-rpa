@@ -96,7 +96,13 @@ function lint(w: WorkflowJson): void {
     }
   }
   const text = JSON.stringify(w);
-  expect(text).not.toMatch(/"credentials"|"secretKey"|"password"|"token"/);
+  expect(text).not.toMatch(/"secretKey"|"password"|"token"|"connectionLine"/);
+  // Credentials only on RPA nodes, in n8n's own form: an id (or null) and a name, never a value.
+  for (const n of w.nodes) {
+    if (!n.credentials) continue;
+    expect(n.type, n.name).toBe(NODE_TYPE);
+    for (const c of Object.values(n.credentials)) expect(Object.keys(c).sort(), n.name).toEqual(['id', 'name']);
+  }
   // No expression names a node ($('…')): Run steps reads its own input item, so project text never meets a node reference.
   for (const n of w.nodes) for (const [, v] of strings(n.parameters)) if (v.startsWith('=')) expect(v).not.toMatch(/\$\(/);
   // Naming: only stored identifiers say Playwright.
@@ -119,7 +125,7 @@ function lint(w: WorkflowJson): void {
     expect(n.parameters.aiRepair, n.name).toBe(false);
     expect(n.parameters, n.name).not.toHaveProperty('goal');
     expect(targets(w, n.name).length, n.name).toBeLessThanOrEqual(1);
-    if (!n.credentials) expect(n.notes, n.name).toContain('To let it repair itself when the site changes:\n1. Connect a chat model to its Model input (after step 2).\n2. Turn on AI Repair here and write the Goal in plain words.\n3. Connect its Repaired Steps output to an Execute Workflow node that calls RPA: 3 Approve steps.');
+    if (!n.credentials?.rpaDesktopRunnerApi) expect(n.notes, n.name).toContain('To let it repair itself when the site changes:\n1. Connect a chat model to its Model input (after step 2).\n2. Turn on AI Repair here and write the Goal in plain words.\n3. Connect its Repaired Steps output to an Execute Workflow node that calls RPA: 3 Approve steps.');
   }
   // Main connections only: no node feeds a Model input.
   for (const byType of Object.values(w.connections)) expect(Object.keys(byType)).toEqual(['main']);
@@ -228,7 +234,7 @@ describe('buildWorkflow', () => {
     const cred = byName(w, 'Credential: SAP_Login');
     expect(cred.type).toBe(STICKY);
     expect((cred.parameters as { color: number }).color).toBe(COLOUR.green);
-    expect(content(cred)).toContain('UiPath credential `SAP_Login`: pick an RPA Site Login on the Run steps node(s)');
+    expect(content(cred)).toContain('UiPath credential `SAP_Login`: the RPA Site Login on the Run steps node(s) holds that login. n8n never copies a UiPath credential. Pick one there.');
     expect(cred.position[0]).toBeGreaterThan(byName(w, 'Run the bot').position[0]);
     expect(cred.position[0]).toBeLessThan(get.position[0]);
 
@@ -344,7 +350,7 @@ describe('buildWorkflow', () => {
     expect(workflow.getParentNodes('Run the bot')).toEqual([]);
   });
 
-  it('no secret or credential value appears in the workflow JSON', () => {
+  it('no secret or credential value appears in the workflow JSON, and without passed-on credentials none is attached', () => {
     const { json: w } = imported();
     const text = JSON.stringify(w);
     for (const v of [SECRETS.username, SECRETS.password, SECRETS.totpSecret, 'in_Password', 'in_User']) expect(text).not.toContain(v);
@@ -661,7 +667,7 @@ describe('buildWorkflow', () => {
     const build = (d: ReturnType<typeof desktop>) => buildWorkflow({ name: 'd', nodes: [{ kind: 'desktop', sequence: 1, displayName: 'Desk', draft: 'd' }] }, [], { name: 'd', desktopDrafts: [d], source: 'recording' });
     const none = build(desktop([], []));
     expect(none.nodes.some((n) => n.name.startsWith('Fill in the variables'))).toBe(false);
-    expect(byName(none, 'Desk').notes).toBe('Runs the signed desktop steps d (1 step imported from the recording "Desk") on the desktop runner. Pick the RPA Desktop Runner and RPA Step Signing credentials.');
+    expect(byName(none, 'Desk').notes).toBe('Runs the signed desktop steps d (1 step imported from the recording "Desk") on the desktop runner. Pick RPA Desktop Runner and RPA Step Signing here.');
     const about = content(byName(none, 'About this import'));
     expect(about).toContain('Green: set once. Text from the recording is kept as text');
     expect(about).not.toContain('Gold');
@@ -709,5 +715,44 @@ describe('buildWorkflow', () => {
     expect(mixed.nodes.map((n) => n.name)).not.toContain('Small');
     expect(mixed.nodes.map((n) => n.name)).not.toContain('Get active steps (mx-1)');
     expect(content(byName(mixed, '2 more activities'))).toContain('see the report');
+  });
+
+  it('credentials passed on are attached in n8n\'s own form, so an id this n8n does not have still names the credential for n8n\'s fallback', () => {
+    const passed = {
+      browser: { id: 'b1', name: 'RPA Browser' }, siteLogin: { id: 's1', name: 'Portal login' },
+      signing: { id: 'k1', name: 'RPA Step Signing' }, desktopRunner: { id: 'r1', name: 'RPA Desktop Runner' },
+    };
+    const desktop = {
+      name: 'm-2', writeCandidates: [], variables: [], secretVariables: [],
+      script: { surface: 'desktop' as const, name: 'm-2', version: 1, app: { exe: 'App.exe' }, steps: [{ intent: 'Click', click: { uia: { path: [{ name: 'x' }] } } }] },
+    };
+    const flow = flowOf([{ kind: 'browser', sequence: 1, displayName: 'Log in' }, { kind: 'desktop', sequence: 2, displayName: 'Desk' }, { kind: 'credential', asset: 'Portal', displayName: 'Get' }]);
+    const w = buildWorkflow(flow, [draft('m-1')], { name: 'm', desktopDrafts: [desktop], credentials: passed });
+    expect(byName(w, 'Log in').credentials).toEqual({ playwrightBrowserApi: passed.browser, playwrightSiteLoginApi: passed.siteLogin, playwrightScriptSigningApi: passed.signing });
+    expect(byName(w, 'Desk').credentials).toEqual({ rpaDesktopRunnerApi: passed.desktopRunner, playwrightScriptSigningApi: passed.signing });
+    // Each type is one the RPA node shows on Run Steps, so n8n puts it in that slot; INodeCredentialsDetails is { id, name }.
+    const d = new Playwright().description;
+    const runStepsTypes = (d.credentials ?? []).filter((c) => c.displayOptions?.show?.operation?.includes('runSteps') || c.displayOptions?.hide).map((c) => c.name);
+    for (const run of ['Log in', 'Desk']) for (const type of Object.keys(byName(w, run).credentials ?? {})) expect(runStepsTypes, type).toContain(type);
+    // Loaded by n8n-workflow as it is: the id is kept with the name. In another n8n, where id b1 does not exist, n8n's
+    // editor (useNodeHelpers matchCredentials) takes the only credential of that type with the same name, else asks.
+    const playwright = new Playwright();
+    const nodeTypes = { getByName: (t: string) => (t === NODE_TYPE ? playwright : undefined), getByNameAndVersion: (t: string) => (t === NODE_TYPE ? playwright : undefined), getKnownTypes: () => ({}) } as unknown as INodeTypes;
+    const loaded = new Workflow({ nodes: structuredClone(w.nodes) as unknown as INode[], connections: w.connections as unknown as IConnections, nodeTypes, active: false });
+    expect(loaded.getNode('Log in')?.credentials?.playwrightSiteLoginApi).toEqual({ id: 's1', name: 'Portal login' });
+    // The notes and stickies say what was picked and what happens elsewhere.
+    expect(byName(w, 'Log in').notes).toContain('RPA Browser, RPA Site Login and RPA Step Signing are picked for you: check them.');
+    expect(byName(w, 'Desk').notes).toContain('RPA Desktop Runner and RPA Step Signing are picked for you: check them.');
+    const set = content(byName(w, 'Set once'));
+    expect(set).toContain('No secret is in this file. The RPA credentials the import used are picked for you: check them on the nodes, and pick the others there. In another n8n, or once a picked credential is deleted, n8n takes the only credential of the same name if there is one: otherwise pick it on the node again.');
+    expect(set).toContain('- **RPA Browser** (picked for you), **RPA Site Login** (picked for you) and **RPA Step Signing** (picked for you): **Log in**');
+    expect(content(byName(w, 'Credential: Portal'))).not.toContain('Pick one there');
+    // Only well-formed references are passed on: anything else is left for the person to pick.
+    const odd = buildWorkflow(flowOf([{ kind: 'browser', sequence: 1, displayName: 'Log in' }]), [draft('m-1')], {
+      name: 'm', credentials: { browser: { id: '', name: 'x' }, siteLogin: { id: 7 as unknown as string, name: 'y' }, signing: { id: 'k'.repeat(65), name: 'z' } },
+    });
+    expect(byName(odd, 'Log in').credentials).toBeUndefined();
+    expect(byName(odd, 'Log in').notes).toContain('Pick RPA Browser, RPA Site Login and RPA Step Signing here.');
+    expect(content(byName(odd, 'Set once'))).toContain('No secret is in this file. Pick the credentials on the nodes:');
   });
 });

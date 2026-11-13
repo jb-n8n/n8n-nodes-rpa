@@ -56,6 +56,11 @@ export class Playwright implements INodeType {
       { name: 'rpaDesktopRunnerApi', displayName: 'RPA Desktop Runner', required: false, testedBy: 'desktopRunnerTest', displayOptions: { show: { operation: ['runSteps'] } } },
       // Secret run variables, browser and desktop runs alike (operations/runSteps.ts withSecretVariables).
       { name: 'rpaSecretVariablesApi', displayName: 'RPA Secret Variables', required: false, testedBy: 'secretVariablesTest', displayOptions: { show: { operation: ['runSteps'] } } },
+      // Import Steps never reads these two: it copies their id and name into the Run steps of the workflow file it makes,
+      // so that file needs nothing picked. They come after the entries above on purpose: n8n reads a credential through the
+      // first entry of its type, which Import Steps does not show, so a read here would fail ("Credentials not found").
+      { name: 'playwrightScriptSigningApi', displayName: 'RPA Step Signing (only passed on to the workflow file)', required: false, testedBy: 'scriptSigningTest', displayOptions: { show: { operation: ['importSteps'] } } },
+      { name: 'rpaDesktopRunnerApi', displayName: 'RPA Desktop Runner (only passed on to the workflow file)', required: false, testedBy: 'desktopRunnerTest', displayOptions: { show: { operation: ['importSteps'] } } },
     ],
     properties,
   };

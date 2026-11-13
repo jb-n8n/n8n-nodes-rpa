@@ -11,7 +11,7 @@ import type { Engine } from '../nodes/Playwright/engine.js';
 import type { WorkflowJson } from '../nodes/Playwright/import/workflow.js';
 import { executeImportSteps, SOURCE_NOT_DETECTED } from '../nodes/Playwright/operations/importSteps.js';
 import { fakeEngine } from './fake-engine.js';
-import { nodeContext, siteLoginData } from './feed-fixtures.js';
+import { nodeContext, SITE_LOGIN_ID, siteLoginData } from './feed-fixtures.js';
 import { WORKFLOW_NODE_TYPES } from './fixtures.js';
 import { SECRETS } from './fixtures.js';
 
@@ -42,17 +42,23 @@ function engine(): Engine {
     },
   });
 }
-async function importFile(data: Buffer | string, fileName: string, options: IDataObject = {}) {
+/** Import Steps' two slots that are only passed on: their data is never read, so it is not even valid here. */
+const PASS_ON = { playwrightScriptSigningApi: { secretKey: 'never-read' }, rpaDesktopRunnerApi: { connectionLine: 'never-read' } };
+async function importFile(data: Buffer | string, fileName: string, options: IDataObject = {}, passOn: IDataObject = {}) {
   const params = {
     operation: 'importSteps', source: 'auto', inputFrom: 'binary', binaryPropertyName: 'data', stepsName: 'bot', startUrl: '', aiRepair: false, goal: '', idPattern: 'N26-\\d{4}',
     expectedFile: {}, options: { saveTrace: 'never', ...options },
   };
   const ctx = nodeContext({
     params, rawParameters: params, items: [fileItem(data, fileName)], continueOnFail: true,
-    credentials: { playwrightBrowserApi: { mode: 'local', headless: true }, playwrightSiteLoginApi: siteLoginData(SITE) },
+    credentials: { playwrightBrowserApi: { mode: 'local', headless: true }, playwrightSiteLoginApi: siteLoginData(SITE), ...passOn } as never,
   });
+  // Which credentials the import reads: never the ones it only passes on.
+  const read: string[] = [];
+  const getCredentials = ctx.getCredentials.bind(ctx);
+  ctx.getCredentials = async (type: string, i?: number) => { read.push(type); return await getCredentials(type, i as number); };
   const [out, repaired] = await executeImportSteps(ctx, engine(), { executionsMode: 'regular' });
-  return { item: out[0], repaired };
+  return { item: out[0], repaired, read };
 }
 /** The generated workflow on the item, with the checks every source shares. */
 function workflowOf(item: INodeExecutionData): WorkflowJson {
@@ -174,5 +180,75 @@ describe('every source ends in a workflow that runs', () => {
     const { item } = await importFile('just some notes', 'notes.txt');
     expect(item.json.error).toBe(SOURCE_NOT_DETECTED);
     expect(item.binary).toBeUndefined();
+  });
+});
+
+describe('the workflow file arrives with the credentials the import was given, by id and name', () => {
+  const ref = (type: string) => ({ id: `${type}-1`, name: `${type} credential` });
+  const BROWSER_RUN = { playwrightBrowserApi: ref('playwrightBrowserApi'), playwrightSiteLoginApi: { id: SITE_LOGIN_ID, name: 'playwrightSiteLoginApi credential' }, playwrightScriptSigningApi: ref('playwrightScriptSigningApi') };
+  const DESKTOP_RUN = { rpaDesktopRunnerApi: ref('rpaDesktopRunnerApi'), playwrightScriptSigningApi: ref('playwrightScriptSigningApi') };
+  /** Every credential on a node is n8n's { id, name } and nothing else: no value of a credential is in the file. */
+  function onlyRefs(wf: WorkflowJson): void {
+    for (const n of wf.nodes) {
+      for (const [type, c] of Object.entries(n.credentials ?? {})) {
+        expect(Object.keys(c).sort(), `${n.name} ${type}`).toEqual(['id', 'name']);
+        expect(n.type, n.name).toBe('n8n-nodes-rpa.playwright');
+      }
+    }
+    expect(JSON.stringify(wf)).not.toContain('never-read');
+    expect(String(wf.nodes.find((n) => n.name === 'Set once')?.parameters.content)).toContain('No secret is in this file. The RPA credentials the import used are picked for you');
+  }
+
+  it('a Chrome recording: RPA Browser, RPA Site Login and RPA Step Signing on Run steps; the import reads neither passed-on slot', async () => {
+    const chrome = fixture('chrome-sap-export.json').toString('utf8').split('http://localhost:8080').join(SITE.url);
+    const { item, read } = await importFile(chrome, 'export.json', {}, PASS_ON);
+    expect(item.json.error).toBeUndefined();
+    expect(read).not.toContain('playwrightScriptSigningApi');
+    expect(read).not.toContain('rpaDesktopRunnerApi');
+    const wf = workflowOf(item);
+    onlyRefs(wf);
+    const [run] = runNodes(wf);
+    expect(run.credentials).toEqual(BROWSER_RUN);
+    expect(run.notes).toContain('RPA Browser, RPA Site Login and RPA Step Signing are picked for you: check them.');
+    expect(run.notes).not.toMatch(/Pick RPA/);
+  });
+
+  it('a desktop recording: RPA Desktop Runner and RPA Step Signing, and no Site Login (desktop steps refuse one)', async () => {
+    const rec = fixture('recording-erp/erp.rpa-recording.json').toString('utf8');
+    const { item, read } = await importFile(rec, 'erp.rpa-recording.json', {}, PASS_ON);
+    expect(item.json.error).toBeUndefined();
+    expect(read).not.toContain('rpaDesktopRunnerApi');
+    const wf = workflowOf(item);
+    onlyRefs(wf);
+    const [run] = runNodes(wf);
+    expect(run.credentials).toEqual(DESKTOP_RUN);
+    expect(run.notes).toContain('RPA Desktop Runner and RPA Step Signing are picked for you: check them.');
+  });
+
+  it('a UiPath project and a step document with both kinds: each Run steps gets the credentials of its kind', async () => {
+    const uipath = await importFile(uipathZip('uipath-sap-report', 'SAP Line Item Report'), 'project.zip', {}, PASS_ON);
+    const uwf = workflowOf(uipath.item);
+    onlyRefs(uwf);
+    for (const run of runNodes(uwf)) expect(run.credentials, run.name).toEqual(BROWSER_RUN);
+    // The UiPath credential lookup no longer asks for a pick: the Site Login is there.
+    const cred = uwf.nodes.find((n) => n.name.startsWith('Credential: '));
+    expect(String(cred?.parameters.content)).toContain('the RPA Site Login on the Run steps node(s) holds that login');
+    expect(String(cred?.parameters.content)).not.toContain('Pick one there');
+
+    const desktop = JSON.stringify({ surface: 'desktop', app: { exe: 'ErpDemo.exe' }, steps: [{ intent: 'Click Search', click: { uia: { window: { exe: 'erpdemo.exe' }, path: [{ controlType: 'Button', automationId: 'btnSearch' }] } } }] });
+    const doc = await importFile(desktop, 'desktop.json', {}, PASS_ON);
+    const [run] = runNodes(workflowOf(doc.item));
+    expect(run.credentials).toEqual(DESKTOP_RUN);
+  });
+
+  it('without the passed-on slots: the import\'s own Browser and Site Login are still picked, Step Signing is left to pick, the runner is named by name', async () => {
+    const chrome = fixture('chrome-sap-export.json').toString('utf8').split('http://localhost:8080').join(SITE.url);
+    const [run] = runNodes(workflowOf((await importFile(chrome, 'export.json')).item));
+    expect(run.credentials).toEqual({ playwrightBrowserApi: BROWSER_RUN.playwrightBrowserApi, playwrightSiteLoginApi: BROWSER_RUN.playwrightSiteLoginApi });
+    expect(run.notes).toContain('RPA Browser and RPA Site Login are picked for you: check them. Pick RPA Step Signing here.');
+    const desktop = JSON.stringify({ surface: 'desktop', app: { exe: 'ErpDemo.exe' }, steps: [{ intent: 'Click Search', click: { uia: { window: { exe: 'erpdemo.exe' }, path: [{ controlType: 'Button', automationId: 'btnSearch' }] } } }] });
+    const [drun] = runNodes(workflowOf((await importFile(desktop, 'desktop.json')).item));
+    expect(drun.credentials).toEqual({ rpaDesktopRunnerApi: { id: null, name: 'RPA Desktop Runner' } });
+    expect(drun.notes).toContain('Pick RPA Desktop Runner and RPA Step Signing here.');
   });
 });

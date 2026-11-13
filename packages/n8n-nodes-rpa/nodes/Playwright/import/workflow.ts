@@ -4,11 +4,13 @@
 // Each browser sequence n becomes Get active steps (playwright_steps, name <name>-n) feeding Run steps with signed steps
 // required and AI Repair off, so the workflow runs as generated: no Chat model credential and no approval workflow to
 // pick first; the Run steps note says how to add self-repair. Each desktop sequence n becomes Get active steps feeding a Run steps on
-// the RPA Desktop Runner credential (named by type, no secret), with signed steps required, AI Repair off (desktop steps
+// the RPA Desktop Runner credential, with signed steps required, AI Repair off (desktop steps
 // have none yet) and the variables its steps type, empty for the user to fill in (secrets from a secret source). Everything else follows a fixed table of n8n 2.41 node types. Text from the project is
 // never evaluated: it goes into literal parameters only when n8n cannot read it as an expression, and otherwise into
-// notes and stickies as text. No credential is attached and no secret is written: credentials are named in stickies.
+// notes and stickies as text. The RPA credentials the import was given are attached by id and name (opts.credentials),
+// so the file needs nothing picked; without them the desktop runner is named by name only. No secret is ever written.
 import type { DesktopDraft, Draft, FlowNode, UiPathFlow } from 'n8n-rpa-engine';
+import { CREDENTIALS } from '../config.js';
 import { RPA_NODE_TYPE } from '../node-type.js';
 import { STEPS_TABLE } from '../rows.js';
 
@@ -24,9 +26,14 @@ export interface WorkflowNode {
   executeOnce?: boolean;
   /** Switched off: n8n skips it (the Schedule Trigger, until a person sets the time). */
   disabled?: boolean;
-  /** A credential named by type and display name only: no id, no secret. n8n selects it when one credential has the name. */
-  credentials?: Record<string, { id: null; name: string }>;
+  /**
+   * Credentials by type, in n8n's own form: the id and display name of one the import was given, or the name alone (id
+   * null: n8n selects it when exactly one credential has that name). Never a secret.
+   */
+  credentials?: Record<string, CredentialRef | { id: null; name: string }>;
 }
+/** A credential by id and display name, as n8n writes it on a node: never a value of it. */
+export interface CredentialRef { id: string; name: string }
 export interface WorkflowConnection { node: string; type: 'main'; index: number }
 export interface WorkflowJson {
   name: string;
@@ -50,15 +57,22 @@ export interface BuildWorkflowOptions {
   run?: { maxSeconds?: number; allowedHosts?: string[]; allowPrivateNetwork?: boolean };
   /** Where the flow came from. Only the texts that name it differ. */
   source?: ImportedFrom;
+  /**
+   * The RPA credentials the import was given (Import Steps' own slots), by id and name: browser Run steps get the
+   * Browser, the Site Login and the Step Signing; desktop Run steps get the Desktop Runner and the Step Signing.
+   */
+  credentials?: PassedOn;
 }
+/** The credentials an import passes on to the workflow file. */
+export interface PassedOn { browser?: CredentialRef; siteLogin?: CredentialRef; signing?: CredentialRef; desktopRunner?: CredentialRef }
 export type ImportedFrom = 'uipath' | 'recording' | 'chrome' | 'playwright' | 'steps';
 /** How the generated texts name where the steps came from. */
 const FROM = {
-  uipath: { steps: 'imported from UiPath', importIt: 'import the project', workflow: 'imported from UiPath', origin: 'the UiPath project' },
-  recording: { steps: 'imported from the recording', importIt: 'import the recording', workflow: 'imported from a recording', origin: 'the recording' },
-  chrome: { steps: 'imported from the Chrome recording', importIt: 'import the recording', workflow: 'imported from a Chrome recording', origin: 'the Chrome recording' },
-  playwright: { steps: 'imported from the Playwright code', importIt: 'import the code', workflow: 'imported from Playwright code', origin: 'the Playwright code' },
-  steps: { steps: 'from the step document', importIt: 'import the step document', workflow: 'imported from a step document', origin: 'the step document' },
+  uipath: { steps: 'imported from UiPath', importIt: 'import the project', workflow: 'imported from UiPath', origin: 'the UiPath project', startValues: "the values the UiPath project gave them" },
+  recording: { steps: 'imported from the recording', importIt: 'import the recording', workflow: 'imported from a recording', origin: 'the recording', startValues: 'the values that were recorded' },
+  chrome: { steps: 'imported from the Chrome recording', importIt: 'import the recording', workflow: 'imported from a Chrome recording', origin: 'the Chrome recording', startValues: 'the values that were recorded' },
+  playwright: { steps: 'imported from the Playwright code', importIt: 'import the code', workflow: 'imported from Playwright code', origin: 'the Playwright code', startValues: 'the values the code gave them' },
+  steps: { steps: 'from the step document', importIt: 'import the step document', workflow: 'imported from a step document', origin: 'the step document', startValues: 'the values the step document gave them' },
 } as const;
 /** The default Max Seconds of Run Steps: a run option equal to it is not written. */
 const DEFAULT_MAX_SECONDS = 180;
@@ -70,8 +84,26 @@ export const PRIVATE_NETWORK_ON = 'Options → Allow Private Network is on becau
 /** Where the steps get approved by default. */
 const IMPORT_FORM = 'RPA: 5 Import a bot';
 
-/** The credential a desktop Run steps names, by type (CREDENTIALS.desktopRunner) and display name. */
-const DESKTOP_RUNNER_CREDENTIAL = { rpaDesktopRunnerApi: { id: null, name: 'RPA Desktop Runner' } };
+/** The display name of each RPA credential a Run steps uses, as the node shows it. */
+const LABEL = { browser: 'RPA Browser', siteLogin: 'RPA Site Login', signing: 'RPA Step Signing', desktopRunner: 'RPA Desktop Runner' } as const;
+type Slot = keyof typeof LABEL;
+/** The slots a browser Run steps uses, and a desktop one. */
+const BROWSER_SLOTS: Slot[] = ['browser', 'siteLogin', 'signing'];
+const DESKTOP_SLOTS: Slot[] = ['desktopRunner', 'signing'];
+/** Without the import's own, a desktop Run steps names the RPA Desktop Runner by name: n8n selects it when one has that name. */
+const DESKTOP_RUNNER_BY_NAME = { id: null, name: LABEL.desktopRunner } as const;
+/** "A", "A and B", "A, B and C". */
+const and = (items: string[]) => (items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`);
+/**
+ * Only a well-formed reference is passed on: an id and a name that are non-empty strings of a sane length. Anything else
+ * is left for the person to pick.
+ */
+function cleanRef(ref: CredentialRef | undefined): CredentialRef | undefined {
+  if (!ref || typeof ref.id !== 'string' || typeof ref.name !== 'string') return undefined;
+  const id = ref.id.trim();
+  const name = line(ref.name, 200);
+  return id && id.length <= 64 && name ? { id, name } : undefined;
+}
 
 /** Node types and the versions used, each checked against n8n's nodes-base (and nodes-langchain) at tag n8n@2.41.0. */
 const T = {
@@ -163,6 +195,13 @@ function stepVariables(steps: unknown): { all: string[]; secret: string[] } {
   walk(steps);
   return { all, secret: all.filter((v) => secret.has(v)) };
 }
+/** What a Run steps' note says about its credentials: the ones picked for you, then the ones to pick. */
+function pickText(picked: string[], missing: string[]): string {
+  return [
+    picked.length ? `${and(picked)} ${picked.length === 1 ? 'is' : 'are'} picked for you: check ${picked.length === 1 ? 'it' : 'them'}.` : '',
+    missing.length ? `Pick ${and(missing)} here.` : '',
+  ].filter(Boolean).join(' ');
+}
 const RUNS_ONCE = 'Run steps runs once for all items here, not once per item, because Get active steps has Execute Once on.';
 /** The binary property Run steps gives the draft's last top-level download or expected file (file_<index>, see the engine's binaryName). */
 function downloadProperty(draft: Draft | DesktopDraft): string | undefined {
@@ -212,7 +251,29 @@ class Builder {
     private readonly prefix: string, private readonly drafts: Map<string, Draft>, private readonly desktopDrafts: Map<string, DesktopDraft> = new Map(),
     private readonly codeWorkflow?: BuildWorkflowOptions['codeWorkflow'], readonly source: ImportedFrom = 'uipath',
     private readonly run: NonNullable<BuildWorkflowOptions['run']> = {},
+    private readonly passedOn: PassedOn = {},
   ) {}
+
+  /**
+   * What a Run steps carries for these slots: each credential the import passed on, by id and name, and the labels of
+   * those it picked and of those the person still picks (a desktop Run steps names the RPA Desktop Runner by name then).
+   */
+  slots(which: Slot[]): { credentials: NonNullable<WorkflowNode['credentials']>; picked: string[]; missing: string[] } {
+    const credentials: NonNullable<WorkflowNode['credentials']> = {};
+    const picked: string[] = [];
+    const missing: string[] = [];
+    for (const slot of which) {
+      const ref = cleanRef(this.passedOn[slot]);
+      if (ref) {
+        credentials[CREDENTIALS[slot]] = ref;
+        picked.push(LABEL[slot]);
+      } else {
+        if (slot === 'desktopRunner') credentials[CREDENTIALS[slot]] = { ...DESKTOP_RUNNER_BY_NAME };
+        missing.push(LABEL[slot]);
+      }
+    }
+    return { credentials, picked, missing };
+  }
   /** Run variables that come from the RPA Secret Variables credential, over every Run steps. */
   readonly secretVariables = new Set<string>();
 
@@ -407,7 +468,8 @@ class Builder {
     const plain = (values: Record<string, string>) => Object.values(values).filter((v) => literal(v) !== undefined);
     const plainVars = draft.variables.filter((v) => !secret.has(v));
     // Only what applies: a list with no variables asks for none, and one whose variables are all secret has no Variables.
-    const fillIn = plain(start).length ? ' The Variables start with the values that were recorded: change them here.' : plainVars.length ? ' Fill in the Variables.' : '';
+    const fillIn = plain(start).length ? ` The Variables start with ${FROM[this.source].startValues}: change them here.` : plainVars.length ? ' Fill in the Variables.' : '';
+    const creds = this.slots(DESKTOP_SLOTS);
     this.add(T.rpa, run, [runX, y], {
       operation: 'runSteps',
       steps: "={{ $json.steps ?? '' }}",
@@ -417,8 +479,8 @@ class Builder {
       aiRepair: false,
       options: { name: draftName, expectedVersion: '={{ $json.version }}', ...this.runOptions(false), ...this.variablesOption(draft.variables, secret, start) },
     }, {
-      credentials: { ...DESKTOP_RUNNER_CREDENTIAL },
-      notes: `Runs the signed desktop steps ${draftName} (${plural(draft.script.steps.length, 'step')} ${FROM[this.source].steps} "${line(n.displayName, 120)}") on the desktop runner. Pick the RPA Desktop Runner and RPA Step Signing credentials.${fillIn}${secret.size ? ` ${[...secret].join(', ')}: put ${secret.size === 1 ? 'it' : 'them'} in an RPA Secret Variables credential (type rpaSecretVariablesApi, field Variables) and select it here.` : ''}`,
+      credentials: creds.credentials,
+      notes: `Runs the signed desktop steps ${draftName} (${plural(draft.script.steps.length, 'step')} ${FROM[this.source].steps} "${line(n.displayName, 120)}") on the desktop runner. ${pickText(creds.picked, creds.missing)}${fillIn}${secret.size ? ` ${[...secret].join(', ')}: put ${secret.size === 1 ? 'it' : 'them'} in an RPA Secret Variables credential (type rpaSecretVariablesApi, field Variables) and select it here.` : ''}`,
     });
     this.connect([{ node: get, output: 0 }], run);
     this.desktopRunNodes.push(run);
@@ -449,6 +511,7 @@ class Builder {
         const run = this.nodeName(n.displayName, `Run steps (${draftName})`);
         const runX = x + STEP;
         const vars = stepVariables(draft.script);
+        const creds = this.slots(BROWSER_SLOTS);
         // Runs as generated: no repair branch (a Chat model and an Approve steps would need a credential and a workflow
         // picked first). The note says how to add it.
         this.add(T.rpa, run, [runX, y], {
@@ -460,8 +523,9 @@ class Builder {
           aiRepair: false,
           options: { name: draftName, expectedVersion: '={{ $json.version }}', ...this.codeOptions(), ...this.runOptions(true), ...this.variablesOption(vars.all, new Set(vars.secret)) },
         }, {
+          ...(Object.keys(creds.credentials).length ? { credentials: creds.credentials } : {}),
           notes: [
-            `Runs the signed steps ${draftName} (${plural(draft.script.steps.length, 'step')} ${FROM[this.source].steps} "${line(n.displayName, 120)}"). Pick RPA Browser, RPA Site Login and RPA Step Signing here. ${this.privateNetwork ? PRIVATE_NETWORK_ON : PRIVATE_NETWORK_OFF}${vars.secret.length ? ` ${vars.secret.join(', ')}: put ${vars.secret.length === 1 ? 'it' : 'them'} in an RPA Secret Variables credential (type rpaSecretVariablesApi, field Variables) and select it here.` : ''}`,
+            `Runs the signed steps ${draftName} (${plural(draft.script.steps.length, 'step')} ${FROM[this.source].steps} "${line(n.displayName, 120)}"). ${pickText(creds.picked, creds.missing)} ${this.privateNetwork ? PRIVATE_NETWORK_ON : PRIVATE_NETWORK_OFF}${vars.secret.length ? ` ${vars.secret.join(', ')}: put ${vars.secret.length === 1 ? 'it' : 'them'} in an RPA Secret Variables credential (type rpaSecretVariablesApi, field Variables) and select it here.` : ''}`,
             'To let it repair itself when the site changes:',
             '1. Connect a chat model to its Model input (after step 2).',
             `2. Turn on AI Repair here and write the Goal in plain words.`,
@@ -596,16 +660,18 @@ class Builder {
           COLOUR.grey, [x - 60, y - 160 - BRANCH * d], end - x, 330 + 2 * BRANCH * d + (this.hasBrowser([n.body]) ? 270 : 0));
         return { tails: body.tails, x: end };
       }
-      case 'credential':
+      case 'credential': {
         this.credentials += 1;
         // Desktop steps refuse a Site Login: they type the sign-in from their Run steps' Variables.
+        const pickOne = cleanRef(this.passedOn.siteLogin) ? '' : ' Pick one there.';
         if (this.desktopDrafts.size > 0) {
-          const browser = this.drafts.size > 0 ? ' Browser steps: pick an RPA Site Login on their Run steps; the Site Login holds the login.' : '';
+          const browser = this.drafts.size > 0 ? ` Browser steps: the RPA Site Login on their Run steps holds the login.${pickOne}` : '';
           return this.inline(tails, x, y, `Credential: ${line(n.asset, 80) || 'UiPath'}`,
             `### UiPath credential (green)\nUiPath credential ${code(n.asset, 120)}: n8n never copies a UiPath credential. Desktop steps type the user name and password from their Run steps' **Variables** (see the gold notes); a secret one, such as the password, comes from an ${SECRET_VARIABLES} credential selected on that Run steps, never as text in this workflow.${browser}`, COLOUR.green);
         }
         return this.inline(tails, x, y, `Credential: ${line(n.asset, 80) || 'UiPath'}`,
-          `### UiPath credential (green)\nUiPath credential ${code(n.asset, 120)}: pick an RPA Site Login on the Run steps node(s). n8n never copies a UiPath credential; the Site Login holds the login.`, COLOUR.green);
+          `### UiPath credential (green)\nUiPath credential ${code(n.asset, 120)}: the RPA Site Login on the Run steps node(s) holds that login. n8n never copies a UiPath credential.${pickOne}`, COLOUR.green);
+      }
       case 'untranslated':
         return this.untranslatedSticky(tails, x, y, n.displayName, n.activity, n.note);
     }
@@ -624,7 +690,7 @@ function listed(names: string[]): string {
  */
 export function buildWorkflow(flow: UiPathFlow, drafts: Draft[], opts: BuildWorkflowOptions): WorkflowJson {
   if (opts.name.trim() === '' || opts.name.startsWith('=')) throw new Error('The Name must not be empty or start with "="');
-  const b = new Builder(opts.name, new Map(drafts.map((d) => [d.name, d])), new Map((opts.desktopDrafts ?? []).map((d) => [d.name, d])), opts.codeWorkflow, opts.source, opts.run);
+  const b = new Builder(opts.name, new Map(drafts.map((d) => [d.name, d])), new Map((opts.desktopDrafts ?? []).map((d) => [d.name, d])), opts.codeWorkflow, opts.source, opts.run, opts.credentials);
   const from = FROM[b.source];
   const uipath = b.source === 'uipath';
   b.add(T.manualTrigger, b.unique('Run the bot'), [0, 0], {});
@@ -658,11 +724,18 @@ export function buildWorkflow(flow: UiPathFlow, drafts: Draft[], opts: BuildWork
       uipath ? 'UiPath expressions are kept as text in notes; nothing from the project runs as an n8n expression.' : `Text from ${from.origin} is kept as text; nothing from it runs as an n8n expression.`,
     ].filter(Boolean).join(' '),
   ].filter(Boolean).join('\n\n');
+  // Each RPA credential in bold, marked when the import passed it on (by id and name: no secret is in this file).
+  const named = (slots: Slot[]) => { const s = b.slots(slots); return { text: and([...s.picked.map((l) => `**${l}** (picked for you)`), ...s.missing.map((l) => `**${l}**`)]), picked: s.picked.length }; };
+  const browserCreds = named(BROWSER_SLOTS);
+  const desktopCreds = named(DESKTOP_SLOTS);
+  const anyPicked = (b.runNodes.length > 0 && browserCreds.picked > 0) || (b.desktopRunNodes.length > 0 && desktopCreds.picked > 0);
   const setOnce = [
     '### Set once (green)',
-    'No credential is stored in this file. Pick them on the nodes:',
-    b.runNodes.length ? `- **RPA Browser**, **RPA Site Login** and **RPA Step Signing**: ${listed(b.runNodes)}` : '',
-    b.desktopRunNodes.length ? `- **RPA Desktop Runner** and **RPA Step Signing**: ${listed(b.desktopRunNodes)}` : '',
+    anyPicked
+      ? 'No secret is in this file. The RPA credentials the import used are picked for you: check them on the nodes, and pick the others there. In another n8n, or once a picked credential is deleted, n8n takes the only credential of the same name if there is one: otherwise pick it on the node again.'
+      : 'No secret is in this file. Pick the credentials on the nodes:',
+    b.runNodes.length ? `- ${browserCreds.text}: ${listed(b.runNodes)}` : '',
+    b.desktopRunNodes.length ? `- ${desktopCreds.text}: ${listed(b.desktopRunNodes)}` : '',
     b.secretVariables.size ? `- ${SECRET_VARIABLES}, holding ${[...b.secretVariables].slice(0, 10).map((v) => code(v, 60)).join(', ')}: on the Run steps that name them (their notes say which)` : '',
     b.credentials && !b.desktopRunNodes.length ? '- UiPath credential lookups (green notes in the flow): the RPA Site Login on Run steps holds that login' : '',
     b.credentials && b.desktopRunNodes.length ? `- UiPath credential lookups (green notes in the flow): desktop steps type the sign-in from their Run steps' Variables (a password from ${SECRET_VARIABLES}); browser steps use the RPA Site Login on their Run steps` : '',
