@@ -120,9 +120,10 @@ describe('Import Steps with a UiPath desktop project', () => {
     const run = wf.nodes.find((n) => n.type === 'n8n-nodes-rpa.playwright')!;
     expect(run.name).toBe("Open Application 'ERP Demo - Sign in'");
     expect(run.parameters).toEqual({
-      operation: 'runSteps', runsOn: 'desktop', steps: "={{ $json.steps ?? '' }}", requireSignedSteps: true, signature: '={{ $json.signature }}', approvedBy: '={{ $json.approvedBy }}', aiRepair: false,
+      operation: 'runSteps', runsOn: 'desktop', steps: "={{ $('Get active steps (erp-1)').first().json.steps ?? '' }}", requireSignedSteps: true,
+      signature: "={{ $('Get active steps (erp-1)').first().json.signature }}", approvedBy: "={{ $('Get active steps (erp-1)').first().json.approvedBy }}", aiRepair: false,
       options: {
-        name: 'erp-1', expectedVersion: '={{ $json.version }}',
+        name: 'erp-1', expectedVersion: "={{ $('Get active steps (erp-1)').first().json.version }}",
         // The secret one (password) is not here: it comes from the RPA Secret Variables credential the note names. The
         // others start with what the project passes in (Main's variable defaults); username has none.
         variables: { values: [

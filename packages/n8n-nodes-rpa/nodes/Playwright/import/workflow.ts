@@ -158,6 +158,18 @@ function code(s: string | undefined, max = 300): string {
   const pad = text.startsWith('`') || text.endsWith('`') ? ' ' : '';
   return `${fence}${pad}${text}${pad}${fence}`;
 }
+/**
+ * A node name as a JavaScript string inside an n8n expression: every character but letters, digits, spaces and
+ * `_ . , : ( ) -` is written as a \u escape, so a quote, a backslash, a "$" or a "}}" in a name taken from the project
+ * cannot end the string or the expression. An ordinary name stays as it is, so n8n's rename updates the reference.
+ */
+export const jsName = (name: string): string => `'${name.replace(/[^A-Za-z0-9 _.,:()-]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)}'`;
+/**
+ * What a Run steps reads from its Get active steps row, by that node's name and not from its own input item: a node put
+ * between the two (the accounts of a many-accounts bot, a spreadsheet's rows) changes the input, never the row.
+ */
+export const fromRow = (get: string, field: 'steps' | 'signature' | 'approvedBy' | 'version'): string =>
+  field === 'steps' ? `={{ $(${jsName(get)}).first().json.steps ?? '' }}` : `={{ $(${jsName(get)}).first().json.${field} }}`;
 /** A literal parameter value, unless it could be or become an expression (a leading "=", or "{{" anywhere): then none. */
 const literal = (v: string | undefined): string | undefined => (v !== undefined && v !== '' && !v.startsWith('=') && !v.includes('{{') ? v : undefined);
 const basename = (path: string) => path.split(/[\\/]/).pop() ?? '';
@@ -454,7 +466,7 @@ class Builder {
   }
 
   /**
-   * The run log after the flow: each Run steps' Data output also feeds **Log run** (Execute Once), and its error output
+   * The run log after the flow: each Run steps' Data output also feeds **Log run** (a row per run), and its error output
    * feeds **Log failed run** → **Stop and Error**, so a failed run is logged and the execution still fails. One set for
    * every Run steps. A lone Run steps at the end of the flow has them right of it; otherwise they sit below the flow.
    */
@@ -476,8 +488,9 @@ class Builder {
       failAt = [2 * STEP, bottom + 280];
     }
     const table = { __rl: true, mode: 'name', value: RUN_TABLE };
+    // Not Execute Once: a Run steps that runs once per item (one per account) writes one row per run.
     this.add(T.dataTable, LOG.run, logAt, { resource: 'row', operation: 'insert', dataTableId: table, columns: runRow(LOG_RUN_ROW), options: {} }, {
-      executeOnce: true, notes: `One row in ${RUN_TABLE} per successful run of a Run steps.`,
+      notes: `One row in ${RUN_TABLE} per successful run of a Run steps.`,
     });
     this.add(T.dataTable, LOG.failed, failAt, { resource: 'row', operation: 'insert', dataTableId: table, columns: runRow(LOG_FAILED_ROW), options: {} }, {
       onError: 'continueRegularOutput',
@@ -573,12 +586,12 @@ class Builder {
     this.add(T.rpa, run, [runX, y], {
       operation: 'runSteps',
       runsOn: 'desktop',
-      steps: "={{ $json.steps ?? '' }}",
+      steps: fromRow(get, 'steps'),
       requireSignedSteps: true,
-      signature: '={{ $json.signature }}',
-      approvedBy: '={{ $json.approvedBy }}',
+      signature: fromRow(get, 'signature'),
+      approvedBy: fromRow(get, 'approvedBy'),
       aiRepair: false,
-      options: { name: draftName, expectedVersion: '={{ $json.version }}', ...this.runOptions(false), ...this.variablesOption(draft.variables, secret, start) },
+      options: { name: draftName, expectedVersion: fromRow(get, 'version'), ...this.runOptions(false), ...this.variablesOption(draft.variables, secret, start) },
     }, {
       onError: 'continueErrorOutput',
       credentials: creds.credentials,
@@ -620,13 +633,13 @@ class Builder {
         this.add(T.rpa, run, [runX, y], {
           operation: 'runSteps',
           runsOn: 'browser',
-          steps: "={{ $json.steps ?? '' }}",
+          steps: fromRow(get, 'steps'),
           requireSignedSteps: true,
-          signature: '={{ $json.signature }}',
-          approvedBy: '={{ $json.approvedBy }}',
+          signature: fromRow(get, 'signature'),
+          approvedBy: fromRow(get, 'approvedBy'),
           aiRepair: false,
           options: {
-            name: draftName, expectedVersion: '={{ $json.version }}', ...this.codeOptions(), ...this.runOptions(true), ...this.idPatternOption(draftName),
+            name: draftName, expectedVersion: fromRow(get, 'version'), ...this.codeOptions(), ...this.runOptions(true), ...this.idPatternOption(draftName),
             ...this.variablesOption(vars.all, new Set(vars.secret)),
           },
         }, {
