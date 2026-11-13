@@ -2727,18 +2727,18 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       const after = await checkBeforeReview({ ...ran, 'Change or sign again': [[{ json: { changedSteps: text } }]], [COMPARED]: [[{ json: line }]], 'Import steps': [data, repaired] }, NEW_KEY);
       expect(after['Sign steps'][0][0].json).toEqual({ checkOnly: true, siteLogin: null, approvedVersion: { version: 1, desktop: true, signatureFits: false } });
       // The review page of an import, with its opening lines on top: how these steps relate to the approved version, what
-      // a desktop signature binds, and, as desktop steps bind no Site Login, a plain line, not a red warning: a signature
-      // that does not fit is what a new signing key looks like, and approving signs the steps again.
+      // a desktop signature binds, and the warning. Desktop steps bind no Site Login, so it names the key, and, as for
+      // browser steps, a row changed after approval: the page cannot tell the two apart and says to read every step.
       const all = jsonFormFields(String(byName(t, REVIEW).parameters.jsonOutput), { $: nodesRan(after) });
       expect(all[0]).toEqual({
         fieldType: 'html',
         html: `<p><b>${escapeHtml(line.compared)}</b></p><p>Desktop steps are signed for the app they start, without a Site Login.</p>`
-          + "<p>Version 1 was signed with another signing key than this form's. That is how a desktop bot looks after a new signing key: approving here signs it again with the new key.</p>",
+          + "<p><strong>⚠ Version 1 does not fit this form: it was signed with another signing key, or its row was changed after it was approved. This page cannot tell which. Read every step before you approve: approving signs the steps shown here with this form's key, which is the way back after a new signing key.</strong></p>",
       });
-      expect(String(all[0].html)).not.toMatch(/⚠|<strong>/);
       const fields = all.slice(1);
-      // Said once: nothing more above the Decision.
-      expect(fields.map((f) => f.fieldName ?? f.fieldType)).toEqual(['html', 'writes_0', 'html', 'moreWrites_0', 'decision_0']);
+      // Its first sentence stands again directly above the Decision, as for browser steps.
+      expect(fields.map((f) => f.fieldName ?? f.fieldType)).toEqual(['html', 'writes_0', 'html', 'moreWrites_0', 'html', 'decision_0']);
+      expect(fields[4].html).toBe('<p><strong>⚠ Version 1 does not fit this form: it was signed with another signing key, or its row was changed after it was approved. The warning at the top says what to do.</strong></p>');
       // Every step list is the same without the line: an ordinary import shows none.
       expect(jsonFormFields(String(byName(t, REVIEW).parameters.jsonOutput), { $: nodesRan({ ...after, [COMPARED]: undefined as never }) }).slice(1)).toEqual(fields);
       const signed = await signAfterReview(after, answer, {}, false, by, undefined, NEW_KEY);
@@ -2851,8 +2851,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // Signed for another Site Login (the many-accounts one): the warning leads with what the person can check, this
     // form's Site Login, not with keys; then the two causes' advice, shortest first. Its first sentence stands again
     // directly above the Decision.
-    const FIT = '⚠ Version 4 does not fit this form: it was signed for another Site Login than "Shop &lt;login&gt;", or with another signing key.';
-    const WARNING = `<p><strong>${FIT} After a new signing key, approving here is right. If the bot's workflow uses another Site Login, a version approved here will not run there: put that Site Login on Import steps and Sign steps first.</strong></p>`;
+    const FIT = '⚠ Version 4 does not fit this form: it was signed for another Site Login than "Shop &lt;login&gt;", or with another signing key, or its row was changed after it was approved.';
+    const READ = "This page cannot tell which. Read every step before you approve: approving signs the steps shown here with this form's key, which is the way back after a new signing key.";
+    const WARNING = `<p><strong>${FIT} ${READ} If the bot's workflow uses another Site Login, a version approved here will not run there: put that Site Login on Import steps and Sign steps first.</strong></p>`;
     expect(await head(row(KEY, 'site-b'), KEY, SHOP)).toBe(UNCHANGED + NAMED + WARNING);
     expect((await fieldsOf(row(KEY, 'site-b'), KEY, SHOP)).map((f) => f.fieldName ?? f.fieldType)).toEqual(['html', 'html', 'decision_0']);
     expect((await fieldsOf(row(KEY, 'site-b'), KEY, SHOP))[1].html).toBe(`<p><strong>${FIT} The warning at the top says what to do.</strong></p>`);
@@ -2863,7 +2864,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // No Site Login on Sign steps: the line says so, and a version signed for one does not fit.
     const NONE = '<p>Signs for no RPA Site Login. The workflow that runs the bot must have none.</p>';
     expect(await head(row(KEY), KEY)).toBe(UNCHANGED + NONE);
-    expect(await head(row(KEY, SHOP.id), KEY)).toBe(UNCHANGED + NONE + "<p><strong>⚠ Version 4 does not fit this form: it was signed for a Site Login, which this form does not have, or with another signing key. After a new signing key, approving here is right. If the bot's workflow uses a Site Login, a version approved here will not run there: put that Site Login on Import steps and Sign steps first.</strong></p>");
+    expect(await head(row(KEY, SHOP.id), KEY)).toBe(UNCHANGED + NONE + `<p><strong>⚠ Version 4 does not fit this form: it was signed for a Site Login, which this form does not have, or with another signing key, or its row was changed after it was approved. ${READ} If the bot's workflow uses a Site Login, a version approved here will not run there: put that Site Login on Import steps and Sign steps first.</strong></p>`);
     // No key, signature or Site Login data is shown.
     const shown = await head(row(KEY, 'site-b'), KEY, SHOP);
     for (const secret of [KEY, String(row(KEY, 'site-b').signature), 'site-a', 'site-b']) expect(shown).not.toContain(secret);
