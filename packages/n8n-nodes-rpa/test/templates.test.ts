@@ -2769,6 +2769,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
         { intent: 'Save the file', fill: { field: { uia: { path: [{ name: 'File name' }] } }, value: '{{$exportDir}}\\items.csv' } },
         { intent: 'Type somewhere', fill: { field: { uia: { path: [] } }, value: 'x' } },
         { intent: 'Open', goto: 'https://not.for.desktop/' },
+        { intent: 'Type the name', fill: { field: { uia: { path: [{ name: 'Name:' }] } }, value: 'n' } },
       ],
     };
     expect(changePath('erp', [{ id: 1, name: 'erp', version: 1, steps: JSON.stringify(desk), status: 'active' }]).bot.values).toEqual([
@@ -2776,6 +2777,8 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       v(2, 'select', 'option', '2. Choose in cmbCompany: chosen option', '2000'),
       v(3, 'fill', 'value', '3. Type into File name: typed value', '{{$exportDir}}\\items.csv', FIXED),
       v(4, 'fill', 'value', '4. Type into a field without a name: typed value', 'x'),
+      // A control name that ends with a colon (a Save As dialog's "File name:") is not followed by a second one.
+      v(6, 'fill', 'value', '6. Type into Name: typed value', 'n'),
     ]);
     // Steps that do not parse, or no steps list: nothing to offer.
     for (const steps of ['{broken', '[]', '{"steps":{}}', 'null']) expect(changePath('x', [{ id: 1, name: 'x', version: 1, steps, status: 'active' }]).bot.values).toEqual([]);
