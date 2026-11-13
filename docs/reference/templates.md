@@ -19,8 +19,10 @@ Templates 2, 3 and 5 create the two Data Tables when they are missing.
 - **Settings**: `approval` is `on this form` (the default) or `by email`. `showDetails` (false) puts each step list's
   safety flags, evidence and change list on the review page.
 - **Import a bot** asks for the **Bot file**, **Source (optional)** and **Name for the steps**. For every upload but an
-  RPA recording it asks on a second page, **The file it downloads**, for a file name pattern and required columns.
-  Leave both empty when the bot downloads nothing in a browser.
+  RPA recording and a step document it asks on a second page, **The file it downloads**, for a file name pattern and
+  required columns. Leave both empty when the bot downloads nothing in a browser. A step document's download steps
+  carry their own checks, so it is not asked: **Read the upload** reads the file's text (a file of at most 5 MB that is
+  not a ZIP, XAML, code or a recording) and **Asks about a download?** looks for the step document's shape.
 - **Bot file** may be left empty to change an approved bot or sign it again. **Approved bots** reads the `active`
   rows of `playwright_steps`, and **Change or sign again** shows the newest active steps of the name typed, in a box.
   **Review** sends the box to **Import steps** as a step document, then to the same review page and **Sign steps**.

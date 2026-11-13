@@ -1093,7 +1093,10 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(targets(t, 'Plain address?')).toEqual([['Settings'], ['Address with values']]);
     // No file on the first page: the change path (an approved bot by its name, its steps in a box). With a file: the import.
     expect(targets(t, 'Settings')).toEqual([['Change an approved bot?']]);
-    expect(targets(t, 'Change an approved bot?')).toEqual([['Approved bots'], ['Asks about a download?']]);
+    expect(targets(t, 'Change an approved bot?')).toEqual([['Approved bots'], ['Read the upload']]);
+    // Read the upload gives Asks about a download? the file's text (one Extract From File node; an error item passes on).
+    expect(targets(t, 'Read the upload')).toEqual([['Asks about a download?']]);
+    expect(byName(t, 'Read the upload')).toMatchObject({ type: 'n8n-nodes-base.extractFromFile', typeVersion: 1.1, onError: 'continueRegularOutput', parameters: { operation: 'text', destinationKey: 'text' } });
     expect(targets(t, 'Approved bots')).toEqual([['The bot to change']]);
     expect(targets(t, 'The bot to change')).toEqual([['Approved bot found?']]);
     expect(targets(t, 'Approved bot found?')).toEqual([['Change or sign again'], ['No approved bot']]);
@@ -1146,7 +1149,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(working).toEqual([
       'Add the login page', 'Address with values', 'Approval by email?', 'Approve on this form?', 'Approve steps', 'Approved bot found?', 'Approved bots', 'Asks about a download?', 'Change an approved bot?',
       'Change or sign again', 'Compared with the approved version', 'Create run log table', 'Create steps table', 'Import a bot', 'Import failed', 'Import steps', 'Imported', 'Imported, with the workflow file', 'Missing login page?',
-      'No approved bot', 'Plain address?', 'Record rejection', REVIEW, 'Save signed steps', 'Settings', 'Sign steps', 'Signed?', 'Step lists', 'Step lists to sign', 'Supersede older versions',
+      'No approved bot', 'Plain address?', 'Read the upload', 'Record rejection', REVIEW, 'Save signed steps', 'Settings', 'Sign steps', 'Signed?', 'Step lists', 'Step lists to sign', 'Supersede older versions',
       'The bot to change', 'The file it downloads', 'The steps as a file', 'The upload', 'Workflow file?',
     ]);
     expect(t.nodes.filter((n) => n.type === COMPLETION).map((n) => n.typeVersion)).toEqual([2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5]);
@@ -1231,10 +1234,14 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // Asked unless the Source or the file name says recording (the recorder makes its export step). A UiPath project is
     // asked too: its browser steps need the Expected File to make their download a checked one.
     const asks = (byName(t, 'Asks about a download?').parameters as { conditions: { conditions: { leftValue: string }[] } }).conditions.conditions[0].leftValue;
-    const ask = (source: string | null, filename: string) => evaluate(asks, { $json: { source, bot: { filename } } });
+    /** Settings' item, Read the upload's text (when it read the file), and whether the page is asked. */
+    const ask = (source: string | null, filename: string, text?: string) =>
+      evaluate(asks, { $json: text === undefined ? { error: 'No binary data property "none"' } : { text }, $: (n: string) => ({ first: () => ({ json: n === 'Settings' ? { source, bot: { filename } } : {} }) }) });
     expect(ask(null, 'export.json')).toBe(true);
     expect(ask('Chrome Recorder', 'export.json')).toBe(true);
+    // A step document is not asked: its download steps carry their own checks, and the answers are not used for it.
     expect(ask('Step document', 'steps.json')).toBe(true);
+    expect(ask('Step document', 'steps.json', JSON.stringify({ steps: [{ intent: 'Open', goto: '/' }] }))).toBe(false);
     expect(ask(null, 'Project.ZIP')).toBe(true);
     expect(ask(null, 'Main.xaml')).toBe(true);
     expect(ask('UiPath project', 'p.json')).toBe(true);
@@ -1290,7 +1297,11 @@ describe('5-import-a-bot.json (the first-day import)', () => {
   function throughTheDownloadPage(first: INodeExecutionData, answer: IDataObject | null): { asked: boolean; upload: INodeExecutionData } {
     const settings = { json: { ...first.json, ...settingsJson() }, binary: first.binary };
     const asks = (byName(t, 'Asks about a download?').parameters as { conditions: { conditions: { leftValue: string }[] } }).conditions.conditions[0].leftValue;
-    const asked = evaluate(asks, { $json: settings.json }) === true;
+    // Read the upload, as n8n runs it: the text of a file that may be a step document, else an error item.
+    const read = byName(t, 'Read the upload').parameters as { binaryPropertyName: string; destinationKey: string };
+    const field = evaluate(read.binaryPropertyName, { $json: settings.json });
+    const readOut = field === 'bot' && settings.binary?.bot ? { text: Buffer.from(settings.binary.bot.data, 'base64').toString('utf8') } : { error: `No binary data property "${String(field)}"` };
+    const asked = evaluate(asks, { $json: readOut, $: (name: string) => ({ first: () => (name === 'Settings' ? settings : { json: {} }) }) }) === true;
     const pageRan = asked && answer !== null;
     const scope = { $: (name: string) => (name === 'Settings' ? { first: () => settings } : { isExecuted: name === 'The file it downloads' && pageRan, last: () => ({ json: answer ?? {} }) }) };
     const values = (byName(t, 'The upload').parameters.assignments as { assignments: { name: string; value: string; type: string }[] }).assignments;
@@ -1303,6 +1314,43 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     }
     return { asked, upload: { json, ...(binary ? { binary } : {}) } };
   }
+  it('The file it downloads is asked for every upload but a recording and a step document: each kind of upload, through Read the upload', () => {
+    const asked = (source: string, file: Buffer, filename: string) => {
+      const item = formItem(source, file);
+      (item.json.bot as IDataObject).filename = filename;
+      return throughTheDownloadPage(item, null).asked;
+    };
+    const doc = (o: unknown) => Buffer.from(JSON.stringify(o));
+    const auto = 'Work it out from the file';
+    // Step documents: a download with its own check, one that reads rows, a desktop one, and one that only clicks.
+    const download = { steps: [{ intent: 'Download with Export', download: { trigger: { role: 'button', name: 'Export' }, check: { name: '^X_', columns: ['A'] } } }] };
+    const rows = { steps: [{ intent: 'Read the rows', extractTable: { scope: { css: 'table' }, idPattern: 'N\\d+' } }] };
+    const desktop = { surface: 'desktop', app: { exe: 'ErpDemo.exe' }, steps: [{ intent: 'Click Save', click: { uia: { path: [{ name: 'Save' }] } } }] };
+    const clicks = [{ intent: 'Click Go', click: { text: 'Go' } }];
+    for (const d of [download, rows, desktop, clicks]) {
+      expect(asked(auto, doc(d), 'bot.steps.json'), JSON.stringify(d)).toBe(false);
+      expect(asked('Step document', doc(d), 'steps.json'), JSON.stringify(d)).toBe(false);
+    }
+    // Asked: a Chrome Recorder export, Playwright code, a UiPath project, and a file that is not a step document.
+    expect(asked(auto, CHROME, 'export.json')).toBe(true);
+    expect(asked('Chrome Recorder', CHROME, 'export.json')).toBe(true);
+    expect(asked(auto, Buffer.from("await page.goto('https://a.example/');"), 'bot.js')).toBe(true);
+    expect(asked(auto, Buffer.from('PK\u0003\u0004'), 'Project.zip')).toBe(true);
+    expect(asked('UiPath project', Buffer.from('<Activity />'), 'Main.xaml')).toBe(true);
+    expect(asked(auto, Buffer.from('not json'), 'notes.json')).toBe(true);
+    expect(asked(auto, doc({ steps: [] }), 'empty.json')).toBe(true);
+    // A step document named as a ZIP is not read, and so asked (the import then refuses it as a project).
+    expect(asked(auto, doc(download), 'steps.zip')).toBe(true);
+    // Never asked: a recording, by name, by Source or by its format.
+    expect(asked(auto, doc({ format: 'rpa-recording/1' }), 'erp.rpa-recording.json')).toBe(false);
+    expect(asked('RPA recording', doc({}), 'renamed.json')).toBe(false);
+    expect(asked(auto, doc({ format: 'rpa-recording/1', events: [] }), 'renamed.json')).toBe(false);
+    // A file over 5 MB is not read: asked, as before.
+    const big = formItem(auto, doc(download));
+    Object.assign(big.json.bot as IDataObject, { filename: 'big.json', size: 6 * 1024 * 1024 });
+    expect(throughTheDownloadPage(big, null).asked).toBe(true);
+  });
+
   /** A draft "proved" by the real proposal builder (no browser), as the replay would return it, with the file it downloaded. */
   const provedWithoutBrowser = (seen: AdoptInput[]) => (input: AdoptInput): AdoptResult => {
     seen.push(input);
@@ -1354,9 +1402,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
 
   it('a step document that reads rows: imported with the ID Pattern its steps state, shown and signed, and its workflow file runs with it; without one the refusal names the field', async () => {
     const sample = readFileSync(new URL('../../../docs/samples/sandbox-rows.steps.json', import.meta.url), 'utf8').split('http://sandbox:8080').join(SITE.url);
-    // The download page is asked as for any other upload, and left empty: nothing on it is about rows.
+    // A step document: the download page is not asked (nothing on it is about rows, and Import steps does not use it).
     const { asked, upload } = throughTheDownloadPage(formItem('Step document', Buffer.from(sample)), { expectedFileName: null, columns: null });
-    expect(asked).toBe(true);
+    expect(asked).toBe(false);
     const seen: AdoptInput[] = [];
     const [data, repaired] = await runImport(upload, provedWithoutBrowser(seen));
     expect(data[0].json.error, JSON.stringify(data[0].json).slice(0, 800)).toBeUndefined();

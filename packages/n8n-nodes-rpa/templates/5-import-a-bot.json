@@ -220,6 +220,24 @@
     },
     {
       "parameters": {
+        "operation": "text",
+        "binaryPropertyName": "={{ ((s, f, size) => (s === '' || s === 'Work it out from the file' || s === 'Step document') && !/\\.(?:zip|xaml|[cm]?js|ts)$|\\.rpa-recording\\.json$/i.test(f) && !(size > 5242880) ? 'bot' : 'none')(String($json.source ?? ''), String($json.bot?.filename ?? ''), Number($json.bot?.size ?? 0)) }}",
+        "destinationKey": "text",
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005d1",
+      "name": "Read the upload",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        0
+      ],
+      "onError": "continueRegularOutput",
+      "notes": "The upload's text, so that Asks about a download? can tell a step document (it never needs the download page). Read only for a file that may be one (Source worked out or Step document, not a ZIP, XAML, code or recording, at most 5 MB); for any other the node gives an error item and the flow goes on."
+    },
+    {
+      "parameters": {
         "conditions": {
           "options": {
             "caseSensitive": true,
@@ -230,7 +248,7 @@
           "conditions": [
             {
               "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005b5",
-              "leftValue": "={{ $json.source !== 'RPA recording' && !/\\.rpa-recording\\.json$/i.test(String($json.bot?.filename ?? '')) }}",
+              "leftValue": "={{ ((s, f, d) => s !== 'RPA recording' && !/\\.rpa-recording\\.json$/i.test(f) && !(d !== null && typeof d === 'object' && (d.format === 'rpa-recording/1' || d.surface === 'desktop' || ((l) => Array.isArray(l) && l.length > 0 && l.every((x) => x !== null && typeof x === 'object' && typeof x.intent === 'string'))(Array.isArray(d) ? d : d.steps))))(String($('Settings').first().json.source ?? ''), String($('Settings').first().json.bot?.filename ?? ''), ((text) => { try { return JSON.parse(text); } catch (e) { return null; } })(typeof $json.text === 'string' ? $json.text : '')) }}",
               "rightValue": "",
               "operator": {
                 "type": "boolean",
@@ -248,10 +266,10 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        880,
+        1100,
         0
       ],
-      "notes": "A recording never asks: the recorder makes its export step. Every other upload, a UiPath project too, gets the optional download question on a second page."
+      "notes": "Asks on a second page about the file the bot downloads, for every upload but a recording and a step document. A recording never asks: the recorder makes its export step. A step document never asks either: its download steps carry their own checks, and Import steps does not use the answers for it (Read the upload gives its text; the shape is the one Work it out from the file looks for). Every other upload, a UiPath project too, gets the optional question."
     },
     {
       "parameters": {
@@ -287,7 +305,7 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        1100,
+        1320,
         -120
       ],
       "notes": "Every upload but a recording (see Asks about a download?). The run pauses here until the person submits, at most 1 hour."
@@ -1613,7 +1631,7 @@
         ],
         [
           {
-            "node": "Asks about a download?",
+            "node": "Read the upload",
             "type": "main",
             "index": 0
           }
@@ -1705,6 +1723,17 @@
         [
           {
             "node": "Address with values",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read the upload": {
+      "main": [
+        [
+          {
+            "node": "Asks about a download?",
             "type": "main",
             "index": 0
           }
