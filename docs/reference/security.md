@@ -143,7 +143,11 @@ a file only its user can read, which is removed right after, never in a command'
 - **Changing or signing again on the form.** With **Bot file** left empty, the form's next page shows the steps of the
   `active` row of the name typed, and a name it does not find ends on a page that lists every approved bot's name.
   With its box left empty, the steps signed again are the row's own, read in n8n: they do not pass through the browser.
-  What comes back from that page is a new import: the same review page, the same checks by Sign Steps, the approver on
+  **Change values** sends only the values back, from a page of fields: n8n puts each one into the row's steps, as
+  text, in place of the old value at the place it was read from, and into the step's own description where that
+  quotes the old value. A value with `{{` is refused, because steps read `{{` as a variable. n8n fills the values
+  page's fields from an address only through the form's first page, which refuses an address with values.
+  What comes back from those pages is a new import: the same review page, the same checks by Sign Steps, the approver on
   the allowlist, and a new row that supersedes the old one only when it is approved. Nothing is signed again without a
   person's approval. Those pages are later pages of the form, as the review page is:
   - With n8n's sign-in, only n8n users who may run the workflow reach them through the form. Any signed-in n8n user
