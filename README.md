@@ -82,6 +82,7 @@ run `rpa status` there. Every option, the token gate, TLS and version matching:
 | [Your first Windows desktop bot](docs/guides/desktop-bot.md) | Install, connect, record, approve and run |
 | [Record a bot](docs/guides/record-a-bot.md) | The RPA Recorder, stage by stage |
 | [Move a bot](docs/guides/move-a-bot.md) | UiPath, recordings, Playwright code, step documents, Power Automate Desktop |
+| [One bot, many accounts](docs/guides/many-accounts.md) | One Site Login, one approval and one workflow for every account of a site |
 | [Windows guide](docs/install/windows.md) | For the administrator: install, sign-in modes, the `rpa` command, allowing apps, upgrades, failures |
 | [Operations](docs/reference/operations.md) | Each node operation and its fields |
 | [Steps](docs/reference/steps.md) | Every browser and desktop step, locators, conditions, sign-in |

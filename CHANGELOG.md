@@ -8,6 +8,7 @@ All notable changes to `n8n-nodes-rpa`, the `rpa-browser` image and the Windows 
 
 ### Added
 
+- **One bot, many accounts**: a guide ([docs/guides/many-accounts.md](docs/guides/many-accounts.md)) for a bot that signs in to one site with many accounts. One RPA Site Login whose username and password are expressions on the items, one approval and one workflow serve every account. Tried on n8n 2.45.3 with three accounts of the sample site.
 - **Set up the import form in one command**: `npx n8n-nodes-rpa setup` creates the form's login, the RPA Step Signing key and, with a Connection Line, the RPA Desktop Runner credential, then imports and publishes **RPA: 5 Import a bot** with your address as the approver. It prints the form's address and password once, and reuses what it made when run again.
 - **The RPA Recorder** on the Windows machine (Start menu: **RPA Recorder**). It records a person's work in a Windows app as steps, asks once after **Finish** which values change from run to run, saves to `Documents\RPA recordings`, and allows the recorded app with one button (**Allow this app…**). It does not read password boxes. Tried on WinForms and Win32 apps.
 - **Install in one command**: `.\Get-Rpa.ps1 -AllowFrom <n8n address>` downloads the Windows package, checks its SHA-256 (and its build attestation where the GitHub CLI is signed in), unpacks it under `C:\Program Files\RPA package\<version>` and runs the installer.
@@ -22,6 +23,8 @@ All notable changes to `n8n-nodes-rpa`, the `rpa-browser` image and the Windows 
 
 ### Changed
 
+- **The login breaker, the run lock and the block after a password change are kept per account** (the Site Login and the username). With a username set by an expression, one account's wrong password, run or password change no longer stops the other accounts. A breaker that opened in 0.2.0 or earlier still stops every account until the reset key changes. After a password change the message says `The password of this account was changed earlier in this execution`.
+- **Sign Steps** signs with a Site Login whose username and password are empty, as they are on an approval item when they are expressions on the account items. Run Steps and Import Steps still need both.
 - **The desktop runner asks the apps to close before it stops them.** When a run ends, it sends each launched app a close request (like the close button, with no typing, clicking or answering), waits up to 3 seconds in total, then stops what is still running as before. `run.end` now answers at once and the cleanup goes on after it. The log says how each app ended.
 - **The default approver.** On the default path, the person who imports a bot approves it on the form. Anyone who can open the form (its Basic Auth credential) can approve, and the row records the address in **Sign steps → Approver Allowlist**. Set `approval` to `by email` in the template's **Settings** for a second person. Template 5's **Approve steps** node ships switched off. Template 3's **Settings** now holds `approver`.
 - **Sign Steps' Approved By** may be empty when the **Approver Allowlist** holds exactly one address.

@@ -172,17 +172,21 @@ host (**Options → Also Allow These Sites**, the Allowed Hosts of the run) to r
 
 ## Login breaker and run lock
 
-One failed login stops every further login with that Site Login, so a wrong password does not lock the account. After
-`login_failed`, a corrected username, password or TOTP Secret gets one try. Adding, replacing or removing the Site Login's TOTP Secret also counts as a changed login and gets one try.
+One failed login stops every further login with that Site Login and username, so a wrong password does not lock the
+account. A Site Login whose username is an expression keeps one breaker per account
+([One bot, many accounts](../guides/many-accounts.md)). After `login_failed`, a corrected username, password or TOTP
+Secret gets one try. Adding, replacing or removing the Site Login's TOTP Secret also counts as a changed login and gets one try.
 In the other cases (the login was right, the account was locked, or the breaker opened in 0.2.0 or earlier), type a
 new **Login Breaker Reset Key**. To tell a corrected login from the rejected one, the breaker keeps a fingerprint of
 the rejected login: a salted scrypt hash, keyed with the TOTP Secret when there is one. It holds no username or
-password, but someone who can read the workflow's static data or Redis can test guesses against it.
+password, but someone who can read the workflow's static data or Redis can test guesses against it. Breaker and lock
+keys hold a short SHA-256 of the username, so they can also test a guessed username.
 
 n8n saves the breaker with the workflow's static data only for production runs, not for manual executions: a breaker
-tripped in a manual execution holds until n8n restarts. With RPA Redis it is kept in Redis. The Site Login also keys
-the run lock: two workflows with the same Site Login share it (`busy`). A Site Login that n8n reports without an id is
-a configuration error (`The RPA Site Login credential has no id. Save the credential, then select it again on this node.`).
+tripped in a manual execution holds until n8n restarts. With RPA Redis it is kept in Redis. The Site Login and username
+also key the run lock: two workflows with the same Site Login and username share it (`busy`). A breaker that opened in
+0.2.0 or earlier is kept under the Site Login alone and stops every account until you type a new reset key. A Site
+Login that n8n reports without an id is a configuration error (`The RPA Site Login credential has no id. Save the credential, then select it again on this node.`).
 
 ## Other settings
 

@@ -22,7 +22,8 @@ It creates the form's login, the **RPA Step Signing** key and the workflow, with
 publishes it. It prints the form's address, its user name and its password, once. For browser bots, add
 `--browser-url <ws-url>` with the browser service's token in `RPA_BROWSER_TOKEN`: it creates **RPA Browser** and
 picks it on **Import steps**. A bot that signs in also needs an **RPA Site Login** on **Import steps** and **Sign
-steps**, which you pick in n8n. The [desktop bot guide](desktop-bot.md#4-import-and-approve) shows the output, and
+steps**, which you pick in n8n. A bot that signs in with many accounts needs only one: see [One bot, many
+accounts](many-accounts.md). The [desktop bot guide](desktop-bot.md#4-import-and-approve) shows the output, and
 [Templates](../reference/templates.md#set-it-up-by-hand) the way by hand.
 
 <img src="../images/import-form.png" alt="The Import a bot form: a file, an optional source and a name for the steps" width="360">
