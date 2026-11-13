@@ -20,6 +20,8 @@ export interface NodeContext {
   getExecutionCancelSignal(): AbortSignal | undefined;
   continueOnFail(): boolean;
   getExecutionId(): string;
+  /** Evaluates an n8n expression (`{{ … }}`) for one item: Sign Steps reads who signed in on the approval form page. */
+  evaluateExpression(expression: string, itemIndex: number): unknown;
   /** Runs another workflow and waits for its output (Run Steps → One-Time Code Workflow). */
   executeWorkflow(workflowInfo: IExecuteWorkflowInfo, inputData?: INodeExecutionData[]): Promise<ExecuteWorkflowData>;
   helpers: {

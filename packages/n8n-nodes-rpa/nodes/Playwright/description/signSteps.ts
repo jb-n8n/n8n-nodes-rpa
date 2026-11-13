@@ -16,13 +16,39 @@ export const signStepsProperties: INodeProperties[] = [
     displayOptions: signSteps,
   },
   {
+    displayName: 'Approver',
+    name: 'approverFrom',
+    type: 'options',
+    default: 'approvedBy',
+    options: [
+      { name: 'Approved By', value: 'approvedBy', description: 'The address in Approved By, or the one address on the allowlist when it is empty' },
+      {
+        name: 'Who Signed In to n8n on the Approval Form',
+        value: 'formSignIn',
+        description: 'The n8n user who submitted the form page named in Approval Form Page. Its form must use n8n User Auth.',
+      },
+    ],
+    description: 'Where the approver comes from. Either way, the approver must be on the Approver Allowlist.',
+    displayOptions: signSteps,
+  },
+  {
+    displayName: 'Approval Form Page',
+    name: 'approvalFormPage',
+    type: 'string',
+    default: 'Review and approve',
+    noDataExpression: true,
+    description:
+      'With Approver set to who signed in to n8n: the name of the form page where the approver decides. The email of the n8n user who submitted that page is recorded as the approver. Must be set directly, not with an expression.',
+    displayOptions: signSteps,
+  },
+  {
     displayName: 'Approved By',
     name: 'approverId',
     type: 'string',
     default: '',
     placeholder: 'ops-lead@example.com',
     description:
-      'Who decided: an address on the Approver Allowlist. Leave it empty when the allowlist holds one address: that address is recorded. With more than one, it is required.',
+      'Who decided: an address on the Approver Allowlist. Leave it empty when the allowlist holds one address: that address is recorded. With more than one, it is required. Not used when Approver is who signed in to n8n.',
     displayOptions: signSteps,
   },
   {
