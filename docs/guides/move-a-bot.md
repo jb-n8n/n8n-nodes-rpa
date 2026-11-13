@@ -26,8 +26,11 @@ user name and password instead, printed once. For browser bots, add
 picks it on **Import steps**. With a Connection Line it creates **RPA Desktop Runner**. It puts the signing key and
 the desktop runner on **Import steps** too, in two slots marked "only passed on to the workflow file": the import never
 reads them, it writes their name and id into the workflow it hands over. A bot that signs in also needs an
-**RPA Site Login** on **Import steps** and **Sign steps**, which you pick in n8n. A bot that signs in with many
-accounts needs only one: see [One bot, many accounts](many-accounts.md). The
+**RPA Site Login** on **Import steps** and **Sign steps**. Make it in n8n first, then add `--site-login "<its name>"`:
+the command picks that one of your project by its name, and never makes one or reads its values. For a site on this
+computer or your own network, `--allow-private-network` turns on **Allow Private Network** on **Import steps**. Both
+apply when the command makes the workflow: one there already is left as it is, and the command says what to set on it
+in n8n. A bot that signs in with many accounts needs only one Site Login: see [One bot, many accounts](many-accounts.md). The
 [desktop bot guide](desktop-bot.md#4-import-and-approve) shows the output, and
 [Templates](../reference/templates.md#set-it-up-by-hand) the way by hand.
 

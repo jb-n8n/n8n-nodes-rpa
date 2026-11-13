@@ -164,10 +164,21 @@ describe('the browser bot guide', () => {
     for (const text of [
       'openssl rand -hex 32', 'BROWSER_TOKEN', 'docker compose up --build -d', 'docker compose up -d browser', 'http://localhost:5678', 'http://localhost:8025',
       '**Settings → n8n API → Create API key**', SETUP_IN_STACK, 'Connect a Windows machine now?', 'The import form is ready.',
-      '+ → New credential → RPA Site Login', 'Add Option → Allow Private Network', 'docs/samples/sandbox-line-items.steps.json', '**Allow access**',
+      '+ → New credential → RPA Site Login', '--site-login "RPA Site Login account" --allow-private-network', 'Private network: on.', 'docs/samples/sandbox-line-items.steps.json', '**Allow access**',
       'Approved and signed: sandbox-line-items v1 is now the version that runs under that name.', 'sandbox-line-items.workflow.json',
       'packages/n8n-nodes-rpa/templates/hello-world.json', 'docker-compose.dev.yml', 'SKU-1001', 'Private Network Endpoint', TOKEN_REFUSED, 'Mismatching encryption keys',
     ]) expect(doc.browserBot, text).toContain(text);
+  });
+
+  it('makes the Site Login before the setup command, which picks it by the name n8n gives it: no step opens the import workflow', () => {
+    const headings = doc.browserBot.match(/^## \d+\. .+$/gm) ?? [];
+    expect(headings.slice(0, 5)).toEqual([
+      '## 1. Start n8n and the browser', "## 2. Add the sample site's login", '## 3. Set up the import form with one command',
+      '## 4. Import the sample bot and approve it', '## 5. Run it',
+    ]);
+    expect(section(doc.browserBot, "## 2. Add the sample site's login")).toContain('n8n names it **RPA Site Login account**');
+    expect(doc.browserBot).not.toContain('## 4. Give the import form the Site Login');
+    expect(doc.browserBot).not.toContain('Open the workflow **RPA: 5 Import a bot**');
   });
 
   it("runs the setup command where the n8n image installs it, and the first bot needs no chat model and no email server", () => {
@@ -193,7 +204,7 @@ describe('the browser bot guide', () => {
   });
 
   it('sets up the self-repair part as the templates ship it: workflow 3 published first, then 2', () => {
-    const s = section(doc.browserBot, '## 8. Import the two workflows');
+    const s = section(doc.browserBot, '## 7. Import the two workflows');
     expect(s.indexOf('3-approve-steps.json')).toBeLessThan(s.indexOf('2-data-feed.json'));
     for (const text of ['**Publish**', 'Allow Private Network', '**RPA: 3 Approve steps** in **Approve steps**']) expect(s, text).toContain(text);
     expect(doc.browserBot).toContain('`lane: "script"`, `version: 1` and `llmCalls: 0`');

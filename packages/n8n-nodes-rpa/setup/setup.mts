@@ -46,6 +46,8 @@ const FORM = { name: 'RPA import form', type: 'httpBasicAuth', user: 'rpa' };
 const SIGNING = { name: 'RPA Step Signing', type: CREDENTIALS.signing };
 const RUNNER = { name: 'RPA Desktop Runner', type: CREDENTIALS.desktopRunner };
 const BROWSER = { name: 'RPA Browser', type: CREDENTIALS.browser };
+// The names of what this command makes: --site-login names a credential it only picks, never one of these.
+const OWN_NAMES = [FORM.name, SIGNING.name, RUNNER.name, BROWSER.name];
 // The template's nodes that take what this command makes.
 const NODE = { form: 'Import a bot', importSteps: 'Import steps', signSteps: 'Sign steps' };
 const DOCS = 'https://github.com/jb-n8n/n8n-nodes-rpa/blob/main/docs';
@@ -70,6 +72,9 @@ const USAGE = [
   '  --new-form-password    with --form-login basic: give the form a new password and print it (n8n never shows the old one again).',
   '  --browser-url <ws-url> the browser service for browser bots: creates the RPA Browser credential, with the token from',
   '                         RPA_BROWSER_TOKEN, and sets it on Import steps.',
+  '  --site-login <name>    the RPA Site Login of the site your bots open, made in n8n before this runs: picks it by its name',
+  '                         on Import steps and Sign steps. It is never made, read or changed here.',
+  '  --allow-private-network  turn on Allow Private Network on Import steps, for a site on this computer or your network.',
   '  --project-id <id>      the n8n project to work in (default: the API key owner\'s personal project). Only what that',
   '                         project owns is reused.',
   '  --reuse-project-credentials  in a shared project, use the credentials and the workflow of these names found there',
@@ -106,6 +111,9 @@ interface Options {
   replaceSigningKey: boolean;
   newFormPassword: boolean;
   browserUrl?: string;
+  /** The name of an RPA Site Login of the project, picked on Import steps and Sign steps. */
+  siteLogin?: string;
+  allowPrivateNetwork: boolean;
   projectId?: string;
   newWorkflow: boolean;
   reuseProject: boolean;
@@ -120,6 +128,7 @@ function readOptions(argv: string[]): Options | 'help' {
         url: { type: 'string' }, approver: { type: 'string' }, 'form-login': { type: 'string' }, 'allow-http': { type: 'boolean' }, 'show-signing-key': { type: 'boolean' },
         'replace-signing-key': { type: 'boolean' },
         'new-form-password': { type: 'boolean' }, 'browser-url': { type: 'string' }, 'project-id': { type: 'string' },
+        'site-login': { type: 'string' }, 'allow-private-network': { type: 'boolean' },
         'new-workflow': { type: 'boolean' }, 'reuse-project-credentials': { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
       },
       strict: true,
@@ -138,6 +147,12 @@ function readOptions(argv: string[]): Options | 'help' {
   const formLogin = values['form-login'] ?? 'n8n';
   if (formLogin !== 'n8n' && formLogin !== 'basic') throw new Stop("--form-login must be n8n (the default: n8n's own sign-in) or basic (a user name and password).", 2);
   if (values['new-form-password'] && formLogin !== 'basic') throw new Stop("--new-form-password applies only with --form-login basic: with n8n's sign-in the form has no password.", 2);
+  const siteLogin = values['site-login'];
+  // n8n's credential names are 3 to 128 characters. A control character could change what a printed line looks like.
+  if (siteLogin !== undefined && (!siteLogin.trim() || siteLogin.length > 128 || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(siteLogin))) {
+    throw new Stop('--site-login must be the name of an RPA Site Login as n8n shows it, such as "RPA Site Login account".', 2);
+  }
+  if (siteLogin !== undefined && OWN_NAMES.includes(siteLogin)) throw new Stop(`--site-login names a credential this command makes ("${siteLogin}"): give the name of your RPA Site Login.`, 2);
   return {
     url: values.url ?? DEFAULT_URL,
     approver: values.approver,
@@ -147,6 +162,8 @@ function readOptions(argv: string[]): Options | 'help' {
     replaceSigningKey: values['replace-signing-key'] === true,
     newFormPassword: values['new-form-password'] === true,
     browserUrl: values['browser-url'],
+    siteLogin,
+    allowPrivateNetwork: values['allow-private-network'] === true,
     projectId: values['project-id'],
     newWorkflow: values['new-workflow'] === true,
     reuseProject: values['reuse-project-credentials'] === true,
@@ -416,6 +433,16 @@ function sameName(items: any[], spec: { name: string; type: string }, home: stri
   return { mine: ours[0] as any, others };
 }
 
+/**
+ * Why --site-login found nothing to pick, with the RPA Site Logins this run's project has, by name and id (cleaned).
+ * Those of other projects or users were each named in a line of their own already.
+ */
+function noSiteLogin(name: string, items: any[], home: string | undefined): string {
+  const ours = items.filter((c) => c?.type === CREDENTIALS.siteLogin && home !== undefined && ownerProject(c, 'credential') === home);
+  const listed = ours.length ? `Your project's RPA Site Logins: ${ours.map((c) => `"${clean(c.name, c.id)}" (id ${clean(c.id)})`).join(', ')}.` : 'Your project has no RPA Site Login.';
+  return `No RPA Site Login named "${clean(name)}" in your project. ${listed} Create it in n8n (+ → New credential → RPA Site Login), or give its name as n8n shows it. Nothing was changed.`;
+}
+
 /** One line for something of the same name that this run leaves alone. */
 function leftAlone(kind: string, item: any, typeOrNothing: string, home: string | undefined) {
   const owner = ownerProject(item, kind === 'credential' ? 'credential' : 'workflow');
@@ -466,11 +493,14 @@ const formAuthentication = (workflow: any): unknown => workflow?.nodes?.find((n:
 /**
  * The template's nodes, with the approver on the allowlist and an address for each form page; no credentials. With
  * --form-login basic the form asks for Basic Auth (Sign steps then takes Approved By: its Approver follows the form).
+ * With --allow-private-network, Import steps has Options → Allow Private Network on.
  */
-function templateNodes(approver: string, formLogin: Options['formLogin']): Record<string, any>[] {
+function templateNodes(approver: string, formLogin: Options['formLogin'], allowPrivateNetwork: boolean): Record<string, any>[] {
   return loadTemplate().nodes.map((node: Record<string, any>) => {
     const n: Record<string, any> = { ...node, parameters: { ...node.parameters } };
     delete n.credentials;
+    // --allow-private-network: a typed true (Import Steps refuses an expression there).
+    if (n.name === NODE.importSteps && allowPrivateNetwork) n.parameters.options = { ...n.parameters.options, allowPrivateNetwork: true };
     // The form's address is its webhook id: n8n's editor gives one on import, the API does not.
     if (/\.(formTrigger|form)$/.test(n.type) && !n.webhookId) n.webhookId = randomUUID();
     if (n.name === NODE.signSteps) n.parameters.approverAllowlist = approver;
@@ -485,15 +515,19 @@ function templateNodes(approver: string, formLogin: Options['formLogin']): Recor
 /**
  * The nodes with this run's credentials set on the nodes that use them. Import steps also gets the signing key and the
  * desktop runner in its two "only passed on to the workflow file" slots: it never reads them, it copies their id and
- * name into the workflow file the form hands over, so that file needs nothing picked.
+ * name into the workflow file the form hands over, so that file needs nothing picked. The Site Login (--site-login) goes
+ * on Import steps and Sign steps, which both use it.
  */
-function wire(nodes: Record<string, any>[], refs: { form?: Ref; signing: Ref; browser?: Ref; runner?: Ref }) {
+function wire(nodes: Record<string, any>[], refs: { form?: Ref; signing: Ref; browser?: Ref; runner?: Ref; siteLogin?: Ref }) {
+  const site = refs.siteLogin ? { [CREDENTIALS.siteLogin]: refs.siteLogin } : {};
   return nodes.map((node) => {
     const n = { ...node };
     if (n.name === NODE.form && refs.form) n.credentials = { httpBasicAuth: refs.form };
-    if (n.name === NODE.signSteps) n.credentials = { [SIGNING.type]: refs.signing };
+    if (n.name === NODE.signSteps) n.credentials = { [SIGNING.type]: refs.signing, ...site };
     if (n.name === NODE.importSteps) {
-      n.credentials = { ...(refs.browser ? { [BROWSER.type]: refs.browser } : {}), [SIGNING.type]: refs.signing, ...(refs.runner ? { [RUNNER.type]: refs.runner } : {}) };
+      n.credentials = {
+        ...(refs.browser ? { [BROWSER.type]: refs.browser } : {}), ...site, [SIGNING.type]: refs.signing, ...(refs.runner ? { [RUNNER.type]: refs.runner } : {}),
+      };
     }
     return n;
   });
@@ -611,9 +645,14 @@ async function run(inputs: Inputs): Promise<number> {
   }
 
   // The credentials found in the project, by name (the browser's too without --browser-url: a reused workflow may use it).
-  const specs = [...(basic ? [FORM] : []), SIGNING, ...(inputs.line ? [RUNNER] : []), BROWSER];
+  // The Site Login (--site-login) is found the same way, and only picked: it must be there.
+  const SITE = options.siteLogin !== undefined ? { name: options.siteLogin, type: CREDENTIALS.siteLogin } : undefined;
+  const specs = [...(basic ? [FORM] : []), SIGNING, ...(inputs.line ? [RUNNER] : []), BROWSER, ...(SITE ? [SITE] : [])];
   let found = new Map<string, { mine?: any; others: any[] }>();
-  const findAll = () => { found = new Map(specs.map((spec) => [spec.name, sameName(list.items, spec, home)])); };
+  const findAll = () => {
+    found = new Map(specs.map((spec) => [spec.name, sameName(list.items, spec, home)]));
+    if (SITE && !found.get(SITE.name)?.mine) throw new Stop(noSiteLogin(SITE.name, list.items, home), 2);
+  };
   if (home) findAll();
 
   // In a shared project, one answer for what was found there, as a set: all of it is used, or none of it.
@@ -671,7 +710,7 @@ async function run(inputs: Inputs): Promise<number> {
       const taken = new Set(workflows.items.map((w) => w?.name));
       workflowName = taken.has(`${WORKFLOW_NAME} (${date})`) ? `${WORKFLOW_NAME} (${date} ${new Date().toISOString().slice(11, 16).replace(':', '-')})` : `${WORKFLOW_NAME} (${date})`;
     }
-    nodes = templateNodes(approver as string, options.formLogin);
+    nodes = templateNodes(approver as string, options.formLogin, options.allowPrivateNetwork);
     if (!home) {
       made = await createWorkflow(client, workflowName, nodes, projectId);
       halfMade = { client, id: String(made.id) };
@@ -680,6 +719,7 @@ async function run(inputs: Inputs): Promise<number> {
       // Made without a projectId, so n8n put it in the key owner's personal project: nothing to ask about there.
       if (home) setProject(ownerEntryProject(r.json), home, inputs.userId, !projectId);
       if (!home) say('Note: n8n does not say which project owns the new workflow, so no credential of the same name is reused: fresh ones are made.');
+      if (!home && SITE) throw new Stop(`--site-login: n8n does not say which project owns the new workflow, so this run cannot tell that "${clean(SITE.name)}" is yours. Pick it on "${NODE.importSteps}" and "${NODE.signSteps}" in n8n instead.`);
       findAll();
       if (shared.is && !(await useFound([...found].filter(([, f]) => f.mine).map(([name, f]) => ({ kind: 'credential', name, id: String(f.mine.id) }))))) {
         for (const f of found.values()) { if (f.mine) f.others.push(f.mine); f.mine = undefined; }
@@ -727,6 +767,10 @@ async function run(inputs: Inputs): Promise<number> {
   } else if (of(BROWSER).mine) {
     browserRef = { id: String(of(BROWSER).mine.id), name: BROWSER.name };
   }
+  // The Site Login is only picked: by id and name, never its values. In a shared project whose set was not used, it is not.
+  const siteMine = SITE ? of(SITE).mine : undefined;
+  const siteRef: Ref | undefined = SITE && siteMine ? { id: String(siteMine.id), name: SITE.name } : undefined;
+  if (SITE && !siteRef) say(`not used credential "${clean(SITE.name)}": this run does not use what it found in the shared project, so no Site Login is set. Pick one on "${NODE.importSteps}" and "${NODE.signSteps}" in n8n.`);
 
   if (workflow) {
     say(`reused   workflow "${clean(workflow.name, workflow.id)}" (id ${clean(workflow.id)}): it matches the template${workflow.active ? '' : ', publishing it'}`);
@@ -734,8 +778,17 @@ async function run(inputs: Inputs): Promise<number> {
     const onImport = workflow.nodes.find((n: any) => n.name === NODE.importSteps)?.credentials ?? {};
     const toPick = [inputs.browser && !onImport[BROWSER.type] ? BROWSER.name : '', !onImport[SIGNING.type] ? SIGNING.name : '', runnerRef && !onImport[RUNNER.type] ? RUNNER.name : ''].filter(Boolean);
     if (toPick.length) say(`         its credentials were left as they are: pick ${toPick.map((c) => `"${c}"`).join(', ')} on "${NODE.importSteps}" in n8n, so the workflow file the form hands over carries them.`);
+    // --site-login and --allow-private-network change a workflow only when this run makes it: one it reuses is left as it is.
+    const onSign = workflow.nodes.find((n: any) => n.name === NODE.signSteps)?.credentials ?? {};
+    const siteOn = (creds: any) => siteRef !== undefined && String(creds?.[CREDENTIALS.siteLogin]?.id) === siteRef.id;
+    const wouldSet = [
+      siteRef && !(siteOn(onImport) && siteOn(onSign)) ? `pick "${clean(siteRef.name)}" (id ${clean(siteRef.id)}) on "${NODE.importSteps}" and "${NODE.signSteps}"` : '',
+      options.allowPrivateNetwork && workflow.nodes.find((n: any) => n.name === NODE.importSteps)?.parameters?.options?.allowPrivateNetwork !== true
+        ? `turn on Options → Allow Private Network on "${NODE.importSteps}"` : '',
+    ].filter(Boolean);
+    if (wouldSet.length) say(`         it was left as it is, without what you asked for: in n8n, ${wouldSet.join(', and ')}, then publish it again.`);
   } else {
-    const wired = wire(nodes as Record<string, any>[], { form: formRef, signing: signing.ref, browser: browserRef, runner: runnerRef });
+    const wired = wire(nodes as Record<string, any>[], { form: formRef, signing: signing.ref, browser: browserRef, runner: runnerRef, siteLogin: siteRef });
     if (made) {
       const r = await client.api('PUT', `/workflows/${encodeURIComponent(String(made.id))}`, { name: workflowName, nodes: wired, connections: made.connections, settings: made.settings ?? { executionOrder: 'v1' } });
       if (r.status !== 200 || !r.json?.id) throw new Stop(`Could not set the credentials on the workflow "${workflowName}" (id ${clean(made.id)}) (${client.reason(r)}). It is not published.`);
@@ -746,6 +799,7 @@ async function run(inputs: Inputs): Promise<number> {
     }
     workflow = workflow as Record<string, any>;
     say(`created  workflow "${workflowName}" (id ${clean(workflow.id)}), approver ${approver}`);
+    if (siteRef) say(`         with the Site Login "${clean(siteRef.name)}" (id ${clean(siteRef.id)}) on "${NODE.importSteps}" and "${NODE.signSteps}"`);
     const same = named.filter((w) => w.name === workflowName);
     if (same.length) say(`         n8n now has more than one workflow named "${workflowName}": this run's is id ${clean(workflow.id)}.`);
   }
@@ -786,6 +840,8 @@ async function run(inputs: Inputs): Promise<number> {
   } else {
     say('  Sign-in:    the form opens with your n8n sign-in. Who approves is recorded as the n8n user who approved.');
   }
+  const privateOn = workflow.nodes.find((n: any) => n.name === NODE.importSteps)?.parameters?.options?.allowPrivateNetwork === true;
+  if (options.allowPrivateNetwork && privateOn) say('  Private network: on. Imports may open sites on this computer or your own network, and the workflow the form hands over has it on too.');
   if (showKey && signingKey) reveal(`  Signing key: `, signingKey, '   (shown once: keep a copy where you keep recovery secrets)');
   // Made earlier: bots may be approved with it by now, so a new key is no way to keep a copy.
   else if (signingKey === undefined) say('  Signing key: made earlier and kept in n8n, which does not show it again. A new key (--replace-signing-key) stops every bot signed with this one until it is approved again.');

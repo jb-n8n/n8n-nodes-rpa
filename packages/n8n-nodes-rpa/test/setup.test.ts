@@ -510,6 +510,125 @@ describe('npx n8n-nodes-rpa setup', () => {
     expect(noToken.out).toMatch(/RPA_BROWSER_TOKEN/);
   });
 
+  describe('--site-login and --allow-private-network', () => {
+    const SITE_PASSWORD = 'site-password-0123456789-abcdefghij';
+    const site = (id: string, name: string, projectId = HOME): Cred => ({
+      id, name, type: 'playwrightSiteLoginApi', projectId, data: { loginUrl: 'http://sandbox:8080/acme/login', username: 'summit-ops', password: SITE_PASSWORD, totpSecret: 'JBSWY3DPEHPK3PXP' },
+    });
+    const MINE = site('c-site', 'RPA Site Login account');
+    // A workflow of another name in the owner's project tells this run its project before anything is made.
+    const OWN_WORK: Wf = { id: 'w-own', name: 'Own work', active: false, versionId: 'v', nodes: [], connections: {}, settings: {} };
+    const siteArgs = ['--site-login', 'RPA Site Login account', '--allow-private-network'];
+    const node = (wf: Wf, name: string) => wf.nodes.find((n) => n.name === name);
+    /** Every request this run sent and every line it printed: the Site Login's values are in none of them. */
+    const expectSiteUntouched = (fake: Fake, out: string) => {
+      for (const v of [SITE_PASSWORD, 'summit-ops', 'JBSWY3DPEHPK3PXP']) expect(out).not.toContain(v);
+      expect(fake.state.requests.filter((r) => r.path.includes('c-site'))).toEqual([]);
+      for (const r of fake.state.requests) expect(r.body).not.toContain(SITE_PASSWORD);
+      expect(fake.state.credentials.find((c) => c.id === 'c-site')).toEqual({ ...MINE });
+    };
+
+    it('picks the existing Site Login by name on Import steps and Sign steps, and turns Allow Private Network on, typed', async () => {
+      const other = site('c-other', 'RPA Site Login account', 'P-other');
+      const fake = await n8n({ credentials: [MINE, other] });
+      const { code, out, stdout } = await run(setup(fake.url, '--browser-url', 'ws://browser:3000/', ...siteArgs), { ...ENV, RPA_BROWSER_TOKEN: BROWSER_TOKEN });
+      expect(code, out).toBe(0);
+      const wf = fake.state.workflows.find((w) => w.name === 'RPA: 5 Import a bot')!;
+      const ref = { id: 'c-site', name: 'RPA Site Login account' };
+      expect(node(wf, 'Import steps').credentials.playwrightSiteLoginApi).toEqual(ref);
+      expect(node(wf, 'Sign steps').credentials.playwrightSiteLoginApi).toEqual(ref);
+      expect(node(wf, 'Import steps').parameters.options).toEqual({ allowPrivateNetwork: true });
+      // Never one of another user or project, never made.
+      expect(stdout).toContain('left alone credential "RPA Site Login account" (playwrightSiteLoginApi, id c-other): it belongs to another project or user, so it is not used');
+      expect(fake.state.credentials.filter((c) => c.type === 'playwrightSiteLoginApi')).toHaveLength(2);
+      expect(stdout).toContain('with the Site Login "RPA Site Login account" (id c-site) on "Import steps" and "Sign steps"');
+      expect(stdout).toContain('  Private network: on. Imports may open sites on this computer or your own network, and the workflow the form hands over has it on too.');
+      expectSiteUntouched(fake, out);
+      expectNoSecrets(out);
+
+      // Without the flags nothing of this is set.
+      const plain = await n8n({ credentials: [MINE] });
+      const p = await run(setup(plain.url), ENV);
+      expect(p.code, p.out).toBe(0);
+      const pwf = plain.state.workflows[0];
+      expect(node(pwf, 'Import steps').credentials).not.toHaveProperty('playwrightSiteLoginApi');
+      expect(node(pwf, 'Sign steps').credentials).not.toHaveProperty('playwrightSiteLoginApi');
+      expect(node(pwf, 'Import steps').parameters.options).toEqual({});
+      expect(p.stdout).not.toContain('Private network');
+    });
+
+    it('a name that matches none, or more than one, in the project stops before anything is changed, listing what it found', async () => {
+      const none = await n8n({ credentials: [site('c-a', 'Acme portal'), site('c-x', 'RPA Site Login account', 'P-other')], workflows: [OWN_WORK] });
+      const r = await run(setup(none.url, ...siteArgs), ENV);
+      expect(r.code, r.out).toBe(2);
+      expect(r.out).toContain('No RPA Site Login named "RPA Site Login account" in your project. Your project\'s RPA Site Logins: "Acme portal" (id c-a). Create it in n8n (+ → New credential → RPA Site Login), or give its name as n8n shows it. Nothing was changed.');
+      expect(r.out).toContain('left alone credential "RPA Site Login account" (playwrightSiteLoginApi, id c-x): it belongs to another project or user');
+      expect(none.posts()).toEqual([]);
+      const empty = await n8n({ workflows: [OWN_WORK] });
+      expect((await run(setup(empty.url, ...siteArgs), ENV)).out).toContain('Your project has no RPA Site Login.');
+      expect(empty.posts()).toEqual([]);
+      // Learned from the workflow it makes: that one is removed again.
+      const late = await n8n();
+      expect((await run(setup(late.url, ...siteArgs), ENV)).code).toBe(2);
+      expect(late.state.workflows).toEqual([]);
+      expect(late.state.credentials).toEqual([]);
+
+      const two = await n8n({ credentials: [MINE, site('c-site2', 'RPA Site Login account')], workflows: [OWN_WORK] });
+      const t = await run(setup(two.url, ...siteArgs), ENV);
+      expect(t.code, t.out).toBe(1);
+      expect(t.out).toContain('Your project has 2 credentials named "RPA Site Login account" (ids c-site, c-site2), and this command cannot tell which one is meant.');
+      expect(two.posts()).toEqual([]);
+      expectSiteUntouched(two, r.out + t.out);
+      // Not a name, or the name of a credential this command makes.
+      for (const bad of [' ', 'RPA Step Signing', 'a\u001b[2Jb', 'x'.repeat(129)]) {
+        const b = await run(setup(empty.url, '--site-login', bad), ENV);
+        expect(b.code, bad).toBe(2);
+        expect(b.out).toMatch(/--site-login/);
+      }
+    });
+
+    it('in a shared project the one question covers it: without a terminal or the flag it is not set', async () => {
+      const TEAM_SITE = site('c-tsite', 'RPA Site Login account', 'P-team');
+      const TEAM_WORK: Wf = { id: 'w-team-other', name: 'Team work', active: false, versionId: 'v', nodes: [], connections: {}, settings: {}, projectId: 'P-team' };
+      const no = await n8n({ credentials: [TEAM_SITE], workflows: [TEAM_WORK] });
+      const r = await run(setup(no.url, '--project-id', 'P-team', ...siteArgs), ENV);
+      expect(r.code, r.out).toBe(0);
+      expect(r.out).toMatch(/Found in the shared project "Ops" \(id P-team\):\n {2}credential "RPA Site Login account" \(id c-tsite\)\n/);
+      expect(r.out).toContain('not used credential "RPA Site Login account": this run does not use what it found in the shared project, so no Site Login is set. Pick one on "Import steps" and "Sign steps" in n8n.');
+      const made = no.state.workflows.find((w) => w.name === 'RPA: 5 Import a bot')!;
+      expect(node(made, 'Import steps').credentials).not.toHaveProperty('playwrightSiteLoginApi');
+      const yes = await n8n({ credentials: [TEAM_SITE], workflows: [TEAM_WORK] });
+      const y = await run(setup(yes.url, '--project-id', 'P-team', '--reuse-project-credentials', ...siteArgs), ENV);
+      expect(y.code, y.out).toBe(0);
+      const wf = yes.state.workflows.find((w) => w.name === 'RPA: 5 Import a bot')!;
+      expect(node(wf, 'Sign steps').credentials.playwrightSiteLoginApi).toEqual({ id: 'c-tsite', name: 'RPA Site Login account' });
+    });
+
+    it('a workflow that is there already is left as it is: it says what it would have set', async () => {
+      const fake = await n8n({ credentials: [MINE] });
+      expect((await run(setup(fake.url), ENV)).code).toBe(0);
+      const before = JSON.stringify(fake.state.workflows);
+      const puts = () => fake.state.requests.filter((x) => x.method === 'PUT').length;
+      const putsBefore = puts();
+      const r = await run(setup(fake.url, ...siteArgs), ENV);
+      expect(r.code, r.out).toBe(0);
+      expect(r.stdout).toMatch(/reused +workflow "RPA: 5 Import a bot"/);
+      expect(r.stdout).toContain('         it was left as it is, without what you asked for: in n8n, pick "RPA Site Login account" (id c-site) on "Import steps" and "Sign steps", and turn on Options → Allow Private Network on "Import steps", then publish it again.');
+      expect(r.stdout).not.toContain('Private network: on');
+      expect(JSON.stringify(fake.state.workflows)).toBe(before);
+      expect(puts()).toBe(putsBefore);
+      // Once set by hand in n8n, a run with the same flags has nothing to say about them.
+      const wf = fake.state.workflows[0];
+      for (const n of ['Import steps', 'Sign steps']) node(wf, n).credentials.playwrightSiteLoginApi = { id: 'c-site', name: 'RPA Site Login account' };
+      node(wf, 'Import steps').parameters.options = { allowPrivateNetwork: true };
+      const again = await run(setup(fake.url, ...siteArgs), ENV);
+      expect(again.code, again.out).toBe(0);
+      expect(again.stdout).not.toContain('without what you asked for');
+      expect(again.stdout).toContain('Private network: on.');
+      expectSiteUntouched(fake, r.out + again.out);
+    });
+  });
+
   it('redacts every secret when n8n echoes a request: a credential body, a workflow on a failed publish', async () => {
     const echo = await n8n({ echo: 'credentials' });
     const failed = await run(basicSetup(echo.url), { ...ENV, RPA_CONNECTION_LINE: LINE });
@@ -791,7 +910,7 @@ describe('npx n8n-nodes-rpa setup', () => {
   it('prints its usage, and names the command', async () => {
     const help = await run(['--help']);
     expect(help.code).toBe(0);
-    for (const flag of ['--url', '--approver', '--form-login', '--allow-http', '--show-signing-key', '--replace-signing-key', '--new-form-password', '--browser-url', 'N8N_API_KEY', 'RPA_CONNECTION_LINE']) expect(help.out).toContain(flag);
+    for (const flag of ['--url', '--approver', '--form-login', '--allow-http', '--show-signing-key', '--replace-signing-key', '--new-form-password', '--browser-url', '--site-login', '--allow-private-network', 'N8N_API_KEY', 'RPA_CONNECTION_LINE']) expect(help.out).toContain(flag);
     expect((await run([])).code).toBe(2);
   });
 });

@@ -100,7 +100,7 @@ The same flow on the other report-screen releases (set them on `/admin` under **
 
 ### 3.4 First automation from a plain-English goal (AI build) (not walked)
 
-Use the data feed templates as in the [browser bot guide](../guides/browser-bot.md#8-import-the-two-workflows):
+Use the data feed templates as in the [browser bot guide](../guides/browser-bot.md#7-import-the-two-workflows):
 - Pick the SAP Site Login on **Run steps** and **Sign steps**.
 - Write a Goal such as "Open Line Item Report, run company code 1000 for 01.09.2026 to 30.09.2026, and read the document numbers in the list".
 - Set **ID Pattern** `19\d{8}`, and clear **Stated Total Pattern**, because the ALV states no "Showing … of N" total.
