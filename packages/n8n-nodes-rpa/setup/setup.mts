@@ -321,7 +321,6 @@ async function readInputs(options: Options, env: NodeJS.ProcessEnv): Promise<Inp
   if ('command' in way) {
     say("Setting up n8n for RPA through n8n's own command line: no API key is needed.");
     say(`  Why this way: no API key was given, the command n8n is here, and it works on the database of the n8n that runs here (${way.database}).`);
-    if (way.postgres) say("  Note: the way through n8n's command line was tried with n8n's default database (SQLite) only. This n8n uses Postgres.");
   } else if (options.noApiKey) {
     throw new Stop(`--no-api-key: n8n's command line cannot be used here: ${way.why}. ${CLI_HOW} Nothing was changed.`, 2);
   } else {
