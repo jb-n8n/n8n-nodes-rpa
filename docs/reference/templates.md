@@ -29,7 +29,9 @@ first, before anything reads or writes them.
   and copy, with one box that is empty to start with. **Compared with the approved version** takes the steps to
   review: with the box left empty, the active row's steps as **The bot to change** read them from the table (they never
   pass through the browser); with text in the box, that text. It also gives the review page its first line: unchanged,
-  or which steps differ. **Review** sends those steps to **Import steps** as a step document, then to the same review
+  or which steps differ and how: for each changed step, at most three, its number and its changed values, old → new
+  (`step 6: value "2026-09-15" → "2026-09-30"`), each on one line and cut at 60 characters, `several fields` for a
+  step with more than three, then the other steps by number. **Review** sends those steps to **Import steps** as a step document, then to the same review
   page and **Sign steps**. Text that is not a step document ends on **Import failed**, which says the old version keeps
   running.
   The steps get the next version: **Import steps → Options → Version** is one more than the highest version any row
@@ -60,7 +62,7 @@ first, before anything reads or writes them.
   the name of an approved bot it replaces what runs: the review page says `version 5, replacing version 4`, the
   part of each step list that has a running version says how it differs from that version (**Compared with the
   running version**, the change path's comparison, for each list: `<name>: changed from the approved version 4: step
-  6.`, or `unchanged`, or that it could not be compared; a new list says nothing; which desktop steps are writes is
+  6: value "2026-09-15" → "2026-09-30".`, or `unchanged`, or that it could not be compared; a new list says nothing; which desktop steps are writes is
   chosen again on the review page, so that mark is not compared, and the line says so), and
   the last page `Approved and signed: <name> version 5 is now the version that runs, replacing version 4.` or
   `Rejected: <name> version 5. Nothing was signed. Version 4 keeps running.` After a change or a re-sign it says
