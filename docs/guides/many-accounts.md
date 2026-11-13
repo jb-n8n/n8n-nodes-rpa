@@ -71,8 +71,7 @@ The sample site of [Your first browser bot](browser-bot.md) has three accounts: 
 The login breaker and the run lock are kept per account: the Site Login and the user name, without case or spaces.
 
 - A wrong password fails that item `login_failed` and opens that account's breaker. The other items run as usual.
-- Later runs skip that account with `locked_out`. Correct its password in your data, where it lives here (the
-  `guidance` says the Site Login), and the next run tries once. If the password was right, or the account is unlocked
+- Later runs skip that account with `locked_out`. Correct its password in your data, and the next run tries once. If the password was right, or the account is unlocked
   now (`account_locked`), type a new **Options → Login Breaker Reset Key**: it reopens every account of this Site Login.
 - Two runs of the same account at the same time: the second fails `busy`. Different accounts may run at the same time.
 - A breaker from version 0.2.0 or earlier stops every account until you type a new reset key
