@@ -1,12 +1,13 @@
-// `npx n8n-nodes-rpa setup`: sets an n8n up for importing a first bot, through n8n's public API. It creates the import
-// form's login, the RPA Step Signing credential and (with a Connection Line) the RPA Desktop Runner credential, imports
-// "RPA: 5 Import a bot" with those set and the approver on the allowlist, and publishes it. Node 22+, no dependencies:
+// `npx n8n-nodes-rpa setup`: sets an n8n up for importing a first bot, through n8n's public API. It creates the RPA Step
+// Signing credential and (with a Connection Line) the RPA Desktop Runner credential, imports "RPA: 5 Import a bot" with
+// those set and the approver on the allowlist, and publishes it. The form opens with n8n's own sign-in; with
+// --form-login basic it gets a Basic Auth login (a credential made here) instead. Node 22+, no dependencies:
 // scripts/build-setup.mjs bundles this file, setup/n8n-api.mjs and the Connection Line parser of the node into
 // dist/setup.mjs, the package's bin.
 //
 // Secrets: the API key and the Connection Line come from the environment or a prompt that does not echo, never from a
 // flag. Every line printed passes through the redactor, which knows every secret (also a server error that echoes a
-// request). The form's password is printed once, on the line that shows it; the signing key only with
+// request). The form's password (--form-login basic) is printed once, on the line that shows it; the signing key only with
 // --show-signing-key on the run that makes it. Nothing is written to a file.
 //
 // Ownership: it works in one project, the API key owner's personal project or the one --project-id names, and reuses only
@@ -54,16 +55,19 @@ const WHERE_KEYS = 'Make an API key in n8n: Settings → n8n API → Create an A
 const USAGE = [
   'Usage: npx n8n-nodes-rpa setup [--url <n8n address>] [--approver <email>] [options]',
   '',
-  'Sets up n8n for importing a bot: the import form and its login, the RPA Step Signing credential, and the workflow',
-  `"${WORKFLOW_NAME}", published. Run it again at any time: it reuses what is there.`,
+  'Sets up n8n for importing a bot: the import form, which opens with your n8n sign-in, the RPA Step Signing credential,',
+  `and the workflow "${WORKFLOW_NAME}", published. Run it again at any time: it reuses what is there.`,
   '',
   `  --url <address>        n8n's address (default ${DEFAULT_URL}). http:// only on this machine.`,
-  '  --approver <email>     your email address: it goes into the Approver Allowlist of Sign steps.',
+  '  --approver <email>     the n8n address of the person who approves: it goes into the Approver Allowlist of Sign steps.',
+  "                         Default: the API key owner's address, when n8n tells it; else it asks.",
+  "  --form-login basic     give the form a user name and password (Basic Auth) instead of n8n's sign-in, for approvers",
+  '                         without an n8n account. The approver is then the address on the allowlist.',
   '  --allow-http           allow http:// to another machine (the API key then crosses the network unencrypted).',
   '  --show-signing-key     print the signing key when this run makes it (n8n never gives a stored key back).',
   '  --replace-signing-key  make a new signing key and print it. Every bot signed with the old key must be approved again:',
   '                         it asks you to type REPLACE, at a terminal only.',
-  '  --new-form-password    give the form a new password and print it (n8n never shows the old one again).',
+  '  --new-form-password    with --form-login basic: give the form a new password and print it (n8n never shows the old one again).',
   '  --browser-url <ws-url> the browser service for browser bots: creates the RPA Browser credential, with the token from',
   '                         RPA_BROWSER_TOKEN, and sets it on Import steps.',
   '  --project-id <id>      the n8n project to work in (default: the API key owner\'s personal project). Only what that',
@@ -95,6 +99,8 @@ class Stop extends Error {
 interface Options {
   url: string;
   approver?: string;
+  /** How the form signs people in: n8n's own sign-in (the default), or a Basic Auth credential made here. */
+  formLogin: 'n8n' | 'basic';
   allowHttp: boolean;
   showSigningKey: boolean;
   replaceSigningKey: boolean;
@@ -111,7 +117,7 @@ function readOptions(argv: string[]): Options | 'help' {
     parsed = parseArgs({
       args: argv,
       options: {
-        url: { type: 'string' }, approver: { type: 'string' }, 'allow-http': { type: 'boolean' }, 'show-signing-key': { type: 'boolean' },
+        url: { type: 'string' }, approver: { type: 'string' }, 'form-login': { type: 'string' }, 'allow-http': { type: 'boolean' }, 'show-signing-key': { type: 'boolean' },
         'replace-signing-key': { type: 'boolean' },
         'new-form-password': { type: 'boolean' }, 'browser-url': { type: 'string' }, 'project-id': { type: 'string' },
         'new-workflow': { type: 'boolean' }, 'reuse-project-credentials': { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
@@ -129,9 +135,13 @@ function readOptions(argv: string[]): Options | 'help' {
   if (positionals.length !== 1 || positionals[0] !== 'setup') {
     throw new Stop(`${positionals.length ? 'Unknown command.' : 'Say what to do: setup.'}\n\n${USAGE}`, 2);
   }
+  const formLogin = values['form-login'] ?? 'n8n';
+  if (formLogin !== 'n8n' && formLogin !== 'basic') throw new Stop("--form-login must be n8n (the default: n8n's own sign-in) or basic (a user name and password).", 2);
+  if (values['new-form-password'] && formLogin !== 'basic') throw new Stop("--new-form-password applies only with --form-login basic: with n8n's sign-in the form has no password.", 2);
   return {
     url: values.url ?? DEFAULT_URL,
     approver: values.approver,
+    formLogin,
     allowHttp: values['allow-http'] === true,
     showSigningKey: values['show-signing-key'] === true,
     replaceSigningKey: values['replace-signing-key'] === true,
@@ -198,6 +208,8 @@ interface Inputs {
   client: Client;
   /** The API key owner's user id, from the key itself; undefined when the key does not say. */
   userId?: string;
+  /** When the API key expires (seconds since 1970), from the key itself: null when it never does, undefined when the key does not say. */
+  keyExpires?: number | null;
   line?: string;
   browser?: { href: string; token: string };
 }
@@ -248,22 +260,45 @@ async function readInputs(options: Options, env: NodeJS.ProcessEnv): Promise<Inp
       throw new Stop(`${(err as Error).message} Nothing was sent to n8n.`, 2);
     }
   }
-  return { options, origin: n8n.origin, plaintext: n8n.plaintext, client: createClient({ base: n8n.base, apiKey, redact }), userId: keyUserId(apiKey), line, browser };
+  const claims = keyClaims(apiKey);
+  return { options, origin: n8n.origin, plaintext: n8n.plaintext, client: createClient({ base: n8n.base, apiKey, redact }), ...claims, line, browser };
 }
 
 /**
- * The user an n8n API key belongs to: n8n 2.x keys are JWTs whose subject is the user's id. Read without checking the
- * signature (n8n checks it on every call); undefined for a key of any other form.
+ * What an n8n API key says about itself: n8n 2.x keys are JWTs whose subject is the user's id, with an expiry (exp) when
+ * the key was given one (PublicApiKeyService.generateApiKey). Read without checking the signature (n8n checks it on every
+ * call); nothing for a key of any other form. Its scopes are kept in n8n, not in the key.
  */
-function keyUserId(apiKey: string): string | undefined {
+function keyClaims(apiKey: string): { userId?: string; keyExpires?: number | null } {
   const parts = apiKey.split('.');
-  if (parts.length !== 3) return undefined;
+  if (parts.length !== 3) return {};
   try {
-    const sub = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'))?.sub;
-    return typeof sub === 'string' && sub ? sub : undefined;
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+    const sub = payload?.sub;
+    const exp = payload?.exp;
+    return { userId: typeof sub === 'string' && sub ? sub : undefined, keyExpires: typeof exp === 'number' && Number.isFinite(exp) ? exp : null };
   } catch {
-    return undefined;
+    return {};
   }
+}
+
+/** The API key owner's email, when n8n tells it (GET /users/{id}: the owner or an admin); undefined otherwise. */
+async function keyOwnerEmail(client: Client, userId: string | undefined): Promise<string | undefined> {
+  if (!userId) return undefined;
+  const r = await client.api('GET', `/users/${encodeURIComponent(userId)}`).catch(() => undefined);
+  const email = r?.status === 200 ? r.json?.email : undefined;
+  // Only a plain address: one with a control character (it could change what a printed line looks like) is not used.
+  return typeof email === 'string' && EMAIL.test(email) && clean(email, '') === email ? email : undefined;
+}
+
+/** One line about the API key, at the end of a run: what it can do, when it expires (never the key). */
+function keyAdvice(keyExpires: number | null | undefined): string {
+  const can = 'The API key you gave can do everything its owner can in n8n, within its scopes';
+  const where = 'in n8n (Settings → n8n API) when the setup is done';
+  if (typeof keyExpires === 'number') return `${can}, until ${new Date(keyExpires * 1000).toISOString().slice(0, 16).replace('T', ' ')} UTC. Delete it ${where}.`;
+  // n8n sets a key's expiry only when the key is made: a key without one is deleted, or the next one made with one.
+  if (keyExpires === null) return `${can}, and it never expires. Delete it ${where}, or make the next one with an expiry.`;
+  return `${can}. Delete it ${where}, or make the next one with an expiry.`;
 }
 
 /** The project that owns a list item: its one shared entry with the owner role, or undefined when n8n does not say. */
@@ -301,7 +336,7 @@ const ownerEntryProject = (json: any) => (Array.isArray(json?.shared) ? json.sha
  * Whether this run's project is shared, and what to call it. Only the API key owner's own personal project is not
  * shared; a team project, someone else's personal project, or a project whose type n8n does not tell, is.
  */
-const shared = { is: false, label: '', reuse: false, announced: false };
+const shared = { is: false, label: '', reuse: false, announced: false, basic: false };
 function setProject(project: any, id: string, userId: string | undefined, callersOwn = false) {
   // callersOwn: the project n8n put a workflow in that this key made without a projectId, which is the key owner's own.
   const mine = callersOwn || (userId !== undefined && project?.creatorId === userId);
@@ -310,7 +345,9 @@ function setProject(project: any, id: string, userId: string | undefined, caller
   shared.label = name ? `"${name}" (id ${clean(id)})` : `id ${clean(id)}`;
   if (shared.is && !shared.announced) {
     shared.announced = true;
-    say(`The project ${shared.label} is shared: everyone in it can use the form's login and the signing key this command sets up there. A personal project keeps them to one person.`);
+    say(shared.basic
+      ? `The project ${shared.label} is shared: everyone in it can use the form's login and the signing key this command sets up there. A personal project keeps them to one person.`
+      : `The project ${shared.label} is shared: everyone in it who may run its workflows can open the form, and use the signing key this command sets up there. A personal project keeps them to one person.`);
   }
 }
 
@@ -421,14 +458,26 @@ function loadTemplate() {
   return t;
 }
 
-/** The template's nodes, with the approver on the allowlist and an address for each form page; no credentials. */
-function templateNodes(approver: string): Record<string, any>[] {
+/** The form trigger's Authentication for each --form-login. */
+const FORM_AUTH = { n8n: 'n8nUserAuth', basic: 'basicAuth' } as const;
+/** How a workflow's form signs people in: its trigger's Authentication (a form saved without one has none). */
+const formAuthentication = (workflow: any): unknown => workflow?.nodes?.find((n: any) => n?.name === NODE.form)?.parameters?.authentication;
+
+/**
+ * The template's nodes, with the approver on the allowlist and an address for each form page; no credentials. With
+ * --form-login basic the form asks for Basic Auth (Sign steps then takes Approved By: its Approver follows the form).
+ */
+function templateNodes(approver: string, formLogin: Options['formLogin']): Record<string, any>[] {
   return loadTemplate().nodes.map((node: Record<string, any>) => {
     const n: Record<string, any> = { ...node, parameters: { ...node.parameters } };
     delete n.credentials;
     // The form's address is its webhook id: n8n's editor gives one on import, the API does not.
     if (/\.(formTrigger|form)$/.test(n.type) && !n.webhookId) n.webhookId = randomUUID();
     if (n.name === NODE.signSteps) n.parameters.approverAllowlist = approver;
+    if (n.name === NODE.form && formLogin === 'basic') {
+      delete n.parameters.requireExecuteAccess;
+      n.parameters.authentication = FORM_AUTH.basic;
+    }
     return n;
   });
 }
@@ -438,10 +487,10 @@ function templateNodes(approver: string): Record<string, any>[] {
  * desktop runner in its two "only passed on to the workflow file" slots: it never reads them, it copies their id and
  * name into the workflow file the form hands over, so that file needs nothing picked.
  */
-function wire(nodes: Record<string, any>[], refs: { form: Ref; signing: Ref; browser?: Ref; runner?: Ref }) {
+function wire(nodes: Record<string, any>[], refs: { form?: Ref; signing: Ref; browser?: Ref; runner?: Ref }) {
   return nodes.map((node) => {
     const n = { ...node };
-    if (n.name === NODE.form) n.credentials = { httpBasicAuth: refs.form };
+    if (n.name === NODE.form && refs.form) n.credentials = { httpBasicAuth: refs.form };
     if (n.name === NODE.signSteps) n.credentials = { [SIGNING.type]: refs.signing };
     if (n.name === NODE.importSteps) {
       n.credentials = { ...(refs.browser ? { [BROWSER.type]: refs.browser } : {}), [SIGNING.type]: refs.signing, ...(refs.runner ? { [RUNNER.type]: refs.runner } : {}) };
@@ -498,6 +547,8 @@ async function confirmReplace() {
 
 async function run(inputs: Inputs): Promise<number> {
   const { client, options, origin } = inputs;
+  const basic = options.formLogin === 'basic';
+  shared.basic = basic;
   if (inputs.plaintext) {
     warn('WARNING: --allow-http: the API key crosses the network unencrypted.');
   }
@@ -532,16 +583,27 @@ async function run(inputs: Inputs): Promise<number> {
   const reportOthers = () => { for (const w of named.filter((x) => !ours.includes(x))) leftAlone('workflow', w, '', home); };
   let workflow: Record<string, any> | undefined;
   let differs: { id: string; name: string; why: string } | undefined;
+  // One that matches the template but signs people in another way (Basic Auth or n8n's sign-in) is not used.
+  let otherLogin: Record<string, any> | undefined;
   for (const w of [...ours].sort((a, b) => String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? '')))) {
     const r = await client.api('GET', `/workflows/${encodeURIComponent(String(w.id))}`);
     if (r.status !== 200 || !Array.isArray(r.json?.nodes)) throw new Stop(`Could not read the workflow "${clean(w.name, w.id)}" (${client.reason(r)}).`);
     // Read again, from the workflow itself: it is used only when it still belongs to this project.
     const why = ownerProject(r.json, 'workflow') !== home ? 'n8n does not say it belongs to your project' : templateDifference(r.json, list.items, home as string);
     if (!why) {
-      workflow = r.json;
-      break;
+      if (formAuthentication(r.json) === FORM_AUTH[options.formLogin]) {
+        workflow = r.json;
+        break;
+      }
+      otherLogin ??= r.json;
+      continue;
     }
     differs ??= { id: String(w.id), name: String(w.name), why };
+  }
+  if (!workflow && otherLogin) {
+    const auth = formAuthentication(otherLogin);
+    const has = auth === FORM_AUTH.basic ? 'Basic Auth' : auth === FORM_AUTH.n8n ? "n8n's sign-in" : 'no sign-in';
+    say(`not used workflow "${clean(otherLogin.name, otherLogin.id)}" (id ${clean(otherLogin.id)}): its form uses ${has}, and this run sets up ${basic ? 'Basic Auth (--form-login basic)' : "n8n's sign-in"}. This run makes a fresh one: unpublish the old one in n8n when you no longer use it.`);
   }
   if (!workflow && differs && !options.newWorkflow) {
     reportOthers();
@@ -549,7 +611,7 @@ async function run(inputs: Inputs): Promise<number> {
   }
 
   // The credentials found in the project, by name (the browser's too without --browser-url: a reused workflow may use it).
-  const specs = [FORM, SIGNING, ...(inputs.line ? [RUNNER] : []), BROWSER];
+  const specs = [...(basic ? [FORM] : []), SIGNING, ...(inputs.line ? [RUNNER] : []), BROWSER];
   let found = new Map<string, { mine?: any; others: any[] }>();
   const findAll = () => { found = new Map(specs.map((spec) => [spec.name, sameName(list.items, spec, home)])); };
   if (home) findAll();
@@ -570,7 +632,7 @@ async function run(inputs: Inputs): Promise<number> {
   if (workflow) {
     const runs: Record<string, string | undefined> = { httpBasicAuth: found.get(FORM.name)?.mine?.id, [SIGNING.type]: found.get(SIGNING.name)?.mine?.id, [BROWSER.type]: found.get(BROWSER.name)?.mine?.id };
     for (const n of workflow.nodes) {
-      const required = n.name === NODE.form ? 'httpBasicAuth' : n.name === NODE.signSteps ? SIGNING.type : undefined;
+      const required = n.name === NODE.form && basic ? 'httpBasicAuth' : n.name === NODE.signSteps ? SIGNING.type : undefined;
       for (const type of Object.keys(runs)) {
         const ref = n.credentials?.[type]?.id;
         const odd = ref !== undefined ? runs[type] === undefined || String(ref) !== String(runs[type]) : type === required;
@@ -584,11 +646,14 @@ async function run(inputs: Inputs): Promise<number> {
     }
   }
 
-  // The approver is needed only for a workflow still to create; asked before anything is created.
+  // The approver is needed only for a workflow still to create: the API key owner's address when n8n tells it, else
+  // asked, before anything is created.
   let approver = options.approver;
   if (!workflow && approver === undefined) {
-    if (!interactive()) throw new Stop('Give your email address with --approver: it goes into the Approver Allowlist of Sign steps.', 2);
-    approver = checkApprover(await ask('Your email address (recorded as the approver of each bot): '));
+    approver = await keyOwnerEmail(client, inputs.userId);
+    if (approver) say(`approver ${approver}: the API key's owner (another with --approver)`);
+    else if (!interactive()) throw new Stop('Give your email address with --approver: it goes into the Approver Allowlist of Sign steps.', 2);
+    else approver = checkApprover(await ask(basic ? 'Your email address (recorded as the approver of each bot): ' : 'Your n8n email address (the approver of each bot): '));
   }
 
   // An existing signing key is replaced only with --replace-signing-key and the typed word, asked before anything is
@@ -606,7 +671,7 @@ async function run(inputs: Inputs): Promise<number> {
       const taken = new Set(workflows.items.map((w) => w?.name));
       workflowName = taken.has(`${WORKFLOW_NAME} (${date})`) ? `${WORKFLOW_NAME} (${date} ${new Date().toISOString().slice(11, 16).replace(':', '-')})` : `${WORKFLOW_NAME} (${date})`;
     }
-    nodes = templateNodes(approver as string);
+    nodes = templateNodes(approver as string, options.formLogin);
     if (!home) {
       made = await createWorkflow(client, workflowName, nodes, projectId);
       halfMade = { client, id: String(made.id) };
@@ -624,17 +689,22 @@ async function run(inputs: Inputs): Promise<number> {
   reportOthers();
 
   // The secrets made here are registered at once: from now on no output can print them by mistake.
-  let formPassword: string | undefined = newPassword();
+  let formPassword: string | undefined = basic ? newPassword() : undefined;
   let signingKey: string | undefined = newSigningKey();
   redactor.add(formPassword);
   redactor.add(signingKey);
   const of = (spec: { name: string }) => found.get(spec.name) ?? { others: [] };
 
-  const form = await credential(client, of(FORM), projectId, FORM, () => ({ user: FORM.user, password: formPassword }),
-    options.newFormPassword ? 'a new password is set below' : 'its password was made earlier and stays as it is');
-  if (!form.created) {
-    if (options.newFormPassword) await replaceData(client, form.ref, FORM.type, { user: FORM.user, password: formPassword });
-    else formPassword = undefined;
+  // The form's login: only with --form-login basic. With n8n's sign-in there is nothing to make.
+  let formRef: Ref | undefined;
+  if (basic) {
+    const form = await credential(client, of(FORM), projectId, FORM, () => ({ user: FORM.user, password: formPassword }),
+      options.newFormPassword ? 'a new password is set below' : 'its password was made earlier and stays as it is');
+    formRef = form.ref;
+    if (!form.created) {
+      if (options.newFormPassword) await replaceData(client, form.ref, FORM.type, { user: FORM.user, password: formPassword });
+      else formPassword = undefined;
+    }
   }
 
   const replaceKey = options.replaceSigningKey;
@@ -665,7 +735,7 @@ async function run(inputs: Inputs): Promise<number> {
     const toPick = [inputs.browser && !onImport[BROWSER.type] ? BROWSER.name : '', !onImport[SIGNING.type] ? SIGNING.name : '', runnerRef && !onImport[RUNNER.type] ? RUNNER.name : ''].filter(Boolean);
     if (toPick.length) say(`         its credentials were left as they are: pick ${toPick.map((c) => `"${c}"`).join(', ')} on "${NODE.importSteps}" in n8n, so the workflow file the form hands over carries them.`);
   } else {
-    const wired = wire(nodes as Record<string, any>[], { form: form.ref, signing: signing.ref, browser: browserRef, runner: runnerRef });
+    const wired = wire(nodes as Record<string, any>[], { form: formRef, signing: signing.ref, browser: browserRef, runner: runnerRef });
     if (made) {
       const r = await client.api('PUT', `/workflows/${encodeURIComponent(String(made.id))}`, { name: workflowName, nodes: wired, connections: made.connections, settings: made.settings ?? { executionOrder: 'v1' } });
       if (r.status !== 200 || !r.json?.id) throw new Stop(`Could not set the credentials on the workflow "${workflowName}" (id ${clean(made.id)}) (${client.reason(r)}). It is not published.`);
@@ -692,23 +762,30 @@ async function run(inputs: Inputs): Promise<number> {
   const formUrl = typeof webhookId === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(webhookId) ? `${origin}/form/${webhookId}` : undefined;
   const shownName = clean(workflow.name, workflow.id);
   if (formUrl) {
-    // Without the login the published form answers 401: anything else means the address is not the form's. n8n
+    // Without a sign-in the published form answers 401 (Basic Auth), or sends the browser to n8n's sign-in (n8n's
+    // sign-in: a redirect to its sign-in or authorize page): anything else means the address is not the form's. n8n
     // registers the form a moment after it publishes the workflow, so it is asked for up to 10 seconds.
+    const signsIn = (r: Response | undefined) => (basic ? r?.status === 401
+      : r?.status === 302 && /\/(signin|[\w-]*oauth[\w-]*\/authorize)\b/.test(r.headers.get('location') ?? ''));
     let probe: Response | undefined;
     for (let i = 0; i < 20; i++) {
       if (i) await new Promise((resolve) => setTimeout(resolve, 500));
       probe = await fetch(formUrl, { redirect: 'manual', signal: AbortSignal.timeout(10_000) }).catch(() => undefined);
-      if (probe?.status === 401) break;
+      if (signsIn(probe)) break;
     }
-    if (probe?.status !== 401) warn(`Note: the form did not answer as expected at ${formUrl} (${probe ? `HTTP ${probe.status}` : 'no answer'}). In n8n, open "${shownName}", then the node "${NODE.form}", for its production URL.`);
+    if (!signsIn(probe)) warn(`Note: the form did not answer as expected at ${formUrl} (${probe ? `HTTP ${probe.status}` : 'no answer'}). In n8n, open "${shownName}", then the node "${NODE.form}", for its production URL.`);
   }
 
   say();
   say('The import form is ready.');
   say(`  Address:    ${formUrl ?? `open "${shownName}" in n8n, then the node "${NODE.form}", for its production URL`}`);
-  say(`  User name:  ${FORM.user}`);
-  if (formPassword) reveal('  Password:   ', formPassword, '   (shown once: keep it in your password manager)');
-  else say('  Password:   made earlier, n8n does not show it again. To set a new one, run this again with --new-form-password.');
+  if (basic) {
+    say(`  User name:  ${FORM.user}`);
+    if (formPassword) reveal('  Password:   ', formPassword, '   (shown once: keep it in your password manager)');
+    else say('  Password:   made earlier, n8n does not show it again. To set a new one, run this again with --new-form-password.');
+  } else {
+    say('  Sign-in:    the form opens with your n8n sign-in. Who approves is recorded as the n8n user who approved.');
+  }
   if (showKey && signingKey) reveal(`  Signing key: `, signingKey, '   (shown once: keep a copy where you keep recovery secrets)');
   // Made earlier: bots may be approved with it by now, so a new key is no way to keep a copy.
   else if (signingKey === undefined) say('  Signing key: made earlier and kept in n8n, which does not show it again. A new key (--replace-signing-key) stops every bot signed with this one until it is approved again.');
@@ -716,12 +793,16 @@ async function run(inputs: Inputs): Promise<number> {
   say();
   say('Next:');
   say('  1. Record a bot, or pick a bot file you have: an RPA recording, a UiPath project, a Chrome Recorder export, Playwright code or a step document.');
-  say('  2. Open the form address in your browser and sign in with the user name and password above.');
+  if (basic) say('  2. Open the form address in your browser and sign in with the user name and password above.');
+  else say('  2. Open the form address in your browser and sign in to n8n. The first time, n8n asks whether the form may use your n8n login: choose Allow.');
   say('  3. Upload the file, give the steps a name, and submit. On the next page, review the steps and approve them.');
+  if (!basic) say(`  Only the n8n users on "${NODE.signSteps}" → Approver Allowlist may approve: add others there in n8n.`);
   if (runnerRef) {
     const passed = String(workflow.nodes?.find((n: any) => n.name === NODE.importSteps)?.credentials?.[RUNNER.type]?.id) === runnerRef.id;
     say(passed ? `The Windows machine is connected: the workflow the form gives you already uses "${RUNNER.name}".` : `The Windows machine is connected: pick "${RUNNER.name}" on the RPA node of the workflow the form gives you.`);
   }
+  say();
+  say(keyAdvice(inputs.keyExpires));
   return 0;
 }
 
