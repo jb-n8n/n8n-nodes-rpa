@@ -2002,7 +2002,8 @@ describe('5-import-a-bot.json (the first-day import)', () => {
 
   it('the last page reports what was imported and, after the review page, what was signed; a UiPath import also returns the workflow file (n8n Form Ending: Return Binary File)', async () => {
     const shown = completion('Imported');
-    expect(shown).toMatchObject({ operation: 'completion', respondWith: 'text', completionTitle: 'Imported' });
+    expect(shown).toMatchObject({ operation: 'completion', respondWith: 'text' });
+    expect(render(shown.completionTitle, { $: nodesRan({}) })).toBe('Imported');
     const [data] = await runImport(formItem('Chrome Recorder', CHROME), () => NOT_ADOPTABLE);
     const page = (message: string, ran: Record<string, INodeExecutionData[][]>) => render(message, { $: nodesRan({ Settings: [[{ json: settingsJson() }]], ...ran }) });
     const message = page(shown.completionMessage, { 'Import steps': [data, []] });
@@ -2062,7 +2063,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     ]);
     expect(reviewed([], [], [draft({ surface: 'desktop', forApproval: true })])).toEqual(['Nothing was signed: the review page was not answered in time.']);
     // Both pages say the same about the step lists.
-    expect(completion('Imported, with the workflow file').completionMessage.split('\n')[1]).toBe(shown.completionMessage.split('\n')[1]);
+    const lists = (m: string) => /\{\{ \$\('Review and approve'\)\.isExecuted[\s\S]*? \}\}/.exec(m)?.[0];
+    expect(lists(completion('Imported, with the workflow file').completionMessage)).toBeDefined();
+    expect(lists(completion('Imported, with the workflow file').completionMessage)).toBe(lists(shown.completionMessage));
     const ifParams = byName(t, 'Workflow file?').parameters as { conditions: { conditions: { leftValue: string; operator: unknown }[] } };
     expect(ifParams.conditions.conditions).toEqual([expect.objectContaining({ operator: { type: 'boolean', operation: 'true', singleValue: true } })]);
     // Every import with steps comes with a workflow file now, a Chrome recording's too.
@@ -2409,7 +2412,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       throw new Error('desktop steps are never replayed');
     };
     /** Submits the box with `text` ('' for left empty): Import steps, the review page, then Sign steps under the new key with `answer`. */
-    const review = async (text: string, answer: IDataObject) => {
+    const review = async (text: string, answer: IDataObject, by: IDataObject = signedIn(APPROVER)) => {
       const upload = changedUpload(ran, text);
       expect(upload.json).toMatchObject({ name: old.name, source: 'Step document', expectedFileName: '', columns: '' });
       // The next version: the approved one plus one, from The bot to change (the active row), never from the box.
@@ -2426,7 +2429,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       expect(fields.map((f) => f.fieldName ?? f.fieldType)).toEqual(['html', 'writes_0', 'html', 'moreWrites_0', 'decision_0']);
       // Every step list is the same without the line: an ordinary import shows none.
       expect(jsonFormFields(String(byName(t, REVIEW).parameters.jsonOutput), { $: nodesRan({ ...after, [COMPARED]: undefined as never }) })).toEqual(fields);
-      const signed = await signAfterReview(after, answer, {}, false, signedIn(APPROVER), undefined, NEW_KEY);
+      const signed = await signAfterReview(after, answer, {}, false, by, undefined, NEW_KEY);
       return { after, fields, ...signed };
     };
 
@@ -2438,6 +2441,13 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(again.fields[1].defaultValue).toBe('Step 16: Click Save');
     expect(again.errors).toEqual([]);
     const fresh = again.signed[0];
+    /** The last page after the review page was answered with `answer`, and what Sign steps gave. */
+    const lastPage = (r: { after: Record<string, INodeExecutionData[][]>; signed: IDataObject[]; errors: IDataObject[] }, answer: IDataObject = { decision_0: 'Approve and sign' }) => {
+      const $ = nodesRan({ ...r.after, [REVIEW]: [[{ json: answer }]], 'Sign steps': [r.signed.map((json) => ({ json })), r.errors.map((json) => ({ json }))] });
+      return { title: render(completion('Imported').completionTitle, { $ }), text: render(completion('Imported').completionMessage, { $ }) };
+    };
+    // It says what happened to the bot, in those words: never "Imported: 17 steps.", never a report to look for.
+    expect(lastPage(again)).toEqual({ title: 'Change or sign again', text: `Signed again: ${String(old.name)} version 2, unchanged. Signed as writes: step 16 (Click Save).` });
     // Signed again with unchanged steps: a new approval, so the next version, and the steps as they were apart from it.
     expect(fresh).toMatchObject({ status: 'active', name: old.name, version: 2, approvedBy: APPROVER, writeLine: 'Signed as writes: step 16 (Click Save)' });
     expect({ ...JSON.parse(String(fresh.steps)), version: 1 }).toEqual(JSON.parse(String(old.steps)));
@@ -2475,11 +2485,23 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(changed.signed[0]).toMatchObject({ status: 'active', name: old.name });
     expect(String(changed.signed[0].steps)).toContain('"3000"');
     expect(trust(changed.signed[0].steps, changed.signed[0].signature, NEW_KEY)).toEqual({ ok: true, signed: true });
+    expect(lastPage(changed).text).toBe(`Changed: ${String(old.name)} version 2 is now the version that runs, replacing version 1. Signed as writes: step 16 (Click Save).`);
 
     // A rejected change: a rejected row, no steps, no signature. Only Save signed steps leads to Supersede older versions,
     // so the old row stays active and keeps running (under the key it was signed with).
     const rejected = await review(box.replace('"2000"', '"3000"'), { writes_0: [], decision_0: 'Reject' });
     expect(rejected.signed).toEqual([expect.objectContaining({ status: 'rejected', steps: '', signature: '' })]);
+    // The last page does not say that a version was rejected that keeps running.
+    expect(lastPage(rejected, { decision_0: 'Reject' }).text).toBe(`Nothing changed: ${String(old.name)} version 1 keeps running.`);
+    // Sign steps refused (an approver not on the list), or the review page not answered: the old version keeps running too.
+    const refused = await review('', { writes_0: [], decision_0: 'Approve and sign' }, signedIn('member@example.com'));
+    expect(lastPage(refused).text.split('\n')).toEqual([
+      `Not signed: ${String(old.name)} v2. Sign Steps refused: The n8n user who submitted the approval form is not on the Approver Allowlist`,
+      `Nothing changed: ${String(old.name)} version 1 keeps running.`,
+    ]);
+    expect(lastPage({ after: rejected.after, signed: [], errors: [] }, { name: 'steps table' }).text.split('\n')).toEqual([
+      'Nothing was signed: the review page was not answered in time.', `Nothing changed: ${String(old.name)} version 1 keeps running.`,
+    ]);
     expect(targets(t, 'Signed?')).toEqual([['Save signed steps'], ['Record rejection']]);
     expect(targets(t, 'Record rejection')).toEqual([]);
   });

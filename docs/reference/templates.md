@@ -42,7 +42,9 @@ Templates 2, 3 and 5 create the two Data Tables when they are missing.
   save, send or submit?". The **Decision** is **Approve and sign** or **Reject**. A page left unanswered for an hour
   signs nothing.
 - The last page says `Approved and signed: <name> v<version> is now the version that runs under that name.`, or
-  `Rejected: <name> v<version>. Nothing was signed.` An import is version 1. When Sign steps signed a step list, it
+  `Rejected: <name> v<version>. Nothing was signed.` An import is version 1. After a change or a re-sign it says
+  `Signed again: <name> version N, unchanged.`, `Changed: <name> version N is now the version that runs, replacing
+  version M.`, or `Nothing changed: <name> version M keeps running.` When Sign steps signed a step list, it
   also downloads the workflow that runs the bot. When nothing was signed (rejected, or Sign steps refused), it neither
   gives the file nor says it does.
 - In another n8n, or once a credential the workflow file picks is deleted, n8n picks the only credential of the same

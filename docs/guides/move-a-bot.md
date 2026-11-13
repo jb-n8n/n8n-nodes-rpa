@@ -139,8 +139,10 @@ steps differ from the approved version, and which steps or settings do. Text tha
 page that says so, and nothing changes.
 
 Approved, the steps become the next version under that name (version 2 replaces version 1), signed with the current
-key, and the old row is superseded: the bot's workflow runs the new version as it is. Rejected, or not answered within
-an hour, the old version keeps running. This path offers no workflow file. A name the form does not find ends on a page that lists the approved
+key, and the old row is superseded: the bot's workflow runs the new version as it is. The last page says
+`Signed again: <name> version 2, unchanged.`, or `Changed: <name> version 2 is now the version that runs, replacing
+version 1.` Rejected, or not answered within an hour, the old version keeps running, and the last page says `Nothing
+changed: <name> version 1 keeps running.` This path offers no workflow file. A name the form does not find ends on a page that lists the approved
 bots.
 
 ## From Power Automate Desktop
