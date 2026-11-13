@@ -491,7 +491,7 @@ describe('the templates reference', () => {
     for (const t of ['playwright_steps', 'playwright_runs']) expect(doc.templates).toContain(t);
     for (const status of ['pending', 'active', 'rejected', 'expired']) expect(doc.templates).toContain(`\`${status}\``);
     const flat = doc.templates.replace(/\s+/g, ' ');
-    for (const text of ['Showing \\d+-\\d+ of (\\d+)', 'every host, form submission, download and pop-up handler', 'not their intents', 'HTML-escape', 'safety flags first',
+    for (const text of ['Showing \\d+-\\d+ of (\\d+)', 'every host, form submission, download and pop-up handler', 'not their intents', 'look-alikes for `<`, `>` and `&`', 'an invisible space in each address', 'safety flags first',
       'Rejected Repaired steps can come back unchanged if the next repair produces the same steps. They reuse their row.']) expect(flat, text).toContain(text);
   });
 });

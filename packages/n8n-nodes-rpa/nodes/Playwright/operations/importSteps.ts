@@ -5,7 +5,7 @@ import type {
 import { browserConfig, ConfigError, CREDENTIALS, policyFor, siteLoginConfig, type SiteLogin } from '../config.js';
 import type { NodeContext } from '../context.js';
 import type { Engine } from '../engine.js';
-import { configNodeError, errorJson, failedOnCode, guidanceFor } from '../errors.js';
+import { configNodeError, errorJson, failedOnCode, guidanceFor, shownMessage } from '../errors.js';
 import { isBreakerCode, noteRepairRan, repairAlreadyRan, runGuarded, siteLoginGuard, type GuardedResult } from '../execute.js';
 import {
   DESKTOP_DOCUMENT_EVIDENCE_LINE, DESKTOP_EVIDENCE_LINE, DESKTOP_RECORDING_EVIDENCE_LINE, importAddedSteps, reviewSteps, reviewWrites,
@@ -394,7 +394,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
   }
   const entries: IDataObject[] = outcomes.map((o, k) => {
     const withheld = containsSecret(o.draft.script);
-    const reason = o.kind === 'forApproval' ? WRITES_FOR_APPROVAL : o.kind !== 'adopted' ? mask(o.reason) : undefined;
+    const reason = o.kind === 'forApproval' ? WRITES_FOR_APPROVAL : o.kind !== 'adopted' ? shownMessage(mask(o.reason)) : undefined;
     const why = withheld ? (reason ? `${reason} ${STEPS_WITHHELD}` : STEPS_WITHHELD) : reason;
     return {
       name: o.draft.name,
@@ -413,7 +413,7 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
 
   if (allFailed) {
     const first = failed[0];
-    const what = `${first.code ? `${first.code}: ` : ''}${mask(first.reason)}`;
+    const what = `${first.code ? `${first.code}: ` : ''}${shownMessage(mask(first.reason))}`;
     const message = outcomes.length === 1 ? what : NONE_ADOPTED(outcomes.length, `${first.draft.name}: ${what}`);
     const error = new NodeOperationError(node, message, {
       itemIndex: i, description: first.code ? `${first.code}: ${first.guidance ?? guidanceFor(first.code, first.reason)}` : 'No step list was replayed. The reasons are in details.drafts.',
@@ -442,8 +442,10 @@ async function importItem(ctx: NodeContext, engine: Engine, i: number, deps: Imp
 
 /** A browser Repaired steps item with its steps as the review page lists them (shown only, never signed or reviewed). */
 function withReviewSteps(engine: Pick<Engine, 'shownUrl'>, json: IDataObject): IDataObject {
-  const steps = (json.steps as { steps?: unknown } | null)?.steps;
-  return { ...json, reviewSteps: reviewSteps(Array.isArray(steps) ? steps : [], { desktop: false, shownUrl: engine.shownUrl }) as unknown as IDataObject[] };
+  const doc = json.steps as { steps?: unknown; startUrl?: unknown } | null;
+  const steps = doc?.steps;
+  const startUrl = typeof doc?.startUrl === 'string' ? doc.startUrl : undefined;
+  return { ...json, reviewSteps: reviewSteps(Array.isArray(steps) ? steps : [], { desktop: false, shownUrl: engine.shownUrl, startUrl }) as unknown as IDataObject[] };
 }
 
 /**

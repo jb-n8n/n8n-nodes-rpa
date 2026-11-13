@@ -170,6 +170,11 @@ export interface ReviewStep {
    * by searching the sentence.
    */
   describedAs?: string;
+  /**
+   * Set when `describedAs` names the same kind of action as the step and no other site (describedQuietly): the page shows
+   * it quietly, as the author's words. Absent, a description is shown as a warning.
+   */
+  quiet?: true;
   marks: string[]; added?: true; each?: ReviewStep[];
 }
 /** A step's sentence and, when it says something else, the author's description. */
@@ -385,6 +390,66 @@ export const comparable = (t: string): string =>
  * never part of the sentence.
  */
 export const DESCRIBED_DIFFERENTLY = 'described differently as:';
+/** The label the review page and the approval emails write before a `describedAs` shown quietly (`quiet`). */
+export const AUTHOR_CALLS_IT = 'the author calls it:';
+
+/**
+ * The kinds of action a description names by its first word (or two), and the kinds each step may be described as. A
+ * description whose first word is in VERBS but names no kind of its step is a warning; one whose first word is not
+ * there is quiet. One table, exact words: no fuzzy matching. A click may open, download, tick or choose, and a submit
+ * often saves, so those are not warnings.
+ */
+const VERBS: Record<string, readonly string[]> = {
+  open: ['open', 'go', 'navigate', 'visit'],
+  type: ['type', 'enter', 'fill', 'set'],
+  click: ['click', 'press', 'tap', 'double-click'],
+  choose: ['choose', 'select', 'pick'],
+  check: ['check', 'tick', 'untick', 'uncheck'],
+  read: ['read', 'get', 'copy'],
+  download: ['download', 'export', 'save'],
+  wait: ['wait'],
+  upload: ['upload'],
+  signIn: ['sign in', 'log in'],
+};
+const CLICK_KINDS = ['click', 'open', 'download', 'check', 'choose'];
+const STEP_KINDS: Record<string, readonly string[]> = {
+  goto: ['open'], signIn: ['signIn', 'type'], click: CLICK_KINDS, doubleClick: CLICK_KINDS, clickAll: ['click', 'check'], hover: ['click', 'open'],
+  popup: ['click', 'open'], press: ['click', 'type'], key: ['click', 'type'], fill: ['type'], select: ['choose'], check: ['check', 'click'],
+  submit: ['click', 'download'], download: ['download', 'click'], paginate: ['click', 'open', 'read'],
+};
+
+/** The kind of action a description names by its first word or two, or undefined when the word is not in VERBS. */
+function describedKind(described: string): string | undefined {
+  const words = described.toLowerCase().replace(/^[^a-z]+/, '').split(/[^a-z-]+/);
+  const first = [`${words[0]} ${words[1] ?? ''}`, words[0]];
+  return Object.keys(VERBS).find((kind) => VERBS[kind].some((v) => first.includes(v)));
+}
+
+/** File names, which look like a host (report.csv): their last part is one of these. */
+const FILE_EXTENSION = /\.(?:csv|tsv|xlsx?|pdf|txt|json|xml|zip|docx?|pptx?|png|jpe?g|gif|html?|js|ts|exe|dll|msi)$/i;
+/** Hosts named in a text: of an address with a scheme (any, with its port and user dropped), or a bare domain name. */
+function hostsIn(text: string): string[] {
+  const hosts: string[] = [];
+  for (const m of text.matchAll(/\b[a-z][a-z0-9+.-]*:\/\/([^\s/?#'"<>\\]+)|\b((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,})\b/gi)) {
+    const host = (m[1] ?? m[2]).replace(/^.*@/, '').replace(/:\d*$/, '').toLowerCase();
+    if (m[1] !== undefined || !FILE_EXTENSION.test(host)) hosts.push(host);
+  }
+  return hosts;
+}
+
+/**
+ * Whether the author's description of a step can be shown quietly: it names a kind of action the step may be (VERBS,
+ * STEP_KINDS), or none the table knows, and no host but the step's own (any host its fields name, and the start site's).
+ * Otherwise the page shows it as a warning. What runs is the sentence built from the step, whatever the description says.
+ */
+function describedQuietly(step: Json, described: string, startUrl: string | undefined): boolean {
+  const kind = describedKind(described);
+  const stepKinds = Object.keys(STEP_KINDS).filter((k) => step[k] !== undefined).flatMap((k) => STEP_KINDS[k]);
+  if (kind !== undefined && !stepKinds.includes(kind)) return false;
+  const own = JSON.stringify(Object.fromEntries(Object.entries(step).filter(([k]) => k !== 'intent'))).replace(/\\\\/g, '').toLowerCase();
+  const start = startUrl && URL.canParse(startUrl) ? new URL(startUrl).hostname.toLowerCase() : undefined;
+  return hostsIn(described).every((h) => h === start || own.includes(h));
+}
 
 /**
  * A browser step's sentence. For every step that acts on the page or sends something, the action, the target and the
@@ -412,8 +477,12 @@ function browserSentence(s: Json, shownUrl: (url: string) => string): Sentence {
  */
 export function reviewSteps(
   steps: readonly unknown[],
-  o: { desktop: true; secretVariables?: readonly string[]; startValues?: Readonly<Record<string, string>>; added?: readonly number[] }
-    | { desktop: false; shownUrl: (url: string) => string; secretVariables?: undefined; startValues?: undefined; added?: undefined },
+  o: { desktop: true; secretVariables?: readonly string[]; startValues?: Readonly<Record<string, string>>; added?: readonly number[]; startUrl?: undefined }
+    | {
+      desktop: false; shownUrl: (url: string) => string; secretVariables?: undefined; startValues?: undefined; added?: undefined;
+      /** The steps' start address: a description may name its host (describedQuietly). */
+      startUrl?: string;
+    },
 ): ReviewStep[] {
   const review = (raw: unknown, j: number): ReviewStep => {
     const s = asJson(raw);
@@ -428,8 +497,9 @@ export function reviewSteps(
       ...(s.read && asJson(s.read).as ? [`gives its text to n8n as ${String(asJson(s.read).as)}`] : []),
       ...(s.signIn ? ['signs in with the RPA Site Login'] : []),
     ];
+    const said = o.desktop ? desktopSentence(s) : browserSentence(s, o.shownUrl);
     return {
-      ...(o.desktop ? desktopSentence(s) : browserSentence(s, o.shownUrl)), marks,
+      ...said, ...(said.describedAs !== undefined && describedQuietly(s, said.describedAs, o.startUrl) ? { quiet: true as const } : {}), marks,
       ...((o.added ?? []).includes(j + 1) ? { added: true as const } : {}),
       ...(body?.length ? { each: body.map((b) => review(b, -1)) } : {}),
     };
@@ -441,4 +511,56 @@ export function reviewSteps(
 export function reviewWrites(steps: readonly DesktopStep[], candidates: readonly number[], secretVariables: readonly string[]): ReviewWrite[] {
   const signsIn = signInKeySteps(steps, secretVariables);
   return candidates.map((n) => ({ step: n, intent: oneLine(steps[n - 1]?.intent ?? ''), ...(signsIn.includes(n) ? { signsIn: true as const } : {}) }));
+}
+
+/**
+ * One entry of the change list as the approval emails show it (shown only, never signed). For an entry that names a step
+ * the steps have, its number (from 1; a step inside a paginate has its paginate's number and `onEachPage`) and that
+ * step's sentence, description and mark, as reviewSteps builds them. An entry that names no step (a pop-up handler, or a
+ * step removed) keeps the run's own words in `text`. `was`: the run's words for the step as it was.
+ */
+export interface ReviewChange {
+  change: 'Added' | 'Changed' | 'Removed';
+  step?: number; onEachPage?: true; text?: string; describedAs?: string; quiet?: true; was?: string;
+}
+
+/** The suffix the engine's change list adds to a changed step that reads the same as before (engine ALSO_CHANGED). */
+const ALSO_CHANGED_SUFFIX = / \(also changed: [\w.]+(?:, [\w.]+)*\)$/;
+
+/**
+ * For the approval emails of browser steps: each change-list entry (`changes`, the engine's stepChanges) as a ReviewChange.
+ * An entry names a step when it is that step's engine description (describeStep, the also-changed suffix aside); the first
+ * such step is taken. A pure function of the steps and the change list, so Sign Steps builds the same list again.
+ */
+export function reviewChanges(
+  engine: Pick<Engine, 'describeStep'>, steps: readonly unknown[], changes: readonly { was: string | null; now: string | null }[],
+  o: { shownUrl: (url: string) => string; startUrl?: string },
+): ReviewChange[] {
+  const describe = (s: unknown): string | undefined => {
+    try {
+      return engine.describeStep(s as Step);
+    } catch {
+      return undefined;
+    }
+  };
+  const located: { step: number; raw: unknown; inner: boolean; said: string | undefined }[] = [];
+  steps.forEach((s, i) => {
+    located.push({ step: i + 1, raw: s, inner: false, said: describe(s) });
+    const each = asJson(asJson(s).paginate).each;
+    if (Array.isArray(each)) for (const b of each) located.push({ step: i + 1, raw: b, inner: true, said: describe(b) });
+  });
+  return changes.map((c) => {
+    const change = c.was !== null && c.now !== null ? 'Changed' : c.now !== null ? 'Added' : 'Removed';
+    const was = c.was !== null ? { was: oneLine(c.was) } : {};
+    if (c.now === null) return { change, ...was };
+    const now = c.now.replace(ALSO_CHANGED_SUFFIX, '');
+    const at = located.find((l) => l.said !== undefined && l.said === now);
+    if (!at) return { change, text: oneLine(c.now), ...was };
+    // The step's own sentence: a paginate's inner lines are entries of their own.
+    const [r] = reviewSteps([at.raw], { desktop: false, ...o });
+    return {
+      change, step: at.step, ...(at.inner ? { onEachPage: true as const } : {}), text: r.text,
+      ...(r.describedAs !== undefined ? { describedAs: r.describedAs } : {}), ...(r.quiet ? { quiet: true as const } : {}), ...was,
+    };
+  });
 }

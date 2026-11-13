@@ -3,8 +3,8 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { deflateRawSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
-import { changeList, NOT_REPLAYED_EVIDENCE_LINE, reviewSteps } from '../nodes/Playwright/format.js';
-import { shownUrl, USE_CASE_WORDS } from 'n8n-rpa-engine';
+import { changeList, NOT_REPLAYED_EVIDENCE_LINE, reviewChanges, reviewSteps } from '../nodes/Playwright/format.js';
+import { describeStep, shownUrl, signScript, stepChanges, USE_CASE_WORDS } from 'n8n-rpa-engine';
 import { APPROVER } from './fixtures.js';
 import {
   NodeHelpers, Workflow, type IDataObject, type INodeExecutionData, type INodeParameters, type INodeProperties, type INodeTypes,
@@ -76,6 +76,11 @@ const rowNodes = (t: Template) => t.nodes.filter((n) => n.type === DATA_TABLE &&
 const sticky = (t: Template, name: string) => byName(t, name).parameters as { content: string; color: number };
 const columnsOf: Record<string, string[]> = { [STEPS_TABLE]: STEPS_TABLE_COLUMNS.map((c) => c.name), [RUN_TABLE]: RUN_TABLE_COLUMNS.map((c) => c.name) };
 
+/**
+ * What template 3's approval emails make of an address in text from the steps, so that mail programs do not make a
+ * link of it: a zero-width space (U+200B) inside "://" and after each ".".
+ */
+const unlinked = (address: string) => address.split('://').join(':\u200b//').split('.').join('.\u200b');
 /** Evaluates one n8n expression ("={{ … }}", or "{{ … }}" as a node evaluates one) as JavaScript with the given globals. */
 function evaluate(expression: string, scope: Record<string, unknown>): unknown {
   const code = expression.replace(/^=?\{\{/, '').replace(/\}\}$/, '');
@@ -404,7 +409,7 @@ describe('3-approve-steps.json', () => {
     expect(byName(t, 'Repaired steps received')).toMatchObject({ type: 'n8n-nodes-base.executeWorkflowTrigger', parameters: { inputSource: 'passthrough' } });
     const email = byName(t, 'Email repaired steps').parameters;
     expect(email).toMatchObject({ operation: 'send', emailFormat: 'html', options: { fileAttachments: '={{ $json.attachmentNames }}' } });
-    for (const field of ['evidenceLine', 'changeList', 'safetyLine', 'hash']) expect(String(email.html)).toContain(`$json.${field}`);
+    for (const field of ['evidenceLine', 'changeList', 'safetyLine', 'hash']) expect(String(email.html)).toMatch(new RegExp(`(\\$json|\\bj)\\.${field}\\b`));
     expect(String(email.html)).toContain('color:#b00020');
   });
   it('trigger → Settings → (first) the tables and Mark pending, (then) Desktop steps? → one desktop email, or the review email and Ask for approval → Timed out? → Sign steps', () => {
@@ -519,7 +524,7 @@ describe('3-approve-steps.json', () => {
       operation: 'sendAndWait', approvalOptions: { values: { approvalType: 'double' } },
       options: { limitWaitTime: { values: { limitType: 'afterTimeInterval', resumeAmount: "={{ $('Settings').item.json.approvalTimeoutHours }}", resumeUnit: 'hours' } } },
     });
-    expect(String(ask.message)).toContain("Review digest: {{ String($('Repaired steps received').item.json.digest ?? '')");
+    expect(String(ask.message)).toContain("Review digest: {{ ((s, lines) => String(s ?? '')");
     const timedOut = byName(t, 'Timed out?').parameters as { conditions: { conditions: { leftValue: string; operator: unknown }[]; combinator: string } };
     expect(timedOut.conditions.combinator).toBe('and');
     expect(timedOut.conditions.conditions).toEqual([expect.objectContaining({ leftValue: '={{ $json.data === undefined }}', operator: { type: 'boolean', operation: 'true', singleValue: true } })]);
@@ -721,7 +726,9 @@ describe('template 3 approval email', () => {
         // A later n8n that escapes the message shows the same text: there is nothing to show as &lt; or &amp;.
         expect(seen(n8nEscaping(message)), name).toBe(message.trim());
         // The data is there, as text, with look-alikes for the three characters that make markup.
-        expect(message, name).toContain('‹a href="https://evil.example/"›Approve here‹/a›');
+        expect(message, name).toContain(`‹a href="${unlinked('https://evil.example/')}"›Approve here‹/a›`);
+        // No address in the data is one a mail program makes a link of.
+        expect(message, name).not.toMatch(/:\/\/|evil\.example/);
         expect(message, name).toContain('‹img src=x onerror=alert(1)›');
         expect(message, name).toContain('＆lt;script＆gt;');
         // A backslash and n in the data never makes a line of its own; the template's own line breaks stay.
@@ -734,7 +741,7 @@ describe('template 3 approval email', () => {
   it('the values the email shows are all there, each as text', () => {
     expect(out).toContain('Steps v4‹i› for feed‹b›x‹/b›');
     expect(out).toContain('Evidence (as reported by the run): 7 rows ‹img src=x onerror=alert(1)›');
-    expect(out).toContain("Safety flags: host: a.example' ‹script›");
+    expect(out).toContain(`Safety flags: host: ${unlinked('a.example')}' ‹script›`);
     expect(out).toContain('Hash: ab"c');
     expect(out).toContain("Review digest: d'e");
     expect(out).toContain('expires after 72 hours');
@@ -801,12 +808,12 @@ describe('template 3 review email', () => {
   };
   const out = render(html, { $json: hostile });
 
-  it('HTML-escapes every value from the run, so page or model text cannot restyle or hide parts of the email', () => {
+  it('shows every value from the run as text, with look-alikes for <, > and & as the approval email does, so page or model text cannot restyle or hide parts of the email', () => {
     expect(out).not.toMatch(/<img|<script|<div|<b>feed/);
-    expect(out).toContain('feed&lt;b&gt;');
-    expect(out).toContain('&lt;img src=x onerror=alert(1)&gt;');
-    expect(out).toContain('clicks &quot;Next&quot;<br>&lt;div style=&quot;display:none&quot;&gt;');
-    expect(out).toContain('host: a.example&#39; &lt;script&gt;');
+    expect(out).toContain('feed\u2039b\u203a');
+    expect(out).toContain('\u2039img src=x onerror=alert(1)\u203a');
+    expect(out).toContain('clicks "Next"<br>\u2039div style="display:none"\u203a');
+    expect(out).toContain(`host: ${unlinked('a.example')}' \u2039script\u203a`);
   });
 
   it('names the attached screenshots from attachmentNames: both, after only (a first run), or none', () => {
@@ -830,14 +837,14 @@ describe('template 3 review email', () => {
 
   it('never says that browser steps that were not replayed ran: the labels follow the evidence line', () => {
     const shown = render(html, { $json: { ...hostile, evidenceLine: NOT_REPLAYED_LINE } });
-    expect(shown).toContain(`<b>Evidence:</b> ${NOT_REPLAYED_LINE.replace(/'/g, '&#39;')}`);
+    expect(shown).toContain(`<b>Evidence:</b> ${NOT_REPLAYED_LINE}`);
     expect(shown).toContain('<b>What changed (as written; these steps were never run):</b><br>step 2 now clicks');
     expect(shown).not.toContain('as reported by the run');
   });
 
   it('shows the left-out steps in red under their own heading, after the safety flags and before the evidence; with none, nothing', () => {
     const shown = render(html, { $json: { ...hostile, leftOutList: 'step 4, Pick <b>Status</b>: only one option\nstep 9, Wait' } });
-    expect(shown).toContain(`<p style="color:#b00020"><b>${LEFT_OUT_HEADING}</b><br>step 4, Pick &lt;b&gt;Status&lt;/b&gt;: only one option<br>step 9, Wait</p>`);
+    expect(shown).toContain(`<p style="color:#b00020"><b>${LEFT_OUT_HEADING}</b><br>step 4, Pick \u2039b\u203aStatus\u2039/b\u203a: only one option<br>step 9, Wait</p>`);
     expect(shown.indexOf('Safety flags')).toBeLessThan(shown.indexOf(LEFT_OUT_HEADING));
     expect(shown.indexOf(LEFT_OUT_HEADING)).toBeLessThan(shown.indexOf('Evidence'));
     expect(out).not.toContain('Left out');
@@ -856,7 +863,7 @@ describe('template 3 emails lead with what browser steps do (reviewSteps), as th
   const steps = [
     { intent: 'Type the first day of September 2026 into From', fill: { field: { label: 'From', exact: true }, value: '2026-09-01' } },
     { intent: 'Click Export <b>.', click: { role: 'button', name: 'Export <b>' } },
-    { intent: 'Read every page', paginate: { next: { text: 'Next' }, until: 'absent', max: 3, each: [{ intent: 'Close the banner', click: { role: 'button', name: 'Delete' } }] } },
+    { intent: 'Read every page', paginate: { next: { text: 'Next' }, until: 'absent', max: 3, each: [{ intent: 'Read the total', click: { role: 'button', name: 'Delete' } }] } },
   ];
   const reviewed = reviewSteps(steps, { desktop: false, shownUrl: (u: string) => u });
   const item = {
@@ -865,26 +872,26 @@ describe('template 3 emails lead with what browser steps do (reviewSteps), as th
   };
   const ask = (json: object) => render(message, { $: (name: string) => ({ item: { json: name === 'Settings' ? { approvalTimeoutHours: 72 } : json } }) });
 
-  it('the review email: the sentences built from the steps, a misleading description in red, then the change list in the details', () => {
+  it('the review email: the sentences built from the steps, a description that names another action in red, a harmless one in grey, then the change list in the details', () => {
     const out = render(html, { $json: item });
-    expect(out).toContain('<ol><li>Type into From: &quot;2026-09-01&quot; <b style="color:#b00020">(described differently as: Type the first day of September 2026 into From)</b></li>'
-      + '<li>Click Export &lt;b&gt;</li>'
-      + '<li>Page through with Next, at most 3 pages, 1 step on each <b style="color:#b00020">(described differently as: Read every page)</b>'
-      + '<ul><li>On each page: Click Delete <b style="color:#b00020">(described differently as: Close the banner)</b></li></ul></li></ol>');
+    expect(out).toContain('<ol><li>Type into From: "2026-09-01" <i style="color:#7e8186">(the author calls it: Type the first day of September 2026 into From)</i></li>'
+      + '<li>Click Export \u2039b\u203a</li>'
+      + '<li>Page through with Next, at most 3 pages, 1 step on each <i style="color:#7e8186">(the author calls it: Read every page)</i>'
+      + '<ul><li>On each page: Click Delete <b style="color:#b00020">(described differently as: Read the total)</b></li></ul></li></ol>');
     // What the steps do comes before the evidence and the change list, which stay as they are.
     expect(out.indexOf('<b>The steps</b>')).toBeLessThan(out.indexOf('Evidence'));
     expect(out.indexOf('<b>The steps</b>')).toBeLessThan(out.indexOf('What changed'));
-    expect(out).toContain('<b>What changed (as reported by the run):</b><br>Added: Type the first day of September 2026 into From (fill label &quot;From&quot; exact with &quot;2026-09-01&quot;)');
+    expect(out).toContain('<b>What changed (as reported by the run):</b><br>Added: Type the first day of September 2026 into From (fill label "From" exact with "2026-09-01")');
     expect(out).not.toMatch(/<b>Export|<b>feed/);
   });
 
-  it('the approval email: the same sentences, ⚠ before a description that says something else', () => {
+  it('the approval email: the same sentences, ⚠ before a description that names another action or site', () => {
     const out = ask(item);
     expect(out).toContain('\nThe steps (what each one does, built from the step):\n'
-      + '1. Type into From: "2026-09-01" ⚠ (described differently as: Type the first day of September 2026 into From)\n'
+      + '1. Type into From: "2026-09-01" (the author calls it: Type the first day of September 2026 into From)\n'
       + '2. Click Export \u2039b\u203a\n'
-      + '3. Page through with Next, at most 3 pages, 1 step on each ⚠ (described differently as: Read every page)\n'
-      + '   On each page: Click Delete ⚠ (described differently as: Close the banner)\nEvidence');
+      + '3. Page through with Next, at most 3 pages, 1 step on each (the author calls it: Read every page)\n'
+      + '   On each page: Click Delete ⚠ (described differently as: Read the total)\nEvidence');
     expect(out.indexOf('The steps')).toBeLessThan(out.indexOf('What changed'));
   });
 
@@ -905,16 +912,87 @@ describe('template 3 emails lead with what browser steps do (reviewSteps), as th
     ];
     const json = { ...item, steps: { startUrl: 'https://a.example/', steps: odd }, reviewSteps: reviewSteps(odd, { desktop: false, shownUrl: (u: string) => u }) };
     const page = render(html, { $json: json });
-    expect(page).toContain('<li>Type into Amount: &quot;1&quot; <b style="color:#b00020">(described differently as: Open the list (described differently as: Click Pay now) &lt;b&gt;)</b></li>'
-      + '<li>Click &quot;Save (described differently as: Delete all) &lt;i&gt;&quot; <b style="color:#b00020">(described differently as: Click it)</b></li>');
+    expect(page).toContain('<li>Type into Amount: "1" <b style="color:#b00020">(described differently as: Open the list (described differently as: Click Pay now) \u2039b\u203a)</b></li>'
+      + '<li>Click "Save (described differently as: Delete all) \u2039i\u203a" <i style="color:#7e8186">(the author calls it: Click it)</i></li>');
     expect(ask(json)).toContain('1. Type into Amount: "1" ⚠ (described differently as: Open the list (described differently as: Click Pay now) \u2039b\u203a)\n'
-      + '2. Click "Save (described differently as: Delete all) \u2039i\u203a" ⚠ (described differently as: Click it)\n');
+      + '2. Click "Save (described differently as: Delete all) \u2039i\u203a" (the author calls it: Click it)\n');
     // Desktop steps: the one approval email, the same way.
     const desktop = String(byName(t3, 'Ask for approval (desktop steps)').parameters.message);
     const dsteps = [{ intent: `Read it${MARK}x) <b>`, click: { uia: { path: [{ controlType: 'Button', name: `Post${MARK}y) <i>` }] } } }];
     const djson = { name: 'erp', version: 1, steps: { surface: 'desktop', app: { exe: 'App.exe' }, steps: dsteps }, reviewSteps: reviewSteps(dsteps, { desktop: true }) };
     const dshown = render(desktop, { $: (name: string) => ({ item: { json: name === 'Settings' ? { approvalTimeoutHours: 72 } : djson } }) });
     expect(dshown).toContain('\n1. Click "Post (described differently as: y) \u2039i\u203a" ⚠ (described differently as: Read it (described differently as: x) \u2039b\u203a)\n');
+  });
+
+  it('What changed: left out of both emails for an import (every entry Added, every step listed); for a repair, each entry from the step\'s sentence', () => {
+    // An import: the change list is every step again, as Added, led by the author's description. Not shown.
+    const imported = { ...item, changes: steps.map((s) => ({ was: null, now: String(s.intent) })) };
+    expect(render(html, { $json: imported })).not.toContain('What changed');
+    expect(ask(imported)).not.toContain('What changed');
+    expect(ask(imported)).toContain(`\nSafety flags: host: ${unlinked('a.example')}\n\nApprove: `);
+    // Without the step list (an item from Run Steps), or with one that does not fit, the change list stays as before.
+    const { reviewSteps: _r, ...older } = imported;
+    expect(render(html, { $json: older })).toContain('<b>What changed (as reported by the run):</b><br>Added: Type the first day');
+    expect(ask(older)).toContain('\nWhat changed (as reported by the run):\nAdded: Type the first day');
+    // A repair: each entry names its step by number, with the sentence built from the step and the description marked.
+    const base = { startUrl: 'https://a.example/', steps: [steps[0], { intent: 'Click Export', click: { role: 'button', name: 'Export' } }] };
+    const now = { startUrl: 'https://a.example/', steps: [steps[0], { intent: 'Read the total', click: { role: 'button', name: 'Delete' } }, { intent: 'Open the list', goto: 'https://a.example/list' }] };
+    const changes = stepChanges(parseScript(base), parseScript(now));
+    const repair = { ...item, baseVersion: 1, version: 2, steps: now, changes, changeList: changeList({ changes } as unknown as Proposal), reviewSteps: undefined,
+      reviewChanges: reviewChanges({ describeStep }, now.steps, changes, { shownUrl: (u: string) => u, startUrl: now.startUrl }) };
+    expect(repair.reviewChanges).toEqual([
+      { change: 'Changed', step: 2, text: 'Click Delete', describedAs: 'Read the total', was: 'Click Export (click role "button" name "Export")' },
+      { change: 'Added', step: 3, text: 'Open a.example/list', describedAs: 'Open the list', quiet: true },
+    ]);
+    expect(render(html, { $json: repair })).toContain('<b>What changed (as reported by the run):</b><br>'
+      + 'Changed: step 2, Click Delete <b style="color:#b00020">(described differently as: Read the total)</b> <i style="color:#7e8186">(was: Click Export (click role "button" name "Export"))</i><br>'
+      + `Added: step 3, Open ${unlinked('a.example/list')} <i style="color:#7e8186">(the author calls it: Open the list)</i></p>`);
+    expect(ask(repair)).toContain('\nWhat changed (as reported by the run):\n'
+      + 'Changed: step 2, Click Delete ⚠ (described differently as: Read the total) (was: Click Export (click role "button" name "Export"))\n'
+      + `Added: step 3, Open ${unlinked('a.example/list')} (the author calls it: Open the list)\n\nApprove: `);
+    // A removed step keeps the run's words: there is no step to build a sentence from.
+    const removed = stepChanges(parseScript(now), parseScript(base));
+    const back = reviewChanges({ describeStep }, base.steps, removed, { shownUrl: (u: string) => u });
+    expect(back.find((c) => c.change === 'Removed')).toEqual({ change: 'Removed', was: 'Open the list (go to "https://a.example/list")' });
+    expect(ask({ ...repair, changes: removed, reviewChanges: back })).toContain(`Removed: Open the list (go to "${unlinked('https://a.example/list')}")`);
+  });
+
+  it('both approval emails show text from the steps through one function: look-alikes for <, > and &, and no address a mail program makes a link of', () => {
+    const desktopMessage = String(byName(t3, 'Ask for approval (desktop steps)').parameters.message);
+    const fns = (text: string) => [...text.matchAll(/\(\(s, lines\) => String\(s \?\? ''\)[\s\S]*?split\('\.'\)\.join\('\.\\u200b'\)\)\)/g)].map((m) => m[0]);
+    const all = [...fns(html), ...fns(message), ...fns(desktopMessage)];
+    expect(all.length).toBeGreaterThan(20);
+    expect(new Set(all).size).toBe(1);
+    // No other escaping is left in them: the review email showed &lt; where the approval email showed ‹.
+    for (const text of [html, message, desktopMessage]) {
+      expect(text).not.toContain("'&lt;'");
+      expect(text).not.toMatch(/\.replace\(\/\[&<>/);
+    }
+    // A description that holds a link, and addresses in a value and a goto.
+    const LINK = '<a href="http://evil.example/x">http://evil.example/x</a>';
+    const linked = [
+      { intent: LINK, click: { role: 'button', name: 'Pay' } },
+      { intent: 'Type the address', fill: { field: { label: 'Site' }, value: 'see www.evil.example/pay' } },
+      { intent: 'Open the shop', goto: 'https://shop.example/cart' },
+    ];
+    const json = { ...item, name: 'feed.example', steps: { startUrl: 'https://shop.example/', steps: linked }, reviewSteps: reviewSteps(linked, { desktop: false, shownUrl: (u: string) => u, startUrl: 'https://shop.example/' }),
+      changeList: `Added: ${LINK}`, evidenceLine: 'Proven at https://shop.example/cart', leftOutList: 'step 2, go to http://evil.example/y' };
+    const review = render(html, { $json: json });
+    const approval = ask(json);
+    // What a plain-text view of the HTML shows (tags removed): the same text.
+    const plain = review.replace(/<[^>]*>/g, ' ');
+    for (const [name, text] of [['review email', plain], ['approval email', approval]] as const) {
+      expect(text, name).not.toMatch(/:\/\/|evil\.example|shop\.example|www\.evil/);
+      expect(text, name).toContain(`\u2039a href="${unlinked('http://evil.example/x')}"\u203a${unlinked('http://evil.example/x')}\u2039/a\u203a`);
+      expect(text, name).toContain(unlinked('www.evil.example/pay'));
+      expect(text, name).toContain(`Open ${unlinked('shop.example/cart')}`);
+    }
+    expect(review).not.toMatch(/<a |href="http:\/\//);
+    // A file name stays as it is.
+    expect(ask({ ...item, evidenceLine: 'downloaded "report.csv" and ErpDemo.exe' })).toContain('downloaded "report.csv" and ErpDemo.exe');
+    // Only the emails: the review page and what is signed keep the address as it is.
+    expect(json.reviewSteps[2].text).toBe('Open shop.example/cart');
+    expect(String(byName(load('5-import-a-bot.json'), 'Review and approve').parameters.jsonOutput)).not.toContain('u200b');
   });
 
   it('Sign Steps checks the sentences the emails showed: the item goes to Sign steps whole, reviewSteps included', () => {
@@ -1079,6 +1157,19 @@ describe('5-import-a-bot.json (the first-day import)', () => {
   const completion = (name: string) => byName(t, name).parameters as { operation: string; respondWith: string; completionTitle: string; completionMessage: string; inputDataFieldName?: string };
   const REVIEW = 'Review and approve';
   const review = byName(t, REVIEW);
+  /**
+   * The review page's fields after its opening lines: the first field is always html that names the RPA Site Login Sign
+   * steps signs for (or that desktop steps are signed without one), after the comparison line on the change path, before
+   * the warning when the approved version does not fit.
+   */
+  function reviewFields(scope: Record<string, unknown>) {
+    const all = jsonFormFields(String(review.parameters.jsonOutput), scope);
+    expect(all[0].fieldType).toBe('html');
+    expect(String(all[0].html)).toMatch(/<p>(Signs for (the|no) RPA Site Login|Desktop steps are signed)/);
+    return all.slice(1);
+  }
+  /** The review page's opening lines (its first field). */
+  const reviewHead = (scope: Record<string, unknown>) => String(jsonFormFields(String(review.parameters.jsonOutput), scope)[0].html);
   const settingsJson = () => Object.fromEntries((byName(t, 'Settings').parameters as { assignments: { assignments: { name: string; value: string }[] } }).assignments.assignments.map((a) => [a.name, a.value])) as IDataObject;
   /** `$('<node>')` as an n8n expression sees it: the node's outputs in this execution (by output index) and its parameters. */
   function nodesRan(ran: Record<string, INodeExecutionData[][]>) {
@@ -1145,8 +1236,11 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(targets(t, 'Compared with the approved version')).toEqual([['The steps as a file']]);
     expect(targets(t, 'The steps as a file')).toEqual([['The upload']]);
     // The download question only for a browser source, on a second page; Import steps always reads The upload.
-    expect(targets(t, 'Asks about a download?')).toEqual([['The file it downloads'], ['The upload']]);
-    expect(targets(t, 'The file it downloads')).toEqual([['The upload']]);
+    // An upload then reads what runs under its name (What it replaces), so that it becomes the next version.
+    expect(targets(t, 'Asks about a download?')).toEqual([['The file it downloads'], ['Running versions']]);
+    expect(targets(t, 'The file it downloads')).toEqual([['Running versions']]);
+    expect(targets(t, 'Running versions')).toEqual([['What it replaces']]);
+    expect(targets(t, 'What it replaces')).toEqual([['The upload']]);
     expect(targets(t, 'The upload')).toEqual([['Import steps']]);
     // No chat model ships with it: a recording, a step document and a UiPath desktop sequence never use one, and n8n
     // would not publish the form while a model node has no credential. The README says how to add one.
@@ -1161,13 +1255,17 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(targets(t, 'Approval by email?')).toEqual([['Approve steps'], []]);
     expect(targets(t, 'Approve on this form?')).toEqual([['Create steps table'], ['Workflow file?']]);
     expect(targets(t, 'Create steps table')).toEqual([['Create run log table']]);
-    expect(targets(t, 'Create run log table')).toEqual([[REVIEW]]);
+    // Sign steps checks first (Check Only, before the review page): The approved version is what it checks, then Checked?
+    // sends that item to the review page. After the review page, it signs, and Checked? sends the records to Signed?.
+    expect(targets(t, 'Create run log table')).toEqual([['The approved version']]);
+    expect(targets(t, 'The approved version')).toEqual([['Sign steps']]);
+    expect(targets(t, 'Checked?')).toEqual([[REVIEW], ['Signed?']]);
     // v1 order runs the topmost child's branch to its end first: every step list is signed and saved before the last page.
     expect(targets(t, REVIEW)).toEqual([['Step lists', 'Workflow file?']]);
     expect(byName(t, 'Step lists').position[1]).toBeLessThan(byName(t, 'Workflow file?').position[1]);
     expect(targets(t, 'Step lists')).toEqual([['Step lists to sign']]);
     expect(targets(t, 'Step lists to sign')).toEqual([['Sign steps']]);
-    expect(targets(t, 'Sign steps')).toEqual([['Signed?'], []]);
+    expect(targets(t, 'Sign steps')).toEqual([['Checked?'], []]);
     expect(targets(t, 'Signed?')).toEqual([['Save signed steps'], ['Record rejection']]);
     expect(targets(t, 'Save signed steps')).toEqual([['Supersede older versions']]);
     expect(targets(t, 'Workflow file?')).toEqual([['Imported, with the workflow file'], ['Imported']]);
@@ -1189,9 +1287,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const working = t.nodes.filter((n) => n.type !== STICKY).map((n) => n.name).sort();
     expect(working).toEqual([
       'Add the login page', 'Address with values', 'Approval by email?', 'Approve on this form?', 'Approve steps', 'Approved bot found?', 'Approved bots', 'Asks about a download?', 'Change an approved bot?',
-      'Change or sign again', 'Compared with the approved version', 'Create run log table', 'Create steps table', 'Import a bot', 'Import failed', 'Import steps', 'Imported', 'Imported, with the workflow file', 'Missing login page?',
-      'No approved bot', 'Plain address?', 'Read the upload', 'Record rejection', REVIEW, 'Save signed steps', 'Settings', 'Sign steps', 'Signed?', 'Step lists', 'Step lists to sign', 'Supersede older versions',
-      'The bot to change', 'The file it downloads', 'The steps as a file', 'The upload', 'Workflow file?',
+      'Change or sign again', 'Checked?', 'Compared with the approved version', 'Create run log table', 'Create steps table', 'Import a bot', 'Import failed', 'Import steps', 'Imported', 'Imported, with the workflow file', 'Missing login page?',
+      'No approved bot', 'Plain address?', 'Read the upload', 'Record rejection', REVIEW, 'Running versions', 'Save signed steps', 'Settings', 'Sign steps', 'Signed?', 'Step lists', 'Step lists to sign', 'Supersede older versions',
+      'The approved version', 'The bot to change', 'The file it downloads', 'The steps as a file', 'The upload', 'What it replaces', 'Workflow file?',
     ]);
     expect(t.nodes.filter((n) => n.type === COMPLETION).map((n) => n.typeVersion)).toEqual([2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5]);
     // A form page pauses the run until the browser loads it; a closed tab must not leave the execution waiting for ever.
@@ -1228,7 +1326,16 @@ describe('5-import-a-bot.json (the first-day import)', () => {
   it('nothing reaches Save signed steps except an active record on the success output of Sign steps; Sign steps\' allowlist is typed', () => {
     const into = (node: string) => Object.entries(t.connections).flatMap(([from, byType]) => (byType.main ?? []).flatMap((out, index) => out.filter((c) => c.node === node).map(() => [from, index])));
     expect(into('Save signed steps')).toEqual([['Signed?', 0]]);
-    expect(into('Signed?')).toEqual([['Sign steps', 0]]);
+    expect(into('Signed?')).toEqual([['Checked?', 1]]);
+    expect(into('Checked?')).toEqual([['Sign steps', 0]]);
+    expect(into(REVIEW)).toEqual([['Checked?', 0]]);
+    const checkedCond = (byName(t, 'Checked?').parameters as { conditions: { conditions: { leftValue: string; operator: unknown }[] } }).conditions.conditions;
+    expect(checkedCond).toEqual([expect.objectContaining({ leftValue: '={{ $json.checkOnly === true }}', operator: { type: 'boolean', operation: 'true', singleValue: true } })]);
+    // A record never carries checkOnly, and the check never carries a status: neither can reach the other's path.
+    expect([{ checkOnly: true, siteLogin: null, approvedVersion: null }, { status: 'active' }, { status: 'rejected' }, {}].map(($json) => evaluate(checkedCond[0].leftValue, { $json }))).toEqual([true, false, false, false]);
+    // Check Only exactly while the review page has not run: the check before it, the signing after it.
+    const checkOnly = (reviewed: boolean) => evaluate(String(byName(t, 'Sign steps').parameters.checkOnly), { $: (n: string) => ({ isExecuted: n === REVIEW ? reviewed : true }) });
+    expect([checkOnly(false), checkOnly(true)]).toEqual([true, false]);
     expect(into('Record rejection')).toEqual([['Signed?', 1]]);
     expect(into('Supersede older versions')).toEqual([['Save signed steps', 0]]);
     const signed = byName(t, 'Signed?').parameters as { conditions: { conditions: { leftValue: string; rightValue: string; operator: unknown }[] } };
@@ -1427,7 +1534,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(repaired).toHaveLength(1);
     // The review page and Sign steps, as the template wires them: approved, it is signed as the active version 1.
     const ran = { Settings: [[{ json: settingsJson() }]], 'Import steps': [data, repaired] } as Record<string, INodeExecutionData[][]>;
-    expect(jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan(ran) }).map((f) => f.fieldType)).toEqual(['html', 'radio']);
+    expect(reviewFields({ $: nodesRan(ran) }).map((f) => f.fieldType)).toEqual(['html', 'radio']);
     // Sign steps holds the same Site Login as Import steps (the Set once note says so).
     const approved = await signAfterReview(ran, { decision_0: 'Approve and sign' }, {}, true);
     expect(approved.errors).toEqual([]);
@@ -1458,7 +1565,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect((runs[0].parameters.options as IDataObject).idPattern).toBe('N26-\\d{4}');
     // The review page shows the steps and the proof's rows, and Sign steps signs them as version 1.
     const ran = { Settings: [[{ json: settingsJson() }]], 'Import steps': [data, repaired] } as Record<string, INodeExecutionData[][]>;
-    const shown = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan(ran) });
+    const shown = reviewFields({ $: nodesRan(ran) });
     expect(shown.map((f) => f.fieldType)).toEqual(['html', 'radio']);
     expect(String(shown[0].html)).toContain('On each page: Read the notices table on this page');
     expect(String(shown[0].html)).toContain('Proven in a fresh browser:');
@@ -1513,7 +1620,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(data[0].binary?.workflow).toMatchObject({ fileName: 'line-item-export.workflow.json' });
     expect(repaired).toHaveLength(1);
     const item = repaired[0].json;
-    const fields = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan(ran) });
+    const fields = reviewFields({ $: nodesRan(ran) });
     expect(fields.map((f) => [f.fieldType, f.fieldName])).toEqual([['html', undefined], ['checkbox', 'writes_0'], ['html', undefined], ['text', 'moreWrites_0'], ['radio', 'decision_0']]);
     // A short top: the name and version as the page's title, two sentences.
     const options = review.parameters.options as IDataObject;
@@ -1536,7 +1643,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       ].map((l) => `<li>${l}</li>`).join('') + `</ol>${POINTER}`);
     // The parenthesis names the returned file only when one of the added steps returns it.
     const noFile = { ...item, reviewSteps: (item.reviewSteps as { text: string; marks: string[]; added?: true }[]).filter((r) => !r.marks.includes('returns a file')) };
-    const noFileFields = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan({ ...ran, 'Import steps': [[{ json: data[0].json }], [{ json: noFile }]] }) });
+    const noFileFields = reviewFields({ $: nodesRan({ ...ran, 'Import steps': [[{ json: data[0].json }], [{ json: noFile }]] }) });
     expect(noFileFields[0].html).toContain('<em>13 recorded steps, plus 4 the import added (waits for each window)</em>');
     expect(noFileFields[0].html).not.toContain('the returned file)');
     expect(String((review.parameters.options as IDataObject).customCss)).toContain('div.html li:has(> i) { color: #7e8186; }\ndiv.html li > i { font-style: normal; color: #7e8186; }');
@@ -1548,7 +1655,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       fieldOptions: { values: [{ option: 'Step 4: Press Enter in Password' }, { option: 'Step 16: Click Save' }] }, defaultValue: 'Step 16: Click Save',
     });
     // The page places what Import steps built (reviewSteps, writeCandidates); it reads nothing from Data's drafts.
-    const noDrafts = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan({ ...ran, 'Import steps': [[{ json: { ...data[0].json, drafts: [] } }], repaired] }) });
+    const noDrafts = reviewFields({ $: nodesRan({ ...ran, 'Import steps': [[{ json: { ...data[0].json, drafts: [] } }], repaired] }) });
     expect(noDrafts).toEqual(fields);
     expect(fields[0].html).not.toContain('candidate');
     expect(fields[3]).toMatchObject({ fieldLabel: 'Any other step that saves, sends or submits (its number, optional)', placeholder: '7, 9' });
@@ -1558,7 +1665,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // The page ends at the decision. Settings → showDetails puts the full detail (the item's own texts, escaped, small and
     // grey) back, above the question, in place of the pointer.
     expect(settingsJson().showDetails).toBe(false);
-    const detailed = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan({ ...ran, Settings: [[{ json: { ...settingsJson(), showDetails: true } }]] }) });
+    const detailed = reviewFields({ $: nodesRan({ ...ran, Settings: [[{ json: { ...settingsJson(), showDetails: true } }]] }) });
     expect(detailed.map((f) => f.fieldType)).toEqual(['html', 'checkbox', 'html', 'text', 'radio']);
     expect(detailed[0].html).toBe(String(fields[0].html).replace(POINTER, '') + '<h4>Details of every step (how each one finds its control)</h4>'
       + `<p><em><b>Safety flags:</b> ${escapeHtml(String(item.safetyLine))}</em></p>`
@@ -1629,7 +1736,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const candidate = { step: 3, intent: 'Save, then <b>close</b>' };
     const two = [repaired[0], { json: { ...repaired[0].json, name: 'second<b>', writeCandidates: [...(repaired[0].json.writeCandidates as IDataObject[]), candidate] } }];
     const ran = { Settings: [[{ json: settingsJson() }]], 'Import steps': [data, two] } as Record<string, INodeExecutionData[][]>;
-    const fields = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan(ran) });
+    const fields = reviewFields({ $: nodesRan(ran) });
     const html = fields.filter((f) => f.fieldType === 'html').map((f) => String(f.html));
     expect(html.map((h) => h.slice(0, 4))).toEqual(['<h3>', '<p><', '<h3>', '<p><']);
     expect(html[0]).toMatch(/^<h3>1 of 2: line-item-export, version 1<\/h3><p>Opens ErpDemo.exe/);
@@ -1658,8 +1765,8 @@ describe('5-import-a-bot.json (the first-day import)', () => {
         { intent: 'Open the list', goto: 'https://a.example/list' }, { intent: 'Sign in', signIn: {} },
         { intent: 'Type the export password', fill: { field: { css: '#p' }, value: '{{var.exportPassword}}', secret: true } },
         { intent: 'Pick <b>Status</b>', select: { field: { css: '#s' }, value: '{{var.status}}' } }, { intent: 'Download the report', download: {} },
-        // A typed value: the short list shows it, from the step.
-        { intent: 'Type the note', fill: { field: { css: '#n' }, value: 'hello <b>' } },
+        // A typed value: the short list shows it, from the step. Its description names another action: a warning.
+        { intent: 'Read the note', fill: { field: { css: '#n' }, value: 'hello <b>' } },
       ] },
       safetyFlags: ['host: a.example\' <script>', 'form submission: POST a.example/send', 'download step', 'secret fill: a step types the run variable {{var.exportPassword}}'],
       safetyLine: 'host: a.example\' <script>; …', evidenceLine: '7 rows <img src=x onerror=alert(1)>; compared with the repair run: 0 missing, 0 extra',
@@ -1668,19 +1775,19 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // As Import steps builds it from the steps.
     const withLines = { ...item, reviewSteps: reviewSteps(item.steps.steps, { desktop: false, shownUrl }) };
     const ran = { Settings: [[{ json: settingsJson() }]], 'Import steps': [[{ json: { report: { steps: 2, items: [] }, drafts: [] } }], [{ json: withLines }]] } as Record<string, INodeExecutionData[][]>;
-    const fields = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan(ran) });
+    const fields = reviewFields({ $: nodesRan(ran) });
     expect(fields.map((f) => f.fieldType)).toEqual(['html', 'radio']);
     const POINTER = '<p><em>How each step finds its control is in this run\'s execution in n8n (the Import steps node\'s output), and in the approval email when approval is by email.</em></p>';
     expect(fields[0].html).toBe('<p>Opens a.example&#39; &lt;script&gt;.<br>Signs in with the RPA Site Login.<br>Submits a form: POST a.example/send.<br>Returns a file to n8n: step 5.<br>'
       + 'Types a secret: the run variable {{var.exportPassword}}.<br>7 rows &lt;img src=x onerror=alert(1)&gt;.</p>'
       + '<p><b>⚠ Left out by the import:</b><br>step 4, Pick &lt;b&gt;Status&lt;/b&gt;<br>step 9, Wait</p>'
-      + '<p><b>The steps</b></p><ol><li>Open a.example/list <strong>(described differently as: Open the list)</strong></li><li>Sign in <em>· signs in with the RPA Site Login</em></li>'
-      + '<li>Type into the element matching &quot;#p&quot;: a secret <strong>(described differently as: Type the export password)</strong> <em>· secret variable exportPassword</em></li>'
-      + '<li>Choose an option set by a variable in the element matching &quot;#s&quot; <strong>(described differently as: Pick &lt;b&gt;Status&lt;/b&gt;)</strong> <em>· variable status</em></li>'
-      + '<li>Download with an element <strong>(described differently as: Download the report)</strong> <em>· returns a file</em></li>'
-      + '<li>Type into the element matching &quot;#n&quot;: &quot;hello &lt;b&gt;&quot; <strong>(described differently as: Type the note)</strong></li></ol>' + POINTER);
+      + '<p><b>The steps</b></p><ol><li>Open a.example/list <em>(the author calls it: Open the list)</em></li><li>Sign in <em>· signs in with the RPA Site Login</em></li>'
+      + '<li>Type into the element matching &quot;#p&quot;: a secret <em>(the author calls it: Type the export password)</em> <em>· secret variable exportPassword</em></li>'
+      + '<li>Choose an option set by a variable in the element matching &quot;#s&quot; <em>(the author calls it: Pick &lt;b&gt;Status&lt;/b&gt;)</em> <em>· variable status</em></li>'
+      + '<li>Download with an element <em>(the author calls it: Download the report)</em> <em>· returns a file</em></li>'
+      + '<li>Type into the element matching &quot;#n&quot;: &quot;hello &lt;b&gt;&quot; <strong>(described differently as: Read the note)</strong></li></ol>' + POINTER);
     // Every flag the opening lines do not already say in their own words is worded as a sentence, never shown raw.
-    const opening = (safetyFlags: string[]) => String(jsonFormFields(String(review.parameters.jsonOutput), {
+    const opening = (safetyFlags: string[]) => String(reviewFields({
       $: nodesRan({ ...ran, 'Import steps': [ran['Import steps'][0], [{ json: { ...withLines, safetyFlags, leftOutList: undefined, evidenceLine: 'Proven in a fresh browser: 7 rows (the page states no total)' } }]] }),
     })[0].html).split('</p>')[0].replace(/^<p>/, '').split('<br>');
     expect(opening([
@@ -1698,21 +1805,22 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       'Sets a new password from the run variable {{var.newPassword}} when the site asks for one.',
       'Gives the clipboard&#39;s text to n8n: step 4 (Copy the total), as &quot;total&quot;. The desktop runner allows this only when its policy allows clipboard reads.',
       'A flag a later engine adds.',
-      'Proven in a fresh browser: 7 rows (the page states no total).',
+      // Said once: the line above says the page states no total.
+      'Proven in a fresh browser: 7 rows.',
     ]);
-    const detailed = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan({ ...ran, Settings: [[{ json: { ...settingsJson(), showDetails: true } }]] }) });
+    const detailed = reviewFields({ $: nodesRan({ ...ran, Settings: [[{ json: { ...settingsJson(), showDetails: true } }]] }) });
     expect(detailed[0].html).toBe(String(fields[0].html).replace(POINTER, '') + '<h4>Details of every step (how each one finds its control)</h4><p><em><b>Safety flags:</b> host: a.example&#39; &lt;script&gt;; …</em></p>'
       + '<p><em><b>Left out by the import (the source does these, the steps do not):</b><br>step 4, Pick &lt;b&gt;Status&lt;/b&gt;<br>step 9, Wait</em></p>'
       + '<p><em><b>Evidence (as reported by the run):</b> 7 rows &lt;img src=x onerror=alert(1)&gt;; compared with the repair run: 0 missing, 0 extra</em></p>'
       + '<p><em><b>What changed (as reported by the run):</b><br>Added: Open the list<br>Added: Read &quot;rows&quot; $&amp; $$</em></p>'
       + '<p><em>Screenshots of the replay are in this execution in n8n, on the Repaired Steps output of Import steps.</em></p>');
-    const notRun = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan({ Settings: [[{ json: { ...settingsJson(), showDetails: true } }]], 'Import steps': [ran['Import steps'][0], [{ json: { ...withLines, evidenceLine: NOT_REPLAYED_LINE, attachmentNames: '', leftOutList: undefined } }]] }) });
+    const notRun = reviewFields({ $: nodesRan({ Settings: [[{ json: { ...settingsJson(), showDetails: true } }]], 'Import steps': [ran['Import steps'][0], [{ json: { ...withLines, evidenceLine: NOT_REPLAYED_LINE, attachmentNames: '', leftOutList: undefined } }]] }) });
     expect(notRun[0].html).toContain('<br>Not run by the import: check every step, each form&#39;s target and each download before you approve.</p><p><b>The steps</b></p><ol>');
     expect(notRun[0].html).toContain(`<b>Evidence:</b> ${escapeHtml(NOT_REPLAYED_LINE)}</em></p><p><em><b>What changed (as written; these steps were never run):</b>`);
     expect(notRun[0].html).not.toContain('Screenshots');
     // A variable written with spaces gets its mark too (the page's own regex used to miss it).
     expect(reviewSteps([{ intent: 'Type the note', fill: { field: { label: 'Note' }, value: '{{ var.note }}' } }], { desktop: false, shownUrl }))
-      .toEqual([{ text: 'Type into Note: a variable', describedAs: 'Type the note', marks: ['variable note'] }]);
+      .toEqual([{ text: 'Type into Note: a variable', describedAs: 'Type the note', quiet: true, marks: ['variable note'] }]);
     expect(reviewSteps([{ intent: 'Pick', select: { field: { uia: { path: [{ controlType: 'ComboBox', name: 'Plant' }] } }, option: '{{ var.plant }}' } }], { desktop: true }))
       .toEqual([{ text: 'Choose an item in Plant', marks: ['variable plant'] }]);
     // A desktop read names its control by the name a person sees, never by its automation id, and says the output once.
@@ -1751,6 +1859,50 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       'Click Post (described differently as: Read the total)',
       'Double-click Post (described differently as: Open the row)',
       'Click a control without a name (described differently as: Look at the list)',
+    ]);
+  });
+
+  it('a description is the author\'s words, shown quietly; a warning only when it names another kind of action or another site', () => {
+    const one = (step: IDataObject, startUrl?: string) => reviewSteps([step], { desktop: false, shownUrl, ...(startUrl ? { startUrl } : {}) })[0];
+    // The samples of the films: a harmless rewording is quiet.
+    expect(one({ intent: 'Type the PIN', fill: { field: { label: 'PIN' }, value: '{{var.pin}}', secret: true } }))
+      .toEqual({ text: 'Type into PIN: a secret', describedAs: 'Type the PIN', quiet: true, marks: ['secret variable pin'] });
+    expect(one({ intent: 'Open the products page', goto: 'http://sandbox:8080/public/table' }))
+      .toEqual({ text: 'Open http://sandbox:8080/public/table', describedAs: 'Open the products page', quiet: true, marks: [] });
+    // Another kind of action: a warning.
+    expect(one({ intent: 'Read the total', click: { role: 'button', name: 'Delete all' } })).toEqual({ text: 'Click Delete all', describedAs: 'Read the total', marks: [] });
+    // Another site: a warning, whatever the verb; the step's own host, or the start site's, is quiet.
+    expect(one({ intent: 'Open https://bank.example', goto: 'https://evil.example/login' })).toEqual({ text: 'Open evil.example/login', describedAs: 'Open https://bank.example', marks: [] });
+    expect(one({ intent: 'Open bank.example', goto: 'https://evil.example/login' })).not.toHaveProperty('quiet');
+    expect(one({ intent: 'Open https://evil.example', goto: 'https://evil.example/login' })).toMatchObject({ quiet: true });
+    expect(one({ intent: 'Open https://shop.example/orders', goto: '/orders' }, 'https://shop.example/')).toMatchObject({ quiet: true });
+    expect(one({ intent: 'Open https://bank.example/orders', goto: '/orders' }, 'https://shop.example/')).not.toHaveProperty('quiet');
+    expect(one({ intent: 'Type user@mail.example', fill: { field: { label: 'Email' }, value: 'user@mail.example' } })).toMatchObject({ quiet: true });
+    expect(one({ intent: 'Type the address of bank.example', fill: { field: { label: 'Email' }, value: 'x' } })).not.toHaveProperty('quiet');
+    // A file name is not a site.
+    expect(one({ intent: 'Download report.csv', download: { trigger: { text: 'Export' } } })).toMatchObject({ quiet: true });
+    // The same words as the sentence: nothing beside it, as before.
+    expect(one({ intent: 'Click Delete all.', click: { role: 'button', name: 'Delete all' } })).toEqual({ text: 'Click Delete all', marks: [] });
+    // A first word the table does not know is quiet; each kind its own words, two-word ones included.
+    expect(one({ intent: 'Remove the banner', click: { text: 'OK' } })).toMatchObject({ quiet: true });
+    for (const [intent, step, quiet] of [
+      ['Navigate to the list', { goto: 'https://a.example/list' }, true], ['Visit the list', { goto: 'https://a.example/list' }, true],
+      ['Click the list', { goto: 'https://a.example/list' }, false], ['Enter 5', { fill: { field: { label: 'N' }, value: '5' } }, true],
+      ['Wait for the total', { fill: { field: { label: 'N' }, value: '5' } }, false], ['Tap Save', { click: { text: 'Save' } }, true],
+      ['Open the order', { click: { text: 'Order 7' } }, true], ['Export the list', { click: { text: 'Export' } }, true],
+      ['Tick Agree', { check: { field: { label: 'Agree' } } }, true], ['Get the rows', { check: { field: { label: 'Agree' } } }, false],
+      ['Pick north', { select: { field: { label: 'Region' }, value: 'north' } }, true], ['Upload the file', { click: { text: 'Send' } }, false],
+      ['Log in as the admin', { signIn: {} }, true], ['Sign in as the admin', { click: { text: 'Delete' } }, false],
+      ['Save the order', { submit: { path: '/save', button: { text: 'Save' } } }, true], ['Read the order', { submit: { path: '/save', button: { text: 'Save' } } }, false],
+    ] as const) {
+      const r = one({ intent, ...step });
+      expect(r.describedAs, intent).toBe(intent);
+      expect(r.quiet === true, intent).toBe(quiet);
+    }
+    // Desktop steps alike.
+    const field = { uia: { path: [{ name: 'Total' }] } };
+    expect(reviewSteps([{ intent: 'Read the total', click: field }, { intent: 'Press the button', click: field }], { desktop: true })).toEqual([
+      { text: 'Click Total', describedAs: 'Read the total', marks: [] }, { text: 'Click Total', describedAs: 'Press the button', quiet: true, marks: [] },
     ]);
   });
 
@@ -1926,7 +2078,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     for (const steps of [{ startUrl: 'https://a.example/', steps: [{}, {}] }, { surface: 'desktop', app: { exe: 'App.exe' }, steps: [{}, {}] }]) {
       const item = { name: 'feed', version: 1, steps, safetyFlags: [], safetyLine: 'none', evidenceLine: '3 rows', changeList: '', reviewSteps: entries };
       const ran = { Settings: [[{ json: settingsJson() }]], 'Import steps': [[{ json: { report: { steps: 2, items: [] }, drafts: [] } }], [{ json: item }]] } as Record<string, INodeExecutionData[][]>;
-      const html = String(jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan(ran) })[0].html);
+      const html = String(reviewFields({ $: nodesRan(ran) })[0].html);
       expect(html).toContain('<ol><li>Click &quot;Save (described differently as: Delete all) &lt;i&gt;&quot; <strong>(described differently as: Open (described differently as: x) &lt;b&gt;)</strong></li>'
         + '<li>Type into Note: &quot;v (described differently as: w)&quot;</li></ol>');
       // Only describedAs is in red: the sentence's own words are never.
@@ -1940,31 +2092,33 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       { intent: 'Open the list', goto: 'https://a.example/list' },
       { intent: 'Go through the pages', paginate: { next: { role: 'button', name: 'Next' }, until: 'absent', max: 3, each: [
         { intent: 'Read the rows', extract: { scope: { css: 'table' }, item: { css: 'tr' } } },
-        { intent: 'Close the banner', fill: { field: { label: 'Note' }, value: '<b>{{var.note}}</b>' } },
+        { intent: 'Read the note', fill: { field: { label: 'Note' }, value: '<b>{{var.note}}</b>' } },
         { intent: 'Close the banner', click: { text: 'Delete <all>' } },
       ] } },
       { intent: 'Download with Export', download: { trigger: { text: 'Export' } } },
     ];
     const listed = reviewSteps(steps, { desktop: false, shownUrl });
     expect(listed[1]).toEqual({
-      text: 'Page through with Next, at most 3 pages, 3 steps on each', describedAs: 'Go through the pages', marks: [],
+      text: 'Page through with Next, at most 3 pages, 3 steps on each', describedAs: 'Go through the pages', quiet: true, marks: [],
       each: [
         { text: 'Read the rows', marks: [] },
-        { text: 'Type into Note: a variable', describedAs: 'Close the banner', marks: ['variable note'] },
-        { text: 'Click Delete <all>', describedAs: 'Close the banner', marks: [] },
+        // "Read" names another kind of action than typing: a warning. "Close" is not in the table: the author's words.
+        { text: 'Type into Note: a variable', describedAs: 'Read the note', marks: ['variable note'] },
+        { text: 'Click Delete <all>', describedAs: 'Close the banner', quiet: true, marks: [] },
       ],
     });
     expect(listed.map((r) => r.each === undefined)).toEqual([true, false, true]);
     // On the page: nested under the paginate's item, so the numbers of the steps after it do not move. Escaped once.
     const item = { name: 'feed', version: 1, steps: { startUrl: 'https://a.example/', steps }, safetyFlags: [], safetyLine: 'none', evidenceLine: '3 rows', changeList: '', reviewSteps: listed };
     const ran = { Settings: [[{ json: settingsJson() }]], 'Import steps': [[{ json: { report: { steps: 3, items: [] }, drafts: [] } }], [{ json: item }]] } as Record<string, INodeExecutionData[][]>;
-    const html = String(jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan(ran) })[0].html);
-    // A description that says something else is a warning: <strong>, which the page's style shows in red.
-    expect(html).toContain('<ol><li>Open a.example/list <strong>(described differently as: Open the list)</strong></li>'
-      + '<li>Page through with Next, at most 3 pages, 3 steps on each <strong>(described differently as: Go through the pages)</strong><ul>'
+    const html = String(reviewFields({ $: nodesRan(ran) })[0].html);
+    // A description that names another kind of action is a warning: <strong>, which the page's style shows in red. Any
+    // other description stands beside the sentence quietly (<em>, grey), as the author's words.
+    expect(html).toContain('<ol><li>Open a.example/list <em>(the author calls it: Open the list)</em></li>'
+      + '<li>Page through with Next, at most 3 pages, 3 steps on each <em>(the author calls it: Go through the pages)</em><ul>'
       + '<li>On each page: Read the rows</li>'
-      + '<li>On each page: Type into Note: a variable <strong>(described differently as: Close the banner)</strong> <em>· variable note</em></li>'
-      + '<li>On each page: Click Delete &lt;all&gt; <strong>(described differently as: Close the banner)</strong></li></ul></li>'
+      + '<li>On each page: Type into Note: a variable <strong>(described differently as: Read the note)</strong> <em>· variable note</em></li>'
+      + '<li>On each page: Click Delete &lt;all&gt; <em>(the author calls it: Close the banner)</em></li></ul></li>'
       + '<li>Download with Export <em>· returns a file</em></li></ol>');
     expect(html).toContain('Returns a file to n8n: step 3.');
     expect(String(review.parameters.options && (review.parameters.options as IDataObject).customCss)).toContain('div.html strong { color: #b00020; font-weight: 600; }');
@@ -1975,7 +2129,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const data = ran['Import steps'][0][0].json as { drafts: IDataObject[] };
     expect(data.drafts[0]).toMatchObject({ surface: 'desktop', secretVariables: ['password'] });
     expect((repaired[0].json.reviewSteps as IDataObject[])[2]).toEqual({ text: 'Type into Password', marks: ['secret variable password'] });
-    const fields = jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan(ran) });
+    const fields = reviewFields({ $: nodesRan(ran) });
     expect(fields[0].html).toContain('<li>Type into Password <em>· secret variable password</em></li>');
   });
 
@@ -1987,7 +2141,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // The value changed to a fixed 2000 on the change page, the description left as it was: no variable mark, and the
     // description shows beside the sentence as saying something else.
     const fixed = { ...doc, steps: [choose('2000')] };
-    expect(reviewSteps(fixed.steps, { desktop: true })).toEqual([{ text: 'Choose "2000" in Company code', describedAs: 'Choose {{var.company_code}} in Company code', marks: [] }]);
+    expect(reviewSteps(fixed.steps, { desktop: true })).toEqual([{ text: 'Choose "2000" in Company code', describedAs: 'Choose {{var.company_code}} in Company code', quiet: true, marks: [] }]);
     // A browser step alike.
     expect(reviewSteps([{ intent: 'Type {{var.code}} into Code', fill: { field: { label: 'Code' }, value: '2000' } }], { desktop: false, shownUrl: (u: string) => u })[0].marks).toEqual([]);
     const { ran } = changePath('erp', [{ id: 1, name: 'erp', version: 1, steps: JSON.stringify(doc), status: 'active' }]);
@@ -1995,10 +2149,10 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       throw new Error('desktop steps are never replayed');
     }, ran);
     expect(data[0].json.error).toBeUndefined();
-    expect(repaired[0].json.reviewSteps).toEqual([{ text: 'Choose "2000" in Company code', describedAs: 'Choose {{var.company_code}} in Company code', marks: [] }]);
+    expect(repaired[0].json.reviewSteps).toEqual([{ text: 'Choose "2000" in Company code', describedAs: 'Choose {{var.company_code}} in Company code', quiet: true, marks: [] }]);
     const after = { ...ran, 'Change or sign again': [[{ json: { changedSteps: JSON.stringify(fixed) } }]], [COMPARED]: [[{ json: compared(ran, JSON.stringify(fixed)) }]], 'Import steps': [data, repaired] };
-    const page = String(jsonFormFields(String(review.parameters.jsonOutput), { $: nodesRan(after) })[1].html);
-    expect(page).toContain('<li>Choose &quot;2000&quot; in Company code <strong>(described differently as: Choose {{var.company_code}} in Company code)</strong></li>');
+    const page = String(reviewFields({ $: nodesRan(after) })[0].html);
+    expect(page).toContain('<li>Choose &quot;2000&quot; in Company code <em>(the author calls it: Choose {{var.company_code}} in Company code)</em></li>');
     expect(page).not.toContain('variable company_code');
     // Sign steps rebuilds the same sentence and marks, and signs.
     const signed = await signAfterReview(after, { decision_0: 'Approve and sign' });
@@ -2099,8 +2253,8 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       'Approved and signed: erp&lt;1&gt; v1 is now the version that runs under that name. Signed as writes: step 16 (Click Save).',
       'Approved and signed: feed v1 is now the version that runs under that name.',
       'Rejected: other v1. Nothing was signed.',
-      'Not signed: bad v1. Sign Steps refused: the steps do not match the hash that was reviewed',
-      'Not signed. Sign Steps needs an RPA Step Signing credential',
+      'Not signed: bad v1. Sign Steps refused: the steps do not match the hash that was reviewed.',
+      'Not signed. Sign Steps needs an RPA Step Signing credential.',
     ]);
     expect(reviewed([], [], [draft({ surface: 'desktop', forApproval: true })])).toEqual(['Nothing was signed: the review page was not answered in time.']);
     // Both pages say the same about the step lists.
@@ -2204,6 +2358,33 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     return { json, ...(binary ? { binary } : {}) };
   }
 
+  /**
+   * Sign steps' first run, before the review page: The approved version (from `ran`), then Sign steps with the parameters
+   * it reads then resolved as n8n resolves them (Check Only on: the review page has not run; the parameters that read the
+   * review page are never read), the key `key` and the Site Login `siteLogin` (none when not given). Returns `ran` with both.
+   */
+  async function checkBeforeReview(ran: Record<string, INodeExecutionData[][]>, key: string, siteLogin?: { id: string; name: string }) {
+    const $ = nodesRan(ran);
+    const item = evaluate(String(byName(t, 'The approved version').parameters.jsonOutput), { $ }) as IDataObject;
+    const sign = byName(t, 'Sign steps').parameters;
+    const params = Object.fromEntries(Object.entries(sign).flatMap(([k, v]) => {
+      if (typeof v !== 'string' || !v.startsWith('=')) return [[k, v]];
+      try {
+        return [[k, evaluate(v, { $, $itemIndex: 0 })]];
+      } catch {
+        return [];
+      }
+    }));
+    expect(params.checkOnly).toBe(true);
+    const out = await executeSignSteps(harness({
+      params, rawParameters: sign, items: [{ json: item }], continueOnFail: true,
+      credentials: { playwrightScriptSigningApi: { secretKey: key }, ...(siteLogin ? { playwrightSiteLoginApi: siteLoginData(SITE) } : {}) },
+      ...(siteLogin ? { credentialIds: { playwrightSiteLoginApi: siteLogin.id }, credentialNames: { playwrightSiteLoginApi: siteLogin.name } } : {}),
+    }), importEngine(() => NOT_ADOPTABLE));
+    expect(out[0]).toHaveLength(1);
+    expect(out[0][0].json.checkOnly).toBe(true);
+    return { ...ran, 'The approved version': [[{ json: item }]], 'Sign steps': [out[0], []] } as Record<string, INodeExecutionData[][]>;
+  }
   const COMPARED = 'Compared with the approved version';
   /**
    * What Compared with the approved version gives for the box submitted as `text` ('' for left empty; n8n gives null for
@@ -2330,15 +2511,18 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       { id: 5, name: 'erp', version: 9, steps: '', status: 'active' },
       { error: 'The Data Table playwright_steps does not exist' }, {},
     ];
-    const found = { name: 'erp', found: true, version: 3, steps: JSON.stringify(doc), names: ['erp', 'other<b>'] };
+    const found = { name: 'erp', found: true, version: 3, steps: JSON.stringify(doc), signature: '', approvedBy: '', names: ['erp', 'other<b>'] };
     expect(changePath('erp', rows).bot).toEqual(found);
     expect(changePath('  erp ', rows).bot).toEqual(found);
     // Exactly the name: another casing is another bot.
-    expect(changePath('ERP', rows).bot).toEqual({ name: 'ERP', found: false, version: null, steps: '', names: ['erp', 'other<b>'] });
+    expect(changePath('ERP', rows).bot).toEqual({ name: 'ERP', found: false, version: null, steps: '', signature: '', approvedBy: '', names: ['erp', 'other<b>'] });
     // A row whose steps are not JSON is shown as it is: Import steps then says what is wrong with it.
     expect(changePath('erp', [{ id: 1, name: 'erp', version: 1, steps: '{broken', status: 'active' }]).bot).toMatchObject({ found: true, steps: '{broken' });
     // No table yet, or no row.
-    expect(changePath('erp', [{ error: 'no table' }]).bot).toEqual({ name: 'erp', found: false, version: null, steps: '', names: [] });
+    expect(changePath('erp', [{ error: 'no table' }]).bot).toEqual({ name: 'erp', found: false, version: null, steps: '', signature: '', approvedBy: '', names: [] });
+    // The row's signature and approver come along for Sign steps' check, as the table holds them (never shown on a page).
+    expect(changePath('erp', [{ id: 2, name: 'erp', version: 3, steps: '{}', signature: 'ab12', approvedBy: 'approver@example.com', status: 'active' }]).bot)
+      .toMatchObject({ found: true, signature: 'ab12', approvedBy: 'approver@example.com' });
     expect(changePath('erp', [{}]).bot).toMatchObject({ found: false, names: [] });
     const foundCond = (byName(t, 'Approved bot found?').parameters as { conditions: { conditions: { leftValue: string }[] } }).conditions.conditions[0].leftValue;
     expect([found, { found: false }, {}].map(($json) => evaluate(foundCond, { $json }))).toEqual([true, false, false]);
@@ -2384,6 +2568,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     }
     // The block scrolls at a sensible height and one click selects it all.
     expect(String((page.parameters.options as IDataObject).customCss)).toMatch(/div\.html pre \{ max-height: 24em; overflow: auto;[^}]*user-select: all;/);
+    // Long lines wrap inside the block (a desktop step's window name is longer than the page is wide): no sideways scroll.
+    expect(String((page.parameters.options as IDataObject).customCss)).toMatch(/div\.html pre \{[^}]*white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere;/);
+    expect(String((page.parameters.options as IDataObject).customCss)).not.toMatch(/white-space: pre;/);
     // A row whose steps are not JSON is shown as it is.
     const broken = jsonFormFields(String(page.parameters.jsonOutput), { $: changePath('x', [{ id: 1, name: 'x', version: 2, steps: '{broken <', status: 'active' }]).$ });
     expect(String(broken[0].html)).toContain('<pre>{broken &lt;</pre>');
@@ -2465,14 +2652,21 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       expect(data[0].json.error, JSON.stringify(data[0].json).slice(0, 600)).toBeUndefined();
       expect(repaired).toHaveLength(1);
       const line = compared(ran, text);
-      const after = { ...ran, 'Change or sign again': [[{ json: { changedSteps: text } }]], [COMPARED]: [[{ json: line }]], 'Import steps': [data, repaired] };
-      // The review page of an import, with one line on top: how these steps relate to the approved version.
+      // Sign steps checks the approved version first, with the new key: signed with the old one, it does not fit.
+      const after = await checkBeforeReview({ ...ran, 'Change or sign again': [[{ json: { changedSteps: text } }]], [COMPARED]: [[{ json: line }]], 'Import steps': [data, repaired] }, NEW_KEY);
+      expect(after['Sign steps'][0][0].json).toEqual({ checkOnly: true, siteLogin: null, approvedVersion: { version: 1, desktop: true, signatureFits: false } });
+      // The review page of an import, with its opening lines on top: how these steps relate to the approved version, what
+      // a desktop signature binds, and the warning (desktop steps bind no Site Login, so it names only the key).
       const all = jsonFormFields(String(byName(t, REVIEW).parameters.jsonOutput), { $: nodesRan(after) });
-      expect(all[0]).toEqual({ fieldType: 'html', html: `<p><b>${escapeHtml(line.compared)}</b></p>` });
+      expect(all[0]).toEqual({
+        fieldType: 'html',
+        html: `<p><b>${escapeHtml(line.compared)}</b></p><p>Desktop steps are signed for the app they start, without a Site Login.</p>`
+          + "<p><strong>⚠ Version 1 was not signed with this form's signing key. After a new signing key, that is expected.</strong></p>",
+      });
       const fields = all.slice(1);
       expect(fields.map((f) => f.fieldName ?? f.fieldType)).toEqual(['html', 'writes_0', 'html', 'moreWrites_0', 'decision_0']);
       // Every step list is the same without the line: an ordinary import shows none.
-      expect(jsonFormFields(String(byName(t, REVIEW).parameters.jsonOutput), { $: nodesRan({ ...after, [COMPARED]: undefined as never }) })).toEqual(fields);
+      expect(jsonFormFields(String(byName(t, REVIEW).parameters.jsonOutput), { $: nodesRan({ ...after, [COMPARED]: undefined as never }) }).slice(1)).toEqual(fields);
       const signed = await signAfterReview(after, answer, {}, false, by, undefined, NEW_KEY);
       return { after, fields, ...signed };
     };
@@ -2547,7 +2741,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // Sign steps refused (an approver not on the list), or the review page not answered: the old version keeps running too.
     const refused = await review('', { writes_0: [], decision_0: 'Approve and sign' }, signedIn('member@example.com'));
     expect(lastPage(refused).text.split('\n')).toEqual([
-      `Not signed: ${String(old.name)} v2. Sign Steps refused: The n8n user who submitted the approval form is not on the Approver Allowlist`,
+      `Not signed: ${String(old.name)} v2. Sign Steps refused: The n8n user who submitted the approval form is not on the Approver Allowlist. Ask a person on the Approver Allowlist to approve it on this form.`,
       `Nothing changed: ${String(old.name)} version 1 keeps running.`,
     ]);
     expect(lastPage({ after: rejected.after, signed: [], errors: [] }, { name: 'steps table' }).text.split('\n')).toEqual([
@@ -2555,6 +2749,129 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     ]);
     expect(targets(t, 'Signed?')).toEqual([['Save signed steps'], ['Record rejection']]);
     expect(targets(t, 'Record rejection')).toEqual([]);
+  });
+
+  it('the review page names the Site Login Sign steps signs for; on a change or sign again, a warning when the approved version does not fit its key and Site Login', async () => {
+    const KEY = 'k'.repeat(32);
+    const doc = { startUrl: `${SITE.url}/list`, name: 'feed', version: 4, steps: [{ intent: 'Open the list', goto: `${SITE.url}/list` }] };
+    /** The active row of `doc` as Sign Steps saved it: signed with `key` for the Site Login id `siteLoginId` (none when not given). */
+    const row = (key: string, siteLoginId?: string): IDataObject => ({
+      id: 9, name: 'feed', version: 4, steps: JSON.stringify(doc), signature: signScript(doc, key, { approvedBy: APPROVER, ...(siteLoginId ? { siteLoginId } : {}) }).signature,
+      approvedBy: APPROVER, status: 'active',
+    });
+    /** The Repaired steps item of the next version, as the review page lists it. */
+    const next = (surface?: string) => ({ json: { name: 'feed', version: 5, baseVersion: null, steps: { ...doc, version: 5, ...(surface ? { surface } : {}) }, reviewSteps: [], safetyFlags: [] } });
+    const head = async (r: IDataObject, key: string, siteLogin?: { id: string; name: string }) => {
+      const { ran } = changePath('feed', [r]);
+      const after = await checkBeforeReview({ ...ran, 'Change or sign again': [[{ json: { changedSteps: '' } }]], [COMPARED]: [[{ json: compared(ran, '') }]], 'Import steps': [[{ json: {} }], [next()]] }, key, siteLogin);
+      return reviewHead({ $: nodesRan(after) });
+    };
+    const SHOP = { id: 'site-a', name: 'Shop <login>' };
+    const UNCHANGED = '<p><b>These are the steps of the approved version 4, unchanged.</b></p>';
+    const NAMED = '<p>Signs for the RPA Site Login <b>Shop &lt;login&gt;</b>. The workflow that runs the bot must use this Site Login.</p>';
+    // Signed with this key for this Site Login: the line names it, and nothing more is said.
+    expect(await head(row(KEY, SHOP.id), KEY, SHOP)).toBe(UNCHANGED + NAMED);
+    // Signed for another Site Login (the many-accounts one): the warning, above the decision, names this form's.
+    const WARNING = "<p><strong>⚠ Version 4 was not signed with this form's signing key and the Site Login Shop &lt;login&gt;. After a new signing key, that is expected. If the bot's workflow uses another Site Login, a version signed here will not run there: put that Site Login on Import steps and Sign steps of this form first.</strong></p>";
+    expect(await head(row(KEY, 'site-b'), KEY, SHOP)).toBe(UNCHANGED + NAMED + WARNING);
+    // Signed with another key: the same warning (the row alone cannot tell the two apart), and it does not refuse.
+    expect(await head(row('o'.repeat(32), SHOP.id), KEY, SHOP)).toBe(UNCHANGED + NAMED + WARNING);
+    // No Site Login on Sign steps: the line says so, and a version signed for one does not fit.
+    const NONE = '<p>Signs for no RPA Site Login. The workflow that runs the bot must have none.</p>';
+    expect(await head(row(KEY), KEY)).toBe(UNCHANGED + NONE);
+    expect(await head(row(KEY, SHOP.id), KEY)).toContain(" and no Site Login. After a new signing key, that is expected.");
+    // No key, signature or Site Login data is shown.
+    const shown = await head(row(KEY, 'site-b'), KEY, SHOP);
+    for (const secret of [KEY, String(row(KEY, 'site-b').signature), 'site-a', 'site-b']) expect(shown).not.toContain(secret);
+
+    // A new bot: no approved version to check, only the line. Sign steps' check gets an empty item.
+    const fresh = await checkBeforeReview({ Settings: [[{ json: { name: 'feed', ...settingsJson() } }]], 'Import steps': [[{ json: {} }], [next()]] }, KEY, SHOP);
+    expect(fresh['The approved version'][0][0].json).toEqual({});
+    expect(fresh['Sign steps'][0][0].json).toEqual({ checkOnly: true, siteLogin: SHOP.name, approvedVersion: null });
+    expect(reviewHead({ $: nodesRan(fresh) })).toBe(NAMED);
+    // Desktop steps bind no Site Login: the line says what they bind, whatever Sign steps holds.
+    const desktop = { ...fresh, 'Import steps': [[{ json: {} }], [next('desktop')]] };
+    expect(reviewHead({ $: nodesRan(desktop) })).toBe('<p>Desktop steps are signed for the app they start, without a Site Login.</p>');
+    expect(reviewHead({ $: nodesRan({ ...desktop, 'Import steps': [[{ json: {} }], [next(), next('desktop')]] }) }))
+      .toBe('<p>Signs for the RPA Site Login <b>Shop &lt;login&gt;</b>. The workflow that runs the bot must use this Site Login. Desktop steps are signed for the app they start, without a Site Login.</p>');
+
+    // The page was not answered: Sign steps' last run is its check, which the last page never counts as signed or rejected.
+    const last = render(completion('Imported').completionMessage, { $: nodesRan({ ...fresh, 'Import steps': [[{ json: { drafts: [], report: { steps: 1, items: [] } } }], [next()]], [REVIEW]: [[{ json: {} }]] }) });
+    expect(last).toContain('Nothing was signed: the review page was not answered in time.');
+    expect(last).not.toContain('Rejected');
+  });
+
+  it('a file uploaded under the name of an approved bot is its next version, and the review page and the last page say which version it replaces', () => {
+    const get = byName(t, 'Running versions');
+    expect(get).toMatchObject({ type: DATA_TABLE, typeVersion: 1.1, alwaysOutputData: true, onError: 'continueRegularOutput' });
+    expect(table(get)).toEqual(table(byName(t, 'Approved bots')));
+    expect(byName(t, 'What it replaces')).toMatchObject({ type: 'n8n-nodes-base.set', typeVersion: 3.4, executeOnce: true, parameters: { mode: 'raw' } });
+    const upload = formItem('Step document', Buffer.from('{}'));
+    /** The file path as n8n's expressions see it, with Running versions giving `rows`. */
+    const filePath = (rows: IDataObject[]) => {
+      const ran: Record<string, INodeExecutionData[][]> = { Settings: [[{ json: { ...upload.json, ...settingsJson() } }]], 'Running versions': [rows.map((json) => ({ json }))] };
+      const code = String(byName(t, 'What it replaces').parameters.jsonOutput);
+      expect(code.replace(/^=\{\{/, '').replace(/\}\}$/, '')).not.toMatch(/\{\{|\}\}/);
+      ran['What it replaces'] = [[{ json: evaluate(code, { $: nodesRan(ran) }) as IDataObject }]];
+      return ran;
+    };
+    const row = (name: string, version: number, status = 'active'): IDataObject => ({ id: version, name, version, steps: '{}', signature: 's', approvedBy: APPROVER, status });
+    // Version 4 runs: before this change the upload was version 1 and superseded it. Now it is version 5.
+    const ran = filePath([row('line-item-export', 3, 'superseded'), row('line-item-export', 4), row('other', 9)]);
+    expect(ran['What it replaces'][0][0].json).toEqual({ running: [{ name: 'line-item-export', version: 4, steps: '{}', signature: 's', approvedBy: APPROVER }] });
+    expect(resolved(upload, ran)).toMatchObject({ stepsName: 'line-item-export', options: { version: 5 } });
+    // The step lists an import names after it (a UiPath project's line-item-export-1, -2) count; another name does not.
+    const many = filePath([row('line-item-export-1', 3), row('line-item-export-2', 7), row('line-item-exporter', 12), row('line-item-export-x', 11)]);
+    expect((many['What it replaces'][0][0].json.running as IDataObject[]).map((r) => r.name)).toEqual(['line-item-export-1', 'line-item-export-2']);
+    expect(resolved(upload, many)).toMatchObject({ options: { version: 8 } });
+    // Nothing runs under the name (or no table yet): version 1, and no word about replacing.
+    for (const rows of [[], [{}], [{ error: 'The Data Table playwright_steps does not exist' }], [row('line-item-export', 4, 'rejected')]]) {
+      const none = filePath(rows);
+      expect(none['What it replaces'][0][0].json).toEqual({ running: [] });
+      expect(resolved(upload, none)).toMatchObject({ options: { version: 1 } });
+    }
+    expect(resolved(upload)).toMatchObject({ options: { version: 1 } });
+
+    // The review page: its title, and each block of several, name the version it replaces.
+    const list = (name: string, version: number) => ({ json: { name, version, baseVersion: null, steps: { startUrl: SITE.url, steps: [] }, reviewSteps: [], safetyFlags: [] } });
+    const title = (r: Record<string, INodeExecutionData[][]>) => evaluate(String((review.parameters.options as IDataObject).formTitle), { $: nodesRan(r) });
+    expect(title({ ...ran, 'Import steps': [[{ json: {} }], [list('line-item-export', 5)]] })).toBe('line-item-export, version 5, replacing version 4');
+    expect(title({ ...filePath([]), 'Import steps': [[{ json: {} }], [list('line-item-export', 1)]] })).toBe('line-item-export, version 1');
+    const blocks = reviewFields({ $: nodesRan({ ...many, 'Import steps': [[{ json: {} }], [list('line-item-export-1', 8), list('line-item-export-3', 8)]] }) })
+      .filter((f) => f.fieldType === 'html').map((f) => /<h3>(.*?)<\/h3>/.exec(String(f.html))?.[1]);
+    expect(blocks).toEqual(['1 of 2: line-item-export-1, version 8, replacing version 3', '2 of 2: line-item-export-3, version 8']);
+    // The version that runs is what Sign steps checks before the review page, as on a change.
+    expect(evaluate(String(byName(t, 'The approved version').parameters.jsonOutput), { $: nodesRan(ran) })).toEqual({ name: 'line-item-export', version: 4, steps: '{}', signature: 's', approvedBy: APPROVER });
+    expect(evaluate(String(byName(t, 'The approved version').parameters.jsonOutput), { $: nodesRan(filePath([])) })).toEqual({});
+
+    // The last page: approved, it replaces version 4; rejected or refused, version 4 keeps running.
+    const last = (signed: IDataObject[], errors: IDataObject[] = []) => render(completion('Imported').completionMessage, { $: nodesRan({
+      ...ran, 'Import steps': [[{ json: { drafts: [{ name: 'line-item-export', forApproval: true }], report: { steps: 1, items: [] } } }], [list('line-item-export', 5)]],
+      [REVIEW]: [[{ json: { decision_0: 'Approve and sign' } }]], 'Sign steps': [signed.map((json) => ({ json })), errors.map((json) => ({ json }))],
+    }) }).split('\n').slice(1);
+    expect(last([{ status: 'active', name: 'line-item-export', version: 5 }])[0]).toBe('Approved and signed: line-item-export version 5 is now the version that runs, replacing version 4.');
+    expect(last([{ status: 'rejected', name: 'line-item-export', version: 5 }])[0]).toBe('Rejected: line-item-export v5. Nothing was signed. Version 4 keeps running.');
+    expect(last([], [{ error: 'Sign Steps refused: a reason', details: { name: 'line-item-export', version: 5 } }]).slice(0, 2))
+      .toEqual(['Not signed: line-item-export v5. Sign Steps refused: a reason.', 'Nothing changed: line-item-export version 4 keeps running.']);
+    // Approved, Supersede older versions turns version 4 superseded (an upload is a first version: every older active row).
+    const supersede = table(byName(t, 'Supersede older versions')).filters!.conditions;
+    const lte = supersede.find((c) => c.condition === 'lte')!;
+    expect(evaluate(String(lte.keyValue), { $: () => ({ item: { json: { baseVersion: null, version: 5 } } }) })).toBe(2147483647);
+  });
+
+  it('a member who may not approve: the last page ends its sentence, says whom to ask, and points to no execution', () => {
+    const POINTER = 'The full report, and the reason for any step list that could not be proved, is on the Data output of Import steps in this execution.';
+    const page = (error: string) => render(completion('Imported').completionMessage, { $: nodesRan({
+      Settings: [[{ json: settingsJson() }]], 'Import steps': [[{ json: { report: { steps: 2, items: [] }, drafts: [{ name: 'feed', forApproval: true }] } }], []],
+      [REVIEW]: [[{ json: { decision_0: 'Approve and sign' } }]], 'Sign steps': [[], [{ json: { error, details: { name: 'feed', version: 1 } } }]],
+    }) }).split('\n');
+    const member = page('Sign Steps refused: The n8n user who submitted the approval form is not on the Approver Allowlist');
+    expect(member).toEqual(['Imported: 2 steps.', 'Not signed: feed v1. Sign Steps refused: The n8n user who submitted the approval form is not on the Approver Allowlist. Ask a person on the Approver Allowlist to approve it on this form.']);
+    expect(page('Sign Steps refused: Approved By is not on the Approver Allowlist').join('\n')).not.toContain(POINTER);
+    // Any other refusal: the owner reads the execution, so the page still says where the full report is.
+    expect(page('Sign Steps refused: the steps do not match the hash that was reviewed')).toEqual(['Imported: 2 steps.', 'Not signed: feed v1. Sign Steps refused: the steps do not match the hash that was reviewed.', POINTER]);
+    // A reason that ends its own sentence gets no second full stop.
+    expect(page('Sign Steps refused: the steps changed.')[1]).toBe('Not signed: feed v1. Sign Steps refused: the steps changed.');
   });
 
   it('has the stickies: About (grey), Set once (green, a checklist), Approval by email (grey, the option), Why approval (grey)', () => {

@@ -41,6 +41,9 @@ One approval covers every account: a signature binds the Site Login's credential
 5 Import a bot**, pick this Site Login on **Import steps** and **Sign steps**, then **Publish** (before the first setup,
 name it with the setup command's `--site-login`). The workflow the form hands over then has it on its RPA node.
 
+The form then signs every bot for this Site Login: a bot signed for another one must be changed or signed again with
+its own Site Login on **Import steps** and **Sign steps**. The review page names the Site Login in use.
+
 ## Try it on the sample site
 
 The sample site of [Your first browser bot](browser-bot.md) has three accounts: `summit-ops`, the one of that guide,

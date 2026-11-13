@@ -740,7 +740,8 @@ describe('Import Steps: execution', () => {
       const engine = importEngine(() => adoptFailure('auth_blocked', message));
       const error = await run(engine, { credentials: NO_SEED as never, continueOnFail: false }).then(() => undefined, (e: unknown) => e);
       expect(error).toBeInstanceOf(NodeOperationError);
-      expect((error as NodeOperationError).message).toBe(`auth_blocked: ${message}`);
+      // The engine's detected: mark is for the node, not for the reader: the message is shown without it.
+      expect((error as NodeOperationError).message).toBe('auth_blocked: Sign in: the site asked for a one-time code and the Site Login has no TOTP Secret');
       expect((error as NodeOperationError).description).toBe(
         `auth_blocked: ${NO_TOTP_SECRET_GUIDANCE}`,
       );
@@ -761,7 +762,7 @@ describe('Import Steps: execution', () => {
       const error = await run(engine, {}, ctx).then(() => undefined, (e: unknown) => e);
       expect(error).toBeInstanceOf(NodeOperationError);
       expect((error as NodeOperationError).message).toBe(
-        'auth_blocked: Sign in with an authentication code: detected:mfa_code: the one-time code workflow failed: it is not published: open the workflow set in Options → One-Time Code Workflow and click Publish (Workflow is not active and cannot be executed.)',
+        'auth_blocked: Sign in with an authentication code: the one-time code workflow failed: it is not published: open the workflow set in Options → One-Time Code Workflow and click Publish (Workflow is not active and cannot be executed.)',
       );
       expect((error as NodeOperationError).description).toBe(
         `auth_blocked: ${CODE_WORKFLOW_GUIDANCE}`,
@@ -779,8 +780,9 @@ describe('Import Steps: execution', () => {
       expect(engine.adoptions).toHaveLength(1);
       const listed = details(data[0]).drafts as IDataObject[];
       expect(listed.map((d) => [d.name, d.adopted, d.code ?? null])).toEqual([['sap-report-1', false, 'auth_blocked'], ['sap-report-2', false, null], ['sap-report-3', false, null]]);
-      expect(listed[0].reason).toBe(failure);
-      for (const d of listed.slice(1)) expect(d.reason).toBe(`not tried: sap-report-1 failed on its one-time code (${failure})`);
+      const shown = 'Sign in with an authentication code: the site rejected the one-time code from the workflow twice';
+      expect(listed[0].reason).toBe(shown);
+      for (const d of listed.slice(1)) expect(d.reason).toBe(`not tried: sap-report-1 failed on its one-time code (${shown})`);
       // The generated workflow's Run steps take their code from the same workflow.
       const workflow = JSON.parse(binaryText(data[0], 'workflow').toString('utf8')) as WorkflowJson;
       const runs = workflow.nodes.filter((n) => (n.parameters as { operation?: string }).operation === 'runSteps');
@@ -1311,7 +1313,8 @@ describe('Import Steps: a step document', () => {
       const { engine, repaired } = await notReplayed(doc);
       const item = repaired[0].json;
       const shown = item.reviewSteps as { text: string; marks: string[]; each?: { text: string; marks: string[] }[] }[];
-      expect(shown[2].each).toEqual([{ text: 'Click Row', describedAs: 'Open the row', marks: [] }]);
+      // A click may open: the description is shown quietly, as the author's words.
+      expect(shown[2].each).toEqual([{ text: 'Click Row', describedAs: 'Open the row', quiet: true, marks: [] }]);
       expect(await sign(engine, item)).toMatchObject({ status: 'active' });
       const forged = shown.map((r, i) => (i === 2 ? { ...r, each: [{ text: 'Open the row', marks: [] }] } : r));
       const out = await sign(engine, { ...item, reviewSteps: forged as unknown as IDataObject[] });
@@ -1334,12 +1337,12 @@ describe('Import Steps: a step document', () => {
       ] };
       const { engine, repaired } = await notReplayed(doc);
       const item = repaired[0].json;
-      const shown = item.reviewSteps as { text: string; describedAs?: string; marks: string[] }[];
+      const shown = item.reviewSteps as { text: string; describedAs?: string; quiet?: true; marks: string[] }[];
       expect(shown.slice(1, 4)).toEqual([
         { text: 'Type into Amount: "1"', describedAs: `Open the list${MARK}Click Pay now) <b>`, marks: [] },
         // A name with a bracket is quoted (shownName), so it reads as one name; the description stays apart.
-        { text: `Click "Save${MARK}Delete all) <i>"`, describedAs: 'Click it', marks: [] },
-        { text: `Type into Note: "x${MARK}y) <b>z</b>"`, describedAs: 'Type it', marks: [] },
+        { text: `Click "Save${MARK}Delete all) <i>"`, describedAs: 'Click it', quiet: true, marks: [] },
+        { text: `Type into Note: "x${MARK}y) <b>z</b>"`, describedAs: 'Type it', quiet: true, marks: [] },
       ]);
       expect(await sign(engine, item)).toMatchObject({ status: 'active' });
       const refused = async (reviewSteps: object[]) => (await sign(engine, { ...item, reviewSteps: reviewSteps as unknown as IDataObject[] })).error;
@@ -1348,6 +1351,11 @@ describe('Import Steps: a step document', () => {
       expect(await refused(shown.map((r, i) => (i === 1 ? { ...r, describedAs: 'Type the amount' } : r)))).toBe(NOT_THE_STEPS);
       expect(await refused(shown.map((r, i) => (i === 1 ? { text: r.text, marks: r.marks } : r)))).toBe(NOT_THE_STEPS);
       expect(await refused(shown.map((r, i) => (i === 0 ? { ...r, describedAs: 'Sign in as the admin' } : r)))).toBe(NOT_THE_STEPS);
+      // The warning ("Open the list" on a step that types) made quiet is refused; a quiet one shown as a warning, as an
+      // item made before the mark shows it, says more and is signed.
+      expect(await refused(shown.map((r, i) => (i === 1 ? { ...r, quiet: true } : r)))).toBe(NOT_THE_STEPS);
+      expect(await refused(shown.map((r, i) => (i === 2 ? { ...r, quiet: 'yes' } : r)))).toBe(NOT_THE_STEPS);
+      expect((await sign(engine, { ...item, reviewSteps: shown.map(({ quiet: _q, ...r }) => r) as unknown as IDataObject[] })).status).toBe('active');
       // An item made before the description had its own field carries it inside the sentence: refused, never signed.
       const older = shown.map(({ describedAs, ...r }) => (describedAs === undefined ? r : { ...r, text: `${r.text} (described as: ${describedAs})` }));
       expect(await refused(older)).toBe(NOT_THE_STEPS);

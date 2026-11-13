@@ -147,6 +147,8 @@ Signs a **Repaired steps** item once a person approved it (**Approved** on), or 
 No browser opens. Template **RPA: 5 Import a bot** and template **RPA: 3 Approve steps** use it for you.
 
 - **Approver Allowlist**: the addresses that may approve. Type it, not as an expression.
+- **Check Only**: signs and records nothing. It gives the name of the RPA Site Login on the node and whether an approved
+  version's signature fits the node's key and Site Login. Template **RPA: 5 Import a bot** runs it before its review page.
 - **Approver**: where the approver comes from. **Approved By** (the default), or **Who Signed In to n8n on the Approval
   Form**: the n8n user who submitted the form page named in **Approval Form Page** (`Review and approve`), as n8n's
   form reports it. That form must use n8n User Auth. Nobody signed in there is refused, even with one address on the

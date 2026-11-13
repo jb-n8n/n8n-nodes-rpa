@@ -37,12 +37,22 @@ Templates 2, 3 and 5 create the two Data Tables when they are missing.
   reads Expected Version from the active row, so it keeps running. Approved, the new row supersedes the old one. Rejected, the old one keeps running. This path gives no workflow file:
   the bot's workflow exists already. A name with no active row ends on **No approved bot**, which lists the approved
   names.
+- Before the review page, **Sign steps** runs once with **Check Only** on: it signs nothing. It gives the name of the
+  RPA Site Login it signs for, and after **Change or sign again** it checks the approved version's signature with its
+  own signing key and Site Login, as a run checks it. **Checked?** sends that to the review page. The page's opening
+  lines name the Site Login (desktop steps are signed for the app they start, without one). When the approved version
+  does not fit, a warning says so above the decision: after a new signing key that is expected, but if the bot's
+  workflow uses another Site Login, a version signed here will not run there. The page does not refuse.
 - **Review and approve** shows each step list: what it opens, whether it signs in, forms it submits, files it returns,
   what the replay proved, the steps it left out, and the numbered steps. For desktop steps it asks "Which of these steps
   save, send or submit?". The **Decision** is **Approve and sign** or **Reject**. A page left unanswered for an hour
   signs nothing.
 - The last page says `Approved and signed: <name> v<version> is now the version that runs under that name.`, or
-  `Rejected: <name> v<version>. Nothing was signed.` An import is version 1. After a change or a re-sign it says
+  `Rejected: <name> v<version>. Nothing was signed.` An import is version 1. A file uploaded under the name of an
+  approved bot is its next version (**Running versions** and **What it replaces** read what runs under that name, and
+  the step lists named after it, `<name>-1`, `<name>-2`): the review page says `version 5, replacing version 4`, and
+  the last page `Approved and signed: <name> version 5 is now the version that runs, replacing version 4.` or
+  `Rejected: <name> v5. Nothing was signed. Version 4 keeps running.` After a change or a re-sign it says
   `Signed again: <name> version N, unchanged.`, `Changed: <name> version N is now the version that runs, replacing
   version M.`, or `Nothing changed: <name> version M keeps running.` When Sign steps signed a step list, it
   also downloads the workflow that runs the bot. When nothing was signed (rejected, or Sign steps refused), it neither
@@ -107,13 +117,15 @@ with no model call.
 Called by the data feed, or by template 5 with `approval` set to `by email`. It writes a `pending` row that expires
 after `approvalTimeoutHours` (72), then:
 - **Browser steps**: a review email with the safety flags first, in red, then the steps the import left out, the steps
-  as the review page words them (a description that says something else in red), the evidence, the change list and the
+  as the review page words them (a description that says something else in grey, in red when it names another action or site), the evidence, the change list and the
   before and after screenshots. Then an approval email with the same steps (⚠ before such a description), **Approve**
   and **Reject**. The steps show when the item carries them (an import's step lists do): Sign Steps builds them again
   and refuses to sign when they differ.
-  The emails HTML-escape every value. The safety flags are the full list: every host, form submission, download and pop-up handler the steps have.
+  The emails show every value as text, with look-alikes for `<`, `>` and `&`, and an invisible space in each address so that mail programs do not link it. The safety flags are the full list: every host, form submission, download and pop-up handler the steps have.
   The change list compares the steps themselves, not their intents, so a step that clicks another element is listed
-  even when its intent reads the same.
+  even when its intent reads the same. For an import, where every entry is a step added, the emails leave it out: it
+  would repeat the steps. For a repair, each entry names its step by number, with the sentence built from the step and
+  the description marked as above. Sign Steps builds that list again and refuses to sign when it differs.
 - **Desktop steps**: one email, `Approve desktop steps v<version> for <name>?`, with the numbered steps and a
   **Review and decide** button, to a form with **Decision** and the candidate writes as tick boxes, none ticked to start.
 - Approve: **Sign steps** signs, the row becomes `active`, older `active` rows of the name become `superseded`, and

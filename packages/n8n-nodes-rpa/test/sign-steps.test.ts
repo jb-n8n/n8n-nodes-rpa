@@ -867,3 +867,107 @@ describe('approver lines are one line', () => {
     expect(fe).toContain('\\u202e');
   });
 });
+
+describe('Sign Steps: Check Only (what the review page names before anything is signed)', () => {
+  const SITE_A = 'site-a';
+  /** An approved version as the steps table holds it: Sign Steps' own record, with `siteLoginId` attached when it signed. */
+  async function approvedRow(steps: unknown, siteLoginId?: string, key = KEY): Promise<IDataObject> {
+    const item = typeof steps === 'object' && steps !== null && (steps as { surface?: unknown }).surface === 'desktop'
+      ? desktopRepairedStepsJson(engine, engine.desktopProposal(engine.parseDesktopScript(steps)))
+      : repairedItem(steps as Script);
+    const rec = only(await sign(item, {
+      credentials: { playwrightScriptSigningApi: { secretKey: key }, ...(siteLoginId ? { playwrightSiteLoginApi: SITE_LOGIN } : {}) },
+      ...(siteLoginId ? { credentialIds: { playwrightSiteLoginApi: siteLoginId } } : {}),
+    })).json;
+    expect(rec.status, String(rec.message)).toBe('active');
+    return { id: 7, ...rec };
+  }
+  /** Sign steps with Check Only on, the Site Login `siteLoginId` (named "Shop login") or none, and the key `key`. */
+  async function check(json: IDataObject, siteLoginId: string | undefined, key: string | null = KEY) {
+    let siteLoginRead = false;
+    const out = await executeSignSteps(harness({
+      params: params({ checkOnly: true }), items: [{ json }], continueOnFail: true,
+      credentials: { ...(key ? { playwrightScriptSigningApi: { secretKey: key } } : {}), ...(siteLoginId ? { playwrightSiteLoginApi: SITE_LOGIN } : {}) },
+      credentialIds: siteLoginId ? { playwrightSiteLoginApi: siteLoginId } : {},
+      credentialNames: { playwrightSiteLoginApi: 'Shop login' },
+      itemCredentials: (type) => {
+        if (type === 'playwrightSiteLoginApi') siteLoginRead = true;
+        return undefined;
+      },
+    }), engine, () => NOW);
+    // Never the Site Login's data: only its name and id, which n8n gives every node.
+    expect(siteLoginRead).toBe(false);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toHaveLength(1);
+    expect(out[0][0].pairedItem).toEqual([{ item: 0 }]);
+    return out[0][0].json;
+  }
+
+  it('the approved version signed with this key and this Site Login fits: the page says nothing more', async () => {
+    const row = await approvedRow(STEPS, SITE_A);
+    expect(await check(row, SITE_A)).toEqual({ checkOnly: true, siteLogin: 'Shop login', approvedVersion: { version: 2, desktop: false, signatureFits: true } });
+    // The steps as the table holds them (text) or parsed: the same answer.
+    expect(await check({ ...row, steps: JSON.parse(String(row.steps)) as IDataObject }, SITE_A)).toMatchObject({ approvedVersion: { signatureFits: true } });
+  });
+
+  it('signed for another Site Login, or for none, it does not fit; nor does a version signed with another key', async () => {
+    const row = await approvedRow(STEPS, SITE_A);
+    expect(await check(row, 'site-b')).toEqual({ checkOnly: true, siteLogin: 'Shop login', approvedVersion: { version: 2, desktop: false, signatureFits: false } });
+    expect(await check(row, undefined)).toEqual({ checkOnly: true, siteLogin: null, approvedVersion: { version: 2, desktop: false, signatureFits: false } });
+    const none = await approvedRow(STEPS);
+    expect(await check(none, undefined)).toMatchObject({ siteLogin: null, approvedVersion: { signatureFits: true } });
+    expect(await check(none, SITE_A)).toMatchObject({ siteLogin: 'Shop login', approvedVersion: { signatureFits: false } });
+    // A new signing key: the same answer as another Site Login (the row alone cannot tell them apart).
+    expect(await check(row, SITE_A, 'another-signing-key-0123456789abcdef')).toMatchObject({ approvedVersion: { signatureFits: false } });
+    // Steps or approver changed in the table: it does not fit either.
+    expect(await check({ ...row, approvedBy: 'lead@example.com' }, SITE_A)).toMatchObject({ approvedVersion: { signatureFits: false } });
+    expect(await check({ ...row, steps: String(row.steps).replace('Open the list', 'Open the lists') }, SITE_A)).toMatchObject({ approvedVersion: { signatureFits: false } });
+  });
+
+  it('a new bot (no approved version on the item): only the Site Login\'s name, no check', async () => {
+    for (const json of [{}, { name: 'items', found: false }, { signature: '' }, repairedItem(STEPS)]) {
+      expect(await check(json, SITE_A)).toEqual({ checkOnly: true, siteLogin: 'Shop login', approvedVersion: null });
+    }
+    expect(await check({}, undefined)).toEqual({ checkOnly: true, siteLogin: null, approvedVersion: null });
+  });
+
+  it('desktop steps bind no Site Login (they bind the app they start): a Site Login on the node changes nothing', async () => {
+    const doc = { surface: 'desktop', name: 'orders', version: 1, app: { exe: 'ErpDemo.exe' }, steps: [{ intent: 'Click Save', click: { uia: { path: [{ controlType: 'Button', automationId: 'btnSave' }] } } }] };
+    const row = await approvedRow(doc, SITE_A);
+    expect(await check(row, SITE_A)).toEqual({ checkOnly: true, siteLogin: 'Shop login', approvedVersion: { version: 1, desktop: true, signatureFits: true } });
+    expect(await check(row, undefined)).toMatchObject({ siteLogin: null, approvedVersion: { desktop: true, signatureFits: true } });
+    expect(await check(row, SITE_A, 'another-signing-key-0123456789abcdef')).toMatchObject({ approvedVersion: { desktop: true, signatureFits: false } });
+  });
+
+  it('never an error, never a key or a signature: no key gives null, and nothing is signed or recorded', async () => {
+    const row = await approvedRow(STEPS, SITE_A);
+    const json = await check(row, SITE_A, null);
+    expect(json).toEqual({ checkOnly: true, siteLogin: 'Shop login', approvedVersion: { version: 2, desktop: false, signatureFits: null } });
+    const text = JSON.stringify(await check(row, SITE_A));
+    for (const secret of [KEY, String(row.signature), USER, PASS]) expect(text).not.toContain(secret);
+    // Not a record: no status, no signature, so it can never be saved as one.
+    expect(json).not.toHaveProperty('status');
+    expect(json).not.toHaveProperty('signature');
+  });
+});
+
+describe('Sign Steps: the change list the approval emails showed (reviewChanges)', () => {
+  const REFUSED = 'Sign Steps refused: the steps shown for approval are not the steps to sign: import the steps again';
+  it('a repair carries each entry built from its step; Sign Steps builds it again and refuses one that was changed', async () => {
+    const item = repairedItem(STEPS);
+    expect(item.reviewChanges).toEqual([{ change: 'Changed', step: 2, text: 'Read the items', was: 'Read the list (extract rows from css "main")' }]);
+    expect(only(await sign(item)).json.status).toBe('active');
+    const forged = (over: IDataObject) => ({ ...item, reviewChanges: [{ ...(item.reviewChanges as IDataObject[])[0], ...over }] });
+    for (const over of [{ step: 1 }, { text: 'Read the list' }, { change: 'Added' }, { describedAs: 'Open it', quiet: true }, { was: 'Read the rows' }]) {
+      expect(only(await sign(forged(over))).json.error, JSON.stringify(over)).toBe(REFUSED);
+    }
+    expect(only(await sign({ ...item, reviewChanges: [] })).json.error).toBe(REFUSED);
+    expect(only(await sign({ ...item, reviewChanges: 'x' })).json.error).toBe(REFUSED);
+    // An item made before the field (or one without it) is signed as before.
+    const { reviewChanges: _c, ...older } = item;
+    expect(only(await sign(older)).json.status).toBe('active');
+    // The signature does not cover it: the same record either way.
+    const [a, b] = [only(await sign(item)).json, only(await sign(older)).json];
+    for (const key of ['steps', 'hash', 'signature']) expect(a[key], key).toEqual(b[key]);
+  });
+});

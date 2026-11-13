@@ -6,7 +6,7 @@ import type { Engine } from '../engine.js';
 import { configNodeError, errorJson } from '../errors.js';
 import {
   changeList, DESKTOP_EVIDENCE_LINES, evidenceLine, fullSafetyFlags, hasDownloadStep, importAddedSteps, isDesktopProposal, isFileDocument, leftOutList,
-  NOT_REPLAYED_EVIDENCE_LINE, reviewSteps, safetyLine, type ReviewStep,
+  NOT_REPLAYED_EVIDENCE_LINE, reviewChanges, reviewSteps, safetyLine, type ReviewStep,
 } from '../format.js';
 import { configErrorItem } from '../output.js';
 import { rejectedRecord, signedRecord, type StepsRecord } from '../rows.js';
@@ -141,6 +141,9 @@ function sameReviewStep(shown: unknown, built: ReviewStep): boolean {
   // item made before the description had its own field carries it inside `text`, which then differs: it is refused,
   // so nothing is signed that a person saw worded another way.
   if (shown.describedAs !== built.describedAs) return false;
+  // Shown quietly only when the rebuilt step is quiet too. An item made before the mark existed has none: its page and
+  // emails showed every description as a warning, which says more, never less, than the rebuilt one.
+  if (shown.quiet !== undefined && !(shown.quiet === true && built.quiet === true)) return false;
   const marks = shown.marks.map((m) => (typeof m === 'string' ? m.replace(STARTS_AS, '$1') : m));
   if (marks.length !== built.marks.length || marks.some((m, i) => m !== built.marks[i])) return false;
   // Only a step the import may add (a wait for a window, a returned file) may be shown as added.
@@ -167,11 +170,30 @@ function reviewStepsProblem(engine: Engine, p: ParsedProposal, json: IDataObject
     const secretVariables = Array.isArray(json.secretVariables) ? json.secretVariables.filter((v): v is string => typeof v === 'string') : [];
     built = engine.isDesktopDocument(p.steps)
       ? reviewSteps(steps, { desktop: true, secretVariables, added: importAddedSteps(steps as never) })
-      : reviewSteps(steps, { desktop: false, shownUrl: engine.shownUrl });
+      : reviewSteps(steps, { desktop: false, shownUrl: engine.shownUrl, startUrl: isObject(p.steps) && typeof p.steps.startUrl === 'string' ? p.steps.startUrl : undefined });
   } catch {
     return REVIEW_STEPS_CHANGED;
   }
   return shown.length === built.length && shown.every((e, i) => sameReviewStep(e, built[i])) ? undefined : REVIEW_STEPS_CHANGED;
+}
+
+/**
+ * Why the change list the approval emails showed (`reviewChanges`, shown only and outside the digest) cannot stand for
+ * the item's change list, or undefined: it is built again from the item's steps and change list (format.ts
+ * reviewChanges) and must be the same. An item without it is signed as before.
+ */
+function reviewChangesProblem(engine: Engine, p: ParsedProposal, json: IDataObject): string | undefined {
+  if (json.reviewChanges === undefined) return undefined;
+  const doc = isObject(p.steps) ? p.steps : undefined;
+  if (!doc || !Array.isArray(doc.steps) || engine.isDesktopDocument(doc)) return REVIEW_STEPS_CHANGED;
+  let built: string;
+  try {
+    const changes = p.changes.map((c) => ({ was: typeof c.was === 'string' ? c.was : null, now: typeof c.now === 'string' ? c.now : null }));
+    built = engine.canonicalize(reviewChanges(engine, doc.steps, changes, { shownUrl: engine.shownUrl, startUrl: typeof doc.startUrl === 'string' ? doc.startUrl : undefined }));
+    return engine.canonicalize(json.reviewChanges) === built ? undefined : REVIEW_STEPS_CHANGED;
+  } catch {
+    return REVIEW_STEPS_CHANGED;
+  }
 }
 
 /** Hosts of the absolute http(s) gotos, paginate bodies included. */
@@ -434,7 +456,7 @@ async function signOne(ctx: NodeContext, engine: Engine, i: number, json: IDataO
   const leftOut = leftOutProblem(p);
   if (leftOut) return refuse([leftOut]);
   // Reported after the engine's own reasons (a step edited after review fails the digest check first), never instead.
-  const shownSteps = reviewStepsProblem(engine, p, json);
+  const shownSteps = reviewStepsProblem(engine, p, json) ?? reviewChangesProblem(engine, p, json);
   if (engine.isDesktopDocument(p.steps)) return signDesktop(engine, p, { key, approverId, writeStepsText, secrets: siteSecrets, at, refuse, record, shownSteps });
   if (writeStepsText) return refuse([WRITE_STEPS_BROWSER]);
 
@@ -550,9 +572,56 @@ export function desktopWriteLine(writes: { step: number; intent: string }[]): st
   return `Signed as writes: ${writes.map((w) => `step ${w.step} (${w.intent.replace(/\s+/g, ' ').trim()})`).join(', ')}`;
 }
 
+/** What Check Only gives for one item. Names and yes or no only: never a key, a signature or a credential's data. */
+export interface SigningCheck {
+  checkOnly: true;
+  /** The name of the RPA Site Login on this node, or null when it has none. Desktop steps are signed without it. */
+  siteLogin: string | null;
+  /**
+   * The approved version the item carries (an active row of the steps table: steps, signature, approvedBy), or null
+   * when it carries no signature. `signatureFits` is what the run's own check (engine verifyScript) says with this
+   * node's Step Signing key and, for browser steps, its Site Login: null when this node has no key to check with.
+   */
+  approvedVersion: { version: number | null; desktop: boolean; signatureFits: boolean | null } | null;
+}
+
+/**
+ * The name of the credential of `type` on this node, or null. n8n gives a node the id and the name of each credential
+ * picked on it; only getCredentials reads its data, and this does not call it.
+ */
+function credentialName(ctx: NodeContext, type: string): string | null {
+  if (credentialId(ctx, type) === undefined) return null;
+  const name = ctx.getNode().credentials?.[type]?.name;
+  return typeof name === 'string' ? name : null;
+}
+
+/**
+ * Check Only: signs and records nothing. Names the RPA Site Login this node signs for and, when the item carries an
+ * approved version, says whether its signature verifies with this node's Step Signing key and Site Login, with the
+ * verification a run makes (engine verifyScript): a browser signature binds the Site Login's id, a desktop signature
+ * binds none (signDesktop). The Site Login's data is never read. Never an error: a missing key gives null.
+ */
+async function checkOne(ctx: NodeContext, engine: Engine, i: number, json: IDataObject): Promise<SigningCheck> {
+  const siteLogin = credentialName(ctx, CREDENTIALS.siteLogin);
+  const signature = json.signature;
+  if (typeof signature !== 'string' || signature.trim() === '') return { checkOnly: true, siteLogin, approvedVersion: null };
+  const steps = parseOnce(json.steps);
+  const desktop = engine.isDesktopDocument(steps);
+  let key: string | undefined;
+  try {
+    key = credentialId(ctx, CREDENTIALS.signing) === undefined ? undefined : signingKey(await ctx.getCredentials(CREDENTIALS.signing, i));
+  } catch {
+    key = undefined;
+  }
+  const siteLoginId = desktop ? undefined : credentialId(ctx, CREDENTIALS.siteLogin) || undefined;
+  const signatureFits = key === undefined ? null : engine.verifyScript(steps, key, { approvedBy: asString(json.approvedBy), signature, ...(siteLoginId ? { siteLoginId } : {}) });
+  return { checkOnly: true, siteLogin, approvedVersion: { version: wholeNumber(json.version), desktop, signatureFits } };
+}
+
 /**
  * Sign Steps: one steps-table record per input item, `active` (signed) or `rejected`. No browser is opened.
  * Refusals and configuration errors are error items under continue-on-fail (n8n routes them to the error output).
+ * With Check Only on, one SigningCheck per item instead (checkOne): nothing is signed.
  */
 export async function executeSignSteps(ctx: NodeContext, engine: Engine, now: () => Date = () => new Date()): Promise<INodeExecutionData[][]> {
   const items = ctx.getInputData();
@@ -562,6 +631,10 @@ export async function executeSignSteps(ctx: NodeContext, engine: Engine, now: ()
   for (let i = 0; i < items.length; i++) {
     let r: SignOutcome;
     try {
+      if (asBoolean(ctx.getNodeParameter('checkOnly', i, false), false)) {
+        out.push({ json: { ...(await checkOne(ctx, engine, i, items[i].json)) }, pairedItem: [{ item: i }] });
+        continue;
+      }
       r = await signOne(ctx, engine, i, items[i].json, now());
     } catch (error) {
       // signOne turns every expected problem into an outcome; anything else is a configuration error item, as in

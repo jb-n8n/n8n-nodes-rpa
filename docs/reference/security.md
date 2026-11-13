@@ -95,7 +95,10 @@ an **RPA Step Signing** credential that its own project owns, and never one of t
     asks for an n8n sign-in too, but any signed-in n8n user who has a page's address can open and submit it. So the
     approver is the n8n user who submits **Review and approve**, as n8n reports it. Sign Steps signs only when that
     user is on **Sign steps → Approver Allowlist**, and the row records their n8n address. Nobody signed in, or a user
-    not on the list, signs nothing. Removing a person from n8n, or from the list, ends their access.
+    not on the list, signs nothing. Removing a person from n8n, or from the list, ends their access. An n8n user who
+    may not run the workflow gets n8n's own page, "Authorization unavailable. You do not have sufficient permissions to
+    authorize this request.", and nothing is imported. To let them import, the owner shares the workflow with them
+    (**Share** on the workflow) or moves it to a project they belong to.
   - **Basic Auth (`--form-login basic`, for approvers with no n8n account).** Anyone who has the form's user name and
     password can open the form. The pages after the first are not behind the password: anyone who has a page's
     address can open and submit it, and n8n puts that address in the browser's address bar. The row records the
@@ -105,15 +108,20 @@ an **RPA Step Signing** credential that its own project owns, and never one of t
   read or imported, and an approval never arrives with its answer chosen by whoever made the link.
 - **By email (an option).** Set `approval` to `by email` in template 5's **Settings**, and each step list goes to
   **RPA: 3 Approve steps**, which emails a named approver. The approval link is a bearer link: anyone who receives or
-  forwards it can approve. Send it to one person. The AI repairs of **RPA: 2 Data feed** use this path. In the
-  approval email, each `<`, `>` and `&` from the steps or the page is shown as `‹`, `›` and `＆`, so that no text from
-  them is read as a link or other markup by the email.
+  forwards it can approve. Send it to one person. The AI repairs of **RPA: 2 Data feed** use this path. In both
+  approval emails, each `<`, `>` and `&` from the steps or the page is shown as `‹`, `›` and `＆`, so that no text from
+  them is read as markup by the email. An address in that text has an invisible space inside `://` and after each dot,
+  so most mail programs do not make a link of it. A copied address carries those spaces: read the address on the
+  review page, or in the steps in n8n.
 - **What each step says.** The review page builds each step's sentence from the step itself: what it does, where, and
   the value it types or chooses. A secret's or a variable's value is never shown. A variable is marked from what the step
   types or chooses, never from its description. A step's description comes from
-  whoever wrote the steps, so it is shown beside the sentence, in red, as `(described differently as: …)`, when it says
-  something else. Only case, spaces, quotes and a full stop at the end are ignored in that comparison: another verb,
-  target or value shows. The approval emails show the same sentences. Sign Steps refuses to sign when the step sentences shown for approval differ from the steps it is asked to sign.
+  whoever wrote the steps. When it says something else than the sentence, it is shown beside it in grey, as `(the
+  author calls it: …)`. It is shown in red, as `(described differently as: …)`, when its first word names another kind
+  of action than the step does (for example "Read" on a step that clicks), or when it names a site that is not the
+  step's own or the start site. The red mark catches a description that names another action or site. It does not
+  judge the rest of the words: the sentence built from the step is what will run, whatever the description says. The
+  approval emails show the same sentences and the same marks. Sign Steps refuses to sign when the step sentences shown for approval differ from the steps it is asked to sign.
 - **Desktop writes.** The review page asks "Which of these steps save, send or submit?". The ticked steps are signed as
   writes. A write mark only matters where the runner's policy lists the control or key (see [Desktop runs](#desktop-runs)).
 - **Changing or signing again on the form.** With **Bot file** left empty, the form's next page shows the steps of the

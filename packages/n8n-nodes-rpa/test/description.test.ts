@@ -164,9 +164,12 @@ describe('Run Steps and Sign Steps fields', () => {
     expect(field('steps').placeholder).toBe(STEPS_PLACEHOLDER);
     expect(parseScript(JSON.parse(STEPS_PLACEHOLDER)).steps).toHaveLength(3);
   });
-  it('Sign Steps shows Approved (hint "Off records a rejection"), Approver, Approval Form Page, Approved By, Approver Allowlist and Write Steps', () => {
+  it('Sign Steps shows Approved (hint "Off records a rejection"), Approver, Approval Form Page, Approved By, Approver Allowlist, Write Steps and Check Only', () => {
     const sign = d.properties.filter((p) => p.displayOptions?.show?.operation?.includes('signSteps') && p.name !== 'options').map((p) => p.name);
-    expect(sign).toEqual(['signInputNotice', 'approved', 'approverFrom', 'approvalFormPage', 'approverId', 'approverAllowlist', 'writeSteps']);
+    expect(sign).toEqual(['signInputNotice', 'approved', 'approverFrom', 'approvalFormPage', 'approverId', 'approverAllowlist', 'writeSteps', 'checkOnly']);
+    // Check Only hides nothing: the template sets it with an expression, and n8n drops a field an expression's value hides.
+    expect(field('checkOnly')).toMatchObject({ displayName: 'Check Only', type: 'boolean', default: false, hint: 'On signs and records nothing', displayOptions: { show: { operation: ['signSteps'] } } });
+    expect(d.properties.filter((p) => p.displayOptions?.show?.checkOnly !== undefined || p.displayOptions?.hide?.checkOnly !== undefined)).toEqual([]);
     // Approved By stays the default, so a node saved before the choice existed keeps working as it did.
     expect(field('approverFrom')).toMatchObject({ displayName: 'Approver', type: 'options', default: 'approvedBy' });
     expect((field('approverFrom').options as { value: string }[]).map((o) => o.value)).toEqual(['approvedBy', 'formSignIn']);
