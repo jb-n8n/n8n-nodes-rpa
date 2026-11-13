@@ -2281,10 +2281,10 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       { status: 'active', name: 'erp<1>', version: 1, writeLine: 'Signed as writes: step 16 (Click Save)' }, { status: 'active', name: 'feed', version: 1 }, { status: 'rejected', name: 'other', version: 1 },
     ], [{ error: 'Sign Steps refused: the steps do not match the hash that was reviewed', details: { name: 'bad', version: 1 } }, { error: 'Sign Steps needs an RPA Step Signing credential', details: { name: null } }])).toEqual([
       '1 of 2 step lists passed the replay.',
-      'Approved and signed: erp&lt;1&gt; v1 is now the version that runs under that name. Signed as writes: step 16 (Click Save).',
-      'Approved and signed: feed v1 is now the version that runs under that name.',
-      'Rejected: other v1. Nothing was signed.',
-      'Not signed: bad v1. Sign Steps refused: the steps do not match the hash that was reviewed.',
+      'Approved and signed: erp&lt;1&gt; version 1 is now the version that runs under that name. Signed as writes: step 16 (Click Save).',
+      'Approved and signed: feed version 1 is now the version that runs under that name.',
+      'Rejected: other version 1. Nothing was signed.',
+      'Not signed: bad version 1. Sign Steps refused: the steps do not match the hash that was reviewed.',
       'Not signed. Sign Steps needs an RPA Step Signing credential.',
     ]);
     expect(reviewed([], [], [draft({ surface: 'desktop', forApproval: true })])).toEqual(['Nothing was signed: the review page was not answered in time.']);
@@ -2529,12 +2529,13 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // A first-time import meets no new field and no new page: with its file it takes the import path, unchanged.
     expect(change(formItem('Chrome Recorder', CHROME) as unknown as IDataObject)).toBe(false);
     expect(byName(t, 'Change an approved bot?').position[1]).toBe(byName(t, 'Asks about a download?').position[1]);
-    // Only the active rows, every one this workflow may read; no row (an empty item) finds nothing. The table was made
-    // first (Create steps table), so the read never gives an error item: n8n 2.45 cannot read one in an expression.
+    // Every row this workflow may read (the active ones are the approved bots; every row of a name gives its next version
+    // number); no row (an empty item) finds nothing. The table was made first (Create steps table), so the read never
+    // gives an error item: n8n 2.45 cannot read one in an expression.
     const get = byName(t, 'Approved bots');
     expect(get).toMatchObject({ type: DATA_TABLE, typeVersion: 1.1, alwaysOutputData: true });
     expect(get).not.toHaveProperty('onError');
-    expect(table(get)).toEqual({ resource: 'row', operation: 'get', dataTableId: { __rl: true, mode: 'name', value: STEPS_TABLE }, matchType: 'allConditions', filters: { conditions: [{ keyName: 'status', condition: 'eq', keyValue: 'active' }] }, returnAll: true });
+    expect(table(get)).toEqual({ resource: 'row', operation: 'get', dataTableId: { __rl: true, mode: 'name', value: STEPS_TABLE }, returnAll: true });
     expect(byName(t, 'The bot to change')).toMatchObject({ type: 'n8n-nodes-base.set', typeVersion: 3.4, executeOnce: true, parameters: { mode: 'raw' } });
   });
 
@@ -2547,15 +2548,23 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       { id: 5, name: 'erp', version: 9, steps: '', status: 'active' },
       { error: 'The Data Table playwright_steps does not exist' }, {},
     ];
-    const found = { name: 'erp', found: true, version: 3, steps: JSON.stringify(doc), signature: '', approvedBy: '', names: ['erp', 'other<b>'] };
+    // next: one more than the highest version any row of the name has (an active row without steps counts too).
+    const found = { name: 'erp', found: true, version: 3, steps: JSON.stringify(doc), signature: '', approvedBy: '', names: ['erp', 'other<b>'], next: 10 };
     expect(changePath('erp', rows).bot).toEqual(found);
     expect(changePath('  erp ', rows).bot).toEqual(found);
     // Exactly the name: another casing is another bot.
-    expect(changePath('ERP', rows).bot).toEqual({ name: 'ERP', found: false, version: null, steps: '', signature: '', approvedBy: '', names: ['erp', 'other<b>'] });
+    expect(changePath('ERP', rows).bot).toEqual({ name: 'ERP', found: false, version: null, steps: '', signature: '', approvedBy: '', names: ['erp', 'other<b>'], next: 1 });
+    // A rejected or superseded row is not a running version, but its number is used: the next attempt takes the one after
+    // the highest of them, so the table never holds two rows of one name and version.
+    const used: IDataObject[] = [
+      { id: 1, name: 'erp', version: 2, steps: '{}', status: 'superseded' }, { id: 2, name: 'erp', version: 3, steps: JSON.stringify(doc), status: 'active' },
+      { id: 3, name: 'erp', version: 4, steps: '', status: 'rejected' }, { id: 4, name: 'erp', version: 5, steps: '', status: 'rejected' }, { id: 5, name: 'erp-1', version: 7, steps: '', status: 'rejected' },
+    ];
+    expect(changePath('erp', used).bot).toMatchObject({ found: true, version: 3, next: 6, names: ['erp'] });
     // A row whose steps are not JSON is shown as it is: Import steps then says what is wrong with it.
     expect(changePath('erp', [{ id: 1, name: 'erp', version: 1, steps: '{broken', status: 'active' }]).bot).toMatchObject({ found: true, steps: '{broken' });
     // No row (the table was made first: there is never an error item to read).
-    expect(changePath('erp', []).bot).toEqual({ name: 'erp', found: false, version: null, steps: '', signature: '', approvedBy: '', names: [] });
+    expect(changePath('erp', []).bot).toEqual({ name: 'erp', found: false, version: null, steps: '', signature: '', approvedBy: '', names: [], next: 1 });
     // The row's signature and approver come along for Sign steps' check, as the table holds them (never shown on a page).
     expect(changePath('erp', [{ id: 2, name: 'erp', version: 3, steps: '{}', signature: 'ab12', approvedBy: 'approver@example.com', status: 'active' }]).bot)
       .toMatchObject({ found: true, signature: 'ab12', approvedBy: 'approver@example.com' });
@@ -2779,7 +2788,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // Sign steps refused (an approver not on the list), or the review page not answered: the old version keeps running too.
     const refused = await review('', { writes_0: [], decision_0: 'Approve and sign' }, signedIn('member@example.com'));
     expect(lastPage(refused).text.split('\n')).toEqual([
-      `Not signed: ${String(old.name)} v2. Sign Steps refused: The n8n user who submitted the approval form is not on the Approver Allowlist. Ask the person who set up this form to approve it, or to put you on its Approver Allowlist.`,
+      `Not signed: ${String(old.name)} version 2. Sign Steps refused: The n8n user who submitted the approval form is not on the Approver Allowlist. Ask the person who set up this form to approve it, or to put you on its Approver Allowlist.`,
       `Nothing changed: ${String(old.name)} version 1 keeps running.`,
     ]);
     expect(lastPage({ after: rejected.after, signed: [], errors: [] }, { name: 'steps table' }).text.split('\n')).toEqual([
@@ -2866,18 +2875,26 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const row = (name: string, version: number, status = 'active'): IDataObject => ({ id: version, name, version, steps: '{}', signature: 's', approvedBy: APPROVER, status });
     // Version 4 runs: before this change the upload was version 1 and superseded it. Now it is version 5.
     const ran = filePath([row('line-item-export', 3, 'superseded'), row('line-item-export', 4), row('other', 9)]);
-    expect(ran['What it replaces'][0][0].json).toEqual({ running: [{ name: 'line-item-export', version: 4, steps: '{}', signature: 's', approvedBy: APPROVER }] });
+    expect(ran['What it replaces'][0][0].json).toEqual({ running: [{ name: 'line-item-export', version: 4, steps: '{}', signature: 's', approvedBy: APPROVER }], next: 5 });
     expect(resolved(upload, ran)).toMatchObject({ stepsName: 'line-item-export', options: { version: 5 } });
     // The step lists an import names after it (a UiPath project's line-item-export-1, -2) count; another name does not.
     const many = filePath([row('line-item-export-1', 3), row('line-item-export-2', 7), row('line-item-exporter', 12), row('line-item-export-x', 11)]);
     expect((many['What it replaces'][0][0].json.running as IDataObject[]).map((r) => r.name)).toEqual(['line-item-export-1', 'line-item-export-2']);
     expect(resolved(upload, many)).toMatchObject({ options: { version: 8 } });
     // Nothing runs under the name (a new n8n: the table was just made, empty): version 1, and no word about replacing.
-    for (const rows of [[], [{}], [row('line-item-export', 4, 'rejected')]]) {
+    for (const rows of [[], [{}]]) {
       const none = filePath(rows);
-      expect(none['What it replaces'][0][0].json).toEqual({ running: [] });
+      expect(none['What it replaces'][0][0].json).toEqual({ running: [], next: 1 });
       expect(resolved(upload, none)).toMatchObject({ options: { version: 1 } });
     }
+    // A rejected attempt keeps its number: the next one takes the number after the highest any row of the name has
+    // (active, rejected or superseded), and what it replaces is still the version that runs.
+    const rejected = filePath([row('line-item-export', 4, 'rejected')]);
+    expect(rejected['What it replaces'][0][0].json).toEqual({ running: [], next: 5 });
+    expect(resolved(upload, rejected)).toMatchObject({ options: { version: 5 } });
+    const again = filePath([row('line-item-export', 3, 'superseded'), row('line-item-export', 4), row('line-item-export', 5, 'rejected'), row('line-item-export', 6, 'rejected')]);
+    expect((again['What it replaces'][0][0].json.running as IDataObject[]).map((r) => r.version)).toEqual([4]);
+    expect(resolved(upload, again)).toMatchObject({ options: { version: 7 } });
     expect(resolved(upload)).toMatchObject({ options: { version: 1 } });
 
     // The review page: its title, and each block of several, name the version it replaces.
@@ -2885,6 +2902,8 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const title = (r: Record<string, INodeExecutionData[][]>) => evaluate(String((review.parameters.options as IDataObject).formTitle), { $: nodesRan(r) });
     expect(title({ ...ran, 'Import steps': [[{ json: {} }], [list('line-item-export', 5)]] })).toBe('line-item-export, version 5, replacing version 4');
     expect(title({ ...filePath([]), 'Import steps': [[{ json: {} }], [list('line-item-export', 1)]] })).toBe('line-item-export, version 1');
+    // After rejected attempts: the next number, replacing the version that runs (not the number minus one).
+    expect(title({ ...again, 'Import steps': [[{ json: {} }], [list('line-item-export', 7)]] })).toBe('line-item-export, version 7, replacing version 4');
     const blocks = reviewFields({ $: nodesRan({ ...many, 'Import steps': [[{ json: {} }], [list('line-item-export-1', 8), list('line-item-export-3', 8)]] }) })
       .filter((f) => f.fieldType === 'html').map((f) => /<h3>(.*?)<\/h3>/.exec(String(f.html))?.[1]);
     expect(blocks).toEqual(['1 of 2: line-item-export-1, version 8, replacing version 3', '2 of 2: line-item-export-3, version 8']);
@@ -2955,9 +2974,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       [REVIEW]: [[{ json: { decision_0: 'Approve and sign' } }]], 'Sign steps': [signed.map((json) => ({ json })), errors.map((json) => ({ json }))],
     }) }).split('\n').slice(1);
     expect(last([{ status: 'active', name: 'line-item-export', version: 5 }])[0]).toBe('Approved and signed: line-item-export version 5 is now the version that runs, replacing version 4.');
-    expect(last([{ status: 'rejected', name: 'line-item-export', version: 5 }])[0]).toBe('Rejected: line-item-export v5. Nothing was signed. Version 4 keeps running.');
+    expect(last([{ status: 'rejected', name: 'line-item-export', version: 5 }])[0]).toBe('Rejected: line-item-export version 5. Nothing was signed. Version 4 keeps running.');
     expect(last([], [{ error: 'Sign Steps refused: a reason', details: { name: 'line-item-export', version: 5 } }]).slice(0, 2))
-      .toEqual(['Not signed: line-item-export v5. Sign Steps refused: a reason.', 'Nothing changed: line-item-export version 4 keeps running.']);
+      .toEqual(['Not signed: line-item-export version 5. Sign Steps refused: a reason.', 'Nothing changed: line-item-export version 4 keeps running.']);
     // Approved, Supersede older versions turns version 4 superseded (an upload is a first version: every older active row).
     const supersede = table(byName(t, 'Supersede older versions')).filters!.conditions;
     const lte = supersede.find((c) => c.condition === 'lte')!;
@@ -2971,12 +2990,12 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       [REVIEW]: [[{ json: { decision_0: 'Approve and sign' } }]], 'Sign steps': [[], [{ json: { error, details: { name: 'feed', version: 1 } } }]],
     }) }).split('\n');
     const member = page('Sign Steps refused: The n8n user who submitted the approval form is not on the Approver Allowlist');
-    expect(member).toEqual(['Imported: 2 steps.', 'Not signed: feed v1. Sign Steps refused: The n8n user who submitted the approval form is not on the Approver Allowlist. Ask the person who set up this form to approve it, or to put you on its Approver Allowlist.']);
+    expect(member).toEqual(['Imported: 2 steps.', 'Not signed: feed version 1. Sign Steps refused: The n8n user who submitted the approval form is not on the Approver Allowlist. Ask the person who set up this form to approve it, or to put you on its Approver Allowlist.']);
     expect(page('Sign Steps refused: Approved By is not on the Approver Allowlist').join('\n')).not.toContain(POINTER);
     // Any other refusal: the owner reads the execution, so the page still says where the full report is.
-    expect(page('Sign Steps refused: the steps do not match the hash that was reviewed')).toEqual(['Imported: 2 steps.', 'Not signed: feed v1. Sign Steps refused: the steps do not match the hash that was reviewed.', POINTER]);
+    expect(page('Sign Steps refused: the steps do not match the hash that was reviewed')).toEqual(['Imported: 2 steps.', 'Not signed: feed version 1. Sign Steps refused: the steps do not match the hash that was reviewed.', POINTER]);
     // A reason that ends its own sentence gets no second full stop.
-    expect(page('Sign Steps refused: the steps changed.')[1]).toBe('Not signed: feed v1. Sign Steps refused: the steps changed.');
+    expect(page('Sign Steps refused: the steps changed.')[1]).toBe('Not signed: feed version 1. Sign Steps refused: the steps changed.');
   });
 
   it('has the stickies: About (grey), Set once (green, a checklist), Approval by email (grey, the option), Why approval (grey)', () => {

@@ -165,7 +165,7 @@ describe('the browser bot guide', () => {
       'openssl rand -hex 32', 'BROWSER_TOKEN', 'docker compose up --build -d', 'docker compose up -d browser', 'http://localhost:5678', 'http://localhost:8025',
       '**Settings → n8n API → Create API key**', SETUP_IN_STACK, 'Connect a Windows machine now?', 'The import form is ready.',
       '+ → New credential → RPA Site Login', '--site-login "RPA Site Login account" --allow-private-network', 'Private network: on.', 'docs/samples/sandbox-line-items.steps.json', '**Allow access**',
-      'Approved and signed: sandbox-line-items v1 is now the version that runs under that name.', 'sandbox-line-items.workflow.json',
+      'Approved and signed: sandbox-line-items version 1 is now the version that runs under that name.', 'sandbox-line-items.workflow.json',
       'packages/n8n-nodes-rpa/templates/hello-world.json', 'docker-compose.dev.yml', 'SKU-1001', 'Private Network Endpoint', TOKEN_REFUSED, 'Mismatching encryption keys',
     ]) expect(doc.browserBot, text).toContain(text);
   });
@@ -215,7 +215,7 @@ describe('the desktop bot guide and the Windows guide', () => {
   it('teaches the short path: one command, one line, record, approve on the form, run', () => {
     for (const text of ['.\\Get-Rpa.ps1 -AllowFrom <n8n address>', '& "C:\\Program Files\\RPA Runner\\rpa.cmd" connection -ShowTokens', '**Connection Line**',
       'Which of these change from run to run?', '**Allow this app…**', 'packages/n8n-nodes-rpa/templates/5-import-a-bot.json', '**Approve and sign**',
-      'Approved and signed: erp-line-items v1 is now the version that runs under that name.', '**RPA Secret Variables**', '**Not released yet.**']) {
+      'Approved and signed: erp-line-items version 1 is now the version that runs under that name.', '**RPA Secret Variables**', '**Not released yet.**']) {
       expect(doc.desktopBot, text).toContain(text);
     }
   });

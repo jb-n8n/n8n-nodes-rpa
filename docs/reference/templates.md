@@ -24,17 +24,20 @@ first, before anything reads or writes them.
   required columns. Leave both empty when the bot downloads nothing in a browser. A step document's download steps
   carry their own checks, so it is not asked: **Read the upload** reads the file's text (a file of at most 5 MB that is
   not a ZIP, XAML, code or a recording) and **Asks about a download?** looks for the step document's shape.
-- **Bot file** may be left empty to change an approved bot or sign it again. **Approved bots** reads the `active`
-  rows of `playwright_steps`, and **Change or sign again** shows the newest active steps of the name typed, to read
+- **Bot file** may be left empty to change an approved bot or sign it again. **Approved bots** reads the rows of
+  `playwright_steps` (the `active` ones are the approved bots), and **Change or sign again** shows the newest active steps of the name typed, to read
   and copy, with one box that is empty to start with. **Compared with the approved version** takes the steps to
   review: with the box left empty, the active row's steps as **The bot to change** read them from the table (they never
   pass through the browser); with text in the box, that text. It also gives the review page its first line: unchanged,
   or which steps differ. **Review** sends those steps to **Import steps** as a step document, then to the same review
   page and **Sign steps**. Text that is not a step document ends on **Import failed**, which says the old version keeps
   running.
-  The steps get the next version: **Import steps → Options → Version** is the approved version plus one, read by
-  **The bot to change** from the active row (never from the box), so the review page says `version 2, replacing version
-  1`. Signing the same steps again also gives the next version: it is a new approval. The workflow that runs the bot
+  The steps get the next version: **Import steps → Options → Version** is one more than the highest version any row
+  of that name has, active, rejected or superseded, read by **The bot to change** (never from the box). A rejected
+  attempt keeps its number and the next attempt takes a new one, so the table never holds two rows of one name and
+  version. The review page names the version that runs: `version 2, replacing version 1`, or after a rejected
+  attempt `version 3, replacing version 1`. Signing the same steps again also gives the next version: it is a new
+  approval. The workflow that runs the bot
   reads Expected Version from the active row, so it keeps running. Approved, the new row supersedes the old one. Rejected, the old one keeps running. This path gives no workflow file:
   the bot's workflow exists already. A name with no active row ends on **No approved bot**, which lists the approved
   names.
@@ -50,16 +53,17 @@ first, before anything reads or writes them.
   what the replay proved, the steps it left out, and the numbered steps. For desktop steps it asks "Which of these steps
   save, send or submit?". The **Decision** is **Approve and sign** or **Reject**. A page left unanswered for an hour
   signs nothing.
-- The last page says `Approved and signed: <name> v<version> is now the version that runs under that name.`, or
-  `Rejected: <name> v<version>. Nothing was signed.` An import is version 1. A file uploaded under the name of an
-  approved bot is its next version (**Running versions** and **What it replaces** read what runs under that name, and
-  the step lists named after it, `<name>-1`, `<name>-2`): the review page says `version 5, replacing version 4`, the
+- The last page says `Approved and signed: <name> version <version> is now the version that runs under that name.`,
+  or `Rejected: <name> version <version>. Nothing was signed.` An import of a new name is version 1. A file uploaded
+  under a name used before gets the number after the highest any row of that name has (**Running versions** and
+  **What it replaces** read the rows of that name, and of the step lists named after it, `<name>-1`, `<name>-2`). Under
+  the name of an approved bot it replaces what runs: the review page says `version 5, replacing version 4`, the
   part of each step list that has a running version says how it differs from that version (**Compared with the
   running version**, the change path's comparison, for each list: `<name>: changed from the approved version 4: step
   6.`, or `unchanged`, or that it could not be compared; a new list says nothing; which desktop steps are writes is
   chosen again on the review page, so that mark is not compared, and the line says so), and
   the last page `Approved and signed: <name> version 5 is now the version that runs, replacing version 4.` or
-  `Rejected: <name> v5. Nothing was signed. Version 4 keeps running.` After a change or a re-sign it says
+  `Rejected: <name> version 5. Nothing was signed. Version 4 keeps running.` After a change or a re-sign it says
   `Signed again: <name> version N, unchanged.`, `Changed: <name> version N is now the version that runs, replacing
   version M.`, or `Nothing changed: <name> version M keeps running.` When Sign steps signed a step list, it
   also downloads the workflow that runs the bot. When nothing was signed (rejected, or Sign steps refused), it neither

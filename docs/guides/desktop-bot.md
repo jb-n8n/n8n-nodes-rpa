@@ -131,7 +131,7 @@ you use n8n from, and open the form there. [Record a bot](record-a-bot.md) expla
 
    <img src="../images/import-review-page.png" alt="The Review and approve page for the ERP Demo recording: the numbered steps, the tick boxes and the decision" width="360">
 
-3. The last page says `Approved and signed: erp-line-items v1 is now the version that runs under that name.` The
+3. The last page says `Approved and signed: erp-line-items version 1 is now the version that runs under that name.` The
    browser downloads `erp-line-items.workflow.json`, the workflow that runs the bot. The signed row records the email
    address of your n8n user as **approvedBy**. Someone not on **Sign steps → Approver Allowlist** cannot approve: the last page says
    `Sign Steps refused` and nothing is signed.

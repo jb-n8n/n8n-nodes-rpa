@@ -112,7 +112,7 @@ steps written as JSON. It signs in, opens the sandbox's SAP report screen, runs 
    "LINEITEMS_1000_2026-09-01_2026-09-30.csv"`. The page builds each step's sentence from the step itself. A
    step's own description stands beside it in grey, as `(the author calls it: …)`, and in red when it names another
    action or site: read the red ones twice. The sample shows none. Under **Decision**, choose **Approve and sign**, then **Submit**.
-4. The last page says `Approved and signed: sandbox-line-items v1 is now the version that runs under that name.` Your
+4. The last page says `Approved and signed: sandbox-line-items version 1 is now the version that runs under that name.` Your
    browser downloads `sandbox-line-items.workflow.json`, the workflow that runs the bot.
 
 If the last page says `Nothing to approve`, it names the problem:
