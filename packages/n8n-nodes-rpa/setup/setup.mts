@@ -530,6 +530,43 @@ async function testRunner(client: Client, ref: Ref): Promise<RunnerTest> {
   return { result: 'untested', message: `${why}.${scope}` };
 }
 
+/** "no answer within N s": nothing on n8n's way reached the Windows machine (the engine's runnerNoTcpAnswer, runnerUnreachable). */
+const NO_ANSWER = /\(no answer within \d+ s\)/;
+
+/**
+ * After a test that got no answer, at a terminal: once, a corrected Connection Line (not shown), or Enter to finish. A
+ * line replaces the credential's line as offerLine does, said by its address and port only; n8n then tests it again.
+ * A line that does not parse, or that n8n does not take, changes nothing. Returns whether the line was replaced.
+ */
+async function correctLine(client: Client, ref: Ref): Promise<boolean> {
+  const what = `credential "${clean(ref.name, ref.id)}" (id ${clean(ref.id)})`;
+  say('n8n got no answer from the Windows machine. If you printed its line again, for example with -Address, paste it now.');
+  const line = await askHidden(`Corrected Connection Line for "${clean(ref.name, ref.id)}" (not shown), or Enter to finish: `);
+  redactor.add(line);
+  if (!line) return false;
+  let to: string | undefined;
+  let problem: string | undefined;
+  try {
+    // The node's own parser: its messages never repeat any part of the line.
+    const parsed = parseConnectionLine('runner', line);
+    redactor.add(parsed.token);
+    to = new URL(parsed.url).host;
+  } catch (err) {
+    problem = (err as Error).message;
+  }
+  if (to === undefined) {
+    say(`         not used: ${problem ?? 'the line does not parse.'} The Connection Line of ${what} stays as it is.`);
+    return false;
+  }
+  const r = await client.api('PATCH', `/credentials/${encodeURIComponent(ref.id)}`, { name: ref.name, type: RUNNER.type, data: { connectionLine: line } });
+  if (r.status !== 200) {
+    say(`         not used: n8n did not take it (${client.reason(r)}). The Connection Line of ${what} stays as it is.`);
+    return false;
+  }
+  say(`replaced Connection Line of ${what}: it now names ${to}`);
+  return true;
+}
+
 /** What n8n's test of the RPA Desktop Runner gave, for the closing lines. */
 interface RunnerTest { result: 'connected' | 'failed' | 'untested'; message: string }
 
@@ -1085,7 +1122,11 @@ async function run(inputs: Inputs): Promise<number> {
     if (!signsIn(probe)) warn(`Note: the form did not answer as expected at ${formUrl} (${probe ? `HTTP ${probe.status}` : 'no answer'}). In n8n, open "${shownName}", then the node "${NODE.form}", for its production URL.`);
   }
   // Last, as it may wait a minute for a machine that does not answer: the form is ready by then.
-  const runnerTest = runnerRef ? await testRunner(client, runnerRef) : undefined;
+  let runnerTest = runnerRef ? await testRunner(client, runnerRef) : undefined;
+  // No answer, at a terminal: one chance to paste a corrected line now, instead of running the whole command again.
+  if (runnerRef && runnerTest?.result === 'failed' && NO_ANSWER.test(runnerTest.message) && interactive() && (await correctLine(client, runnerRef))) {
+    runnerTest = await testRunner(client, runnerRef);
+  }
 
   // The address to open: n8n's own when its environment gives it here, else the one this command reached n8n at.
   const shownUrl = formUrl && inputs.formBase ? new URL(`form/${webhookId}`, inputs.formBase).href : formUrl;

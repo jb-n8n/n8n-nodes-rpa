@@ -46,6 +46,8 @@ interface Options {
   test?: 'ok' | 'error' | 'forbidden';
   /** What a failed test says (default RUNNER_UNREACHABLE). */
   testMessage?: string;
+  /** With test 'error': the test passes once the credential's Connection Line holds this text (a corrected line). */
+  testOkWhen?: string;
   /** Workflows the API key cannot see (not listed), whose forms still hold their paths. */
   hiddenForms?: Wf[];
 }
@@ -127,8 +129,10 @@ async function fakeN8n(o: Options = {}) {
       }
       if ((m = /^POST \/api\/v1\/credentials\/([\w-]+)\/test$/.exec(route))) {
         if (o.test === 'forbidden') return send(403, { message: 'Forbidden' });
-        if (!state.credentials.some((x) => x.id === m![1])) return send(404, { message: 'Not Found' });
-        if (o.test === 'error') return send(200, { status: 'Error', message: o.testMessage ?? RUNNER_UNREACHABLE });
+        const tested = state.credentials.find((x) => x.id === m![1]);
+        if (!tested) return send(404, { message: 'Not Found' });
+        const fixed = o.testOkWhen !== undefined && String(tested.data?.connectionLine ?? '').includes(o.testOkWhen);
+        if (o.test === 'error' && !fixed) return send(200, { status: 'Error', message: o.testMessage ?? RUNNER_UNREACHABLE });
         return send(200, { status: 'OK', message: RUNNER_CONNECTED });
       }
       if ((m = /^PATCH \/api\/v1\/credentials\/([\w-]+)$/.exec(route))) {
@@ -203,7 +207,12 @@ function runAtTerminal(args: string[], env: Record<string, string>, answers: [Re
     const pending = [...answers];
     const onOutput = (chunk: Buffer) => {
       out += chunk.toString();
-      if (pending.length && pending[0][0].test(out)) child.stdin.write(`${pending.shift()![1]}\n`);
+      if (pending.length && pending[0][0].test(out)) {
+        child.stdin.write(`${pending.shift()![1]}\n`);
+        // After the last answer the pipe is closed: a pipe read without echo (askHidden) keeps the process alive after it
+        // pauses, which a terminal does not.
+        if (!pending.length) child.stdin.end();
+      }
     };
     child.stdout.on('data', onOutput);
     child.stderr.on('data', onOutput);
@@ -798,6 +807,60 @@ describe('npx n8n-nodes-rpa setup', () => {
         '  What to do: open the credential "RPA Desktop Runner account" in n8n, which tests it as it opens.',
       ]);
       expect(onImport(forbidden).rpaDesktopRunnerApi).toEqual({ id: 'c-hand', name: 'RPA Desktop Runner account' });
+    });
+
+    it('no answer, at a terminal: it offers once to paste a corrected line, replaces it, says only its address and port, and n8n tests it again', async () => {
+      const NO_WINDOWS = /Connect a Windows machine now\? \(y\/N\)/;
+      const ASK = /Corrected Connection Line for "RPA Desktop Runner account" \(not shown\), or Enter to finish: /;
+      const lineOf = (fake: Fake) => fake.state.credentials.find((c) => c.id === 'c-hand')!.data.connectionLine;
+      const tests = (fake: Fake) => fake.state.requests.filter((r) => r.path === '/api/v1/credentials/c-hand/test').length;
+      const fake = await n8n({ credentials: [HAND], test: 'error', testOkWhen: 'rpa.example.com' });
+      const r = await runAtTerminal(setup(fake.url), ENV, [[NO_WINDOWS, ''], [ASK, NEW_LINE]]);
+      expect(r.code, r.out).toBe(0);
+      expect(lineOf(fake)).toBe(NEW_LINE);
+      expect(r.out).toContain('n8n got no answer from the Windows machine. If you printed its line again, for example with -Address, paste it now.');
+      expect(r.out).toContain('replaced Connection Line of credential "RPA Desktop Runner account" (id c-hand): it now names rpa.example.com:8765');
+      expect(tests(fake)).toBe(2);
+      expect(r.out.trimEnd().split('\n').at(-1)).toBe(`The import form is ready, and the Windows machine is connected. n8n's test said: ${RUNNER_CONNECTED}.`);
+      expectNoSecrets(r.out, [NEW_LINE, NEW_TOKEN, 'CD'.repeat(32)]);
+
+      // Enter: nothing changes, and the closing lines are today's.
+      const enter = await n8n({ credentials: [HAND], test: 'error' });
+      const e = await runAtTerminal(setup(enter.url), ENV, [[NO_WINDOWS, ''], [ASK, '']]);
+      expect(e.code, e.out).toBe(0);
+      expect(lineOf(enter)).toBe(LINE);
+      expect(enter.state.requests.filter((q) => q.method === 'PATCH')).toEqual([]);
+      expect(tests(enter)).toBe(1);
+      expect(e.out).toContain('The import form is ready, but the Windows machine is not connected yet.');
+      // A line that does not parse: the node's message, nothing changed, nothing more asked.
+      const bad = await n8n({ credentials: [HAND], test: 'error' });
+      const b = await runAtTerminal(setup(bad.url), ENV, [[NO_WINDOWS, ''], [ASK, 'rpa-runner://half-a-line']]);
+      expect(b.code, b.out).toBe(0);
+      expect(lineOf(bad)).toBe(LINE);
+      expect(b.out).toMatch(/ {9}not used: .* The Connection Line of credential "RPA Desktop Runner account" \(id c-hand\) stays as it is\./);
+      expect(b.out).not.toContain('half-a-line');
+      expect(tests(bad)).toBe(1);
+      // Still no answer after the new line: asked once only, and the closing lines say so.
+      const still = await n8n({ credentials: [HAND], test: 'error' });
+      const st = await runAtTerminal(setup(still.url), ENV, [[NO_WINDOWS, ''], [ASK, NEW_LINE]]);
+      expect(st.code, st.out).toBe(0);
+      expect(tests(still)).toBe(2);
+      expect(st.out.match(/Corrected Connection Line/g)).toHaveLength(1);
+      expect(st.out).toContain('The import form is ready, but the Windows machine is not connected yet.');
+      expectNoSecrets(e.out + b.out + st.out, [NEW_LINE, NEW_TOKEN]);
+    });
+
+    it('another failure than no answer, or no terminal: it does not ask, and the closing lines are today\'s', async () => {
+      const other = await n8n({ credentials: [HAND], test: 'error', testMessage: 'The desktop runner at wss://x.example.com:8765/rpa/v1 refused the token. Check the Token in the RPA Desktop Runner credential.' });
+      const o = await runAtTerminal(setup(other.url), ENV, [[/Connect a Windows machine now\? \(y\/N\)/, '']]);
+      expect(o.code, o.out).toBe(0);
+      expect(o.out).not.toContain('Corrected Connection Line');
+      const plain = await n8n({ credentials: [HAND], test: 'error' });
+      const p = await run(setup(plain.url), ENV);
+      expect(p.code, p.out).toBe(0);
+      expect(p.out).not.toContain('Corrected Connection Line');
+      expect(p.out).not.toContain('n8n got no answer');
+      expect(plain.state.requests.filter((q) => q.method === 'PATCH')).toEqual([]);
     });
 
     it('a workflow there already is left alone: it says to pick the runner on Import steps, by name and id', async () => {
