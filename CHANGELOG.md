@@ -69,6 +69,7 @@ All notable changes to `n8n-nodes-rpa`, the `rpa-browser` image and the Windows 
 
 ### Security
 
+- **RPA: 5 Import a bot** refuses an address that carries values (anything after `?`) before anything is read or imported: n8n fills the fields of every page of a form from that address, the review page's decision and write ticks too.
 - A secret variable or a secret fill's value is masked in screenshots, and a screenshot or PDF of a page that shows one is refused.
 - A sign-in judges a login form by its own action, and a refusal names the address to list under **Pages Where the Password May Be Typed**.
 - `policy-changes\` is created for administrators only and refused when it is a link or someone else owns it.

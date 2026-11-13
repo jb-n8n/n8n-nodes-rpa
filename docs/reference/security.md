@@ -100,6 +100,9 @@ an **RPA Step Signing** credential that its own project owns, and never one of t
     password can open the form. The pages after the first are not behind the password: anyone who has a page's
     address can open and submit it, and n8n puts that address in the browser's address bar. The row records the
     address in **Sign steps → Approver Allowlist**, not who approved.
+- **Values in the form's address.** n8n fills the fields of every page of a form, the review page too, from the
+  address the form was opened with. So the import form refuses an address that carries values, before anything is
+  read or imported, and an approval never arrives with its answer chosen by whoever made the link.
 - **By email (an option).** Set `approval` to `by email` in template 5's **Settings**, and each step list goes to
   **RPA: 3 Approve steps**, which emails a named approver. The approval link is a bearer link: anyone who receives or
   forwards it can approve. Send it to one person. The AI repairs of **RPA: 2 Data feed** use this path.
@@ -120,10 +123,8 @@ an **RPA Step Signing** credential that its own project owns, and never one of t
 
   Sign Steps refuses steps that hold a Site Login secret, and a secret variable appears in steps only by its name.
   Steps still show the sites, apps and fields they use and the other values they type. The page says who can open it.
-  n8n fills a field on a later page of a form from the address the first page was opened with, so a link to the
-  form could put other steps in the box. The form therefore refuses an address that names the steps box, and the
-  review page's first line, worked out in n8n from the row it read, says whether and where the steps submitted
-  differ from the approved version.
+  The review page's first line, worked out in n8n from the row it read, says whether and where the steps submitted
+  differ from the approved version, so a slip in the box shows before anyone approves.
 - **An old key or an edit.** A row signed with an older key and a row changed in the Data Table after it was approved
   look the same to the current key: neither verifies, and the old key is gone. The row's `hash` column is not keyed,
   so whoever changed the steps could also change it. The form therefore cannot refuse an edited row. It says so on

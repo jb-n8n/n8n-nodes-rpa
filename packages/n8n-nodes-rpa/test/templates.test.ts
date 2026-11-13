@@ -1009,7 +1009,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
   it('the import template wires the form, Settings, Import steps, the review page and Sign steps; approval by email is a switched-off hand-off', () => {
     expect(form).toMatchObject({ type: 'n8n-nodes-base.formTrigger', typeVersion: 2.6 });
     expect(imp).toMatchObject({ type: NODE_TYPE, typeVersion: 1, onError: 'continueErrorOutput' });
-    expect(targets(t, 'Import a bot')).toEqual([['Settings']]);
+    // An address that carries values for the form's fields ends the run before anything is read.
+    expect(targets(t, 'Import a bot')).toEqual([['Plain address?']]);
+    expect(targets(t, 'Plain address?')).toEqual([['Settings'], ['Address with values']]);
     // No file on the first page: the change path (an approved bot by its name, its steps in a box). With a file: the import.
     expect(targets(t, 'Settings')).toEqual([['Change an approved bot?']]);
     expect(targets(t, 'Change an approved bot?')).toEqual([['Approved bots'], ['Asks about a download?']]);
@@ -1063,12 +1065,12 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(byName(t, 'Approval by email?').position[1]).toBeLessThan(Math.min(...['Approve on this form?', 'Import failed'].map((n) => byName(t, n).position[1])));
     const working = t.nodes.filter((n) => n.type !== STICKY).map((n) => n.name).sort();
     expect(working).toEqual([
-      'Add the login page', 'Approval by email?', 'Approve on this form?', 'Approve steps', 'Approved bot found?', 'Approved bots', 'Asks about a download?', 'Change an approved bot?',
+      'Add the login page', 'Address with values', 'Approval by email?', 'Approve on this form?', 'Approve steps', 'Approved bot found?', 'Approved bots', 'Asks about a download?', 'Change an approved bot?',
       'Change or sign again', 'Compared with the approved version', 'Create run log table', 'Create steps table', 'Import a bot', 'Import failed', 'Import steps', 'Imported', 'Imported, with the workflow file', 'Missing login page?',
-      'No approved bot', 'Record rejection', REVIEW, 'Save signed steps', 'Settings', 'Sign steps', 'Signed?', 'Step lists', 'Step lists to sign', 'Supersede older versions',
+      'No approved bot', 'Plain address?', 'Record rejection', REVIEW, 'Save signed steps', 'Settings', 'Sign steps', 'Signed?', 'Step lists', 'Step lists to sign', 'Supersede older versions',
       'The bot to change', 'The file it downloads', 'The steps as a file', 'The upload', 'Workflow file?',
     ]);
-    expect(t.nodes.filter((n) => n.type === COMPLETION).map((n) => n.typeVersion)).toEqual([2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5]);
+    expect(t.nodes.filter((n) => n.type === COMPLETION).map((n) => n.typeVersion)).toEqual([2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5]);
     // A form page pauses the run until the browser loads it; a closed tab must not leave the execution waiting for ever.
     for (const n of t.nodes.filter((x) => x.type === COMPLETION)) {
       expect(n.parameters, n.name).toMatchObject({ limitWaitTime: true, limitType: 'afterTimeInterval', resumeAmount: 1, resumeUnit: 'hours' });
@@ -1932,22 +1934,51 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(compare(changePath('gone', []).ran, box)).toBe(COULD_NOT);
   });
 
-  it('a value for the steps box in the form\'s address is refused: nothing is shown, and a box that differs from the row is reported as changed', () => {
+  it('an address that carries values for the form\'s fields is refused before anything is read, imported, shown or signed; a plain address goes through', () => {
+    // n8n 2.45 keeps the first page's query as the trigger's formQueryParameters, only when it has a key (Form
+    // utils.ts 574-579), and fills the fields of every later page from it (utils.ts 634-648 and 337): the review page's
+    // decision and write ticks, the steps box. A later page's own ?signature= never gets there.
+    const cond = (byName(t, 'Plain address?').parameters as { conditions: { conditions: { leftValue: string; operator: unknown }[] } }).conditions.conditions;
+    expect(cond).toEqual([expect.objectContaining({ operator: { type: 'boolean', operation: 'true', singleValue: true } })]);
+    const plain = (query?: unknown) => evaluate(cond[0].leftValue, { $json: { ...formItem('Chrome Recorder', CHROME).json, ...(query === undefined ? {} : { formQueryParameters: query }) } });
+    expect(plain()).toBe(true);
+    expect(plain({})).toBe(true);
+    expect(plain('')).toBe(true);
+    // The two keys n8n adds itself when it shows a form inside its connect-accounts frame.
+    expect(plain({ n8nShellInner: '1' })).toBe(true);
+    expect(plain({ n8nShellHosted: '1', n8nShellInner: '1' })).toBe(true);
     const doc = { startUrl: `${SITE.url}/a`, name: 'feed', version: 1, steps: [{ intent: 'Open the report', goto: '/report' }] };
-    const rows = [{ id: 1, name: 'feed', version: 1, steps: JSON.stringify(doc), status: 'active' }];
-    // n8n 2.45 fills a field of a later page from the address the first page was opened with (formQueryParameters).
     const planted = JSON.stringify({ ...doc, steps: [{ intent: 'Open the report', goto: 'https://elsewhere.example.com/' }] });
-    const { bot, $ } = changePath('feed', rows, 'n8nUserAuth', { name: 'feed', steps: planted });
-    expect(bot).toMatchObject({ found: true, prefilled: true });
-    const foundCond = (byName(t, 'Approved bot found?').parameters as { conditions: { conditions: { leftValue: string }[] } }).conditions.conditions[0].leftValue;
-    expect(evaluate(foundCond, { $json: bot })).toBe(false);
-    expect(render(completion('No approved bot').completionMessage, { $ }).split('\n')[0])
-      .toBe('The address of this form carried a value for the steps box. Nothing was shown and nothing was imported. Open the form from its own address, with nothing after a question mark.');
-    // Other address values (the name, a source) change nothing.
-    expect(changePath('feed', rows, 'n8nUserAuth', { name: 'feed' }).bot).toMatchObject({ found: true, prefilled: false });
-    // Steps that reach the box another way (a slip of the hand, a value put there) while the person meant to change
-    // nothing: the review page says they changed, and where.
+    for (const query of [{ decision_0: 'Approve and sign' }, { writes_0: 'Step 16: Click Save' }, { steps: planted }, { name: 'feed' }, { utm_source: 'mail' }, { n8nShellInner: '1', decision_0: 'Approve and sign' }, 'x']) {
+      expect(plain(query), JSON.stringify(query)).toBe(false);
+    }
+    // Refused: one last page, and nothing after it. Settings, and everything that reads, imports or signs, comes after
+    // the true output only.
+    const after = (from: string): Set<string> => {
+      const seen = new Set<string>();
+      const walk = (n: string) => targets(t, n).flat().forEach((m) => (seen.has(m) ? undefined : (seen.add(m), walk(m))));
+      walk(from);
+      return seen;
+    };
+    expect(targets(t, 'Address with values')).toEqual([]);
+    expect([...after('Import a bot')].sort()).toEqual([...new Set(['Plain address?', 'Address with values', 'Settings', ...after('Settings')])].sort());
+    for (const n of ['Settings', 'Approved bots', 'Import steps', REVIEW, 'Sign steps']) expect(after('Address with values').has(n), n).toBe(false);
+    const page = completion('Address with values');
+    expect(page).toMatchObject({ operation: 'completion', respondWith: 'text', completionTitle: 'Open the form by its plain address' });
+    expect(page.completionMessage).toBe("This address carries values for the form's fields. Open the form by its plain address: the address up to the question mark.\nNothing was imported, shown or signed.");
+    // Steps that reach the box another way (a slip of the hand) while the person meant to change nothing: the review
+    // page says they changed, and where.
+    const rows = [{ id: 1, name: 'feed', version: 1, steps: JSON.stringify(doc), status: 'active' }];
     expect(compare(changePath('feed', rows).ran, planted)).toBe('Changed from the approved version 1: step 1.');
+  });
+
+  it('template 3 has no form that n8n fills from an address, and template 2 has no form', () => {
+    // Send-and-wait renders its custom form with an empty query (n8n 2.45 utils/sendAndWait/utils.ts 392 and 460), and
+    // its Approve and Reject links are signed resume links. Template 2 has no form node at all.
+    const t3 = load('3-approve-steps.json');
+    expect(t3.nodes.filter((n) => /\.form(Trigger)?$/.test(n.type))).toEqual([]);
+    expect(t3.nodes.filter((n) => n.parameters.operation === 'sendAndWait').map((n) => n.type)).toEqual(['n8n-nodes-base.emailSend', 'n8n-nodes-base.emailSend']);
+    expect(load('2-data-feed.json').nodes.filter((n) => /form/i.test(n.type) || n.parameters.operation === 'sendAndWait')).toEqual([]);
   });
 
   it('the first page with no file leads to an approved bot by its name; with a file, the import goes on as before', () => {
@@ -1976,18 +2007,18 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       { id: 5, name: 'erp', version: 9, steps: '', status: 'active' },
       { error: 'The Data Table playwright_steps does not exist' }, {},
     ];
-    const found = { name: 'erp', found: true, version: 3, steps: JSON.stringify(doc, null, 2), names: ['erp', 'other<b>'], prefilled: false };
+    const found = { name: 'erp', found: true, version: 3, steps: JSON.stringify(doc, null, 2), names: ['erp', 'other<b>'] };
     expect(changePath('erp', rows).bot).toEqual(found);
     expect(changePath('  erp ', rows).bot).toEqual(found);
     // Exactly the name: another casing is another bot.
-    expect(changePath('ERP', rows).bot).toEqual({ name: 'ERP', found: false, version: null, steps: '', names: ['erp', 'other<b>'], prefilled: false });
+    expect(changePath('ERP', rows).bot).toEqual({ name: 'ERP', found: false, version: null, steps: '', names: ['erp', 'other<b>'] });
     // A row whose steps are not JSON is shown as it is: Import steps then says what is wrong with it.
     expect(changePath('erp', [{ id: 1, name: 'erp', version: 1, steps: '{broken', status: 'active' }]).bot).toMatchObject({ found: true, steps: '{broken' });
     // No table yet, or no row.
-    expect(changePath('erp', [{ error: 'no table' }]).bot).toEqual({ name: 'erp', found: false, version: null, steps: '', names: [], prefilled: false });
+    expect(changePath('erp', [{ error: 'no table' }]).bot).toEqual({ name: 'erp', found: false, version: null, steps: '', names: [] });
     expect(changePath('erp', [{}]).bot).toMatchObject({ found: false, names: [] });
     const foundCond = (byName(t, 'Approved bot found?').parameters as { conditions: { conditions: { leftValue: string }[] } }).conditions.conditions[0].leftValue;
-    expect([found, { found: false }, {}, { ...found, prefilled: true }].map(($json) => evaluate(foundCond, { $json }))).toEqual([true, false, false, false]);
+    expect([found, { found: false }, {}].map(($json) => evaluate(foundCond, { $json }))).toEqual([true, false, false]);
 
     // None of that name: a last page names the approved bots, escaped, and how to import instead; none at all says so.
     const none = completion('No approved bot');

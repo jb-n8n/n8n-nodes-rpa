@@ -132,6 +132,63 @@
     },
     {
       "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005b9",
+              "leftValue": "={{ Object.keys(Object($json.formQueryParameters ?? {})).filter((k) => !['n8nShellInner', 'n8nShellHosted'].includes(k)).length === 0 }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000539",
+      "name": "Plain address?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        220,
+        0
+      ],
+      "notes": "n8n fills the fields of every page of this form, the review page too, from the address the first page was opened with (kept as formQueryParameters). An address that carries any value is refused before anything is read, imported or shown. Allowed by name: n8nShellInner and n8nShellHosted, which n8n adds itself when it shows a form inside its connect-accounts frame."
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "respondWith": "text",
+        "completionTitle": "Open the form by its plain address",
+        "completionMessage": "This address carries values for the form's fields. Open the form by its plain address: the address up to the question mark.\nNothing was imported, shown or signed.",
+        "limitWaitTime": true,
+        "limitType": "afterTimeInterval",
+        "resumeAmount": 1,
+        "resumeUnit": "hours",
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000540",
+      "name": "Address with values",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        440,
+        240
+      ],
+      "notes": "The run pauses here until the browser shows this page, at most 1 hour."
+    },
+    {
+      "parameters": {
         "assignments": {
           "assignments": [
             {
@@ -156,7 +213,7 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [
-        220,
+        440,
         0
       ],
       "notes": "approval: \"on this form\" (the person who imports reviews and approves on the next page) or \"by email\" (RPA: 3 Approve steps asks a second person). showDetails: true puts each step list's full detail (how each step finds its control) on the review page, above the question."
@@ -191,7 +248,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        660,
+        880,
         0
       ],
       "notes": "A recording never asks: the recorder makes its export step. Every other upload, a UiPath project too, gets the optional download question on a second page."
@@ -230,7 +287,7 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        880,
+        1100,
         -120
       ],
       "notes": "Every upload but a recording (see Asks about a download?). The run pauses here until the person submits, at most 1 hour."
@@ -278,7 +335,7 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [
-        1760,
+        1980,
         0
       ],
       "notes": "What Import steps reads: the uploaded file (binary bot) and the Name and Source from the first page, the download answers when they were asked. After Change or sign again: the steps from that page, as a step document. The same file again after Import again."
@@ -313,7 +370,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        440,
+        660,
         0
       ],
       "notes": "No file on the first page: the name picks an approved bot to change or sign again. With a file: an import, as always."
@@ -344,7 +401,7 @@
       "type": "n8n-nodes-base.dataTable",
       "typeVersion": 1.1,
       "position": [
-        660,
+        880,
         240
       ],
       "alwaysOutputData": true,
@@ -354,7 +411,7 @@
     {
       "parameters": {
         "mode": "raw",
-        "jsonOutput": "={{ ((name, rows) => ((mine) => ({ name, found: mine.length > 0, version: mine.length ? mine[0].version : null, steps: mine.length ? ((s) => { try { return JSON.stringify(JSON.parse(s), null, 2); } catch (e) { return s; } })(mine[0].steps) : '', names: [...new Set(rows.map((r) => r.name))].sort(), prefilled: ((q) => q !== null && typeof q === 'object' && 'steps' in q)($('Settings').first().json.formQueryParameters ?? null) }))(rows.filter((r) => r.name === name).sort((a, b) => Number(b.version) - Number(a.version))))(String($('Settings').first().json.name ?? '').trim(), $('Approved bots').all().map((i) => i.json).filter((r) => r.status === 'active' && typeof r.name === 'string' && typeof r.steps === 'string' && r.steps !== '')) }}",
+        "jsonOutput": "={{ ((name, rows) => ((mine) => ({ name, found: mine.length > 0, version: mine.length ? mine[0].version : null, steps: mine.length ? ((s) => { try { return JSON.stringify(JSON.parse(s), null, 2); } catch (e) { return s; } })(mine[0].steps) : '', names: [...new Set(rows.map((r) => r.name))].sort() }))(rows.filter((r) => r.name === name).sort((a, b) => Number(b.version) - Number(a.version))))(String($('Settings').first().json.name ?? '').trim(), $('Approved bots').all().map((i) => i.json).filter((r) => r.status === 'active' && typeof r.name === 'string' && typeof r.steps === 'string' && r.steps !== '')) }}",
         "options": {}
       },
       "id": "3d6f1a20-7b4c-4e8a-9c11-000000000533",
@@ -362,11 +419,11 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [
-        880,
+        1100,
         240
       ],
       "executeOnce": true,
-      "notes": "One item: the newest active row whose name is exactly the name typed (trimmed), its steps laid out for reading, and the names of every approved bot for the page that says none was found. prefilled: the form's address carried a value for the steps box (n8n fills a field of a later page from the first page's address), and nothing is shown."
+      "notes": "One item: the newest active row whose name is exactly the name typed (trimmed), its steps laid out for reading, and the names of every approved bot for the page that says none was found."
     },
     {
       "parameters": {
@@ -380,7 +437,7 @@
           "conditions": [
             {
               "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005b8",
-              "leftValue": "={{ $json.found === true && $json.prefilled !== true }}",
+              "leftValue": "={{ $json.found === true }}",
               "rightValue": "",
               "operator": {
                 "type": "boolean",
@@ -398,7 +455,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        1100,
+        1320,
         240
       ]
     },
@@ -422,7 +479,7 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        1320,
+        1540,
         160
       ],
       "notes": "The active steps in a box (a step document, as Import steps takes it). Submitted as they are, they are signed again under the current key; changed, the change is reviewed. Either way a person approves them on Review and approve, as for any import. The run pauses here until the person submits, at most 1 hour."
@@ -441,7 +498,7 @@
       "type": "n8n-nodes-base.convertToFile",
       "typeVersion": 1.1,
       "position": [
-        1540,
+        1760,
         160
       ],
       "notes": "The box's text as the file bot, which The upload hands to Import steps with the source Step document."
@@ -457,7 +514,7 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [
-        1760,
+        1980,
         160
       ],
       "executeOnce": true,
@@ -468,7 +525,7 @@
         "operation": "completion",
         "respondWith": "text",
         "completionTitle": "No approved bot of that name",
-        "completionMessage": "={{ ((b, e) => (b.prefilled ? 'The address of this form carried a value for the steps box. Nothing was shown and nothing was imported. Open the form from its own address, with nothing after a question mark.' : b.names.length ? 'No approved bot is named ' + e(b.name) + '. The approved bots: ' + b.names.map(e).join(', ') + '.' : 'No bot has been approved yet.') + '\\nTo import a bot, open the form again and upload its file. To change an approved bot or sign it again, open the form again, leave Bot file empty and type its name.')($('The bot to change').first().json, (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c])) }}",
+        "completionMessage": "={{ ((b, e) => (b.names.length ? 'No approved bot is named ' + e(b.name) + '. The approved bots: ' + b.names.map(e).join(', ') + '.' : 'No bot has been approved yet.') + '\\nTo import a bot, open the form again and upload its file. To change an approved bot or sign it again, open the form again, leave Bot file empty and type its name.')($('The bot to change').first().json, (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c])) }}",
         "limitWaitTime": true,
         "limitType": "afterTimeInterval",
         "resumeAmount": 1,
@@ -480,10 +537,10 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        1320,
+        1540,
         320
       ],
-      "notes": "No file, and no active row of that name; or the form's address carried a value for the steps box. The run pauses here until the browser shows this page, at most 1 hour."
+      "notes": "No file, and no active row of that name. The run pauses here until the browser shows this page, at most 1 hour."
     },
     {
       "parameters": {
@@ -506,7 +563,7 @@
       "type": "n8n-nodes-rpa.playwright",
       "typeVersion": 1,
       "position": [
-        2200,
+        2420,
         0
       ],
       "onError": "continueErrorOutput",
@@ -542,7 +599,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        2420,
+        2640,
         -320
       ],
       "notes": "Only with approval \"by email\": each step list goes to RPA: 3 Approve steps."
@@ -566,7 +623,7 @@
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.2,
       "position": [
-        2640,
+        2860,
         -320
       ],
       "notes": "Off until you set up approval by email (sticky Approval by email). Fire and forget, once for each item: every step list gets its own approval execution, which waits for a person; this run finishes now.",
@@ -602,7 +659,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        2420,
+        2640,
         0
       ],
       "notes": "Any approval value other than \"by email\" approves on this form. No step list to approve: straight to the last page."
@@ -661,7 +718,7 @@
       "type": "n8n-nodes-base.dataTable",
       "typeVersion": 1.1,
       "position": [
-        2640,
+        2860,
         -120
       ]
     },
@@ -723,7 +780,7 @@
       "type": "n8n-nodes-base.dataTable",
       "typeVersion": 1.1,
       "position": [
-        2860,
+        3080,
         -120
       ]
     },
@@ -748,7 +805,7 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        3080,
+        3300,
         -120
       ],
       "notes": "After Change or sign again only: a first line that says whether and where the steps differ from the approved version (Compared with the approved version). One block per step list on Repaired Steps: what it does besides reading, the steps the import left out, the numbered steps with what they type and their variables and files (the steps the import added to a recording in grey), then the write steps (desktop) and Approve and sign or Reject. With Settings → showDetails, each step list's own flags, evidence and change list above the question. The run pauses here until the person submits, at most 1 hour; without an answer nothing is signed."
@@ -764,7 +821,7 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [
-        3300,
+        3520,
         -220
       ],
       "notes": "The Repaired steps items exactly as Import steps gave them, in the order the review page showed them. None when the page was not answered in time."
@@ -779,7 +836,7 @@
       "type": "n8n-nodes-base.splitOut",
       "typeVersion": 1,
       "position": [
-        3520,
+        3740,
         -220
       ]
     },
@@ -797,7 +854,7 @@
       "type": "n8n-nodes-rpa.playwright",
       "typeVersion": 1,
       "position": [
-        3740,
+        3960,
         -220
       ],
       "onError": "continueErrorOutput",
@@ -832,7 +889,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        3960,
+        4180,
         -280
       ]
     },
@@ -940,7 +997,7 @@
       "type": "n8n-nodes-base.dataTable",
       "typeVersion": 1.1,
       "position": [
-        4180,
+        4400,
         -340
       ],
       "notes": "Writes the signed steps as an active row, from Sign steps' record only."
@@ -1004,7 +1061,7 @@
       "type": "n8n-nodes-base.dataTable",
       "typeVersion": 1.1,
       "position": [
-        4400,
+        4620,
         -340
       ],
       "notes": "Every other active row of the same name becomes superseded (an import is a first version, so whatever its version), so the steps just approved are what runs under that name."
@@ -1093,7 +1150,7 @@
       "type": "n8n-nodes-base.dataTable",
       "typeVersion": 1.1,
       "position": [
-        4180,
+        4400,
         -180
       ],
       "notes": "A rejected step list: a rejected row, with no steps and no signature. A step list Sign steps refused writes no row; the last page names the reason."
@@ -1128,7 +1185,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        3300,
+        3520,
         160
       ],
       "notes": "Every import with steps carries the bot as binary workflow on the Data output of Import steps. After the review page, only when a step list was approved: a rejected bot gets no workflow to run. A change or a new signature of an approved bot gets no file: its workflow exists already."
@@ -1151,7 +1208,7 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        3520,
+        3740,
         80
       ],
       "notes": "The run pauses here until the browser shows this page, at most 1 hour. The file comes from the Data output of Import steps."
@@ -1173,7 +1230,7 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        3520,
+        3740,
         240
       ],
       "notes": "The run pauses here until the browser shows this page, at most 1 hour."
@@ -1208,7 +1265,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        2420,
+        2640,
         320
       ],
       "notes": "The sign-in was refused because an address is not listed in the RPA Site Login: the page says which and offers to import the same file again."
@@ -1233,7 +1290,7 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        2640,
+        2860,
         260
       ],
       "notes": "Import again runs Import steps once more on the same upload (The upload), with the Site Login as it is then."
@@ -1255,7 +1312,7 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        2640,
+        2860,
         420
       ],
       "notes": "The run pauses here until the browser shows this page, at most 1 hour."
@@ -1266,7 +1323,7 @@
       "main": [
         [
           {
-            "node": "Settings",
+            "node": "Plain address?",
             "type": "main",
             "index": 0
           }
@@ -1612,6 +1669,24 @@
         [
           {
             "node": "The upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plain address?": {
+      "main": [
+        [
+          {
+            "node": "Settings",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Address with values",
             "type": "main",
             "index": 0
           }
