@@ -26,6 +26,9 @@ const SAMPLE_ARGS: Record<string, unknown[]> = {
   expectedFileInvalid: [['check.name is not a valid regex']],
   runnerNoTcpAnswer: ['wss://10.0.0.20:8765/rpa/v1', 10, '10.0.0.20'],
   runnerConnected: [{ interactive: true }],
+  pageShows: ['buttons', ['sample', 'sample'], 3],
+  checkedWithoutActing: [[5, 6, 8], false],
+  notCheckedFrom: [7, 9],
 };
 const SAMPLE = ['sample', 'sample', 'sample'];
 

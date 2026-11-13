@@ -16,12 +16,13 @@ import { runBinaryProblem } from '../steps/limits.js';
 import { screenshotMasks } from '../steps/masks.js';
 import { shownMessage } from '../steps/urls.js';
 import { installInterrupts } from '../steps/interrupts.js';
+import { lookAtPage, withPageLook } from '../steps/page-offers.js';
 import { parseScript } from '../steps/parse.js';
 import { newRunState, runSteps, type StepContext } from '../steps/run.js';
 import { stopTrace, wantTrace, type SaveTrace } from '../trace/trace.js';
 import type {
-  BrowserEndpoint, CodeProvider, DownloadedFile, ErrorCode, OutputSpec, PageInfo, PortalPolicy, PortalSecrets, RequestRecord, Row, RunState, Script,
-  StepFailure, StepLogEntry, StepOutput, Violation,
+  BrowserEndpoint, CodeProvider, DownloadedFile, ErrorCode, MissingControl, OutputSpec, PageInfo, PortalPolicy, PortalSecrets, RequestRecord, Row, RunState,
+  Script, StepFailure, StepLogEntry, StepOutput, Violation,
 } from '../types.js';
 import { verifyRows } from '../verify/verify.js';
 import { maskedPageText, openStartPage, pageInfo, START_TIMEOUT_MS, startPageFailure, startPlan, startProceeds } from './start-page.js';
@@ -65,6 +66,12 @@ export interface ScriptLaneInput {
   signal?: AbortSignal;
   /** Keep a scrubbed Playwright trace: on failure (default), always, or never. */
   saveTrace?: SaveTrace;
+  /**
+   * Report Every Missing Control: when a step's control is not found, the later steps that act on the same page are
+   * checked too, without acting, and each one whose control is not there is named (steps/page-offers.ts). The import's
+   * replay sets it (lane/draft.ts). Off by default: only the failed step's control is reported.
+   */
+  reportEveryMissing?: boolean;
 }
 
 export type LaneSuccess = {
@@ -98,6 +105,11 @@ export type LaneFailure = {
   submitted?: boolean;
   /** True when signIn.changePassword set a new password before the run failed; absent otherwise. */
   passwordChanged?: true;
+  /**
+   * drift_detected because a browser step's control was not found: that control and what the page showed instead, then
+   * (Report Every Missing Control) each later step on the same page whose control was not there either. Masked.
+   */
+  missingControls?: MissingControl[];
 };
 /**
  * Result of a script-lane run. On success: extracted rows or downloaded files, the masked step log and the
@@ -324,7 +336,18 @@ async function executeScript(
     const pageText = await maskedPageText(ctx.page, masker);
     const loginConfirmed = Object.values(res.state.detected).includes('logged_in');
     const cls = classifyFailure({ violations: session.violations, failure: res.failure, pageText, loginConfirmed });
-    return { result: fail(toErrorCode(cls), masker.mask(shownFailure(res.failure.intent, res.failure.message, res.failure.index)), base), ...keep };
+    const code = toErrorCode(cls);
+    const shown = shownFailure(res.failure.intent, res.failure.message, res.failure.index);
+    // A control that is not there: one look at what the page shows instead, after the step's own wait (no second wait).
+    // Only the lane's message and missingControls carry it: the step's own failure (what self-repair reads) stays as it was.
+    const look = code === 'drift_detected' && res.missing
+      ? await lookAtPage({
+        page: ctx.page, policy: input.policy, masker, vars: ctx.vars, steps: script.steps, failed: res.failure.index, missing: res.missing,
+        every: input.reportEveryMissing === true,
+      })
+      : undefined;
+    const message = masker.mask(look ? withPageLook(shown, look) : shown);
+    return { result: fail(code, message, { ...base, ...(look ? { missingControls: look.controls } : {}) }), ...keep };
   }
   const tail = {
     violations: session.violations, log: maskLog(res.state.log, masker),

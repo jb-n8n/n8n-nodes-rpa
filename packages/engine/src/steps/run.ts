@@ -9,7 +9,7 @@ import { renderLocators } from './render-locators.js';
 import { registerSecretFills } from '../secrets/secret-fills.js';
 import { renderVars } from '../secrets/render.js';
 import type { SecretTypingLimit } from '../secrets/secret-targets.js';
-import { PolicyError } from './errors.js';
+import { ControlNotFound, PolicyError } from './errors.js';
 import { shownMessage } from './urls.js';
 import { BLOCKED_STOP, networkSentence, signedStepMessage } from '../messages.js';
 import { surfaceOf } from '../surface/browser.js';
@@ -215,7 +215,9 @@ export async function runSteps(
         log('skipped', Date.now() - t0, { note: message });
       } else if (!ctx.violations.some((v) => v.fatal)) {
         log('failed', Date.now() - t0, { note: message });
-        return { ok: false, state, failure: { index: i, intent: step.intent, message } };
+        // The control that was not there, for the lane's one look at what the page shows instead (steps/page-offers.ts).
+        const missing = err instanceof ControlNotFound && !opts.nested && surface.kind === 'browser' ? { missing: err.locator } : {};
+        return { ok: false, state, failure: { index: i, intent: step.intent, message }, ...missing };
       }
     }
     if (ctx.violations.some((v) => v.fatal)) {
