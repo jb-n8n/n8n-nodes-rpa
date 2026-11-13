@@ -892,7 +892,7 @@ describe('buildWorkflow', () => {
     expect(Object.keys(shape(LOG_RUN_ROW, { name: 'bot' }, { 'Create run log table': {} }))).toEqual(RUN_TABLE_COLUMNS.map((c) => c.name));
 
     // A refusal before the run (locked_out: no lane) leaves lane, duration and tokens empty, and nothing was counted.
-    expect(failedRow).toMatchObject({ lane: null, durationMs: null, llmTokens: null, confirmed: null, rowCount: null, version: 1, file: '' });
+    expect(failedRow).toMatchObject({ lane: null, durationMs: null, llmTokens: null, confirmed: null, rowCount: null, version: 1, file: '', account: '' });
     // A failed run that ran keeps its lane and duration.
     expect(shape(LOG_FAILED_ROW, { ...lockedOut, details: { ...lockedOut.details, code: 'drift_detected', lane: 'script', durationMs: 1200 } }, all))
       .toMatchObject({ lane: 'script', durationMs: 1200, llmTokens: 0 });
@@ -903,8 +903,11 @@ describe('buildWorkflow', () => {
     };
     expect(shape(LOG_RUN_ROW, download, all)).toEqual({
       name: 'bot', lane: 'script', version: 2, hash: 'h2', confirmed: null, rowCount: null, durationMs: 986, llmTokens: 0, code: '', executionId: '22',
-      message: '', guidance: '', file: 'LINEITEMS_1000_2026-09-01_2026-09-30.csv',
+      message: '', guidance: '', file: 'LINEITEMS_1000_2026-09-01_2026-09-30.csv', account: '',
     });
+    // With many accounts each row names its account (Run Steps' account, the Site Login's user name).
+    expect(shape(LOG_RUN_ROW, { ...download, account: 'summit-ops' }, all)).toMatchObject({ account: 'summit-ops' });
+    expect(shape(LOG_FAILED_ROW, { ...lockedOut, details: { ...lockedOut.details, account: 'harbor-ops' } }, all)).toMatchObject({ account: 'harbor-ops' });
     // Rows: their count and whether it matched the stated total; no file.
     expect(shape(LOG_RUN_ROW, { ...download, files: undefined, rows: [{ id: 'N1' }, { id: 'N2' }], confirmed: false }, all)).toMatchObject({ confirmed: false, rowCount: 2, file: '' });
     expect(shape(LOG_RUN_ROW, { ...download, files: undefined, rows: [], confirmed: true }, all)).toMatchObject({ confirmed: true, rowCount: 0 });

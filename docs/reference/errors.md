@@ -13,7 +13,8 @@ error output as an item with three fields (n8n sends an item to the error output
 - `details`: everything else: `code`, `message`, `name`, `version`, `lane`, `hash`, `stepIntent`, `durationMs`,
   `llmTokens` (chat model tokens the run used), `submitted` (`true` once a submit was sent), `log` (the steps that
   finished), `traceRef` (the binary field that holds the scrubbed trace) and `guidance`: what to do, the same text as
-  the error's description in n8n, which n8n does not show for an item on the error output
+  the error's description in n8n, which n8n does not show for an item on the error output. With an RPA Site Login,
+  Run Steps adds `account`: the user name it signs in with, never the password or a code
 
 Read them as `{{ $json.details.code }}` and `{{ $json.details.guidance }}`. The workflow the import form hands over
 shows the code, the message and the guidance in its **Stop and Error** message and writes them to its run log row.

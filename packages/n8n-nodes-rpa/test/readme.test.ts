@@ -329,7 +329,7 @@ describe('the steps reference', () => {
   });
 
   it('lists the Data fields, and states the AI Repair rules and messages word for word', () => {
-    expect(doc.steps).toContain('{ url, title, status, name, version, hash, lane, confirmed, llmCalls, durationMs, llmTokens, log, rows?, files?, blockedRequests?, submitted?, passwordChanged? }');
+    expect(doc.steps).toContain('{ url, title, status, name, version, hash, lane, confirmed, llmCalls, durationMs, llmTokens, log, rows?, files?, blockedRequests?, submitted?, passwordChanged?, account? }');
     const s = section(doc.steps, '## AI Repair');
     const flat = s.replace(/\s+/g, ' ');
     for (const text of ['screenshot, PDF, read and table steps', '`submit`', '`download.via`', 'after a write', 'one repair per workflow execution', 'every Run Steps node',

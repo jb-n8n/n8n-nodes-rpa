@@ -31,6 +31,7 @@ export const RUN_TABLE_COLUMNS: readonly { name: string; type: ColumnType }[] = 
   { name: 'message', type: 'string' },
   { name: 'guidance', type: 'string' },
   { name: 'file', type: 'string' },
+  { name: 'account', type: 'string' },
 ];
 /** The run log's columns of the first version: every playwright_runs table has them, also one made by an earlier version. */
 export const RUN_TABLE_FIRST_COLUMNS = RUN_TABLE_COLUMNS.slice(0, 10);

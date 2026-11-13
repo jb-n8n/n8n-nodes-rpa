@@ -88,6 +88,8 @@ export interface FailureDetails extends IDataObject {
    * text chosen by the code and the masked message: it holds nothing from the run.
    */
   guidance: string;
+  /** Run Steps with a Site Login: the user name it signs in with (never the password or a code). */
+  account?: string;
 }
 
 /** A failed run as a NodeOperationError: message `<code>: <message>`, its guidance (guidanceFor) as description. */

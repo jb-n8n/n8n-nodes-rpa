@@ -258,7 +258,7 @@ export const LOG_RUN_ROW = rowExpression([
   "name: $json.name ?? ''", 'lane: $json.lane ?? null', 'version: $json.version ?? null', "hash: $json.hash ?? ''",
   'confirmed: Array.isArray($json.rows) ? $json.confirmed === true : null', 'rowCount: Array.isArray($json.rows) ? $json.rows.length : null',
   'durationMs: $json.durationMs ?? null', 'llmTokens: $json.llmTokens ?? null', "code: ''", 'executionId: $execution.id',
-  "message: ''", "guidance: ''", "file: [].concat($json.files ?? []).map((f) => f?.fileName).filter((n) => n).join(', ')",
+  "message: ''", "guidance: ''", "file: [].concat($json.files ?? []).map((f) => f?.fileName).filter((n) => n).join(', ')", "account: $json.account ?? ''",
 ].join(', '));
 /**
  * A failed run: Run steps' error item, its facts under details (a configuration error has no code: config_error), the
@@ -270,7 +270,7 @@ export const LOG_FAILED_ROW = rowExpression([
   'confirmed: null', 'rowCount: null', 'durationMs: $json.details?.lane ? ($json.details?.durationMs ?? null) : null',
   'llmTokens: $json.details?.lane ? ($json.details?.llmTokens ?? null) : null',
   "code: $json.details?.code || 'config_error'", 'executionId: $execution.id', "message: $json.message ?? ''", "guidance: $json.details?.guidance ?? ''",
-  "file: ''",
+  "file: ''", "account: $json.details?.account ?? ''",
 ].join(', '));
 /**
  * Stop and Error's message, from the row Log failed run shaped (also when writing it failed): the code, the step list's

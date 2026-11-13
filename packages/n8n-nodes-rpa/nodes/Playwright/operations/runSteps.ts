@@ -68,6 +68,11 @@ async function runStepsItem(ctx: NodeContext, engine: Engine, i: number, deps: R
 
   const id = stepsIdentity(engine, p.steps, p.name);
   /**
+   * The user name the Site Login signs in with, on the Data item and the error item's details, so that a run of one of
+   * many accounts says which account it was. Never the password, a one-time code or the TOTP Secret.
+   */
+  const account = siteLogin?.secrets.username || undefined;
+  /**
    * A failure item. `ran` is what the engine run did (lane, write, a new password): if attaching the screenshot or trace
    * fails, the item is rebuilt without them and still says what the run did, so `submitted` stays true after a write and
    * `passwordChanged` after a password change.
@@ -85,6 +90,7 @@ async function runStepsItem(ctx: NodeContext, engine: Engine, i: number, deps: R
     if (ran) {
       Object.assign(item.json.details as IDataObject, { lane: ran.lane, submitted: ran.submitted === true }, ran.passwordChanged ? { passwordChanged: true } : {});
     }
+    if (account) (item.json.details as IDataObject).account = account;
     return { kind: 'error', item, error: stepsRunError(node, item.json.details as FailureDetails, i) };
   };
 
@@ -167,6 +173,7 @@ async function runStepsItem(ctx: NodeContext, engine: Engine, i: number, deps: R
     // version 1 is approved, so the agent's rows never reach Data.
     if (p.steps.kind === 'empty') return { kind: 'ok', ...(repaired ? { repaired } : {}) };
     const data: INodeExecutionData = { ...(await dataItem(ctx, r, { name: id.name, version: id.version, hash: id.hash || null })), pairedItem: paired };
+    if (account) data.json.account = account;
     return { kind: 'ok', data, ...(repaired ? { repaired } : {}) };
   } catch (error) {
     // The run finished but its output could not be built (for example the binary store failed). Report a runtime
