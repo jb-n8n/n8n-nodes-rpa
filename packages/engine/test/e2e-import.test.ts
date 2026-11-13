@@ -289,6 +289,10 @@ describe('adopting imported steps against the sandbox portal', () => {
     });
     if (!lane.ok) throw new Error(json(lane).slice(0, 1500));
     expect(lane.rows).toHaveLength(r.proposal.evidence.count);
+    // Each row is a notice a person can read: its ID and the table's columns, not the ID alone.
+    expect(Object.keys(lane.rows[0]).sort()).toEqual(['Bulletin', 'Date', 'Models', 'Summary', 'Type', 'id']);
+    expect(lane.rows[0]).toMatchObject({ id: 'N26-0417', Bulletin: 'N26-0417', Type: 'Stop-Sale', Summary: expect.stringMatching(/^Rear seat belt buckle may not latch /) });
+    expect(String(lane.rows[0].Date)).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   }, 120_000);
 
   it('adoption never writes: a declared form post is refused before the browser, a click that posts is blocked', async () => {
