@@ -31,6 +31,7 @@ export const LOOKS_DESTRUCTIVE = 'looks like it deletes, cancels, pays, sends or
 export const UNSIGNED_REQUIRED =
   'The steps are not signed, or the signature is not valid, and Require Signed Steps is on. '
   + 'To sign a bot again, for example after the signing key changed, open the import form, leave Bot file empty and type the bot\'s name. '
+  + 'Its steps may also have been changed in the Data Table after they were approved: read every step on the form before you approve. '
   + 'Steps used without the form: sign them with Sign Steps first.';
 export const SIGNATURE_INVALID =
   'The signature is not valid for these steps: it does not match their name, version, start site, Site Login or approver.';
