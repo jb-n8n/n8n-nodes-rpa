@@ -462,7 +462,7 @@ describe('Sign Steps: configuration and secrets', () => {
   it('without a Step Signing credential it is a configuration error', async () => {
     expect(only(await sign(repairedItem(STEPS), { credentials: {} })).json).toEqual({
       error: 'Sign Steps needs an RPA Step Signing credential', message: 'Sign Steps needs an RPA Step Signing credential',
-      details: { configError: true, code: null, name: null, version: null, hash: '', lane: null, log: [], submitted: false },
+      details: { configError: true, code: null, name: null, version: null, hash: '', lane: null, log: [], submitted: false, guidance: 'Check the node parameters and the RPA credentials.' },
     });
     const run = executeSignSteps(harness({ params: params(), items: [{ json: repairedItem(STEPS) }], credentials: {} }), engine, () => NOW);
     await expect(run).rejects.toThrow('Sign Steps needs an RPA Step Signing credential');
