@@ -240,9 +240,10 @@ run whether a user is signed in or not), or with input that comes from a file or
   local drive (`the change file must be on a local drive` for a UNC or device path). Two things only a change file
   may have, both shown in the question and never written into the policy: a `name` in a `writeControls` entry (the
   control's name), and `leftOutControls`, entries of `exe`, `automationId` and `name` for controls that were not
-  proposed because their ids, 1 to 11, are those of Windows' standard dialog buttons (OK, Cancel, Yes, No and the
-  like), which every dialog of an app shares. A `leftOutControls` entry with any other id is refused
-  (`the change: leftOutControls lists only the ids 1 to 11 of Windows' standard dialog buttons, not "<id>"`). The
+  proposed because their ids are those of Windows' standard dialog buttons (OK, Cancel, Yes, No and the like), which
+  every dialog of an app shares: 1 to 11 in a classic dialog, `CommandButton_1` to `CommandButton_11` in a task dialog
+  (such as "Confirm Save As"). A `leftOutControls` entry with any other id is refused
+  (`the change: leftOutControls lists only the ids of Windows' standard dialog buttons (1 to 11, CommandButton_1 to CommandButton_11), not "<id>"`). The
   recorder's change file has both: the buttons its recording clicked that the engine's review page ticks as writes
   (`recorder/src/Rpa.Recorder.Core/WriteRules.cs`), and the standard dialog buttons among them.
 - The change file and the application are paths chosen by whoever started the tool, and the tool works with
@@ -313,7 +314,7 @@ line is last, directly above the prompt:
 |---|---|
 | `Add write control "<exe>" / "<automationId>"` | A new `writeControls` entry. |
 | `Protect "<name>" ("<automationId>") of "<exe>" as a write control` | A new `writeControls` entry with a `name`. Under the last of them: `A run must then mark a step as a write to press one of these, and to press any key but Tab, arrows, Home, End, PageUp, PageDown or Escape while a window that holds one is open.` |
-| `Not protected: "<name>" ("<automationId>") of "<exe>": 1 to 11 are the ids of Windows' standard dialog buttons, which every dialog of the app shares` | A `leftOutControls` entry the policy does not protect. Nothing is written for it, and a change that has nothing else gets no question. |
+| `Not protected: "<name>" ("<automationId>") of "<exe>": 1 to 11 are the ids of Windows' standard dialog buttons, which every dialog of the app shares` | A `leftOutControls` entry the policy does not protect. Nothing is written for it, and a change that has nothing else gets no question. For a task dialog's button the reason reads `: CommandButton_1 to CommandButton_11 are the ids of the standard buttons of Windows' task dialogs, which every task dialog of the app shares`. |
 | `Add gated key "<chord>"` | A new `gatedKeys` entry. |
 | `Allow app "<exe>" at "<path>"` | A new `allowedApps` entry. ` (SHA-256 pinned <64 hex digits>)` follows when it sets `sha256`. |
 | `Update app "<exe>" at "<path>" (<what changes>)` | The existing entry for this exe and path changes. In the parentheses, joined by `; `: `SHA-256 pinned <hash>` (it had no pin), `SHA-256 pin changed from <hash> to <hash>`, `allowed arguments added`, `user-writable path allowed`. |

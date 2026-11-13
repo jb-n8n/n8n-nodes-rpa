@@ -944,6 +944,7 @@ public class PolicyChangeTests
     private const string PostButton = """{ "exe": "ErpDemo.exe", "automationId": "btnPost", "name": "Post" }""";
     private const string SaveButton = """{ "exe": "ErpDemo.exe", "automationId": "1", "name": "Save" }""";
     private const string LeftOutSave = "Not protected: \"Save\" (\"1\") of \"ErpDemo.exe\": 1 to 11 are the ids of Windows' standard dialog buttons, which every dialog of the app shares";
+    private const string LeftOutTaskYes = "Not protected: \"Yes\" (\"CommandButton_6\") of \"ErpDemo.exe\": CommandButton_1 to CommandButton_11 are the ids of the standard buttons of Windows' task dialogs, which every task dialog of the app shares";
 
     [Fact]
     public void A_named_write_control_is_shown_as_a_button_to_protect_and_the_name_is_not_kept()
@@ -998,10 +999,34 @@ public class PolicyChangeTests
         Assert.Empty(PolicyChange.Apply(PolicyChange.Apply("", RecorderChange(PostButton)).Json, RecorderChange(PostButton, SaveButton)).Summary);
     }
 
+    [Fact]
+    public void A_task_dialog_s_standard_button_is_named_as_left_out_with_its_own_reason()
+    {
+        // "Confirm Save As" (a task dialog) names its Yes CommandButton_6, the same in every task dialog of the app.
+        var result = PolicyChange.Apply("", RecorderChange("", SaveButton + """, { "exe": "ErpDemo.exe", "automationId": "CommandButton_6", "name": "Yes" }"""));
+        Assert.Equal(
+            [
+                LeftOutSave,
+                LeftOutTaskYes,
+                $"Allow app \"ErpDemo.exe\" at {L(ErpPath)}",
+                Count(apps: 1),
+            ],
+            result.Summary);
+        Assert.Empty(RunnerPolicy.Parse(result.Json).WriteControls);
+        Assert.True(PolicyChange.IsDialogButtonId("CommandButton_1"));
+        Assert.True(PolicyChange.IsDialogButtonId("CommandButton_11"));
+        Assert.False(PolicyChange.IsDialogButtonId("CommandButton_12"));
+        Assert.False(PolicyChange.IsDialogButtonId("CommandButton_101"));
+        Assert.False(PolicyChange.IsDialogButtonId("CommandButton_06"));
+        Assert.False(PolicyChange.IsDialogButtonId("commandbutton_6"));
+        Assert.False(PolicyChange.IsDialogButtonId("CommandLink_6"));
+    }
+
     [Theory]
-    [InlineData("""{ "exe": "ErpDemo.exe", "automationId": "btnSave" }""", "the change: leftOutControls lists only the ids 1 to 11 of Windows' standard dialog buttons, not \"btnSave\"")]
-    [InlineData("""{ "exe": "ErpDemo.exe", "automationId": "12" }""", "the change: leftOutControls lists only the ids 1 to 11 of Windows' standard dialog buttons, not \"12\"")]
-    [InlineData("""{ "exe": "ErpDemo.exe", "automationId": "01" }""", "the change: leftOutControls lists only the ids 1 to 11 of Windows' standard dialog buttons, not \"01\"")]
+    [InlineData("""{ "exe": "ErpDemo.exe", "automationId": "btnSave" }""", "the change: leftOutControls lists only the ids of Windows' standard dialog buttons (1 to 11, CommandButton_1 to CommandButton_11), not \"btnSave\"")]
+    [InlineData("""{ "exe": "ErpDemo.exe", "automationId": "12" }""", "the change: leftOutControls lists only the ids of Windows' standard dialog buttons (1 to 11, CommandButton_1 to CommandButton_11), not \"12\"")]
+    [InlineData("""{ "exe": "ErpDemo.exe", "automationId": "01" }""", "the change: leftOutControls lists only the ids of Windows' standard dialog buttons (1 to 11, CommandButton_1 to CommandButton_11), not \"01\"")]
+    [InlineData("""{ "exe": "ErpDemo.exe", "automationId": "CommandButton_100" }""", "the change: leftOutControls lists only the ids of Windows' standard dialog buttons (1 to 11, CommandButton_1 to CommandButton_11), not \"CommandButton_100\"")]
     [InlineData("""{ "exe": "ErpDemo.exe" }""", "the change: leftOutControls[] needs exe and automationId")]
     [InlineData("""{ "automationId": "1" }""", "the change: leftOutControls[] needs exe and automationId")]
     [InlineData("""{ "exe": "C:\\ErpDemo.exe", "automationId": "1" }""", "the change: leftOutControls[] needs exe and automationId")]

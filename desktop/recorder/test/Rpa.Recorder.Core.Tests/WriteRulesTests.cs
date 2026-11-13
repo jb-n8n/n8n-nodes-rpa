@@ -11,6 +11,7 @@ public class WriteRulesTests
     private static readonly string Sha = new('a', 64);
     private static readonly string ErpPath = OperatingSystem.IsWindows() ? ErpDemoObservations.ExePath : "/opt/ERP Demo/ErpDemo.exe";
     private static readonly WindowFacts Main = new("erpdemo.exe", "ERP Demo - Line items", WinFormsClass);
+    private static readonly WindowFacts ConfirmSaveAs = new("erpdemo.exe", "Confirm Save As", "#32770");
     private static readonly ElementFacts Post = El("Button", "btnPost", "Post", "WindowsForms10.Button.app.0.19fd5c7_r3_ad1");
 
     private static RecordedCondition C(string? type, string? id, string? name) => new(type, id, name);
@@ -85,13 +86,21 @@ public class WriteRulesTests
     [Fact]
     public void The_dialog_button_ids_are_the_policy_tools()
     {
-        foreach (var id in Enumerable.Range(0, 1200).Select(n => n.ToString(System.Globalization.CultureInfo.InvariantCulture))
-                     .Concat(["", "01", "1 ", " 1", "1.0", "+1", "-1", "IDOK", "\u0661", "btnPost"]))
+        var numbers = Enumerable.Range(0, 1200).Select(n => n.ToString(System.Globalization.CultureInfo.InvariantCulture)).ToList();
+        foreach (var id in numbers.Concat(numbers.Select(n => "CommandButton_" + n))
+                     .Concat(["", "01", "1 ", " 1", "1.0", "+1", "-1", "IDOK", "\u0661", "btnPost", "CommandButton_", "CommandButton_06",
+                              "commandbutton_6", "CommandButton_6 ", "xCommandButton_6", "CommandLink_6", "CommandButton_\u0666"]))
             Assert.Equal(RunnerPolicyChange.IsDialogButtonId(id), WriteRules.IsDialogButtonId(id));
         Assert.True(WriteRules.IsDialogButtonId("1"));
         Assert.True(WriteRules.IsDialogButtonId("11"));
         Assert.False(WriteRules.IsDialogButtonId("12"));
         Assert.False(WriteRules.IsDialogButtonId("1001"));
+        // A task dialog's standard buttons ("Confirm Save As" names its Yes CommandButton_6); an app's own buttons in a
+        // task dialog carry ids the app chooses, and are proposed.
+        Assert.True(WriteRules.IsDialogButtonId("CommandButton_6"));
+        Assert.True(WriteRules.IsDialogButtonId("CommandButton_11"));
+        Assert.False(WriteRules.IsDialogButtonId("CommandButton_12"));
+        Assert.False(WriteRules.IsDialogButtonId("CommandButton_1001"));
     }
 
     [Fact]
@@ -150,11 +159,12 @@ public class WriteRulesTests
             Click(21, El("Button", "btnApprove", "Approve"), window: Main),
             Click(25, El("Button", "2", "Cancel"), window: Main),
             Click(29, El("Button", "6", "Yes"), window: Main),
-            Click(33, El("Button", "btnSearch", "Search"), window: Main));
+            Click(33, El("Button", "btnSearch", "Search"), window: Main),
+            Click(37, El("Button", "CommandButton_6", "Yes", "CCPushButton"), window: ConfirmSaveAs));
         var change = s.ToPolicyChange(ErpPath, Sha);
         Assert.Equal([new ProposedControl("ErpDemo.exe", "btnPost", "Post"), new ProposedControl("ErpDemo.exe", "btnApprove", "Approve")], change.WriteControls);
-        // Cancel is no write word; Yes is, and 6 is a standard dialog button's id.
-        Assert.Equal([new ProposedControl("ErpDemo.exe", "6", "Yes")], change.LeftOut);
+        // Cancel is no write word; Yes is, and 6 is a standard dialog button's id, CommandButton_6 a task dialog's.
+        Assert.Equal([new ProposedControl("ErpDemo.exe", "6", "Yes"), new ProposedControl("ErpDemo.exe", "CommandButton_6", "Yes")], change.LeftOut);
 
         // A step deleted from the bar proposes nothing.
         var approve = s.Steps.Select((step, i) => (step, i)).First(x => x.step.Target?.Path[^1].AutomationId == "btnApprove").i;

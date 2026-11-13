@@ -28,9 +28,10 @@ public sealed record PolicyChangeResult(string Json, IReadOnlyList<string> Summa
 /// <para>
 /// Two things a change may have that a policy file does not, both only for the question and never kept: a
 /// <c>name</c> in a <c>writeControls</c> entry (the control's name as the recorder showed it), and
-/// <c>leftOutControls</c>, the controls the recorder did not propose because their ids, 1 to 11, are those of Windows'
-/// standard dialog buttons (OK, Cancel, Yes, No and the like), which every dialog of an app shares. Such an entry with
-/// any other id is refused, so the line that says why it was left out stays true.
+/// <c>leftOutControls</c>, the controls the recorder did not propose because their ids are those of Windows' standard
+/// dialog buttons (OK, Cancel, Yes, No and the like): 1 to 11 in a classic dialog, CommandButton_1 to CommandButton_11
+/// in a task dialog, which every dialog of an app shares. Such an entry with any other id is refused, so the line that
+/// says why it was left out stays true.
 /// </para>
 /// <para>
 /// The summary is all the administrator approves, and a change file may come from a user who is not one. So a change
@@ -62,6 +63,9 @@ public static class PolicyChange
                                          "PageUp, PageDown or Escape while a window that holds one is open.";
 
     private const string LeftOutReason = ": 1 to 11 are the ids of Windows' standard dialog buttons, which every dialog of the app shares";
+    private const string LeftOutTaskReason = ": CommandButton_1 to CommandButton_11 are the ids of the standard buttons of Windows' task dialogs, " +
+                                             "which every task dialog of the app shares";
+    private const string TaskButton = "CommandButton_";
 
     // The keys of a policy file and of the entries in its lists, as RunnerPolicy reads them.
     private static readonly string[] PolicyKeys = ["allowedApps", "writeControls", "gatedKeys", "maxFileBytes", "helperProcesses", "clipboardRead"];
@@ -84,8 +88,10 @@ public static class PolicyChange
     };
 
     /// <summary>Whether an automation id is one of Windows' standard dialog button ids, 1 to 11 (IDOK to IDCONTINUE),
-    /// written as Windows writes them. The recorder leaves such a control out (WriteRules.IsDialogButtonId, held to this).</summary>
-    public static bool IsDialogButtonId(string automationId) => Regex.IsMatch(automationId, "^(?:[1-9]|1[01])\\z");
+    /// written as Windows writes them: as the number in a classic dialog, as CommandButton_ and the number in a task
+    /// dialog ("Confirm Save As" names its Yes CommandButton_6). An app's own buttons in a task dialog have ids the app
+    /// chooses. The recorder leaves such a control out (WriteRules.IsDialogButtonId, held to this).</summary>
+    public static bool IsDialogButtonId(string automationId) => Regex.IsMatch(automationId, "^(?:CommandButton_)?(?:[1-9]|1[01])\\z");
 
     /// <summary>A control the change names: a write control with its name, or one left out.</summary>
     private sealed record NamedControl(string Exe, string AutomationId, string? Name);
@@ -157,8 +163,9 @@ public static class PolicyChange
         {
             if (Protected(left.Exe, left.AutomationId) || shownLeftOut.Any(s => Same(s.Exe, left.Exe) && s.AutomationId == left.AutomationId)) continue;
             shownLeftOut.Add(left);
-            if (left.Name is { } name) Add("Not protected: {0} ({1}) of {2}" + LeftOutReason, name, left.AutomationId, left.Exe);
-            else Add("Not protected: {0} of {1}" + LeftOutReason, left.AutomationId, left.Exe);
+            var reason = left.AutomationId.StartsWith(TaskButton, StringComparison.Ordinal) ? LeftOutTaskReason : LeftOutReason;
+            if (left.Name is { } name) Add("Not protected: {0} ({1}) of {2}" + reason, name, left.AutomationId, left.Exe);
+            else Add("Not protected: {0} of {1}" + reason, left.AutomationId, left.Exe);
         }
 
         var keys = current.GatedKeys.ToList();
@@ -557,7 +564,8 @@ public static class PolicyChange
             var exe = Text(entry, "exe");
             var id = Text(entry, "automationId");
             if (string.IsNullOrWhiteSpace(exe) || exe.IndexOfAny(['\\', '/']) >= 0 || id is null) throw Refused($"the change: {LeftOutKey}[] needs exe and automationId");
-            if (!IsDialogButtonId(id)) throw Refused($"the change: {LeftOutKey} lists only the ids 1 to 11 of Windows' standard dialog buttons, not {Echo(id)}");
+            if (!IsDialogButtonId(id))
+                throw Refused($"the change: {LeftOutKey} lists only the ids of Windows' standard dialog buttons (1 to 11, CommandButton_1 to CommandButton_11), not {Echo(id)}");
             leftOut.Add(new NamedControl(exe, id, Name(entry)));
         }
         return (names, leftOut);
