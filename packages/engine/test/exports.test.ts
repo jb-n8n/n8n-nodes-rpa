@@ -37,7 +37,7 @@ const EXPORTS = [
   'readPathTooBroad', 'readPostLabel', 'readPostsProblem', 'renderSnapshot', 'renderVars', 'repairKind', 'repairPrecondition',
   'requestFrame', 'resolveGoto', 'resolveUnique', 'responseText', 'reviewDesktopLocator', 'reviewLocator', 'runAgentLoop', 'runDesktopTask',
   'runSteps', 'runTask', 'runnerAddress', 'runnerConnected', 'runnerError', 'sanitizeFileName', 'screenshotMasks', 'scriptHash',
-  'scrubTrace', 'settle', 'shownFailure', 'signDesktopSteps', 'signScript', 'signSteps', 'snapshot', 'sniffMime', 'startHostOf',
+  'scrubTrace', 'settle', 'shownFailure', 'shownUrl', 'signDesktopSteps', 'signScript', 'signSteps', 'snapshot', 'sniffMime', 'startHostOf',
   'stepChanges', 'stopTrace', 'stripShownPrefix', 'substituteVars', 'toErrorCode', 'totp', 'unsignedWrites', 'validateScript', 'verbOf',
   'verifyRows', 'verifyScript', 'violationMessage', 'wantTrace',
 ];
