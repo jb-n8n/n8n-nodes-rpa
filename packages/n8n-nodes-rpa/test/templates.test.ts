@@ -1924,14 +1924,24 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // Every import with steps comes with a workflow file now, a Chrome recording's too.
     expect(evaluate(ifParams.conditions.conditions[0].leftValue, { $: nodesRan({ 'Import steps': [data, []] }) })).toBe(true);
     expect(evaluate(ifParams.conditions.conditions[0].leftValue, { $: nodesRan({ 'Import steps': [[{ json: { report: {}, drafts: [] } }], []] }) })).toBe(false);
-    // After the review page, the file comes only when a step list was approved: a rejected bot gets no workflow to run.
-    const afterReview = (answer: IDataObject) => evaluate(ifParams.conditions.conditions[0].leftValue, { $: nodesRan({ 'Import steps': [data, []], [REVIEW]: [[{ json: answer }]] }) });
-    expect(afterReview({ decision_0: 'Approve and sign' })).toBe(true);
-    expect(afterReview({ decision_0: 'Reject', decision_1: 'Approve and sign' })).toBe(true);
-    expect(afterReview({ decision_0: 'Reject' })).toBe(false);
-    expect(afterReview({ decision_0: 'Reject', decision_1: 'Reject' })).toBe(false);
-    // Not answered in time: the page gives its input item on, with no decision.
+    // After the review page, the file comes only when Sign steps signed a step list: a rejected bot, or one Sign steps
+    // refused (an approver not on the allowlist), gets no workflow to run, and the page does not say a file comes.
+    const afterReview = (answer: IDataObject, signed?: IDataObject[], refused: IDataObject[] = []) => evaluate(ifParams.conditions.conditions[0].leftValue, {
+      $: nodesRan({ 'Import steps': [data, []], [REVIEW]: [[{ json: answer }]], ...(signed ? { 'Sign steps': [signed.map((json) => ({ json })), refused.map((json) => ({ json }))] } : {}) }),
+    });
+    expect(afterReview({ decision_0: 'Approve and sign' }, [{ status: 'active', name: 'a', version: 1 }])).toBe(true);
+    expect(afterReview({ decision_0: 'Reject', decision_1: 'Approve and sign' }, [{ status: 'rejected' }, { status: 'active' }])).toBe(true);
+    expect(afterReview({ decision_0: 'Reject' }, [{ status: 'rejected' }])).toBe(false);
+    expect(afterReview({ decision_0: 'Reject', decision_1: 'Reject' }, [{ status: 'rejected' }, { status: 'rejected' }])).toBe(false);
+    // Approved, but Sign Steps refused: nothing was signed, so no file.
+    const notOnList = { error: 'Sign Steps refused: The n8n user who submitted the approval form is not on the Approver Allowlist', details: { name: 'owner-started', version: 1 } };
+    expect(afterReview({ decision_0: 'Approve and sign' }, [], [notOnList])).toBe(false);
+    expect(afterReview({ decision_0: 'Approve and sign', decision_1: 'Approve and sign' }, [{ status: 'active' }], [notOnList])).toBe(true);
+    // Not answered in time: the page gives its input item on, with no decision, and Sign steps gets no step list.
     expect(afterReview({ name: 'steps table' })).toBe(false);
+    expect(afterReview({ name: 'steps table' }, [])).toBe(false);
+    // The page without the file never says the browser downloads one.
+    expect(shown.completionMessage).not.toContain('Your browser downloads');
 
     const withFile = completion('Imported, with the workflow file');
     expect(withFile).toMatchObject({ operation: 'completion', respondWith: 'returnBinary', inputDataFieldName: 'workflow', completionTitle: 'Imported' });
@@ -2228,7 +2238,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(matches({ ...oldRow, id: 3, name: 'other' })).toBe(false);
     // The last page gives no workflow file: the bot's workflow exists already.
     const fileCond = (byName(t, 'Workflow file?').parameters as { conditions: { conditions: { leftValue: string }[] } }).conditions.conditions[0].leftValue;
-    const withReview = { ...again.after, [REVIEW]: [[{ json: { decision_0: 'Approve and sign' } }]] };
+    const withReview = { ...again.after, [REVIEW]: [[{ json: { decision_0: 'Approve and sign' } }]], 'Sign steps': [[{ json: { status: 'active' } }], []] };
     expect(evaluate(fileCond, { $: nodesRan(withReview) })).toBe(false);
     const importOnly = Object.fromEntries(Object.entries(withReview).filter(([k]) => k !== 'Change or sign again'));
     expect(evaluate(fileCond, { $: nodesRan(importOnly) })).toBe(true);

@@ -1183,7 +1183,7 @@
           "conditions": [
             {
               "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005b1",
-              "leftValue": "={{ Boolean($('Import steps').first(0).json.workflowName) && !$('Change or sign again').isExecuted && (!$('Review and approve').isExecuted || Object.entries($('Review and approve').first().json).some(([k, v]) => k.startsWith('decision_') && v === 'Approve and sign')) }}",
+              "leftValue": "={{ Boolean($('Import steps').first(0).json.workflowName) && !$('Change or sign again').isExecuted && (!$('Review and approve').isExecuted || ($('Sign steps').isExecuted && $('Sign steps').all(0).some((i) => i.json.status === 'active'))) }}",
               "rightValue": "",
               "operator": {
                 "type": "boolean",
@@ -1204,7 +1204,7 @@
         3520,
         160
       ],
-      "notes": "Every import with steps carries the bot as binary workflow on the Data output of Import steps. After the review page, only when a step list was approved: a rejected bot gets no workflow to run. A change or a new signature of an approved bot gets no file: its workflow exists already."
+      "notes": "Every import with steps carries the bot as binary workflow on the Data output of Import steps. After the review page, only when Sign steps signed a step list: a rejected bot, or one Sign steps refused, gets no workflow to run, and the last page does not say a file comes. A change or a new signature of an approved bot gets no file: its workflow exists already."
     },
     {
       "parameters": {
