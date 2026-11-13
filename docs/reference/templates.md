@@ -92,8 +92,11 @@ with no model call.
 
 Called by the data feed, or by template 5 with `approval` set to `by email`. It writes a `pending` row that expires
 after `approvalTimeoutHours` (72), then:
-- **Browser steps**: a review email with the safety flags first, in red, then the steps the import left out, the
-  evidence, the change list and the before and after screenshots. Then an approval email with **Approve** and **Reject**.
+- **Browser steps**: a review email with the safety flags first, in red, then the steps the import left out, the steps
+  as the review page words them (a description that says something else in red), the evidence, the change list and the
+  before and after screenshots. Then an approval email with the same steps (⚠ before such a description), **Approve**
+  and **Reject**. The steps show when the item carries them (an import's step lists do): Sign Steps builds them again
+  and refuses to sign when they differ.
   The emails HTML-escape every value. The safety flags are the full list: every host, form submission, download and pop-up handler the steps have.
   The change list compares the steps themselves, not their intents, so a step that clicks another element is listed
   even when its intent reads the same.

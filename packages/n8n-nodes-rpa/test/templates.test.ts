@@ -805,6 +805,59 @@ describe('template 3 review email', () => {
   });
 });
 
+describe('template 3 emails lead with what browser steps do (reviewSteps), as the review page does', () => {
+  const t3 = load('3-approve-steps.json');
+  const html = String(byName(t3, 'Email repaired steps').parameters.html);
+  const message = String(byName(t3, 'Ask for approval').parameters.message);
+  const steps = [
+    { intent: 'Type the first day of September 2026 into From', fill: { field: { label: 'From', exact: true }, value: '2026-09-01' } },
+    { intent: 'Click Export <b>.', click: { role: 'button', name: 'Export <b>' } },
+    { intent: 'Read every page', paginate: { next: { text: 'Next' }, until: 'absent', max: 3, each: [{ intent: 'Close the banner', click: { role: 'button', name: 'Delete' } }] } },
+  ];
+  const reviewed = reviewSteps(steps, { desktop: false, shownUrl: (u: string) => u });
+  const item = {
+    name: 'line-items', version: 1, hash: 'h', digest: 'd', safetyLine: 'host: a.example', evidenceLine: 'Proven in a fresh browser: 8 rows',
+    changeList: 'Added: Type the first day of September 2026 into From (fill label "From" exact with "2026-09-01")', steps: { startUrl: 'https://a.example/', steps }, reviewSteps: reviewed,
+  };
+  const ask = (json: object) => render(message, { $: (name: string) => ({ item: { json: name === 'Settings' ? { approvalTimeoutHours: 72 } : json } }) });
+
+  it('the review email: the sentences built from the steps, a misleading description in red, then the change list in the details', () => {
+    const out = render(html, { $json: item });
+    expect(out).toContain('<ol><li>Type into From: &quot;2026-09-01&quot; <b style="color:#b00020">(described differently as: Type the first day of September 2026 into From)</b></li>'
+      + '<li>Click Export &lt;b&gt;</li>'
+      + '<li>Page through with Next, at most 3 pages, 1 step on each <b style="color:#b00020">(described differently as: Read every page)</b>'
+      + '<ul><li>On each page: Click Delete <b style="color:#b00020">(described differently as: Close the banner)</b></li></ul></li></ol>');
+    // What the steps do comes before the evidence and the change list, which stay as they are.
+    expect(out.indexOf('<b>The steps</b>')).toBeLessThan(out.indexOf('Evidence'));
+    expect(out.indexOf('<b>The steps</b>')).toBeLessThan(out.indexOf('What changed'));
+    expect(out).toContain('<b>What changed (as reported by the run):</b><br>Added: Type the first day of September 2026 into From (fill label &quot;From&quot; exact with &quot;2026-09-01&quot;)');
+    expect(out).not.toMatch(/<b>Export|<b>feed/);
+  });
+
+  it('the approval email: the same sentences, ⚠ before a description that says something else', () => {
+    const out = ask(item);
+    expect(out).toContain('\nThe steps (what each one does, built from the step):\n'
+      + '1. Type into From: &quot;2026-09-01&quot; ⚠ (described differently as: Type the first day of September 2026 into From)\n'
+      + '2. Click Export &lt;b&gt;\n'
+      + '3. Page through with Next, at most 3 pages, 1 step on each ⚠ (described differently as: Read every page)\n'
+      + '   On each page: Click Delete ⚠ (described differently as: Close the banner)\nEvidence');
+    expect(out.indexOf('The steps')).toBeLessThan(out.indexOf('What changed'));
+  });
+
+  it('an item without reviewSteps (from Run Steps or older), or with a list that does not fit the steps, shows the change list alone, as before', () => {
+    const { reviewSteps: _r, ...older } = item;
+    for (const json of [older, { ...item, reviewSteps: reviewed.slice(1) }, { ...item, reviewSteps: [] }]) {
+      expect(render(html, { $json: json })).not.toContain('The steps');
+      expect(ask(json)).not.toContain('The steps');
+      expect(ask(json)).toContain('What changed (as reported by the run):');
+    }
+  });
+
+  it('Sign Steps checks the sentences the emails showed: the item goes to Sign steps whole, reviewSteps included', () => {
+    expect(byName(t3, 'Repaired steps to sign').parameters.jsonOutput).toBe("={{ $('Repaired steps received').item.json }}");
+  });
+});
+
 describe('hello-world.json', () => {
   const t = load('hello-world.json');
   it('is named, has exactly four nodes (three working nodes and one sticky) and the right names', () => {
