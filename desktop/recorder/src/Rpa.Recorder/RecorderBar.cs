@@ -871,7 +871,7 @@ internal sealed class RecorderBar : Form
     private void OpenImportForm()
     {
         if (_savedRecording is not { } recording) return;
-        if ((_form ?? AskFirstAddress()) is not { Verdict: not AddressVerdict.Refused, Target: { } target }) return;
+        if ((_form ?? AskAddress("")) is not { Verdict: not AddressVerdict.Refused, Target: { } target }) return;
         var copied = CopyPath(recording);
         try { Process.Start(new ProcessStartInfo(target) { UseShellExecute = true })?.Dispose(); }
         catch (Win32Exception e)
@@ -885,34 +885,19 @@ internal sealed class RecorderBar : Form
         ShowStage(_stage);
     }
 
-    /// <summary>
-    /// The first time the form's address is asked for: the box is filled in with the form's address when the clipboard
-    /// holds one (<see cref="ImportForm.FromClipboard"/>), and says so. This is the only place the bar reads the
-    /// clipboard, and it keeps nothing of it but that address, which the person still checks and confirms.
-    /// </summary>
-    private FormAddress? AskFirstAddress()
-    {
-        string? onClipboard;
-        try { onClipboard = Clipboard.ContainsText() ? ImportForm.FromClipboard(Clipboard.GetText()) : null; }
-        catch (ExternalException) { onClipboard = null; }
-        return AskAddress(onClipboard ?? "", fromClipboard: onClipboard is not null);
-    }
-
-    /// <summary>Asks for the import form's address (filled in with <paramref name="filled"/>, from the clipboard when
-    /// <paramref name="fromClipboard"/>), and for an http address that leaves this machine and its network, whether to
-    /// continue (Back returns to the address). Keeps the answer.</summary>
-    private FormAddress? AskAddress(string filled, bool fromClipboard = false)
+    /// <summary>Asks for the import form's address (filled in with <paramref name="filled"/>), and for an http address
+    /// that leaves this machine and its network, whether to continue (Back returns to the address). Keeps the answer.</summary>
+    private FormAddress? AskAddress(string filled)
     {
         while (true)
         {
             FormAddress address;
-            using (var dialog = new AddressDialog(this, filled, fromClipboard))
+            using (var dialog = new AddressDialog(this, filled))
             {
                 if (!Ask(dialog)) return null;
                 address = dialog.Address;
                 filled = dialog.Typed;
             }
-            fromClipboard = false;
             if (address.Verdict == AddressVerdict.Refused) return null;
             if (address.Verdict == AddressVerdict.AskFirst && !Confirm(DialogText.PlainHttp)) continue;
             ImportForm.Keep(_formPath, address);

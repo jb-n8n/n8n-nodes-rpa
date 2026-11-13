@@ -36,8 +36,6 @@ public static class DialogText
     public const string AddressTitle = "The import form's address";
     public const string AddressLabel = "Address of n8n's Import a bot form";
     public const string AddressNote = "The setup command prints it. It looks like https://your-n8n/form/…";
-    /// <summary>The line under the box when it was filled in from the clipboard (<see cref="ImportForm.FromClipboard"/>).</summary>
-    public const string AddressFromClipboard = "Filled in from the clipboard. Check that it is the form's address, then choose OK.";
 
     /// <summary>An http address that leaves this machine and its private network (<see cref="ImportForm.Check"/>).
     /// Back, the default, returns to the address.</summary>

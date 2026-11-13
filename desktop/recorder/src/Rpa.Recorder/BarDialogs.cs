@@ -238,21 +238,20 @@ internal sealed class QuestionDialog : SmallDialog
     }
 }
 
-/// <summary>The import form's address: one box (filled in when the address is changed, or from the clipboard the first
-/// time), the line that says where the address comes from, and what is wrong with it while it is refused. OK is enabled
-/// once the address is not refused.</summary>
+/// <summary>The import form's address: one box (filled in when the address is changed), the line that says where the
+/// address comes from, and what is wrong with it while it is refused. OK is enabled once the address is not refused.</summary>
 internal sealed class AddressDialog : SmallDialog
 {
     private readonly TextBox _box;
     private readonly Label _problem;
     private readonly Button _action;
 
-    public AddressDialog(Form bar, string filled, bool fromClipboard = false) : base(bar, DialogText.AddressTitle)
+    public AddressDialog(Form bar, string filled) : base(bar, DialogText.AddressTitle)
     {
         AddText(DialogText.AddressLabel);
         _box = new TextBox { Text = filled, Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, BarLayout.Tight), AccessibleName = DialogText.AddressLabel };
         Add(_box);
-        AddText(fromClipboard ? DialogText.AddressFromClipboard : DialogText.AddressNote, quiet: true);
+        AddText(DialogText.AddressNote, quiet: true);
         _problem = AddText("", top: BarLayout.Tight);
         _problem.ForeColor = RecorderBar.Amber;
         _action = Finish(DialogText.Ok);

@@ -34,45 +34,6 @@ public sealed class ImportFormTests : IDisposable
         Assert.Equal(new FormAddress(AddressVerdict.Open, opened, null), address);
     }
 
-    // The first time the form's address is asked for, the box is filled in with an address on the clipboard: one http(s)
-    // address of a form (its path starts with /form/), without a login, a query or a fragment. Nothing else is taken.
-    [Theory]
-    [InlineData("https://n8n.example.com/form/rpa-import", "https://n8n.example.com/form/rpa-import")]
-    [InlineData("  https://N8N.example.com:8443/form/rpa-import\r\n", "https://n8n.example.com:8443/form/rpa-import")]
-    [InlineData("http://192.168.1.20:5678/form/rpa-import", "http://192.168.1.20:5678/form/rpa-import")]
-    [InlineData("http://n8n.example.com/form/rpa-import", "http://n8n.example.com/form/rpa-import")]
-    [InlineData("https://n8n.example.com/form/", "https://n8n.example.com/form/")]
-    [InlineData("https://n8n.example.com/form/rpa-import?x=1", null)]
-    [InlineData("https://n8n.example.com/form/rpa-import?", null)]
-    [InlineData("https://n8n.example.com/form/rpa-import#top", null)]
-    [InlineData("https://n8n.example.com/form/rpa-import#", null)]
-    [InlineData("https://clerk:pass@n8n.example.com/form/rpa-import", null)]
-    [InlineData("https://clerk@n8n.example.com/form/rpa-import", null)]
-    [InlineData("https://n8n.example.com/webhook/rpa-import", null)]
-    [InlineData("https://n8n.example.com/forms/rpa-import", null)]
-    [InlineData("https://n8n.example.com/form", null)]
-    [InlineData("https://n8n.example.com/FORM/rpa-import", null)]
-    [InlineData("https://n8n.example.com/x/../form/rpa-import", null)]
-    [InlineData("https://n8n.example.com/form/rpa-import https://other.example/form/x", null)]
-    [InlineData("https://n8n.example.com/form/rpa-import\nhttps://other.example/form/x", null)]
-    [InlineData("see https://n8n.example.com/form/rpa-import", null)]
-    [InlineData("ftp://n8n.example.com/form/rpa-import", null)]
-    [InlineData("file:///C:/form/rpa-import", null)]
-    [InlineData("C:\\Users\\clerk\\Documents\\RPA recordings\\x.rpa-recording.json", null)]
-    [InlineData("", null)]
-    [InlineData(null, null)]
-    public void The_clipboard_fills_the_box_only_with_one_form_address(string? clipboard, string? filled) =>
-        Assert.Equal(filled, ImportForm.FromClipboard(clipboard));
-
-    [Fact]
-    public void The_clipboard_is_not_taken_when_it_is_longer_than_an_address_may_be()
-    {
-        var path = "/form/" + new string('a', ImportForm.MaxLength);
-        Assert.Null(ImportForm.FromClipboard("https://n8n.example.com" + path));
-        Assert.Null(ImportForm.FromClipboard(new string(' ', 5_000_000) + "https://n8n.example.com/form/rpa-import"));
-        Assert.Equal("Filled in from the clipboard. Check that it is the form's address, then choose OK.", DialogText.AddressFromClipboard);
-    }
-
     [Theory]
     [InlineData("http://n8n.example.com/form/import")]
     [InlineData("http://172.32.0.1/form/import")]
