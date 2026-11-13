@@ -100,6 +100,9 @@ an **RPA Step Signing** credential that its own project owns, and never one of t
     password can open the form. The pages after the first are not behind the password: anyone who has a page's
     address can open and submit it, and n8n puts that address in the browser's address bar. The row records the
     address in **Sign steps → Approver Allowlist**, not who approved.
+- **Values in the form's address.** n8n fills the fields of every page of a form, the review page too, from the
+  address the form was opened with. So the import form refuses an address that carries values, before anything is
+  read or imported, and an approval never arrives with its answer chosen by whoever made the link.
 - **By email (an option).** Set `approval` to `by email` in template 5's **Settings**, and each step list goes to
   **RPA: 3 Approve steps**, which emails a named approver. The approval link is a bearer link: anyone who receives or
   forwards it can approve. Send it to one person. The AI repairs of **RPA: 2 Data feed** use this path.
@@ -109,6 +112,23 @@ an **RPA Step Signing** credential that its own project owns, and never one of t
   Sign Steps refuses to sign when the step sentences shown for approval differ from the steps it is asked to sign.
 - **Desktop writes.** The review page asks "Which of these steps save, send or submit?". The ticked steps are signed as
   writes. A write mark only matters where the runner's policy lists the control or key (see [Desktop runs](#desktop-runs)).
+- **Changing or signing again on the form.** With **Bot file** left empty, the form's next page shows the steps of the
+  `active` row of the name typed, and a name it does not find ends on a page that lists every approved bot's name.
+  What comes back from that page is a new import: the same review page, the same checks by Sign Steps, the approver on
+  the allowlist, and a new row that supersedes the old one only when it is approved. Nothing is signed again without a
+  person's approval. Those pages are later pages of the form, as the review page is:
+  - With n8n's sign-in, only n8n users who may run the workflow reach them through the form. Any signed-in n8n user
+    who has a page's address can open it and read the steps or the names.
+  - With Basic Auth, anyone who has the form's password reaches them, and anyone who has a page's address can open it.
+
+  Sign Steps refuses steps that hold a Site Login secret, and a secret variable appears in steps only by its name.
+  Steps still show the sites, apps and fields they use and the other values they type. The page says who can open it.
+  The review page's first line, worked out in n8n from the row it read, says whether and where the steps submitted
+  differ from the approved version, so a slip in the box shows before anyone approves.
+- **An old key or an edit.** A row signed with an older key and a row changed in the Data Table after it was approved
+  look the same to the current key: neither verifies, and the old key is gone. The row's `hash` column is not keyed,
+  so whoever changed the steps could also change it. The form therefore cannot refuse an edited row. It says so on
+  the page, and the person approves the steps as the review page shows them, every step in full.
 
 ## Secret variables
 
@@ -158,12 +178,15 @@ To sign the step lists again with the new key:
    asks. It replaces the key in the **RPA Step Signing** credential and shows the new one once. By hand instead,
    create the credential with a new key of 32 or more random characters, and select it on **Sign steps** in template
    5 (and template 3) and on every **Run steps** node.
-2. For each bot, open the `playwright_steps` Data Table, copy the `steps` value of its `active` row, and save it as a
-   `.json` file.
-3. Upload that file on the **Import a bot** form with the source **Step document** and the bot's own name. Browser
-   steps are replayed, desktop steps go to approval as written. Steps that were signed as writes come back as
-   candidates: tick them again.
+2. For each bot, open the **Import a bot** form, leave **Bot file** empty and type the bot's name. The next page
+   shows the steps of its `active` row in a box. Leave them as they are and click **Review**: they go to the import
+   as a **Step document**.
+3. Read every step on the review page. Browser steps are replayed, desktop steps go to approval as written. Steps
+   that were signed as writes come back as candidates: tick them again.
 4. Approve. The new row supersedes the old ones under that name, and the bot runs again.
+
+The form cannot tell a row signed with the old key from a row changed in the Data Table since it was approved (see
+[An old key or an edit](#signing-and-approval)). Approve only steps you have read.
 
 Keep a copy of the key where you keep other recovery secrets, so that a lost n8n does not mean re-approving every bot.
 

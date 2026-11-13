@@ -106,7 +106,8 @@ by another name or address than the one in the line (a NAT, a tunnel), run the c
 
    Its last line is about the API key: it can do everything you can in n8n. Delete it in n8n when the setup is done.
 
-   The signing key stays in n8n, and n8n does not show it again. A lost key means approving every bot again. Add
+   The signing key stays in n8n, and n8n does not show it again. A lost key means approving every bot again, on the
+   import form, by name ([Change an approved bot, or sign it again](move-a-bot.md#change-an-approved-bot-or-sign-it-again)). Add
    `--show-signing-key` to the first run to see it once. The command never changes a key that exists: only
    `--replace-signing-key` does, after you type `REPLACE`, and every bot signed with the old key must then be approved
    again. Run it again at any time: it reuses what it made.

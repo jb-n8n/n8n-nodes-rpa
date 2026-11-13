@@ -3,8 +3,8 @@
   "nodes": [
     {
       "parameters": {
-        "content": "### Import a bot (grey: leave as is)\nTurns a bot you already have into signed steps. Open the form (**Execute workflow**, or the production URL once published) and upload one of:\n- a **Chrome Recorder** export: Chrome DevTools → Recorder → Export → JSON\n- **Playwright code** from `npx playwright codegen` (JavaScript or TypeScript)\n- a **UiPath** project as a .zip, or one .xaml workflow\n- a **step document** you wrote, as Run Steps takes it (JSON): this is how hand-written steps get approved and signed\n- an **RPA recording** saved by the RPA recorder on the Windows machine (.rpa-recording.json)\n\n**Import steps** builds a draft, runs it once and replays it in a fresh browser. Desktop steps (a UiPath project, a step document or an RPA recording) are not replayed, and neither are browser steps from a step document that submit a form, download through a form, type a secret or change a password. The next page of the form shows every step list with its safety flags, evidence and numbered steps, and each step list gets its own approval there: Approve or Reject. **Sign steps** signs what was approved, and the last page says what was signed; every import also downloads an n8n workflow that runs the steps (for a UiPath project, the rest of the bot). Run the steps with Run Steps as **RPA: 2 Data feed** does, with `name` in **Settings** set to the name the last page shows.",
-        "height": 400,
+        "content": "### Import a bot (grey: leave as is)\nTurns a bot you already have into signed steps. Open the form (**Execute workflow**, or the production URL once published) and upload one of:\n- a **Chrome Recorder** export: Chrome DevTools → Recorder → Export → JSON\n- **Playwright code** from `npx playwright codegen` (JavaScript or TypeScript)\n- a **UiPath** project as a .zip, or one .xaml workflow\n- a **step document** you wrote, as Run Steps takes it (JSON): this is how hand-written steps get approved and signed\n- an **RPA recording** saved by the RPA recorder on the Windows machine (.rpa-recording.json)\n\n**Import steps** builds a draft, runs it once and replays it in a fresh browser. Desktop steps (a UiPath project, a step document or an RPA recording) are not replayed, and neither are browser steps from a step document that submit a form, download through a form, type a secret or change a password. The next page of the form shows every step list with its safety flags, evidence and numbered steps, and each step list gets its own approval there: Approve or Reject. **Sign steps** signs what was approved, and the last page says what was signed; every import also downloads an n8n workflow that runs the steps (for a UiPath project, the rest of the bot). Run the steps with Run Steps as **RPA: 2 Data feed** does, with `name` in **Settings** set to the name the last page shows.\n\n**Change or sign again.** Leave Bot file empty and type the name of an approved bot. The next page shows the steps that run now under that name (its active row in `playwright_steps`) in a box: change them, or leave them as they are to sign them again after the signing key changed. They go to **Import steps** as a step document and to the same review page. Approved, they supersede the version that runs now. Rejected, the version that runs now keeps running.",
+        "height": 520,
         "width": 520,
         "color": 7
       },
@@ -70,7 +70,7 @@
         "authentication": "n8nUserAuth",
         "requireExecuteAccess": true,
         "formTitle": "Import a bot",
-        "formDescription": "Upload a bot: an RPA recording, a UiPath project (ZIP or XAML), a Chrome Recorder export (JSON), Playwright code, or steps you wrote (JSON). You review every step on the next page. Nothing runs until you approve it.",
+        "formDescription": "Upload a bot: an RPA recording, a UiPath project (ZIP or XAML), a Chrome Recorder export (JSON), Playwright code, or steps you wrote (JSON). You review every step on the next page. Nothing runs until you approve it. To change an approved bot, or sign it again after the signing key changed, leave Bot file empty and type its name.",
         "formFields": {
           "values": [
             {
@@ -79,7 +79,7 @@
               "fieldType": "file",
               "multipleFiles": false,
               "acceptFileTypes": ".json, .js, .ts, .zip, .xaml",
-              "requiredField": true
+              "requiredField": false
             },
             {
               "fieldLabel": "Source (optional)",
@@ -128,7 +128,64 @@
         0,
         0
       ],
-      "notes": "Opens with n8n sign-in (n8n User Auth, Require Workflow Execute Permission on): only people who may run this workflow start an import, and each page of the form records the n8n user who submitted it. For approvers without an n8n account: Authentication → Basic Auth, and pick or create a Basic Auth credential here. The upload arrives as binary `bot` (Field Name bot, one file)."
+      "notes": "Opens with n8n sign-in (n8n User Auth, Require Workflow Execute Permission on): only people who may run this workflow start an import, and each page of the form records the n8n user who submitted it. For approvers without an n8n account: Authentication → Basic Auth, and pick or create a Basic Auth credential here. The upload arrives as binary `bot` (Field Name bot, one file). Bot file is optional: without a file, Name for the steps picks an approved bot to change or sign again (Change an approved bot?)."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005b9",
+              "leftValue": "={{ Object.keys(Object($json.formQueryParameters ?? {})).filter((k) => !['n8nShellInner', 'n8nShellHosted'].includes(k)).length === 0 }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000539",
+      "name": "Plain address?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        220,
+        0
+      ],
+      "notes": "n8n fills the fields of every page of this form, the review page too, from the address the first page was opened with (kept as formQueryParameters). An address that carries any value is refused before anything is read, imported or shown. Allowed by name: n8nShellInner and n8nShellHosted, which n8n adds itself when it shows a form inside its connect-accounts frame."
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "respondWith": "text",
+        "completionTitle": "Open the form by its plain address",
+        "completionMessage": "This address carries values for the form's fields. Open the form by its plain address: the address up to the question mark.\nNothing was imported, shown or signed.",
+        "limitWaitTime": true,
+        "limitType": "afterTimeInterval",
+        "resumeAmount": 1,
+        "resumeUnit": "hours",
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000540",
+      "name": "Address with values",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        440,
+        240
+      ],
+      "notes": "The run pauses here until the browser shows this page, at most 1 hour."
     },
     {
       "parameters": {
@@ -156,7 +213,7 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [
-        220,
+        440,
         0
       ],
       "notes": "approval: \"on this form\" (the person who imports reviews and approves on the next page) or \"by email\" (RPA: 3 Approve steps asks a second person). showDetails: true puts each step list's full detail (how each step finds its control) on the review page, above the question."
@@ -191,7 +248,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        440,
+        880,
         0
       ],
       "notes": "A recording never asks: the recorder makes its export step. Every other upload, a UiPath project too, gets the optional download question on a second page."
@@ -230,7 +287,7 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        660,
+        1100,
         -120
       ],
       "notes": "Every upload but a recording (see Asks about a download?). The run pauses here until the person submits, at most 1 hour."
@@ -248,7 +305,7 @@
             {
               "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005c4",
               "name": "source",
-              "value": "={{ $('Settings').first().json.source ?? '' }}",
+              "value": "={{ $('The steps as a file').isExecuted ? 'Step document' : $('Settings').first().json.source ?? '' }}",
               "type": "string"
             },
             {
@@ -266,7 +323,7 @@
             {
               "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005c7",
               "name": "bot",
-              "value": "={{ $('Settings').first().binary.bot }}",
+              "value": "={{ ($('The steps as a file').isExecuted ? $('The steps as a file') : $('Settings')).first().binary.bot }}",
               "type": "binary"
             }
           ]
@@ -278,10 +335,212 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [
-        880,
+        1980,
         0
       ],
-      "notes": "What Import steps reads: the uploaded file (binary bot) and the Name and Source from the first page, the download answers when they were asked. The same file again after Import again."
+      "notes": "What Import steps reads: the uploaded file (binary bot) and the Name and Source from the first page, the download answers when they were asked. After Change or sign again: the steps from that page, as a step document. The same file again after Import again."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005b7",
+              "leftValue": "={{ !$('Settings').first().binary?.bot }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000531",
+      "name": "Change an approved bot?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        0
+      ],
+      "notes": "No file on the first page: the name picks an approved bot to change or sign again. With a file: an import, as always."
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "playwright_steps"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "status",
+              "condition": "eq",
+              "keyValue": "active"
+            }
+          ]
+        },
+        "returnAll": true
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000532",
+      "name": "Approved bots",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        240
+      ],
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput",
+      "notes": "Every active row of playwright_steps, as this workflow may read them. No table yet, or no row: nothing is found."
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ ((name, rows) => ((mine) => ({ name, found: mine.length > 0, version: mine.length ? mine[0].version : null, steps: mine.length ? ((s) => { try { return JSON.stringify(JSON.parse(s), null, 2); } catch (e) { return s; } })(mine[0].steps) : '', names: [...new Set(rows.map((r) => r.name))].sort() }))(rows.filter((r) => r.name === name).sort((a, b) => Number(b.version) - Number(a.version))))(String($('Settings').first().json.name ?? '').trim(), $('Approved bots').all().map((i) => i.json).filter((r) => r.status === 'active' && typeof r.name === 'string' && typeof r.steps === 'string' && r.steps !== '')) }}",
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000533",
+      "name": "The bot to change",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1100,
+        240
+      ],
+      "executeOnce": true,
+      "notes": "One item: the newest active row whose name is exactly the name typed (trimmed), its steps laid out for reading, and the names of every approved bot for the page that says none was found."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005b8",
+              "leftValue": "={{ $json.found === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000534",
+      "name": "Approved bot found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1320,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "page",
+        "defineForm": "json",
+        "jsonOutput": "={{ JSON.stringify(((b, e, signedIn) => [{ fieldType: 'html', html: '<p>The steps that run now as <b>' + e(b.name) + '</b> (version ' + e(b.version) + ' in the playwright_steps Data Table). Change what you need, or leave them as they are to sign them again, for example after the signing key changed or after a move to another n8n. <b>Review</b> opens the review page of an import. Approved there, these steps become the version that runs under this name. Rejected, or not answered within an hour, the version that runs now keeps running.</p><p><em>This form cannot tell steps signed with an older key from steps changed in the Data Table after they were approved: to the current key both look the same. So read every step on the next page: you approve the steps as that page shows them. Desktop steps signed as writes come back as candidates: check the ticks again.</em></p><p><em>' + (signedIn ? 'Any signed-in n8n user who has the address of this page can open it and read these steps.' : 'Anyone who has the address of this page can open it and read these steps.') + ' Do not share it.</em></p>' }, { fieldLabel: 'Steps (a step document, JSON)', fieldName: 'steps', fieldType: 'textarea', defaultValue: b.steps, requiredField: true }])($('The bot to change').first().json, (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]), $('Import a bot').params.authentication === 'n8nUserAuth')).split('$').join('\\\\u0024') }}",
+        "limitWaitTime": true,
+        "limitType": "afterTimeInterval",
+        "resumeAmount": 1,
+        "resumeUnit": "hours",
+        "options": {
+          "formTitle": "={{ 'Change or sign again: ' + $('The bot to change').first().json.name }}",
+          "formDescription": "Nothing changes until you approve the steps on the next page.",
+          "buttonLabel": "Review"
+        }
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000535",
+      "name": "Change or sign again",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        1540,
+        160
+      ],
+      "notes": "The active steps in a box (a step document, as Import steps takes it). Submitted as they are, they are signed again under the current key; changed, the change is reviewed. Either way a person approves them on Review and approve, as for any import. The run pauses here until the person submits, at most 1 hour."
+    },
+    {
+      "parameters": {
+        "operation": "toText",
+        "sourceProperty": "steps",
+        "binaryPropertyName": "bot",
+        "options": {
+          "fileName": "steps.json"
+        }
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000536",
+      "name": "The steps as a file",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        1760,
+        160
+      ],
+      "notes": "The box's text as the file bot, which The upload hands to Import steps with the source Step document."
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ (() => { const bot = $('The bot to change').first().json; const parse = (s) => { try { return JSON.parse(String(s)); } catch (e) { return undefined; } }; const asDoc = (v) => (Array.isArray(v) ? { steps: v } : v); const canon = (v) => (Array.isArray(v) ? '[' + v.map(canon).join(',') + ']' : v !== null && typeof v === 'object' ? '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + canon(v[k])).join(',') + '}' : JSON.stringify(v === undefined ? null : v)); const was = asDoc(parse(bot.steps)); const now = asDoc(parse($('Change or sign again').first().json.steps)); const n = String(bot.version); const usable = (d) => d !== null && typeof d === 'object' && Array.isArray(d.steps); if (bot.found !== true || !usable(was) || !usable(now)) return { compared: 'Could not compare with the approved version: read every step.' }; const steps = []; for (let i = 0; i < Math.max(was.steps.length, now.steps.length); i++) if (i >= was.steps.length || i >= now.steps.length || canon(was.steps[i]) !== canon(now.steps[i])) steps.push(i + 1); const labels = [['startUrl', 'the start site'], ['app', 'the app'], ['interrupts', 'the pop-up handlers'], ['surface', 'browser or desktop']]; const others = [...new Set(Object.keys(was).concat(Object.keys(now)))].filter((k) => !['name', 'version', 'steps', 'signature', 'approvedBy'].includes(k) && canon(was[k]) !== canon(now[k])).sort().map((k) => (labels.find((p) => p[0] === k) || [k, 'the field ' + k])[1]); if (steps.length === 0 && others.length === 0) return { compared: 'These are the steps of the approved version ' + n + ', unchanged.' }; const listed = (steps.length === 1 ? 'step ' : 'steps ') + steps.slice(0, 20).join(', ') + (steps.length > 20 ? ' and more' : ''); const counts = now.steps.length === was.steps.length ? '' : ' ' + now.steps.length + ' steps now, ' + was.steps.length + ' in the approved version.'; return { compared: 'Changed from the approved version ' + n + ': ' + (steps.length ? [listed] : []).concat(others).join(', ') + '.' + counts }; })() }}",
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000538",
+      "name": "Compared with the approved version",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1980,
+        160
+      ],
+      "executeOnce": true,
+      "notes": "Computed here in n8n, from this execution only: the active row The bot to change read from the Data Table, and the text submitted on Change or sign again. The parsed step lists are compared step by step (spacing and key order do not count), and the other signed fields (start site, app, pop-up handlers). The review page shows the line at the top."
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "respondWith": "text",
+        "completionTitle": "No approved bot of that name",
+        "completionMessage": "={{ ((b, e) => (b.names.length ? 'No approved bot is named ' + e(b.name) + '. The approved bots: ' + b.names.map(e).join(', ') + '.' : 'No bot has been approved yet.') + '\\nTo import a bot, open the form again and upload its file. To change an approved bot or sign it again, open the form again, leave Bot file empty and type its name.')($('The bot to change').first().json, (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c])) }}",
+        "limitWaitTime": true,
+        "limitType": "afterTimeInterval",
+        "resumeAmount": 1,
+        "resumeUnit": "hours",
+        "options": {}
+      },
+      "id": "3d6f1a20-7b4c-4e8a-9c11-000000000537",
+      "name": "No approved bot",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        1540,
+        320
+      ],
+      "notes": "No file, and no active row of that name. The run pauses here until the browser shows this page, at most 1 hour."
     },
     {
       "parameters": {
@@ -304,7 +563,7 @@
       "type": "n8n-nodes-rpa.playwright",
       "typeVersion": 1,
       "position": [
-        1320,
+        2420,
         0
       ],
       "onError": "continueErrorOutput",
@@ -340,7 +599,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        1540,
+        2640,
         -320
       ],
       "notes": "Only with approval \"by email\": each step list goes to RPA: 3 Approve steps."
@@ -364,7 +623,7 @@
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.2,
       "position": [
-        1760,
+        2860,
         -320
       ],
       "notes": "Off until you set up approval by email (sticky Approval by email). Fire and forget, once for each item: every step list gets its own approval execution, which waits for a person; this run finishes now.",
@@ -400,7 +659,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        1540,
+        2640,
         0
       ],
       "notes": "Any approval value other than \"by email\" approves on this form. No step list to approve: straight to the last page."
@@ -459,7 +718,7 @@
       "type": "n8n-nodes-base.dataTable",
       "typeVersion": 1.1,
       "position": [
-        1760,
+        2860,
         -120
       ]
     },
@@ -521,7 +780,7 @@
       "type": "n8n-nodes-base.dataTable",
       "typeVersion": 1.1,
       "position": [
-        1980,
+        3080,
         -120
       ]
     },
@@ -529,7 +788,7 @@
       "parameters": {
         "operation": "page",
         "defineForm": "json",
-        "jsonOutput": "={{ JSON.stringify(((lists, e, list, detail, label, details) => lists.flatMap((l, k) => ((desktop, writes, who) => [{ fieldType: 'html', html: (lists.length > 1 ? '<h3>' + (k + 1) + ' of ' + lists.length + ': ' + e(l.name) + ', version ' + e(l.version) + '</h3>' : '') + list(l, e) + (details ? '<h4>Details of every step (how each one finds its control)</h4>' + detail(l, 1, e) : '<p><em>How each step finds its control is in this run\\'s execution in n8n (the Import steps node\\'s output), and in the approval email when approval is by email.</em></p>') }].concat(writes.length ? [{ fieldLabel: who + 'Which of these steps save, send or submit?', fieldName: 'writes_' + k, fieldType: 'checkbox', fieldOptions: { values: writes.map((c) => ({ option: label(c) })) }, defaultValue: writes.filter((c) => !c.signsIn).map(label).join(',') }] : [], desktop ? [{ fieldType: 'html', html: '<p><em>' + (writes.length ? 'Ticked steps are' : 'The steps you list here are') + ' allowed to save or send. ' + (writes.length ? 'An unticked step' : 'Any other step') + ' is stopped only when it tries to use a control or key that your administrator has protected on the bot machine.</em></p>' }, { fieldLabel: who + (writes.length ? 'Any other step that saves, sends or submits (its number, optional)' : 'Steps that save, send or submit (their numbers, optional)'), fieldName: 'moreWrites_' + k, fieldType: 'text', placeholder: '7, 9' }] : [], [{ fieldLabel: who + 'Decision', fieldName: 'decision_' + k, fieldType: 'radio', fieldOptions: { values: [{ option: 'Approve and sign' }, { option: 'Reject' }] }, requiredField: true }]))(l.steps?.surface === 'desktop', l.steps?.surface === 'desktop' ? l.writeCandidates ?? [] : [], lists.length > 1 ? String(l.name ?? '') + ': ' : '')))($('Import steps').all(1).map((i) => i.json), (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]), (l, e) => ((desktop, notRun, steps, flags) => '<p>' + [desktop ? 'Opens ' + String(l.steps.app?.exe ?? '') + ' on the desktop runner.' : (flags.filter((f) => f.startsWith('host: ')).length ? 'Opens ' + flags.filter((f) => f.startsWith('host: ')).map((f) => f.slice(6)).join(', ') + '.' : '')].concat(steps.some((s) => s.signIn) ? ['Signs in with the RPA Site Login.'] : [], flags.filter((f) => f.startsWith('form submission: ')).map((f) => 'Submits a form: ' + f.slice(17) + '.'), steps.map((s, i) => (s.expectFile || s.download ? i + 1 : 0)).filter((i) => i).map((i) => 'Returns a file to n8n: step ' + i + '.'), flags.filter((f) => !/^(host|form submission|desktop app|file returned to n8n|candidate write|write): /.test(f) && f !== 'download step'), [desktop ? 'Not tried by the import: read every step before you approve.' : notRun ? 'Not run by the import: check every step, each form\\'s target and each download before you approve.' : String(l.evidenceLine ?? '').split('; ')[0] + '.']).filter((x) => x).map(e).join('<br>') + '</p>' + (String(l.leftOutList ?? '') ? '<p><b>⚠ Left out by the import:</b><br>' + e(l.leftOutList).split('\\n').join('<br>') + '</p>' : '') + '<p><b>The steps</b></p>' + ((a) => (a.length ? '<p><em>' + (steps.length - a.length) + (steps.length - a.length === 1 ? ' recorded step' : ' recorded steps') + ', plus ' + a.length + ' the import added (waits for each window' + (a.some((r) => r.marks.includes('returns a file')) ? ', the returned file' : '') + ')</em></p>' : ''))((l.reviewSteps ?? []).filter((r) => r.added)) + '<ol>' + (l.reviewSteps ?? []).map((r) => '<li>' + ((t) => (r.added ? '<i>' + t + '</i>' : t))(e(r.text) + (r.marks.length ? ' <em>· ' + e(r.marks.join('; ')) + '</em>' : '')) + (Array.isArray(r.each) && r.each.length ? '<ul>' + r.each.map((x) => '<li>On each page: ' + e(x.text) + (x.marks.length ? ' <em>· ' + e(x.marks.join('; ')) + '</em>' : '') + '</li>').join('') + '</ul>' : '') + '</li>').join('') + '</ol>')(l.steps?.surface === 'desktop', String(l.evidenceLine ?? '').startsWith('Not replayed:'), Array.isArray(l.steps?.steps) ? l.steps.steps : [], (l.safetyFlags ?? []).map(String)), (l, n, e) => ((desktop, notRun) => (n > 1 ? '<p><b>' + e(l.name) + '</b></p>' : '') + '<p><em><b>Safety flags:</b> ' + e(l.safetyLine) + '</em></p>' + (String(l.leftOutList ?? '') ? '<p><em><b>Left out by the import (the source does these, the steps do not):</b><br>' + e(l.leftOutList).split('\\n').join('<br>') + '</em></p>' : '') + '<p><em><b>Evidence' + (notRun ? '' : ' (as reported by the run)') + ':</b> ' + e(l.evidenceLine) + '</em></p>' + '<p><em><b>' + (desktop ? 'The steps' : notRun ? 'What changed (as written; these steps were never run)' : 'What changed (as reported by the run)') + ':</b><br>' + e(l.changeList).split('\\n').join('<br>') + '</em></p>' + (String(l.attachmentNames ?? '') ? '<p><em>Screenshots of the replay are in this execution in n8n, on the Repaired Steps output of Import steps.</em></p>' : ''))(l.steps?.surface === 'desktop', l.steps?.surface === 'desktop' || String(l.evidenceLine ?? '').startsWith('Not replayed:')), (c) => 'Step ' + c.step + ': ' + String(c.intent).split(',').join(';').split('<').join('‹').split('>').join('›'), $('Settings').first().json.showDetails === true)).split('$').join('\\\\u0024') }}",
+        "jsonOutput": "={{ JSON.stringify(((c) => (c ? [{ fieldType: 'html', html: '<p><b>' + String(c).replace(/[&<>\"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[ch]) + '</b></p>' }] : []))($('Compared with the approved version').isExecuted ? $('Compared with the approved version').first().json.compared : '').concat(((lists, e, list, detail, label, details) => lists.flatMap((l, k) => ((desktop, writes, who) => [{ fieldType: 'html', html: (lists.length > 1 ? '<h3>' + (k + 1) + ' of ' + lists.length + ': ' + e(l.name) + ', version ' + e(l.version) + '</h3>' : '') + list(l, e) + (details ? '<h4>Details of every step (how each one finds its control)</h4>' + detail(l, 1, e) : '<p><em>How each step finds its control is in this run\\'s execution in n8n (the Import steps node\\'s output), and in the approval email when approval is by email.</em></p>') }].concat(writes.length ? [{ fieldLabel: who + 'Which of these steps save, send or submit?', fieldName: 'writes_' + k, fieldType: 'checkbox', fieldOptions: { values: writes.map((c) => ({ option: label(c) })) }, defaultValue: writes.filter((c) => !c.signsIn).map(label).join(',') }] : [], desktop ? [{ fieldType: 'html', html: '<p><em>' + (writes.length ? 'Ticked steps are' : 'The steps you list here are') + ' allowed to save or send. ' + (writes.length ? 'An unticked step' : 'Any other step') + ' is stopped only when it tries to use a control or key that your administrator has protected on the bot machine.</em></p>' }, { fieldLabel: who + (writes.length ? 'Any other step that saves, sends or submits (its number, optional)' : 'Steps that save, send or submit (their numbers, optional)'), fieldName: 'moreWrites_' + k, fieldType: 'text', placeholder: '7, 9' }] : [], [{ fieldLabel: who + 'Decision', fieldName: 'decision_' + k, fieldType: 'radio', fieldOptions: { values: [{ option: 'Approve and sign' }, { option: 'Reject' }] }, requiredField: true }]))(l.steps?.surface === 'desktop', l.steps?.surface === 'desktop' ? l.writeCandidates ?? [] : [], lists.length > 1 ? String(l.name ?? '') + ': ' : '')))($('Import steps').all(1).map((i) => i.json), (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]), (l, e) => ((desktop, notRun, steps, flags) => '<p>' + [desktop ? 'Opens ' + String(l.steps.app?.exe ?? '') + ' on the desktop runner.' : (flags.filter((f) => f.startsWith('host: ')).length ? 'Opens ' + flags.filter((f) => f.startsWith('host: ')).map((f) => f.slice(6)).join(', ') + '.' : '')].concat(steps.some((s) => s.signIn) ? ['Signs in with the RPA Site Login.'] : [], flags.filter((f) => f.startsWith('form submission: ')).map((f) => 'Submits a form: ' + f.slice(17) + '.'), steps.map((s, i) => (s.expectFile || s.download ? i + 1 : 0)).filter((i) => i).map((i) => 'Returns a file to n8n: step ' + i + '.'), flags.filter((f) => !/^(host|form submission|desktop app|file returned to n8n|candidate write|write): /.test(f) && f !== 'download step'), [desktop ? 'Not tried by the import: read every step before you approve.' : notRun ? 'Not run by the import: check every step, each form\\'s target and each download before you approve.' : String(l.evidenceLine ?? '').split('; ')[0] + '.']).filter((x) => x).map(e).join('<br>') + '</p>' + (String(l.leftOutList ?? '') ? '<p><b>⚠ Left out by the import:</b><br>' + e(l.leftOutList).split('\\n').join('<br>') + '</p>' : '') + '<p><b>The steps</b></p>' + ((a) => (a.length ? '<p><em>' + (steps.length - a.length) + (steps.length - a.length === 1 ? ' recorded step' : ' recorded steps') + ', plus ' + a.length + ' the import added (waits for each window' + (a.some((r) => r.marks.includes('returns a file')) ? ', the returned file' : '') + ')</em></p>' : ''))((l.reviewSteps ?? []).filter((r) => r.added)) + '<ol>' + (l.reviewSteps ?? []).map((r) => '<li>' + ((t) => (r.added ? '<i>' + t + '</i>' : t))(e(r.text) + (r.marks.length ? ' <em>· ' + e(r.marks.join('; ')) + '</em>' : '')) + (Array.isArray(r.each) && r.each.length ? '<ul>' + r.each.map((x) => '<li>On each page: ' + e(x.text) + (x.marks.length ? ' <em>· ' + e(x.marks.join('; ')) + '</em>' : '') + '</li>').join('') + '</ul>' : '') + '</li>').join('') + '</ol>')(l.steps?.surface === 'desktop', String(l.evidenceLine ?? '').startsWith('Not replayed:'), Array.isArray(l.steps?.steps) ? l.steps.steps : [], (l.safetyFlags ?? []).map(String)), (l, n, e) => ((desktop, notRun) => (n > 1 ? '<p><b>' + e(l.name) + '</b></p>' : '') + '<p><em><b>Safety flags:</b> ' + e(l.safetyLine) + '</em></p>' + (String(l.leftOutList ?? '') ? '<p><em><b>Left out by the import (the source does these, the steps do not):</b><br>' + e(l.leftOutList).split('\\n').join('<br>') + '</em></p>' : '') + '<p><em><b>Evidence' + (notRun ? '' : ' (as reported by the run)') + ':</b> ' + e(l.evidenceLine) + '</em></p>' + '<p><em><b>' + (desktop ? 'The steps' : notRun ? 'What changed (as written; these steps were never run)' : 'What changed (as reported by the run)') + ':</b><br>' + e(l.changeList).split('\\n').join('<br>') + '</em></p>' + (String(l.attachmentNames ?? '') ? '<p><em>Screenshots of the replay are in this execution in n8n, on the Repaired Steps output of Import steps.</em></p>' : ''))(l.steps?.surface === 'desktop', l.steps?.surface === 'desktop' || String(l.evidenceLine ?? '').startsWith('Not replayed:')), (c) => 'Step ' + c.step + ': ' + String(c.intent).split(',').join(';').split('<').join('‹').split('>').join('›'), $('Settings').first().json.showDetails === true))).split('$').join('\\\\u0024') }}",
         "limitWaitTime": true,
         "limitType": "afterTimeInterval",
         "resumeAmount": 1,
@@ -546,10 +805,10 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        2200,
+        3300,
         -120
       ],
-      "notes": "One block per step list on Repaired Steps: what it does besides reading, the steps the import left out, the numbered steps with what they type and their variables and files (the steps the import added to a recording in grey), then the write steps (desktop) and Approve and sign or Reject. With Settings → showDetails, each step list's own flags, evidence and change list above the question. The run pauses here until the person submits, at most 1 hour; without an answer nothing is signed."
+      "notes": "After Change or sign again only: a first line that says whether and where the steps differ from the approved version (Compared with the approved version). One block per step list on Repaired Steps: what it does besides reading, the steps the import left out, the numbered steps with what they type and their variables and files (the steps the import added to a recording in grey), then the write steps (desktop) and Approve and sign or Reject. With Settings → showDetails, each step list's own flags, evidence and change list above the question. The run pauses here until the person submits, at most 1 hour; without an answer nothing is signed."
     },
     {
       "parameters": {
@@ -562,7 +821,7 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [
-        2420,
+        3520,
         -220
       ],
       "notes": "The Repaired steps items exactly as Import steps gave them, in the order the review page showed them. None when the page was not answered in time."
@@ -577,7 +836,7 @@
       "type": "n8n-nodes-base.splitOut",
       "typeVersion": 1,
       "position": [
-        2640,
+        3740,
         -220
       ]
     },
@@ -595,7 +854,7 @@
       "type": "n8n-nodes-rpa.playwright",
       "typeVersion": 1,
       "position": [
-        2860,
+        3960,
         -220
       ],
       "onError": "continueErrorOutput",
@@ -630,7 +889,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        3080,
+        4180,
         -280
       ]
     },
@@ -738,7 +997,7 @@
       "type": "n8n-nodes-base.dataTable",
       "typeVersion": 1.1,
       "position": [
-        3300,
+        4400,
         -340
       ],
       "notes": "Writes the signed steps as an active row, from Sign steps' record only."
@@ -802,7 +1061,7 @@
       "type": "n8n-nodes-base.dataTable",
       "typeVersion": 1.1,
       "position": [
-        3520,
+        4620,
         -340
       ],
       "notes": "Every other active row of the same name becomes superseded (an import is a first version, so whatever its version), so the steps just approved are what runs under that name."
@@ -891,7 +1150,7 @@
       "type": "n8n-nodes-base.dataTable",
       "typeVersion": 1.1,
       "position": [
-        3300,
+        4400,
         -180
       ],
       "notes": "A rejected step list: a rejected row, with no steps and no signature. A step list Sign steps refused writes no row; the last page names the reason."
@@ -908,7 +1167,7 @@
           "conditions": [
             {
               "id": "3d6f1a20-7b4c-4e8a-9c11-0000000005b1",
-              "leftValue": "={{ Boolean($('Import steps').first(0).json.workflowName) && (!$('Review and approve').isExecuted || Object.entries($('Review and approve').first().json).some(([k, v]) => k.startsWith('decision_') && v === 'Approve and sign')) }}",
+              "leftValue": "={{ Boolean($('Import steps').first(0).json.workflowName) && !$('Change or sign again').isExecuted && (!$('Review and approve').isExecuted || Object.entries($('Review and approve').first().json).some(([k, v]) => k.startsWith('decision_') && v === 'Approve and sign')) }}",
               "rightValue": "",
               "operator": {
                 "type": "boolean",
@@ -926,10 +1185,10 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        2420,
+        3520,
         160
       ],
-      "notes": "Every import with steps carries the bot as binary workflow on the Data output of Import steps. After the review page, only when a step list was approved: a rejected bot gets no workflow to run."
+      "notes": "Every import with steps carries the bot as binary workflow on the Data output of Import steps. After the review page, only when a step list was approved: a rejected bot gets no workflow to run. A change or a new signature of an approved bot gets no file: its workflow exists already."
     },
     {
       "parameters": {
@@ -949,7 +1208,7 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        2640,
+        3740,
         80
       ],
       "notes": "The run pauses here until the browser shows this page, at most 1 hour. The file comes from the Data output of Import steps."
@@ -971,7 +1230,7 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        2640,
+        3740,
         240
       ],
       "notes": "The run pauses here until the browser shows this page, at most 1 hour."
@@ -1006,7 +1265,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        1540,
+        2640,
         320
       ],
       "notes": "The sign-in was refused because an address is not listed in the RPA Site Login: the page says which and offers to import the same file again."
@@ -1031,7 +1290,7 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        1760,
+        2860,
         260
       ],
       "notes": "Import again runs Import steps once more on the same upload (The upload), with the Site Login as it is then."
@@ -1053,7 +1312,7 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        1760,
+        2860,
         420
       ],
       "notes": "The run pauses here until the browser shows this page, at most 1 hour."
@@ -1064,7 +1323,7 @@
       "main": [
         [
           {
-            "node": "Settings",
+            "node": "Plain address?",
             "type": "main",
             "index": 0
           }
@@ -1075,7 +1334,7 @@
       "main": [
         [
           {
-            "node": "Asks about a download?",
+            "node": "Change an approved bot?",
             "type": "main",
             "index": 0
           }
@@ -1319,6 +1578,115 @@
         [
           {
             "node": "The upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Change an approved bot?": {
+      "main": [
+        [
+          {
+            "node": "Approved bots",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Asks about a download?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Approved bots": {
+      "main": [
+        [
+          {
+            "node": "The bot to change",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "The bot to change": {
+      "main": [
+        [
+          {
+            "node": "Approved bot found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Approved bot found?": {
+      "main": [
+        [
+          {
+            "node": "Change or sign again",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No approved bot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Change or sign again": {
+      "main": [
+        [
+          {
+            "node": "The steps as a file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "The steps as a file": {
+      "main": [
+        [
+          {
+            "node": "Compared with the approved version",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compared with the approved version": {
+      "main": [
+        [
+          {
+            "node": "The upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plain address?": {
+      "main": [
+        [
+          {
+            "node": "Settings",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Address with values",
             "type": "main",
             "index": 0
           }
