@@ -626,7 +626,7 @@ class Builder {
     }, {
       onError: 'continueErrorOutput',
       credentials: creds.credentials,
-      notes: `Runs the signed desktop steps ${draftName} (${plural(draft.script.steps.length, 'step')} ${FROM[this.source].steps} "${line(n.displayName, 120)}") on the desktop runner. ${pickText(creds.picked, creds.missing)}${fillIn}${secret.size ? ` ${[...secret].join(', ')}: put ${secret.size === 1 ? 'it' : 'them'} in an RPA Secret Variables credential (type rpaSecretVariablesApi, field Variables) and select it here.` : ''}`,
+      notes: `Runs the signed desktop steps ${draftName} on the desktop runner. ${pickText(creds.picked, creds.missing)}${fillIn}${secret.size ? ` ${[...secret].join(', ')}: put ${secret.size === 1 ? 'it' : 'them'} in an RPA Secret Variables credential and select it here.` : ''}`,
     });
     this.connect([{ node: get, output: 0 }], run);
     this.desktopRunNodes.push(run);
@@ -677,7 +677,7 @@ class Builder {
           onError: 'continueErrorOutput',
           ...(Object.keys(creds.credentials).length ? { credentials: creds.credentials } : {}),
           notes: [
-            `Runs the signed steps ${draftName} (${plural(draft.script.steps.length, 'step')} ${FROM[this.source].steps} "${line(n.displayName, 120)}"). ${pickText(creds.picked, creds.missing)} ${this.privateNetwork ? PRIVATE_NETWORK_ON : PRIVATE_NETWORK_OFF}${vars.secret.length ? ` ${vars.secret.join(', ')}: put ${vars.secret.length === 1 ? 'it' : 'them'} in an RPA Secret Variables credential (type rpaSecretVariablesApi, field Variables) and select it here.` : ''}`,
+            `Runs the signed steps ${draftName}. ${pickText(creds.picked, creds.missing)} ${this.privateNetwork ? PRIVATE_NETWORK_ON : PRIVATE_NETWORK_OFF}${vars.secret.length ? ` ${vars.secret.join(', ')}: put ${vars.secret.length === 1 ? 'it' : 'them'} in an RPA Secret Variables credential and select it here.` : ''}`,
             'To let it repair itself when the site changes:',
             '1. Connect a chat model to its Model input (after step 2).',
             `2. Turn on AI Repair here and write the Goal in plain words. The outputs become Data, Repaired Steps and error.`,
@@ -831,6 +831,17 @@ class Builder {
   }
 }
 
+/**
+ * A note's size for its text, so that nothing is cut off on the canvas: about 7 px per character at the note's width,
+ * 22 px per line of text and room for the heading and the margins.
+ */
+export function noteSize(content: string, width: number): { width: number; height: number } {
+  const perLine = Math.floor((width - 40) / 7);
+  let lines = 0;
+  for (const l of content.split('\n')) lines += Math.max(1, Math.ceil(l.replace(/[*`\\]/g, '').length / perLine));
+  return { width, height: 60 + lines * 22 };
+}
+
 /** Up to five names in bold, then how many more. */
 function listed(names: string[]): string {
   const shown = names.slice(0, 5).map((n) => `**${md(n, 100)}**`).join(', ');
@@ -876,47 +887,52 @@ export function buildWorkflow(flow: UiPathFlow, drafts: Draft[], opts: BuildWork
   // A loop, not Math.min(...positions): spreading a long array into arguments overflows the stack.
   let highest = 0;
   for (const n of b.nodes) highest = Math.min(highest, n.position[1]);
-  const top = highest - 420;
+  // For a person who just imported the file and wants to run it: one thing to act on per line, nothing about wiring.
+  const names = [...b.draftNames, ...b.desktopDraftNames];
+  const which = names.length ? `${names.slice(0, 3).map((d) => code(d)).join(', ')}${names.length > 3 ? ', …' : ''}` : '';
+  const colours = new Set([...b.colours, COLOUR.grey, COLOUR.green]);
   const about = [
-    '### About this import (grey: leave as is)',
-    `Imported from ${from.origin} ${code(project, 120)}: ${summary}.`,
-    b.draftNames.length
-      ? `${uipath ? 'Each browser sequence is' : 'The browser steps are'} **Get active steps** → **Run steps**, which runs only the newest signed, active version of its steps (${b.draftNames.slice(0, 3).map((d) => code(d)).join(', ')}${b.draftNames.length > 3 ? ', …' : ''}) from ${STEPS_TABLE}: approve them on the review page of **${IMPORT_FORM}**; until a version is approved, Run steps stops with "Steps is empty". AI Repair is off: each Run steps' note says how to let it repair itself when the site changes (a chat model, AI Repair, **${APPROVE_WORKFLOW}**).`
-      : '',
-    b.desktopDraftNames.length
-      ? `${uipath ? 'Each desktop sequence is' : 'The desktop steps are'} **Get active steps** → **Run steps** on the **RPA Desktop Runner**: it runs only the newest signed, active version of its steps (${b.desktopDraftNames.slice(0, 3).map((d) => code(d)).join(', ')}${b.desktopDraftNames.length > 3 ? ', …' : ''}) from ${STEPS_TABLE}. Desktop steps are not replayed at import and have no AI repair yet: approve them on the review page of **${IMPORT_FORM}**, ticking the steps that save, send or submit.`
-      : '',
-    b.allRuns.length
-      ? `Every run writes one row to ${RUN_TABLE}: **${LOG.run}**, or **${LOG.failed}** with the error code. A failed run then ends at **${LOG.stop}**, so it shows as failed in Executions. To be told when one fails, choose an Error Workflow in this workflow's settings.`
-      : '',
-    '**On a schedule** is off: set the time, turn it on and publish the workflow. **Run the bot** runs it now.',
-    [
-      uipath && (b.untranslated || b.skipped) ? 'Grey notes: not translated, rebuild by hand.' : '', b.colours.has(COLOUR.gold) ? 'Gold: fill in.' : '', 'Green: set once.',
-      uipath ? 'UiPath expressions are kept as text in notes; nothing from the project runs as an n8n expression.' : `Text from ${from.origin} is kept as text; nothing from it runs as an n8n expression.`,
-    ].filter(Boolean).join(' '),
-  ].filter(Boolean).join('\n\n');
-  // Each RPA credential in bold, marked when the import passed it on (by id and name: no secret is in this file).
-  const named = (slots: Slot[]) => { const s = b.slots(slots); return { text: and([...s.picked.map((l) => `**${l}** (picked for you)`), ...s.missing.map((l) => `**${l}**`)]), picked: s.picked.length }; };
-  const browserCreds = named(BROWSER_SLOTS);
-  const desktopCreds = named(DESKTOP_SLOTS);
-  const anyPicked = (b.runNodes.length > 0 && browserCreds.picked > 0) || (b.desktopRunNodes.length > 0 && desktopCreds.picked > 0);
-  const setOnce = [
-    '### Set once (green)',
-    anyPicked
-      ? 'No secret is in this file. The RPA credentials the import used are picked for you: check them on the nodes, and pick the others there. In another n8n, or once a picked credential is deleted, n8n takes the only credential of the same name if there is one: otherwise pick it on the node again.'
-      : 'No secret is in this file. Pick the credentials on the nodes:',
-    b.runNodes.length ? `- ${browserCreds.text}: ${listed(b.runNodes)}` : '',
-    b.desktopRunNodes.length ? `- ${desktopCreds.text}: ${listed(b.desktopRunNodes)}` : '',
-    b.secretVariables.size ? `- ${SECRET_VARIABLES}, holding ${[...b.secretVariables].slice(0, 10).map((v) => code(v, 60)).join(', ')}: on the Run steps that name them (their notes say which)` : '',
+    '### About this import',
+    `- Runs the approved steps ${which || 'of the import'}, imported from ${from.origin} ${code(project, 120)}.`,
+    uipath ? `- ${plural(b.others, 'other activity', 'other activities')} became n8n nodes. ${b.untranslated || b.skipped ? `Grey notes mark what was not translated${b.skipped ? `, and ${b.skipped.toLocaleString('en-US')} more not drawn (see the report)` : ''}: rebuild that by hand.` : 'Each one says what to check.'}` : '',
+    '- **Run the bot** runs it now. **On a schedule** is off: set the time, turn it on, publish.',
+    b.allRuns.length ? `- Each run writes a row to ${RUN_TABLE}. Failed runs show as failed in Executions.` : '',
+    b.allRuns.length ? '- To hear of a failed run, set an Error Workflow in the workflow settings.' : '',
+    names.length ? `- To change the steps or sign them again, use **${IMPORT_FORM}** with the bot's name.` : '',
+    b.draftNames.length ? '- For self-repair when the site changes, see the browser guide, Part 2.' : '',
+    colours.size > 2 ? `- ${[colours.has(COLOUR.gold) ? 'Gold: fill in.' : '', 'Green: set once.', 'Grey: leave as is.'].filter(Boolean).join(' ')}` : '',
+  ].filter(Boolean).join('\n');
+  // Each RPA credential the Run steps use: picked when the import passed it on (by id and name: no secret is in this file).
+  const used = (slots: Slot[], runs: string[]) => (runs.length ? b.slots(slots) : { picked: [], missing: [] });
+  const browserCreds = used(BROWSER_SLOTS, b.runNodes);
+  const desktopCreds = used(DESKTOP_SLOTS, b.desktopRunNodes);
+  const picked = [...new Set([...browserCreds.picked, ...desktopCreds.picked])];
+  const secretLine = b.secretVariables.size
+    ? `- ${SECRET_VARIABLES}, holding ${[...b.secretVariables].slice(0, 10).map((v) => code(v, 60)).join(', ')}: pick it on the Run steps that name them, and list where its values may be typed (the app or the site) in its May Be Typed Into.`
+    : '';
+  const toPick = [
+    browserCreds.missing.length ? `- ${and(browserCreds.missing.map((l) => `**${l}**`))}: ${listed(b.runNodes)}` : '',
+    desktopCreds.missing.length ? `- ${and(desktopCreds.missing.map((l) => `**${l}**`))}: ${listed(b.desktopRunNodes)}` : '',
     b.credentials && !b.desktopRunNodes.length ? '- UiPath credential lookups (green notes in the flow): the RPA Site Login on Run steps holds that login' : '',
     b.credentials && b.desktopRunNodes.length ? `- UiPath credential lookups (green notes in the flow): desktop steps type the sign-in from their Run steps' Variables (a password from ${SECRET_VARIABLES}); browser steps use the RPA Site Login on their Run steps` : '',
     b.s3Nodes.length ? `- **AWS**: ${listed(b.s3Nodes)}` : '',
     b.emailNodes.length ? `- **SMTP**: ${listed(b.emailNodes)}` : '',
     b.httpNodes.length ? `- HTTP authentication, if the endpoint needs it: ${listed(b.httpNodes)}` : '',
+  ].filter(Boolean);
+  const onNodes = b.allRuns.length === 1 ? 'the RPA node' : 'the RPA nodes';
+  const setOnce = [
+    '### Set once',
+    toPick.length
+      ? ['No secret is in this file. Pick these on the nodes:', ...toPick, picked.length ? `- Already set on ${onNodes}: ${and(picked.map((l) => `**${l}**`))}` : ''].filter(Boolean).join('\n')
+      : picked.length ? `Nothing to pick: ${and(picked.map((l) => `**${l}**`))} ${picked.length === 1 ? 'is' : 'are'} set on ${onNodes}.` : 'Nothing to pick.',
+    secretLine,
   ].filter(Boolean).join('\n');
+  const aboutAt = noteSize(about, 460);
+  const setAt = noteSize(setOnce, 440);
+  const top = highest - Math.max(aboutAt.height, setAt.height) - 60;
   const before = b.nodes.length;
-  b.sticky('About this import', about, COLOUR.grey, [-80, top], 460, 360, true);
-  b.sticky('Set once', setOnce, COLOUR.green, [400, top], 440, 360, true);
+  b.sticky('About this import', about, COLOUR.grey, [-80, top], aboutAt.width, aboutAt.height, true);
+  b.sticky('Set once', setOnce, COLOUR.green, [400, top], setAt.width, setAt.height, true);
   // The two stickies first, as in the templates.
   b.nodes.unshift(...b.nodes.splice(before));
 

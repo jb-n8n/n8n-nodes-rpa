@@ -76,7 +76,8 @@ function workflowOf(item: INodeExecutionData): WorkflowJson {
   for (const n of wf.nodes.filter((x) => x.type === 'n8n-nodes-rpa.playwright')) {
     expect(n.parameters.aiRepair, n.name).toBe(false);
     expect(setOnce, n.name).toContain(`**RPA Step Signing**`);
-    expect(setOnce, n.name).toContain(n.name.length <= 100 ? `**${n.name}**` : '**');
+    // A node is named where something is still to pick on it; with every RPA credential picked, none is.
+    if (!/Nothing to pick: |Already set on the RPA node/.test(setOnce)) expect(setOnce, n.name).toContain(n.name.length <= 100 ? `**${n.name}**` : '**');
   }
   return wf;
 }
@@ -142,7 +143,7 @@ describe('every source ends in a workflow that runs', () => {
     const wf = workflowOf(item);
     const [run] = runNodes(wf);
     expect(optionsOf(run).variables).toEqual({ values: [{ name: 'company', value: '' }] });
-    expect(run.notes).toContain('exportPassword: put it in an RPA Secret Variables credential (type rpaSecretVariablesApi, field Variables) and select it here.');
+    expect(run.notes).toContain('exportPassword: put it in an RPA Secret Variables credential and select it here.');
   });
 
   it('a desktop step document: one desktop pair on the RPA Desktop Runner', async () => {
@@ -234,7 +235,7 @@ describe('the workflow file arrives with the credentials the import was given, b
       }
     }
     expect(JSON.stringify(wf)).not.toContain('never-read');
-    expect(String(wf.nodes.find((n) => n.name === 'Set once')?.parameters.content)).toContain('No secret is in this file. The RPA credentials the import used are picked for you');
+    expect(String(wf.nodes.find((n) => n.name === 'Set once')?.parameters.content)).toMatch(/Nothing to pick: .* set on the RPA nodes?\.|Already set on the RPA nodes?: /);
   }
 
   it('a Chrome recording: RPA Browser, RPA Site Login and RPA Step Signing on Run steps; the import reads neither passed-on slot', async () => {

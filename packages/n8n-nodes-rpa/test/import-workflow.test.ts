@@ -182,7 +182,7 @@ describe('buildWorkflow', () => {
     expect(w.nodes.slice(0, 2).map((n) => n.name)).toEqual(['About this import', 'Set once']);
     expect((w.nodes[0].parameters as { color: number }).color).toBe(COLOUR.grey);
     expect((w.nodes[1].parameters as { color: number }).color).toBe(COLOUR.green);
-    expect(content(w.nodes[0])).toContain('Imported from the UiPath project `SAP Line Item Report`');
+    expect(content(w.nodes[0])).toContain('- Runs the approved steps `sap-report-1`, imported from the UiPath project `SAP Line Item Report`.');
     expect(content(w.nodes[1])).toMatch(/RPA Browser/);
     expect(content(w.nodes[1])).toMatch(/RPA Site Login/);
     expect(content(w.nodes[1])).toMatch(/RPA Step Signing/);
@@ -214,7 +214,7 @@ describe('buildWorkflow', () => {
     expect(targets(w, 'On a schedule')).toEqual([['Create run log table']]);
     expect(byName(w, 'On a schedule')).toMatchObject({ disabled: true, parameters: { rule: { interval: [{ field: 'days', triggerAtHour: 6 }] } } });
     expect(byName(w, 'On a schedule').notes).toBe('Set the time, then turn this node on and publish the workflow. Until then the bot runs only when you click Execute.');
-    expect(content(byName(w, 'About this import'))).toContain('**On a schedule** is off: set the time, turn it on and publish the workflow.');
+    expect(content(byName(w, 'About this import'))).toContain('- **Run the bot** runs it now. **On a schedule** is off: set the time, turn it on, publish.');
     expect(targets(w, 'Get active steps (sap-report-1)')).toEqual([['Use Browser Chrome: SAP Logon']]);
     // Data (0) feeds the next node and the run log; there is no repair branch; the error output feeds the failure log.
     expect(targets(w, 'Use Browser Chrome: SAP Logon')).toEqual([['Upload line items to S3', 'Log run'], ['Log failed run']]);
@@ -628,7 +628,7 @@ describe('buildWorkflow', () => {
     const more = byName(w, `${rest} more activities`);
     expect(more.parameters).toMatchObject({ color: COLOUR.grey });
     expect(content(more)).toContain(`${rest} more activities: see the report.`);
-    expect(content(byName(w, 'About this import'))).toContain(`${rest} more not drawn (see the report)`);
+    expect(content(byName(w, 'About this import'))).toContain(`and ${rest} more not drawn (see the report): rebuild that by hand.`);
     expect(w.description).toContain(`${rest} more not drawn`);
   });
 
@@ -665,7 +665,7 @@ describe('buildWorkflow', () => {
     const set = content(byName(w, 'Set once'));
     expect(set).toContain('- **RPA Browser**, **RPA Site Login** and **RPA Step Signing**');
     expect(set).not.toMatch(/Chat model|choose \*\*RPA: 3/);
-    expect(content(byName(w, 'About this import'))).toContain('AI Repair is off: each Run steps\' note says how to let it repair itself when the site changes');
+    expect(content(byName(w, 'About this import'))).toContain('- For self-repair when the site changes, see the browser guide, Part 2.');
   });
   it('an import that took its code from a workflow gives each Run steps the same One-Time Code Workflow, and Code Timeout when it was not the default', () => {
     const flow = flowOf([{ kind: 'browser', sequence: 1, displayName: 'Log in' }, { kind: 'browser', sequence: 2, displayName: 'Export' }]);
@@ -743,19 +743,20 @@ describe('buildWorkflow', () => {
     const build = (d: ReturnType<typeof desktop>) => buildWorkflow({ name: 'd', nodes: [{ kind: 'desktop', sequence: 1, displayName: 'Desk', draft: 'd' }] }, [], { name: 'd', desktopDrafts: [d], source: 'recording' });
     const none = build(desktop([], []));
     expect(none.nodes.some((n) => n.name.startsWith('Fill in the variables'))).toBe(false);
-    expect(byName(none, 'Desk').notes).toBe('Runs the signed desktop steps d (1 step imported from the recording "Desk") on the desktop runner. Pick RPA Desktop Runner and RPA Step Signing here.');
+    expect(byName(none, 'Desk').notes).toBe('Runs the signed desktop steps d on the desktop runner. Pick RPA Desktop Runner and RPA Step Signing here.');
     const about = content(byName(none, 'About this import'));
-    expect(about).toContain('Green: set once. Text from the recording is kept as text');
-    expect(about).not.toContain('Gold');
+    // Two colours (the two notes): no legend. A desktop bot has no repair line.
+    expect(about).not.toMatch(/Gold|Green:|repair/);
     const secretOnly = build(desktop(['password'], ['password']));
     expect(byName(secretOnly, 'Desk').notes).not.toContain('Fill in the Variables');
     expect(content(byName(secretOnly, 'Fill in the variables (d)'))).toBe(
       '### Fill in the variables (gold)\nSecret: `password`: in an **RPA Secret Variables** credential selected on **Desk**, never typed here. To keep these values to this app, put `App.exe` in that credential\'s May Be Typed Into. Desktop steps run only once approved: import the recording with **RPA: 5 Import a bot** and approve `d` on its review page.',
     );
-    expect(content(byName(secretOnly, 'About this import'))).toContain('Gold: fill in. Green: set once.');
+    // A gold note: three colours, so the legend.
+    expect(content(byName(secretOnly, 'About this import'))).toContain('- Gold: fill in. Green: set once. Grey: leave as is.');
     // A UiPath project with nothing left untranslated has no grey notes to explain.
     const uipath = buildWorkflow(flowOf([{ kind: 'browser', sequence: 1, displayName: 'Log in' }]), [draft('m-1')], { name: 'm' });
-    expect(content(byName(uipath, 'About this import'))).toContain('Green: set once. UiPath expressions are kept as text in notes');
+    expect(content(byName(uipath, 'About this import'))).toContain('- 0 other activities became n8n nodes. Each one says what to check.');
     expect(content(byName(uipath, 'About this import'))).not.toContain('Grey notes');
   });
 
@@ -821,8 +822,11 @@ describe('buildWorkflow', () => {
     expect(byName(w, 'Log in').notes).toContain('RPA Browser, RPA Site Login and RPA Step Signing are picked for you: check them.');
     expect(byName(w, 'Desk').notes).toContain('RPA Desktop Runner and RPA Step Signing are picked for you: check them.');
     const set = content(byName(w, 'Set once'));
-    expect(set).toContain('No secret is in this file. The RPA credentials the import used are picked for you: check them on the nodes, and pick the others there. In another n8n, or once a picked credential is deleted, n8n takes the only credential of the same name if there is one: otherwise pick it on the node again.');
-    expect(set).toContain('- **RPA Browser** (picked for you), **RPA Site Login** (picked for you) and **RPA Step Signing** (picked for you): **Log in**');
+    // Every RPA credential picked: one line, and the UiPath credential lookup (a green note in the flow) to read.
+    expect(set).toBe('### Set once\nNo secret is in this file. Pick these on the nodes:\n- UiPath credential lookups (green notes in the flow): desktop steps type the sign-in from their Run steps\' Variables (a password from **RPA Secret Variables**); browser steps use the RPA Site Login on their Run steps\n'
+      + '- Already set on the RPA nodes: **RPA Browser**, **RPA Site Login**, **RPA Step Signing** and **RPA Desktop Runner**');
+    // Another n8n, or a deleted credential: said in docs/reference/templates.md, not on the canvas.
+    expect(set).not.toContain('another n8n');
     expect(content(byName(w, 'Credential: Portal'))).not.toContain('Pick one there');
     // Only well-formed references are passed on: anything else is left for the person to pick.
     const odd = buildWorkflow(flowOf([{ kind: 'browser', sequence: 1, displayName: 'Log in' }]), [draft('m-1')], {
@@ -830,7 +834,7 @@ describe('buildWorkflow', () => {
     });
     expect(byName(odd, 'Log in').credentials).toBeUndefined();
     expect(byName(odd, 'Log in').notes).toContain('Pick RPA Browser, RPA Site Login and RPA Step Signing here.');
-    expect(content(byName(odd, 'Set once'))).toContain('No secret is in this file. Pick the credentials on the nodes:');
+    expect(content(byName(odd, 'Set once'))).toContain('No secret is in this file. Pick these on the nodes:\n- **RPA Browser**, **RPA Site Login** and **RPA Step Signing**: **Log in**');
   });
 
   it('every run writes the run log, and a failed run still ends as failed: Create run log table → … → Run steps → Log run, error → Log failed run → Stop and Error', () => {
@@ -925,7 +929,7 @@ describe('buildWorkflow', () => {
     expect(failed.position[1]).toBeGreaterThan(ry);
     expect(stop.position[0]).toBeGreaterThan(byName(w, 'Write failed run row').position[0]);
     // One line says where a notification goes; no email or chat node is built.
-    expect(content(byName(w, 'About this import'))).toContain('Every run writes one row to playwright_runs: **Log run**, or **Log failed run** with the error code. A failed run then ends at **Stop and Error**, so it shows as failed in Executions. To be told when one fails, choose an Error Workflow in this workflow\'s settings.');
+    expect(content(byName(w, 'About this import'))).toContain('- Each run writes a row to playwright_runs. Failed runs show as failed in Executions.\n- To hear of a failed run, set an Error Workflow in the workflow settings.');
     expect(w.nodes.filter((n) => n.type === 'n8n-nodes-base.emailSend')).toEqual([]);
   });
 
@@ -950,6 +954,49 @@ describe('buildWorkflow', () => {
     lint(none);
     expect(targets(none, 'Run the bot')).toEqual([['Call']]);
     expect(content(byName(none, 'About this import'))).not.toContain('playwright_runs');
+  });
+
+  it('"About this import" stays short for every kind of generated workflow, and both notes are tall enough for their text', () => {
+    const desktopDraft = (name: string, secretVariables: string[] = []) => ({
+      name, writeCandidates: [], variables: secretVariables, secretVariables,
+      script: { surface: 'desktop' as const, name, version: 1, app: { exe: 'ErpDemo.exe' }, steps: [{ intent: 'Click Save', click: { uia: { path: [{ name: 'Save' }] } } }] },
+    });
+    const PASSED = { browser: { id: 'b1', name: 'RPA Browser' }, siteLogin: { id: 's1', name: 'RPA Site Login account' }, signing: { id: 'k1', name: 'RPA Step Signing' }, desktopRunner: { id: 'r1', name: 'RPA Desktop Runner' } };
+    const kinds: [string, WorkflowJson, number][] = [
+      ['a recording', buildWorkflow({ name: 'ERP Demo line items', nodes: [{ kind: 'desktop', sequence: 1, displayName: 'ERP', draft: 'erp' }] }, [], { name: 'erp', desktopDrafts: [desktopDraft('erp', ['password'])], source: 'recording', credentials: PASSED }), 6],
+      ['a desktop step document', buildWorkflow({ name: 'erp', nodes: [{ kind: 'desktop', sequence: 1, displayName: 'erp', draft: 'erp' }] }, [], { name: 'erp', desktopDrafts: [desktopDraft('erp')], source: 'steps' }), 6],
+      ['a Chrome export', buildWorkflow(flowOf([{ kind: 'browser', sequence: 1, displayName: 'bot', draft: 'bot' }], 'Line items'), [draft('bot')], { name: 'bot', source: 'chrome', credentials: PASSED }), 6],
+      ['a browser step document', buildWorkflow(flowOf([{ kind: 'browser', sequence: 1, displayName: 'sandbox-line-items', draft: 'sandbox-line-items' }], 'sandbox-line-items'), [draft('sandbox-line-items')], { name: 'sandbox-line-items', source: 'steps', credentials: PASSED }), 6],
+      // A UiPath project with both kinds, something not translated and a gold note: one line more for what was left out
+      // and one for the colours.
+      ['a UiPath project with both kinds', buildWorkflow(flowOf([
+        { kind: 'browser', sequence: 1, displayName: 'Web' }, { kind: 'desktop', sequence: 2, displayName: 'Desk' },
+        { kind: 'untranslated', activity: 'NSAPLogon', displayName: 'SAP Logon', note: 'rebuild it' },
+        { kind: 'if', expression: 'x > 1', then: [], else: [], displayName: 'If' },
+      ], 'SAP Line Item Report'), [draft('u-1')], { name: 'u', desktopDrafts: [desktopDraft('u-2')] }), 8],
+    ];
+    for (const [kind, w, most] of kinds) {
+      const about = content(byName(w, 'About this import'));
+      const lines = about.split('\n').slice(1);
+      expect(lines.length, `${kind}:\n${about}`).toBeLessThanOrEqual(most);
+      expect(lines.map((l) => l.replace(/^- /, '')).join(' ').split(/\s+/).filter(Boolean).length, `${kind}: words`).toBeLessThanOrEqual(most === 6 ? 90 : 120);
+      for (const l of lines) expect(l, kind).toMatch(/^- /);
+      // Plain words: no em dash, no semicolon joining sentences, and nothing about wiring.
+      expect(about, kind).not.toMatch(/\u2014|; |Stop and Error|Get active steps|→/);
+      // Each note is tall enough for its text, about 7 px a character at its width and 22 px a line.
+      for (const name of ['About this import', 'Set once']) {
+        const n = byName(w, name).parameters as { content: string; width: number; height: number };
+        const perLine = Math.floor((n.width - 40) / 7);
+        // As shown: the markdown's ** and ` are not drawn.
+        const textLines = n.content.split('\n').reduce((sum, l) => sum + Math.max(1, Math.ceil(l.replace(/[*`\\]/g, '').length / perLine)), 0);
+        expect(n.height, `${kind}: ${name}`).toBeGreaterThanOrEqual(40 + textLines * 22);
+      }
+    }
+    // Every RPA credential arrived picked: one line, and the secret variables line only where there are some.
+    const set = (i: number) => content(byName(kinds[i][1], 'Set once'));
+    expect(set(3)).toBe('### Set once\nNothing to pick: **RPA Browser**, **RPA Site Login** and **RPA Step Signing** are set on the RPA node.');
+    expect(set(0)).toBe('### Set once\nNothing to pick: **RPA Desktop Runner** and **RPA Step Signing** are set on the RPA node.\n'
+      + '- **RPA Secret Variables**, holding `password`: pick it on the Run steps that name them, and list where its values may be typed (the app or the site) in its May Be Typed Into.');
   });
 
   it('a start value is never shown for a variable that is secret under another casing', () => {
