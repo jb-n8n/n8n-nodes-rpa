@@ -54,17 +54,10 @@ fields, not the password: a wrong password shows on the first run.
 ## 3. Set up the import form with one command
 
 The **import form** is an n8n form where you upload a bot, read its steps and approve them. One command sets it up,
-with the Site Login of step 2.
+with the Site Login of step 2. It runs inside the n8n container, where the package is installed already, and works
+through n8n's own command line: it needs no API key.
 
-1. In n8n, make an API key, a key that lets a program act as you in n8n: **Settings → n8n API → Create API key**.
-   Give it a label, leave **Scopes** on **All**, and set **Expiration** to **7 days**, the shortest in its list. The
-   command uses the key once, and you revoke it right after (below). Choose **Save**, and copy the key with the copy
-   button next to it.
-
-   The stricter way: under **Scopes**, choose **Custom** and tick only the scopes the command uses:
-   `workflow:create`, `workflow:read`, `workflow:update`, `workflow:delete`, `workflow:list`, `workflow:activate`, `credential:create`, `credential:read`, `credential:update`, `credential:list`, `user:read`.
-2. In the repository folder, run the setup command. It is already installed in the n8n container. The first part of
-   the line hands it the browser token from `.env`:
+1. In the repository folder, run the setup command. The first part of the line hands it the browser token from `.env`:
 
    ```bash
    RPA_BROWSER_TOKEN="$(sed -n 's/^BROWSER_TOKEN=//p' .env)" docker compose exec -e RPA_BROWSER_TOKEN n8n /opt/n8n-rpa/node_modules/.bin/n8n-nodes-rpa setup --browser-url ws://browser:3000/ --site-login "RPA Site Login account" --allow-private-network
@@ -73,14 +66,17 @@ with the Site Login of step 2.
    `--site-login` picks the Site Login of step 2 by its name. `--allow-private-network` lets the import open the
    sandbox, which is on your own network: the bot opens private addresses only with this on. Leave it out for a site on
    the internet.
-3. Paste the API key when it asks `n8n API key (not shown):`. The terminal shows nothing while you paste. Answer `n`
-   when it asks `Connect a Windows machine now?`.
+2. Answer `n` when it asks `Connect a Windows machine now?`.
 
-The command creates two **credentials** (a credential is where n8n keeps an address or a key, with its secret): **RPA
-Browser**, the browser's address and token, and **RPA Step Signing**, a key that marks steps as approved. The bot runs
-only steps whose signature matches that key. The command also creates the workflow **RPA: 5 Import a bot**, with the
-Site Login on its nodes **Import steps** and **Sign steps** and **Allow Private Network** on, and publishes it, with
-you as its approver. It never reads the Site Login's values. Near the end it prints:
+Its first lines say which way it took and why: `Setting up n8n for RPA through n8n's own command line: no API key is
+needed.`, and the project it works in, your own (the n8n owner's personal project). Before it changes anything, it
+checks that n8n's command line works on the database of the n8n that runs in the container. The command creates two
+**credentials** (a credential is where n8n keeps an address or a key, with its secret): **RPA Browser**, the
+browser's address and token, and **RPA Step Signing**, a key that marks steps as approved. The bot runs only steps
+whose signature matches that key. The command also creates the workflow **RPA: 5 Import a bot**, with the Site Login
+on its nodes **Import steps** and **Sign steps** and **Allow Private Network** on, and publishes it, with you (the
+n8n owner's address) as its approver. It never reads the Site Login's values. It waits until the form answers, which
+takes a few seconds, and then prints:
 
 ```text
 The import form is ready.
@@ -90,12 +86,14 @@ The import form is ready.
 ```
 
 Keep the address. It ends in `/form/rpa-import`, or in a long id when another form in your n8n has that address
-already (the command says so). If **RPA: 5 Import a bot** is there already from an earlier run, the command leaves it as it is and
-says what to set on it in n8n. The command's last line is about the API key: it can act as you in n8n within its
-scopes, so revoke it now. In **Settings → n8n API**, open the key's **⋯** menu and choose **Revoke**. The signing key stays in
-n8n, and n8n does not show it again. The `Signing key:` line says how to keep a copy: you need one only to move signed
-bots to another n8n, so otherwise skip it. The command's other options, and how to run it for an n8n outside this stack
-(`npx n8n-nodes-rpa setup`), are in step 2 of the [desktop bot guide](desktop-bot.md#2-set-up-n8n-with-one-command).
+already (the command says so). Run the command again at any time: it reuses what is there and changes nothing. If
+**RPA: 5 Import a bot** differs from this version's template, for example after an upgrade, it lists what differs and
+asks `Update this form to this version? (y/N)`. `y` updates it in place and keeps its address, approvers and
+credentials. Anything else changed by hand in it is lost, and the question names what. The signing key stays in n8n,
+and n8n does not show it again. The `Signing key:` line says how to keep a copy: you need one only to move signed bots
+to another n8n, so otherwise skip it. The command's other options are in step 2 of the
+[desktop bot guide](desktop-bot.md#2-set-up-n8n-with-one-command), with the way for an n8n where you cannot run a
+command (an API key).
 
 ## 4. Import the sample bot and approve it
 
