@@ -1275,7 +1275,8 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(targets(t, 'The bot to change')).toEqual([['Approved bot found?']]);
     expect(targets(t, 'Approved bot found?')).toEqual([['Change or sign again'], ['No approved bot']]);
     expect(targets(t, 'Change or sign again')).toEqual([['Choice fits the box?']]);
-    expect(targets(t, 'Choice fits the box?')).toEqual([['Compared with the approved version'], ['Choice and box differ']]);
+    expect(targets(t, 'Choice fits the box?')).toEqual([['Compared with the approved version'], ['Page answered?']]);
+    expect(targets(t, 'Page answered?')).toEqual([['Change or sign again'], ['Choice and box differ']]);
     expect(targets(t, 'Choice and box differ')).toEqual([]);
     expect(targets(t, 'Compared with the approved version')).toEqual([['The steps as a file']]);
     expect(targets(t, 'The steps as a file')).toEqual([['The upload']]);
@@ -1337,7 +1338,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(working).toEqual([
       'Add the login page', 'Address with values', 'Approval by email?', 'Approve on this form?', 'Approve steps', 'Approved bot found?', 'Approved bots', 'Approved meanwhile', 'Asks about a download?', 'Change an approved bot?',
       'Change or sign again', 'Checked?', 'Choice and box differ', 'Choice fits the box?', 'Compared with the approved version', 'Compared with the running version', 'Create run log table', 'Create steps table', 'Import a bot', 'Import failed', 'Import steps', 'Imported', 'Imported, with the workflow file', 'Missing login page?',
-      'No approved bot', 'Plain address?', 'Read the upload', 'Record rejection', REVIEW, 'Running versions', 'Save signed steps', 'Settings', 'Sign steps', 'Signed?', 'Step lists', 'Step lists to sign', 'Still the next version?', 'Supersede older versions',
+      'No approved bot', 'Page answered?', 'Plain address?', 'Read the upload', 'Record rejection', REVIEW, 'Running versions', 'Save signed steps', 'Settings', 'Sign steps', 'Signed?', 'Step lists', 'Step lists to sign', 'Still the next version?', 'Supersede older versions',
       'The approved version', 'The bot to change', 'The file it downloads', 'The steps as a file', 'The upload', 'Versions now', 'What it replaces', 'Workflow file?',
     ]);
     expect(t.nodes.filter((n) => n.type === COMPLETION).map((n) => n.typeVersion)).toEqual(Array(11).fill(2.5));
@@ -2560,32 +2561,32 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(compare(ran, JSON.stringify({ steps: doc.steps, version: 9, name: 'x', startUrl: doc.startUrl }))).toBe('feed: unchanged from the approved version 4.');
     expect(compare(ran, edit((d) => { d.steps[2] = { goto: '/p3', intent: 'Open page 3' }; }))).toBe('feed: unchanged from the approved version 4.');
     // What changed, not only where: the step's number and its changed values, old → new.
-    expect(compare(ran, edit((d) => { d.steps[6].goto = '/other'; }))).toBe('feed: changed from the approved version 4: step 7: goto "/p7" → "/other".');
-    expect(compare(ran, edit((d) => { d.steps[1].intent = 'x'; d.steps[9].goto = '/y'; }))).toBe('feed: changed from the approved version 4: step 2: intent "Open page 2" → "x"; step 10: goto "/p10" → "/y".');
+    expect(compare(ran, edit((d) => { d.steps[6].goto = '/other'; }))).toBe('feed: changed from the approved version 4: step 7: address "/p7" → "/other".');
+    expect(compare(ran, edit((d) => { d.steps[1].intent = 'x'; d.steps[9].goto = '/y'; }))).toBe('feed: changed from the approved version 4: step 2: description "Open page 2" → "x"; step 10: address "/p10" → "/y".');
     // A field added or taken away shows (none) on its other side; two fields of one step are listed together.
-    expect(compare(ran, edit((d) => { (d.steps[0] as IDataObject).waitFor = 3; d.steps[0].goto = '/a'; }))).toBe('feed: changed from the approved version 4: step 1: goto "/p1" → "/a", waitFor (none) → 3.');
+    expect(compare(ran, edit((d) => { (d.steps[0] as IDataObject).waitFor = 3; d.steps[0].goto = '/a'; }))).toBe('feed: changed from the approved version 4: step 1: address "/p1" → "/a", waitFor (none) → 3.');
     // More than three fields of one step: "several fields". More than three steps: three, then the others by number.
     expect(compare(ran, edit((d) => { d.steps[3] = { intent: 'a', goto: '/b', fill: { selector: '#c', value: 'd' } } as typeof d.steps[0]; })))
       .toBe('feed: changed from the approved version 4: step 4: several fields.');
     expect(compare(ran, edit((d) => { for (const i of [2, 4, 6, 8, 10]) d.steps[i].goto = `/n${i}`; })))
-      .toBe('feed: changed from the approved version 4: step 3: goto "/p3" → "/n2"; step 5: goto "/p5" → "/n4"; step 7: goto "/p7" → "/n6"; and more: steps 9, 11.');
+      .toBe('feed: changed from the approved version 4: step 3: address "/p3" → "/n2"; step 5: address "/p5" → "/n4"; step 7: address "/p7" → "/n6"; and more: steps 9, 11.');
     // Added at the end, and one taken out in the middle (every later step moves up).
     expect(compare(ran, edit((d) => { d.steps.push({ intent: 'Open more', goto: '/more' }); }))).toBe('feed: changed from the approved version 4: step 26: added. 26 steps now, 25 in the approved version.');
     expect(compare(ran, edit((d) => { d.steps.splice(22, 1); })))
-      .toBe('feed: changed from the approved version 4: step 23: intent "Open page 23" → "Open page 24", goto "/p23" → "/p24"; step 24: intent "Open page 24" → "Open page 25", goto "/p24" → "/p25"; step 25: removed. 24 steps now, 25 in the approved version.');
+      .toBe('feed: changed from the approved version 4: step 23: description "Open page 23" → "Open page 24", address "/p23" → "/p24"; step 24: description "Open page 24" → "Open page 25", address "/p24" → "/p25"; step 25: removed. 24 steps now, 25 in the approved version.');
     expect(compare(ran, edit((d) => { d.steps.splice(0, 1); })))
-      .toBe(`feed: changed from the approved version 4: step 1: intent "Open page 1" → "Open page 2", goto "/p1" → "/p2"; step 2: intent "Open page 2" → "Open page 3", goto "/p2" → "/p3"; step 3: intent "Open page 3" → "Open page 4", goto "/p3" → "/p4"; and more: steps ${Array.from({ length: 20 }, (_, i) => i + 4).join(', ')}, …. 24 steps now, 25 in the approved version.`);
+      .toBe(`feed: changed from the approved version 4: step 1: description "Open page 1" → "Open page 2", address "/p1" → "/p2"; step 2: description "Open page 2" → "Open page 3", address "/p2" → "/p3"; step 3: description "Open page 3" → "Open page 4", address "/p3" → "/p4"; and more: steps ${Array.from({ length: 20 }, (_, i) => i + 4).join(', ')}, …. 24 steps now, 25 in the approved version.`);
     // A value is shown on one line, cut at 60 characters; markup stays text (the page escapes the line, as everything
     // else); a secret variable is shown as written, by its name: no secret is in the steps.
     const long = `${'a'.repeat(70)}\nsecond line`;
-    expect(compare(ran, edit((d) => { d.steps[4].intent = long; }))).toBe(`feed: changed from the approved version 4: step 5: intent "Open page 5" → "${'a'.repeat(59)}…".`);
-    expect(compare(ran, edit((d) => { d.steps[4].intent = 'two\nlines\there'; }))).toBe('feed: changed from the approved version 4: step 5: intent "Open page 5" → "two lines here".');
-    expect(compare(ran, edit((d) => { d.steps[4].goto = '<b>x</b> & "y"'; }))).toBe('feed: changed from the approved version 4: step 5: goto "/p5" → "<b>x</b> & "y"".');
+    expect(compare(ran, edit((d) => { d.steps[4].intent = long; }))).toBe(`feed: changed from the approved version 4: step 5: description "Open page 5" → "${'a'.repeat(59)}…".`);
+    expect(compare(ran, edit((d) => { d.steps[4].intent = 'two\nlines\there'; }))).toBe('feed: changed from the approved version 4: step 5: description "Open page 5" → "two lines here".');
+    expect(compare(ran, edit((d) => { d.steps[4].goto = '<b>x</b> & "y"'; }))).toBe('feed: changed from the approved version 4: step 5: address "/p5" → "<b>x</b> & "y"".');
     expect(compare(ran, edit((d) => { (d.steps[4] as IDataObject).fill = { selector: '#pin', value: '{{var.pin}}' }; })))
-      .toBe('feed: changed from the approved version 4: step 5: selector (none) → "#pin", value (none) → "{{var.pin}}".');
+      .toBe('feed: changed from the approved version 4: step 5: selector (none) → "#pin", typed value (none) → "{{var.pin}}".');
     // The other fields the box can change and the signature covers: the start site, the pop-up handlers, the app.
     expect(compare(ran, edit((d) => { d.startUrl = 'https://elsewhere.example.com/'; }))).toBe('feed: changed from the approved version 4: the start site.');
-    expect(compare(ran, edit((d) => { d.interrupts = [{ when: { text: 'Session' }, click: 'OK' }]; d.steps[0].goto = '/z'; }))).toBe('feed: changed from the approved version 4: step 1: goto "/p1" → "/z"; the pop-up handlers.');
+    expect(compare(ran, edit((d) => { d.interrupts = [{ when: { text: 'Session' }, click: 'OK' }]; d.steps[0].goto = '/z'; }))).toBe('feed: changed from the approved version 4: step 1: address "/p1" → "/z"; the pop-up handlers.');
     const desktop = { surface: 'desktop', name: 'erp', version: 1, app: { exe: 'ErpDemo.exe' }, steps: [{ intent: 'Click Save', click: { uia: { path: [{ name: 'Save' }] } } }] };
     const d = changePath('erp', [{ id: 2, name: 'erp', version: 2, steps: JSON.stringify(desktop), status: 'active' }]);
     expect(compare(d.ran, JSON.stringify({ ...desktop, app: { exe: 'Other.exe' } }))).toBe('erp: changed from the approved version 2: the app.');
@@ -2598,7 +2599,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(compare(changePath('gone', []).ran, box)).toBe('gone: could not be compared with the approved version: read every step.');
   });
 
-  it('the choice and the box must fit: sign again with an empty box, change with text; otherwise a page says which to correct and nothing is imported or signed', () => {
+  it('the choice and the box must fit: sign again with an empty box or the approved steps pasted unchanged, change with text; otherwise the page comes back with both kept (IB-15)', () => {
     const doc = { startUrl: `${SITE.url}/a`, name: 'feed', version: 4, steps: [{ intent: 'Open the report', goto: '/report' }] };
     const { ran } = changePath('feed <b>', [{ id: 1, name: 'feed <b>', version: 4, steps: JSON.stringify(doc), status: 'active' }]);
     const answered = (choice: string | null, changedSteps: string | null) => nodesRan({ ...ran, 'Change or sign again': [[{ json: { choice, changedSteps } }]] });
@@ -2607,22 +2608,45 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(cond).toEqual([expect.objectContaining({ operator: { type: 'boolean', operation: 'true', singleValue: true } })]);
     const fits = (choice: string | null, box: string | null) => evaluate(cond[0].leftValue, { $: answered(choice, box) });
     const pasted = JSON.stringify(doc);
+    const other = JSON.stringify({ ...doc, steps: [{ intent: 'Open the report', goto: '/other' }] });
     expect(fits(SIGN_AGAIN, '')).toBe(true);
     expect(fits(SIGN_AGAIN, ' \r\n ')).toBe(true);
     expect(fits(SIGN_AGAIN, null)).toBe(true);
+    // The approved steps pasted back unchanged (as the page shows them, indented, keys in any order) are sign again.
+    expect(fits(SIGN_AGAIN, pasted)).toBe(true);
+    expect(fits(SIGN_AGAIN, JSON.stringify({ steps: doc.steps, version: 4, name: 'feed', startUrl: doc.startUrl }, null, 2))).toBe(true);
     expect(fits(CHANGE, pasted)).toBe(true);
-    // The two wrong combinations, and no choice (a page left unanswered gives its input item on).
-    expect(fits(SIGN_AGAIN, pasted)).toBe(false);
+    // The wrong combinations, and no choice (a page left unanswered gives its input item on).
+    expect(fits(SIGN_AGAIN, other)).toBe(false);
+    expect(fits(SIGN_AGAIN, '{ not json')).toBe(false);
     expect(fits(CHANGE, '')).toBe(false);
     expect(fits(CHANGE, '  ')).toBe(false);
     expect(fits(null, '')).toBe(false);
     expect(fits(null, pasted)).toBe(false);
-    // The page that says which of the two to correct: nothing after it, so nothing is imported or signed.
+    // Sign again takes the row's own steps, whatever was pasted: byte for byte the table's.
+    const signAgain = evaluate(String(byName(t, COMPARED).parameters.jsonOutput), { $: answered(SIGN_AGAIN, JSON.stringify(doc, null, 2)) }) as IDataObject;
+    expect(signAgain).toEqual({ steps: JSON.stringify(doc), changed: false, unchanged: true, compared: 'feed <b>: unchanged from the approved version 4.' });
+    // A choice that does not fit goes back to the change page; only a page not answered ends on Choose again.
+    expect(targets(t, 'Choice fits the box?')).toEqual([[COMPARED], ['Page answered?']]);
+    expect(targets(t, 'Page answered?')).toEqual([['Change or sign again'], ['Choice and box differ']]);
+    const answeredCond = (byName(t, 'Page answered?').parameters as { conditions: { conditions: { leftValue: string }[] } }).conditions.conditions[0].leftValue;
+    expect(evaluate(answeredCond, { $: answered(SIGN_AGAIN, other) })).toBe(true);
+    expect(evaluate(answeredCond, { $: answered(null, null) })).toBe(false);
+    // The change page again: what to correct in red at the top, the choice and the pasted steps kept.
+    const again = (choice: string, box: string) => jsonFormFields(String(byName(t, 'Change or sign again').parameters.jsonOutput), {
+      $: (name: string) => (name === 'Import a bot' ? { params: form.parameters } : answered(choice, box)(name)),
+    });
+    const first = again(SIGN_AGAIN, other);
+    expect(String(first[0].html)).toMatch(/^<p><strong>You chose to sign the approved steps again, unchanged, and pasted steps that differ from them\. To use the pasted steps, choose Change the steps\. To sign them again unchanged, empty the box\. Your choice and the pasted steps are kept below\.<\/strong><\/p><p>These are the steps/);
+    expect(first.slice(1).map((f) => [f.fieldName, f.defaultValue])).toEqual([['choice', SIGN_AGAIN], ['changedSteps', other]]);
+    expect(String(again(CHANGE, '')[0].html)).toMatch(/^<p><strong>You chose to change the steps, but the box was empty\. Paste the changed steps in the box, or choose Sign the approved steps again, unchanged\.<\/strong><\/p>/);
+    // Pasted text with markup and "$" comes back as typed (n8n puts a field's default value in as text).
+    expect(again(CHANGE, '<b>x</b> $1 $&')[2].defaultValue).toBe('<b>x</b> $1 $&');
+    // The page not answered in time: nothing after it, so nothing is imported or signed.
     const page = completion('Choice and box differ');
     expect(page).toMatchObject({ operation: 'completion', respondWith: 'text', completionTitle: 'Choose again' });
-    const say = (choice: string, box: string) => String(evaluate(page.completionMessage, { $: answered(choice, box) }));
-    expect(say(SIGN_AGAIN, pasted)).toBe(`You chose to sign the approved steps again, unchanged, and pasted steps in the box. To use the pasted steps, choose ${CHANGE}. To sign them again unchanged, leave the box empty.\nNothing was imported or signed: feed &lt;b&gt; version 4 keeps running. Open the form again, leave Bot file empty and type the bot's name.`);
-    expect(say(CHANGE, '')).toBe(`You chose to change the steps, but the box is empty. Paste the changed steps in the box, or choose ${SIGN_AGAIN}.\nNothing was imported or signed: feed &lt;b&gt; version 4 keeps running. Open the form again, leave Bot file empty and type the bot's name.`);
+    const say = (choice: string | null, box: string | null) => String(evaluate(page.completionMessage, { $: answered(choice, box) }));
+    expect(say(null, null)).toBe("This page was not answered in time.\nNothing was imported or signed: feed &lt;b&gt; version 4 keeps running. Open the form again, leave Bot file empty and type the bot's name.");
     // The steps shown, the comparison and the review page are as before: Compared with the approved version reads the box only.
     expect(compared(ran, '')).toMatchObject({ unchanged: true });
     // An address that fills the choice is refused on the first page, as any field's value is.
@@ -2666,7 +2690,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // Steps that reach the box another way (a slip of the hand) while the person meant to change nothing: the review
     // page says they changed, and where.
     const rows = [{ id: 1, name: 'feed', version: 1, steps: JSON.stringify(doc), status: 'active' }];
-    expect(compare(changePath('feed', rows).ran, planted)).toBe('feed: changed from the approved version 1: step 1: goto "/report" → "https://elsewhere.example.com/".');
+    expect(compare(changePath('feed', rows).ran, planted)).toBe('feed: changed from the approved version 1: step 1: address "/report" → "https://elsewhere.example.com/".');
   });
 
   it('template 3 has no form that n8n fills from an address, and template 2 has no form', () => {
@@ -2828,7 +2852,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // line break in a box as CR LF (multipart form data); n8n hands on the rest as typed (Form utils.ts
     // addFormResponseDataToReturnItem: a textarea is neither trimmed nor escaped).
     const pasted = JSON.stringify({ ...doc, steps: [{ ...doc.steps[0], fill: { ...doc.steps[0].fill, value: '<i>2000</i> & $1' } }] }, null, 2).replace(/\n/g, '\r\n');
-    expect(compared(ran, pasted)).toEqual({ steps: pasted, changed: true, unchanged: false, compared: 'erp: changed from the approved version 3: step 1: value "<b>Tom & Jerry</b> café $5 $HOME $& \\ "q"" → "<i>2000</i> & $1".' });
+    expect(compared(ran, pasted)).toEqual({ steps: pasted, changed: true, unchanged: false, compared: 'erp: changed from the approved version 3: step 1: typed value "<b>Tom & Jerry</b> café $5 $HOME $& \\ "q"" → "<i>2000</i> & $1".' });
     expect(compared(ran, JSON.stringify(doc))).toMatchObject({ changed: true, unchanged: true, compared: 'erp: unchanged from the approved version 3.' });
     const [changed, changedOut] = await runImport(changedUpload(ran, pasted), never, ran);
     expect(changed[0].json.error).toBeUndefined();
@@ -2953,10 +2977,10 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // A change: the company code typed in step 6. The review page shows the new value; the signed steps hold it.
     expect(box).toContain('"2000"');
     const changed = await review(box.replace('"2000"', '"3000"'), { writes_0: ['Step 16: Click Save'], decision_0: 'Approve and sign' });
-    expect(compare(ran, box.replace('"2000"', '"3000"'))).toBe(`${String(old.name)}: changed from the approved version 1: step 6: option "2000" → "3000".`);
+    expect(compare(ran, box.replace('"2000"', '"3000"'))).toBe(`${String(old.name)}: changed from the approved version 1: step 6: chosen option "2000" → "3000".`);
     // On the review page, where version 1 does not fit the new key: changed from the stored version, not the approved one.
     expect(String(jsonFormFields(String(byName(t, REVIEW).parameters.jsonOutput), { $: nodesRan(changed.after) })[0].html))
-      .toContain(`<p><b>${String(old.name)}: changed from the stored version 1, whose signature does not fit this form: step 6: option &quot;2000&quot; → &quot;3000&quot;.</b></p>`);
+      .toContain(`<p><b>${String(old.name)}: changed from the stored version 1, whose signature does not fit this form: step 6: chosen option &quot;2000&quot; → &quot;3000&quot;.</b></p>`);
     expect(String(changed.fields[0].html)).toContain('<li>Choose &quot;3000&quot; in Company code</li>');
     expect(changed.signed[0]).toMatchObject({ status: 'active', name: old.name });
     expect(String(changed.signed[0].steps)).toContain('"3000"');
@@ -3049,7 +3073,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     };
     expect(await uploaded(row(KEY, SHOP.id))).toBe('feed: unchanged from the approved version 4.');
     // The file holds the steps as approved; the edited row differs from them, and the line says so without "approved".
-    expect(await uploaded(edited)).toBe('feed: changed from the stored version 4, whose signature does not fit this form: step 1: goto &quot;https://erp.example.com/other&quot; → &quot;https://erp.example.com/list&quot;.');
+    expect(await uploaded(edited)).toBe('feed: changed from the stored version 4, whose signature does not fit this form: step 1: address &quot;https://erp.example.com/other&quot; → &quot;https://erp.example.com/list&quot;.');
     expect(await uploaded(row('o'.repeat(32), SHOP.id))).toBe('feed: these are the steps of the stored version 4, whose signature does not fit this form (the warning says what that can mean).');
 
     // A new bot: no approved version to check, only the line. Sign steps' check gets an empty item.
@@ -3184,12 +3208,12 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // One list (as the pickup found it): the To date taken back from 2026-09-15 to 2026-09-30 is step 2.
     const one = page([stored('line-item-export', 4, '2026-09-15')], [imported('line-item-export', '2026-09-30', 5)]);
     // The page shows the line escaped, as it escapes everything else.
-    expect(one.lines).toEqual(['line-item-export: changed from the approved version 4: step 2: value &quot;2026-09-15&quot; → &quot;2026-09-30&quot;.']);
+    expect(one.lines).toEqual(['line-item-export: changed from the approved version 4: step 2: typed value &quot;2026-09-15&quot; → &quot;2026-09-30&quot;.']);
     expect(one.top).toMatch(/^<p>Signs for /);
     expect(page([stored('line-item-export', 4, '2026-09-15')], [imported('line-item-export', '2026-09-15', 5)]).lines).toEqual(['line-item-export: unchanged from the approved version 4.']);
     // Two lists (a project's -1 and -2): each compared with its own version, one unchanged and one changed.
     const two = page([stored('line-item-export-1', 3, '2026-09-15'), stored('line-item-export-2', 7, '2026-09-15')], [imported('line-item-export-1', '2026-09-15'), imported('line-item-export-2', '2026-09-30')]);
-    expect(two.lines).toEqual(['line-item-export-1: unchanged from the approved version 3.', 'line-item-export-2: changed from the approved version 7: step 2: value &quot;2026-09-15&quot; → &quot;2026-09-30&quot;.']);
+    expect(two.lines).toEqual(['line-item-export-1: unchanged from the approved version 3.', 'line-item-export-2: changed from the approved version 7: step 2: typed value &quot;2026-09-15&quot; → &quot;2026-09-30&quot;.']);
     expect(two.top).toMatch(/^<p>Signs for /);
     // Only the second has a running version: the first is new and says nothing about a comparison.
     const second = page([stored('line-item-export-2', 7, '2026-09-15')], [imported('line-item-export-1', '2026-09-15'), imported('line-item-export-2', '2026-09-15')]);
@@ -3208,7 +3232,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const deskFile = (save: string) => ({ json: { ...list('line-item-export', 4).json, steps: { ...desk(save, false), version: 4 } } });
     const NOT_COMPARED = ' Which steps are writes is not compared: it is chosen again on this page.';
     expect(page([deskRow('Save')], [deskFile('Save')]).item).toEqual({ lists: [{ name: 'line-item-export', unchanged: true, compared: `line-item-export: unchanged from the approved version 3.${NOT_COMPARED}` }] });
-    expect(page([deskRow('Save')], [deskFile('Save all')]).item).toEqual({ lists: [{ name: 'line-item-export', unchanged: false, compared: `line-item-export: changed from the approved version 3: step 2: name "Save" → "Save all".${NOT_COMPARED}` }] });
+    expect(page([deskRow('Save')], [deskFile('Save all')]).item).toEqual({ lists: [{ name: 'line-item-export', unchanged: false, compared: `line-item-export: changed from the approved version 3: step 2: control name "Save" → "Save all".${NOT_COMPARED}` }] });
     // A file that carries a mark of its own, where the approved version has none: the same, and the line still says so.
     const marked = { json: { ...list('line-item-export', 4).json, steps: { ...desk('Save', true), version: 4 } } };
     const plainRow = { ...row('line-item-export', 3), steps: JSON.stringify({ ...desk('Save', false), version: 3 }) };

@@ -74,8 +74,8 @@ The sample site of [Your first browser bot](browser-bot.md) has three accounts: 
    ```
 
 4. Click **Execute workflow**. The Data output of **sandbox-rows-accounts** has two items, `account` `summit-ops` and
-   `lakeside-ops`, each with the notices it read. Its error output has harbor-ops: `login_failed`, with `guidance` that
-   says what to do. **Log failed run** writes its row, and the execution ends as failed at **Stop and Error**.
+   `lakeside-ops`, each with the notices it read. Its error output has harbor-ops: `login_failed`, with `details.guidance`,
+   which says what to do. **Log failed run** writes its row, and the execution ends as failed at **Stop and Error**.
 5. Execute it again: harbor-ops fails `locked_out` and tries no login, the other two run. Change its password to
    `harbor-password` in **Get accounts** and execute again: all three run.
 

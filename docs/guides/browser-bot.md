@@ -135,8 +135,8 @@ If the last page says `Nothing to approve`, it names the problem:
 
 Each run writes one row to `playwright_runs`, a table in n8n's Data Tables (**Log run**). A failed run writes its
 error code there (**Log failed run**) and then stops at **Stop and Error**, so it shows as failed under **Executions**.
-After a failed run, open the RPA node: the failed item on its error output has a `guidance` field that says what to
-do. **Stop and Error** and the run log's row show it too.
+After a failed run, open the RPA node: the failed item on its error output has `details.guidance`, which says what
+to do. **Stop and Error** and the run log's row show it too.
 To run the bot on a schedule, open **On a schedule**, set the time, turn the node on, and **Publish** the workflow.
 
 **A bot that reads rows.** `docs/samples/sandbox-rows.steps.json` signs in and reads the sample site's notices. Import
