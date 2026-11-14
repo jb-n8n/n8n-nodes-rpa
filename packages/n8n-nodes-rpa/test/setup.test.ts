@@ -9,7 +9,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { runnerNoTcpAnswer } from '../../engine/src/messages.js';
-import { open, TEMPLATE, PLAIN_KEY, API_KEY, EXPIRING_KEY, FINGERPRINT, RUNNER_TOKEN, LINE, NEW_TOKEN, NEW_LINE, BROWSER_TOKEN, RUNNER_CONNECTED, RUNNER_UNREACHABLE, Cred, Wf, Options, HOME, fakeN8n, n8n, run, runAtTerminal } from './fixtures/fake-n8n-api.js';
+import { open, TEMPLATE, PLAIN_KEY, API_KEY, EXPIRING_KEY, FINGERPRINT, RUNNER_TOKEN, LINE, NEW_TOKEN, NEW_LINE, BROWSER_TOKEN, RUNNER_CONNECTED, RUNNER_UNREACHABLE, Cred, Wf, HOME, fakeN8n, n8n, run, runAtTerminal } from './fixtures/fake-n8n-api.js';
 
 const ENV = { N8N_API_KEY: API_KEY };
 const setup = (url: string, ...more: string[]) => ['setup', '--url', url, '--approver', 'ops@example.com', ...more];
