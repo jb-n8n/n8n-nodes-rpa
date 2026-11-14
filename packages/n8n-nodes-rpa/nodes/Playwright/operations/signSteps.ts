@@ -603,7 +603,8 @@ function credentialName(ctx: NodeContext, type: string): string | null {
  * Check Only: signs and records nothing. Names the RPA Site Login this node signs for and, when the item carries an
  * approved version, says whether its signature verifies with this node's Step Signing key and Site Login, with the
  * verification a run makes (engine verifyScript): a browser signature binds the Site Login's id, a desktop signature
- * binds none (signDesktop). The Site Login's data is never read. Never an error: a missing key gives null.
+ * binds none (signDesktop), and the row's name and version must be those its steps were signed with, as a run checks
+ * them. The Site Login's data is never read. Never an error: a missing key gives null.
  */
 async function checkOne(ctx: NodeContext, engine: Engine, i: number, json: IDataObject): Promise<SigningCheck> {
   const siteLogin = credentialName(ctx, CREDENTIALS.siteLogin);
@@ -618,7 +619,11 @@ async function checkOne(ctx: NodeContext, engine: Engine, i: number, json: IData
     key = undefined;
   }
   const siteLoginId = desktop ? undefined : credentialId(ctx, CREDENTIALS.siteLogin) || undefined;
-  const signatureFits = key === undefined ? null : engine.verifyScript(steps, key, { approvedBy: asString(json.approvedBy), signature, ...(siteLoginId ? { siteLoginId } : {}) });
+  // A run also refuses a row whose name or version column is not the name and version its steps were signed with
+  // (Get active steps finds it by the column, Run Steps expects the column's version): a row changed in the table.
+  const doc = isObject(steps) ? steps : {};
+  const sameRow = (json.version === undefined || doc.version === wholeNumber(json.version)) && (typeof json.name !== 'string' || doc.name === json.name);
+  const signatureFits = key === undefined ? null : sameRow && engine.verifyScript(steps, key, { approvedBy: asString(json.approvedBy), signature, ...(siteLoginId ? { siteLoginId } : {}) });
   return { checkOnly: true, siteLogin, approvedVersion: { version: wholeNumber(json.version), desktop, signatureFits } };
 }
 

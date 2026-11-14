@@ -3501,6 +3501,13 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // Another Site Login, another key, a row changed in the table: the question, not the steps.
     const edited = { ...row(KEY, SHOP.id), steps: JSON.stringify({ ...doc, steps: [{ intent: 'Open the list', goto: `${SITE.url}/other` }] }) };
     for (const r of [row(KEY, 'site-b'), row('o'.repeat(32), SHOP.id), edited]) expect(await fitsForm(r)).toBe(false);
+    // A row whose version column was changed (or a signed row copied under a higher version): its steps verify, but a
+    // run expects the column's version and refuses it, so it does not fit either (found live).
+    expect(await fitsForm({ ...row(KEY, SHOP.id), version: 7 })).toBe(false);
+    expect(await fitsForm({ ...row(KEY, SHOP.id), version: '4' })).toBe(true);
+    // The same for steps signed under another name, put in a row of this name.
+    const other = { ...doc, name: 'other' };
+    expect(await fitsForm({ ...row(KEY, SHOP.id), steps: JSON.stringify(other), signature: signScript(other, KEY, { approvedBy: APPROVER, siteLoginId: SHOP.id }).signature })).toBe(false);
     // No signature, or not checked (no key on Sign steps): on to the change page, as before; its review page warns then.
     expect([{ approvedVersion: { version: 4, desktop: false, signatureFits: null } }, { approvedVersion: null }, {}].map(($json) => evaluate(cond('Fits this form?'), { $json }))).toEqual([true, true, true]);
     // The question names what the form cannot tell apart and shows no step: two answers, none chosen, one required.
