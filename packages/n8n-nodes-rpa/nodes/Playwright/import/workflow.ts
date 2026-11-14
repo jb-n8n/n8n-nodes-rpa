@@ -359,6 +359,19 @@ function downloadProperty(draft: Draft | DesktopDraft): string | undefined {
 type Tail = { node: string; output: number };
 interface Walked { tails: Tail[]; x: number }
 
+/** What a Builder is made from: the import's options, the drafts by name, and the texts worked out from them. */
+interface BuilderOptions {
+  prefix: string;
+  drafts: Map<string, Draft>;
+  desktopDrafts: Map<string, DesktopDraft>;
+  codeWorkflow?: BuildWorkflowOptions['codeWorkflow'];
+  source?: ImportedFrom;
+  run?: BuildWorkflowOptions['run'];
+  passedOn?: PassedOn;
+  approvedBeforeHandOver: boolean;
+  importForm: string;
+}
+
 class Builder {
   readonly nodes: WorkflowNode[] = [];
   readonly connections: WorkflowJson['connections'] = {};
@@ -395,14 +408,27 @@ class Builder {
   private readonly depths = new Map<FlowNode, number>();
   private readonly browsers = new Map<FlowNode, boolean>();
 
-  constructor(
-    private readonly prefix: string, private readonly drafts: Map<string, Draft>, private readonly desktopDrafts: Map<string, DesktopDraft> = new Map(),
-    private readonly codeWorkflow?: BuildWorkflowOptions['codeWorkflow'], readonly source: ImportedFrom = 'uipath',
-    private readonly run: NonNullable<BuildWorkflowOptions['run']> = {},
-    private readonly passedOn: PassedOn = {},
-    private readonly approvedBeforeHandOver = false,
-    readonly importForm = importFormText(undefined),
-  ) {}
+  private readonly prefix: string;
+  private readonly drafts: Map<string, Draft>;
+  private readonly desktopDrafts: Map<string, DesktopDraft>;
+  private readonly codeWorkflow?: BuildWorkflowOptions['codeWorkflow'];
+  readonly source: ImportedFrom;
+  private readonly run: NonNullable<BuildWorkflowOptions['run']>;
+  private readonly passedOn: PassedOn;
+  private readonly approvedBeforeHandOver: boolean;
+  readonly importForm: string;
+
+  constructor(o: BuilderOptions) {
+    this.prefix = o.prefix;
+    this.drafts = o.drafts;
+    this.desktopDrafts = o.desktopDrafts;
+    this.codeWorkflow = o.codeWorkflow;
+    this.source = o.source ?? 'uipath';
+    this.run = o.run ?? {};
+    this.passedOn = o.passedOn ?? {};
+    this.approvedBeforeHandOver = o.approvedBeforeHandOver;
+    this.importForm = o.importForm;
+  }
 
   /**
    * What a Run steps carries for these slots: each credential the import passed on, by id and name, and the labels of
@@ -945,7 +971,11 @@ export function buildWorkflow(flow: UiPathFlow, drafts: Draft[], opts: BuildWork
   for (const d of [...drafts, ...(opts.desktopDrafts ?? [])]) {
     if (d.name.trim() === '' || d.name.startsWith('=')) throw new Error(`The Name of a step list must not be empty or start with "=": ${JSON.stringify(d.name.slice(0, 60))}`);
   }
-  const b = new Builder(opts.name, new Map(drafts.map((d) => [d.name, d])), new Map((opts.desktopDrafts ?? []).map((d) => [d.name, d])), opts.codeWorkflow, opts.source, opts.run, opts.credentials, opts.approvedBeforeHandOver === true, importFormText(opts.importForm));
+  const b = new Builder({
+    prefix: opts.name, drafts: new Map(drafts.map((d) => [d.name, d])), desktopDrafts: new Map((opts.desktopDrafts ?? []).map((d) => [d.name, d])),
+    codeWorkflow: opts.codeWorkflow, source: opts.source, run: opts.run, passedOn: opts.credentials,
+    approvedBeforeHandOver: opts.approvedBeforeHandOver === true, importForm: importFormText(opts.importForm),
+  });
   const from = FROM[b.source];
   const uipath = b.source === 'uipath';
   b.add(T.manualTrigger, b.unique('Run the bot'), [0, 0], {});
