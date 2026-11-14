@@ -2844,12 +2844,14 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const { bot } = changePath('feed', [{ id: 1, name: 'feed', version: 2, steps: JSON.stringify(doc), status: 'active' }]);
     const v = (step: number, at: string, key: string, label: string, value: string, why = '') => ({ step, name: `value_${step}`, at, key, label, value, offered: why === '', why });
     const FIXED = 'not a fixed value: it is filled in when the bot runs';
+    // A run variable says where it IS changed: on the bot's workflow, not on this form (W6-5).
+    const VARIABLE = "a run variable, so it is not changed here: change it on the bot's workflow, in the RPA node's Options → Variables (a secret one in the RPA Secret Variables credential that node uses)";
     const CANNOT = 'a field cannot hold it as it is';
     expect(bot.values).toEqual([
       v(1, 'goto', 'goto', '1. Open: address', `${SITE.url}/list?x=1`),
       v(2, 'fill', 'value', '2. Type into User name: typed value', 'clerk'),
-      v(3, 'fill', 'value', '3. Type into Password: typed value', '{{var.pin}}', FIXED),
-      v(4, 'fill', 'value', '4. Type into the element matching #note ‹b›: typed value', 'Dear {{ var.name }}', FIXED),
+      v(3, 'fill', 'value', '3. Type into Password: typed value', '{{var.pin}}', VARIABLE),
+      v(4, 'fill', 'value', '4. Type into the element matching #note ‹b›: typed value', 'Dear {{ var.name }}', VARIABLE),
       v(5, 'select', 'value', '5. Choose in region: chosen option', 'EMEA'),
       v(6, 'select', 'value', '6. Choose in Tags: chosen option', 'a, b', 'several options'),
       v(7, 'fill', 'value', '7. Type into the textbox: typed value', '<b>bold</b>', CANNOT),
@@ -2901,7 +2903,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       { fieldLabel: '3. Type into From: typed value', fieldName: 'value_3', fieldType: 'text', defaultValue: '2026-09-01', requiredField: false },
       { fieldLabel: '4. Type into To: typed value', fieldName: 'value_4', fieldType: 'text', defaultValue: '2026-09-15', requiredField: false },
       { fieldLabel: '5. Choose in Status: chosen option', fieldName: 'value_5', fieldType: 'text', defaultValue: 'Posted', requiredField: false },
-      { fieldType: 'html', html: '<p><em>7. Type into PIN: typed value &quot;{{var.pin}}&quot;: not a fixed value: it is filled in when the bot runs.</em></p>' },
+      { fieldType: 'html', html: '<p><em>7. Type into PIN: typed value &quot;{{var.pin}}&quot;: a run variable, so it is not changed here: change it on the bot&#39;s workflow, in the RPA node&#39;s Options → Variables (a secret one in the RPA Secret Variables credential that node uses).</em></p>' },
       // "$" comes back as written (the page writes it as $, so n8n's String.replace leaves it alone).
       { fieldLabel: '8. Type into Note: typed value', fieldName: 'value_8', fieldType: 'text', defaultValue: 'a $& b $1 & "c"', requiredField: false },
       { fieldType: 'hiddenField', fieldName: 'valuesPage', fieldValue: 'answered' },
@@ -3025,7 +3027,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // The page offers the recording's values; the password is a variable and has no field.
     const fields = valuesFields([row], String(old.name));
     expect(fields.filter((f) => f.fieldType === 'text').map((f) => f.fieldName)).toEqual(values.filter((v) => v.offered).map((v) => v.name));
-    expect(fields.some((f) => f.fieldType === 'html' && /typed value &quot;\{\{var\.password\}\}&quot;: not a fixed value/.test(String(f.html)))).toBe(true);
+    expect(fields.some((f) => f.fieldType === 'html' && /typed value &quot;\{\{var\.password\}\}&quot;: a run variable, so it is not changed here/.test(String(f.html)))).toBe(true);
     // Step 6: 2000 → 3000. The same import, comparison, review page and Sign steps as a pasted change.
     const r = valuesAnswered(ran, { [company.name]: '3000' });
     expect(r.line?.compared).toBe(`${String(old.name)}: changed from the approved version 1: step 6: description "Choose 2000 in Company code" → "Choose 3000 in Company code", chosen option "2000" → "3000".`);

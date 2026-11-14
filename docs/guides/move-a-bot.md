@@ -45,9 +45,10 @@ Then, for each bot:
 1. Upload the file. **Source** works it out from the file name, or choose it. Give the steps a **Name**: they are
    saved and run under that name.
 2. The next page, **The file it downloads**, comes for every upload but an RPA recording or a step document (a step
-   document's download steps carry their own checks). For a browser bot that
-   downloads a file, a UiPath one too, give the file name pattern and the required columns. The replay checks that the
-   bot gets that file. Leave both empty when the bot downloads nothing in a browser.
+   document's download steps carry their own checks). For a bot that downloads a file in a browser, give the file
+   name pattern and the required columns: the replay checks that the bot gets that file. Leave both empty when the
+   bot downloads nothing in a browser, or when a desktop app saves the file (a UiPath project's Save dialog becomes
+   the step that returns it).
 3. The import runs browser steps once and replays them in a fresh browser with every write blocked. Desktop steps are
    not replayed.
 4. **Review and approve** shows each step list: what it opens, whether it signs in, and the numbered steps. When the
@@ -136,7 +137,7 @@ form asks for nothing more. Without one, the last page says:
 2. The next page shows the steps that run now under that name, to read or copy. Under **What to do**, choose
    **Change values** and click **Review**.
 3. The values page has one field for each value the steps type, choose or open, in step order, with the approved
-   value in it, such as `4. Type into To: typed value` holding `2026-09-15`. Change the ones you need and click
+   value in it, such as `6. Type into To: typed value` holding `2026-09-30`. Change the ones you need and click
    **Review**.
 4. The review page of an import follows: read every step, check the write ticks of desktop steps, and choose
    **Approve and sign** or **Reject**.
@@ -150,9 +151,10 @@ On the values page, only the values you change change. Where a step's own descri
 the new one too; where it does not, it is left as it is, and the review page shows it in red when it states another
 value. A value is taken as text. A value with `{{` is refused, because steps read `{{` as the start of a variable, and
 nothing is imported. Change no value and click **Review**: the steps are signed again, and the review page says that
-no value was changed. The page has no field for a variable (`{{var.name}}`), for a value a field cannot hold as it is
-(with `<`, `>`, a line break, or a space at an end) or for several options: it shows them, and they are changed as
-JSON. For a bot with more than 40 values, or none, **Change values** is not offered.
+no value was changed. The page has no field for a value a field cannot hold as it is (with `<`, `>`, a line break, or
+a space at an end) or for several options: it shows them, and they are changed as JSON. A run variable
+(`{{var.name}}`, such as a value you ticked in the recorder) is not changed on the form at all: the page says so, and
+you change it on the bot's workflow, in the RPA node's **Options → Variables**, with no new approval. For a bot with more than 40 values, or none, **Change values** is not offered.
 
 Signed again unchanged, the steps are the active row's steps as the workflow reads them from the Data Table: they do
 not pass through your browser, also when you pasted them back unchanged under sign again. A choice that does not fit the
@@ -166,9 +168,11 @@ a step that changed starts its write tick from the rule, and the review page say
 approved tick.
 
 Approved, the steps become the next version under that name (version 2 replaces version 1), signed with the current
-key, and the old row is superseded: the bot's workflow runs the new version as it is. The last page says
-`Signed again: <name> version 2, unchanged.`, or `Changed: <name> version 2 is now the version that runs, replacing
-version 1.` Rejected, or not answered within an hour, the old version keeps running, and the last page says `Nothing
+key, and the old row is superseded: the bot's workflow runs the new version as it is. The last page, titled by what
+happened, says `Signed again: <name> version 2, unchanged.`, or `Changed: <name> version 2 is now the version that
+runs, replacing version 1.` Desktop steps signed again with other write ticks say which: `Signed again: <name> version
+2, steps unchanged; write marks changed from version 1: added step 9 (Click Post).` (marks are compared only with an
+approved version whose signature fits this form; otherwise it says `steps unchanged` and lists the marks signed). Rejected, or not answered within an hour, the old version keeps running, and the last page says `Nothing
 changed: <name> version 1 keeps running.` This path offers no workflow file. A name the form does not find ends on a page that lists the approved
 bots.
 
