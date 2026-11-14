@@ -78,10 +78,13 @@ first, before anything reads or writes them.
   answered in time; `I changed the signing key or the row was changed: show me the steps to read and sign again`
   goes on to the change page and to the review page with its warning. Only that answer goes on (**Sign it again
   here?**); the first page's address cannot fill it in (**Plain address?**).
-- Two `active` rows of one name can be left by two approvals saved at the same moment. A run then uses the one of the
-  highest version, and of two of one version the one saved first (n8n orders them by id). When **The bot to change**
-  meets more than one, **Supersede older active rows** marks every other one (of that version or lower) `superseded`
-  before the change page, and the change page says so.
+- Two `active` rows of one name (two approvals saved at the same moment, or a row added in the table by hand): a run
+  uses the one of the highest version, and of two of one version the one saved first (n8n orders them by id). The
+  table read cannot check a signature, so when that row is not a signed one, the run is refused as `script_untrusted`;
+  it does not fall back to another row. On the form, the change page shows that row and says how many are active, and
+  the question above (or the review page's warning) says it does not fit. Nothing on the form writes to the table
+  before an approver signed: an approval's **Supersede older versions** marks every active row of the name saved
+  before the new one `superseded`, whatever its version, so the name has one active row again.
 - Before the review page, **Sign steps** runs with **Check Only** on (on the change path it has already run so once,
   before the change page): it signs nothing. It gives the name of the
   RPA Site Login it signs for, and after **Change or sign again** it checks the approved version's signature with its

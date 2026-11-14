@@ -217,7 +217,7 @@ describe('every Data Table is made before anything reads or writes it, on every 
   it('the reads of template 5 are covered: the check finds the round 12 wiring, where the tables were made late', () => {
     const t = load('5-import-a-bot.json');
     expect(t.nodes.filter((n) => used(n) !== undefined).map((n) => n.name).sort()).toEqual([
-      'Approved bots', 'Record rejection', 'Running versions', 'Save signed steps', 'Supersede older active rows', 'Supersede older versions', 'Versions now',
+      'Approved bots', 'Record rejection', 'Running versions', 'Save signed steps', 'Supersede older versions', 'Versions now',
     ]);
     // As at 1ac5167: Settings → Change an approved bot? only, and the tables made after Approve on this form?.
     const late = structuredClone(t);
@@ -225,11 +225,11 @@ describe('every Data Table is made before anything reads or writes it, on every 
     late.connections['Approve on this form?'].main[0] = [{ node: 'Create steps table', type: 'main', index: 0 }];
     late.connections['Create run log table'] = { main: [[{ node: 'Compared with the running version', type: 'main', index: 0 }]] };
     // The change path reaches Sign steps' check, and through it the review page, before Approve on this form? there.
-    expect(tablesNotMadeFirst(late)).toEqual(['Running versions uses playwright_steps', 'Approved bots uses playwright_steps', 'Versions now uses playwright_steps', 'Save signed steps uses playwright_steps', 'Supersede older versions uses playwright_steps', 'Record rejection uses playwright_steps', 'Supersede older active rows uses playwright_steps']);
+    expect(tablesNotMadeFirst(late)).toEqual(['Running versions uses playwright_steps', 'Approved bots uses playwright_steps', 'Versions now uses playwright_steps', 'Save signed steps uses playwright_steps', 'Supersede older versions uses playwright_steps', 'Record rejection uses playwright_steps']);
     // The order matters too: the tables' branch below the rest would run after it, so nothing is made first.
     const below = structuredClone(t);
     byName(below, 'Create steps table').position = [660, 600];
-    expect(tablesNotMadeFirst(below)).toEqual(['Running versions uses playwright_steps', 'Approved bots uses playwright_steps', 'Versions now uses playwright_steps', 'Save signed steps uses playwright_steps', 'Supersede older versions uses playwright_steps', 'Record rejection uses playwright_steps', 'Supersede older active rows uses playwright_steps']);
+    expect(tablesNotMadeFirst(below)).toEqual(['Running versions uses playwright_steps', 'Approved bots uses playwright_steps', 'Versions now uses playwright_steps', 'Save signed steps uses playwright_steps', 'Supersede older versions uses playwright_steps', 'Record rejection uses playwright_steps']);
   });
   it('no read of a Data Table goes on with an error item: none has onError set', () => {
     for (const file of Object.keys(FILES)) for (const n of load(file).nodes.filter((x) => used(x) !== undefined && table(x).operation === 'get')) expect(n.onError, `${file}: ${n.name}`).toBeUndefined();
@@ -1278,10 +1278,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(byName(t, 'Read the upload')).toMatchObject({ type: 'n8n-nodes-base.extractFromFile', typeVersion: 1.1, onError: 'continueRegularOutput', parameters: { operation: 'text', destinationKey: 'text' } });
     expect(targets(t, 'Approved bots')).toEqual([['The bot to change']]);
     expect(targets(t, 'The bot to change')).toEqual([['Approved bot found?']]);
-    // An approved bot found: other active rows of its name are marked superseded (IB-5), then Sign steps checks it before
-    // the change page. One that does not fit this form asks the person why before any step is shown (IB-4).
-    expect(targets(t, 'Approved bot found?')).toEqual([['Supersede older active rows'], ['No approved bot']]);
-    expect(targets(t, 'Supersede older active rows')).toEqual([['The approved version']]);
+    // An approved bot found: Sign steps checks it before the change page. One that does not fit this form asks the
+    // person why before any step is shown (IB-4).
+    expect(targets(t, 'Approved bot found?')).toEqual([['The approved version'], ['No approved bot']]);
     expect(targets(t, 'Change page next?')).toEqual([['Fits this form?'], [REVIEW]]);
     expect(targets(t, 'Fits this form?')).toEqual([['Change or sign again'], ['Approved on another form?']]);
     expect(targets(t, 'Approved on another form?')).toEqual([['Sign it again here?']]);
@@ -1358,7 +1357,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(working).toEqual([
       'Add the login page', 'Address with values', 'Approval by email?', 'Approve on this form?', 'Approve steps', 'Approved bot found?', 'Approved bots', 'Approved meanwhile', 'Approved on another form?', 'Asks about a download?', 'Change an approved bot?',
       'Change it on its own form', 'Change or sign again', 'Change page next?', 'Change values', 'Change values?', 'Checked?', 'Choice and box differ', 'Choice fits the box?', 'Compared with the approved version', 'Compared with the running version', 'Create run log table', 'Create steps table', 'Fits this form?', 'Import a bot', 'Import failed', 'Import steps', 'Imported', 'Imported, with the workflow file', 'Missing login page?',
-      'No approved bot', 'Page answered?', 'Plain address?', 'Read the upload', 'Record rejection', REVIEW, 'Running versions', 'Save signed steps', 'Settings', 'Sign it again here?', 'Sign steps', 'Signed?', 'Step lists', 'Step lists to sign', 'Still the next version?', 'Supersede older active rows', 'Supersede older versions',
+      'No approved bot', 'Page answered?', 'Plain address?', 'Read the upload', 'Record rejection', REVIEW, 'Running versions', 'Save signed steps', 'Settings', 'Sign it again here?', 'Sign steps', 'Signed?', 'Step lists', 'Step lists to sign', 'Still the next version?', 'Supersede older versions',
       'The approved version', 'The bot to change', 'The file it downloads', 'The steps as a file', 'The upload', 'Value not taken', 'Values taken?', 'Values to steps', 'Versions now', 'What it replaces', 'Workflow file?',
     ]);
     expect(t.nodes.filter((n) => n.type === COMPLETION).map((n) => n.typeVersion)).toEqual(Array(15).fill(2.5));
@@ -3094,12 +3093,12 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       { error: 'The Data Table playwright_steps does not exist' }, {},
     ];
     // next: one more than the highest version any row of the name has (an active row without steps counts too).
-    // id: the row's, for marking the others superseded; active: how many active rows with steps the name has (IB-5).
-    const found = { name: 'erp', found: true, id: 2, active: 2, version: 3, steps: JSON.stringify(doc), signature: '', approvedBy: '', names: ['erp', 'other<b>'], next: 10, values: [] };
+    // active: how many active rows with steps the name has (IB-5).
+    const found = { name: 'erp', found: true, active: 2, version: 3, steps: JSON.stringify(doc), signature: '', approvedBy: '', names: ['erp', 'other<b>'], next: 10, values: [] };
     expect(changePath('erp', rows).bot).toEqual(found);
     expect(changePath('  erp ', rows).bot).toEqual(found);
     // Exactly the name: another casing is another bot.
-    expect(changePath('ERP', rows).bot).toEqual({ name: 'ERP', found: false, id: null, active: 0, version: null, steps: '', signature: '', approvedBy: '', names: ['erp', 'other<b>'], next: 1, values: [] });
+    expect(changePath('ERP', rows).bot).toEqual({ name: 'ERP', found: false, active: 0, version: null, steps: '', signature: '', approvedBy: '', names: ['erp', 'other<b>'], next: 1, values: [] });
     // A rejected or superseded row is not a running version, but its number is used: the next attempt takes the one after
     // the highest of them, so the table never holds two rows of one name and version.
     const used: IDataObject[] = [
@@ -3110,7 +3109,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     // A row whose steps are not JSON is shown as it is: Import steps then says what is wrong with it.
     expect(changePath('erp', [{ id: 1, name: 'erp', version: 1, steps: '{broken', status: 'active' }]).bot).toMatchObject({ found: true, steps: '{broken' });
     // No row (the table was made first: there is never an error item to read).
-    expect(changePath('erp', []).bot).toEqual({ name: 'erp', found: false, id: null, active: 0, version: null, steps: '', signature: '', approvedBy: '', names: [], next: 1, values: [] });
+    expect(changePath('erp', []).bot).toEqual({ name: 'erp', found: false, active: 0, version: null, steps: '', signature: '', approvedBy: '', names: [], next: 1, values: [] });
     // The row's signature and approver come along for Sign steps' check, as the table holds them (never shown on a page).
     expect(changePath('erp', [{ id: 2, name: 'erp', version: 3, steps: '{}', signature: 'ab12', approvedBy: 'approver@example.com', status: 'active' }]).bot)
       .toMatchObject({ found: true, signature: 'ab12', approvedBy: 'approver@example.com' });
@@ -3541,7 +3540,27 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     expect(into('Change or sign again')).toEqual([['Page answered?', 0], ['Fits this form?', 0], ['Sign it again here?', 0]]);
   });
 
-  it('two active rows of one name (IB-5): The bot to change takes the one runs use, the others are marked superseded before the change page, and the page says so', () => {
+  it('nothing on the form writes to the steps table before an approver signed: the change path, the question, the values page and the review page write nothing (IB-5)', () => {
+    // Every way from the form's first page, not going past Signed? (which only an approval and Sign steps' signature
+    // reach): no Data Table row write is on it. Making a missing table is not a row write.
+    const writes = (n: TemplateNode) => n.type === DATA_TABLE && table(n).resource === 'row' && table(n).operation !== 'get';
+    const reached = new Set<string>();
+    for (const queue = ['Import a bot']; queue.length; ) {
+      const name = queue.shift()!;
+      if (reached.has(name)) continue;
+      reached.add(name);
+      if (name === 'Signed?') continue;
+      for (const out of targets(t, name)) queue.push(...out);
+    }
+    for (const page of ['Change or sign again', 'Approved on another form?', 'Change values', REVIEW, 'Sign steps', 'Signed?']) expect(reached.has(page), page).toBe(true);
+    expect(t.nodes.filter((n) => reached.has(n.name) && writes(n)).map((n) => n.name)).toEqual([]);
+    // Past Signed?: its true output (an active record) saves and supersedes; its false output records a rejection.
+    expect(t.nodes.filter(writes).map((n) => n.name).sort()).toEqual(['Record rejection', 'Save signed steps', 'Supersede older versions']);
+    expect(targets(t, 'Signed?')).toEqual([['Save signed steps'], ['Record rejection']]);
+    expect(targets(t, 'Save signed steps')).toEqual([['Supersede older versions']]);
+  });
+
+  it('two active rows of one name (IB-5): the change page says so and writes nothing; runs use the newest, the first saved of one version; an approval marks every older one superseded', () => {
     const doc = (to: string) => JSON.stringify({ startUrl: `${SITE.url}/a`, name: 'erp', version: 7, steps: [{ intent: 'Type the To date', fill: { field: { label: 'To' }, value: to } }] });
     // As n8n's Data Table gives them (by id): version 6, then two of version 7 saved at the same moment.
     const rows: IDataObject[] = [
@@ -3551,29 +3570,28 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       { id: 4, name: 'erp', version: 7, steps: doc('2026-09-30'), status: 'active' },
       { id: 5, name: 'other', version: 7, steps: doc('2026-09-30'), status: 'active' },
     ];
-    // Get active steps reads the highest version, and of two of one version the first saved (n8n orders ties by id):
-    // The bot to change takes the same row.
-    const { $, bot } = changePath('erp', rows);
-    expect(bot).toMatchObject({ found: true, id: 3, active: 3, version: 7, steps: doc('2026-09-15'), next: 8 });
-    const tidy = byName(t, 'Supersede older active rows');
-    expect(tidy).toMatchObject({ type: DATA_TABLE, typeVersion: 1.1, alwaysOutputData: true, executeOnce: true });
-    expect(table(tidy)).toMatchObject({ resource: 'row', operation: 'update', dataTableId: { mode: 'name', value: STEPS_TABLE }, matchType: 'allConditions', columns: { value: { status: 'superseded' } } });
-    const conditions = table(tidy).filters!.conditions;
-    expect(conditions.map((c) => [c.keyName, c.condition])).toEqual([['name', 'eq'], ['status', 'eq'], ['version', 'lte'], ['id', 'neq']]);
-    const matches = (r: IDataObject) => conditions.every((c) => {
-      const want = typeof c.keyValue === 'string' && c.keyValue.startsWith('=') ? evaluate(c.keyValue, { $ }) : c.keyValue;
-      const have = r[c.keyName];
-      return c.condition === 'eq' ? have === want : c.condition === 'neq' ? have !== want : Number(have) <= Number(want);
-    });
-    expect(rows.filter(matches).map((r) => r.id)).toEqual([2, 4]);
-    // One active row: nothing matches, and the run goes on (Always Output Data).
-    const one = changePath('erp', rows.filter((r) => r.id !== 2 && r.id !== 4));
-    expect(one.bot).toMatchObject({ id: 3, active: 1 });
+    // Get active steps reads the highest version, and of two of one version the first saved (n8n 2.45 orders ties by id,
+    // ascending): The bot to change shows the same row, and counts the active rows.
+    const get = table(byName(load('2-data-feed.json'), 'Get active steps'));
+    expect(get).toMatchObject({ operation: 'get', returnAll: false, limit: 1, orderBy: true, orderByColumn: 'version', orderByDirection: 'DESC' });
+    const { bot } = changePath('erp', rows);
+    expect(bot).toMatchObject({ found: true, active: 3, version: 7, steps: doc('2026-09-15'), next: 8 });
     // The change page says what it met, quietly, after the steps it shows; with one active row it says nothing.
     const changePage = (scope: ReturnType<typeof changePath>) => String(jsonFormFields(String(byName(t, 'Change or sign again').parameters.jsonOutput), { $: scope.$ })[0].html);
-    expect(changePage(changePath('erp', rows))).toContain('</pre><p><em>The steps table held 3 active rows of this name, as when two approvals are saved at the same moment. The one runs use is kept (version 7, shown here); the others are now marked superseded.</em></p>');
-    expect(changePage(changePath('erp', rows.filter((r) => r.id !== 2)))).toContain('held 2 active rows of this name, as when two approvals are saved at the same moment. The one runs use is kept (version 7, shown here); the other is now marked superseded.');
-    expect(changePage(one)).not.toContain('active rows');
+    expect(changePage(changePath('erp', rows))).toContain('</pre><p><em>The steps table holds 3 active rows of this name, as when two approvals are saved at the same moment. Runs use version 7, shown here. An approval on this form marks the others superseded.</em></p>');
+    expect(changePage(changePath('erp', rows.filter((r) => r.id !== 2)))).toContain('holds 2 active rows of this name, as when two approvals are saved at the same moment. Runs use version 7, shown here. An approval on this form marks the other superseded.');
+    expect(changePage(changePath('erp', rows.filter((r) => r.id !== 2 && r.id !== 4)))).not.toContain('active rows');
+    // Approved, the new row (version 8, id 6) is saved and Supersede older versions marks every active row of the name
+    // saved before it superseded, whatever its version: both of version 7 and the one of version 6. Not another name.
+    const conditions = table(byName(t, 'Supersede older versions')).filters!.conditions;
+    const saved = { id: 6, name: 'erp', version: 8, status: 'active' };
+    const matches = (r: IDataObject, baseVersion: number | null) => conditions.every((c) => {
+      const want = typeof c.keyValue === 'string' && c.keyValue.startsWith('=') ? evaluate(c.keyValue, { $json: saved, $: () => ({ item: { json: { baseVersion, version: 8 } } }) }) : c.keyValue;
+      const have = r[c.keyName];
+      return c.condition === 'eq' ? have === want : c.condition === 'lt' ? Number(have) < Number(want) : Number(have) <= Number(want);
+    });
+    expect([...rows, saved].filter((r) => matches(r, null)).map((r) => r.id)).toEqual([2, 3, 4]);
+    expect([...rows, saved].filter((r) => matches(r, 7)).map((r) => r.id)).toEqual([2, 3, 4]);
   });
 
   it('the write ticks start from the approved version\'s marks only when its signature fits; otherwise, and for a changed step, from the rule (IW-8)', async () => {
