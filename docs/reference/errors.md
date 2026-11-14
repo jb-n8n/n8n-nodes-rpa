@@ -35,7 +35,7 @@ guidance reading `Check the node parameters and the RPA credentials.` A Sign Ste
 | `auth_blocked` | The site asked for a second factor this run could not answer. The message says which: no TOTP Secret, or the One-Time Code Workflow gave no code (for example because it is not published). | Add the TOTP Secret to the Site Login, or fix and publish the One-Time Code Workflow. A push message or a hardware key needs a person to sign in. |
 | `site_down` | The site did not answer, returned a server error, or the first page did not load in time. | Try again later. |
 | `browser_unavailable` | The browser could not be reached, refused the token or the certificate. | Check the RPA Browser credential ([Where the browser runs](../../README.md#where-the-browser-runs)). On a Windows machine, run `rpa status` there. |
-| `drift_detected` | A step did not find what it expected: no element, more than one, or one that could not take the action. | Correct the step, or record it again and approve the new version. Browser steps can repair themselves with AI Repair. |
+| `drift_detected` | A step did not find what it expected: no element, more than one, or one that could not take the action. For a browser control that is not there, the message also says what the page shows instead. | Correct the step, or record it again and approve the new version. Browser steps can repair themselves with AI Repair. |
 | `not_found` | The page or the data was not found. | Check the URL, the Goal and the trace. |
 | `incomplete` | Not every row the page states was read, a capture failed, a limit was hit, the run timed out, or it was cancelled. | Check the trace. Raise **Options → Max Seconds** if runs time out. |
 | `script_untrusted` | Nothing ran: the steps are not signed, or the signature does not fit (another Step Signing key, Site Login, name, version or start site), or their row was changed after they were approved. | Approve the steps again after reading every step on the form. If nobody changed the setup, check who edited the `playwright_steps` table. See [Security](security.md#if-the-signing-key-is-lost-or-changed) for a changed key. |
@@ -74,8 +74,8 @@ The messages you meet most, word for word:
 | A blocked POST | `policy_violation`: `<step>: a blocked request was attempted during the run: POST <host/path>. If it only reads data, list it in the RPA Site Login under Requests That Only Read ...` |
 | Site not found | `site_down`: `The site sandbox:8080 could not be found: no site answers to that name. Check the address, and that the site is up. (browser: page.goto: net::ERR_NAME_NOT_RESOLVED at http://sandbox:8080/acme/login)`. A refused connection, a time-out and a certificate the browser does not accept are worded the same way, the browser's own text in brackets. The guidance says to check the address and that the site is up. |
 | A value the field does not take | `policy_violation`: `Step 2 (Type into From): the field "From" did not take the value "first of September": it does not fit that field, for example text in a date field (browser: locator.fill: Error: Malformed value)`. The page did not change, so it is not `drift_detected`; the guidance says to correct that value and approve the new version. |
-| Locator not found | `drift_detected`: `No element found for Visible Text "Sign In" on https://example.com/account after 30 s. Check the spelling or try Find by: Role and Name.` |
-| Locator not found, signed steps | `drift_detected`: the same first sentence, then `The page no longer has that control. To go on, change the bot on the import form, or let self-repair fix it if it is set up (AI Repair on the RPA node).` A signed step cannot be edited on the node, so the message does not suggest another Find by. |
+| Locator not found | `drift_detected`: `No element found for Visible Text "Sign In" on https://example.com/account after 30 s. Check the spelling or try Find by: Role and Name.` After its first sentence, a browser run says what the page shows instead: `The page shows these links and buttons: "Sign in", "Help".` See [A control that is not there](#a-control-that-is-not-there). |
+| Locator not found, signed steps | `drift_detected`: the same first two sentences, then `The page no longer has that control. To go on, change the bot on the import form, or let self-repair fix it if it is set up (AI Repair on the RPA node).` A signed step cannot be edited on the node, so the message does not suggest another Find by. |
 | Not unique | `drift_detected`: `Visible Text "Submit" matches 3 elements. Use a more specific locator; it must match exactly one.` |
 | Not signed | `script_untrusted`: `The steps are not signed, or the signature is not valid, and Require Signed Steps is on. To sign a bot again, for example after the signing key changed, open the import form, leave Bot file empty and type the bot's name. Its steps may also have been changed in the Data Table after they were approved: read every step on the form before you approve. Steps used without the form: sign them with Sign Steps first.` Steps signed with an earlier Step Signing key get this too. On **RPA: 5 Import a bot**, the bot's name opens a page with the steps that run now: choose **Sign the approved steps again, unchanged** to sign them again. |
 | Count mismatch | `incomplete`: `Expected 120 rows (the page says "120 results") but found 117. Nothing was marked successful.` |
@@ -94,3 +94,41 @@ The messages you meet most, word for word:
 
 Windows-side failures (the supervisor, the installer, the policy tool) are in the
 [Windows guide](../install/windows.md#11-when-something-fails).
+
+## A control that is not there
+
+When a browser step's control is not on the page, the run looks at the page once, after the step's own wait ran out,
+and the message says what the page shows instead:
+- for a click, a download or another step that presses something: the visible links and buttons, by their names;
+- for a typed or chosen value: the visible fields and lists, by their labels.
+
+At most 12 are listed, nearest in name to what the step looked for first, each cut to 60 characters, then `and N more`
+when the page shows more. The look takes a few milliseconds (under 15 ms on the sample site and on a page of 400 controls); there is no second wait. It reads names only, never what a
+field holds, and it does not look at a page on a site the Site Login's rules do not allow. A control inside a frame,
+and a step that reads a table or waits, get no list.
+
+The names come from the site. They are shown as text: one line, without control characters, quotes as `'` and angle
+brackets as `‹ ›`, a Site Login or secret value as `[secret]`, an address without its query. Self-repair is not given
+the list: it reads the page itself.
+
+The same list is on the error item as `details.missingControls`: for each step, `step` (its number), `intent`,
+`lookedFor`, `kind` (`buttons` or `fields`), `offered` and `more`.
+
+**On the import form, every missing control on the page.** The import's replay (nothing is signed yet, and it blocks
+writes) also checks the later steps that act on the same page, without pressing, typing or reading anything. It goes
+on through steps that type, choose or tick, and checks the next step that can change the page (a click, a key, a
+download) too, then stops: what comes after it may be on another page. A step with a condition, an optional step, and
+one that opens an address or signs in stop it before they are checked. After a click that is not there, nothing later
+is checked, because the click may lead to another page or open a menu. For example, a form whose labels were renamed:
+
+```
+Choose 1000 in Company: No element found for Form Label "Company" on http://sandbox:8080/sap(…)/bc/gui/sap/its/webgui
+after 30 s. The page shows these fields and lists: "Company Code", "From", "To". Check the spelling or try Find by:
+Role and Name. Steps 6, 7 and 8 were checked on this page too, without acting. Step 6 (Type into Date from) cannot
+find Form Label "Date from" here either. The page shows these fields and lists: "From", "To", "Company Code". Step 8
+(Click Execute) cannot find Role and Name button "Execute" here either. The page shows these links and buttons: "Run",
+"Back". Step 9 was not checked: it comes after a step that can change the page.
+```
+
+A control that only shows after an earlier step of the same page (a field that appears once a list is chosen) is
+listed as not there. Run Steps reports the first missing control only.

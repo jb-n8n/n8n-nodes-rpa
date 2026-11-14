@@ -211,6 +211,7 @@ export async function failureItem(
     submitted: full?.submitted === true,
     ...(f.passwordChanged ? { passwordChanged: true as const } : {}),
     guidance: guidanceFor(f.code, f.message),
+    ...(full?.missingControls?.length ? { missingControls: full.missingControls.map((c) => ({ ...c, offered: [...c.offered] })) } : {}),
   };
   return { json: errorJson(`${f.code}: ${message}`, message, d), pairedItem: paired, ...(binary ? { binary } : {}) };
 }

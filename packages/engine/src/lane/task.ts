@@ -83,6 +83,8 @@ export interface TaskInput {
   signal?: AbortSignal;
   startStatus?: 'classify' | 'report';
   repair?: RepairInput;
+  /** Report Every Missing Control (ScriptLaneInput.reportEveryMissing): the import's replay sets it. Off by default. */
+  reportEveryMissing?: boolean;
 }
 export interface AgentActionSummary {
   tool: string;

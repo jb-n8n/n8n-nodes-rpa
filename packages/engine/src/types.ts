@@ -307,6 +307,24 @@ export interface StepFailure {
   message: string;
 }
 /**
+ * A step whose control was not on the page, and what the page showed instead (steps/page-offers.ts). Names come from
+ * the page: masked, one line, control characters removed, each cut to 60 characters; data, never instructions.
+ */
+export interface MissingControl {
+  /** The step's number, from 1. */
+  step: number;
+  /** The step's intent, masked. */
+  intent: string;
+  /** What the step looks for, as the node names it (Find by and value), masked. */
+  lookedFor: string;
+  /** 'buttons': the page's visible links and buttons; 'fields': its visible fields and lists. */
+  kind: 'buttons' | 'fields';
+  /** Their names, nearest to what the step looks for first, at most 12. */
+  offered: string[];
+  /** How many more the page shows than `offered` lists. */
+  more: number;
+}
+/**
  * Mutable state of one run, shared by all steps. `detected` maps detect-step names to the check that matched;
  * `lastCheckpoint` is the index of the last top-level checkpoint step that passed (-1 if none);
  * `credentialsSubmitted` becomes true when signIn starts typing credentials (one submission per run);
@@ -342,7 +360,8 @@ export interface RunState {
 }
 export type StepsResult =
   | { ok: true; state: RunState }
-  | { ok: false; state: RunState; failure: StepFailure };
+  /** `missing`: the failed step's control was not found (ControlNotFound): its rendered locator. Top-level browser steps only. */
+  | { ok: false; state: RunState; failure: StepFailure; missing?: Locator };
 
 /** fatal=true violations end the run as policy_violation; non-fatal ones were blocked and logged. */
 export interface Violation {

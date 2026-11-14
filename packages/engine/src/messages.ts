@@ -159,6 +159,28 @@ export const signedStepMessage = (message: string): string =>
   message.replace(/Check the spelling or try Find by: (?:Visible Text|Role and Name)\./, SIGNED_CONTROL_GONE);
 export const locatorNotFound = (desc: string, url: string, seconds: number): string =>
   `No element found for ${desc} on ${url} after ${seconds} s. ${locatorSuggestion(desc)}`;
+/**
+ * What the page shows at a control that is not there (steps/page-offers.ts): its visible links and buttons, or its
+ * fields and lists, by `names` already shown as text (masked, one line, cut), nearest first; `more` it shows besides.
+ */
+export const pageShows = (kind: 'buttons' | 'fields', names: readonly string[], more: number): string => {
+  if (names.length === 0) return kind === 'buttons' ? 'The page shows no links or buttons.' : 'The page shows no fields or lists.';
+  const list = names.map((n) => `"${n}"`).join(', ');
+  return `The page shows these ${kind === 'buttons' ? 'links and buttons' : 'fields and lists'}: ${list}${more > 0 ? `, and ${more} more` : ''}.`;
+};
+const stepList = (steps: readonly number[]): string =>
+  steps.length === 1 ? `Step ${steps[0]}` : `Steps ${steps.slice(0, -1).join(', ')} and ${steps[steps.length - 1]}`;
+/** The import's replay checked the later steps on the same page (steps/page-offers.ts); `allThere`: none is missing. */
+export const checkedWithoutActing = (steps: readonly number[], allThere: boolean): string =>
+  `${stepList(steps)} ${steps.length === 1 ? 'was' : 'were'} checked on this page too, without acting${allThere ? `: ${steps.length === 1 ? 'its control is' : 'their controls are'} there` : ''}.`;
+/** A later step whose control is not on the page either. */
+export const alsoMissing = (step: number, intent: string, lookedFor: string): string =>
+  `Step ${step} (${intent}) cannot find ${lookedFor} here either.`;
+/** Where the check of later steps stopped: the steps from `step` to `last` come after one that can change the page. */
+export const notCheckedFrom = (step: number, last: number): string =>
+  step >= last
+    ? `Step ${step} was not checked: it comes after a step that can change the page.`
+    : `Steps ${step} ${last === step + 1 ? 'and' : 'to'} ${last} were not checked: they come after a step that can change the page.`;
 export const locatorNotUnique = (desc: string, count: number): string =>
   `${desc} matches ${count} elements. Use a more specific locator; it must match exactly one.`;
 export const countMismatch = (expected: number, stated: string, found: number): string =>

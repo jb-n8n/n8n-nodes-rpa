@@ -21,8 +21,9 @@ export const draftWrites = (steps: Script['steps']) =>
  * empty, does not parse, or submits or downloads through a form is refused (policy_violation, configError). The copy
  * then runs as an ordinary task whose trust is a first run's (unsigned, writes allowed: the sign-in is the only one
  * left) under the no-write policy, so every session (script, agent, prove) is no-write and the Site Login rules still
- * decide where the password is typed. Rows, files and captures are removed from a success: nothing from an adoption
- * run is delivered. Never throws.
+ * decide where the password is typed. A control not found also has the later steps on its page checked, without acting
+ * (reportEveryMissing). Rows, files and captures are removed from a success: nothing from an adoption run is delivered.
+ * Never throws.
  */
 export async function runDraft(input: DraftTaskInput): Promise<TaskResult> {
   const t0 = Date.now();
@@ -48,6 +49,8 @@ export async function runDraft(input: DraftTaskInput): Promise<TaskResult> {
     ...(input.defaultStepTimeoutMs !== undefined ? { defaultStepTimeoutMs: input.defaultStepTimeoutMs } : {}),
     ...(input.viewport ? { viewport: input.viewport } : {}), ...(input.saveTrace ? { saveTrace: input.saveTrace } : {}),
     ...(input.signal ? { signal: input.signal } : {}), ...(input.repair ? { repair: input.repair } : {}),
+    // Nothing is signed yet and writes are blocked: a missing control also names the later steps' missing controls on that page.
+    reportEveryMissing: true,
   };
   const r = await runTask(task);
   return r.ok ? { ...r, rows: [], files: [], outputs: [] } : r;

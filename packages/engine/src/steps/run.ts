@@ -1,7 +1,7 @@
 import type { Page } from 'playwright-core';
 import type { AllowedSubmit, WriteWindow } from '../browser/session.js';
 import { maskClipped, type Masker } from '../secrets/mask.js';
-import type { CodeProvider, PortalPolicy, PortalSecrets, RunState, Script, Step, StepLogEntry, StepsResult, StepWhen, Violation } from '../types.js';
+import type { CodeProvider, Locator, PortalPolicy, PortalSecrets, RunState, Script, Step, StepLogEntry, StepsResult, StepWhen, Violation } from '../types.js';
 import type { InterruptHandle } from './interrupts.js';
 import { HANDLERS, type AnyVerb } from './handlers/index.js';
 import { desktopVerbOf, verbOf } from './parse.js';
@@ -9,7 +9,7 @@ import { renderLocators } from './render-locators.js';
 import { registerSecretFills } from '../secrets/secret-fills.js';
 import { renderVars } from '../secrets/render.js';
 import type { SecretTypingLimit } from '../secrets/secret-targets.js';
-import { PolicyError } from './errors.js';
+import { ControlNotFound, PolicyError } from './errors.js';
 import { shownMessage } from './urls.js';
 import { BLOCKED_STOP, networkSentence, signedStepMessage } from '../messages.js';
 import { surfaceOf } from '../surface/browser.js';
@@ -95,6 +95,13 @@ function coverHint(raw: string): string {
 function messageOf(err: unknown, masker: Masker): string {
   const raw = err instanceof Error ? err.message : String(err);
   return shownMessage(networkSentence(raw.split('\n')[0]) + coverHint(raw), masker).slice(0, 500);
+}
+
+/** A locator with every text in it masked (kind, name, frame, within, fallbacks). */
+function maskedLocator(loc: Locator, masker: Masker): Locator {
+  const walk = (v: unknown): unknown =>
+    typeof v === 'string' ? masker.mask(v) : Array.isArray(v) ? v.map(walk) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x)])) : v;
+  return walk(loc) as Locator;
 }
 
 /** The log entry's `output` for a step that produced one: read values, or the binary name (never the bytes). */
@@ -215,7 +222,10 @@ export async function runSteps(
         log('skipped', Date.now() - t0, { note: message });
       } else if (!ctx.violations.some((v) => v.fatal)) {
         log('failed', Date.now() - t0, { note: message });
-        return { ok: false, state, failure: { index: i, intent: step.intent, message } };
+        // The control that was not there, for the lane's one look at what the page shows instead (steps/page-offers.ts).
+        // Masked like every text the run returns: a rendered locator can hold a run variable's value.
+        const missing = err instanceof ControlNotFound && !opts.nested && surface.kind === 'browser' ? { missing: maskedLocator(err.locator, ctx.masker) } : {};
+        return { ok: false, state, failure: { index: i, intent: step.intent, message }, ...missing };
       }
     }
     if (ctx.violations.some((v) => v.fatal)) {

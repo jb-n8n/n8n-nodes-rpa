@@ -112,6 +112,16 @@ describe('v2 error items keep their structured fields through n8n', () => {
     expect(details.portal).toBeUndefined();
     expect(errors[0].binary?.trace?.mimeType).toBe('application/zip');
   });
+  it('a control that is not there: the message says what the page shows, and details.missingControls carries it as data', async () => {
+    const message = 'Open Recalls & Stop-Sales: No element found for Role and Name link "Recalls & Stop-Sales" on http://sandbox:8080/acme/home after 30 s. The page shows these links and buttons: "Recalls", "Service". The page no longer has that control.';
+    const missingControls = [{ step: 5, intent: 'Open Recalls & Stop-Sales', lookedFor: 'Role and Name link "Recalls & Stop-Sales"', kind: 'buttons', offered: ['Recalls', 'Service'], more: 0 }];
+    const out = await runSteps({}, {}, () => ({ ...DRIFT, message, missingControls } as unknown as TaskFailure));
+    const [, errors] = throughN8n(out, INPUT);
+    expect(errors[0].json.message).toBe(message);
+    expect((errors[0].json.details as IDataObject).missingControls).toEqual(missingControls);
+    const [, plain] = throughN8n(await runSteps(), INPUT);
+    expect((plain[0].json.details as IDataObject).missingControls).toBeUndefined();
+  });
   it('with AI Repair off the same failure reaches the error output at index 1', async () => {
     const out = await runSteps();
     expect(out).toHaveLength(1);
