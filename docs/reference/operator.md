@@ -162,7 +162,8 @@ host (**Options → Also Allow These Sites**, the Allowed Hosts of the run) to r
 
 - Set `EXECUTIONS_MODE=queue` on every n8n process (main and workers): the node reads it to know that a Site Login
   needs Redis. A process started as `n8n worker` counts as queue mode too.
-- Attach an **RPA Redis** credential to Run Steps. The breaker and the run lock are then shared by every worker, under
+- Attach an **RPA Redis** credential to Run Steps. On a version 2 node, first turn on **Share Login Breaker Across
+  Workers (RPA Redis)**: the credential's slot shows then. The breaker and the run lock are then shared by every worker, under
   keys that start with `playwrightGuard:`. Without Redis in queue mode, Run Steps with a Site Login is a configuration
   error. A lock left by a worker that died frees itself after the run budget plus one minute.
 - Give the node its own Redis ACL user: `ACL SETUSER rpa on >PASSWORD ~playwrightGuard:* +get +set +del +eval +select +ping +quit`.
