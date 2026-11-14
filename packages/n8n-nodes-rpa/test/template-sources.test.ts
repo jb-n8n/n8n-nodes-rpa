@@ -8,8 +8,7 @@ import { build, fold, LONG, longParameters, parameterAt, readSnippets, readSourc
 const FIX = 'edit the source file in template-src/ (not the template JSON), then run `pnpm --filter n8n-nodes-rpa templates`';
 const sources = readSources();
 const shown = (file: string) => relative(join(SOURCES, '..'), file);
-// Templates 3 and 5 so far; the others follow.
-const templates = readdirSync(TEMPLATES).filter((f) => f === '3-approve-steps.json' || f === '5-import-a-bot.json');
+const templates = readdirSync(TEMPLATES).filter((f) => f.endsWith('.json')).sort();
 const workflow = (template: string) => JSON.parse(readFileSync(join(TEMPLATES, template), 'utf8')) as Workflow;
 
 describe('the fold rule', () => {
