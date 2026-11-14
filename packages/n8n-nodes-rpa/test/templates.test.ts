@@ -1207,7 +1207,7 @@ describe('5-import-a-bot.json (the first-day import)', () => {
   function reviewFields(scope: Record<string, unknown>) {
     const all = jsonFormFields(String(review.parameters.jsonOutput), scope);
     expect(all[0].fieldType).toBe('html');
-    expect(String(all[0].html)).toMatch(/<p>(Signs for the Site Login named "|Signs for no RPA Site Login|Desktop steps are signed)/);
+    expect(String(all[0].html)).toMatch(/<p>(Signs for the Site Login named "|These steps do not sign in, and are signed for the Site Login named "|Signs for no RPA Site Login|Desktop steps are signed)/);
     return all.slice(1);
   }
   /** The review page's opening lines (its first field). */
@@ -3305,8 +3305,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
         ? `${name}: these are the steps of the stored version 1, whose signature does not fit this form (the warning says what that can mean).`
         : line.compared.replace('the approved version 1:', 'the stored version 1, whose signature does not fit this form:');
       expect(told).not.toMatch(/approved version|unchanged/);
-      // Desktop steps whose approved version marks writes: the line says that the marks are not compared (IW-8).
-      const marks = ' Which steps are writes is not compared: it is chosen again on this page.';
+      // Desktop steps whose approved version marks writes: the line says that the marks are not compared (IW-8). The
+      // same steps: the marks are what the reviewer ticks below (W6-8).
+      const marks = line.unchanged ? ' Which of them save, send or submit is what you tick below.' : ' Which steps are writes is not compared: it is chosen again on this page.';
       expect(all[0]).toEqual({
         fieldType: 'html',
         html: `<p><b>${escapeHtml(told + marks)}</b></p><p>Desktop steps are signed for the app they start, without a Site Login.</p>`
@@ -3336,7 +3337,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
       return { title: render(completion('Imported').completionTitle, { $ }), text: render(completion('Imported').completionMessage, { $ }) };
     };
     // It says what happened to the bot, in those words: never "Imported: 17 steps.", never a report to look for.
-    expect(lastPage(again)).toEqual({ title: 'Change or sign again', text: `Signed again: ${String(old.name)} version 2, unchanged. Signed as writes: step 16 (Click Save).` });
+    // The page is titled by what happened (B6-10). Version 1 does not fit the new key, so its write marks are not read:
+    // the steps are unchanged, and the marks are the ones just ticked (W6-8).
+    expect(lastPage(again)).toEqual({ title: 'Signed again', text: `Signed again: ${String(old.name)} version 2, steps unchanged. Signed as writes: step 16 (Click Save).` });
     // Signed again with unchanged steps: a new approval, so the next version, and the steps as they were apart from it.
     expect(fresh).toMatchObject({ status: 'active', name: old.name, version: 2, approvedBy: APPROVER, writeLine: 'Signed as writes: step 16 (Click Save)' });
     expect({ ...JSON.parse(String(fresh.steps)), version: 1 }).toEqual(JSON.parse(String(old.steps)));
@@ -3428,8 +3431,9 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const fieldsOf = async (r: IDataObject, key: string, siteLogin?: { id: string; name: string }) => reviewFields({ $: nodesRan(await checked(r, key, siteLogin)) });
     const SHOP = { id: 'site-a', name: 'Shop <login>' };
     const UNCHANGED = '<p><b>feed: unchanged from the approved version 4.</b></p>';
-    // The name in quotes: n8n's default credential name, "RPA Site Login account", does not read doubled.
-    const NAMED = '<p>Signs for the Site Login named "<b>Shop &lt;login&gt;</b>". The workflow that runs the bot must use this Site Login.</p>';
+    // The name in quotes: n8n's default credential name, "RPA Site Login account", does not read doubled. These steps
+    // never sign in, and the signature binds the Site Login all the same (B6-6): the line says both.
+    const NAMED = '<p>These steps do not sign in, and are signed for the Site Login named "<b>Shop &lt;login&gt;</b>" all the same. The workflow that runs the bot must use this Site Login.</p>';
     // Signed with this key for this Site Login: the line names it, and nothing more is said.
     expect(await head(row(KEY, SHOP.id), KEY, SHOP)).toBe(UNCHANGED + NAMED);
     // Signed for another Site Login (the many-accounts one): the warning leads with what the person can check, this
@@ -3481,7 +3485,11 @@ describe('5-import-a-bot.json (the first-day import)', () => {
     const desktop = { ...fresh, 'Import steps': [[{ json: {} }], [next('desktop')]] };
     expect(reviewHead({ $: nodesRan(desktop) })).toBe('<p>Desktop steps are signed for the app they start, without a Site Login.</p>');
     expect(reviewHead({ $: nodesRan({ ...desktop, 'Import steps': [[{ json: {} }], [next(), next('desktop')]] }) }))
-      .toBe('<p>Signs for the Site Login named "<b>Shop &lt;login&gt;</b>". The workflow that runs the bot must use this Site Login. Desktop steps are signed for the app they start, without a Site Login.</p>');
+      .toBe('<p>These steps do not sign in, and are signed for the Site Login named "<b>Shop &lt;login&gt;</b>" all the same. The workflow that runs the bot must use this Site Login. Desktop steps are signed for the app they start, without a Site Login.</p>');
+    // Steps that sign in: the line says that they sign for it.
+    const signing = { json: { ...next().json, steps: { ...doc, version: 5, steps: [{ intent: 'Sign in', signIn: {} }, ...doc.steps] } } };
+    expect(reviewHead({ $: nodesRan({ ...fresh, 'Import steps': [[{ json: {} }], [signing]] }) }))
+      .toBe('<p>Signs for the Site Login named "<b>Shop &lt;login&gt;</b>". The workflow that runs the bot must use this Site Login.</p>');
 
     // The page was not answered: Sign steps' last run is its check, which the last page never counts as signed or rejected.
     const last = render(completion('Imported').completionMessage, { $: nodesRan({ ...fresh, 'Import steps': [[{ json: { drafts: [], report: { steps: 1, items: [] } } }], [next()]], [REVIEW]: [[{ json: {} }]] }) });
