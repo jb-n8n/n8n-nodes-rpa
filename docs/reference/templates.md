@@ -134,9 +134,14 @@ first, before anything reads or writes them.
   6: typed value "2026-09-15" → "2026-09-30".`, or `unchanged`, or that it could not be compared; a new list says nothing; which desktop steps are writes is
   chosen again on the review page, so that mark is not compared, and the line says so), and
   the last page `Approved and signed: <name> version 5 is now the version that runs, replacing version 4.` or
-  `Rejected: <name> version 5. Nothing was signed. Version 4 keeps running.` After a change or a re-sign it says
-  `Signed again: <name> version N, unchanged.`, `Changed: <name> version N is now the version that runs, replacing
-  version M.`, or `Nothing changed: <name> version M keeps running.` When Sign steps signed a step list, it
+  `Rejected: <name> version 5. Nothing was signed. Version 4 keeps running.` After a change or a re-sign it is titled
+  Signed again, Changed or Nothing changed, and says `Signed again: <name> version N, unchanged.`, `Changed: <name>
+  version N is now the version that runs, replacing version M.`, or `Nothing changed: <name> version M keeps
+  running.` Desktop steps signed again with other write ticks say which were added or removed against version M
+  (`steps unchanged; write marks changed from version M: added step 9 (Click Post)`), read only from a version whose
+  signature fits Sign steps (its first run, the check); otherwise `steps unchanged`. Before the ticks are answered,
+  the review page's line says that the steps are unchanged and that the write marks are what is ticked below.
+  Browser steps that never sign in say that they are signed for the Site Login all the same. When Sign steps signed a step list, it
   also downloads the workflow that runs the bot. After an approval (not on the change page), a step list that types a
   secret adds what to copy into an RPA Secret Variables credential: each variable's name as the steps use it, and May
   Be Typed Into (the app's file name for desktop steps, the start site's host for browser steps). The page never asks
